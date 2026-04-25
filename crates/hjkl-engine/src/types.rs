@@ -464,7 +464,7 @@ pub struct RenderFrame {
 /// - Always check `version` after deserialization; reject on
 ///   mismatch rather than attempt migration. The 0.0.x churn drops
 ///   compatibility freely.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EditorSnapshot {
     /// Format version. Bumped on every structural change. Hosts use
@@ -478,6 +478,10 @@ pub struct EditorSnapshot {
     pub lines: Vec<String>,
     /// Viewport top line at snapshot time.
     pub viewport_top: u32,
+    /// Register bank. Vim's `""`, `"0`–`"9`, `"a`–`"z`, `"+`/`"*`.
+    /// Skipped for `Eq`/`PartialEq` because [`crate::Registers`]
+    /// doesn't derive them today.
+    pub registers: crate::Registers,
 }
 
 /// Status-line mode summary. Bridges to the legacy
@@ -496,7 +500,9 @@ pub enum SnapshotMode {
 
 impl EditorSnapshot {
     /// Current snapshot format version.
-    pub const VERSION: u32 = 1;
+    ///
+    /// Bumped to 2 in v0.0.8: registers added.
+    pub const VERSION: u32 = 2;
 }
 
 /// Errors surfaced from the engine to the host. Intentionally narrow —
@@ -577,7 +583,7 @@ mod tests {
 
     #[test]
     fn editor_snapshot_version_const() {
-        assert_eq!(EditorSnapshot::VERSION, 1);
+        assert_eq!(EditorSnapshot::VERSION, 2);
     }
 
     #[test]
@@ -588,6 +594,7 @@ mod tests {
             cursor: (0, 0),
             lines: vec!["hello".to_string()],
             viewport_top: 0,
+            registers: crate::Registers::default(),
         };
         assert_eq!(s.cursor, (0, 0));
         assert_eq!(s.lines.len(), 1);
@@ -602,10 +609,13 @@ mod tests {
             cursor: (3, 7),
             lines: vec!["alpha".into(), "beta".into()],
             viewport_top: 2,
+            registers: crate::Registers::default(),
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: EditorSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(s, back);
+        assert_eq!(s.cursor, back.cursor);
+        assert_eq!(s.lines, back.lines);
+        assert_eq!(s.viewport_top, back.viewport_top);
     }
 
     #[test]

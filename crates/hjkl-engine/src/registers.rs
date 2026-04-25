@@ -11,6 +11,7 @@
 //!   the matching lowercase slot, matching vim semantics.
 
 #[derive(Default, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Slot {
     pub text: String,
     pub linewise: bool,
@@ -22,7 +23,8 @@ impl Slot {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Registers {
     /// `"` — written by every yank / delete / change.
     pub unnamed: Slot,

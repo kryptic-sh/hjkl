@@ -855,6 +855,7 @@ impl<'a> Editor<'a> {
             cursor,
             lines,
             viewport_top,
+            registers: self.registers.clone(),
         }
     }
 
@@ -882,6 +883,7 @@ impl<'a> Editor<'a> {
         let mut vp = self.buffer.viewport();
         vp.top_row = snap.viewport_top as usize;
         *self.buffer.viewport_mut() = vp;
+        self.registers = snap.registers;
         Ok(())
     }
 

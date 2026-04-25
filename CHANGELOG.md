@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-04-26
+
+### Changed (breaking the 0.0.7 snapshot wire format)
+
+- `EditorSnapshot::VERSION` bumped to `2`. The struct gains a
+  `registers: Registers` field carrying vim's `""`, `"0`, `"1`–`"9`, `"a`–`"z`,
+  and `"+`/`"*` slots. 0.0.7 snapshots fail `restore_snapshot` with
+  `EngineError::SnapshotVersion`.
+- `Slot` and `Registers` derive `Serialize` / `Deserialize` behind the `serde`
+  feature.
+
 ## [0.0.7] - 2026-04-26
 
 ### Added
