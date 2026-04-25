@@ -269,6 +269,148 @@ impl Default for Options {
     }
 }
 
+/// Modifier bits accompanying every keystroke.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Modifiers {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub super_: bool,
+}
+
+/// Special key codes — anything that isn't a printable character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SpecialKey {
+    Esc,
+    Enter,
+    Backspace,
+    Tab,
+    BackTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    F(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseKind {
+    Press,
+    Release,
+    Drag,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MouseEvent {
+    pub kind: MouseKind,
+    pub pos: Pos,
+    pub mods: Modifiers,
+}
+
+/// Single input event handed to the engine.
+///
+/// `Paste` content bypasses insert-mode mappings, abbreviations, and
+/// autoindent; the engine inserts the bracketed-paste payload as-is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Input {
+    Char(char, Modifiers),
+    Key(SpecialKey, Modifiers),
+    Mouse(MouseEvent),
+    Paste(String),
+    FocusGained,
+    FocusLost,
+    Resize(u16, u16),
+}
+
+/// Host adapter consumed by the engine. Lives behind the planned
+/// `Editor<B: Buffer, H: Host>` generic; today it's the contract that
+/// `buffr-modal::BuffrHost` and the (future) `sqeel-tui` Host impl
+/// align against.
+///
+/// Methods with default impls return safe no-ops so hosts that don't
+/// need a feature (cancellation, wrap-aware motion, syntax highlights)
+/// can ignore them.
+pub trait Host: Send {
+    /// Custom intent type. Hosts that don't fan out actions back to
+    /// themselves can use the unit type via the default impl approach
+    /// (set associated type explicitly).
+    type Intent;
+
+    // ── Clipboard (hybrid: write fire-and-forget, read cached) ──
+
+    /// Fire-and-forget clipboard write. Engine never blocks; the host
+    /// queues internally and flushes on its own task (OSC52, `wl-copy`,
+    /// `pbcopy`, …).
+    fn write_clipboard(&mut self, text: String);
+
+    /// Returns the last-known cached clipboard value. May be stale —
+    /// matches the OSC52/wl-paste model neovim and helix both ship.
+    fn read_clipboard(&mut self) -> Option<String>;
+
+    // ── Time + cancellation ──
+
+    /// Monotonic time. Multi-key timeout (`timeoutlen`) resolution
+    /// reads this; engine never reads `Instant::now()` directly so
+    /// macro replay stays deterministic.
+    fn now(&self) -> core::time::Duration;
+
+    /// Cooperative cancellation. Engine polls during long search /
+    /// regex / multi-cursor edit loops. Default returns `false`.
+    fn should_cancel(&self) -> bool {
+        false
+    }
+
+    // ── Search prompt ──
+
+    /// Synchronously prompt the user for a search pattern. Returning
+    /// `None` aborts the search.
+    fn prompt_search(&mut self) -> Option<String>;
+
+    // ── Wrap-aware motion (default: wrap is identity) ──
+
+    /// Map a logical position to its display line for `gj`/`gk`. Hosts
+    /// without wrapping may use the default identity impl.
+    fn display_line_for(&self, pos: Pos) -> u32 {
+        pos.line
+    }
+
+    /// Inverse of [`display_line_for`]. Default identity.
+    fn pos_for_display(&self, line: u32, col: u32) -> Pos {
+        Pos { line, col }
+    }
+
+    // ── Syntax highlights (default: none) ──
+
+    /// Host-supplied syntax highlights for `range`. Empty by default;
+    /// hosts wire tree-sitter or LSP semantic tokens here.
+    fn syntax_highlights(&self, range: Range<Pos>) -> Vec<Highlight> {
+        let _ = range;
+        Vec::new()
+    }
+
+    // ── Cursor shape ──
+
+    /// Engine emits this on every mode transition. Hosts repaint the
+    /// cursor in the requested shape.
+    fn emit_cursor_shape(&mut self, shape: CursorShape);
+
+    // ── Custom intent fan-out ──
+
+    /// Host-defined event the engine raises (LSP request, fold op,
+    /// buffer switch, …).
+    fn emit_intent(&mut self, intent: Self::Intent);
+}
+
 /// Errors surfaced from the engine to the host. Intentionally narrow —
 /// callsites that fail in user-facing ways return `Result<_,
 /// EngineError>`; internal invariant breaks use `debug_assert!`.
