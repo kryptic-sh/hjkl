@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-04-26
+
+### Changed
+
+- Workspace `homepage` set to <https://hjkl.kryptic.sh>.
+- Per-crate READMEs now carry CI / crates.io version / docs.rs / License /
+  Website badges and a Website + Source line.
+
 ## [0.0.3] - 2026-04-26
 
 ### Added

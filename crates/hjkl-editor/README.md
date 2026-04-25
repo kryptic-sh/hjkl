@@ -1,8 +1,17 @@
 # hjkl-editor
 
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/hjkl-editor.svg)](https://crates.io/crates/hjkl-editor)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-editor)](https://docs.rs/hjkl-editor)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+
 Front door for the hjkl modal editor stack. Re-exports the working parts of
 [`hjkl-engine`](../hjkl-engine) and [`hjkl-buffer`](../hjkl-buffer) under a
 curated namespace so consumers add one dependency instead of three.
+
+Website: <https://hjkl.kryptic.sh>. Source:
+<https://github.com/kryptic-sh/hjkl>.
 
 ## Modules
 

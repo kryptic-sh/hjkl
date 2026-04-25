@@ -1,9 +1,18 @@
 # hjkl-buffer
 
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/hjkl-buffer.svg)](https://crates.io/crates/hjkl-buffer)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-buffer)](https://docs.rs/hjkl-buffer)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+
 Rope-backed text buffer with cursor, edits, motions, folds, viewport, and
 search. Extracted from
 [sqeel-buffer](https://github.com/kryptic-sh/sqeel/tree/main/sqeel-buffer) with
 full history.
+
+Website: <https://hjkl.kryptic.sh>. Source:
+<https://github.com/kryptic-sh/hjkl>.
 
 ## Status
 

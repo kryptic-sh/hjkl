@@ -3,13 +3,13 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
 authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
-homepage = "https://github.com/kryptic-sh/hjkl"
+homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [profile.release]
