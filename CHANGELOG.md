@@ -8,6 +8,43 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-04-26
+
+### Changed
+
+- **`ex.rs` relocated from `hjkl-engine` to `hjkl-editor`.** Ex commands now
+  live in the crate they belong to. Consumers reach `ex` via
+  `hjkl_editor::runtime::ex` (unchanged surface — the facade was already routing
+  there).
+- `hjkl-editor` gains `regex` as a direct dep (ex uses it for `:s/pat/.../`) and
+  `crossterm` as a dev-dep.
+- `mark_dirty_after_ex` is now a free function. Ex callsites that previously
+  wrote `editor.mark_dirty_after_ex()` now write `mark_dirty_after_ex(editor)`.
+
+### Added (engine internal — sealed at 0.1.0)
+
+Several `pub(super)` / `pub(crate)` items on `Editor` and `VimState` gained
+`#[doc(hidden)] pub` visibility so ex commands can reach them across the crate
+boundary:
+
+- `Editor`: `vim`, `undo_stack`, `registers`, `settings`, `file_marks`,
+  `syntax_fold_ranges` fields; `settings_mut`, `mutate_edit`, `push_undo`,
+  `restore`, `jump_cursor` methods.
+- `VimState`: `last_edit_pos`, `jump_back`, `marks` fields.
+- `vim::do_undo`, `vim::do_redo` re-exported at the crate root.
+
+These are explicit churn-phase exposures and will be sealed under the 0.1.0
+trait extraction. Do not rely on them.
+
+### Migrated tests
+
+5 vim+ex integration tests (`gqq` reflow, `gq` motion, paragraph break
+preservation, `gqq` undo, `:marks` listing) moved from
+`crates/hjkl-engine/src/vim.rs` to
+`crates/hjkl-editor/tests/vim_ex_integration.rs`. cargo dev-dep cycles between
+hjkl-engine and hjkl-editor produce duplicate type IDs, so they must run from
+the editor side.
+
 ## [0.0.4] - 2026-04-26
 
 ### Changed
