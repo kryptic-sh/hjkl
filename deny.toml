@@ -5,7 +5,12 @@
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "warn"
-ignore = []
+ignore = [
+  # `paste` is unmaintained but only pulled transitively by ratatui.
+  # No replacement exists in ratatui's tree; the macro is a stable
+  # build-time helper. Re-evaluate when ratatui drops the dep.
+  { id = "RUSTSEC-2024-0436", reason = "transitive via ratatui — accept until ratatui drops paste" },
+]
 
 [licenses]
 allow = [
