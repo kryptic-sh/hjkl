@@ -382,6 +382,40 @@ impl Options {
             "undolevels" | "ul" => set_u32!(undo_levels),
             "undobreak" => set_bool!(undo_break_on_motion),
             "readonly" | "ro" => set_bool!(readonly),
+            "wrap" => {
+                let on = match val {
+                    OptionValue::Bool(b) => b,
+                    OptionValue::Int(n) => n != 0,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects bool, got {other:?}"
+                        )));
+                    }
+                };
+                self.wrap = match (on, self.wrap) {
+                    (false, _) => WrapMode::None,
+                    (true, WrapMode::Word) => WrapMode::Word,
+                    (true, _) => WrapMode::Char,
+                };
+                Ok(())
+            }
+            "linebreak" | "lbr" => {
+                let on = match val {
+                    OptionValue::Bool(b) => b,
+                    OptionValue::Int(n) => n != 0,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects bool, got {other:?}"
+                        )));
+                    }
+                };
+                self.wrap = match (on, self.wrap) {
+                    (true, _) => WrapMode::Word,
+                    (false, WrapMode::Word) => WrapMode::Char,
+                    (false, other) => other,
+                };
+                Ok(())
+            }
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -403,6 +437,8 @@ impl Options {
             "undolevels" | "ul" => OptionValue::Int(self.undo_levels as i64),
             "undobreak" => OptionValue::Bool(self.undo_break_on_motion),
             "readonly" | "ro" => OptionValue::Bool(self.readonly),
+            "wrap" => OptionValue::Bool(!matches!(self.wrap, WrapMode::None)),
+            "linebreak" | "lbr" => OptionValue::Bool(matches!(self.wrap, WrapMode::Word)),
             _ => return None,
         })
     }
@@ -764,6 +800,29 @@ mod tests {
             o.get_by_name("ic"),
             Some(OptionValue::Bool(false))
         ));
+    }
+
+    #[test]
+    fn options_wrap_linebreak_roundtrip() {
+        let mut o = Options::default();
+        assert_eq!(o.wrap, WrapMode::None);
+        o.set_by_name("wrap", OptionValue::Bool(true)).unwrap();
+        assert_eq!(o.wrap, WrapMode::Char);
+        o.set_by_name("linebreak", OptionValue::Bool(true)).unwrap();
+        assert_eq!(o.wrap, WrapMode::Word);
+        assert!(matches!(
+            o.get_by_name("wrap"),
+            Some(OptionValue::Bool(true))
+        ));
+        assert!(matches!(
+            o.get_by_name("lbr"),
+            Some(OptionValue::Bool(true))
+        ));
+        o.set_by_name("linebreak", OptionValue::Bool(false))
+            .unwrap();
+        assert_eq!(o.wrap, WrapMode::Char);
+        o.set_by_name("wrap", OptionValue::Bool(false)).unwrap();
+        assert_eq!(o.wrap, WrapMode::None);
     }
 
     #[test]

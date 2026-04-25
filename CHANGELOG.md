@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-04-26
+
+### Added
+
+- `Options::wrap: WrapMode` (engine-native equivalent of `hjkl_buffer::Wrap`).
+  `Editor::current_options` / `apply_options` map between `WrapMode` and
+  `hjkl_buffer::Wrap` at the boundary.
+- `set_by_name` / `get_by_name` recognise vim's `wrap` and `linebreak` (`lbr`)
+  toggles. Combined state collapses into the single `WrapMode` field:
+  `wrap=off → None`, `wrap=on,lbr=off → Char`, `wrap=on,lbr=on → Word`.
+
 ## [0.0.15] - 2026-04-26
 
 ### Added

@@ -388,7 +388,6 @@ pub struct VimState {
     pub(super) last_macro: Option<char>,
     /// Position of the most recent buffer mutation. Surfaced via
     /// the `'.` / `` `. `` marks for quick "back to last edit".
-    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
     pub(super) last_edit_pos: Option<(usize, usize)>,
     /// Bounded ring of recent edit positions (newest at the back).
     /// `g;` walks toward older entries, `g,` toward newer ones. Capped
@@ -423,7 +422,6 @@ pub struct VimState {
     /// with the pre-motion cursor when a "big jump" motion fires
     /// (`gg`/`G`, `%`, `*`/`#`, `n`/`N`, `H`/`M`/`L`, committed `/` or
     /// `?`). Capped at 100 entries.
-    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
     pub(super) jump_back: Vec<(usize, usize)>,
     /// Forward half — `Ctrl-i` pops from here. Cleared by any new big
     /// jump, matching vim's "branch off trims forward history" rule.
@@ -432,7 +430,6 @@ pub struct VimState {
     /// cursor `(row, col)` under the letter; `'{a-z}` and `` `{a-z} ``
     /// read it back. Uppercase / global marks aren't supported
     /// (single-buffer model).
-    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
     pub(super) marks: std::collections::HashMap<char, (usize, usize)>,
     /// Set by `Ctrl-R` in insert mode while waiting for the register
     /// selector. The next typed char names the register; its contents
