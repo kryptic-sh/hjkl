@@ -105,74 +105,127 @@ pub(crate) fn ratatui_style_to_engine(s: ratatui::style::Style) -> crate::types:
     }
 }
 
-/// Map a [`hjkl_buffer::Edit`] to the SPEC [`crate::types::Edit`]
-/// (`EditOp`). Returns `None` when the buffer edit isn't representable
-/// as a single SPEC EditOp; today every variant maps so this is
-/// always `Some`, but the option keeps room for future no-log
-/// signals.
-fn edit_to_editop(edit: &hjkl_buffer::Edit) -> Option<crate::types::Edit> {
+/// Map a [`hjkl_buffer::Edit`] to one or more SPEC
+/// [`crate::types::Edit`] (`EditOp`) records.
+///
+/// Most buffer edits map to a single EditOp. Block ops
+/// ([`hjkl_buffer::Edit::InsertBlock`] /
+/// [`hjkl_buffer::Edit::DeleteBlockChunks`]) emit one EditOp per row
+/// touched — they edit non-contiguous cells and a single
+/// `range..range` can't represent the rectangle.
+///
+/// Returns an empty vec when the edit isn't representable (no buffer
+/// variant currently fails this check).
+fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
     use crate::types::{Edit as Op, Pos};
     use hjkl_buffer::Edit as B;
     let to_pos = |p: hjkl_buffer::Position| Pos {
         line: p.row as u32,
         col: p.col as u32,
     };
-    Some(match edit {
-        B::InsertChar { at, ch } => Op {
+    match edit {
+        B::InsertChar { at, ch } => vec![Op {
             range: to_pos(*at)..to_pos(*at),
             replacement: ch.to_string(),
-        },
-        B::InsertStr { at, text } => Op {
+        }],
+        B::InsertStr { at, text } => vec![Op {
             range: to_pos(*at)..to_pos(*at),
             replacement: text.clone(),
-        },
-        B::DeleteRange { start, end, .. } => Op {
+        }],
+        B::DeleteRange { start, end, .. } => vec![Op {
             range: to_pos(*start)..to_pos(*end),
             replacement: String::new(),
-        },
-        B::Replace { start, end, with } => Op {
+        }],
+        B::Replace { start, end, with } => vec![Op {
             range: to_pos(*start)..to_pos(*end),
             replacement: with.clone(),
-        },
-        B::JoinLines { row, count, .. } => {
+        }],
+        B::JoinLines {
+            row,
+            count,
+            with_space,
+        } => {
+            // Joining `count` rows after `row` collapses
+            // [(row+1, 0) .. (row+count, EOL)] into the joined
+            // sentinel. The replacement is either an empty string
+            // (gJ) or " " between segments (J).
             let start = Pos {
-                line: *row as u32,
+                line: *row as u32 + 1,
                 col: 0,
             };
             let end = Pos {
                 line: (*row + *count) as u32,
-                col: 0,
+                col: u32::MAX, // covers to EOL of the last source row
             };
-            Op {
+            vec![Op {
                 range: start..end,
-                replacement: String::new(),
-            }
+                replacement: if *with_space {
+                    " ".into()
+                } else {
+                    String::new()
+                },
+            }]
         }
-        B::SplitLines { row, .. } => {
-            let p = Pos {
-                line: *row as u32,
-                col: 0,
-            };
-            Op {
-                range: p..p,
-                replacement: String::new(),
-            }
+        B::SplitLines {
+            row,
+            cols,
+            inserted_space: _,
+        } => {
+            // SplitLines reverses a JoinLines: insert a `\n`
+            // (and optional dropped space) at each col on `row`.
+            cols.iter()
+                .map(|c| {
+                    let p = Pos {
+                        line: *row as u32,
+                        col: *c as u32,
+                    };
+                    Op {
+                        range: p..p,
+                        replacement: "\n".into(),
+                    }
+                })
+                .collect()
         }
-        B::InsertBlock { at, .. } => {
-            let p = to_pos(*at);
-            Op {
-                range: p..p,
-                replacement: String::new(),
-            }
+        B::InsertBlock { at, chunks } => {
+            // One EditOp per row in the block — non-contiguous edits.
+            chunks
+                .iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    let p = Pos {
+                        line: at.row as u32 + i as u32,
+                        col: at.col as u32,
+                    };
+                    Op {
+                        range: p..p,
+                        replacement: chunk.clone(),
+                    }
+                })
+                .collect()
         }
-        B::DeleteBlockChunks { at, .. } => {
-            let p = to_pos(*at);
-            Op {
-                range: p..p,
-                replacement: String::new(),
-            }
+        B::DeleteBlockChunks { at, widths } => {
+            // One EditOp per row, deleting `widths[i]` chars at
+            // `(at.row + i, at.col)`.
+            widths
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    let start = Pos {
+                        line: at.row as u32 + i as u32,
+                        col: at.col as u32,
+                    };
+                    let end = Pos {
+                        line: at.row as u32 + i as u32,
+                        col: at.col as u32 + *w as u32,
+                    };
+                    Op {
+                        range: start..end,
+                        replacement: String::new(),
+                    }
+                })
+                .collect()
         }
-    })
+    }
 }
 
 /// Where the cursor should land in the viewport after a `z`-family
@@ -656,9 +709,7 @@ impl<'a> Editor<'a> {
         // Map the underlying buffer edit to a SPEC EditOp for
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
-        if let Some(op) = edit_to_editop(&edit) {
-            self.change_log.push(op);
-        }
+        self.change_log.extend(edit_to_editops(&edit));
         let inverse = self.buffer.apply_edit(edit);
         let pos = self.buffer.cursor();
         // Drop any folds the edit's range overlapped — vim opens the
@@ -1763,6 +1814,34 @@ mod tests {
     fn engine_style_at_out_of_range_returns_none() {
         let e = Editor::new(KeybindingMode::Vim);
         assert!(e.engine_style_at(99).is_none());
+    }
+
+    #[test]
+    fn take_changes_emits_per_row_for_block_insert() {
+        // Visual-block insert (`Ctrl-V` then `I` then text then Esc)
+        // produces an InsertBlock buffer edit with one chunk per
+        // selected row. take_changes should surface N EditOps,
+        // not a single placeholder.
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("aaa\nbbb\nccc\nddd");
+        // Place cursor at (0, 0), enter visual-block, extend down 2.
+        e.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+        e.handle_key(key(KeyCode::Char('j')));
+        e.handle_key(key(KeyCode::Char('j')));
+        // `I` to enter insert mode at the block left edge.
+        e.handle_key(shift_key(KeyCode::Char('I')));
+        e.handle_key(key(KeyCode::Char('X')));
+        e.handle_key(key(KeyCode::Esc));
+
+        let changes = e.take_changes();
+        // Expect at least 3 entries — one per row in the 3-row block.
+        // Vim's block-I inserts on Esc; the cleanup may add more
+        // EditOps for cursor sync, hence >= rather than ==.
+        assert!(
+            changes.len() >= 3,
+            "expected >=3 EditOps for 3-row block insert, got {}: {changes:?}",
+            changes.len()
+        );
     }
 
     #[test]
