@@ -1098,10 +1098,16 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
             true
         }
         Key::Enter => {
-            ed.mutate_edit(Edit::InsertStr {
-                at: cursor,
-                text: "\n".into(),
-            });
+            let indent: String = if ed.settings.autoindent {
+                ed.buffer()
+                    .line(cursor.row)
+                    .map(|l| l.chars().take_while(|c| *c == ' ' || *c == '\t').collect())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let text = format!("\n{indent}");
+            ed.mutate_edit(Edit::InsertStr { at: cursor, text });
             true
         }
         Key::Tab => {
@@ -4890,6 +4896,7 @@ pub(crate) fn do_redo(ed: &mut Editor<'_>) {
     if let Some((lines, cursor)) = ed.redo_stack.pop() {
         let current = ed.snapshot();
         ed.undo_stack.push(current);
+        ed.cap_undo();
         ed.restore(lines, cursor);
     }
     ed.vim.mode = Mode::Normal;
@@ -7910,6 +7917,35 @@ mod tests {
     }
 
     #[test]
+    fn enter_with_autoindent_copies_leading_whitespace() {
+        let mut e = editor_with("    foo");
+        e.jump_cursor(0, 7);
+        run_keys(&mut e, "i<CR>");
+        assert_eq!(e.buffer.line(1).unwrap(), "    ");
+    }
+
+    #[test]
+    fn enter_without_autoindent_inserts_bare_newline() {
+        let mut e = editor_with("    foo");
+        e.settings_mut().autoindent = false;
+        e.jump_cursor(0, 7);
+        run_keys(&mut e, "i<CR>");
+        assert_eq!(e.buffer.line(1).unwrap(), "");
+    }
+
+    #[test]
+    fn undo_levels_cap_drops_oldest() {
+        let mut e = editor_with("abcde");
+        e.settings_mut().undo_levels = 3;
+        run_keys(&mut e, "ra");
+        run_keys(&mut e, "lrb");
+        run_keys(&mut e, "lrc");
+        run_keys(&mut e, "lrd");
+        run_keys(&mut e, "lre");
+        assert_eq!(e.undo_stack_len(), 3);
+    }
+
+    #[test]
     fn tab_inserts_literal_tab_by_default() {
         let mut e = editor_with("");
         run_keys(&mut e, "i");
@@ -7925,6 +7961,14 @@ mod tests {
         run_keys(&mut e, "i");
         e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(e.buffer.line(0).unwrap(), "    ");
+    }
+
+    #[test]
+    fn readonly_blocks_insert_mutation() {
+        let mut e = editor_with("hello");
+        e.settings_mut().readonly = true;
+        run_keys(&mut e, "iX<Esc>");
+        assert_eq!(e.buffer.line(0).unwrap(), "hello");
     }
 
     #[test]

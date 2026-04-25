@@ -677,14 +677,17 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
             hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  textwidth={}  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  wrap={}",
+            "shiftwidth={}  tabstop={}  textwidth={}  undolevels={}  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  readonly={}  wrap={}",
             s.shiftwidth,
             s.tabstop,
             s.textwidth,
+            s.undo_levels,
             if s.expandtab { "on" } else { "off" },
             if s.ignore_case { "on" } else { "off" },
             if s.smartcase { "on" } else { "off" },
             if s.wrapscan { "on" } else { "off" },
+            if s.autoindent { "on" } else { "off" },
+            if s.readonly { "on" } else { "off" },
             wrap,
         ));
     }
@@ -722,6 +725,9 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
                 }
                 editor.settings_mut().textwidth = parsed;
             }
+            "undolevels" | "ul" => {
+                editor.settings_mut().undo_levels = parsed.min(u32::MAX as usize) as u32;
+            }
             other => return Err(format!("unknown :set option `{other}`")),
         }
         return Ok(());
@@ -736,6 +742,8 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
         "smartcase" | "scs" => editor.settings_mut().smartcase = value,
         "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
         "expandtab" | "et" => editor.settings_mut().expandtab = value,
+        "autoindent" | "ai" => editor.settings_mut().autoindent = value,
+        "readonly" | "ro" => editor.settings_mut().readonly = value,
         "wrap" => {
             editor.settings_mut().wrap = if value {
                 // Preserve `Wrap::Word` if `linebreak` already flipped

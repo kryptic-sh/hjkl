@@ -2,4 +2,4 @@
 source: crates/hjkl-editor/tests/golden_ex.rs
 expression: info
 ---
-shiftwidth=2  tabstop=8  textwidth=79  expandtab=off  ignorecase=off  smartcase=off  wrapscan=on  wrap=off
+shiftwidth=2  tabstop=8  textwidth=79  undolevels=1000  expandtab=off  ignorecase=off  smartcase=off  wrapscan=on  autoindent=on  readonly=off  wrap=off

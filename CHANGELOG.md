@@ -8,6 +8,27 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-04-26
+
+### Added
+
+- `:set readonly` / `:set ro` honoured by the engine. `Editor::mutate_edit`
+  short-circuits when `Settings::readonly` is true: no buffer change, no
+  dirty flag, no undo entry, no change-log emission. Returns a self-inverse
+  no-op so callers pushing the inverse onto an undo stack still get a
+  structurally valid round trip.
+- `:set autoindent` / `:set ai` honoured by the insert-mode Enter handler.
+  When on (vim default), Enter copies the leading whitespace of the current
+  line onto the new line. New `Settings::autoindent` field defaults to
+  `true` (vim parity) — a behaviour change from prior 0.0.x where Enter
+  inserted a bare newline. Set `:set noai` to restore the old behaviour.
+- `:set undolevels=N` / `:set ul=N` honoured by `push_undo` and the
+  redo path. Older entries pruned beyond the cap. New `Settings::undo_levels`
+  (default 1000); `0` is treated as unlimited. New `Editor::undo_stack_len`
+  test accessor.
+- `:set` listing surfaces `undolevels`, `autoindent`, `readonly` columns.
+  Golden snapshot updated.
+
 ## [0.0.20] - 2026-04-26
 
 ### Added

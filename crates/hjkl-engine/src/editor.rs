@@ -357,6 +357,18 @@ pub struct Settings {
     /// `:set wrap` flips to char-break wrap; `:set linebreak` flips
     /// to word-break wrap; `:set nowrap` resets.
     pub wrap: hjkl_buffer::Wrap,
+    /// When true, the engine drops every edit before it touches the
+    /// buffer — undo, dirty flag, and change log all stay clean.
+    /// Matches vim's `:set readonly` / `:set ro`. Default `false`.
+    pub readonly: bool,
+    /// When `true`, pressing Enter in insert mode copies the leading
+    /// whitespace of the current line onto the new line. Matches vim's
+    /// `:set autoindent`. Default `true` (vim parity).
+    pub autoindent: bool,
+    /// Cap on undo-stack length. Older entries are pruned past this
+    /// bound. `0` means unlimited. Matches vim's `:set undolevels`.
+    /// Default `1000`.
+    pub undo_levels: u32,
 }
 
 impl Default for Settings {
@@ -370,6 +382,9 @@ impl Default for Settings {
             textwidth: 79,
             expandtab: false,
             wrap: hjkl_buffer::Wrap::None,
+            readonly: false,
+            autoindent: true,
+            undo_levels: 1000,
         }
     }
 }
@@ -718,6 +733,19 @@ impl<'a> Editor<'a> {
     /// route mutations through here so the side effects fire
     /// uniformly.
     pub fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
+        // `:set readonly` short-circuits every mutation funnel: no
+        // buffer change, no dirty flag, no undo entry, no change-log
+        // emission. We swallow the requested `edit` and hand back a
+        // self-inverse no-op (`InsertStr` of an empty string at the
+        // current cursor) so callers that push the return value onto
+        // an undo stack still get a structurally valid round trip.
+        if self.settings.readonly {
+            let _ = edit;
+            return hjkl_buffer::Edit::InsertStr {
+                at: self.buffer.cursor(),
+                text: String::new(),
+            };
+        }
         let pre_row = self.buffer.cursor().row;
         let pre_rows = self.buffer.row_count();
         // Map the underlying buffer edit to a SPEC EditOp for
@@ -1136,6 +1164,9 @@ impl<'a> Editor<'a> {
                 hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
                 hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
             },
+            readonly: self.settings.readonly,
+            autoindent: self.settings.autoindent,
+            undo_levels: self.settings.undo_levels,
             ..crate::types::Options::default()
         }
     }
@@ -1157,6 +1188,9 @@ impl<'a> Editor<'a> {
             crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
             crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
         };
+        self.settings.readonly = opts.readonly;
+        self.settings.autoindent = opts.autoindent;
+        self.settings.undo_levels = opts.undo_levels;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
@@ -1699,16 +1733,33 @@ impl<'a> Editor<'a> {
     }
 
     /// Snapshot current buffer state onto the undo stack and clear
-    /// the redo stack. Bounded at 200 entries — older entries pruned.
-    /// Call before any group of buffer mutations the user might want
-    /// to undo as a single step.
+    /// the redo stack. Bounded by `settings.undo_levels` — older
+    /// entries pruned. Call before any group of buffer mutations the
+    /// user might want to undo as a single step.
     pub fn push_undo(&mut self) {
         let snap = self.snapshot();
-        if self.undo_stack.len() >= 200 {
-            self.undo_stack.remove(0);
-        }
         self.undo_stack.push(snap);
+        self.cap_undo();
         self.redo_stack.clear();
+    }
+
+    /// Trim the undo stack down to `settings.undo_levels`, dropping
+    /// the oldest entries. `undo_levels == 0` is treated as
+    /// "unlimited" (vim's 0-means-no-undo semantics intentionally
+    /// skipped — guarding with `> 0` is one line shorter than gating
+    /// the cap path with an explicit zero-check above the call site).
+    pub(crate) fn cap_undo(&mut self) {
+        let cap = self.settings.undo_levels as usize;
+        if cap > 0 && self.undo_stack.len() > cap {
+            let diff = self.undo_stack.len() - cap;
+            self.undo_stack.drain(..diff);
+        }
+    }
+
+    /// Test-only accessor for the undo stack length.
+    #[doc(hidden)]
+    pub fn undo_stack_len(&self) -> usize {
+        self.undo_stack.len()
     }
 
     /// Replace the buffer with `lines` joined by `\n` and set the
