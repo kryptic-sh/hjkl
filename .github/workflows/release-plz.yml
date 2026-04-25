@@ -1,12 +1,14 @@
 name: Release-plz
 
+# Manual-only until 0.0.1 ships. Pre-release placeholders don't need
+# automated bumps. Re-enable `push` trigger when actively iterating
+# 0.0.x churn.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  release-plz:
-    name: release-plz
+  release-plz-pr:
+    name: release PR
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -17,16 +19,16 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run release-plz
-        uses: release-plz/action@v0
+      - name: release-plz release-pr
+        uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  release:
-    name: publish on tag
+  release-plz-publish:
+    name: publish to crates.io
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,7 +37,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0
+      - uses: release-plz/action@v0.5
         with:
           command: release
         env:
