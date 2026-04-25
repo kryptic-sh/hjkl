@@ -675,6 +675,23 @@ Before touching code, catalog coupling:
   recommended: run `vim --clean -e -c '...'` on ~50 canonical cases in cron CI;
   hand-curated for the rest. Sets the strength of the "vim-compatible" claim.
 
+## Status (2026-04-26)
+
+| Phase                              | State                                               |
+| ---------------------------------- | --------------------------------------------------- |
+| 0 — Audit + Spec Lock              | ✅ done (`AUDIT.md`)                                |
+| 1 — Bootstrap                      | ✅ done                                             |
+| 2 — `sqeel-buffer` → `hjkl-buffer` | ✅ done (history preserved)                         |
+| 3 — `sqeel-vim` → `hjkl-engine`    | ✅ done (history preserved, 448 tests)              |
+| 4 — Decouple ratatui/crossterm     | 🟡 partial — full decouple folded into 5            |
+| 5 — Trait extraction               | 🟡 foundation laid (`types.rs`); FSM rewire pending |
+| 6 — Strip sqeel-specific bits      | ✅ done                                             |
+| 7 — Docs + stability contract      | ✅ done (`SPEC.md`, READMEs, CHANGELOG)             |
+| 8 — sqeel migrates off             | ✅ done (sqeel-vim/sqeel-buffer deleted)            |
+| 9 — Publish 0.0.1                  | ✅ done (4 crates on crates.io, v0.0.1 tag)         |
+| 10 — buffr consumes                | 🟡 deps wired; edit-mode integration TBD            |
+| 11 — hjkl binary                   | 🟡 deferred per plan                                |
+
 ## Phase 1 — Bootstrap hjkl Repo
 
 - [ ] `gh repo create kryptic-sh/hjkl --public`.
