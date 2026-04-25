@@ -1,0 +1,13 @@
+[package]
+name = "hjkl-buffer"
+description = "Rope-backed text buffer with cursor and edits. Pre-release placeholder; no public API yet."
+keywords = ["rope", "buffer", "text", "editor"]
+categories = ["text-editors", "data-structures"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+readme = "README.md"

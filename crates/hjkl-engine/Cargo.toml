@@ -1,0 +1,13 @@
+[package]
+name = "hjkl-engine"
+description = "Vim FSM and grammar engine. Pre-release placeholder; no public API yet."
+keywords = ["vim", "modal", "editor", "fsm"]
+categories = ["text-editors", "no-std"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+readme = "README.md"
