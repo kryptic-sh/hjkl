@@ -13,6 +13,98 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicU16, Ordering};
 
+/// Convert a SPEC [`crate::types::Style`] to a [`ratatui::style::Style`].
+///
+/// Lossless within the styles each library represents. Lives in the
+/// engine because hjkl-engine pulls ratatui as a mandatory dep today;
+/// once trait extraction lands, this becomes a trivial pass-through
+/// once the field types flip.
+pub(crate) fn engine_style_to_ratatui(s: crate::types::Style) -> ratatui::style::Style {
+    use crate::types::Attrs;
+    use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
+    let mut out = RStyle::default();
+    if let Some(c) = s.fg {
+        out = out.fg(RColor::Rgb(c.0, c.1, c.2));
+    }
+    if let Some(c) = s.bg {
+        out = out.bg(RColor::Rgb(c.0, c.1, c.2));
+    }
+    let mut m = RMod::empty();
+    if s.attrs.contains(Attrs::BOLD) {
+        m |= RMod::BOLD;
+    }
+    if s.attrs.contains(Attrs::ITALIC) {
+        m |= RMod::ITALIC;
+    }
+    if s.attrs.contains(Attrs::UNDERLINE) {
+        m |= RMod::UNDERLINED;
+    }
+    if s.attrs.contains(Attrs::REVERSE) {
+        m |= RMod::REVERSED;
+    }
+    if s.attrs.contains(Attrs::DIM) {
+        m |= RMod::DIM;
+    }
+    if s.attrs.contains(Attrs::STRIKE) {
+        m |= RMod::CROSSED_OUT;
+    }
+    out.add_modifier(m)
+}
+
+/// Inverse of [`engine_style_to_ratatui`]. Lossy for ratatui colors
+/// the engine doesn't model (Indexed, named ANSI) — flattens to
+/// nearest RGB.
+pub(crate) fn ratatui_style_to_engine(s: ratatui::style::Style) -> crate::types::Style {
+    use crate::types::{Attrs, Color, Style};
+    use ratatui::style::{Color as RColor, Modifier as RMod};
+    fn c(rc: RColor) -> Color {
+        match rc {
+            RColor::Rgb(r, g, b) => Color(r, g, b),
+            RColor::Black => Color(0, 0, 0),
+            RColor::Red => Color(205, 49, 49),
+            RColor::Green => Color(13, 188, 121),
+            RColor::Yellow => Color(229, 229, 16),
+            RColor::Blue => Color(36, 114, 200),
+            RColor::Magenta => Color(188, 63, 188),
+            RColor::Cyan => Color(17, 168, 205),
+            RColor::Gray => Color(229, 229, 229),
+            RColor::DarkGray => Color(102, 102, 102),
+            RColor::LightRed => Color(241, 76, 76),
+            RColor::LightGreen => Color(35, 209, 139),
+            RColor::LightYellow => Color(245, 245, 67),
+            RColor::LightBlue => Color(59, 142, 234),
+            RColor::LightMagenta => Color(214, 112, 214),
+            RColor::LightCyan => Color(41, 184, 219),
+            RColor::White => Color(255, 255, 255),
+            _ => Color(0, 0, 0),
+        }
+    }
+    let mut attrs = Attrs::empty();
+    if s.add_modifier.contains(RMod::BOLD) {
+        attrs |= Attrs::BOLD;
+    }
+    if s.add_modifier.contains(RMod::ITALIC) {
+        attrs |= Attrs::ITALIC;
+    }
+    if s.add_modifier.contains(RMod::UNDERLINED) {
+        attrs |= Attrs::UNDERLINE;
+    }
+    if s.add_modifier.contains(RMod::REVERSED) {
+        attrs |= Attrs::REVERSE;
+    }
+    if s.add_modifier.contains(RMod::DIM) {
+        attrs |= Attrs::DIM;
+    }
+    if s.add_modifier.contains(RMod::CROSSED_OUT) {
+        attrs |= Attrs::STRIKE;
+    }
+    Style {
+        fg: s.fg.map(c),
+        bg: s.bg.map(c),
+        attrs,
+    }
+}
+
 /// Map a [`hjkl_buffer::Edit`] to the SPEC [`crate::types::Edit`]
 /// (`EditOp`). Returns `None` when the buffer edit isn't representable
 /// as a single SPEC EditOp; today every variant maps so this is
@@ -373,6 +465,28 @@ impl<'a> Editor<'a> {
     /// `StyleResolver` for `BufferView`.
     pub fn style_table(&self) -> &[ratatui::style::Style] {
         &self.style_table
+    }
+
+    /// Intern a SPEC [`crate::types::Style`] and return its opaque id.
+    /// The id matches the one [`intern_style`] would return for the
+    /// equivalent `ratatui::Style` — both methods share the underlying
+    /// table.
+    ///
+    /// Hosts that don't depend on ratatui (buffr, future GUI shells)
+    /// reach this method to populate the table during syntax span
+    /// installation. Internally converts to ratatui::Style today; the
+    /// trait extraction will flip the storage to engine-native.
+    pub fn intern_engine_style(&mut self, style: crate::types::Style) -> u32 {
+        let r = engine_style_to_ratatui(style);
+        self.intern_style(r)
+    }
+
+    /// Look up an interned style by id and return it as a SPEC
+    /// [`crate::types::Style`]. Returns `None` for ids past the end
+    /// of the table.
+    pub fn engine_style_at(&self, id: u32) -> Option<crate::types::Style> {
+        let r = self.style_table.get(id as usize).copied()?;
+        Some(ratatui_style_to_engine(r))
     }
 
     /// Borrow the migration buffer. Host renders through this via
@@ -1403,6 +1517,30 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn intern_engine_style_dedups_with_intern_style() {
+        use crate::types::{Attrs, Color, Style};
+        let mut e = Editor::new(KeybindingMode::Vim);
+        let s = Style {
+            fg: Some(Color(255, 0, 0)),
+            bg: None,
+            attrs: Attrs::BOLD,
+        };
+        let id_a = e.intern_engine_style(s);
+        // Re-interning the same engine style returns the same id.
+        let id_b = e.intern_engine_style(s);
+        assert_eq!(id_a, id_b);
+        // Engine accessor returns the same style back.
+        let back = e.engine_style_at(id_a).expect("interned");
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn engine_style_at_out_of_range_returns_none() {
+        let e = Editor::new(KeybindingMode::Vim);
+        assert!(e.engine_style_at(99).is_none());
     }
 
     #[test]
