@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-04-26
+
+### Added
+
+- `smartcase` honoured by `/` and `?` searches. When `ignorecase` is on
+  and the pattern contains an uppercase letter, the search compiles
+  case-sensitive (matches vim's combined `ignorecase` + `smartcase`
+  behaviour). Wired through `Settings::smartcase`, `Options::smartcase`,
+  and `:set smartcase` / `:set scs` / `:set nosmartcase`.
+- `:set` listing now includes `smartcase=on/off`. Golden snapshot
+  updated.
+
 ## [0.0.18] - 2026-04-26
 
 ### Added

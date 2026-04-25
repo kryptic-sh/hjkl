@@ -573,7 +573,12 @@ fn push_search_pattern(ed: &mut Editor<'_>, pattern: &str) {
         // `:set ignorecase` flips every search pattern to case-insensitive
         // unless the user already prefixed an explicit `(?i)` / `(?-i)`
         // (regex crate honours those even when we layer another `(?i)`).
-        let effective: std::borrow::Cow<'_, str> = if ed.settings().ignore_case {
+        // `:set smartcase` re-enables case sensitivity for any pattern
+        // that contains an uppercase letter — matches vim's combined
+        // `ignorecase` + `smartcase` behaviour.
+        let case_insensitive = ed.settings().ignore_case
+            && !(ed.settings().smartcase && pattern.chars().any(|c| c.is_uppercase()));
+        let effective: std::borrow::Cow<'_, str> = if case_insensitive {
             std::borrow::Cow::Owned(format!("(?i){pattern}"))
         } else {
             std::borrow::Cow::Borrowed(pattern)
@@ -7868,6 +7873,22 @@ mod tests {
                 head_row: 1,
             })
         );
+    }
+
+    #[test]
+    fn smartcase_uppercase_pattern_stays_sensitive() {
+        let mut e = editor_with("foo\nFoo\nBAR\n");
+        e.settings_mut().ignore_case = true;
+        e.settings_mut().smartcase = true;
+        // All-lowercase pattern → ignorecase wins → compiled regex
+        // is case-insensitive.
+        run_keys(&mut e, "/foo\n");
+        let r1 = e.buffer().search_pattern().unwrap().as_str().to_string();
+        assert!(r1.starts_with("(?i)"), "lowercase under smartcase: {r1}");
+        // Uppercase letter → smartcase flips back to case-sensitive.
+        run_keys(&mut e, "/Foo\n");
+        let r2 = e.buffer().search_pattern().unwrap().as_str().to_string();
+        assert!(!r2.starts_with("(?i)"), "mixed-case under smartcase: {r2}");
     }
 
     #[test]

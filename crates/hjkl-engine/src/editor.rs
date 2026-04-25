@@ -338,6 +338,10 @@ pub struct Settings {
     /// When true, `/` / `?` patterns and `:s/.../.../` ignore case
     /// without an explicit `i` flag.
     pub ignore_case: bool,
+    /// When true *and* `ignore_case` is true, an uppercase letter in
+    /// the pattern flips that search back to case-sensitive. Matches
+    /// vim's `:set smartcase`. Default `false`.
+    pub smartcase: bool,
     /// Wrap column for `gq{motion}` text reflow. Vim's default is 79.
     pub textwidth: usize,
     /// When `true`, the Tab key in insert mode inserts `tabstop` spaces
@@ -358,6 +362,7 @@ impl Default for Settings {
             shiftwidth: 2,
             tabstop: 8,
             ignore_case: false,
+            smartcase: false,
             textwidth: 79,
             expandtab: false,
             wrap: hjkl_buffer::Wrap::None,
@@ -1120,6 +1125,7 @@ impl<'a> Editor<'a> {
             textwidth: self.settings.textwidth as u32,
             expandtab: self.settings.expandtab,
             ignorecase: self.settings.ignore_case,
+            smartcase: self.settings.smartcase,
             wrap: match self.settings.wrap {
                 hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
                 hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
@@ -1139,6 +1145,7 @@ impl<'a> Editor<'a> {
         self.settings.textwidth = opts.textwidth as usize;
         self.settings.expandtab = opts.expandtab;
         self.settings.ignore_case = opts.ignorecase;
+        self.settings.smartcase = opts.smartcase;
         self.settings.wrap = match opts.wrap {
             crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
             crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
