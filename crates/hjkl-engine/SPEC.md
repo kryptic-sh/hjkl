@@ -4,7 +4,11 @@ Draft, 2026-04-26. Source: phase 0 audit (`../../AUDIT.md`) + `MIGRATION.md`
 Spec Lock. This document is the **stability contract** that the public trait
 surface guarantees. Bumps in lockstep with crate version.
 
-Status: **0.0.0 placeholder**. SPEC describes the planned 0.0.1 surface.
+Status: **0.0.0 imported**. The crate now contains the wholesale sqeel-vim port
+(448 tests passing, exact baseline match) but the public API still matches
+sqeel's, not this SPEC. Phase 5 trait extraction lands the SPEC-described
+surface; until then `ratatui` and `crossterm` are unconditional deps and
+`no_std`/wasm builds are deferred.
 
 ## Crate boundaries
 
