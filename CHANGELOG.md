@@ -8,6 +8,27 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-04-26
+
+### Added
+
+- `hjkl-buffer`: full sqeel-buffer port with cursor, edits, motions, folds,
+  viewport, search. ratatui Widget impl behind optional `ratatui` feature.
+  Default features off — buffer is UI-agnostic.
+- `hjkl-engine`: full sqeel-vim port with vim FSM, ex commands, registers,
+  dot-repeat, marks. ratatui + crossterm currently mandatory; phase 5
+  trait extraction will move them behind features.
+- `hjkl-engine::types` module: SPEC core types (`Pos`, `Selection`,
+  `SelectionKind`, `SelectionSet`, `Edit`, `Mode`, `CursorShape`,
+  `Style`, `Color`, `Attrs`, `Highlight`, `HighlightKind`). Additive
+  alongside the legacy public API; trait extraction wires the FSM and
+  Editor onto these progressively.
+
+### Changed
+
+- `hjkl-editor` and `hjkl-ratatui`: still placeholder; ship 0.0.1 to keep
+  lockstep workspace version.
+
 ## [0.0.0] - 2026-04-26
 
 ### Added
