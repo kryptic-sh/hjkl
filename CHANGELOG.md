@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-04-26
+
+### Added
+
+- `Options::textwidth` (u32, default 79) — engine-native bridge for the
+  legacy `Settings::textwidth` driving `gq{motion}` reflow. Wired through
+  `current_options` / `apply_options` and `set_by_name("tw"|"textwidth")`.
+
 ## [0.0.16] - 2026-04-26
 
 ### Added

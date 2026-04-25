@@ -249,6 +249,8 @@ pub struct Options {
     /// Soft-wrap behavior for lines that exceed the viewport width.
     /// Maps directly to `:set wrap` / `:set linebreak` / `:set nowrap`.
     pub wrap: WrapMode,
+    /// Wrap column for `gq{motion}` text reflow. Vim's default is 79.
+    pub textwidth: u32,
 }
 
 /// Soft-wrap mode for the renderer + scroll math + `gj` / `gk`.
@@ -300,6 +302,7 @@ impl Default for Options {
             undo_break_on_motion: true,
             readonly: false,
             wrap: WrapMode::None,
+            textwidth: 79,
         }
     }
 }
@@ -360,6 +363,7 @@ impl Options {
         match name {
             "tabstop" | "ts" => set_u32!(tabstop),
             "shiftwidth" | "sw" => set_u32!(shiftwidth),
+            "textwidth" | "tw" => set_u32!(textwidth),
             "expandtab" | "et" => set_bool!(expandtab),
             "iskeyword" | "isk" => set_string!(iskeyword),
             "ignorecase" | "ic" => set_bool!(ignorecase),
@@ -425,6 +429,7 @@ impl Options {
         Some(match name {
             "tabstop" | "ts" => OptionValue::Int(self.tabstop as i64),
             "shiftwidth" | "sw" => OptionValue::Int(self.shiftwidth as i64),
+            "textwidth" | "tw" => OptionValue::Int(self.textwidth as i64),
             "expandtab" | "et" => OptionValue::Bool(self.expandtab),
             "iskeyword" | "isk" => OptionValue::String(self.iskeyword.clone()),
             "ignorecase" | "ic" => OptionValue::Bool(self.ignorecase),
