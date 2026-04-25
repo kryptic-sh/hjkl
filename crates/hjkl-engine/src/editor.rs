@@ -1134,22 +1134,56 @@ impl<'a> Editor<'a> {
 
     /// SPEC-typed highlights for `line`.
     ///
-    /// Today's emission is search-match-only: when the buffer has an
-    /// armed search pattern, every regex hit on that line surfaces as
-    /// a [`crate::types::Highlight`] with kind
-    /// [`crate::types::HighlightKind::SearchMatch`]. Selection,
-    /// IncSearch, MatchParen, and Syntax variants land once the trait
-    /// extraction routes the FSM's selection set + the host's syntax
-    /// pipeline through the [`crate::types::Host`] trait.
+    /// Two emission modes:
     ///
-    /// Returns an empty vec when the buffer has no search pattern
-    /// or `line` is out of bounds.
+    /// - **IncSearch**: the user is typing a `/` or `?` prompt and
+    ///   `Editor::search_prompt` is `Some`. Live-preview matches of
+    ///   the in-flight pattern surface as
+    ///   [`crate::types::HighlightKind::IncSearch`].
+    /// - **SearchMatch**: the prompt has been committed (or absent)
+    ///   and the buffer's armed pattern is non-empty. Matches surface
+    ///   as [`crate::types::HighlightKind::SearchMatch`].
+    ///
+    /// Selection / MatchParen / Syntax(id) variants land once the
+    /// trait extraction routes the FSM's selection set + the host's
+    /// syntax pipeline through the [`crate::types::Host`] trait.
+    ///
+    /// Returns an empty vec when there is nothing to highlight or
+    /// `line` is out of bounds.
     pub fn highlights_for_line(&mut self, line: u32) -> Vec<crate::types::Highlight> {
         use crate::types::{Highlight, HighlightKind, Pos};
         let row = line as usize;
         if row >= self.buffer.lines().len() {
             return Vec::new();
         }
+
+        // Live preview while the prompt is open beats the committed
+        // pattern.
+        if let Some(prompt) = self.search_prompt() {
+            if prompt.text.is_empty() {
+                return Vec::new();
+            }
+            let Ok(re) = regex::Regex::new(&prompt.text) else {
+                return Vec::new();
+            };
+            let Some(haystack) = self.buffer.line(row) else {
+                return Vec::new();
+            };
+            return re
+                .find_iter(haystack)
+                .map(|m| Highlight {
+                    range: Pos {
+                        line,
+                        col: m.start() as u32,
+                    }..Pos {
+                        line,
+                        col: m.end() as u32,
+                    },
+                    kind: HighlightKind::IncSearch,
+                })
+                .collect();
+        }
+
         if self.buffer.search_pattern().is_none() {
             return Vec::new();
         }
@@ -1791,6 +1825,35 @@ mod tests {
         assert_eq!(h.kind, HighlightKind::Selection);
         assert_eq!(h.range.start.line, 0);
         assert_eq!(h.range.end.line, 0);
+    }
+
+    #[test]
+    fn highlights_emit_incsearch_during_active_prompt() {
+        use crate::types::HighlightKind;
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("foo bar foo\nbaz\n");
+        // Open the `/` prompt and type `f` `o` `o`.
+        e.handle_key(key(KeyCode::Char('/')));
+        e.handle_key(key(KeyCode::Char('f')));
+        e.handle_key(key(KeyCode::Char('o')));
+        e.handle_key(key(KeyCode::Char('o')));
+        // Prompt should be active.
+        assert!(e.search_prompt().is_some());
+        let hs = e.highlights_for_line(0);
+        assert_eq!(hs.len(), 2);
+        for h in &hs {
+            assert_eq!(h.kind, HighlightKind::IncSearch);
+        }
+    }
+
+    #[test]
+    fn highlights_empty_for_blank_prompt() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("foo");
+        e.handle_key(key(KeyCode::Char('/')));
+        // Nothing typed yet — prompt active but text empty.
+        assert!(e.search_prompt().is_some());
+        assert!(e.highlights_for_line(0).is_empty());
     }
 
     #[test]
