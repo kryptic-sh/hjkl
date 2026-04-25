@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-04-26
+
+### Added
+
+- `Editor::intern_engine_style(types::Style) -> u32` — SPEC-typed style
+  interning. Same opaque ids as the ratatui-flavoured `intern_style`; both share
+  the underlying table.
+- `Editor::engine_style_at(id) -> Option<types::Style>` — looks up an interned
+  style by id, returns it as a SPEC type. Hosts that don't depend on ratatui
+  (buffr, future GUI shells) reach this surface for syntax-span installation.
+
 ## [0.0.11] - 2026-04-26
 
 ### Added
