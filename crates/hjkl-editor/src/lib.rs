@@ -43,6 +43,11 @@
 //! [`LspIntent`]: hjkl_engine::LspIntent
 #![forbid(unsafe_code)]
 
+// Ex command driver — relocated from hjkl-engine in 0.0.5. Lives here
+// because ex commands operate over the public Editor surface; engine
+// stays focused on the FSM core.
+mod ex;
+
 pub mod buffer {
     //! Re-export of [`hjkl_buffer`]'s public surface.
 
@@ -65,7 +70,9 @@ pub mod runtime {
     };
     pub mod ex {
         //! Ex command driver — `:s/pat/.../`, `:w`, `:q`, etc.
-        pub use hjkl_engine::ex::*;
+        //!
+        //! Lives in this crate (relocated from hjkl-engine in 0.0.5).
+        pub use crate::ex::*;
     }
 }
 

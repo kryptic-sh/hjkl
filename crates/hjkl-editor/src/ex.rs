@@ -6,7 +6,7 @@
 //! applied in-place against `Editor`; quit / save / unknown are returned
 //! to the caller so the TUI loop can run them.
 
-use crate::editor::Editor;
+use hjkl_engine::Editor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExEffect {
@@ -92,11 +92,11 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
         "reg" | "registers" => return ExEffect::Info(format_registers(editor)),
         "marks" => return ExEffect::Info(format_marks(editor)),
         "undo" | "u" => {
-            crate::vim::do_undo(editor);
+            hjkl_engine::do_undo(editor);
             return ExEffect::Ok;
         }
         "redo" | "red" => {
-            crate::vim::do_redo(editor);
+            hjkl_engine::do_redo(editor);
             return ExEffect::Ok;
         }
         "foldindent" | "foldi" => return apply_fold_indent(editor),
@@ -345,7 +345,7 @@ fn apply_shell_filter(editor: &mut Editor<'_>, range: Option<Range>, cmd: &str) 
     all_lines.extend(new_rows);
     all_lines.extend(after);
     editor.restore(all_lines, (scope.start, 0));
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     ExEffect::Ok
 }
 
@@ -413,7 +413,7 @@ fn apply_read_file(editor: &mut Editor<'_>, path: &str) -> ExEffect {
     });
     // Cursor lands on the first inserted row (row + 1) at col 0.
     editor.jump_cursor(row + 1, 0);
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     ExEffect::Ok
 }
 
@@ -565,7 +565,7 @@ fn apply_delete_range(editor: &mut Editor<'_>, range: Option<Range>) -> ExEffect
             kind: MotionKind::Line,
         });
     }
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     ExEffect::Ok
 }
 
@@ -663,7 +663,7 @@ fn apply_global(
             kind: MotionKind::Line,
         });
     }
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     ExEffect::Substituted { count }
 }
 
@@ -828,7 +828,7 @@ fn apply_sort(editor: &mut Editor<'_>, range: Option<Range>, flags: &str) -> ExE
 
     editor.push_undo();
     editor.restore(all_lines, (scope.start, 0));
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     ExEffect::Ok
 }
 
@@ -1058,7 +1058,7 @@ fn apply_substitute(
     editor
         .buffer_mut()
         .set_cursor(hjkl_buffer::Position::new(range_start, 0));
-    editor.mark_dirty_after_ex();
+    mark_dirty_after_ex(editor);
     Ok(count)
 }
 
@@ -1110,20 +1110,23 @@ fn expand_vim_replacement(input: &str) -> String {
     out
 }
 
-impl<'a> Editor<'a> {
-    /// Called by ex-command handlers after they rewrite the buffer.
-    /// Ensures dirty tracking and undo bookkeeping stay consistent.
-    fn mark_dirty_after_ex(&mut self) {
-        self.mark_content_dirty();
-    }
+/// Called by ex-command handlers after they rewrite the buffer. Ensures
+/// dirty tracking and undo bookkeeping stay consistent.
+///
+/// Free function rather than an inherent method because Rust's orphan
+/// rules forbid `impl Editor` from outside the engine crate. Callers
+/// that previously wrote `editor.mark_dirty_after_ex()` now write
+/// `mark_dirty_after_ex(editor)`.
+fn mark_dirty_after_ex(editor: &mut Editor<'_>) {
+    editor.mark_content_dirty();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::KeybindingMode;
-    use crate::editor::Editor;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_engine::Editor;
+    use hjkl_engine::KeybindingMode;
 
     fn new(content: &str) -> Editor<'static> {
         let mut e = Editor::new(KeybindingMode::Vim);
@@ -1383,7 +1386,7 @@ mod tests {
         let mut e = new("c\nb\na");
         run(&mut e, "sort");
         assert_eq!(e.buffer().lines()[0], "a");
-        crate::vim::do_undo(&mut e);
+        hjkl_engine::do_undo(&mut e);
         assert_eq!(
             e.buffer().lines(),
             vec!["c".to_string(), "b".into(), "a".into()]
@@ -1733,7 +1736,7 @@ mod tests {
         let mut e = new("c\nb\na");
         let before: Vec<String> = e.buffer().lines().to_vec();
         run(&mut e, "%!sort");
-        crate::vim::do_undo(&mut e);
+        hjkl_engine::do_undo(&mut e);
         assert_eq!(e.buffer().lines(), before);
     }
 
@@ -1827,7 +1830,7 @@ mod tests {
         e.jump_cursor(0, 0);
         run(&mut e, &format!("r {}", path.display()));
         assert_eq!(e.buffer().lines().len(), 3);
-        crate::vim::do_undo(&mut e);
+        hjkl_engine::do_undo(&mut e);
         assert_eq!(e.buffer().lines(), vec!["a".to_string(), "b".into()]);
         std::fs::remove_file(&path).ok();
     }

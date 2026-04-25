@@ -21,6 +21,10 @@ hjkl-engine = { path = "../hjkl-engine", version = "=0.0.4", default-features = 
 hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.4", features = [
   "ratatui",
 ] }
+regex = "1"
+
+[dev-dependencies]
+crossterm = { version = "0.28.1", features = ["event-stream"] }
 
 [package.metadata.docs.rs]
 all-features = true

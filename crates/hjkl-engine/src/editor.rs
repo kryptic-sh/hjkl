@@ -32,9 +32,11 @@ pub struct Editor<'a> {
     /// Set when the user yanks/cuts; caller drains this to write to OS clipboard.
     pub last_yank: Option<String>,
     /// All vim-specific state (mode, pending operator, count, dot-repeat, ...).
-    pub(super) vim: VimState,
+    #[doc(hidden)]
+    pub vim: VimState,
     /// Undo history: each entry is (lines, cursor) before the edit.
-    pub(super) undo_stack: Vec<(Vec<String>, (usize, usize))>,
+    #[doc(hidden)]
+    pub undo_stack: Vec<(Vec<String>, (usize, usize))>,
     /// Redo history: entries pushed when undoing.
     pub(super) redo_stack: Vec<(Vec<String>, (usize, usize))>,
     /// Set whenever the buffer content changes; cleared by `take_dirty`.
@@ -67,7 +69,8 @@ pub struct Editor<'a> {
     pub(super) style_table: Vec<ratatui::style::Style>,
     /// Vim-style register bank — `"`, `"0`–`"9`, `"a`–`"z`. Sources
     /// every `p` / `P` via the active selector (default unnamed).
-    pub(super) registers: crate::registers::Registers,
+    #[doc(hidden)]
+    pub registers: crate::registers::Registers,
     /// Per-row syntax styling, kept here so the host can do
     /// incremental window updates (see `apply_window_spans` in
     /// the host). Same `(start_byte, end_byte, Style)` tuple shape
@@ -77,18 +80,21 @@ pub struct Editor<'a> {
     /// Per-editor settings tweakable via `:set`. Exposed by reference
     /// so handlers (indent, search) read the live value rather than a
     /// snapshot taken at startup.
-    pub(super) settings: Settings,
+    #[doc(hidden)]
+    pub settings: Settings,
     /// Vim's uppercase / "file" marks. Survive `set_content` calls so
     /// they persist across tab swaps within the same Editor — the
     /// closest sqeel can get to vim's per-file marks without
     /// host-side persistence. Lowercase marks stay buffer-local on
     /// `vim.marks`.
-    pub(super) file_marks: std::collections::HashMap<char, (usize, usize)>,
+    #[doc(hidden)]
+    pub file_marks: std::collections::HashMap<char, (usize, usize)>,
     /// Block ranges (`(start_row, end_row)` inclusive) the host has
     /// extracted from a syntax tree. `:foldsyntax` reads these to
     /// populate folds. The host (the host) refreshes them on every
     /// re-parse via [`Editor::set_syntax_fold_ranges`].
-    pub(super) syntax_fold_ranges: Vec<(usize, usize)>,
+    #[doc(hidden)]
+    pub syntax_fold_ranges: Vec<(usize, usize)>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -170,7 +176,8 @@ impl<'a> Editor<'a> {
         &self.settings
     }
 
-    pub(super) fn settings_mut(&mut self) -> &mut Settings {
+    #[doc(hidden)]
+    pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
     }
 
@@ -320,7 +327,8 @@ impl<'a> Editor<'a> {
     /// content. Replaces the scattered
     /// `ed.textarea.move_cursor(CursorMove::Jump(r, c))` pattern that
     /// existed before Phase 7f.
-    pub(crate) fn jump_cursor(&mut self, row: usize, col: usize) {
+    #[doc(hidden)]
+    pub fn jump_cursor(&mut self, row: usize, col: usize) {
         self.buffer.set_cursor(hjkl_buffer::Position::new(row, col));
     }
 
@@ -387,7 +395,8 @@ impl<'a> Editor<'a> {
     /// the textarea so the still-textarea-driven paths (insert mode,
     /// yank pipe) keep observing the same content. Returns the
     /// inverse for the host's undo stack.
-    pub(super) fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
+    #[doc(hidden)]
+    pub fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
         let pre_row = self.buffer.cursor().row;
         let pre_rows = self.buffer.row_count();
         let inverse = self.buffer.apply_edit(edit);
@@ -989,7 +998,8 @@ impl<'a> Editor<'a> {
         (self.buffer.lines().to_vec(), (pos.row, pos.col))
     }
 
-    pub(super) fn push_undo(&mut self) {
+    #[doc(hidden)]
+    pub fn push_undo(&mut self) {
         let snap = self.snapshot();
         if self.undo_stack.len() >= 200 {
             self.undo_stack.remove(0);
@@ -998,7 +1008,8 @@ impl<'a> Editor<'a> {
         self.redo_stack.clear();
     }
 
-    pub(super) fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
+    #[doc(hidden)]
+    pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
         let text = lines.join("\n");
         self.buffer.replace_all(&text);
         self.buffer

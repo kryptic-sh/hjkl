@@ -388,7 +388,8 @@ pub struct VimState {
     pub(super) last_macro: Option<char>,
     /// Position of the most recent buffer mutation. Surfaced via
     /// the `'.` / `` `. `` marks for quick "back to last edit".
-    pub(super) last_edit_pos: Option<(usize, usize)>,
+    #[doc(hidden)]
+    pub last_edit_pos: Option<(usize, usize)>,
     /// Bounded ring of recent edit positions (newest at the back).
     /// `g;` walks toward older entries, `g,` toward newer ones. Capped
     /// at [`CHANGE_LIST_MAX`].
@@ -422,7 +423,8 @@ pub struct VimState {
     /// with the pre-motion cursor when a "big jump" motion fires
     /// (`gg`/`G`, `%`, `*`/`#`, `n`/`N`, `H`/`M`/`L`, committed `/` or
     /// `?`). Capped at 100 entries.
-    pub(super) jump_back: Vec<(usize, usize)>,
+    #[doc(hidden)]
+    pub jump_back: Vec<(usize, usize)>,
     /// Forward half — `Ctrl-i` pops from here. Cleared by any new big
     /// jump, matching vim's "branch off trims forward history" rule.
     pub(super) jump_fwd: Vec<(usize, usize)>,
@@ -430,7 +432,8 @@ pub struct VimState {
     /// cursor `(row, col)` under the letter; `'{a-z}` and `` `{a-z} ``
     /// read it back. Uppercase / global marks aren't supported
     /// (single-buffer model).
-    pub(super) marks: std::collections::HashMap<char, (usize, usize)>,
+    #[doc(hidden)]
+    pub marks: std::collections::HashMap<char, (usize, usize)>,
     /// Set by `Ctrl-R` in insert mode while waiting for the register
     /// selector. The next typed char names the register; its contents
     /// are inserted inline at the cursor and the flag clears.
@@ -4861,7 +4864,8 @@ fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
     ed.vim.sticky_col = Some(ed.buffer().cursor().col);
 }
 
-pub(crate) fn do_undo(ed: &mut Editor<'_>) {
+#[doc(hidden)]
+pub fn do_undo(ed: &mut Editor<'_>) {
     if let Some((lines, cursor)) = ed.undo_stack.pop() {
         let current = ed.snapshot();
         ed.redo_stack.push(current);
@@ -4870,7 +4874,8 @@ pub(crate) fn do_undo(ed: &mut Editor<'_>) {
     ed.vim.mode = Mode::Normal;
 }
 
-pub(crate) fn do_redo(ed: &mut Editor<'_>) {
+#[doc(hidden)]
+pub fn do_redo(ed: &mut Editor<'_>) {
     if let Some((lines, cursor)) = ed.redo_stack.pop() {
         let current = ed.snapshot();
         ed.undo_stack.push(current);
@@ -7605,51 +7610,10 @@ mod tests {
         assert_ne!(e.cursor(), (2, 1));
     }
 
-    #[test]
-    fn gqq_reflows_current_line_to_textwidth() {
-        let mut e = editor_with("alpha beta gamma delta epsilon zeta eta theta iota");
-        crate::ex::run(&mut e, "set tw=20");
-        assert_eq!(e.settings().textwidth, 20);
-        run_keys(&mut e, "gqq");
-        // Each output line should fit within 20 chars.
-        for line in e.buffer().lines() {
-            assert!(line.chars().count() <= 20, "line too long: {line:?}");
-        }
-        // Output is split across multiple rows now.
-        assert!(e.buffer().lines().len() > 1);
-    }
-
-    #[test]
-    fn gq_motion_reflows_paragraph() {
-        let mut e = editor_with("one two three\nfour five six\nseven eight\n\ntail");
-        crate::ex::run(&mut e, "set tw=15");
-        e.jump_cursor(0, 0);
-        // gq} reflows up to the next blank line.
-        run_keys(&mut e, "gq}");
-        // Last row past the blank stays untouched.
-        assert_eq!(e.buffer().lines().last().unwrap(), "tail");
-    }
-
-    #[test]
-    fn gq_preserves_paragraph_breaks() {
-        let mut e = editor_with("alpha beta gamma\n\ndelta epsilon zeta");
-        crate::ex::run(&mut e, "set tw=10");
-        run_keys(&mut e, "ggVGgq");
-        // The blank line between the two paragraphs survives the
-        // reflow.
-        let blanks = e.buffer().lines().iter().filter(|l| l.is_empty()).count();
-        assert_eq!(blanks, 1);
-    }
-
-    #[test]
-    fn gqq_undo_restores_original_line() {
-        let mut e = editor_with("a b c d e f g h i j k l m n o p");
-        crate::ex::run(&mut e, "set tw=10");
-        let before: Vec<String> = e.buffer().lines().to_vec();
-        run_keys(&mut e, "gqq");
-        crate::vim::do_undo(&mut e);
-        assert_eq!(e.buffer().lines(), before);
-    }
+    // gq* tests moved to crates/hjkl-editor/tests/vim_ex_integration.rs
+    // — they exercise the vim FSM through ex commands which now live in
+    // a sibling crate. cargo dev-dep cycles produce duplicate type IDs
+    // so the integration must run from the editor side.
 
     #[test]
     fn capital_mark_set_and_jump() {
@@ -7677,20 +7641,9 @@ mod tests {
         assert_eq!(e.cursor().0, 1);
     }
 
-    #[test]
-    fn capital_mark_shows_in_marks_listing() {
-        let mut e = editor_with("a\nb\nc");
-        e.jump_cursor(2, 0);
-        run_keys(&mut e, "mZ");
-        e.jump_cursor(0, 0);
-        run_keys(&mut e, "ma");
-        let info = match crate::ex::run(&mut e, "marks") {
-            crate::ex::ExEffect::Info(s) => s,
-            other => panic!("expected Info, got {other:?}"),
-        };
-        assert!(info.contains(" a "));
-        assert!(info.contains(" Z "));
-    }
+    // capital_mark_shows_in_marks_listing moved to
+    // crates/hjkl-editor/tests/vim_ex_integration.rs (depends on the
+    // ex `marks` command).
 
     #[test]
     fn capital_mark_shifts_with_edit() {
