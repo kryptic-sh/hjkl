@@ -34,9 +34,10 @@ pub use registers::{Registers, Slot};
 // (which now live in `hjkl-editor`) can reach them across the crate
 // boundary. Sealed at 0.1.0 trait extraction.
 pub use types::{
-    Attrs, BufferId, Color, CursorShape, Edit as EditOp, EngineError, Highlight, HighlightKind,
-    Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, Options, Pos, Selection,
-    SelectionKind, SelectionSet, SpecialKey, Style, Viewport as PlannedViewport,
+    Attrs, BufferId, Color, CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight,
+    HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, Options,
+    Pos, Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey, Style,
+    Viewport as PlannedViewport,
 };
 pub use vim::SearchPrompt;
 #[doc(hidden)]

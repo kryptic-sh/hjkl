@@ -702,6 +702,67 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// Capture the editor's coarse state into a serde-friendly
+    /// [`crate::types::EditorSnapshot`].
+    ///
+    /// Today's snapshot covers mode, cursor, lines, viewport top.
+    /// Registers, marks, jump list, undo tree, and full options arrive
+    /// once phase 5 trait extraction lands the generic
+    /// `Editor<B: Buffer, H: Host>` constructor — this method's surface
+    /// stays stable; only the snapshot's internal fields grow.
+    ///
+    /// Distinct from the internal `snapshot` used by undo (which
+    /// returns `(Vec<String>, (usize, usize))`); host-facing
+    /// persistence goes through this one.
+    pub fn take_snapshot(&self) -> crate::types::EditorSnapshot {
+        use crate::types::{EditorSnapshot, SnapshotMode};
+        let mode = match self.vim_mode() {
+            crate::VimMode::Normal => SnapshotMode::Normal,
+            crate::VimMode::Insert => SnapshotMode::Insert,
+            crate::VimMode::Visual => SnapshotMode::Visual,
+            crate::VimMode::VisualLine => SnapshotMode::VisualLine,
+            crate::VimMode::VisualBlock => SnapshotMode::VisualBlock,
+        };
+        let cursor = self.cursor();
+        let cursor = (cursor.0 as u32, cursor.1 as u32);
+        let lines: Vec<String> = self.buffer.lines().to_vec();
+        let viewport_top = self.buffer.viewport().top_row as u32;
+        EditorSnapshot {
+            version: EditorSnapshot::VERSION,
+            mode,
+            cursor,
+            lines,
+            viewport_top,
+        }
+    }
+
+    /// Restore editor state from an [`EditorSnapshot`]. Returns
+    /// [`crate::EngineError::SnapshotVersion`] if the snapshot's
+    /// `version` doesn't match [`EditorSnapshot::VERSION`].
+    ///
+    /// Mode is best-effort: `SnapshotMode` only round-trips the
+    /// status-line summary, not the full FSM state. Visual / Insert
+    /// mode entry happens through synthetic key dispatch when needed.
+    pub fn restore_snapshot(
+        &mut self,
+        snap: crate::types::EditorSnapshot,
+    ) -> Result<(), crate::EngineError> {
+        use crate::types::EditorSnapshot;
+        if snap.version != EditorSnapshot::VERSION {
+            return Err(crate::EngineError::SnapshotVersion(
+                snap.version,
+                EditorSnapshot::VERSION,
+            ));
+        }
+        let text = snap.lines.join("\n");
+        self.set_content(&text);
+        self.jump_cursor(snap.cursor.0 as usize, snap.cursor.1 as usize);
+        let mut vp = self.buffer.viewport();
+        vp.top_row = snap.viewport_top as usize;
+        *self.buffer.viewport_mut() = vp;
+        Ok(())
+    }
+
     /// Install `text` as the pending yank buffer so the next `p`/`P` pastes
     /// it. Linewise is inferred from a trailing newline, matching how `yy`/`dd`
     /// shape their payload.
@@ -1074,6 +1135,37 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn snapshot_roundtrips_through_restore() {
+        use crate::types::SnapshotMode;
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("alpha\nbeta\ngamma");
+        e.jump_cursor(2, 3);
+        let snap = e.take_snapshot();
+        assert_eq!(snap.mode, SnapshotMode::Normal);
+        assert_eq!(snap.cursor, (2, 3));
+        assert_eq!(snap.lines.len(), 3);
+
+        let mut other = Editor::new(KeybindingMode::Vim);
+        other.restore_snapshot(snap).expect("restore");
+        assert_eq!(other.cursor(), (2, 3));
+        assert_eq!(other.buffer().lines().len(), 3);
+    }
+
+    #[test]
+    fn restore_snapshot_rejects_version_mismatch() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut snap = e.take_snapshot();
+        snap.version = 9999;
+        match e.restore_snapshot(snap) {
+            Err(crate::EngineError::SnapshotVersion(got, want)) => {
+                assert_eq!(got, 9999);
+                assert_eq!(want, crate::types::EditorSnapshot::VERSION);
+            }
+            other => panic!("expected SnapshotVersion err, got {other:?}"),
+        }
     }
 
     #[test]

@@ -18,6 +18,7 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 proptest = "1"
+serde_json = "1"
 
 [dependencies]
 # ratatui + crossterm are required deps until phase 5 lands the engine-native

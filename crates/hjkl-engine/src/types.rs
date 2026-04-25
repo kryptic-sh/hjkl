@@ -427,6 +427,56 @@ pub trait Host: Send {
     fn emit_intent(&mut self, intent: Self::Intent);
 }
 
+/// Coarse editor snapshot suitable for serde round-tripping.
+///
+/// Today's shape is intentionally minimal — it carries only the bits
+/// the runtime [`crate::Editor`] knows how to round-trip without the
+/// trait extraction (mode, cursor, lines, viewport top, settings).
+/// Once `Editor<B: Buffer, H: Host>` ships under phase 5, this struct
+/// grows to cover full SPEC state: registers, marks, jump list, change
+/// list, undo tree, full options.
+///
+/// Hosts that persist editor state between sessions should:
+///
+/// - Treat the snapshot as opaque. Don't manually mutate fields.
+/// - Always check `version` after deserialization; reject on
+///   mismatch rather than attempt migration. The 0.0.x churn drops
+///   compatibility freely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct EditorSnapshot {
+    /// Format version. Bumped on every structural change. Hosts use
+    /// this to detect mismatched persisted state.
+    pub version: u32,
+    /// Mode at snapshot time (status-line granularity).
+    pub mode: SnapshotMode,
+    /// Cursor `(row, col)` in byte indexing.
+    pub cursor: (u32, u32),
+    /// Buffer lines. Trailing `\n` not included.
+    pub lines: Vec<String>,
+    /// Viewport top line at snapshot time.
+    pub viewport_top: u32,
+}
+
+/// Status-line mode summary. Bridges to the legacy
+/// [`crate::VimMode`] without leaking the full FSM type into the
+/// snapshot wire format.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SnapshotMode {
+    #[default]
+    Normal,
+    Insert,
+    Visual,
+    VisualLine,
+    VisualBlock,
+}
+
+impl EditorSnapshot {
+    /// Current snapshot format version.
+    pub const VERSION: u32 = 1;
+}
+
 /// Errors surfaced from the engine to the host. Intentionally narrow —
 /// callsites that fail in user-facing ways return `Result<_,
 /// EngineError>`; internal invariant breaks use `debug_assert!`.
@@ -501,6 +551,39 @@ mod tests {
         assert!(o.hlsearch);
         assert!(o.wrapscan);
         assert_eq!(o.timeout_len, core::time::Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn editor_snapshot_version_const() {
+        assert_eq!(EditorSnapshot::VERSION, 1);
+    }
+
+    #[test]
+    fn editor_snapshot_default_shape() {
+        let s = EditorSnapshot {
+            version: EditorSnapshot::VERSION,
+            mode: SnapshotMode::Normal,
+            cursor: (0, 0),
+            lines: vec!["hello".to_string()],
+            viewport_top: 0,
+        };
+        assert_eq!(s.cursor, (0, 0));
+        assert_eq!(s.lines.len(), 1);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn editor_snapshot_roundtrip() {
+        let s = EditorSnapshot {
+            version: EditorSnapshot::VERSION,
+            mode: SnapshotMode::Insert,
+            cursor: (3, 7),
+            lines: vec!["alpha".into(), "beta".into()],
+            viewport_top: 2,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: EditorSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
     }
 
     #[test]
