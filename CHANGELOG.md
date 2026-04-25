@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-04-26
+
+### Added
+
+- `hjkl-engine::types::OptionValue { Bool, Int, String }` — typed value carrier
+  for the `:set` parser.
+- `Options::set_by_name(name, OptionValue) -> Result<(), EngineError>` and
+  `Options::get_by_name(name) -> Option<OptionValue>`. Vim-style short aliases
+  supported (`ts`, `sw`, `et`, `isk`, `ic`, `scs`, `hls`, `is`, `ws`, `ai`,
+  `tm`, `ul`, `ro`).
+
 ## [0.0.9] - 2026-04-26
 
 ### Changed (breaking the 0.0.8 snapshot wire format)
