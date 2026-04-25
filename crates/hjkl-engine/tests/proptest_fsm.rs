@@ -112,3 +112,70 @@ fn handle_key_no_panic_baseline() {
     }
     assert_eq!(ed.vim_mode(), VimMode::Normal);
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        ..ProptestConfig::default()
+    })]
+
+    /// Yank-then-paste round-trip: after `yy` (yank line) on row 0
+    /// followed by `p` (paste below), the original line content
+    /// appears at least twice in the buffer. Property: yank/paste
+    /// preserves the source line text byte-for-byte.
+    #[test]
+    fn yy_then_p_duplicates_line(text in "[a-z]{1,15}") {
+        let mut ed = Editor::new(KeybindingMode::Vim);
+        ed.set_content(&text);
+        // `yy` then `p`.
+        ed.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        ed.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        ed.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        let content = ed.content();
+        prop_assert!(
+            content.matches(text.as_str()).count() >= 2,
+            "expected text {text:?} twice in {content:?}"
+        );
+    }
+
+    /// `dd` followed by `u` (undo) restores the buffer. Property:
+    /// the undo stack reverses the most recent edit fully.
+    #[test]
+    fn dd_then_u_restores(
+        line0 in "[a-z]{1,12}",
+        line1 in "[a-z]{1,12}",
+    ) {
+        let original = format!("{line0}\n{line1}");
+        let mut ed = Editor::new(KeybindingMode::Vim);
+        ed.set_content(&original);
+        let before: Vec<String> = ed.buffer().lines().to_vec();
+        // `dd` deletes the first line.
+        ed.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        ed.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        // `u` undoes.
+        ed.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        prop_assert_eq!(before, ed.buffer().lines().to_vec());
+    }
+
+    /// take_changes drains: a second call after the first returns
+    /// empty no matter what edit sequence preceded it.
+    #[test]
+    fn take_changes_is_idempotent(
+        text in "[a-z]{1,15}",
+        edits in 0u32..5,
+    ) {
+        let mut ed = Editor::new(KeybindingMode::Vim);
+        ed.set_content(&text);
+        // Enter insert mode, type some chars, exit.
+        ed.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        for i in 0..edits {
+            let c = char::from(b'a' + (i as u8 % 26));
+            ed.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        ed.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // First drain may or may not have entries.
+        let _first = ed.take_changes();
+        // Second drain must always be empty.
+        prop_assert!(ed.take_changes().is_empty());
+    }
+}
