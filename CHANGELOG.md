@@ -8,6 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-04-26
+
+### Added
+
+- `hjkl-engine::types` extended with the planned 0.1.0 trait surface: `Options`,
+  `EngineError`, `Modifiers`, `SpecialKey`, `MouseEvent`, `MouseKind`, `Input`,
+  `Host` trait. All additive — coexists with the legacy runtime types in
+  `hjkl-engine::editor`.
+- `hjkl-editor`: real facade crate (was placeholder). Exposes three modules:
+  `buffer`, `runtime`, `spec`. Consumers depend on hjkl-editor alone instead of
+  all three downstream crates.
+- `hjkl-buffer/IMPLEMENTERS.md`: caller invariants documentation.
+- `hjkl-buffer` criterion benches under the `budgets` harness:
+  `insert_char_1MB_buffer`, `search_next_10k_lines`, `cold_load_10MB`.
+- `hjkl-buffer` proptest roundtrip property suite for `apply_edit` (768 random
+  scenarios per test run).
+
+### Changed
+
+- `hjkl-engine::types::Edit` re-exported from the crate root as `EditOp` to
+  disambiguate from `hjkl_buffer::Edit`.
+
 ## [0.0.1] - 2026-04-26
 
 ### Added
@@ -16,13 +38,13 @@ patch bumps.
   viewport, search. ratatui Widget impl behind optional `ratatui` feature.
   Default features off — buffer is UI-agnostic.
 - `hjkl-engine`: full sqeel-vim port with vim FSM, ex commands, registers,
-  dot-repeat, marks. ratatui + crossterm currently mandatory; phase 5
-  trait extraction will move them behind features.
+  dot-repeat, marks. ratatui + crossterm currently mandatory; phase 5 trait
+  extraction will move them behind features.
 - `hjkl-engine::types` module: SPEC core types (`Pos`, `Selection`,
-  `SelectionKind`, `SelectionSet`, `Edit`, `Mode`, `CursorShape`,
-  `Style`, `Color`, `Attrs`, `Highlight`, `HighlightKind`). Additive
-  alongside the legacy public API; trait extraction wires the FSM and
-  Editor onto these progressively.
+  `SelectionKind`, `SelectionSet`, `Edit`, `Mode`, `CursorShape`, `Style`,
+  `Color`, `Attrs`, `Highlight`, `HighlightKind`). Additive alongside the legacy
+  public API; trait extraction wires the FSM and Editor onto these
+  progressively.
 
 ### Changed
 
