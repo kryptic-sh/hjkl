@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.15] - 2026-04-26
+
+### Added
+
+- IncSearch highlight emission. `Editor::highlights_for_line` now branches:
+  active `/` or `?` prompt → `HighlightKind::IncSearch` for live-preview
+  matches; committed pattern → `SearchMatch` (existing behaviour). Hosts can
+  paint live-preview distinctly from committed-search.
+- Insta golden snapshots for ex-command output
+  (`crates/hjkl-editor/tests/golden_ex.rs`): `:registers`, `:marks`, bare
+  `:set`. Catches user-visible text format churn.
+
 ## [0.0.14] - 2026-04-26
 
 ### Changed (potentially breaking)
