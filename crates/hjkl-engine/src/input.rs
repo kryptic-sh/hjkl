@@ -1,6 +1,6 @@
 //! Backend-agnostic key input types used by the vim engine.
 //!
-//! Phase 8 of the sqeel-buffer migration replaced `tui_textarea::Input`
+//! Phase 8 of the hjkl-buffer migration replaced `tui_textarea::Input`
 //! / `tui_textarea::Key` with these in-crate equivalents so the
 //! editor can drop the `tui-textarea` dependency entirely.
 

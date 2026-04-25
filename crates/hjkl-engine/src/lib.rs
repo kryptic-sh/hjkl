@@ -1,10 +1,10 @@
-//! Vim-mode editor widget built on top of `sqeel-buffer`.
+//! Vim-mode editor widget built on top of `hjkl-buffer`.
 //!
 //! Exposes an [`Editor`] you can drop into a ratatui layout, a command
 //! grammar that covers the bulk of vim's normal / insert / visual /
 //! visual-line / visual-block modes, text-object operators, dot-repeat,
 //! and ex-command handling (`:s/foo/bar/g`, `:w`, `:q`, `:noh`, ...).
-//! Rendering goes through `sqeel_buffer::BufferView`; selection / gutter
+//! Rendering goes through `hjkl_buffer::BufferView`; selection / gutter
 //! highlights are painted in the same single-pass as text.
 //!
 //! This crate currently lives inside the sqeel workspace and will likely

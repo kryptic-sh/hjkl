@@ -892,7 +892,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
     if input.ctrl {
         match input.key {
             Key::Char('w') => {
-                use sqeel_buffer::{Edit, MotionKind};
+                use hjkl_buffer::{Edit, MotionKind};
                 ed.sync_buffer_content_from_textarea();
                 let cursor = ed.buffer().cursor();
                 if cursor.row == 0 && cursor.col == 0 {
@@ -915,7 +915,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
                 return true;
             }
             Key::Char('u') => {
-                use sqeel_buffer::{Edit, MotionKind, Position};
+                use hjkl_buffer::{Edit, MotionKind, Position};
                 ed.sync_buffer_content_from_textarea();
                 let cursor = ed.buffer().cursor();
                 if cursor.col > 0 {
@@ -929,7 +929,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
                 return true;
             }
             Key::Char('h') => {
-                use sqeel_buffer::{Edit, MotionKind, Position};
+                use hjkl_buffer::{Edit, MotionKind, Position};
                 ed.sync_buffer_content_from_textarea();
                 let cursor = ed.buffer().cursor();
                 if cursor.col > 0 {
@@ -1021,7 +1021,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
 /// `Edit::InsertStr`. Unknown selectors and empty slots are no-ops so
 /// stray keystrokes don't mutate the buffer.
 fn insert_register_text(ed: &mut Editor<'_>, selector: char) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     let text = match ed.registers().read(selector) {
         Some(slot) if !slot.text.is_empty() => slot.text.clone(),
         _ => return,
@@ -1060,7 +1060,7 @@ fn insert_register_text(ed: &mut Editor<'_>, selector: char) {
 /// effect); every other navigation + edit key lands on `Buffer`.
 /// Returns true when the buffer mutated.
 fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = ed.buffer().cursor();
     let line_chars = ed
@@ -1221,7 +1221,7 @@ fn finish_insert_session(ed: &mut Editor<'_>) {
     };
     let inserted = extract_inserted(&before, &after);
     if !inserted.is_empty() && session.count > 1 && !ed.vim.replaying {
-        use sqeel_buffer::{Edit, Position};
+        use hjkl_buffer::{Edit, Position};
         for _ in 0..session.count - 1 {
             let (row, col) = ed.cursor();
             ed.mutate_edit(Edit::InsertStr {
@@ -1232,7 +1232,7 @@ fn finish_insert_session(ed: &mut Editor<'_>) {
     }
     if let InsertReason::BlockEdge { top, bot, col } = session.reason {
         if !inserted.is_empty() && top < bot && !ed.vim.replaying {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             for r in (top + 1)..=bot {
                 let line_len = ed.buffer().line(r).map(|l| l.chars().count()).unwrap_or(0);
                 if col > line_len {
@@ -1770,13 +1770,12 @@ fn handle_goto_mark(ed: &mut Editor<'_>, input: Input, linewise: bool) -> bool {
     let pre = ed.cursor();
     let (r, c_clamped) = clamp_pos(ed, (row, col));
     if linewise {
-        ed.buffer_mut()
-            .set_cursor(sqeel_buffer::Position::new(r, 0));
+        ed.buffer_mut().set_cursor(hjkl_buffer::Position::new(r, 0));
         ed.push_buffer_cursor_to_textarea();
         move_first_non_whitespace(ed);
     } else {
         ed.buffer_mut()
-            .set_cursor(sqeel_buffer::Position::new(r, c_clamped));
+            .set_cursor(hjkl_buffer::Position::new(r, c_clamped));
         ed.push_buffer_cursor_to_textarea();
     }
     if ed.cursor() != pre {
@@ -1939,7 +1938,7 @@ fn scroll_cursor_rows(ed: &mut Editor<'_>, delta: isize) {
     let last_row = ed.buffer().row_count().saturating_sub(1);
     let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
     ed.buffer_mut()
-        .set_cursor(sqeel_buffer::Position::new(target, 0));
+        .set_cursor(hjkl_buffer::Position::new(target, 0));
     ed.buffer_mut().move_first_non_blank();
     ed.push_buffer_cursor_to_textarea();
     ed.vim.sticky_col = Some(ed.buffer().cursor().col);
@@ -2890,7 +2889,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             true
         }
         Key::Char('o') => {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             // Snapshot BEFORE the newline so replay sees "\n<text>" as the
             // delta and produces one fresh line per iteration.
@@ -2910,7 +2909,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             true
         }
         Key::Char('O') => {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: true });
             ed.sync_buffer_content_from_textarea();
@@ -2992,7 +2991,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             true
         }
         Key::Char('s') => {
-            use sqeel_buffer::{Edit, MotionKind, Position};
+            use hjkl_buffer::{Edit, MotionKind, Position};
             ed.push_undo();
             ed.sync_buffer_content_from_textarea();
             for _ in 0..count.max(1) {
@@ -3149,7 +3148,7 @@ fn run_operator_over_range(
                 ed.record_yank(text, matches!(kind, MotionKind::Linewise));
             }
             ed.buffer_mut()
-                .set_cursor(sqeel_buffer::Position::new(top.0, top.1));
+                .set_cursor(hjkl_buffer::Position::new(top.0, top.1));
             ed.push_buffer_cursor_to_textarea();
         }
         Operator::Delete => {
@@ -3184,7 +3183,7 @@ fn run_operator_over_range(
                 ed.buffer_mut().add_fold(top.0, bot.0, true);
             }
             ed.buffer_mut()
-                .set_cursor(sqeel_buffer::Position::new(top.0, top.1));
+                .set_cursor(hjkl_buffer::Position::new(top.0, top.1));
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
@@ -3268,7 +3267,7 @@ fn apply_case_op_to_selection(
     bot: (usize, usize),
     kind: MotionKind,
 ) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     ed.push_undo();
     let saved_yank = ed.yank().to_string();
     let saved_yank_linewise = ed.vim.yank_linewise;
@@ -3371,7 +3370,7 @@ fn execute_line_op(ed: &mut Editor<'_>, op: Operator, count: usize) {
                 ed.record_yank(text, true);
             }
             ed.buffer_mut()
-                .set_cursor(sqeel_buffer::Position::new(row, col));
+                .set_cursor(hjkl_buffer::Position::new(row, col));
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
@@ -3389,7 +3388,7 @@ fn execute_line_op(ed: &mut Editor<'_>, op: Operator, count: usize) {
                 row.min(total_after.saturating_sub(1))
             };
             ed.buffer_mut()
-                .set_cursor(sqeel_buffer::Position::new(target_row, 0));
+                .set_cursor(hjkl_buffer::Position::new(target_row, 0));
             ed.push_buffer_cursor_to_textarea();
             move_first_non_whitespace(ed);
             ed.vim.mode = Mode::Normal;
@@ -3398,7 +3397,7 @@ fn execute_line_op(ed: &mut Editor<'_>, op: Operator, count: usize) {
             // `cc` / `3cc`: wipe contents of the covered lines but leave
             // a single blank line so insert-mode opens on it. Done as two
             // edits: drop rows past the first, then clear row `row`.
-            use sqeel_buffer::{Edit, MotionKind as BufKind, Position};
+            use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
             ed.push_undo();
             ed.sync_buffer_content_from_textarea();
             // Read the cut payload first so yank reflects every line.
@@ -3477,7 +3476,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                         ed.record_yank(text, true);
                     }
                     ed.buffer_mut()
-                        .set_cursor(sqeel_buffer::Position::new(top, 0));
+                        .set_cursor(hjkl_buffer::Position::new(top, 0));
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -3489,7 +3488,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                 Operator::Change => {
                     // Vim `Vc`: wipe the line contents but leave a blank
                     // line in place so insert-mode starts on an empty row.
-                    use sqeel_buffer::{Edit, MotionKind as BufKind, Position};
+                    use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
                     ed.push_undo();
                     ed.sync_buffer_content_from_textarea();
                     let payload = read_vim_range(ed, (top, 0), (bot, 0), MotionKind::Linewise);
@@ -3561,7 +3560,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                         ed.record_yank(text, false);
                     }
                     ed.buffer_mut()
-                        .set_cursor(sqeel_buffer::Position::new(top.0, top.1));
+                        .set_cursor(hjkl_buffer::Position::new(top.0, top.1));
                     ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
@@ -3786,7 +3785,7 @@ fn block_yank(ed: &Editor<'_>, top: usize, bot: usize, left: usize, right: usize
 }
 
 fn delete_block_contents(ed: &mut Editor<'_>, top: usize, bot: usize, left: usize, right: usize) {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let last_row = bot.min(ed.buffer().row_count().saturating_sub(1));
     if last_row < top {
@@ -3829,7 +3828,7 @@ fn reset_textarea_lines(ed: &mut Editor<'_>, lines: Vec<String>) {
     let cursor = ed.cursor();
     ed.buffer_mut().replace_all(&lines.join("\n"));
     ed.buffer_mut()
-        .set_cursor(sqeel_buffer::Position::new(cursor.0, cursor.1));
+        .set_cursor(hjkl_buffer::Position::new(cursor.0, cursor.1));
     ed.mark_content_dirty();
 }
 
@@ -4493,7 +4492,7 @@ fn read_vim_range(
 /// Cut a vim-shaped range through the Buffer edit funnel and return
 /// the deleted text. Translates vim's `MotionKind`
 /// (Linewise/Inclusive/Exclusive) into the buffer's
-/// `sqeel_buffer::MotionKind` (Line/Char) and applies the right end-
+/// `hjkl_buffer::MotionKind` (Line/Char) and applies the right end-
 /// position adjustment so inclusive motions actually include the bot
 /// cell. Pushes the cut text into both `last_yank` and the textarea
 /// yank buffer (still observed by `p`/`P` until the paste path is
@@ -4504,7 +4503,7 @@ fn cut_vim_range(
     end: (usize, usize),
     kind: MotionKind,
 ) -> String {
-    use sqeel_buffer::{Edit, MotionKind as BufKind, Position};
+    use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
     let (buf_start, buf_end, buf_kind) = match kind {
@@ -4560,7 +4559,7 @@ fn cut_vim_range(
 /// path is ported). Cursor lands at the deletion start so the caller
 /// can decide whether to step it left (`D`) or open insert mode (`C`).
 fn delete_to_eol(ed: &mut Editor<'_>) {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = ed.buffer().cursor();
     let line_chars = ed
@@ -4588,7 +4587,7 @@ fn delete_to_eol(ed: &mut Editor<'_>) {
 }
 
 fn do_char_delete(ed: &mut Editor<'_>, forward: bool, count: usize) {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     for _ in 0..count {
@@ -4628,7 +4627,7 @@ fn do_char_delete(ed: &mut Editor<'_>, forward: bool, count: usize) {
 /// cursor on the current line, add `delta`, leave the cursor on the last
 /// digit of the result. No-op if the line has no digits to the right.
 fn adjust_number(ed: &mut Editor<'_>, delta: i64) -> bool {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = ed.buffer().cursor();
     let row = cursor.row;
@@ -4674,7 +4673,7 @@ fn adjust_number(ed: &mut Editor<'_>, delta: i64) -> bool {
 }
 
 fn replace_char(ed: &mut Editor<'_>, ch: char, count: usize) {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     for _ in 0..count {
@@ -4700,7 +4699,7 @@ fn replace_char(ed: &mut Editor<'_>, ch: char, count: usize) {
 }
 
 fn toggle_case_at_cursor(ed: &mut Editor<'_>) {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = ed.buffer().cursor();
     let Some(c) = ed
@@ -4727,7 +4726,7 @@ fn toggle_case_at_cursor(ed: &mut Editor<'_>) {
 }
 
 fn join_line(ed: &mut Editor<'_>) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = ed.buffer().cursor().row;
     if row + 1 >= ed.buffer().row_count() {
@@ -4761,7 +4760,7 @@ fn join_line(ed: &mut Editor<'_>) {
 /// `gJ` — join the next line onto the current one without inserting a
 /// separating space or stripping leading whitespace.
 fn join_line_raw(ed: &mut Editor<'_>) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = ed.buffer().cursor().row;
     if row + 1 >= ed.buffer().row_count() {
@@ -4783,7 +4782,7 @@ fn join_line_raw(ed: &mut Editor<'_>) {
 }
 
 fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     ed.push_undo();
     // Resolve the source register: `"reg` prefix (consumed) or the
     // unnamed register otherwise. Read text + linewise from the
@@ -4881,7 +4880,7 @@ pub(crate) fn do_redo(ed: &mut Editor<'_>) {
 /// with Esc, so the dot-repeat must end the same way — including
 /// the cursor step-back vim does on Esc-from-insert).
 fn replay_insert_and_finish(ed: &mut Editor<'_>, text: &str) {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     let cursor = ed.cursor();
     ed.mutate_edit(Edit::InsertStr {
         at: Position::new(cursor.0, cursor.1),
@@ -4959,7 +4958,7 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
             do_paste(ed, before, count * scale);
         }
         LastChange::DeleteToEol { inserted } => {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             delete_to_eol(ed);
             if let Some(text) = inserted {
@@ -4971,7 +4970,7 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
             }
         }
         LastChange::OpenLine { above, inserted } => {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             ed.sync_buffer_content_from_textarea();
             let row = ed.buffer().cursor().row;
@@ -5004,7 +5003,7 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
             inserted,
             count,
         } => {
-            use sqeel_buffer::{Edit, Position};
+            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             match entry {
                 InsertEntry::I => {}
@@ -7234,8 +7233,8 @@ mod tests {
         v.height = viewport;
         v.width = text_width;
         v.text_width = text_width;
-        v.wrap = sqeel_buffer::Wrap::Char;
-        e.settings_mut().wrap = sqeel_buffer::Wrap::Char;
+        v.wrap = hjkl_buffer::Wrap::Char;
+        e.settings_mut().wrap = hjkl_buffer::Wrap::Char;
         e
     }
 
@@ -7883,7 +7882,7 @@ mod tests {
 
     #[test]
     fn buffer_selection_char_in_visual_mode() {
-        use sqeel_buffer::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let mut e = editor_with("hello world");
         run_keys(&mut e, "vlll");
         assert_eq!(
@@ -7897,7 +7896,7 @@ mod tests {
 
     #[test]
     fn buffer_selection_line_in_visual_line_mode() {
-        use sqeel_buffer::Selection;
+        use hjkl_buffer::Selection;
         let mut e = editor_with("a\nb\nc\nd");
         run_keys(&mut e, "Vj");
         assert_eq!(
@@ -8394,7 +8393,7 @@ mod tests {
 
     #[test]
     fn buffer_selection_block_in_visual_block_mode() {
-        use sqeel_buffer::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let mut e = editor_with("aaaa\nbbbb\ncccc");
         run_keys(&mut e, "<C-v>jl");
         assert_eq!(

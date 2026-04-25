@@ -354,7 +354,7 @@ fn apply_shell_filter(editor: &mut Editor<'_>, range: Option<Range>, cmd: &str) 
 /// Failures (missing file, permission denied) surface as
 /// `ExEffect::Error` toasts.
 fn apply_read_file(editor: &mut Editor<'_>, path: &str) -> ExEffect {
-    use sqeel_buffer::{Edit, Position};
+    use hjkl_buffer::{Edit, Position};
     if path.is_empty() {
         return ExEffect::Error(":r needs a file path or `!cmd`".into());
     }
@@ -531,7 +531,7 @@ fn parse_range<'a>(cmd: &'a str, editor: &Editor<'_>) -> Result<(Option<Range>, 
 
 /// `:[range]d` — drop every row in the range.
 fn apply_delete_range(editor: &mut Editor<'_>, range: Option<Range>) -> ExEffect {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     let r = Range::or_default(range, Range::single(editor.cursor().0));
     let total = editor.buffer().row_count();
     if total == 0 {
@@ -594,7 +594,7 @@ fn apply_global(
     body: &str,
     negate: bool,
 ) -> ExEffect {
-    use sqeel_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, MotionKind, Position};
     let mut chars = body.chars();
     let sep = match chars.next() {
         Some(c) => c,
@@ -674,9 +674,9 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
     if trimmed.is_empty() {
         let s = editor.settings();
         let wrap = match s.wrap {
-            sqeel_buffer::Wrap::None => "off",
-            sqeel_buffer::Wrap::Char => "char",
-            sqeel_buffer::Wrap::Word => "word",
+            hjkl_buffer::Wrap::None => "off",
+            hjkl_buffer::Wrap::Char => "char",
+            hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
             "shiftwidth={}  tabstop={}  textwidth={}  ignorecase={}  wrap={}",
@@ -737,22 +737,22 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
                 // Preserve `Wrap::Word` if `linebreak` already flipped
                 // word-mode on; otherwise default `set wrap` to char.
                 match editor.settings().wrap {
-                    sqeel_buffer::Wrap::Word => sqeel_buffer::Wrap::Word,
-                    _ => sqeel_buffer::Wrap::Char,
+                    hjkl_buffer::Wrap::Word => hjkl_buffer::Wrap::Word,
+                    _ => hjkl_buffer::Wrap::Char,
                 }
             } else {
-                sqeel_buffer::Wrap::None
+                hjkl_buffer::Wrap::None
             };
         }
         "linebreak" | "lbr" => {
             editor.settings_mut().wrap = if value {
-                sqeel_buffer::Wrap::Word
+                hjkl_buffer::Wrap::Word
             } else {
                 // `nolinebreak` drops back to char wrap when wrap is on,
                 // otherwise stays off.
                 match editor.settings().wrap {
-                    sqeel_buffer::Wrap::None => sqeel_buffer::Wrap::None,
-                    _ => sqeel_buffer::Wrap::Char,
+                    hjkl_buffer::Wrap::None => hjkl_buffer::Wrap::None,
+                    _ => hjkl_buffer::Wrap::Char,
                 }
             };
         }
@@ -1057,7 +1057,7 @@ fn apply_substitute(
     editor.buffer_mut().replace_all(&new_lines.join("\n"));
     editor
         .buffer_mut()
-        .set_cursor(sqeel_buffer::Position::new(range_start, 0));
+        .set_cursor(hjkl_buffer::Position::new(range_start, 0));
     editor.mark_dirty_after_ex();
     Ok(count)
 }
@@ -1557,7 +1557,7 @@ mod tests {
     fn set_wrap_flips_to_char_mode() {
         let mut e = new("x");
         run(&mut e, "set wrap");
-        assert_eq!(e.settings().wrap, sqeel_buffer::Wrap::Char);
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Char);
     }
 
     #[test]
@@ -1565,14 +1565,14 @@ mod tests {
         let mut e = new("x");
         run(&mut e, "set wrap");
         run(&mut e, "set nowrap");
-        assert_eq!(e.settings().wrap, sqeel_buffer::Wrap::None);
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::None);
     }
 
     #[test]
     fn set_linebreak_flips_to_word_mode() {
         let mut e = new("x");
         run(&mut e, "set linebreak");
-        assert_eq!(e.settings().wrap, sqeel_buffer::Wrap::Word);
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Word);
     }
 
     #[test]
@@ -1580,7 +1580,7 @@ mod tests {
         let mut e = new("x");
         run(&mut e, "set linebreak");
         run(&mut e, "set wrap");
-        assert_eq!(e.settings().wrap, sqeel_buffer::Wrap::Word);
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Word);
     }
 
     #[test]
@@ -1588,7 +1588,7 @@ mod tests {
         let mut e = new("x");
         run(&mut e, "set linebreak");
         run(&mut e, "set nolinebreak");
-        assert_eq!(e.settings().wrap, sqeel_buffer::Wrap::Char);
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Char);
     }
 
     #[test]

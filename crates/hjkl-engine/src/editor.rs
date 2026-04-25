@@ -1,4 +1,4 @@
-//! Editor — the public sqeel-vim type, layered over `sqeel_buffer::Buffer`.
+//! Editor — the public sqeel-vim type, layered over `hjkl_buffer::Buffer`.
 //!
 //! This file owns the public Editor API — construction, content access,
 //! mouse and goto helpers, the (buffer-level) undo stack, and insert-mode
@@ -57,11 +57,11 @@ pub struct Editor<'a> {
     /// Phase 7a: content syncs on every `set_content` so the rest of
     /// the engine can start reading from / writing to it in
     /// follow-up commits without behaviour changing today.
-    pub(super) buffer: sqeel_buffer::Buffer,
+    pub(super) buffer: hjkl_buffer::Buffer,
     /// Style intern table for the migration buffer's opaque
     /// `Span::style` ids. Phase 7d-ii-a wiring — `apply_window_spans`
     /// produces `(start, end, Style)` tuples for the textarea; we
-    /// translate those to `sqeel_buffer::Span` by interning the
+    /// translate those to `hjkl_buffer::Span` by interning the
     /// `Style` here and storing the table index. The render path's
     /// `StyleResolver` looks the style back up by id.
     pub(super) style_table: Vec<ratatui::style::Style>,
@@ -106,11 +106,11 @@ pub struct Settings {
     /// Wrap column for `gq{motion}` text reflow. Vim's default is 79.
     pub textwidth: usize,
     /// Soft-wrap mode the renderer + scroll math + `gj` / `gk` use.
-    /// Default is [`sqeel_buffer::Wrap::None`] — long lines extend
+    /// Default is [`hjkl_buffer::Wrap::None`] — long lines extend
     /// past the right edge and `top_col` clips the left side.
     /// `:set wrap` flips to char-break wrap; `:set linebreak` flips
     /// to word-break wrap; `:set nowrap` resets.
-    pub wrap: sqeel_buffer::Wrap,
+    pub wrap: hjkl_buffer::Wrap,
 }
 
 impl Default for Settings {
@@ -120,7 +120,7 @@ impl Default for Settings {
             tabstop: 8,
             ignore_case: false,
             textwidth: 79,
-            wrap: sqeel_buffer::Wrap::None,
+            wrap: hjkl_buffer::Wrap::None,
         }
     }
 }
@@ -147,7 +147,7 @@ impl<'a> Editor<'a> {
             cached_content: None,
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
-            buffer: sqeel_buffer::Buffer::new(),
+            buffer: hjkl_buffer::Buffer::new(),
             style_table: Vec::new(),
             registers: crate::registers::Registers::default(),
             styled_spans: Vec::new(),
@@ -182,7 +182,7 @@ impl<'a> Editor<'a> {
     /// round-trip.
     pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>) {
         let line_byte_lens: Vec<usize> = self.buffer.lines().iter().map(|l| l.len()).collect();
-        let mut by_row: Vec<Vec<sqeel_buffer::Span>> = Vec::with_capacity(spans.len());
+        let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
             let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
             let mut translated = Vec::with_capacity(row_spans.len());
@@ -192,7 +192,7 @@ impl<'a> Editor<'a> {
                     continue;
                 }
                 let id = self.intern_style(*style);
-                translated.push(sqeel_buffer::Span::new(*start, end_clamped, id));
+                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
             }
             by_row.push(translated);
         }
@@ -269,7 +269,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Intern a `ratatui::style::Style` and return the opaque id used
-    /// in `sqeel_buffer::Span::style`. The render-side `StyleResolver`
+    /// in `hjkl_buffer::Span::style`. The render-side `StyleResolver`
     /// closure (built by [`Editor::style_resolver`]) uses the id to
     /// look up the style back. Linear-scan dedup — the table grows
     /// only as new tree-sitter token kinds appear, so it stays tiny.
@@ -289,12 +289,12 @@ impl<'a> Editor<'a> {
     }
 
     /// Borrow the migration buffer. Host renders through this via
-    /// `sqeel_buffer::BufferView`.
-    pub fn buffer(&self) -> &sqeel_buffer::Buffer {
+    /// `hjkl_buffer::BufferView`.
+    pub fn buffer(&self) -> &hjkl_buffer::Buffer {
         &self.buffer
     }
 
-    pub fn buffer_mut(&mut self) -> &mut sqeel_buffer::Buffer {
+    pub fn buffer_mut(&mut self) -> &mut hjkl_buffer::Buffer {
         &mut self.buffer
     }
 
@@ -321,8 +321,7 @@ impl<'a> Editor<'a> {
     /// `ed.textarea.move_cursor(CursorMove::Jump(r, c))` pattern that
     /// existed before Phase 7f.
     pub(crate) fn jump_cursor(&mut self, row: usize, col: usize) {
-        self.buffer
-            .set_cursor(sqeel_buffer::Position::new(row, col));
+        self.buffer.set_cursor(hjkl_buffer::Position::new(row, col));
     }
 
     /// `(row, col)` cursor read sourced from the migration buffer.
@@ -388,7 +387,7 @@ impl<'a> Editor<'a> {
     /// the textarea so the still-textarea-driven paths (insert mode,
     /// yank pipe) keep observing the same content. Returns the
     /// inverse for the host's undo stack.
-    pub(super) fn mutate_edit(&mut self, edit: sqeel_buffer::Edit) -> sqeel_buffer::Edit {
+    pub(super) fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
         let pre_row = self.buffer.cursor().row;
         let pre_rows = self.buffer.row_count();
         let inverse = self.buffer.apply_edit(edit);
@@ -600,13 +599,13 @@ impl<'a> Editor<'a> {
         Some((top, bot, left, right))
     }
 
-    /// Active selection in `sqeel_buffer::Selection` shape. `None` when
+    /// Active selection in `hjkl_buffer::Selection` shape. `None` when
     /// not in a Visual mode. Phase 7d-i wiring — the host hands this
     /// straight to `BufferView` once render flips off textarea
     /// (Phase 7d-ii drops the `paint_*_overlay` calls on the same
     /// switch).
-    pub fn buffer_selection(&self) -> Option<sqeel_buffer::Selection> {
-        use sqeel_buffer::{Position, Selection};
+    pub fn buffer_selection(&self) -> Option<hjkl_buffer::Selection> {
+        use hjkl_buffer::{Position, Selection};
         match self.vim_mode() {
             VimMode::Visual => {
                 let (ar, ac) = self.vim.visual_anchor;
@@ -670,7 +669,7 @@ impl<'a> Editor<'a> {
             lines.push(String::new());
         }
         let _ = lines;
-        self.buffer = sqeel_buffer::Buffer::from_str(text);
+        self.buffer = hjkl_buffer::Buffer::from_str(text);
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.mark_content_dirty();
@@ -721,7 +720,7 @@ impl<'a> Editor<'a> {
         let margin = Self::SCROLLOFF.min(height.saturating_sub(1) / 2);
         // Soft-wrap path: scrolloff math runs in *screen rows*, not
         // doc rows, since a wrapped doc row spans many visual lines.
-        if !matches!(self.buffer.viewport().wrap, sqeel_buffer::Wrap::None) {
+        if !matches!(self.buffer.viewport().wrap, hjkl_buffer::Wrap::None) {
             self.ensure_scrolloff_wrap(height, margin);
             return;
         }
@@ -836,7 +835,7 @@ impl<'a> Editor<'a> {
                 .unwrap_or(0);
             let target_col = cursor.col.min(line_len.saturating_sub(1));
             self.buffer
-                .set_cursor(sqeel_buffer::Position::new(target_row, target_col));
+                .set_cursor(hjkl_buffer::Position::new(target_row, target_col));
         }
     }
 
@@ -845,7 +844,7 @@ impl<'a> Editor<'a> {
         let max = self.buffer.row_count().saturating_sub(1);
         let target = row.min(max);
         self.buffer
-            .set_cursor(sqeel_buffer::Position::new(target, 0));
+            .set_cursor(hjkl_buffer::Position::new(target, 0));
     }
 
     /// Scroll so the cursor row lands at the given viewport position:
@@ -904,7 +903,7 @@ impl<'a> Editor<'a> {
         let r = r.min(max_row);
         let line_len = self.buffer.line(r).map(|l| l.chars().count()).unwrap_or(0);
         let c = col.saturating_sub(1).min(line_len);
-        self.buffer.set_cursor(sqeel_buffer::Position::new(r, c));
+        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
     }
 
     /// Jump cursor to the terminal-space mouse position; exits Visual modes if active.
@@ -913,7 +912,7 @@ impl<'a> Editor<'a> {
             self.vim.force_normal();
         }
         let (r, c) = self.mouse_to_doc_pos(area, col, row);
-        self.buffer.set_cursor(sqeel_buffer::Position::new(r, c));
+        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
     }
 
     /// Begin a mouse-drag selection: anchor at current cursor and enter Visual mode.
@@ -927,12 +926,12 @@ impl<'a> Editor<'a> {
     /// Extend an in-progress mouse drag to the given terminal-space position.
     pub fn mouse_extend_drag(&mut self, area: Rect, col: u16, row: u16) {
         let (r, c) = self.mouse_to_doc_pos(area, col, row);
-        self.buffer.set_cursor(sqeel_buffer::Position::new(r, c));
+        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
     }
 
     pub fn insert_str(&mut self, text: &str) {
         let pos = self.buffer.cursor();
-        self.buffer.apply_edit(sqeel_buffer::Edit::InsertStr {
+        self.buffer.apply_edit(hjkl_buffer::Edit::InsertStr {
             at: pos,
             text: text.to_string(),
         });
@@ -941,7 +940,7 @@ impl<'a> Editor<'a> {
     }
 
     pub fn accept_completion(&mut self, completion: &str) {
-        use sqeel_buffer::{Edit, MotionKind, Position};
+        use hjkl_buffer::{Edit, MotionKind, Position};
         let cursor = self.buffer.cursor();
         let line = self.buffer.line(cursor.row).unwrap_or("").to_string();
         let chars: Vec<char> = line.chars().collect();
@@ -985,7 +984,7 @@ impl<'a> Editor<'a> {
         let text = lines.join("\n");
         self.buffer.replace_all(&text);
         self.buffer
-            .set_cursor(sqeel_buffer::Position::new(cursor.0, cursor.1));
+            .set_cursor(hjkl_buffer::Position::new(cursor.0, cursor.1));
         self.mark_content_dirty();
     }
 
