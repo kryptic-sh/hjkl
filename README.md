@@ -31,7 +31,7 @@ Published on crates.io. Add to `Cargo.toml` with an exact-version pin during the
 0.0.x churn:
 
 ```toml
-hjkl-editor = "=0.0.3"
+hjkl-editor = "=0.0.4"
 ```
 
 ## License
