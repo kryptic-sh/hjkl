@@ -13,6 +13,76 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicU16, Ordering};
 
+/// Map a [`hjkl_buffer::Edit`] to the SPEC [`crate::types::Edit`]
+/// (`EditOp`). Returns `None` when the buffer edit isn't representable
+/// as a single SPEC EditOp; today every variant maps so this is
+/// always `Some`, but the option keeps room for future no-log
+/// signals.
+fn edit_to_editop(edit: &hjkl_buffer::Edit) -> Option<crate::types::Edit> {
+    use crate::types::{Edit as Op, Pos};
+    use hjkl_buffer::Edit as B;
+    let to_pos = |p: hjkl_buffer::Position| Pos {
+        line: p.row as u32,
+        col: p.col as u32,
+    };
+    Some(match edit {
+        B::InsertChar { at, ch } => Op {
+            range: to_pos(*at)..to_pos(*at),
+            replacement: ch.to_string(),
+        },
+        B::InsertStr { at, text } => Op {
+            range: to_pos(*at)..to_pos(*at),
+            replacement: text.clone(),
+        },
+        B::DeleteRange { start, end, .. } => Op {
+            range: to_pos(*start)..to_pos(*end),
+            replacement: String::new(),
+        },
+        B::Replace { start, end, with } => Op {
+            range: to_pos(*start)..to_pos(*end),
+            replacement: with.clone(),
+        },
+        B::JoinLines { row, count, .. } => {
+            let start = Pos {
+                line: *row as u32,
+                col: 0,
+            };
+            let end = Pos {
+                line: (*row + *count) as u32,
+                col: 0,
+            };
+            Op {
+                range: start..end,
+                replacement: String::new(),
+            }
+        }
+        B::SplitLines { row, .. } => {
+            let p = Pos {
+                line: *row as u32,
+                col: 0,
+            };
+            Op {
+                range: p..p,
+                replacement: String::new(),
+            }
+        }
+        B::InsertBlock { at, .. } => {
+            let p = to_pos(*at);
+            Op {
+                range: p..p,
+                replacement: String::new(),
+            }
+        }
+        B::DeleteBlockChunks { at, .. } => {
+            let p = to_pos(*at);
+            Op {
+                range: p..p,
+                replacement: String::new(),
+            }
+        }
+    })
+}
+
 /// Where the cursor should land in the viewport after a `z`-family
 /// scroll (`zz` / `zt` / `zb`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +165,15 @@ pub struct Editor<'a> {
     /// re-parse via [`Editor::set_syntax_fold_ranges`].
     #[doc(hidden)]
     pub syntax_fold_ranges: Vec<(usize, usize)>,
+    /// Pending edit log drained by [`Editor::take_changes`]. Each entry
+    /// is a SPEC [`crate::types::Edit`] mapped from the underlying
+    /// `hjkl_buffer::Edit` operation. Compound ops (JoinLines,
+    /// SplitLines, InsertBlock, DeleteBlockChunks) emit a single
+    /// best-effort EditOp covering the touched range; hosts wanting
+    /// per-cell deltas should diff their own snapshot of `lines()`.
+    /// Sealed at 0.1.0 trait extraction.
+    #[doc(hidden)]
+    pub change_log: Vec<crate::types::Edit>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -160,6 +239,7 @@ impl<'a> Editor<'a> {
             settings: Settings::default(),
             file_marks: std::collections::HashMap::new(),
             syntax_fold_ranges: Vec::new(),
+            change_log: Vec::new(),
         }
     }
 
@@ -399,6 +479,12 @@ impl<'a> Editor<'a> {
     pub fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
         let pre_row = self.buffer.cursor().row;
         let pre_rows = self.buffer.row_count();
+        // Map the underlying buffer edit to a SPEC EditOp for
+        // change-log emission before consuming it. Coarse — see
+        // change_log field doc on the struct.
+        if let Some(op) = edit_to_editop(&edit) {
+            self.change_log.push(op);
+        }
         let inverse = self.buffer.apply_edit(edit);
         let pos = self.buffer.cursor();
         // Drop any folds the edit's range overlapped — vim opens the
@@ -700,6 +786,26 @@ impl<'a> Editor<'a> {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.mark_content_dirty();
+    }
+
+    /// Drain the pending change log produced by buffer mutations.
+    ///
+    /// Returns a `Vec<EditOp>` covering edits applied since the last
+    /// call. Empty when no edits ran. Pull-model, complementary to
+    /// [`Editor::take_content_change`] which gives back the new full
+    /// content.
+    ///
+    /// Mapping coverage:
+    /// - InsertChar / InsertStr → exact `EditOp` with empty range +
+    ///   replacement.
+    /// - DeleteRange (`Char` kind) → exact range + empty replacement.
+    /// - Replace → exact range + new replacement.
+    /// - DeleteRange (`Line`/`Block`), JoinLines, SplitLines,
+    ///   InsertBlock, DeleteBlockChunks → best-effort placeholder
+    ///   covering the touched range. Hosts wanting per-cell deltas
+    ///   should diff their own `lines()` snapshot.
+    pub fn take_changes(&mut self) -> Vec<crate::types::Edit> {
+        std::mem::take(&mut self.change_log)
     }
 
     /// Read the engine's current settings as a SPEC
@@ -1297,6 +1403,24 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn take_changes_drains_after_insert() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("abc");
+        // Empty initially.
+        assert!(e.take_changes().is_empty());
+        // Type a char in insert mode.
+        e.handle_key(key(KeyCode::Char('i')));
+        e.handle_key(key(KeyCode::Char('X')));
+        let changes = e.take_changes();
+        assert!(
+            !changes.is_empty(),
+            "insert mode keystroke should produce a change"
+        );
+        // Drained — second call empty.
+        assert!(e.take_changes().is_empty());
     }
 
     #[test]
