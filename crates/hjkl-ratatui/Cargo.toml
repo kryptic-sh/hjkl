@@ -1,6 +1,6 @@
 [package]
 name = "hjkl-ratatui"
-description = "Ratatui adapters for hjkl-engine: Style conversions and KeyEvent bridging. Pre-release placeholder; no public API yet."
+description = "Ratatui ↔ hjkl-engine adapters: Style conversions, KeyEvent bridging."
 keywords = ["vim", "ratatui", "tui", "editor"]
 categories = ["text-editors", "command-line-interface"]
 version.workspace = true
@@ -11,6 +11,15 @@ authors.workspace = true
 rust-version.workspace = true
 homepage.workspace = true
 readme = "README.md"
+
+[features]
+default = ["crossterm"]
+crossterm = ["dep:crossterm"]
+
+[dependencies]
+hjkl-engine = { path = "../hjkl-engine", version = "=0.0.2", default-features = false }
+ratatui = "0.29"
+crossterm = { version = "0.28.1", optional = true }
 
 [package.metadata.docs.rs]
 all-features = true
