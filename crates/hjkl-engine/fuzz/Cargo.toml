@@ -1,0 +1,28 @@
+[package]
+name = "hjkl-engine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# cargo-fuzz requires nightly. Cron CI runs this with the nightly
+# toolchain; local reproduction:
+#
+#   cargo +nightly fuzz run handle_key
+#
+# See CONTRIBUTING.md "Property + fuzz tests".
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+hjkl-engine = { path = ".." }
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+crossterm = "0.28.1"
+
+[[bin]]
+name = "handle_key"
+path = "fuzz_targets/handle_key.rs"
+test = false
+doc = false
+bench = false

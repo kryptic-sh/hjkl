@@ -52,10 +52,14 @@ cargo insta review
 
 - proptest regressions live in `proptest-regressions/`. Commit failing seeds so
   CI replays them.
-- `cargo fuzz` harnesses run on cron with the nightly toolchain. Local
+- `cargo fuzz` harnesses live under each crate's `fuzz/` directory and
+  run on cron with the nightly toolchain. Today the only target is
+  `hjkl-engine/fuzz` :: `handle_key` — feeds an arbitrary keystroke
+  stream into a fresh `Editor` and asserts no panics. Local
   reproduction:
   ```bash
-  cargo +nightly fuzz run <target>
+  cd crates/hjkl-engine/fuzz
+  cargo +nightly fuzz run handle_key
   ```
 
 ## Releases
