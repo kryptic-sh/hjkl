@@ -30,9 +30,6 @@ pub use editor::{Editor, LspIntent};
 pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
 
-// Internal vim FSM entry points — promoted to pub so ex commands
-// (which now live in `hjkl-editor`) can reach them across the crate
-// boundary. Sealed at 0.1.0 trait extraction.
 pub use types::{
     Attrs, BufferId, Color, CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight,
     HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind,
@@ -40,8 +37,6 @@ pub use types::{
     SpecialKey, Style, Viewport as PlannedViewport,
 };
 pub use vim::SearchPrompt;
-#[doc(hidden)]
-pub use vim::{do_redo, do_undo};
 
 /// Which keyboard discipline the editor uses. Currently vim-only, but
 /// kept as an enum so future emacs / plain bindings can slot in without

@@ -92,11 +92,11 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
         "reg" | "registers" => return ExEffect::Info(format_registers(editor)),
         "marks" => return ExEffect::Info(format_marks(editor)),
         "undo" | "u" => {
-            hjkl_engine::do_undo(editor);
+            editor.undo();
             return ExEffect::Ok;
         }
         "redo" | "red" => {
-            hjkl_engine::do_redo(editor);
+            editor.redo();
             return ExEffect::Ok;
         }
         "foldindent" | "foldi" => return apply_fold_indent(editor),
@@ -632,7 +632,7 @@ fn apply_global(
         }
     }
     if targets.is_empty() {
-        editor.undo_stack.pop();
+        editor.pop_last_undo();
         return ExEffect::Substituted { count: 0 };
     }
     let count = targets.len();
@@ -1044,7 +1044,7 @@ fn apply_substitute(
 
     if count == 0 {
         // Undo the undo push so the user doesn't see an empty undo step.
-        editor.undo_stack.pop();
+        editor.pop_last_undo();
         return Ok(0);
     }
 
@@ -1382,7 +1382,7 @@ mod tests {
         let mut e = new("c\nb\na");
         run(&mut e, "sort");
         assert_eq!(e.buffer().lines()[0], "a");
-        hjkl_engine::do_undo(&mut e);
+        e.undo();
         assert_eq!(
             e.buffer().lines(),
             vec!["c".to_string(), "b".into(), "a".into()]
@@ -1732,7 +1732,7 @@ mod tests {
         let mut e = new("c\nb\na");
         let before: Vec<String> = e.buffer().lines().to_vec();
         run(&mut e, "%!sort");
-        hjkl_engine::do_undo(&mut e);
+        e.undo();
         assert_eq!(e.buffer().lines(), before);
     }
 
@@ -1826,7 +1826,7 @@ mod tests {
         e.jump_cursor(0, 0);
         run(&mut e, &format!("r {}", path.display()));
         assert_eq!(e.buffer().lines().len(), 3);
-        hjkl_engine::do_undo(&mut e);
+        e.undo();
         assert_eq!(e.buffer().lines(), vec!["a".to_string(), "b".into()]);
         std::fs::remove_file(&path).ok();
     }

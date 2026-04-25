@@ -388,8 +388,8 @@ pub struct VimState {
     pub(super) last_macro: Option<char>,
     /// Position of the most recent buffer mutation. Surfaced via
     /// the `'.` / `` `. `` marks for quick "back to last edit".
-    #[doc(hidden)]
-    pub last_edit_pos: Option<(usize, usize)>,
+    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
+    pub(super) last_edit_pos: Option<(usize, usize)>,
     /// Bounded ring of recent edit positions (newest at the back).
     /// `g;` walks toward older entries, `g,` toward newer ones. Capped
     /// at [`CHANGE_LIST_MAX`].
@@ -423,8 +423,8 @@ pub struct VimState {
     /// with the pre-motion cursor when a "big jump" motion fires
     /// (`gg`/`G`, `%`, `*`/`#`, `n`/`N`, `H`/`M`/`L`, committed `/` or
     /// `?`). Capped at 100 entries.
-    #[doc(hidden)]
-    pub jump_back: Vec<(usize, usize)>,
+    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
+    pub(super) jump_back: Vec<(usize, usize)>,
     /// Forward half — `Ctrl-i` pops from here. Cleared by any new big
     /// jump, matching vim's "branch off trims forward history" rule.
     pub(super) jump_fwd: Vec<(usize, usize)>,
@@ -432,8 +432,8 @@ pub struct VimState {
     /// cursor `(row, col)` under the letter; `'{a-z}` and `` `{a-z} ``
     /// read it back. Uppercase / global marks aren't supported
     /// (single-buffer model).
-    #[doc(hidden)]
-    pub marks: std::collections::HashMap<char, (usize, usize)>,
+    // (was #[doc(hidden)] for cross-crate ex.rs reach; now sealed)
+    pub(super) marks: std::collections::HashMap<char, (usize, usize)>,
     /// Set by `Ctrl-R` in insert mode while waiting for the register
     /// selector. The next typed char names the register; its contents
     /// are inserted inline at the cursor and the flag clears.
@@ -4864,8 +4864,7 @@ fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
     ed.vim.sticky_col = Some(ed.buffer().cursor().col);
 }
 
-#[doc(hidden)]
-pub fn do_undo(ed: &mut Editor<'_>) {
+pub(crate) fn do_undo(ed: &mut Editor<'_>) {
     if let Some((lines, cursor)) = ed.undo_stack.pop() {
         let current = ed.snapshot();
         ed.redo_stack.push(current);
@@ -4874,8 +4873,7 @@ pub fn do_undo(ed: &mut Editor<'_>) {
     ed.vim.mode = Mode::Normal;
 }
 
-#[doc(hidden)]
-pub fn do_redo(ed: &mut Editor<'_>) {
+pub(crate) fn do_redo(ed: &mut Editor<'_>) {
     if let Some((lines, cursor)) = ed.redo_stack.pop() {
         let current = ed.snapshot();
         ed.undo_stack.push(current);

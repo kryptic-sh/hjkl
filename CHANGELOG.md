@@ -8,6 +8,50 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.14] - 2026-04-26
+
+### Changed (potentially breaking)
+
+**Trait sealing pass.** Every `#[doc(hidden)] pub` item exposed for cross-crate
+ex.rs reach is now sealed behind a proper public method. Hosts that were poking
+at `Editor`'s internal fields (and ignoring the `#[doc(hidden)]` warning) now go
+through the methods.
+
+Field visibility flipped from `pub` to `pub(crate)`:
+
+- `Editor::vim`, `Editor::registers`, `Editor::settings`, `Editor::file_marks`,
+  `Editor::syntax_fold_ranges`, `Editor::undo_stack`, `Editor::change_log`.
+
+`VimState::last_edit_pos`, `jump_back`, `marks` flipped back to `pub(super)` (no
+longer reachable from outside hjkl-engine). `vim::do_undo` / `vim::do_redo`
+flipped from `pub` to `pub(crate)`; the crate-root re-export is gone.
+
+### Added (replacing the sealed surface)
+
+New Editor methods covering everything ex.rs (and any other host) previously
+reached via raw fields:
+
+- `Editor::syntax_fold_ranges() -> &[(usize, usize)]`
+- `Editor::file_marks()` — iterator over uppercase marks
+- `Editor::buffer_mark(c) -> Option<(usize, usize)>`
+- `Editor::buffer_marks()` — iterator over lowercase marks
+- `Editor::last_jump_back() -> Option<(usize, usize)>`
+- `Editor::last_edit_pos() -> Option<(usize, usize)>`
+- `Editor::pop_last_undo() -> bool`
+- `Editor::undo()` / `Editor::redo()`
+
+Previously `#[doc(hidden)]` methods on `Editor` are now plain `pub`:
+
+- `jump_cursor`, `mutate_edit`, `push_undo`, `restore`, `settings_mut`.
+
+Fresh rustdoc covers every promoted method.
+
+### Migration
+
+Code that read fields directly should switch to method calls. For write-side
+mutation (`undo_stack.pop()` etc.), `pop_last_undo()` is the supported
+replacement.
+
 ## [0.0.13] - 2026-04-26
 
 ### Added

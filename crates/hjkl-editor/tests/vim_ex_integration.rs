@@ -89,7 +89,7 @@ fn gqq_undo_restores_original_line() {
     ex::run(&mut e, "set tw=10");
     let before: Vec<String> = e.buffer().lines().to_vec();
     run_keys(&mut e, "gqq");
-    hjkl_engine::do_undo(&mut e);
+    e.undo();
     assert_eq!(e.buffer().lines(), before);
 }
 

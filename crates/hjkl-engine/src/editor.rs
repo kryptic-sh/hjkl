@@ -199,8 +199,9 @@ pub struct Editor<'a> {
     /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
     pub(crate) vim: VimState,
     /// Undo history: each entry is (lines, cursor) before the edit.
-    #[doc(hidden)]
-    pub undo_stack: Vec<(Vec<String>, (usize, usize))>,
+    /// Internal — managed by [`Editor::push_undo`] / [`Editor::restore`]
+    /// / [`Editor::pop_last_undo`].
+    pub(crate) undo_stack: Vec<(Vec<String>, (usize, usize))>,
     /// Redo history: entries pushed when undoing.
     pub(super) redo_stack: Vec<(Vec<String>, (usize, usize))>,
     /// Set whenever the buffer content changes; cleared by `take_dirty`.
@@ -233,8 +234,9 @@ pub struct Editor<'a> {
     pub(super) style_table: Vec<ratatui::style::Style>,
     /// Vim-style register bank — `"`, `"0`–`"9`, `"a`–`"z`. Sources
     /// every `p` / `P` via the active selector (default unnamed).
-    #[doc(hidden)]
-    pub registers: crate::registers::Registers,
+    /// Internal — read via [`Editor::registers`]; mutated by yank /
+    /// delete / paste FSM paths and by [`Editor::seed_yank`].
+    pub(crate) registers: crate::registers::Registers,
     /// Per-row syntax styling, kept here so the host can do
     /// incremental window updates (see `apply_window_spans` in
     /// the host). Same `(start_byte, end_byte, Style)` tuple shape
@@ -243,9 +245,9 @@ pub struct Editor<'a> {
     pub styled_spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     /// Per-editor settings tweakable via `:set`. Exposed by reference
     /// so handlers (indent, search) read the live value rather than a
-    /// snapshot taken at startup.
-    #[doc(hidden)]
-    pub settings: Settings,
+    /// snapshot taken at startup. Read via [`Editor::settings`];
+    /// mutate via [`Editor::settings_mut`].
+    pub(crate) settings: Settings,
     /// Vim's uppercase / "file" marks. Survive `set_content` calls so
     /// they persist across tab swaps within the same Editor — the
     /// closest the host can get to vim's per-file marks without
@@ -267,8 +269,8 @@ pub struct Editor<'a> {
     /// best-effort EditOp covering the touched range; hosts wanting
     /// per-cell deltas should diff their own snapshot of `lines()`.
     /// Sealed at 0.1.0 trait extraction.
-    #[doc(hidden)]
-    pub change_log: Vec<crate::types::Edit>,
+    /// Drained by [`Editor::take_changes`].
+    pub(crate) change_log: Vec<crate::types::Edit>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -348,6 +350,16 @@ impl<'a> Editor<'a> {
         self.vim.marks.get(&c).copied()
     }
 
+    /// Discard the most recent undo entry. Used by ex commands that
+    /// pre-emptively pushed an undo state (`:s`, `:r`) but ended up
+    /// matching nothing — popping prevents a no-op undo step from
+    /// polluting the user's history.
+    ///
+    /// Returns `true` if an entry was discarded.
+    pub fn pop_last_undo(&mut self) -> bool {
+        self.undo_stack.pop().is_some()
+    }
+
     /// Read all buffer-local marks set this session.
     pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
         self.vim.marks.iter().map(|(c, p)| (*c, *p))
@@ -393,7 +405,10 @@ impl<'a> Editor<'a> {
         &self.settings
     }
 
-    #[doc(hidden)]
+    /// Live settings (mutable). `:set` flows through here to mutate
+    /// shiftwidth / tabstop / textwidth / ignore_case / wrap. Hosts
+    /// configuring at startup typically construct a [`Settings`]
+    /// snapshot and overwrite via `*editor.settings_mut() = …`.
     pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
     }
@@ -563,10 +578,8 @@ impl<'a> Editor<'a> {
     }
 
     /// Set the cursor to `(row, col)`, clamped to the buffer's
-    /// content. Replaces the scattered
-    /// `ed.textarea.move_cursor(CursorMove::Jump(r, c))` pattern that
-    /// existed before Phase 7f.
-    #[doc(hidden)]
+    /// content. Hosts use this for goto-line, jump-to-mark, and
+    /// programmatic cursor placement.
     pub fn jump_cursor(&mut self, row: usize, col: usize) {
         self.buffer.set_cursor(hjkl_buffer::Position::new(row, col));
     }
@@ -629,12 +642,14 @@ impl<'a> Editor<'a> {
         self.viewport_height.load(Ordering::Relaxed)
     }
 
-    /// Phase 7f edit funnel: apply `edit` to the migration buffer
-    /// (the eventual edit authority), mirror the result back into
-    /// the textarea so the still-textarea-driven paths (insert mode,
-    /// yank pipe) keep observing the same content. Returns the
-    /// inverse for the host's undo stack.
-    #[doc(hidden)]
+    /// Apply `edit` against the buffer and return the inverse so the
+    /// host can push it onto an undo stack. Side effects: dirty
+    /// flag, change-list ring, mark / jump-list shifts, change_log
+    /// append, fold invalidation around the touched rows.
+    ///
+    /// The primary edit funnel — both FSM operators and ex commands
+    /// route mutations through here so the side effects fire
+    /// uniformly.
     pub fn mutate_edit(&mut self, edit: hjkl_buffer::Edit) -> hjkl_buffer::Edit {
         let pre_row = self.buffer.cursor().row;
         let pre_rows = self.buffer.row_count();
@@ -1552,7 +1567,23 @@ impl<'a> Editor<'a> {
         (self.buffer.lines().to_vec(), (pos.row, pos.col))
     }
 
-    #[doc(hidden)]
+    /// Walk one step back through the undo history. Equivalent to the
+    /// user pressing `u` in normal mode. Drains the most recent undo
+    /// entry and pushes it onto the redo stack.
+    pub fn undo(&mut self) {
+        crate::vim::do_undo(self);
+    }
+
+    /// Walk one step forward through the redo history. Equivalent to
+    /// `<C-r>` in normal mode.
+    pub fn redo(&mut self) {
+        crate::vim::do_redo(self);
+    }
+
+    /// Snapshot current buffer state onto the undo stack and clear
+    /// the redo stack. Bounded at 200 entries — older entries pruned.
+    /// Call before any group of buffer mutations the user might want
+    /// to undo as a single step.
     pub fn push_undo(&mut self) {
         let snap = self.snapshot();
         if self.undo_stack.len() >= 200 {
@@ -1562,7 +1593,9 @@ impl<'a> Editor<'a> {
         self.redo_stack.clear();
     }
 
-    #[doc(hidden)]
+    /// Replace the buffer with `lines` joined by `\n` and set the
+    /// cursor to `cursor`. Used by undo / `:e!` / snapshot restore
+    /// paths. Marks the editor dirty.
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
         let text = lines.join("\n");
         self.buffer.replace_all(&text);
