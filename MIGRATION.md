@@ -677,20 +677,66 @@ Before touching code, catalog coupling:
 
 ## Status (2026-04-26)
 
-| Phase                              | State                                               |
-| ---------------------------------- | --------------------------------------------------- |
-| 0 — Audit + Spec Lock              | ✅ done (`AUDIT.md`)                                |
-| 1 — Bootstrap                      | ✅ done                                             |
-| 2 — `sqeel-buffer` → `hjkl-buffer` | ✅ done (history preserved)                         |
-| 3 — `sqeel-vim` → `hjkl-engine`    | ✅ done (history preserved, 448 tests)              |
-| 4 — Decouple ratatui/crossterm     | 🟡 partial — full decouple folded into 5            |
-| 5 — Trait extraction               | 🟡 foundation laid (`types.rs`); FSM rewire pending |
-| 6 — Strip sqeel-specific bits      | ✅ done                                             |
-| 7 — Docs + stability contract      | ✅ done (`SPEC.md`, READMEs, CHANGELOG)             |
-| 8 — sqeel migrates off             | ✅ done (sqeel-vim/sqeel-buffer deleted)            |
-| 9 — Publish 0.0.1                  | ✅ done (4 crates on crates.io, v0.0.1 tag)         |
-| 10 — buffr consumes                | 🟡 deps wired; edit-mode integration TBD            |
-| 11 — hjkl binary                   | 🟡 deferred per plan                                |
+| Phase                              | State                                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------------- |
+| 0 — Audit + Spec Lock              | ✅ done (`AUDIT.md`)                                                            |
+| 1 — Bootstrap                      | ✅ done                                                                         |
+| 2 — `sqeel-buffer` → `hjkl-buffer` | ✅ done (history preserved)                                                     |
+| 3 — `sqeel-vim` → `hjkl-engine`    | ✅ done (history preserved, 448 tests)                                          |
+| 4 — Decouple ratatui/crossterm     | 🟡 partial — `hjkl-ratatui` adapters real; engine still pulls ratatui           |
+| 5 — Trait extraction               | 🟡 types + Host trait + Options + EngineError shipped; FSM rewire pending       |
+| 6 — Strip sqeel-specific bits      | ✅ done                                                                         |
+| 7 — Docs + stability contract      | ✅ done (`SPEC.md`, `IMPLEMENTERS.md`, READMEs, CHANGELOG)                      |
+| 8 — sqeel migrates off             | ✅ done (sqeel-vim/sqeel-buffer deleted; `SqeelHost` impls `Host`)              |
+| 9 — Publish 0.0.x                  | ✅ done (`v0.0.1` + `v0.0.2` on crates.io)                                      |
+| 10 — buffr consumes                | ✅ deps wired; `BuffrHost` impls `Host`. Edit-mode integration in buffr phase 2 |
+| 11 — hjkl binary                   | 🟡 deferred per plan                                                            |
+
+### What 0.0.2 ships
+
+- `hjkl-buffer 0.0.2` — full sqeel-buffer port. Cursor, edits, motions, folds,
+  viewport, search. ratatui Widget impl behind optional `ratatui` feature.
+  Default features off — buffer is UI-agnostic. `IMPLEMENTERS.md` documents the
+  caller invariants. Criterion benches
+  - 768-case proptest roundtrip.
+- `hjkl-engine 0.0.2` — full sqeel-vim port. Vim FSM, ex commands, registers,
+  dot-repeat, marks. 513-case proptest no-panic harness. ratatui + crossterm
+  currently mandatory. SPEC types (`Pos`, `Selection`, `SelectionSet`, `Edit`,
+  `Mode`, `CursorShape`, `Style`, `Color`, `Attrs`, `Highlight`, `Options`,
+  `Input`, `Modifiers`, `SpecialKey`, `MouseEvent`, `MouseKind`, `Host`,
+  `EngineError`) live in [`types`](crates/hjkl-engine/src/types.rs) and at the
+  crate root.
+- `hjkl-editor 0.0.2` — facade crate (was placeholder). Three modules: `buffer`,
+  `runtime`, `spec`. One-dep entry-point for downstream consumers.
+- `hjkl-ratatui 0.0.2` — adapter crate (was placeholder). Free-function
+  `engine_to_ratatui_*` / `ratatui_to_engine_*` conversions plus
+  `crossterm_key_event_to_input` behind the default-on `crossterm` feature.
+
+### Trait readiness across consumers
+
+- **`buffr-modal::BuffrHost`** — `impl hjkl_engine::Host for BuffrHost` with
+  `type Intent = BuffrEditIntent`. Hybrid clipboard, now() from
+  `std::time::Instant`, intent fan-out queue. Compile-time
+  `satisfies_host_trait` assertion guards the bound.
+- **`sqeel-tui::SqeelHost`** — `impl hjkl_engine::Host for SqeelHost` with
+  `type Intent = SqeelIntent`. Wraps the existing `Clipboard` adapter (arboard /
+  OSC 52 / tmux passthrough). Intent variants cover `Hover`, `Complete`,
+  `GotoDef`, `Rename`, `Diagnostic`, `FormatRange`, `FoldOp`, `SwitchBuffer`,
+  `ListBuffers`.
+
+### Outstanding for 0.1.0
+
+- FSM rewire onto `Editor<B: Buffer, H: Host>`. Today's
+  `Editor::new(KeybindingMode::Vim)` ignores `Buffer`/`Host` generics; trait
+  extraction lands the `Editor::new(buffer, host, options)` constructor on a
+  single-callsite migration.
+- Multi-cursor primitive — engine still operates on a single cursor;
+  `SelectionSet` is defined but unused by the FSM.
+- Engine ratatui-decoupling — `Style` lives in `types::Style` already; remaining
+  work is rewriting the `editor::Editor` struct fields to hold the engine-native
+  type, with ratatui conversion at the host boundary.
+- `Editor::take_changes()` — pull-model change observation. Today's
+  `content_arc()` + `take_dirty()` cover the same need at coarser granularity.
 
 ## Phase 1 — Bootstrap hjkl Repo
 
