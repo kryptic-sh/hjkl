@@ -340,6 +340,10 @@ pub struct Settings {
     pub ignore_case: bool,
     /// Wrap column for `gq{motion}` text reflow. Vim's default is 79.
     pub textwidth: usize,
+    /// When `true`, the Tab key in insert mode inserts `tabstop` spaces
+    /// instead of a literal `\t`. Matches vim's `:set expandtab`.
+    /// Default `false`.
+    pub expandtab: bool,
     /// Soft-wrap mode the renderer + scroll math + `gj` / `gk` use.
     /// Default is [`hjkl_buffer::Wrap::None`] — long lines extend
     /// past the right edge and `top_col` clips the left side.
@@ -355,6 +359,7 @@ impl Default for Settings {
             tabstop: 8,
             ignore_case: false,
             textwidth: 79,
+            expandtab: false,
             wrap: hjkl_buffer::Wrap::None,
         }
     }
@@ -1113,6 +1118,7 @@ impl<'a> Editor<'a> {
             shiftwidth: self.settings.shiftwidth as u32,
             tabstop: self.settings.tabstop as u32,
             textwidth: self.settings.textwidth as u32,
+            expandtab: self.settings.expandtab,
             ignorecase: self.settings.ignore_case,
             wrap: match self.settings.wrap {
                 hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
@@ -1131,6 +1137,7 @@ impl<'a> Editor<'a> {
         self.settings.shiftwidth = opts.shiftwidth as usize;
         self.settings.tabstop = opts.tabstop as usize;
         self.settings.textwidth = opts.textwidth as usize;
+        self.settings.expandtab = opts.expandtab;
         self.settings.ignore_case = opts.ignorecase;
         self.settings.wrap = match opts.wrap {
             crate::types::WrapMode::None => hjkl_buffer::Wrap::None,

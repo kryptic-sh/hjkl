@@ -677,10 +677,11 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
             hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  textwidth={}  ignorecase={}  wrap={}",
+            "shiftwidth={}  tabstop={}  textwidth={}  expandtab={}  ignorecase={}  wrap={}",
             s.shiftwidth,
             s.tabstop,
             s.textwidth,
+            if s.expandtab { "on" } else { "off" },
             if s.ignore_case { "on" } else { "off" },
             wrap,
         ));
@@ -730,6 +731,7 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
     };
     match name {
         "ignorecase" | "ic" => editor.settings_mut().ignore_case = value,
+        "expandtab" | "et" => editor.settings_mut().expandtab = value,
         "wrap" => {
             editor.settings_mut().wrap = if value {
                 // Preserve `Wrap::Word` if `linebreak` already flipped

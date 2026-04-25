@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-04-26
+
+### Added
+
+- `expandtab` honoured by the insert-mode Tab key. When `Settings::expandtab`
+  is true, Tab inserts `tabstop` spaces; otherwise a literal `\t` (existing
+  behaviour). Wired through `Options::expandtab`, `current_options` /
+  `apply_options`, `:set expandtab` / `:set noexpandtab` / `:set et`.
+- `:set` listing now includes `expandtab=on/off`. Golden snapshot updated.
+
 ## [0.0.17] - 2026-04-26
 
 ### Added

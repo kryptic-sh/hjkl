@@ -1097,10 +1097,18 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
             true
         }
         Key::Tab => {
-            ed.mutate_edit(Edit::InsertChar {
-                at: cursor,
-                ch: '\t',
-            });
+            if ed.settings.expandtab {
+                let n = ed.settings.tabstop.max(1);
+                ed.mutate_edit(Edit::InsertStr {
+                    at: cursor,
+                    text: " ".repeat(n),
+                });
+            } else {
+                ed.mutate_edit(Edit::InsertChar {
+                    at: cursor,
+                    ch: '\t',
+                });
+            }
             true
         }
         Key::Backspace => {
@@ -7860,6 +7868,24 @@ mod tests {
                 head_row: 1,
             })
         );
+    }
+
+    #[test]
+    fn tab_inserts_literal_tab_by_default() {
+        let mut e = editor_with("");
+        run_keys(&mut e, "i");
+        e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(e.buffer.line(0).unwrap(), "\t");
+    }
+
+    #[test]
+    fn tab_inserts_spaces_when_expandtab() {
+        let mut e = editor_with("");
+        e.settings_mut().expandtab = true;
+        e.settings_mut().tabstop = 4;
+        run_keys(&mut e, "i");
+        e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(e.buffer.line(0).unwrap(), "    ");
     }
 
     #[test]
