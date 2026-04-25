@@ -16,6 +16,9 @@ readme = "README.md"
 default = ["serde"]
 serde = ["dep:serde"]
 
+[dev-dependencies]
+proptest = "1"
+
 [dependencies]
 # ratatui + crossterm are required deps until phase 5 lands the engine-native
 # Style type and the `Buffer`/`Host` trait extraction (per SPEC). Once that
