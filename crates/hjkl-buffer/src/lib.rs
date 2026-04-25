@@ -1,22 +1,27 @@
-//! Vim-shaped text buffer for the sqeel editor.
+//! # hjkl-buffer
 //!
-//! Replaces the vendored tui-textarea with a buffer model that has
-//! vim semantics baked in: charwise/linewise/blockwise selection are
-//! first-class, motions match vim's edge-case behaviour out of the
-//! box (no `h` wrap, `$` clamp, sticky col on `j`/`k`), and the
-//! render path writes ratatui cells directly without going through
-//! `Paragraph`.
+//! Rope-backed text buffer with vim-shaped semantics: charwise/linewise/
+//! blockwise selection, motions matching vim edge cases (no `h` wrap, `$`
+//! clamp, sticky col on `j`/`k`), folds, viewport, and search.
 //!
-//! This crate is intentionally not a general-purpose terminal text
-//! widget — it's shaped for SQL editing inside sqeel and avoids the
-//! surface-area bloat that comes from supporting every editor idiom
-//! at once. See `TODO.md` at the repo root for the migration plan.
+//! Extracted from `sqeel-buffer` with full git history. See
+//! [MIGRATION.md][plan] for the roadmap and stability contract.
+//!
+//! ## Features
+//!
+//! - `ratatui` (off by default): enables the [`render`] module with a direct
+//!   cell-write `ratatui::widgets::Widget` impl for [`Buffer`].
+//!
+//! [plan]: https://github.com/kryptic-sh/hjkl/blob/main/MIGRATION.md
+
+#![deny(unsafe_op_in_unsafe_fn)]
 
 mod buffer;
 mod edit;
 mod folds;
 mod motion;
 mod position;
+#[cfg(feature = "ratatui")]
 mod render;
 mod search;
 mod selection;
@@ -28,6 +33,7 @@ pub use buffer::Buffer;
 pub use edit::{Edit, MotionKind};
 pub use folds::Fold;
 pub use position::Position;
+#[cfg(feature = "ratatui")]
 pub use render::{BufferView, Gutter, Sign, StyleResolver};
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
