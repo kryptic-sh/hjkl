@@ -688,9 +688,31 @@ Before touching code, catalog coupling:
 | 6 — Strip sqeel-specific bits      | ✅ done                                                                         |
 | 7 — Docs + stability contract      | ✅ done (`SPEC.md`, `IMPLEMENTERS.md`, READMEs, CHANGELOG)                      |
 | 8 — sqeel migrates off             | ✅ done (sqeel-vim/sqeel-buffer deleted; `SqeelHost` impls `Host`)              |
-| 9 — Publish 0.0.x                  | ✅ done (`v0.0.1` + `v0.0.2` on crates.io)                                      |
+| 9 — Publish 0.0.x                  | ✅ ongoing (`v0.0.1` through `v0.0.11` on crates.io)                            |
 | 10 — buffr consumes                | ✅ deps wired; `BuffrHost` impls `Host`. Edit-mode integration in buffr phase 2 |
 | 11 — hjkl binary                   | 🟡 deferred per plan                                                            |
+
+### What 0.0.11 ships (latest)
+
+Cumulative since 0.0.0:
+
+- **Phase 5 SPEC types** — full set live under `hjkl_engine::types` and at crate
+  root: `Pos`, `Selection`, `SelectionKind`, `SelectionSet`, `Edit` (re-exported
+  as `EditOp`), `Mode`, `CursorShape`, `Style`, `Color`, `Attrs`, `Highlight`,
+  `HighlightKind`, `Options`, `OptionValue`, `Modifiers`, `SpecialKey`,
+  `MouseEvent`, `MouseKind`, `Input` (re-exported as `PlannedInput`), `Host`
+  trait, `EngineError`, `BufferId`, `Viewport` (re-exported as
+  `PlannedViewport`), `RenderFrame`, `EditorSnapshot`, `SnapshotMode`.
+- **Editor SPEC bridges** — `take_snapshot` / `restore_snapshot` (snapshot v3
+  with registers + file_marks), `take_changes` (drains pending `Vec<Edit>`),
+  `take_content_change` (pull-model coarse drain), `render_frame`,
+  `highlights_for_line`, `selection_highlight`, `current_options` /
+  `apply_options`.
+- `Options::set_by_name` / `get_by_name` accepts vim-style aliases.
+- `EditorSnapshot::VERSION = 3`. Hosts persisting state should pin the hjkl
+  version to a single 0.0.x patch until 0.1.0.
+- Test count: 614 across the workspace; 768-case + 513-case proptest harnesses;
+  criterion budget benches; cargo-fuzz harness with cron-CI execution.
 
 ### What 0.0.2 ships
 
@@ -726,17 +748,38 @@ Before touching code, catalog coupling:
 
 ### Outstanding for 0.1.0
 
-- FSM rewire onto `Editor<B: Buffer, H: Host>`. Today's
+- **FSM rewire onto `Editor<B: Buffer, H: Host>`.** Today's
   `Editor::new(KeybindingMode::Vim)` ignores `Buffer`/`Host` generics; trait
   extraction lands the `Editor::new(buffer, host, options)` constructor on a
-  single-callsite migration.
-- Multi-cursor primitive — engine still operates on a single cursor;
-  `SelectionSet` is defined but unused by the FSM.
-- Engine ratatui-decoupling — `Style` lives in `types::Style` already; remaining
-  work is rewriting the `editor::Editor` struct fields to hold the engine-native
-  type, with ratatui conversion at the host boundary.
-- `Editor::take_changes()` — pull-model change observation. Today's
-  `content_arc()` + `take_dirty()` cover the same need at coarser granularity.
+  single-callsite migration. The largest remaining refactor — rewiring 8 500
+  lines of `vim.rs` + 1 500 lines of `editor.rs` to operate against the trait
+  surface instead of the concrete `hjkl_buffer::Buffer` and `Settings` types.
+- **Multi-cursor primitive** — engine still operates on a single cursor;
+  `SelectionSet` is defined but unused by the FSM. Wiring multicursor through
+  `vim.rs` requires per-selection edit fan-out with reverse byte-order ordering
+  and conflict resolution.
+- **Engine ratatui-decoupling** — `Style` lives in `types::Style` already;
+  `intern_style(ratatui::Style)` and the `style_table` field are still
+  ratatui-typed internally. `hjkl-ratatui` provides the conversions; consumers
+  that want non-ratatui hosts must wait for the field rewrite.
+- **Trait sealing** — the long list of `#[doc(hidden)] pub` items exposed for
+  cross-crate ex.rs reach should be sealed at 0.1.0. Either re-private with
+  proper accessor methods, or close the dev-dep cycle and re-host `ex.rs` inside
+  `hjkl-engine`.
+- **Snapshot promotion** — `EditorSnapshot::VERSION` must stop bumping in patch
+  releases. Lock at 0.1.0 with a documented schema.
+
+### Closed wedges (no longer outstanding)
+
+- ✅ `ex.rs` relocated to `hjkl-editor` (0.0.5).
+- ✅ `EditorSnapshot` + `Editor::take_snapshot` / `restore_snapshot` (0.0.6 → v3
+  in 0.0.9).
+- ✅ `RenderFrame` + `Editor::render_frame` (0.0.7).
+- ✅ SPEC `Highlight` emission via `highlights_for_line` and
+  `selection_highlight` (0.0.7).
+- ✅ `Options::set_by_name` / `get_by_name` parser surface (0.0.10).
+- ✅ `Editor::take_changes() -> Vec<EditOp>` pull-model drain (0.0.11).
+- ✅ `Editor::current_options` / `apply_options` SPEC bridge (0.0.11).
 
 ## Phase 1 — Bootstrap hjkl Repo
 
