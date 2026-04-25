@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-04-26
+
+### Changed (breaking the 0.0.8 snapshot wire format)
+
+- `EditorSnapshot::VERSION` bumped to `3`. Adds a
+  `file_marks: HashMap<char, (u32, u32)>` field carrying the uppercase / "file"
+  marks (`'A`–`'Z`). Survives `set_content`, so hosts persisting between tab
+  swaps round-trip mark state. 0.0.8 snapshots fail `restore_snapshot` with
+  `EngineError::SnapshotVersion`.
+
 ## [0.0.8] - 2026-04-26
 
 ### Changed (breaking the 0.0.7 snapshot wire format)

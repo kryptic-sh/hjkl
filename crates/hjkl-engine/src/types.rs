@@ -482,6 +482,10 @@ pub struct EditorSnapshot {
     /// Skipped for `Eq`/`PartialEq` because [`crate::Registers`]
     /// doesn't derive them today.
     pub registers: crate::Registers,
+    /// Uppercase / "file" marks (`'A`–`'Z`). Survive `set_content`
+    /// calls so they round-trip across tab swaps in the host.
+    /// Lowercase marks are buffer-local and live on the `VimState`.
+    pub file_marks: std::collections::HashMap<char, (u32, u32)>,
 }
 
 /// Status-line mode summary. Bridges to the legacy
@@ -502,7 +506,8 @@ impl EditorSnapshot {
     /// Current snapshot format version.
     ///
     /// Bumped to 2 in v0.0.8: registers added.
-    pub const VERSION: u32 = 2;
+    /// Bumped to 3 in v0.0.9: file_marks added.
+    pub const VERSION: u32 = 3;
 }
 
 /// Errors surfaced from the engine to the host. Intentionally narrow —
@@ -583,7 +588,7 @@ mod tests {
 
     #[test]
     fn editor_snapshot_version_const() {
-        assert_eq!(EditorSnapshot::VERSION, 2);
+        assert_eq!(EditorSnapshot::VERSION, 3);
     }
 
     #[test]
@@ -595,6 +600,7 @@ mod tests {
             lines: vec!["hello".to_string()],
             viewport_top: 0,
             registers: crate::Registers::default(),
+            file_marks: Default::default(),
         };
         assert_eq!(s.cursor, (0, 0));
         assert_eq!(s.lines.len(), 1);
@@ -603,6 +609,8 @@ mod tests {
     #[cfg(feature = "serde")]
     #[test]
     fn editor_snapshot_roundtrip() {
+        let mut file_marks = std::collections::HashMap::new();
+        file_marks.insert('A', (5u32, 2u32));
         let s = EditorSnapshot {
             version: EditorSnapshot::VERSION,
             mode: SnapshotMode::Insert,
@@ -610,6 +618,7 @@ mod tests {
             lines: vec!["alpha".into(), "beta".into()],
             viewport_top: 2,
             registers: crate::Registers::default(),
+            file_marks,
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: EditorSnapshot = serde_json::from_str(&json).unwrap();

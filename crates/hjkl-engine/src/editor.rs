@@ -849,6 +849,11 @@ impl<'a> Editor<'a> {
         let cursor = (cursor.0 as u32, cursor.1 as u32);
         let lines: Vec<String> = self.buffer.lines().to_vec();
         let viewport_top = self.buffer.viewport().top_row as u32;
+        let file_marks = self
+            .file_marks
+            .iter()
+            .map(|(c, (r, col))| (*c, (*r as u32, *col as u32)))
+            .collect();
         EditorSnapshot {
             version: EditorSnapshot::VERSION,
             mode,
@@ -856,6 +861,7 @@ impl<'a> Editor<'a> {
             lines,
             viewport_top,
             registers: self.registers.clone(),
+            file_marks,
         }
     }
 
@@ -884,6 +890,11 @@ impl<'a> Editor<'a> {
         vp.top_row = snap.viewport_top as usize;
         *self.buffer.viewport_mut() = vp;
         self.registers = snap.registers;
+        self.file_marks = snap
+            .file_marks
+            .into_iter()
+            .map(|(c, (r, col))| (c, (r as usize, col as usize)))
+            .collect();
         Ok(())
     }
 
