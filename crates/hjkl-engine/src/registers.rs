@@ -35,7 +35,7 @@ pub struct Registers {
     /// `"+` / `"*` — system clipboard register. Both selectors alias
     /// the same slot (matches the typical Linux/macOS/Windows setup
     /// where there's no separate primary selection in our pipeline).
-    /// The host (sqeel-tui) syncs this slot from the OS clipboard
+    /// The host (the host) syncs this slot from the OS clipboard
     /// before paste and from the slot back out on yank.
     pub clip: Slot,
 }

@@ -165,7 +165,7 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
 }
 
 /// `:foldsyntax` / `:folds` — apply the host-supplied syntax-tree
-/// block ranges as closed folds. sqeel-tui calls
+/// block ranges as closed folds. the host calls
 /// [`Editor::set_syntax_fold_ranges`] on every tree-sitter re-parse;
 /// running this command consumes the latest snapshot. No-op when the
 /// host hasn't pushed any ranges yet.
@@ -1680,7 +1680,7 @@ mod tests {
     fn read_file_inserts_below_current_row() {
         // Write a temp file with two rows.
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("sqeel_read_{}.sql", std::process::id()));
+        let path = dir.join(format!("hjkl_read_{}.sql", std::process::id()));
         std::fs::write(&path, "SELECT 1;\nSELECT 2;\n").unwrap();
         let mut e = new("alpha\nbeta");
         e.jump_cursor(0, 0);
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn read_file_alias_read_works() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("sqeel_read_alias_{}.sql", std::process::id()));
+        let path = dir.join(format!("hjkl_read_alias_{}.sql", std::process::id()));
         std::fs::write(&path, "x").unwrap();
         let mut e = new("");
         let cmd = format!("read {}", path.display());
@@ -1821,7 +1821,7 @@ mod tests {
     #[test]
     fn read_file_undo_restores() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("sqeel_read_undo_{}.sql", std::process::id()));
+        let path = dir.join(format!("hjkl_read_undo_{}.sql", std::process::id()));
         std::fs::write(&path, "ins\n").unwrap();
         let mut e = new("a\nb");
         e.jump_cursor(0, 0);

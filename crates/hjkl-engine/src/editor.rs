@@ -70,7 +70,7 @@ pub struct Editor<'a> {
     pub(super) registers: crate::registers::Registers,
     /// Per-row syntax styling, kept here so the host can do
     /// incremental window updates (see `apply_window_spans` in
-    /// sqeel-tui). Same `(start_byte, end_byte, Style)` tuple shape
+    /// the host). Same `(start_byte, end_byte, Style)` tuple shape
     /// the textarea used to host. The Buffer-side opaque-id spans are
     /// derived from this on every install.
     pub styled_spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
@@ -86,7 +86,7 @@ pub struct Editor<'a> {
     pub(super) file_marks: std::collections::HashMap<char, (usize, usize)>,
     /// Block ranges (`(start_row, end_row)` inclusive) the host has
     /// extracted from a syntax tree. `:foldsyntax` reads these to
-    /// populate folds. The host (sqeel-tui) refreshes them on every
+    /// populate folds. The host (the host) refreshes them on every
     /// re-parse via [`Editor::set_syntax_fold_ranges`].
     pub(super) syntax_fold_ranges: Vec<(usize, usize)>,
 }
@@ -126,7 +126,7 @@ impl Default for Settings {
 }
 
 /// Host-observable LSP requests triggered by editor bindings. The
-/// sqeel-vim crate doesn't talk to an LSP itself — it just raises an
+/// hjkl-engine crate doesn't talk to an LSP itself — it just raises an
 /// intent that the TUI layer picks up and routes to `sqls`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LspIntent {
@@ -158,7 +158,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Host hook: replace the cached syntax-derived block ranges that
-    /// `:foldsyntax` consumes. sqeel-tui calls this on every re-parse;
+    /// `:foldsyntax` consumes. the host calls this on every re-parse;
     /// the cost is just a `Vec` swap.
     pub fn set_syntax_fold_ranges(&mut self, ranges: Vec<(usize, usize)>) {
         self.syntax_fold_ranges = ranges;
@@ -211,7 +211,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Host hook: load the OS clipboard's contents into the `"+` / `"*`
-    /// register slot. sqeel-tui calls this before letting vim consume a
+    /// register slot. the host calls this before letting vim consume a
     /// paste so `"*p` / `"+p` reflect the live clipboard rather than a
     /// stale snapshot from the last yank.
     pub fn sync_clipboard_register(&mut self, text: String, linewise: bool) {
@@ -219,7 +219,7 @@ impl<'a> Editor<'a> {
     }
 
     /// True when the user's pending register selector is `+` or `*`.
-    /// sqeel-tui peeks this so it can refresh `sync_clipboard_register`
+    /// the host peeks this so it can refresh `sync_clipboard_register`
     /// only when a clipboard read is actually about to happen.
     pub fn pending_register_is_clipboard(&self) -> bool {
         matches!(self.vim.pending_register, Some('+') | Some('*'))

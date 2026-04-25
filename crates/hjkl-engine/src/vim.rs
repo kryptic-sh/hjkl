@@ -67,7 +67,7 @@
 //! - TODO: insert-mode indent helpers — `Ctrl-t` / `Ctrl-d` (increase /
 //!   decrease indent on current line) and `Ctrl-r <reg>` (paste from a
 //!   register). `Ctrl-r` needs the `RegisterBank` from P3 to be useful.
-//! - TODO: `/` and `?` search prompts still live in `sqeel-tui/src/lib.rs`.
+//! - TODO: `/` and `?` search prompts still live in `the host/src/lib.rs`.
 //!   The plan calls for moving them into the editor (so the editor owns
 //!   `last_search_pattern` rather than the TUI loop). Safe to defer.
 
@@ -2600,7 +2600,7 @@ fn handle_after_g(ed: &mut Editor<'_>, input: Input) -> bool {
             }
         }
         Key::Char('d') => {
-            // `gd` — goto definition. sqeel-vim doesn't run an LSP
+            // `gd` — goto definition. hjkl-engine doesn't run an LSP
             // itself; raise an intent the host drains and routes to
             // `sqls`. The cursor stays put here — the host moves it
             // once it has the target location.

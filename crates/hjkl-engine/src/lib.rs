@@ -1,4 +1,4 @@
-//! Vim-mode editor widget built on top of `hjkl-buffer`.
+//! Vim-mode editor engine built on top of [`hjkl_buffer`].
 //!
 //! Exposes an [`Editor`] you can drop into a ratatui layout, a command
 //! grammar that covers the bulk of vim's normal / insert / visual /
@@ -7,9 +7,14 @@
 //! Rendering goes through `hjkl_buffer::BufferView`; selection / gutter
 //! highlights are painted in the same single-pass as text.
 //!
-//! This crate currently lives inside the sqeel workspace and will likely
-//! be promoted to a standalone crate once the API stabilises. The public
-//! surface is intentionally narrow:
+//! Imported wholesale from sqeel-vim with full git history. The trait
+//! extraction (Selection / SelectionSet / Buffer + Host sub-traits per
+//! [`SPEC.md`][spec]) lands progressively under [`crate::types`]. Pre-1.0
+//! churn — the public surface may change in patch bumps.
+//!
+//! [spec]: https://github.com/kryptic-sh/hjkl/blob/main/crates/hjkl-engine/SPEC.md
+//!
+//! The legacy public surface is intentionally narrow:
 //!
 //! - [`Editor`] — the editor widget.
 //! - [`KeybindingMode`] / [`VimMode`] — mode enums used by host apps.
