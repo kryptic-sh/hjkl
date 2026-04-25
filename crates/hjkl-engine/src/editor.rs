@@ -702,6 +702,62 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// Active visual selection as a SPEC [`crate::types::Highlight`]
+    /// with [`crate::types::HighlightKind::Selection`].
+    ///
+    /// Returns `None` when the editor isn't in a Visual mode.
+    /// Visual-line and visual-block selections collapse to the
+    /// bounding char range of the selection — the SPEC `Selection`
+    /// kind doesn't carry sub-line info today; hosts that need full
+    /// line / block geometry continue to read [`buffer_selection`]
+    /// (the legacy [`hjkl_buffer::Selection`] shape).
+    pub fn selection_highlight(&self) -> Option<crate::types::Highlight> {
+        use crate::types::{Highlight, HighlightKind, Pos};
+        let sel = self.buffer_selection()?;
+        let (start, end) = match sel {
+            hjkl_buffer::Selection::Char { anchor, head } => {
+                let a = (anchor.row, anchor.col);
+                let h = (head.row, head.col);
+                if a <= h { (a, h) } else { (h, a) }
+            }
+            hjkl_buffer::Selection::Line {
+                anchor_row,
+                head_row,
+            } => {
+                let (top, bot) = if anchor_row <= head_row {
+                    (anchor_row, head_row)
+                } else {
+                    (head_row, anchor_row)
+                };
+                let last_col = self.buffer.line(bot).map(|l| l.len()).unwrap_or(0);
+                ((top, 0), (bot, last_col))
+            }
+            hjkl_buffer::Selection::Block { anchor, head } => {
+                let (top, bot) = if anchor.row <= head.row {
+                    (anchor.row, head.row)
+                } else {
+                    (head.row, anchor.row)
+                };
+                let (left, right) = if anchor.col <= head.col {
+                    (anchor.col, head.col)
+                } else {
+                    (head.col, anchor.col)
+                };
+                ((top, left), (bot, right))
+            }
+        };
+        Some(Highlight {
+            range: Pos {
+                line: start.0 as u32,
+                col: start.1 as u32,
+            }..Pos {
+                line: end.0 as u32,
+                col: end.1 as u32,
+            },
+            kind: HighlightKind::Selection,
+        })
+    }
+
     /// SPEC-typed highlights for `line`.
     ///
     /// Today's emission is search-match-only: when the buffer has an
@@ -1201,6 +1257,29 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn selection_highlight_none_in_normal() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("hello");
+        assert!(e.selection_highlight().is_none());
+    }
+
+    #[test]
+    fn selection_highlight_some_in_visual() {
+        use crate::types::HighlightKind;
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("hello world");
+        e.handle_key(key(KeyCode::Char('v')));
+        e.handle_key(key(KeyCode::Char('l')));
+        e.handle_key(key(KeyCode::Char('l')));
+        let h = e
+            .selection_highlight()
+            .expect("visual mode should produce a highlight");
+        assert_eq!(h.kind, HighlightKind::Selection);
+        assert_eq!(h.range.start.line, 0);
+        assert_eq!(h.range.end.line, 0);
     }
 
     #[test]
