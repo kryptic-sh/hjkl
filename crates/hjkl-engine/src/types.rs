@@ -248,6 +248,18 @@ pub struct Options {
     pub readonly: bool,
 }
 
+/// Typed value for [`Options::set_by_name`] / [`Options::get_by_name`].
+///
+/// `:set tabstop=4` parses as `OptionValue::Int(4)`;
+/// `:set noexpandtab` parses as `OptionValue::Bool(false)`;
+/// `:set iskeyword=...` as `OptionValue::String(...)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionValue {
+    Bool(bool),
+    Int(i64),
+    String(String),
+}
+
 impl Default for Options {
     fn default() -> Self {
         Options {
@@ -266,6 +278,110 @@ impl Default for Options {
             undo_break_on_motion: true,
             readonly: false,
         }
+    }
+}
+
+impl Options {
+    /// Set an option by name. Vim-flavored option naming. Returns
+    /// [`EngineError::Ex`] for unknown names or type-mismatched values.
+    ///
+    /// Booleans accept `OptionValue::Bool(_)` directly or
+    /// `OptionValue::Int(0)`/`Int(non_zero)`. Integers accept only
+    /// `Int(_)`. Strings accept only `String(_)`.
+    pub fn set_by_name(&mut self, name: &str, val: OptionValue) -> Result<(), EngineError> {
+        macro_rules! set_bool {
+            ($field:ident) => {{
+                self.$field = match val {
+                    OptionValue::Bool(b) => b,
+                    OptionValue::Int(n) => n != 0,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects bool, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }};
+        }
+        macro_rules! set_u32 {
+            ($field:ident) => {{
+                self.$field = match val {
+                    OptionValue::Int(n) if n >= 0 && n <= u32::MAX as i64 => n as u32,
+                    OptionValue::Int(n) => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` out of u32 range: {n}"
+                        )));
+                    }
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects int, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }};
+        }
+        macro_rules! set_string {
+            ($field:ident) => {{
+                self.$field = match val {
+                    OptionValue::String(s) => s,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects string, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }};
+        }
+        match name {
+            "tabstop" | "ts" => set_u32!(tabstop),
+            "shiftwidth" | "sw" => set_u32!(shiftwidth),
+            "expandtab" | "et" => set_bool!(expandtab),
+            "iskeyword" | "isk" => set_string!(iskeyword),
+            "ignorecase" | "ic" => set_bool!(ignorecase),
+            "smartcase" | "scs" => set_bool!(smartcase),
+            "hlsearch" | "hls" => set_bool!(hlsearch),
+            "incsearch" | "is" => set_bool!(incsearch),
+            "wrapscan" | "ws" => set_bool!(wrapscan),
+            "autoindent" | "ai" => set_bool!(autoindent),
+            "timeoutlen" | "tm" => {
+                self.timeout_len = match val {
+                    OptionValue::Int(n) if n >= 0 => core::time::Duration::from_millis(n as u64),
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects non-negative int (millis), got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
+            "undolevels" | "ul" => set_u32!(undo_levels),
+            "undobreak" => set_bool!(undo_break_on_motion),
+            "readonly" | "ro" => set_bool!(readonly),
+            other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
+        }
+    }
+
+    /// Read an option by name. `None` for unknown names.
+    pub fn get_by_name(&self, name: &str) -> Option<OptionValue> {
+        Some(match name {
+            "tabstop" | "ts" => OptionValue::Int(self.tabstop as i64),
+            "shiftwidth" | "sw" => OptionValue::Int(self.shiftwidth as i64),
+            "expandtab" | "et" => OptionValue::Bool(self.expandtab),
+            "iskeyword" | "isk" => OptionValue::String(self.iskeyword.clone()),
+            "ignorecase" | "ic" => OptionValue::Bool(self.ignorecase),
+            "smartcase" | "scs" => OptionValue::Bool(self.smartcase),
+            "hlsearch" | "hls" => OptionValue::Bool(self.hlsearch),
+            "incsearch" | "is" => OptionValue::Bool(self.incsearch),
+            "wrapscan" | "ws" => OptionValue::Bool(self.wrapscan),
+            "autoindent" | "ai" => OptionValue::Bool(self.autoindent),
+            "timeoutlen" | "tm" => OptionValue::Int(self.timeout_len.as_millis() as i64),
+            "undolevels" | "ul" => OptionValue::Int(self.undo_levels as i64),
+            "undobreak" => OptionValue::Bool(self.undo_break_on_motion),
+            "readonly" | "ro" => OptionValue::Bool(self.readonly),
+            _ => return None,
+        })
     }
 }
 
@@ -574,6 +690,58 @@ mod tests {
         let a = Attrs::BOLD | Attrs::UNDERLINE;
         assert!(a.contains(Attrs::BOLD));
         assert!(!a.contains(Attrs::ITALIC));
+    }
+
+    #[test]
+    fn options_set_get_roundtrip() {
+        let mut o = Options::default();
+        o.set_by_name("tabstop", OptionValue::Int(4)).unwrap();
+        assert!(matches!(o.get_by_name("ts"), Some(OptionValue::Int(4))));
+        o.set_by_name("expandtab", OptionValue::Bool(true)).unwrap();
+        assert!(matches!(o.get_by_name("et"), Some(OptionValue::Bool(true))));
+        o.set_by_name("iskeyword", OptionValue::String("a-z".into()))
+            .unwrap();
+        match o.get_by_name("iskeyword") {
+            Some(OptionValue::String(s)) => assert_eq!(s, "a-z"),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn options_unknown_name_errors_on_set() {
+        let mut o = Options::default();
+        assert!(matches!(
+            o.set_by_name("frobnicate", OptionValue::Int(1)),
+            Err(EngineError::Ex(_))
+        ));
+        assert!(o.get_by_name("frobnicate").is_none());
+    }
+
+    #[test]
+    fn options_type_mismatch_errors() {
+        let mut o = Options::default();
+        assert!(matches!(
+            o.set_by_name("tabstop", OptionValue::String("nope".into())),
+            Err(EngineError::Ex(_))
+        ));
+        assert!(matches!(
+            o.set_by_name("iskeyword", OptionValue::Int(7)),
+            Err(EngineError::Ex(_))
+        ));
+    }
+
+    #[test]
+    fn options_int_to_bool_coercion() {
+        // `:set ic=0` reads as boolean false; `:set ic=1` as true.
+        // Common vim spelling.
+        let mut o = Options::default();
+        o.set_by_name("ignorecase", OptionValue::Int(1)).unwrap();
+        assert!(matches!(o.get_by_name("ic"), Some(OptionValue::Bool(true))));
+        o.set_by_name("ignorecase", OptionValue::Int(0)).unwrap();
+        assert!(matches!(
+            o.get_by_name("ic"),
+            Some(OptionValue::Bool(false))
+        ));
     }
 
     #[test]
