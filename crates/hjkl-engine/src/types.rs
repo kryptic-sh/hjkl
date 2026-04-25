@@ -246,6 +246,28 @@ pub struct Options {
     pub undo_break_on_motion: bool,
     /// Reject every edit. `:set ro` sets this; `:w!` clears it.
     pub readonly: bool,
+    /// Soft-wrap behavior for lines that exceed the viewport width.
+    /// Maps directly to `:set wrap` / `:set linebreak` / `:set nowrap`.
+    pub wrap: WrapMode,
+}
+
+/// Soft-wrap mode for the renderer + scroll math + `gj` / `gk`.
+/// Engine-native equivalent of [`hjkl_buffer::Wrap`]; the engine
+/// converts at the boundary to the buffer's runtime wrap setting.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum WrapMode {
+    /// Long lines extend past the right edge; `top_col` clips the
+    /// left side. Matches vim's `:set nowrap`.
+    #[default]
+    None,
+    /// Break at the cell boundary regardless of word edges. Matches
+    /// `:set wrap`.
+    Char,
+    /// Break at the last whitespace inside the visible width when
+    /// possible; falls back to a char break for runs longer than the
+    /// width. Matches `:set linebreak`.
+    Word,
 }
 
 /// Typed value for [`Options::set_by_name`] / [`Options::get_by_name`].
@@ -277,6 +299,7 @@ impl Default for Options {
             undo_levels: 1000,
             undo_break_on_motion: true,
             readonly: false,
+            wrap: WrapMode::None,
         }
     }
 }

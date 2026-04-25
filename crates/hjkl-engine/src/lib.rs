@@ -34,7 +34,7 @@ pub use types::{
     Attrs, BufferId, Color, CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight,
     HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind,
     OptionValue, Options, Pos, RenderFrame, Selection, SelectionKind, SelectionSet, SnapshotMode,
-    SpecialKey, Style, Viewport as PlannedViewport,
+    SpecialKey, Style, Viewport as PlannedViewport, WrapMode,
 };
 pub use vim::SearchPrompt;
 

@@ -1113,6 +1113,11 @@ impl<'a> Editor<'a> {
             shiftwidth: self.settings.shiftwidth as u32,
             tabstop: self.settings.tabstop as u32,
             ignorecase: self.settings.ignore_case,
+            wrap: match self.settings.wrap {
+                hjkl_buffer::Wrap::None => crate::types::WrapMode::None,
+                hjkl_buffer::Wrap::Char => crate::types::WrapMode::Char,
+                hjkl_buffer::Wrap::Word => crate::types::WrapMode::Word,
+            },
             ..crate::types::Options::default()
         }
     }
@@ -1125,6 +1130,11 @@ impl<'a> Editor<'a> {
         self.settings.shiftwidth = opts.shiftwidth as usize;
         self.settings.tabstop = opts.tabstop as usize;
         self.settings.ignore_case = opts.ignorecase;
+        self.settings.wrap = match opts.wrap {
+            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
+            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
+            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
+        };
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
