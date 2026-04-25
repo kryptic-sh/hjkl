@@ -702,6 +702,35 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// Build the engine's [`crate::types::RenderFrame`] for the
+    /// current state. Hosts call this once per redraw and diff
+    /// across frames.
+    ///
+    /// Coarse today — covers mode + cursor + cursor shape + viewport
+    /// top + line count. SPEC-target fields (selections, highlights,
+    /// command line, search prompt, status line) land once trait
+    /// extraction routes them through `SelectionSet` and the
+    /// `Highlight` pipeline.
+    pub fn render_frame(&self) -> crate::types::RenderFrame {
+        use crate::types::{CursorShape, RenderFrame, SnapshotMode};
+        let (cursor_row, cursor_col) = self.cursor();
+        let (mode, shape) = match self.vim_mode() {
+            crate::VimMode::Normal => (SnapshotMode::Normal, CursorShape::Block),
+            crate::VimMode::Insert => (SnapshotMode::Insert, CursorShape::Bar),
+            crate::VimMode::Visual => (SnapshotMode::Visual, CursorShape::Block),
+            crate::VimMode::VisualLine => (SnapshotMode::VisualLine, CursorShape::Block),
+            crate::VimMode::VisualBlock => (SnapshotMode::VisualBlock, CursorShape::Block),
+        };
+        RenderFrame {
+            mode,
+            cursor_row: cursor_row as u32,
+            cursor_col: cursor_col as u32,
+            cursor_shape: shape,
+            viewport_top: self.buffer.viewport().top_row as u32,
+            line_count: self.buffer.lines().len() as u32,
+        }
+    }
+
     /// Capture the editor's coarse state into a serde-friendly
     /// [`crate::types::EditorSnapshot`].
     ///
@@ -1135,6 +1164,22 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn render_frame_reflects_mode_and_cursor() {
+        use crate::types::{CursorShape, SnapshotMode};
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("alpha\nbeta");
+        let f = e.render_frame();
+        assert_eq!(f.mode, SnapshotMode::Normal);
+        assert_eq!(f.cursor_shape, CursorShape::Block);
+        assert_eq!(f.line_count, 2);
+
+        e.handle_key(key(KeyCode::Char('i')));
+        let f = e.render_frame();
+        assert_eq!(f.mode, SnapshotMode::Insert);
+        assert_eq!(f.cursor_shape, CursorShape::Bar);
     }
 
     #[test]

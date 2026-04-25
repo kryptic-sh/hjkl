@@ -159,7 +159,7 @@ pub enum Mode {
 
 /// Cursor shape intent emitted on mode transitions. Hosts honor it via
 /// `Host::emit_cursor_shape` once the trait extraction lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CursorShape {
     #[default]
     Block,
@@ -425,6 +425,28 @@ pub trait Host: Send {
     /// Host-defined event the engine raises (LSP request, fold op,
     /// buffer switch, …).
     fn emit_intent(&mut self, intent: Self::Intent);
+}
+
+/// Engine render frame consumed by the host once per redraw.
+///
+/// Borrow-style — the engine builds it on demand from its internal
+/// state without allocating clones of large fields. Hosts diff across
+/// frames to decide what to repaint.
+///
+/// Coarse today: covers mode + cursor + cursor shape + viewport top
+/// + a snapshot of the current line count (to size the gutter). The
+/// SPEC-target fields (`selections`, `highlights`,
+/// `command_line`, `search_prompt`, `status_line`) land once trait
+/// extraction wires the FSM through `SelectionSet` and the highlight
+/// pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderFrame {
+    pub mode: SnapshotMode,
+    pub cursor_row: u32,
+    pub cursor_col: u32,
+    pub cursor_shape: CursorShape,
+    pub viewport_top: u32,
+    pub line_count: u32,
 }
 
 /// Coarse editor snapshot suitable for serde round-tripping.

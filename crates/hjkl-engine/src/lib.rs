@@ -36,7 +36,7 @@ pub use registers::{Registers, Slot};
 pub use types::{
     Attrs, BufferId, Color, CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight,
     HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, Options,
-    Pos, Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey, Style,
+    Pos, RenderFrame, Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey, Style,
     Viewport as PlannedViewport,
 };
 pub use vim::SearchPrompt;
