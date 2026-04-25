@@ -4349,6 +4349,12 @@ fn find_open_bracket(
     loop {
         let cur = &lines[r];
         let chars: Vec<char> = cur.chars().collect();
+        // Clamp `c` to the line length: callers may seed `col` past
+        // EOL on virtual-cursor lines (e.g., insert mode after `o`)
+        // so direct indexing would panic on empty / short lines.
+        if (c as usize) >= chars.len() {
+            c = chars.len() as isize - 1;
+        }
         while c >= 0 {
             let ch = chars[c as usize];
             if ch == close {

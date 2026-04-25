@@ -96,9 +96,6 @@ jobs:
             echo "wasm not produced (engine still placeholder) — skipping"
           fi
 
-  vim_compat:
-    name: headless vim compat (placeholder)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - run: echo "vim compat oracle harness pending — see MIGRATION.md phase 0 decision"
+  # vim_compat: headless vim diff harness lands once 0.1.0 trait
+  # extraction stabilises the public Editor surface. See
+  # MIGRATION.md phase 0 "vim compatibility oracle".
