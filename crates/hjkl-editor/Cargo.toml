@@ -1,6 +1,6 @@
 [package]
 name = "hjkl-editor"
-description = "Modal editor: vim engine + buffer + registers + ex commands. Pre-release placeholder; no public API yet."
+description = "Front-door for the hjkl modal editor stack: vim engine + rope buffer + registers + ex commands, in one crate."
 keywords = ["vim", "editor", "modal", "ex"]
 categories = ["text-editors"]
 version.workspace = true
@@ -11,6 +11,16 @@ authors.workspace = true
 rust-version.workspace = true
 homepage.workspace = true
 readme = "README.md"
+
+[features]
+default = ["serde"]
+serde = ["hjkl-engine/serde"]
+
+[dependencies]
+hjkl-engine = { path = "../hjkl-engine", version = "=0.0.1", default-features = false }
+hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.1", features = [
+  "ratatui",
+] }
 
 [package.metadata.docs.rs]
 all-features = true
