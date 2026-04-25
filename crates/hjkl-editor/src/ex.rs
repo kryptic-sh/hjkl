@@ -1755,7 +1755,7 @@ mod tests {
     fn shell_filter_failing_command_errors() {
         let mut e = new("a\nb");
         match run(&mut e, "%!exit 5") {
-            ExEffect::Error(msg) => assert!(msg.contains("exited 5")),
+            ExEffect::Error(msg) => assert!(msg.contains("exited 5"), "msg was: {msg}"),
             other => panic!("expected Error, got {other:?}"),
         }
     }
