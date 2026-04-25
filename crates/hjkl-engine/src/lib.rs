@@ -31,8 +31,8 @@ pub use editor::{Editor, LspIntent};
 pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
 pub use types::{
-    Attrs, Color, CursorShape, Edit as EditOp, Highlight, HighlightKind, Mode, Pos, Selection,
-    SelectionKind, SelectionSet, Style,
+    Attrs, Color, CursorShape, Edit as EditOp, EngineError, Highlight, HighlightKind, Mode,
+    Options, Pos, Selection, SelectionKind, SelectionSet, Style,
 };
 pub use vim::SearchPrompt;
 

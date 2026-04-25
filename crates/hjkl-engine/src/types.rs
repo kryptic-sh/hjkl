@@ -209,6 +209,98 @@ pub struct Highlight {
     pub kind: HighlightKind,
 }
 
+/// Editor settings surfaced via `:set`. Per SPEC. Consumed once trait
+/// extraction lands; today's legacy `Settings` (in [`crate::editor`])
+/// continues to drive runtime behaviour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Options {
+    /// Display width of `\t` for column math + render. Default 8.
+    pub tabstop: u32,
+    /// Spaces per shift step (`>>`, `<<`, `Ctrl-T`, `Ctrl-D`).
+    pub shiftwidth: u32,
+    /// Insert spaces (`true`) or literal `\t` (`false`) for the Tab key.
+    pub expandtab: bool,
+    /// Characters considered part of a "word" for `w`/`b`/`*`/`#`.
+    /// Default `"@,48-57,_,192-255"` (ASCII letters, digits, `_`, plus
+    /// extended Latin); host may override per language.
+    pub iskeyword: String,
+    /// Default `false`: search is case-sensitive.
+    pub ignorecase: bool,
+    /// When `true` and `ignorecase` is `true`, an uppercase letter in the
+    /// pattern flips back to case-sensitive for that search.
+    pub smartcase: bool,
+    /// Highlight all matches of the last search.
+    pub hlsearch: bool,
+    /// Incrementally highlight matches while typing the search pattern.
+    pub incsearch: bool,
+    /// Wrap searches around the buffer ends.
+    pub wrapscan: bool,
+    /// Copy previous line's leading whitespace on Enter in insert mode.
+    pub autoindent: bool,
+    /// Multi-key sequence timeout (e.g., `<C-w>v`). Vim's `timeoutlen`.
+    pub timeout_len: core::time::Duration,
+    /// Maximum undo-tree depth. Older entries pruned.
+    pub undo_levels: u32,
+    /// Break the current undo group on cursor motion in insert mode.
+    /// Matches vim default; turn off to merge multi-segment edits.
+    pub undo_break_on_motion: bool,
+    /// Reject every edit. `:set ro` sets this; `:w!` clears it.
+    pub readonly: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            tabstop: 8,
+            shiftwidth: 8,
+            expandtab: false,
+            iskeyword: "@,48-57,_,192-255".to_string(),
+            ignorecase: false,
+            smartcase: false,
+            hlsearch: true,
+            incsearch: true,
+            wrapscan: true,
+            autoindent: true,
+            timeout_len: core::time::Duration::from_millis(1000),
+            undo_levels: 1000,
+            undo_break_on_motion: true,
+            readonly: false,
+        }
+    }
+}
+
+/// Errors surfaced from the engine to the host. Intentionally narrow —
+/// callsites that fail in user-facing ways return `Result<_,
+/// EngineError>`; internal invariant breaks use `debug_assert!`.
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    /// `:s/pat/.../` couldn't compile the pattern. Host displays the
+    /// regex error in the status line.
+    #[error("regex compile error: {0}")]
+    Regex(#[from] regex::Error),
+
+    /// `:[range]` parse failed.
+    #[error("invalid range: {0}")]
+    InvalidRange(String),
+
+    /// Ex command parse failed (unknown command, malformed args).
+    #[error("ex parse: {0}")]
+    Ex(String),
+
+    /// Edit attempted on a read-only buffer.
+    #[error("buffer is read-only")]
+    ReadOnly,
+
+    /// Position passed by the caller pointed outside the buffer.
+    #[error("position out of bounds: {0:?}")]
+    OutOfBounds(Pos),
+
+    /// Snapshot version mismatch. Host should treat as "abandon
+    /// snapshot" rather than attempt migration.
+    #[error("snapshot version mismatch: file={0}, expected={1}")]
+    SnapshotVersion(u32, u32),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +333,23 @@ mod tests {
         let a = Attrs::BOLD | Attrs::UNDERLINE;
         assert!(a.contains(Attrs::BOLD));
         assert!(!a.contains(Attrs::ITALIC));
+    }
+
+    #[test]
+    fn options_default_matches_vim() {
+        let o = Options::default();
+        assert_eq!(o.tabstop, 8);
+        assert!(!o.expandtab);
+        assert!(o.hlsearch);
+        assert!(o.wrapscan);
+        assert_eq!(o.timeout_len, core::time::Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn engine_error_display() {
+        let e = EngineError::ReadOnly;
+        assert_eq!(e.to_string(), "buffer is read-only");
+        let e = EngineError::OutOfBounds(Pos::new(3, 7));
+        assert!(e.to_string().contains("out of bounds"));
     }
 }
