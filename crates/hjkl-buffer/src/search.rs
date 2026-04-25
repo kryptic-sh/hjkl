@@ -11,7 +11,7 @@ use crate::{Buffer, Position};
 /// Per-row match cache. `gen` is the [`Buffer::dirty_gen`] at the
 /// time the row was scanned; mismatch means the row's text changed
 /// underneath us and we re-scan.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct SearchState {
     pub(crate) pattern: Option<Regex>,
     /// `matches[row]` is the cached `(byte_start, byte_end)` runs on
@@ -19,6 +19,20 @@ pub(crate) struct SearchState {
     /// rows get queried.
     pub(crate) matches: Vec<Vec<(usize, usize)>>,
     pub(crate) generations: Vec<u64>,
+    /// Wrap search past buffer ends. Matches vim's `wrapscan`.
+    /// Default `true`.
+    pub(crate) wrap_around: bool,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        Self {
+            pattern: None,
+            matches: Vec::new(),
+            generations: Vec::new(),
+            wrap_around: true,
+        }
+    }
 }
 
 impl SearchState {
@@ -68,6 +82,17 @@ impl Buffer {
         self.search_state().pattern.as_ref()
     }
 
+    /// Toggle search wrap-around (`wrapscan`). `true` (default) wraps
+    /// past buffer ends; `false` stops at the last/first match.
+    pub fn set_search_wrap(&mut self, wrap: bool) {
+        self.search_state_mut().wrap_around = wrap;
+    }
+
+    /// Current wrap-around state. Pure observer; no side effects.
+    pub fn search_wraps(&self) -> bool {
+        self.search_state().wrap_around
+    }
+
     /// Move the cursor to the next match starting from (or just
     /// after, when `skip_current = true`) the cursor. Wraps end-of-
     /// buffer to row 0. Returns `true` when a match was found.
@@ -88,9 +113,11 @@ impl Buffer {
             self.ensure_cursor_visible();
             return true;
         }
-        // Scan rows after cursor, then wrap to rows before.
+        // Scan rows after cursor, then optionally wrap to rows before.
         let total = self.row_count();
-        for offset in 1..=total {
+        let wrap = self.search_state().wrap_around;
+        let limit = if wrap { total } else { total - cursor.row - 1 };
+        for offset in 1..=limit {
             let row = (cursor.row + offset) % total;
             if let Some(pos) = self.find_match_in_row(row, 0, false, true) {
                 self.set_cursor(pos);
@@ -127,8 +154,10 @@ impl Buffer {
             return true;
         }
         let total = self.row_count();
-        for offset in 1..=total {
-            // Walk backwards with wrap.
+        let wrap = self.search_state().wrap_around;
+        let limit = if wrap { total } else { cursor.row };
+        for offset in 1..=limit {
+            // Walk backwards, optionally wrapping past row 0.
             let row = (cursor.row + total - offset) % total;
             if let Some(pos) =
                 self.find_match_in_row(row, usize::MAX, false, /*forward=*/ false)

@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-04-26
+
+### Added
+
+- `wrapscan` honoured by `/` and `?` searches. When off, search stops
+  at end-of-buffer (forward) or beginning-of-buffer (backward) instead
+  of wrapping. Default on (vim parity). New `Buffer::set_search_wrap` /
+  `Buffer::search_wraps` accessors on `hjkl-buffer`. Wired through
+  `Settings::wrapscan`, `Options::wrapscan`, and `:set wrapscan` /
+  `:set ws` / `:set nowrapscan`.
+- `:set` listing includes `wrapscan=on/off`. Golden snapshot updated.
+
 ## [0.0.19] - 2026-04-26
 
 ### Added

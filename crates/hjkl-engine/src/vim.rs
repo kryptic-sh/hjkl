@@ -585,7 +585,10 @@ fn push_search_pattern(ed: &mut Editor<'_>, pattern: &str) {
         };
         regex::Regex::new(&effective).ok()
     };
-    ed.buffer_mut().set_search_pattern(compiled);
+    let wrap = ed.settings().wrapscan;
+    let buf = ed.buffer_mut();
+    buf.set_search_pattern(compiled);
+    buf.set_search_wrap(wrap);
 }
 
 fn step_search_prompt(ed: &mut Editor<'_>, input: Input) -> bool {
@@ -7876,17 +7879,32 @@ mod tests {
     }
 
     #[test]
+    fn wrapscan_off_blocks_wrap_around() {
+        let mut e = editor_with("first\nsecond\nthird\n");
+        e.settings_mut().wrapscan = false;
+        // Place cursor on row 2 ("third") and search for "first".
+        e.jump_cursor(2, 0);
+        run_keys(&mut e, "/first<CR>");
+        // No wrap → cursor stays on row 2.
+        assert_eq!(e.cursor().0, 2, "wrapscan off should block wrap");
+        // Re-enable wrapscan and try again.
+        e.settings_mut().wrapscan = true;
+        run_keys(&mut e, "/first<CR>");
+        assert_eq!(e.cursor().0, 0, "wrapscan on should wrap to row 0");
+    }
+
+    #[test]
     fn smartcase_uppercase_pattern_stays_sensitive() {
         let mut e = editor_with("foo\nFoo\nBAR\n");
         e.settings_mut().ignore_case = true;
         e.settings_mut().smartcase = true;
         // All-lowercase pattern → ignorecase wins → compiled regex
         // is case-insensitive.
-        run_keys(&mut e, "/foo\n");
+        run_keys(&mut e, "/foo<CR>");
         let r1 = e.buffer().search_pattern().unwrap().as_str().to_string();
         assert!(r1.starts_with("(?i)"), "lowercase under smartcase: {r1}");
         // Uppercase letter → smartcase flips back to case-sensitive.
-        run_keys(&mut e, "/Foo\n");
+        run_keys(&mut e, "/Foo<CR>");
         let r2 = e.buffer().search_pattern().unwrap().as_str().to_string();
         assert!(!r2.starts_with("(?i)"), "mixed-case under smartcase: {r2}");
     }
