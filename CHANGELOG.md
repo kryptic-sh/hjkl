@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-04-26
+
+### Added
+
+- `hjkl-engine::types::RenderFrame` — borrow-style render frame the host
+  consumes once per redraw. Coarse today: mode + cursor + cursor_shape +
+  viewport_top + line_count.
+- `Editor::render_frame()` builder.
+- `Editor::highlights_for_line(u32)` — SPEC `Highlight` emission with
+  `HighlightKind::SearchMatch` for search hits.
+- `Editor::selection_highlight()` — bridges the active visual selection to a
+  SPEC `Highlight` with `HighlightKind::Selection`. None outside visual modes;
+  visual-line / visual-block collapse to their bounding char range.
+
+### Changed
+
+- `CursorShape` now derives `Hash` so `RenderFrame` can derive it.
+
 ## [0.0.6] - 2026-04-26
 
 ### Added

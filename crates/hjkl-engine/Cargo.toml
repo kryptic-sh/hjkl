@@ -25,7 +25,7 @@ serde_json = "1"
 # Style type and the `Buffer`/`Host` trait extraction (per SPEC). Once that
 # refactor ships, both will move behind feature flags so wasm/no_std consumers
 # can opt out.
-hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.6", features = [
+hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.7", features = [
   "ratatui",
 ] }
 bitflags = "2"
