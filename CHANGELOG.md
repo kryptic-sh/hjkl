@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-04-26
+
+### Added
+
+- `Editor::feed_input(PlannedInput) -> bool` — SPEC Input dispatch. Bridges
+  hosts that don't carry crossterm (buffr CEF, future GUI shells) into the
+  engine. Char + Key variants route to handle_key; Mouse / Paste / FocusGained /
+  FocusLost / Resize fall through.
+
 ## [0.0.12] - 2026-04-26
 
 ### Added
