@@ -170,7 +170,7 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
 /// running this command consumes the latest snapshot. No-op when the
 /// host hasn't pushed any ranges yet.
 fn apply_fold_syntax(editor: &mut Editor<'_>) -> ExEffect {
-    let ranges = editor.syntax_fold_ranges.clone();
+    let ranges = editor.syntax_fold_ranges().to_vec();
     if ranges.is_empty() {
         return ExEffect::Info("no syntax block ranges available".into());
     }
@@ -497,10 +497,8 @@ fn resolve_address(addr: Address, editor: &Editor<'_>) -> Result<usize, String> 
         Address::Current => Ok(editor.cursor().0),
         Address::Last => Ok(last),
         Address::Mark(c) => editor
-            .vim
-            .marks
-            .get(&c)
-            .map(|(r, _)| (*r).min(last))
+            .buffer_mark(c)
+            .map(|(r, _)| r.min(last))
             .ok_or_else(|| format!("mark `{c}` not set")),
     }
 }
@@ -911,21 +909,19 @@ fn display_register(text: &str) -> String {
 fn format_marks(editor: &Editor<'_>) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
     let mut entries: Vec<(char, usize, usize)> = editor
-        .vim
-        .marks
-        .iter()
-        .map(|(c, (r, col))| (*c, *r, *col))
+        .buffer_marks()
+        .map(|(c, (r, col))| (c, r, col))
         .collect();
     // Uppercase / file marks live separately on Editor.
-    entries.extend(editor.file_marks.iter().map(|(c, (r, col))| (*c, *r, *col)));
+    entries.extend(editor.file_marks().map(|(c, (r, col))| (c, r, col)));
     entries.sort_by_key(|(c, _, _)| *c);
     for (c, r, col) in entries {
         lines.push(format!(" {c}    {:>4}  {col:>3}", r + 1));
     }
-    if let Some((r, col)) = editor.vim.jump_back.last() {
+    if let Some((r, col)) = editor.last_jump_back() {
         lines.push(format!(" '    {:>4}  {col:>3}", r + 1));
     }
-    if let Some((r, col)) = editor.vim.last_edit_pos {
+    if let Some((r, col)) = editor.last_edit_pos() {
         lines.push(format!(" .    {:>4}  {col:>3}", r + 1));
     }
     if lines.len() == 2 {

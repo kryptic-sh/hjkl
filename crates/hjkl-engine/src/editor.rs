@@ -194,8 +194,10 @@ pub struct Editor<'a> {
     /// Set when the user yanks/cuts; caller drains this to write to OS clipboard.
     pub last_yank: Option<String>,
     /// All vim-specific state (mode, pending operator, count, dot-repeat, ...).
-    #[doc(hidden)]
-    pub vim: VimState,
+    /// Internal — exposed via Editor accessor methods
+    /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
+    /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
+    pub(crate) vim: VimState,
     /// Undo history: each entry is (lines, cursor) before the edit.
     #[doc(hidden)]
     pub undo_stack: Vec<(Vec<String>, (usize, usize))>,
@@ -246,17 +248,18 @@ pub struct Editor<'a> {
     pub settings: Settings,
     /// Vim's uppercase / "file" marks. Survive `set_content` calls so
     /// they persist across tab swaps within the same Editor — the
-    /// closest sqeel can get to vim's per-file marks without
+    /// closest the host can get to vim's per-file marks without
     /// host-side persistence. Lowercase marks stay buffer-local on
-    /// `vim.marks`.
-    #[doc(hidden)]
-    pub file_marks: std::collections::HashMap<char, (usize, usize)>,
+    /// `vim.marks`. Ex commands iterate via [`Editor::file_marks`];
+    /// snapshot persistence goes through
+    /// [`Editor::take_snapshot`] / [`Editor::restore_snapshot`].
+    pub(crate) file_marks: std::collections::HashMap<char, (usize, usize)>,
     /// Block ranges (`(start_row, end_row)` inclusive) the host has
     /// extracted from a syntax tree. `:foldsyntax` reads these to
-    /// populate folds. The host (the host) refreshes them on every
-    /// re-parse via [`Editor::set_syntax_fold_ranges`].
-    #[doc(hidden)]
-    pub syntax_fold_ranges: Vec<(usize, usize)>,
+    /// populate folds. The host refreshes them on every re-parse via
+    /// [`Editor::set_syntax_fold_ranges`]; ex commands read them via
+    /// [`Editor::syntax_fold_ranges`].
+    pub(crate) syntax_fold_ranges: Vec<(usize, usize)>,
     /// Pending edit log drained by [`Editor::take_changes`]. Each entry
     /// is a SPEC [`crate::types::Edit`] mapped from the underlying
     /// `hjkl_buffer::Edit` operation. Compound ops (JoinLines,
@@ -338,6 +341,48 @@ impl<'a> Editor<'a> {
     /// Host hook: replace the cached syntax-derived block ranges that
     /// `:foldsyntax` consumes. the host calls this on every re-parse;
     /// the cost is just a `Vec` swap.
+    /// Look up a buffer-local lowercase mark (`'a`–`'z`). Returns
+    /// `(row, col)` if set; `None` otherwise. Uppercase / file marks
+    /// live separately — read those via [`Editor::file_marks`].
+    pub fn buffer_mark(&self, c: char) -> Option<(usize, usize)> {
+        self.vim.marks.get(&c).copied()
+    }
+
+    /// Read all buffer-local marks set this session.
+    pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
+        self.vim.marks.iter().map(|(c, p)| (*c, *p))
+    }
+
+    /// Position the cursor was at when the user last jumped via
+    /// `<C-o>` / `g;` / similar. `None` before any jump.
+    pub fn last_jump_back(&self) -> Option<(usize, usize)> {
+        self.vim.jump_back.last().copied()
+    }
+
+    /// Position of the last edit (where `.` would replay). `None` if
+    /// no edit has happened yet in this session.
+    pub fn last_edit_pos(&self) -> Option<(usize, usize)> {
+        self.vim.last_edit_pos
+    }
+
+    /// Read-only view of the file-marks table — uppercase / "file"
+    /// marks (`'A`–`'Z`) the host has set this session. Returns an
+    /// iterator of `(mark_char, (row, col))` pairs.
+    ///
+    /// Mutate via the FSM (`m{A-Z}` keystroke) or via
+    /// [`Editor::restore_snapshot`].
+    pub fn file_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
+        self.file_marks.iter().map(|(c, p)| (*c, *p))
+    }
+
+    /// Read-only view of the cached syntax-derived block ranges that
+    /// `:foldsyntax` consumes. Returns the slice the host last
+    /// installed via [`Editor::set_syntax_fold_ranges`]; empty when
+    /// no syntax integration is active.
+    pub fn syntax_fold_ranges(&self) -> &[(usize, usize)] {
+        &self.syntax_fold_ranges
+    }
+
     pub fn set_syntax_fold_ranges(&mut self, ranges: Vec<(usize, usize)>) {
         self.syntax_fold_ranges = ranges;
     }
