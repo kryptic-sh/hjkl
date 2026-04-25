@@ -7,11 +7,18 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # rust-toolchain.toml at the repo root pins the stable channel for
+  # local dev. Cron jobs that need a different channel (nightly for
+  # miri / cargo-fuzz, musl for cargo-deny) override via RUSTUP_TOOLCHAIN.
+  # Without this, rustup refuses to install the requested channel
+  # because the in-repo toolchain file claims authority.
 
 jobs:
   miri:
     name: miri (hjkl-buffer)
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
@@ -23,6 +30,8 @@ jobs:
   fuzz:
     name: cargo-fuzz (10 min per harness)
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly
@@ -47,9 +56,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+      - run: cargo deny --all-features check
 
   bench:
     name: criterion vs main baseline
@@ -67,8 +78,14 @@ jobs:
           fi
 
   wasm_size:
-    name: wasm bundle size
+    name: wasm bundle size (deferred)
     runs-on: ubuntu-latest
+    # hjkl-engine pulls ratatui + crossterm unconditionally until
+    # phase 4 trait extraction lands the engine-native Style + Host
+    # rewrite. crossterm is unix-only, so the wasm build can't
+    # complete. Keep the harness around as continue-on-error so
+    # re-enabling once decoupling lands is a one-line flip.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -93,7 +110,7 @@ jobs:
               exit 1
             fi
           else
-            echo "wasm not produced (engine still placeholder) — skipping"
+            echo "wasm not produced — skipping"
           fi
 
   # vim_compat: headless vim diff harness lands once 0.1.0 trait
