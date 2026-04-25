@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-04-26
+
+### Added
+
+- `Editor::take_changes() -> Vec<EditOp>` — pull-model SPEC change drain. Editor
+  accumulates EditOp records on every mutate_edit; take_changes drains the
+  queue. Best-effort mapping for compound buffer edits (JoinLines, InsertBlock,
+  etc.) emits a placeholder covering the touched range.
+- `Editor::current_options() -> Options` and `Editor::apply_options(&Options)`
+  bridge between SPEC Options and legacy Settings. Lets hosts read/write engine
+  config through the SPEC API.
+
 ## [0.0.10] - 2026-04-26
 
 ### Added
