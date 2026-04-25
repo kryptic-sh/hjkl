@@ -6,3 +6,4 @@
 //! See the [migration plan][plan] for the full design and roadmap.
 //!
 //! [plan]: https://github.com/kryptic-sh/hjkl/blob/main/MIGRATION.md
+#![forbid(unsafe_code)]

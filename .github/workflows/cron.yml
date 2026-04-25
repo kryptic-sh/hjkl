@@ -1,0 +1,104 @@
+name: Cron
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday 06:00 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri:
+    name: miri (hjkl-buffer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri test -p hjkl-buffer --all-features
+
+  fuzz:
+    name: cargo-fuzz (10 min per harness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Discover and run fuzz targets
+        run: |
+          if [ -d crates/hjkl-engine/fuzz ]; then
+            cd crates/hjkl-engine/fuzz
+            for target in $(cargo fuzz list); do
+              echo "::group::fuzz $target"
+              cargo fuzz run "$target" -- -max_total_time=600
+              echo "::endgroup::"
+            done
+          else
+            echo "no fuzz targets yet — skipping"
+          fi
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  bench:
+    name: criterion vs main baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run benches if present
+        run: |
+          if grep -rq "\[\[bench\]\]" crates/; then
+            cargo bench --workspace
+          else
+            echo "no benches yet — skipping"
+          fi
+
+  wasm_size:
+    name: wasm bundle size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-opt + binaryen
+        run: |
+          curl -L https://github.com/WebAssembly/binaryen/releases/download/version_119/binaryen-version_119-x86_64-linux.tar.gz | tar xz
+          echo "$PWD/binaryen-version_119/bin" >> "$GITHUB_PATH"
+      - name: Build + measure
+        run: |
+          cargo build -p hjkl-engine --release --no-default-features --target wasm32-unknown-unknown
+          WASM=target/wasm32-unknown-unknown/release/hjkl_engine.wasm
+          if [ -f "$WASM" ]; then
+            wasm-opt -Oz "$WASM" -o /tmp/hjkl-engine.opt.wasm
+            SIZE=$(gzip -c /tmp/hjkl-engine.opt.wasm | wc -c)
+            echo "gzipped wasm size: $SIZE bytes"
+            BUDGET=102400 # 100 KB
+            if [ "$SIZE" -gt "$BUDGET" ]; then
+              echo "::error::wasm size $SIZE exceeds budget $BUDGET"
+              exit 1
+            fi
+          else
+            echo "wasm not produced (engine still placeholder) — skipping"
+          fi
+
+  vim_compat:
+    name: headless vim compat (placeholder)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "vim compat oracle harness pending — see MIGRATION.md phase 0 decision"
