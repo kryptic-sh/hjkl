@@ -63,8 +63,12 @@ jobs:
       - run: cargo build -p hjkl-engine --no-default-features --target wasm32-unknown-unknown
 
   beta:
-    name: test (beta)
+    name: test (beta, non-blocking)
     runs-on: ubuntu-latest
+    # MSRV tracks current stable. Beta is briefly behind stable between
+    # release promotions, which can fail the rust-version check. Run for
+    # forward-compat signal only; do not block PRs.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@beta

@@ -4,9 +4,7 @@ description = "Rope-backed text buffer with cursor and edits. Pre-1.0 churn."
 keywords = ["rope", "buffer", "text", "editor"]
 categories = ["text-editors", "data-structures"]
 version.workspace = true
-# Edition pinned to 2024 (override workspace 2021): the rope render path uses
-# stable 2024-only let-chains. Internal — does not affect downstream consumers.
-edition = "2024"
+edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
