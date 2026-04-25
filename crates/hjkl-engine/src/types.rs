@@ -549,12 +549,11 @@ pub trait Host: Send {
 /// state without allocating clones of large fields. Hosts diff across
 /// frames to decide what to repaint.
 ///
-/// Coarse today: covers mode + cursor + cursor shape + viewport top
-/// + a snapshot of the current line count (to size the gutter). The
-/// SPEC-target fields (`selections`, `highlights`,
-/// `command_line`, `search_prompt`, `status_line`) land once trait
-/// extraction wires the FSM through `SelectionSet` and the highlight
-/// pipeline.
+/// Coarse today: covers mode, cursor, cursor shape, viewport top, and
+/// a snapshot of the current line count (to size the gutter). The
+/// SPEC-target fields (`selections`, `highlights`, `command_line`,
+/// `search_prompt`, `status_line`) land once trait extraction wires
+/// the FSM through `SelectionSet` and the highlight pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RenderFrame {
     pub mode: SnapshotMode,

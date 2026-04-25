@@ -1058,11 +1058,12 @@ impl<'a> Editor<'a> {
     /// Once trait extraction lands, this becomes the canonical config
     /// reader and `Settings` retires.
     pub fn current_options(&self) -> crate::types::Options {
-        let mut o = crate::types::Options::default();
-        o.shiftwidth = self.settings.shiftwidth as u32;
-        o.tabstop = self.settings.tabstop as u32;
-        o.ignorecase = self.settings.ignore_case;
-        o
+        crate::types::Options {
+            shiftwidth: self.settings.shiftwidth as u32,
+            tabstop: self.settings.tabstop as u32,
+            ignorecase: self.settings.ignore_case,
+            ..crate::types::Options::default()
+        }
     }
 
     /// Apply a SPEC [`crate::types::Options`] to the engine's settings.
@@ -1755,10 +1756,12 @@ mod tests {
         assert_eq!(opts.shiftwidth, 2); // legacy Settings default
         assert_eq!(opts.tabstop, 8);
 
-        let mut new_opts = crate::types::Options::default();
-        new_opts.shiftwidth = 4;
-        new_opts.tabstop = 2;
-        new_opts.ignorecase = true;
+        let new_opts = crate::types::Options {
+            shiftwidth: 4,
+            tabstop: 2,
+            ignorecase: true,
+            ..crate::types::Options::default()
+        };
         e.apply_options(&new_opts);
 
         let after = e.current_options();
