@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-04-26
+
+### Added
+
+- `hjkl-engine::types::EditorSnapshot` — coarse serde-friendly snapshot of
+  editor state for host persistence. Carries `version`, `mode`, `cursor`,
+  `lines`, `viewport_top`. Bumps the snapshot `EditorSnapshot::VERSION` constant
+  to track wire-format compat.
+- `hjkl-engine::types::SnapshotMode` — status-line mode summary embedded in the
+  snapshot.
+- `Editor::take_snapshot()` — produces an `EditorSnapshot` at the current state.
+- `Editor::restore_snapshot(snap)` — restores from a snapshot; returns
+  `EngineError::SnapshotVersion` on wire-format mismatch.
+
 ## [0.0.5] - 2026-04-26
 
 ### Changed
