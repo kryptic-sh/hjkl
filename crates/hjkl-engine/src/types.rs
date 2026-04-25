@@ -269,6 +269,22 @@ impl Default for Options {
     }
 }
 
+/// Visible region of a buffer. The host writes `top_line` and `height`
+/// per render frame; the engine reads to decide where the cursor must
+/// land for visibility (cf. `scroll_off`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Viewport {
+    pub top_line: u32,
+    pub height: u32,
+    pub scroll_off: u32,
+}
+
+/// Opaque buffer identifier owned by the host. Engine echoes it back
+/// in [`Host::Intent`] variants for buffer-list operations
+/// (`SwitchBuffer`, etc.). Generation is the host's responsibility.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BufferId(pub u64);
+
 /// Modifier bits accompanying every keystroke.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Modifiers {

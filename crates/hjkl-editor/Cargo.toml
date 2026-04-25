@@ -17,8 +17,8 @@ default = ["serde"]
 serde = ["hjkl-engine/serde"]
 
 [dependencies]
-hjkl-engine = { path = "../hjkl-engine", version = "=0.0.2", default-features = false }
-hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.2", features = [
+hjkl-engine = { path = "../hjkl-engine", version = "=0.0.3", default-features = false }
+hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.3", features = [
   "ratatui",
 ] }
 

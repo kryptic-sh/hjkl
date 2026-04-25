@@ -31,9 +31,9 @@ pub use editor::{Editor, LspIntent};
 pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
 pub use types::{
-    Attrs, Color, CursorShape, Edit as EditOp, EngineError, Highlight, HighlightKind, Host,
-    Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, Options, Pos, Selection,
-    SelectionKind, SelectionSet, SpecialKey, Style,
+    Attrs, BufferId, Color, CursorShape, Edit as EditOp, EngineError, Highlight, HighlightKind,
+    Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, Options, Pos, Selection,
+    SelectionKind, SelectionSet, SpecialKey, Style, Viewport as PlannedViewport,
 };
 pub use vim::SearchPrompt;
 

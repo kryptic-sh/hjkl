@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-04-26
+
+### Added
+
+- `hjkl-engine::Editor::take_content_change()` — pull-model coarse change
+  observation. Returns `Some(Arc<String>)` if content changed since the last
+  call, `None` otherwise. Drains the dirty flag. Bridges the gap until SPEC's
+  `take_changes() -> Vec<EditOp>` ships with full edit-path instrumentation.
+- `hjkl-engine::types::Viewport` (re-exported as `PlannedViewport` at the crate
+  root to disambiguate from `hjkl_buffer::Viewport`).
+- `hjkl-engine::types::BufferId` opaque newtype.
+- 513-case proptest harness for the FSM (`tests/proptest_fsm.rs`): random
+  keystroke sequences never panic, and three Escapes always return to Normal
+  mode.
+
 ## [0.0.2] - 2026-04-26
 
 ### Added
