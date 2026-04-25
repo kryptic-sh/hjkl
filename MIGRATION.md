@@ -52,10 +52,13 @@ These choices ripple through the trait surface — decide up front.
   lockstep, breaking allowed). Promote to `0.1.0` only when trait surface is
   stable. Avoids the `^0.1` semver resolution trap where minor bumps don't
   satisfy callers.
-- **Trait sub-division**: split the ~30-method surface into composable
-  sub-traits — `Cursor`, `Query`, `Edit`, `Search`.
+- **Trait sub-division**: 45 unique methods on `sqeel-buffer` per phase 0 audit.
+  After relocating folds (8) + viewport (3) to host and moving motion logic (24)
+  into engine FSM functions, real `Buffer` trait surface drops to **~12-15
+  methods** across `Cursor`, `Query`, `Edit`, `Search` sub-traits.
   `Buffer: Cursor + Query + Edit + Search`. Sealed via
   `mod sealed { pub trait Sealed {} }` to prevent downstream impls until 1.0.
+  See `AUDIT.md` for full method list.
 - **Selection model: multicursor (helix-style)**. Engine state is
   `Vec<Selection>` always; single-cursor is `len == 1`.
   `Selection { anchor: Pos, head: Pos }`. Visual range = `anchor != head`. Vim
@@ -607,6 +610,9 @@ per node enable round-trip.
   mode boundaries — let it group.
 
 ## Pre-flight Audit (Day 0)
+
+**Status: COMPLETE** as of 2026-04-26. Findings recorded in `AUDIT.md`. All
+checks below were run; numbers replaced estimates throughout this plan.
 
 Before touching code, catalog coupling:
 
