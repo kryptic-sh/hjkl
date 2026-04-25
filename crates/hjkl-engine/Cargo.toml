@@ -24,6 +24,7 @@ serde = ["dep:serde"]
 hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.0", features = [
   "ratatui",
 ] }
+bitflags = "2"
 ratatui = "0.29"
 crossterm = { version = "0.28.1", features = ["event-stream"] }
 regex = "1"

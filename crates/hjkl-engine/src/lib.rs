@@ -19,11 +19,16 @@ mod editor;
 pub mod ex;
 mod input;
 mod registers;
+pub mod types;
 mod vim;
 
 pub use editor::{Editor, LspIntent};
 pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
+pub use types::{
+    Attrs, Color, CursorShape, Edit as EditOp, Highlight, HighlightKind, Mode, Pos, Selection,
+    SelectionKind, SelectionSet, Style,
+};
 pub use vim::SearchPrompt;
 
 /// Which keyboard discipline the editor uses. Currently vim-only, but
