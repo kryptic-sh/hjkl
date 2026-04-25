@@ -902,6 +902,72 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// Feed an SPEC [`crate::PlannedInput`] into the engine.
+    ///
+    /// Bridge for hosts that don't carry crossterm — buffr's CEF
+    /// shell, future GUI frontends. Internally converts to the
+    /// crossterm KeyEvent that [`Editor::handle_key`] expects, then
+    /// dispatches.
+    ///
+    /// `Input::Mouse`, `Input::Paste`, `Input::FocusGained`,
+    /// `Input::FocusLost`, and `Input::Resize` currently fall through
+    /// without effect — the legacy FSM doesn't dispatch them. They're
+    /// accepted so the host can pump them into the engine without
+    /// special-casing.
+    ///
+    /// Returns `true` when the keystroke was consumed.
+    pub fn feed_input(&mut self, input: crate::PlannedInput) -> bool {
+        use crate::{Modifiers, PlannedInput, SpecialKey};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let to_mods = |m: Modifiers| {
+            let mut k = KeyModifiers::NONE;
+            if m.ctrl {
+                k |= KeyModifiers::CONTROL;
+            }
+            if m.shift {
+                k |= KeyModifiers::SHIFT;
+            }
+            if m.alt {
+                k |= KeyModifiers::ALT;
+            }
+            if m.super_ {
+                k |= KeyModifiers::SUPER;
+            }
+            k
+        };
+        let (code, mods) = match input {
+            PlannedInput::Char(c, m) => (KeyCode::Char(c), to_mods(m)),
+            PlannedInput::Key(k, m) => {
+                let code = match k {
+                    SpecialKey::Esc => KeyCode::Esc,
+                    SpecialKey::Enter => KeyCode::Enter,
+                    SpecialKey::Backspace => KeyCode::Backspace,
+                    SpecialKey::Tab => KeyCode::Tab,
+                    SpecialKey::BackTab => KeyCode::BackTab,
+                    SpecialKey::Up => KeyCode::Up,
+                    SpecialKey::Down => KeyCode::Down,
+                    SpecialKey::Left => KeyCode::Left,
+                    SpecialKey::Right => KeyCode::Right,
+                    SpecialKey::Home => KeyCode::Home,
+                    SpecialKey::End => KeyCode::End,
+                    SpecialKey::PageUp => KeyCode::PageUp,
+                    SpecialKey::PageDown => KeyCode::PageDown,
+                    SpecialKey::Insert => KeyCode::Insert,
+                    SpecialKey::Delete => KeyCode::Delete,
+                    SpecialKey::F(n) => KeyCode::F(n),
+                };
+                (code, to_mods(m))
+            }
+            // Variants the legacy FSM doesn't consume yet.
+            PlannedInput::Mouse(_)
+            | PlannedInput::Paste(_)
+            | PlannedInput::FocusGained
+            | PlannedInput::FocusLost
+            | PlannedInput::Resize(_, _) => return false,
+        };
+        self.handle_key(KeyEvent::new(code, mods))
+    }
+
     /// Drain the pending change log produced by buffer mutations.
     ///
     /// Returns a `Vec<EditOp>` covering edits applied since the last
@@ -1517,6 +1583,49 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn feed_input_char_routes_through_handle_key() {
+        use crate::{Modifiers, PlannedInput};
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("abc");
+        // `i` enters insert mode via SPEC input.
+        e.feed_input(PlannedInput::Char('i', Modifiers::default()));
+        assert_eq!(e.vim_mode(), VimMode::Insert);
+        // Type 'X' via SPEC input.
+        e.feed_input(PlannedInput::Char('X', Modifiers::default()));
+        assert!(e.content().contains('X'));
+    }
+
+    #[test]
+    fn feed_input_special_key_routes() {
+        use crate::{Modifiers, PlannedInput, SpecialKey};
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("abc");
+        e.feed_input(PlannedInput::Char('i', Modifiers::default()));
+        assert_eq!(e.vim_mode(), VimMode::Insert);
+        e.feed_input(PlannedInput::Key(SpecialKey::Esc, Modifiers::default()));
+        assert_eq!(e.vim_mode(), VimMode::Normal);
+    }
+
+    #[test]
+    fn feed_input_mouse_paste_focus_resize_no_op() {
+        use crate::{MouseEvent, MouseKind, PlannedInput, Pos};
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("abc");
+        let mode_before = e.vim_mode();
+        let consumed = e.feed_input(PlannedInput::Mouse(MouseEvent {
+            kind: MouseKind::Press,
+            pos: Pos::new(0, 0),
+            mods: Default::default(),
+        }));
+        assert!(!consumed);
+        assert_eq!(e.vim_mode(), mode_before);
+        assert!(!e.feed_input(PlannedInput::Paste("xx".into())));
+        assert!(!e.feed_input(PlannedInput::FocusGained));
+        assert!(!e.feed_input(PlannedInput::FocusLost));
+        assert!(!e.feed_input(PlannedInput::Resize(80, 24)));
     }
 
     #[test]
