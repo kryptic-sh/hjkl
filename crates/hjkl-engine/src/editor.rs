@@ -702,6 +702,43 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// SPEC-typed highlights for `line`.
+    ///
+    /// Today's emission is search-match-only: when the buffer has an
+    /// armed search pattern, every regex hit on that line surfaces as
+    /// a [`crate::types::Highlight`] with kind
+    /// [`crate::types::HighlightKind::SearchMatch`]. Selection,
+    /// IncSearch, MatchParen, and Syntax variants land once the trait
+    /// extraction routes the FSM's selection set + the host's syntax
+    /// pipeline through the [`crate::types::Host`] trait.
+    ///
+    /// Returns an empty vec when the buffer has no search pattern
+    /// or `line` is out of bounds.
+    pub fn highlights_for_line(&mut self, line: u32) -> Vec<crate::types::Highlight> {
+        use crate::types::{Highlight, HighlightKind, Pos};
+        let row = line as usize;
+        if row >= self.buffer.lines().len() {
+            return Vec::new();
+        }
+        if self.buffer.search_pattern().is_none() {
+            return Vec::new();
+        }
+        self.buffer
+            .search_matches(row)
+            .into_iter()
+            .map(|(start, end)| Highlight {
+                range: Pos {
+                    line,
+                    col: start as u32,
+                }..Pos {
+                    line,
+                    col: end as u32,
+                },
+                kind: HighlightKind::SearchMatch,
+            })
+            .collect()
+    }
+
     /// Build the engine's [`crate::types::RenderFrame`] for the
     /// current state. Hosts call this once per redraw and diff
     /// across frames.
@@ -1164,6 +1201,39 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn highlights_emit_search_matches() {
+        use crate::types::HighlightKind;
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("foo bar foo\nbaz qux\n");
+        // Arm a search via buffer's pattern setter.
+        e.buffer_mut()
+            .set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
+        let hs = e.highlights_for_line(0);
+        assert_eq!(hs.len(), 2);
+        for h in &hs {
+            assert_eq!(h.kind, HighlightKind::SearchMatch);
+            assert_eq!(h.range.start.line, 0);
+            assert_eq!(h.range.end.line, 0);
+        }
+    }
+
+    #[test]
+    fn highlights_empty_without_pattern() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("foo bar");
+        assert!(e.highlights_for_line(0).is_empty());
+    }
+
+    #[test]
+    fn highlights_empty_for_out_of_range_line() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("foo");
+        e.buffer_mut()
+            .set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
+        assert!(e.highlights_for_line(99).is_empty());
     }
 
     #[test]
