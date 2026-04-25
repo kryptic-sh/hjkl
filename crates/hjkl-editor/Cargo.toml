@@ -25,6 +25,7 @@ regex = "1"
 
 [dev-dependencies]
 crossterm = { version = "0.28.1", features = ["event-stream"] }
+insta = "1"
 
 [package.metadata.docs.rs]
 all-features = true

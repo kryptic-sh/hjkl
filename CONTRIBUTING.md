@@ -40,7 +40,13 @@ cron jobs only.
 
 ## Snapshot tests
 
-Golden tests use [`insta`](https://insta.rs/). After intentional output changes:
+Golden tests use [`insta`](https://insta.rs/) and live next to the unit tests
+under `tests/snapshots/`. The first batch covers ex-command output
+(`crates/hjkl-editor/tests/golden_ex.rs`): `:registers`, `:marks`, bare `:set`
+listing. Add new snapshots there when you ship a user-visible text format
+change.
+
+After intentional output changes:
 
 ```bash
 INSTA_UPDATE=always cargo test
@@ -48,15 +54,16 @@ INSTA_UPDATE=always cargo test
 cargo insta review
 ```
 
+Commit the updated `*.snap` files alongside the change.
+
 ## Property + fuzz tests
 
 - proptest regressions live in `proptest-regressions/`. Commit failing seeds so
   CI replays them.
-- `cargo fuzz` harnesses live under each crate's `fuzz/` directory and
-  run on cron with the nightly toolchain. Today the only target is
-  `hjkl-engine/fuzz` :: `handle_key` — feeds an arbitrary keystroke
-  stream into a fresh `Editor` and asserts no panics. Local
-  reproduction:
+- `cargo fuzz` harnesses live under each crate's `fuzz/` directory and run on
+  cron with the nightly toolchain. Today the only target is `hjkl-engine/fuzz`
+  :: `handle_key` — feeds an arbitrary keystroke stream into a fresh `Editor`
+  and asserts no panics. Local reproduction:
   ```bash
   cd crates/hjkl-engine/fuzz
   cargo +nightly fuzz run handle_key
