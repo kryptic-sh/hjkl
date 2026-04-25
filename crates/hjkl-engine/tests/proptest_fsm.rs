@@ -178,4 +178,41 @@ proptest! {
         // Second drain must always be empty.
         prop_assert!(ed.take_changes().is_empty());
     }
+
+    /// `apply_options(current_options())` is a fixed-point on the
+    /// fields the engine actually backs today.
+    #[test]
+    fn options_round_trip(
+        ts in 1u32..32,
+        sw in 1u32..32,
+        tw in 1u32..200,
+        et in any::<bool>(),
+        ic in any::<bool>(),
+        wrap_idx in 0u8..3,
+    ) {
+        use hjkl_engine::{Options, WrapMode};
+        let mut ed = Editor::new(KeybindingMode::Vim);
+        ed.set_content("hello\n");
+        let opts = Options {
+            tabstop: ts,
+            shiftwidth: sw,
+            textwidth: tw,
+            expandtab: et,
+            ignorecase: ic,
+            wrap: match wrap_idx {
+                0 => WrapMode::None,
+                1 => WrapMode::Char,
+                _ => WrapMode::Word,
+            },
+            ..Options::default()
+        };
+        ed.apply_options(&opts);
+        let echoed = ed.current_options();
+        prop_assert_eq!(echoed.tabstop, opts.tabstop);
+        prop_assert_eq!(echoed.shiftwidth, opts.shiftwidth);
+        prop_assert_eq!(echoed.textwidth, opts.textwidth);
+        prop_assert_eq!(echoed.expandtab, opts.expandtab);
+        prop_assert_eq!(echoed.ignorecase, opts.ignorecase);
+        prop_assert_eq!(echoed.wrap, opts.wrap);
+    }
 }
