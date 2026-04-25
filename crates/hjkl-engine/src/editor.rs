@@ -702,6 +702,33 @@ impl<'a> Editor<'a> {
         self.mark_content_dirty();
     }
 
+    /// Read the engine's current settings as a SPEC
+    /// [`crate::types::Options`].
+    ///
+    /// Bridges between the legacy [`Settings`] (which carries fewer
+    /// fields than SPEC) and the planned 0.1.0 trait surface. Fields
+    /// not present in `Settings` fall back to vim defaults (e.g.,
+    /// `expandtab=false`, `wrapscan=true`, `timeout_len=1000ms`).
+    /// Once trait extraction lands, this becomes the canonical config
+    /// reader and `Settings` retires.
+    pub fn current_options(&self) -> crate::types::Options {
+        let mut o = crate::types::Options::default();
+        o.shiftwidth = self.settings.shiftwidth as u32;
+        o.tabstop = self.settings.tabstop as u32;
+        o.ignorecase = self.settings.ignore_case;
+        o
+    }
+
+    /// Apply a SPEC [`crate::types::Options`] to the engine's settings.
+    /// Only the fields backed by today's [`Settings`] take effect;
+    /// remaining options become live once trait extraction wires them
+    /// through.
+    pub fn apply_options(&mut self, opts: &crate::types::Options) {
+        self.settings.shiftwidth = opts.shiftwidth as usize;
+        self.settings.tabstop = opts.tabstop as usize;
+        self.settings.ignore_case = opts.ignorecase;
+    }
+
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
     /// with [`crate::types::HighlightKind::Selection`].
     ///
@@ -1270,6 +1297,25 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn options_bridge_roundtrip() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        let opts = e.current_options();
+        assert_eq!(opts.shiftwidth, 2); // legacy Settings default
+        assert_eq!(opts.tabstop, 8);
+
+        let mut new_opts = crate::types::Options::default();
+        new_opts.shiftwidth = 4;
+        new_opts.tabstop = 2;
+        new_opts.ignorecase = true;
+        e.apply_options(&new_opts);
+
+        let after = e.current_options();
+        assert_eq!(after.shiftwidth, 4);
+        assert_eq!(after.tabstop, 2);
+        assert!(after.ignorecase);
     }
 
     #[test]
