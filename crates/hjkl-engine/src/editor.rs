@@ -512,6 +512,24 @@ impl<'a> Editor<'a> {
         dirty
     }
 
+    /// Pull-model coarse change observation. If content changed since
+    /// the last call, returns `Some(Arc<String>)` with the new content
+    /// and clears the dirty flag; otherwise returns `None`.
+    ///
+    /// Hosts that need fine-grained edit deltas (e.g., DOM patching at
+    /// the character level) should diff against their own previous
+    /// snapshot. The SPEC `take_changes() -> Vec<EditOp>` API lands
+    /// once every edit path inside the engine is instrumented; this
+    /// coarse form covers the pull-model use case in the meantime.
+    pub fn take_content_change(&mut self) -> Option<std::sync::Arc<String>> {
+        if !self.content_dirty {
+            return None;
+        }
+        let arc = self.content_arc();
+        self.content_dirty = false;
+        Some(arc)
+    }
+
     /// Returns the cursor's row within the visible textarea (0-based), updating
     /// the stored viewport top so subsequent calls remain accurate.
     pub fn cursor_screen_row(&mut self, height: u16) -> u16 {
@@ -1045,6 +1063,31 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn take_content_change_returns_some_on_first_dirty() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("hello");
+        let first = e.take_content_change();
+        assert!(first.is_some());
+        let second = e.take_content_change();
+        assert!(second.is_none());
+    }
+
+    #[test]
+    fn take_content_change_none_until_mutation() {
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("hello");
+        // drain
+        e.take_content_change();
+        assert!(e.take_content_change().is_none());
+        // mutate via insert mode
+        e.handle_key(key(KeyCode::Char('i')));
+        e.handle_key(key(KeyCode::Char('x')));
+        let after = e.take_content_change();
+        assert!(after.is_some());
+        assert!(after.unwrap().contains('x'));
     }
 
     #[test]
