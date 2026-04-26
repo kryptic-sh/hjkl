@@ -13,8 +13,9 @@ homepage.workspace = true
 readme = "README.md"
 
 [features]
-default = ["serde"]
+default = ["serde", "crossterm"]
 serde = ["dep:serde"]
+crossterm = ["dep:crossterm"]
 
 [dev-dependencies]
 proptest = "1"
@@ -25,12 +26,12 @@ serde_json = "1"
 # Style type and the `Buffer`/`Host` trait extraction (per SPEC). Once that
 # refactor ships, both will move behind feature flags so wasm/no_std consumers
 # can opt out.
-hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.23", features = [
+hjkl-buffer = { path = "../hjkl-buffer", version = "=0.0.24", features = [
   "ratatui",
 ] }
 bitflags = "2"
 ratatui = "0.29"
-crossterm = { version = "0.28.1", features = ["event-stream"] }
+crossterm = { version = "0.28.1", features = ["event-stream"], optional = true }
 regex = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "2"

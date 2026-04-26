@@ -8,6 +8,34 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.24] - 2026-04-26
+
+### Added
+
+- **`undo_break_on_motion` real semantics.** Insert-mode arrow keys
+  (`Left`/`Right`/`Up`/`Down`/`Home`/`End`) now break the active undo
+  group when the toggle is on (vim default). With `:set noundobreak`,
+  the entire insert run stays in one group. Mouse-position handling is
+  intentionally deferred — wiring it requires routing mouse events
+  through `vim::step` first.
+- **`crossterm` is now an optional dependency of `hjkl-engine`.**
+  Default features include `crossterm` so existing consumers keep
+  working unchanged. `cargo build -p hjkl-engine --no-default-features`
+  is clean. `Editor::handle_key(KeyEvent)` and the internal
+  `crossterm_to_input` helper sit behind `#[cfg(feature = "crossterm")]`.
+  `Editor::feed_input(PlannedInput)` was refactored to convert SPEC
+  inputs directly to engine inputs (no longer routed through a
+  synthetic crossterm `KeyEvent`) — usable from the no-crossterm
+  surface.
+
+### Changed
+
+- `EditorSnapshot::VERSION` documentation now states the lock policy
+  explicitly: 0.0.x bumps freely, **0.1.0 freezes the wire format**,
+  0.2.0+ structural changes require a major bump. Same wording added
+  to `crates/hjkl-engine/SPEC.md` under "Stability commitments →
+  Snapshot wire format".
+
 ## [0.0.23] - 2026-04-26
 
 ### Added (potentially breaking)

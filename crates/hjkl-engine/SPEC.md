@@ -306,6 +306,19 @@ bumps**. Lockstep workspace version. Callers pin with `=0.0.x`.
 `cargo public-api` baseline taken at 0.1.0 release; CI gates prevent accidental
 breakage from 0.1.0 onward.
 
+### Snapshot wire format
+
+`EditorSnapshot::VERSION` (currently `3`) tags the serde payload produced by
+`Editor::snapshot` / consumed by `Editor::restore`.
+
+- **0.0.x:** `VERSION` bumps with every structural change. Persisted state from
+  an older patch release will not round-trip; hosts must reject mismatched
+  payloads rather than attempt field-by-field migration.
+- **0.1.0:** `VERSION` freezes. Hosts persisting editor state between sessions
+  can rely on the wire format being stable for the entire 0.1.x line.
+- **0.2.0+:** any further structural change to `EditorSnapshot` requires
+  `VERSION++` and a major-version bump of `hjkl-engine`.
+
 ## Out of scope (engine never owns)
 
 See `MIGRATION.md` "Out of Scope" table.

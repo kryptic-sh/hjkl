@@ -9,6 +9,7 @@
 use crate::input::{Input, Key};
 use crate::vim::{self, VimState};
 use crate::{KeybindingMode, VimMode};
+#[cfg(feature = "crossterm")]
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -1090,9 +1091,10 @@ impl<'a> Editor<'a> {
     /// Feed an SPEC [`crate::PlannedInput`] into the engine.
     ///
     /// Bridge for hosts that don't carry crossterm — buffr's CEF
-    /// shell, future GUI frontends. Internally converts to the
-    /// crossterm KeyEvent that [`Editor::handle_key`] expects, then
-    /// dispatches.
+    /// shell, future GUI frontends. Converts directly to the engine's
+    /// internal [`Input`] type and dispatches through the vim FSM,
+    /// bypassing crossterm entirely so this entry point is always
+    /// available regardless of the `crossterm` feature.
     ///
     /// `Input::Mouse`, `Input::Paste`, `Input::FocusGained`,
     /// `Input::FocusLost`, and `Input::Resize` currently fall through
@@ -1102,46 +1104,40 @@ impl<'a> Editor<'a> {
     ///
     /// Returns `true` when the keystroke was consumed.
     pub fn feed_input(&mut self, input: crate::PlannedInput) -> bool {
-        use crate::{Modifiers, PlannedInput, SpecialKey};
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let to_mods = |m: Modifiers| {
-            let mut k = KeyModifiers::NONE;
-            if m.ctrl {
-                k |= KeyModifiers::CONTROL;
-            }
-            if m.shift {
-                k |= KeyModifiers::SHIFT;
-            }
-            if m.alt {
-                k |= KeyModifiers::ALT;
-            }
-            if m.super_ {
-                k |= KeyModifiers::SUPER;
-            }
-            k
-        };
-        let (code, mods) = match input {
-            PlannedInput::Char(c, m) => (KeyCode::Char(c), to_mods(m)),
+        use crate::{PlannedInput, SpecialKey};
+        let (key, mods) = match input {
+            PlannedInput::Char(c, m) => (Key::Char(c), m),
             PlannedInput::Key(k, m) => {
-                let code = match k {
-                    SpecialKey::Esc => KeyCode::Esc,
-                    SpecialKey::Enter => KeyCode::Enter,
-                    SpecialKey::Backspace => KeyCode::Backspace,
-                    SpecialKey::Tab => KeyCode::Tab,
-                    SpecialKey::BackTab => KeyCode::BackTab,
-                    SpecialKey::Up => KeyCode::Up,
-                    SpecialKey::Down => KeyCode::Down,
-                    SpecialKey::Left => KeyCode::Left,
-                    SpecialKey::Right => KeyCode::Right,
-                    SpecialKey::Home => KeyCode::Home,
-                    SpecialKey::End => KeyCode::End,
-                    SpecialKey::PageUp => KeyCode::PageUp,
-                    SpecialKey::PageDown => KeyCode::PageDown,
-                    SpecialKey::Insert => KeyCode::Insert,
-                    SpecialKey::Delete => KeyCode::Delete,
-                    SpecialKey::F(n) => KeyCode::F(n),
+                let key = match k {
+                    SpecialKey::Esc => Key::Esc,
+                    SpecialKey::Enter => Key::Enter,
+                    SpecialKey::Backspace => Key::Backspace,
+                    SpecialKey::Tab => Key::Tab,
+                    // Engine's internal `Key` doesn't model BackTab as a
+                    // distinct variant — fall through to the FSM as
+                    // shift+Tab, matching crossterm semantics.
+                    SpecialKey::BackTab => Key::Tab,
+                    SpecialKey::Up => Key::Up,
+                    SpecialKey::Down => Key::Down,
+                    SpecialKey::Left => Key::Left,
+                    SpecialKey::Right => Key::Right,
+                    SpecialKey::Home => Key::Home,
+                    SpecialKey::End => Key::End,
+                    SpecialKey::PageUp => Key::PageUp,
+                    SpecialKey::PageDown => Key::PageDown,
+                    // Engine's `Key` has no Insert / F(n) — drop to Null
+                    // (FSM ignores it) which matches the crossterm path
+                    // (`crossterm_to_input` mapped these to Null too).
+                    SpecialKey::Insert => Key::Null,
+                    SpecialKey::Delete => Key::Delete,
+                    SpecialKey::F(_) => Key::Null,
                 };
-                (code, to_mods(m))
+                let m = if matches!(k, SpecialKey::BackTab) {
+                    crate::Modifiers { shift: true, ..m }
+                } else {
+                    m
+                };
+                (key, m)
             }
             // Variants the legacy FSM doesn't consume yet.
             PlannedInput::Mouse(_)
@@ -1150,7 +1146,16 @@ impl<'a> Editor<'a> {
             | PlannedInput::FocusLost
             | PlannedInput::Resize(_, _) => return false,
         };
-        self.handle_key(KeyEvent::new(code, mods))
+        if key == Key::Null {
+            return false;
+        }
+        let event = Input {
+            key,
+            ctrl: mods.ctrl,
+            alt: mods.alt,
+            shift: mods.shift,
+        };
+        vim::step(self, event)
     }
 
     /// Drain the pending change log produced by buffer mutations.
@@ -1812,6 +1817,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Returns true if the key was consumed by the editor.
+    #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
         if input.key == Key::Null {
@@ -1821,6 +1827,7 @@ impl<'a> Editor<'a> {
     }
 }
 
+#[cfg(feature = "crossterm")]
 pub(super) fn crossterm_to_input(key: KeyEvent) -> Input {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let alt = key.modifiers.contains(KeyModifiers::ALT);

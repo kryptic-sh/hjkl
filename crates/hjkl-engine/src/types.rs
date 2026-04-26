@@ -641,13 +641,24 @@ pub struct RenderFrame {
 ///
 /// - Treat the snapshot as opaque. Don't manually mutate fields.
 /// - Always check `version` after deserialization; reject on
-///   mismatch rather than attempt migration. The 0.0.x churn drops
-///   compatibility freely.
+///   mismatch rather than attempt migration.
+///
+/// # Wire-format stability
+///
+/// - **0.0.x:** [`Self::VERSION`] bumps with every structural change to
+///   the snapshot. Hosts must reject mismatched persisted state — no
+///   migration path is offered.
+/// - **0.1.0:** [`Self::VERSION`] freezes. Hosts persisting editor state
+///   between sessions can rely on the wire format being stable for the
+///   entire 0.1.x line.
+/// - **0.2.0+:** any further structural change to this struct requires a
+///   `VERSION++` bump and is gated behind a major version bump of the
+///   crate.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EditorSnapshot {
-    /// Format version. Bumped on every structural change. Hosts use
-    /// this to detect mismatched persisted state.
+    /// Format version. See [`Self::VERSION`] for the lock policy.
+    /// Hosts use this to detect mismatched persisted state.
     pub version: u32,
     /// Mode at snapshot time (status-line granularity).
     pub mode: SnapshotMode,
@@ -686,6 +697,18 @@ impl EditorSnapshot {
     ///
     /// Bumped to 2 in v0.0.8: registers added.
     /// Bumped to 3 in v0.0.9: file_marks added.
+    ///
+    /// # Lock policy
+    ///
+    /// - **0.0.x (today):** `VERSION` bumps freely with each structural
+    ///   change to [`EditorSnapshot`]. Persisted state from an older
+    ///   patch release will not round-trip; hosts must reject the
+    ///   snapshot rather than attempt a field-by-field migration.
+    /// - **0.1.0:** `VERSION` freezes. Hosts persisting editor state
+    ///   between sessions can rely on the wire format being stable for
+    ///   the entire 0.1.x line.
+    /// - **0.2.0+:** any further structural change requires `VERSION++`
+    ///   together with a major-version bump of `hjkl-engine`.
     pub const VERSION: u32 = 3;
 }
 

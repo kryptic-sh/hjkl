@@ -1215,28 +1215,34 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
         }
         Key::Left => {
             ed.buffer_mut().move_left(1);
+            break_undo_group_in_insert(ed);
             false
         }
         Key::Right => {
             // Insert mode allows the cursor one past the last char so the
             // next typed letter appends — use the operator-context move.
             ed.buffer_mut().move_right_to_end(1);
+            break_undo_group_in_insert(ed);
             false
         }
         Key::Up => {
             ed.buffer_mut().move_up(1);
+            break_undo_group_in_insert(ed);
             false
         }
         Key::Down => {
             ed.buffer_mut().move_down(1);
+            break_undo_group_in_insert(ed);
             false
         }
         Key::Home => {
             ed.buffer_mut().move_line_start();
+            break_undo_group_in_insert(ed);
             false
         }
         Key::End => {
             ed.buffer_mut().move_line_end();
+            break_undo_group_in_insert(ed);
             false
         }
         Key::PageUp => {
@@ -1379,6 +1385,40 @@ fn begin_insert(ed: &mut Editor<'_>, count: usize, reason: InsertReason) {
         reason,
     });
     ed.vim.mode = Mode::Insert;
+}
+
+/// `:set undobreak` semantics for insert-mode motions. When the
+/// toggle is on, a non-character keystroke that moves the cursor
+/// (arrow keys, Home/End, mouse click) ends the current undo group
+/// and starts a new one mid-session. After this, a subsequent `u`
+/// in normal mode reverts only the post-break run, leaving the
+/// pre-break edits in place — matching vim's behaviour.
+///
+/// Implementation: snapshot the current buffer onto the undo stack
+/// (the new break point) and reset the active `InsertSession`'s
+/// `before_lines` so `finish_insert_session`'s diff window only
+/// captures the post-break run for `last_change` / dot-repeat.
+///
+/// During replay we skip the break — replay shouldn't pollute the
+/// undo stack with intra-replay snapshots.
+fn break_undo_group_in_insert(ed: &mut Editor<'_>) {
+    if !ed.settings.undo_break_on_motion {
+        return;
+    }
+    if ed.vim.replaying {
+        return;
+    }
+    if ed.vim.insert_session.is_none() {
+        return;
+    }
+    ed.push_undo();
+    let lines = ed.buffer.lines().to_vec();
+    let row = ed.buffer.cursor().row;
+    if let Some(ref mut session) = ed.vim.insert_session {
+        session.before_lines = lines;
+        session.row_min = row;
+        session.row_max = row;
+    }
 }
 
 // ─── Normal / Visual / Operator-pending dispatcher ─────────────────────────
@@ -8034,6 +8074,28 @@ mod tests {
         run_keys(&mut e, "g");
         // Cursor must still be at row 2 — `gg` was NOT completed.
         assert_eq!(e.cursor().0, 2, "timeout must abandon g-prefix");
+    }
+
+    #[test]
+    fn undobreak_on_breaks_group_at_arrow_motion() {
+        let mut e = editor_with("");
+        // i a a a <Left> b b b <Esc> u
+        run_keys(&mut e, "iaaa<Left>bbb<Esc>u");
+        // Default settings.undo_break_on_motion = true, so `u` only
+        // reverses the `bbb` run; `aaa` remains.
+        let line = e.buffer.line(0).unwrap_or("").to_string();
+        assert!(line.contains("aaa"), "after undobreak: {line:?}");
+        assert!(!line.contains("bbb"), "bbb should be undone: {line:?}");
+    }
+
+    #[test]
+    fn undobreak_off_keeps_full_run_in_one_group() {
+        let mut e = editor_with("");
+        e.settings_mut().undo_break_on_motion = false;
+        run_keys(&mut e, "iaaa<Left>bbb<Esc>u");
+        // With undobreak off, the whole insert (aaa<Left>bbb) is one
+        // group — `u` reverts back to empty.
+        assert_eq!(e.buffer.line(0).unwrap_or(""), "");
     }
 
     #[test]
