@@ -1230,12 +1230,14 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
             false
         }
         Key::Up => {
-            crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Down => {
-            crate::motions::move_down(&mut ed.buffer, 1, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_down(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
@@ -2187,21 +2189,25 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             // Final col is set by `apply_sticky_col` below — push the
             // post-move row to the textarea and let sticky tracking
             // finish the work.
-            crate::motions::move_up(&mut ed.buffer, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_up(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
-            crate::motions::move_down(&mut ed.buffer, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_down(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
             let v = *ed.host.viewport();
-            crate::motions::move_screen_up(&mut ed.buffer, &v, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_screen_up(&mut ed.buffer, &folds, &v, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
             let v = *ed.host.viewport();
-            crate::motions::move_screen_down(&mut ed.buffer, &v, count, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_screen_down(&mut ed.buffer, &folds, &v, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
@@ -3042,7 +3048,8 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             });
             // After insert, cursor sits on the surviving content one row
             // down — step back up onto the freshly-empty line.
-            crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
             true
         }
@@ -5117,7 +5124,8 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
                     at: Position::new(row, 0),
                     text: "\n".to_string(),
                 });
-                crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
+                let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+                crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
             } else {
                 let line_chars = ed
                     .buffer()

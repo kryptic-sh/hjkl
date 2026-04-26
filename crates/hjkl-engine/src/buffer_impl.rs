@@ -488,6 +488,83 @@ impl FoldProvider for BufferFoldProviderMut<'_> {
     }
 }
 
+/// Owned-snapshot [`FoldProvider`] adapter. Carries a copy of the
+/// buffer's fold list (one `Vec<Fold>` clone — fold lists are tiny in
+/// practice) plus the buffer's `row_count`, so the call site can hold
+/// the snapshot for fold queries while passing `&mut hjkl_buffer::Buffer`
+/// to a motion function that needs cursor mutation.
+///
+/// Introduced in 0.0.40 (Patch C-δ.5) so the lifted motion fns can
+/// take `&dyn FoldProvider` separately from `&mut B: Cursor + Query`
+/// without the call site running into the immutable-vs-mutable
+/// borrow conflict that arises with [`BufferFoldProvider`] /
+/// [`BufferFoldProviderMut`] (both of which hold a buffer borrow).
+///
+/// The snapshot is read-only — `apply` and `invalidate_range` are
+/// no-ops (any fold mutation must go through the canonical
+/// [`BufferFoldProviderMut`] adapter against the live buffer).
+pub struct SnapshotFoldProvider {
+    folds: Vec<hjkl_buffer::Fold>,
+    row_count: usize,
+}
+
+impl SnapshotFoldProvider {
+    /// Snapshot the current fold list + row-count from `buffer`.
+    /// The snapshot is decoupled from the buffer's lifetime, so the
+    /// caller can immediately re-borrow the buffer mutably.
+    pub fn from_buffer(buffer: &RopeBuffer) -> Self {
+        Self {
+            folds: buffer.folds().to_vec(),
+            row_count: buffer.row_count(),
+        }
+    }
+
+    /// True iff `row` is hidden by any closed fold in the snapshot.
+    /// Mirrors [`hjkl_buffer::Buffer::is_row_hidden`] over the
+    /// snapshotted fold list.
+    fn snapshot_is_row_hidden(&self, row: usize) -> bool {
+        self.folds.iter().any(|f| f.hides(row))
+    }
+}
+
+impl FoldProvider for SnapshotFoldProvider {
+    fn next_visible_row(&self, row: usize, _row_count: usize) -> Option<usize> {
+        // Mirrors [`hjkl_buffer::Buffer::next_visible_row`]: walk
+        // forward, skipping closed-fold-hidden rows, stop at end.
+        let last = self.row_count.saturating_sub(1);
+        if last == 0 && row == 0 {
+            return None;
+        }
+        let mut r = row.checked_add(1)?;
+        while r <= last && self.snapshot_is_row_hidden(r) {
+            r += 1;
+        }
+        (r <= last).then_some(r)
+    }
+
+    fn prev_visible_row(&self, row: usize) -> Option<usize> {
+        // Mirrors [`hjkl_buffer::Buffer::prev_visible_row`].
+        let mut r = row.checked_sub(1)?;
+        while self.snapshot_is_row_hidden(r) {
+            r = r.checked_sub(1)?;
+        }
+        Some(r)
+    }
+
+    fn is_row_hidden(&self, row: usize) -> bool {
+        self.snapshot_is_row_hidden(row)
+    }
+
+    fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)> {
+        self.folds
+            .iter()
+            .find(|f| f.contains(row))
+            .map(|f| (f.start_row, f.end_row, f.closed))
+    }
+
+    // `apply` / `invalidate_range` use the trait's default no-op impl.
+}
+
 // ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
