@@ -8,28 +8,137 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.33] - 2026-04-26
+
+### Patch C-γ (partial) — fold relocation + SPEC constructor preview
+
+This patch was scoped as the 0.1.0 keystone (Editor generic flip, motion bound
+lift, fold relocation, freeze contract) but **stops at 0.0.33** because two of
+the three deferred troikas trip the agent-plan stop thresholds:
+
+- **Phase B (Editor `<B, H>` generic flip)** — `editor.rs` (3094 lines) and
+  `vim.rs` (8800 lines) reach into ~46 distinct `hjkl_buffer::Buffer` methods,
+  most of them outside the SPEC trait surface (viewport/render/wrap/cache).
+  Generic-ifying without a private engine-internal super-trait — or relocating
+  ~33 helpers into the engine — is multi-thousand-LOC churn that can't land in
+  one coherent patch. **Stop threshold #2** fires: ship Phase A + E and let
+  0.1.0 wait one more patch.
+- **Phase D (motion bodies generic over `Cursor + Query + …`)** — the screen
+  motions (`move_screen_vertical`, `step_screen`, `move_viewport_*`) call
+  `buf.viewport()`. SPEC.md §"`Buffer` trait surface" explicitly relocates
+  viewport off `Buffer` onto `Host`, so motions can't be generic over
+  `B: Cursor + Query` without a host-supplied viewport accessor that doesn't
+  exist yet. **Stop threshold #3** fires: track the SPEC delta and let 0.1.0
+  land it together.
+
+The bits that compose cleanly today land here. The 0.1.0 cut becomes Patch C-δ.
+
+#### Phase A (preview) — `Editor::with_options(buffer, host, options)`
+
+The SPEC-shaped constructor lands under a non-clashing name so 0.0.x consumers'
+`Editor::new(KeybindingMode)` keeps compiling:
+
+```rust
+pub fn with_options<H: Host + 'a>(
+    buffer: hjkl_buffer::Buffer,
+    host: H,
+    options: hjkl_engine::Options,
+) -> Editor<'a>
+```
+
+Internally it translates SPEC `Options` into the legacy `Settings` struct (the
+two are field-isomorphic except for type widths and `WrapMode` vs
+`hjkl_buffer::Wrap`). At 0.1.0 (Patch C-δ) this constructor renames to plain
+`Editor::new`, the `<B, H>` generics flip in place, and the legacy
+`Editor::new(KeybindingMode)` / `Editor::with_host(km, host)` shims get deleted.
+
+Migration today:
+
+```rust
+// 0.0.32 (no change required at 0.0.33)
+let mut e = Editor::new(KeybindingMode::Vim);
+
+// 0.0.33 SPEC-flavoured (optional, future-proof)
+let mut e = Editor::with_options(
+    hjkl_buffer::Buffer::new(),
+    hjkl_engine::DefaultHost::new(),
+    hjkl_engine::Options::default(),
+);
+```
+
+#### Phase E (partial) — fold relocation in `editor.rs::ensure_scrolloff_wrap`
+
+`Editor::ensure_scrolloff_wrap` now reads visible-row iteration through
+`crate::buffer_impl::BufferFoldProvider` instead of calling
+`hjkl_buffer::Buffer::next_visible_row` / `prev_visible_row` directly. The
+borrow-checker conflict that blocked Patch C-β is resolved by scoping the
+`BufferFoldProvider` borrow to a `let { … }` block that drops before the mutable
+`viewport_mut()` write. No behaviour change — `BufferFoldProvider` forwards
+directly to the buffer's fold storage.
+
+The `motions.rs` fold call sites (`move_vertical`, `move_screen_vertical`,
+`step_screen`) remain on the concrete `Buffer::next_visible_row` /
+`prev_visible_row` API. Relocating them requires either Phase D's motion generic
+flip (blocked above) or a wider motion API that takes
+`folds: &dyn FoldProvider`, which causes a re-borrow conflict against the
+`&mut Buffer` motion parameter when the provider wraps the same buffer. That's
+an entry on the Patch C-δ punch list.
+
+#### Phase F (preview) — `PUBLIC_API.md` baseline
+
+`crates/hjkl-engine/PUBLIC_API.md` ships as the reference baseline for the 0.1.0
+surface diff. Generated with
+`cargo +nightly public-api -p hjkl-engine --simplified` (toolchain installed
+locally, not vendored). 2030 lines of public surface today; the freeze contract
+trims the deprecated shims (`Editor::new(KeybindingMode)`,
+`Editor::with_host(km, host)`) and pins the rest at 0.1.0.
+
+#### Phase G — version pin
+
+Workspace bumps `0.0.32` → `0.0.33`. Member crate pins (`=0.0.32` → `=0.0.33`).
+
+### Deferred to Patch C-δ (the real 0.1.0)
+
+- Phase B: `Editor<'a, B: Buffer = hjkl_buffer::Buffer, H: Host = DefaultHost>`
+  generic flip with default type params. Likely needs a private engine-internal
+  `BufferExt` trait or relocation of viewport/render helpers out of
+  `hjkl_buffer::Buffer`.
+- Phase D: `motions::*` generic over `B: Cursor + Query + BufferEdit` plus a
+  `folds: &dyn FoldProvider` parameter on fold-aware motions and a host-supplied
+  viewport accessor on screen-relative motions.
+- Phase E (rest): `motions.rs` fold call sites relocated through `FoldProvider`
+  (gated on Phase D).
+- Phase F (real): `cargo public-api` CI gate. Trim deprecated shims.
+- Phase A (rename): `Editor::with_options` → `Editor::new`. Delete
+  `Editor::with_host` and `Editor::new(KeybindingMode)`.
+- Phase G: 0.0.33 → 0.1.0; SPEC.md freeze contract; `=0.0.33` → `=0.1.0` on
+  consumer pins.
+
+Consumers (`sqeel`, `buffr`, `inbx`) keep building unchanged at 0.0.33: bump
+`hjkl-*` pins from `=0.0.32` to `=0.0.33`. No source changes required.
+
 ## [0.0.32] - 2026-04-26
 
 ### Patch C-β (partial) — name freeze + additive `FoldProvider`
 
-This patch is the breaking-rename slice of the planned 0.1.0 keystone. The
-0.1.0 cut itself slipped to Patch C-γ because the deeper restructuring it
-requires (Editor generic flip, motion bound lifts, fold-iteration relocation)
-hits borrow-checker constraints that can't be undone without rewiring
-`Editor`'s field layout. Per the `BCTP`-style stop thresholds in the agent
-plan, we land the bits that compose cleanly today (Phases 1, 2, additive 4)
-and ship the larger flip together as Patch C-γ.
+This patch is the breaking-rename slice of the planned 0.1.0 keystone. The 0.1.0
+cut itself slipped to Patch C-γ because the deeper restructuring it requires
+(Editor generic flip, motion bound lifts, fold-iteration relocation) hits
+borrow-checker constraints that can't be undone without rewiring `Editor`'s
+field layout. Per the `BCTP`-style stop thresholds in the agent plan, we land
+the bits that compose cleanly today (Phases 1, 2, additive 4) and ship the
+larger flip together as Patch C-γ.
 
 #### Phase 1 — `#[deprecated]` aliases removed
 
 The 0.0.31 prefixed-name aliases are gone:
 
-| 0.0.31 (deprecated)             | 0.0.32                       |
-| ------------------------------- | ---------------------------- |
-| `hjkl_engine::SpecBuffer`       | `hjkl_engine::Buffer`        |
-| `hjkl_engine::SpecBufferEdit`   | `hjkl_engine::BufferEdit`    |
-| `hjkl_engine::EditOp`           | `hjkl_engine::Edit`          |
-| `hjkl_engine::PlannedViewport`  | `hjkl_engine::Viewport`      |
+| 0.0.31 (deprecated)            | 0.0.32                    |
+| ------------------------------ | ------------------------- |
+| `hjkl_engine::SpecBuffer`      | `hjkl_engine::Buffer`     |
+| `hjkl_engine::SpecBufferEdit`  | `hjkl_engine::BufferEdit` |
+| `hjkl_engine::EditOp`          | `hjkl_engine::Edit`       |
+| `hjkl_engine::PlannedViewport` | `hjkl_engine::Viewport`   |
 
 Consumers still naming the prefixed forms get hard compile errors. Pin bumps
 (`=0.0.31` → `=0.0.32`) plus the rename are the migration.
@@ -41,18 +150,18 @@ variant ("engine never imports ratatui" per SPEC.md §"Style"). Ratatui-flavoure
 variants take an `_in_rect` suffix or the `ratatui_` prefix. **Breaking** —
 consumers calling these methods need source changes:
 
-| 0.0.31                                                               | 0.0.32                                                                |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `Editor::mouse_click_xy(area_x, area_y, col, row)`                   | `Editor::mouse_click(area_x, area_y, col, row)`                       |
-| `Editor::mouse_click(area, col, row)` (`#[cfg(feature = "ratatui")]`) | `Editor::mouse_click_in_rect(area, col, row)`                         |
-| `Editor::mouse_extend_drag_xy(area_x, area_y, col, row)`             | `Editor::mouse_extend_drag(area_x, area_y, col, row)`                 |
-| `Editor::mouse_extend_drag(area, col, row)`                          | `Editor::mouse_extend_drag_in_rect(area, col, row)`                   |
-| `Editor::cursor_screen_pos_xywh(x, y, w, h)`                         | `Editor::cursor_screen_pos(x, y, w, h)`                               |
-| `Editor::cursor_screen_pos(area)`                                    | `Editor::cursor_screen_pos_in_rect(area)`                             |
-| `Editor::install_engine_syntax_spans(spans)` (engine-native `Style`) | `Editor::install_syntax_spans(spans)`                                 |
-| `Editor::install_syntax_spans(spans)` (ratatui `Style`)              | `Editor::install_ratatui_syntax_spans(spans)`                         |
-| `Editor::intern_engine_style(s)` (engine-native `Style`)             | `Editor::intern_style(s)`                                             |
-| `Editor::intern_style(s)` (ratatui `Style`)                          | `Editor::intern_ratatui_style(s)`                                     |
+| 0.0.31                                                                | 0.0.32                                                |
+| --------------------------------------------------------------------- | ----------------------------------------------------- |
+| `Editor::mouse_click_xy(area_x, area_y, col, row)`                    | `Editor::mouse_click(area_x, area_y, col, row)`       |
+| `Editor::mouse_click(area, col, row)` (`#[cfg(feature = "ratatui")]`) | `Editor::mouse_click_in_rect(area, col, row)`         |
+| `Editor::mouse_extend_drag_xy(area_x, area_y, col, row)`              | `Editor::mouse_extend_drag(area_x, area_y, col, row)` |
+| `Editor::mouse_extend_drag(area, col, row)`                           | `Editor::mouse_extend_drag_in_rect(area, col, row)`   |
+| `Editor::cursor_screen_pos_xywh(x, y, w, h)`                          | `Editor::cursor_screen_pos(x, y, w, h)`               |
+| `Editor::cursor_screen_pos(area)`                                     | `Editor::cursor_screen_pos_in_rect(area)`             |
+| `Editor::install_engine_syntax_spans(spans)` (engine-native `Style`)  | `Editor::install_syntax_spans(spans)`                 |
+| `Editor::install_syntax_spans(spans)` (ratatui `Style`)               | `Editor::install_ratatui_syntax_spans(spans)`         |
+| `Editor::intern_engine_style(s)` (engine-native `Style`)              | `Editor::intern_style(s)`                             |
+| `Editor::intern_style(s)` (ratatui `Style`)                           | `Editor::intern_ratatui_style(s)`                     |
 
 No deprecation aliases — Rust forbids overloading and the rename collisions
 under feature gates make a back-compat shim impossible.
@@ -73,16 +182,17 @@ pub struct NoopFoldProvider;          // every row visible
 pub struct BufferFoldProvider<'a>;    // wraps `&hjkl_buffer::Buffer`
 ```
 
-Re-exported at `hjkl_engine::{FoldProvider, NoopFoldProvider, BufferFoldProvider}`
-and `hjkl_editor::spec::{FoldProvider, NoopFoldProvider, BufferFoldProvider}`.
+Re-exported at
+`hjkl_engine::{FoldProvider, NoopFoldProvider, BufferFoldProvider}` and
+`hjkl_editor::spec::{FoldProvider, NoopFoldProvider, BufferFoldProvider}`.
 
 The engine call sites (`editor.rs::scroll_*`, `motions.rs::move_vertical`,
-`motions.rs::move_screen_vertical`) are **NOT** relocated in this patch.
-Reason: motions take `&mut Buffer`, and constructing a `BufferFoldProvider`
-from the same buffer would create a `&Buffer` aliasing the `&mut`. Threading
-a separate fold provider through requires the `Editor<B, H>` generic flip
-(Phase 6) so the host owns the provider on a different field. That work
-ships as Patch C-γ alongside motion bound lifts.
+`motions.rs::move_screen_vertical`) are **NOT** relocated in this patch. Reason:
+motions take `&mut Buffer`, and constructing a `BufferFoldProvider` from the
+same buffer would create a `&Buffer` aliasing the `&mut`. Threading a separate
+fold provider through requires the `Editor<B, H>` generic flip (Phase 6) so the
+host owns the provider on a different field. That work ships as Patch C-γ
+alongside motion bound lifts.
 
 The trait surface is stable now — Patch C-γ flips the call sites without
 re-touching public API.
@@ -90,10 +200,10 @@ re-touching public API.
 ### Deferred to Patch C-γ
 
 - **Phase 3** — `Editor::new(buffer, host, options)` per SPEC. The current
-  `Editor::new(KeybindingMode)` shim stays; ~74 in-engine test sites use it.
-  The new constructor only delivers value paired with the generic flip.
-- **Phase 5** — motion bound lift to `B: Cursor + Query`. Bodies stay
-  concrete over `hjkl_buffer::Buffer` until Phase 6 lands.
+  `Editor::new(KeybindingMode)` shim stays; ~74 in-engine test sites use it. The
+  new constructor only delivers value paired with the generic flip.
+- **Phase 5** — motion bound lift to `B: Cursor + Query`. Bodies stay concrete
+  over `hjkl_buffer::Buffer` until Phase 6 lands.
 - **Phase 6** — `Editor<'a, B = hjkl_buffer::Buffer, H = DefaultHost>` generic
   flip. Touches every method on `Editor` (~3500 LOC); the highest-risk phase.
 - **Phase 7** — SPEC freeze + `cargo public-api` baseline (gated on Phase 6).
@@ -101,8 +211,8 @@ re-touching public API.
 
 ### Migration
 
-Consumers calling the renamed methods need source changes. The full
-mapping is in the Phase 2 table above. Typical hits in TUI hosts:
+Consumers calling the renamed methods need source changes. The full mapping is
+in the Phase 2 table above. Typical hits in TUI hosts:
 
 ```diff
 -editor.mouse_click(area, col, row);
@@ -143,72 +253,72 @@ additively; relocation of call sites lands at Patch C-γ.
 ### Changed (public-API rename pass — pre-0.1.0 freeze prep)
 
 The 0.1.0 cut freezes the trait surface; once frozen, renames need a
-semver-major bump. This patch is the last cheap window in the 0.0.x churn
-series to clean up names that got shoehorned in mid-refactor (Phase 5 trait
-extraction, 0.0.26).
+semver-major bump. This patch is the last cheap window in the 0.0.x churn series
+to clean up names that got shoehorned in mid-refactor (Phase 5 trait extraction,
+0.0.26).
 
 Every rename ships with a `#[deprecated]` type alias at the OLD name so
-consumers pinning `=0.0.30` keep building unchanged. The deprecated aliases
-are deleted at the 0.1.0 cut (Patch C-β).
+consumers pinning `=0.0.30` keep building unchanged. The deprecated aliases are
+deleted at the 0.1.0 cut (Patch C-β).
 
 #### `hjkl_engine` re-export rename table
 
-| 0.0.30                          | 0.0.31                       | Why                                                                                                                                            |
-| ------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hjkl_engine::SpecBuffer`       | `hjkl_engine::Buffer`        | The "Spec" prefix was a 0.0.26 stop-gap — `crate::types::Buffer` doesn't clash with anything at the engine root, so the SPEC-named re-export wins. |
-| `hjkl_engine::SpecBufferEdit`   | `hjkl_engine::BufferEdit`    | Same reasoning. The trait-vs-value-type clash (`BufferEdit` trait vs `Edit` struct) lives inside `crate::types`; at the engine root no clash exists. |
-| `hjkl_engine::EditOp`           | `hjkl_engine::Edit`          | The `EditOp` rename was needed because `hjkl_buffer::Edit` is also a value type, but `hjkl_buffer::Edit` isn't re-exported from `hjkl_engine` — no clash. |
-| `hjkl_engine::PlannedViewport`  | `hjkl_engine::Viewport`      | Nothing else uses the `Viewport` name at the engine root — the "Planned" prefix was redundant.                                                 |
+| 0.0.30                         | 0.0.31                    | Why                                                                                                                                                       |
+| ------------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hjkl_engine::SpecBuffer`      | `hjkl_engine::Buffer`     | The "Spec" prefix was a 0.0.26 stop-gap — `crate::types::Buffer` doesn't clash with anything at the engine root, so the SPEC-named re-export wins.        |
+| `hjkl_engine::SpecBufferEdit`  | `hjkl_engine::BufferEdit` | Same reasoning. The trait-vs-value-type clash (`BufferEdit` trait vs `Edit` struct) lives inside `crate::types`; at the engine root no clash exists.      |
+| `hjkl_engine::EditOp`          | `hjkl_engine::Edit`       | The `EditOp` rename was needed because `hjkl_buffer::Edit` is also a value type, but `hjkl_buffer::Edit` isn't re-exported from `hjkl_engine` — no clash. |
+| `hjkl_engine::PlannedViewport` | `hjkl_engine::Viewport`   | Nothing else uses the `Viewport` name at the engine root — the "Planned" prefix was redundant.                                                            |
 
 #### Concerns evaluated, decisions, and "leave as-is" rationale
 
-| Concern                                   | Decision      | Why                                                                                                                                                                          |
-| ----------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hjkl_engine::PlannedInput`               | leave         | `crate::input::Input` (legacy) and `crate::types::Input` (SPEC) are both reachable; `PlannedInput` is a useful disambiguation. The legacy `Input` goes away at 0.1.0; rename then. |
-| `hjkl_engine::types::sealed`              | leave         | Already `pub(crate)`. Verified no public surface leaks the seal.                                                                                                              |
-| `Editor::new` vs `Editor::with_host`      | leave         | `Editor::new` keeps the back-compat `DefaultHost` shim; `with_host` is the real one. Patch C-β at 0.1.0 swaps to `Editor::new(buffer, host, options)` per SPEC.               |
-| `EngineHost` vs `Host`                    | leave         | `EngineHost` is the object-safe slice the boxed-trait-object slot needs. The name carries useful intent — "this is the engine's internal slice".                             |
-| `Editor::mouse_click(Rect)` vs `mouse_click_xy` | leave         | Rust forbids overloading; renaming `mouse_click_xy` → `mouse_click` while keeping the `Rect` form requires the `Rect` form to take a different name, breaking `editor.mouse_click(rect, …)` call sites. The `_xy` suffix carries genuine signal ("raw x/y, no Rect"); ratatui-Rect is a sugar layer. **Documented for SPEC review at 0.1.0.** |
-| `Editor::install_syntax_spans` vs `install_engine_syntax_spans` | leave | Same shape — rename while keeping back-compat would require feature-gating two methods with the same name. Defer to 0.1.0.                                                 |
-| `Editor::cursor_screen_pos(Rect)` vs `cursor_screen_pos_xywh` | leave | Same.                                                                                                                                                                       |
-| `Editor::intern_style(ratatui)` vs `intern_engine_style` | leave | Same — rename plus alias produces a same-name conflict under feature combinations. Defer to 0.1.0.                                                                          |
-| `pub mod motions`                         | leave (`pub`) | Curated re-export at the engine root would pollute the namespace with 24 names. The explicit module path (`hjkl_engine::motions::move_word_fwd`) is the right shape.        |
+| Concern                                                         | Decision      | Why                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hjkl_engine::PlannedInput`                                     | leave         | `crate::input::Input` (legacy) and `crate::types::Input` (SPEC) are both reachable; `PlannedInput` is a useful disambiguation. The legacy `Input` goes away at 0.1.0; rename then.                                                                                                                                                            |
+| `hjkl_engine::types::sealed`                                    | leave         | Already `pub(crate)`. Verified no public surface leaks the seal.                                                                                                                                                                                                                                                                              |
+| `Editor::new` vs `Editor::with_host`                            | leave         | `Editor::new` keeps the back-compat `DefaultHost` shim; `with_host` is the real one. Patch C-β at 0.1.0 swaps to `Editor::new(buffer, host, options)` per SPEC.                                                                                                                                                                               |
+| `EngineHost` vs `Host`                                          | leave         | `EngineHost` is the object-safe slice the boxed-trait-object slot needs. The name carries useful intent — "this is the engine's internal slice".                                                                                                                                                                                              |
+| `Editor::mouse_click(Rect)` vs `mouse_click_xy`                 | leave         | Rust forbids overloading; renaming `mouse_click_xy` → `mouse_click` while keeping the `Rect` form requires the `Rect` form to take a different name, breaking `editor.mouse_click(rect, …)` call sites. The `_xy` suffix carries genuine signal ("raw x/y, no Rect"); ratatui-Rect is a sugar layer. **Documented for SPEC review at 0.1.0.** |
+| `Editor::install_syntax_spans` vs `install_engine_syntax_spans` | leave         | Same shape — rename while keeping back-compat would require feature-gating two methods with the same name. Defer to 0.1.0.                                                                                                                                                                                                                    |
+| `Editor::cursor_screen_pos(Rect)` vs `cursor_screen_pos_xywh`   | leave         | Same.                                                                                                                                                                                                                                                                                                                                         |
+| `Editor::intern_style(ratatui)` vs `intern_engine_style`        | leave         | Same — rename plus alias produces a same-name conflict under feature combinations. Defer to 0.1.0.                                                                                                                                                                                                                                            |
+| `pub mod motions`                                               | leave (`pub`) | Curated re-export at the engine root would pollute the namespace with 24 names. The explicit module path (`hjkl_engine::motions::move_word_fwd`) is the right shape.                                                                                                                                                                          |
 
 The five `Editor` method asymmetries (`mouse_click`/`cursor_screen_pos` /
 `install_syntax_spans` / `intern_style` and the drag pair) are **flagged for
 SPEC review at 0.1.0**. The naming asymmetry is real, but resolving it cleanly
 requires a breaking change (Rust's no-overloading rule prevents a same-name
-deprecated alias under feature gates). The 0.1.0 cut is the right place to
-pick the canonical names and break.
+deprecated alias under feature gates). The 0.1.0 cut is the right place to pick
+the canonical names and break.
 
 ### Migration (downstream consumers)
 
-No source change required — every renamed re-export ships with a
-`#[deprecated]` type alias at the old name. Consumers see
-`#[deprecated]`-flavoured warnings and update at their leisure:
+No source change required — every renamed re-export ships with a `#[deprecated]`
+type alias at the old name. Consumers see `#[deprecated]`-flavoured warnings and
+update at their leisure:
 
 ```text
 warning: use of deprecated type alias `hjkl_engine::SpecBuffer`:
          renamed to `hjkl_engine::Buffer`
 ```
 
-Pin bumps (`=0.0.30` → `=0.0.31`) in consumer `Cargo.toml`s suffice. At
-0.1.0, the deprecated aliases are deleted and the `#[deprecated]` warnings
-turn into hard compile errors — schedule the swap before then.
+Pin bumps (`=0.0.30` → `=0.0.31`) in consumer `Cargo.toml`s suffice. At 0.1.0,
+the deprecated aliases are deleted and the `#[deprecated]` warnings turn into
+hard compile errors — schedule the swap before then.
 
 ### Test counts
 
-- `cargo test --workspace`: **668 passed** (unchanged from 0.0.30 — the
-  rename pass is a no-op for runtime behaviour).
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`:
-  green (no internal call sites trigger the new deprecation warnings).
+- `cargo test --workspace`: **668 passed** (unchanged from 0.0.30 — the rename
+  pass is a no-op for runtime behaviour).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: green
+  (no internal call sites trigger the new deprecation warnings).
 - `cargo check --no-default-features`: green.
 
 ### SPEC.md
 
-No change. The SPEC names (`Buffer`, `BufferEdit`, `Edit`, `Viewport`)
-already match the new re-exports — this patch makes the actual API match
-the SPEC, which is the whole point.
+No change. The SPEC names (`Buffer`, `BufferEdit`, `Edit`, `Viewport`) already
+match the new re-exports — this patch makes the actual API match the SPEC, which
+is the whole point.
 
 ## [0.0.30] - 2026-04-26
 

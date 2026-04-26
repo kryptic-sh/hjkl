@@ -452,6 +452,36 @@ impl Default for Settings {
     }
 }
 
+/// Translate a SPEC [`crate::types::Options`] into the engine's
+/// internal [`Settings`] representation. Field-by-field map; the
+/// shapes are isomorphic except for type widths
+/// (`u32` vs `usize`, [`crate::types::WrapMode`] vs
+/// [`hjkl_buffer::Wrap`]). 0.1.0 (Patch C-δ) collapses both into one
+/// type once the `Editor<B, H>::new(buffer, host, options)` constructor
+/// is the canonical entry point.
+fn settings_from_options(o: &crate::types::Options) -> Settings {
+    Settings {
+        shiftwidth: o.shiftwidth as usize,
+        tabstop: o.tabstop as usize,
+        ignore_case: o.ignorecase,
+        smartcase: o.smartcase,
+        wrapscan: o.wrapscan,
+        textwidth: o.textwidth as usize,
+        expandtab: o.expandtab,
+        wrap: match o.wrap {
+            crate::types::WrapMode::None => hjkl_buffer::Wrap::None,
+            crate::types::WrapMode::Char => hjkl_buffer::Wrap::Char,
+            crate::types::WrapMode::Word => hjkl_buffer::Wrap::Word,
+        },
+        readonly: o.readonly,
+        autoindent: o.autoindent,
+        undo_levels: o.undo_levels,
+        undo_break_on_motion: o.undo_break_on_motion,
+        iskeyword: o.iskeyword.clone(),
+        timeout_len: o.timeout_len,
+    }
+}
+
 /// Host-observable LSP requests triggered by editor bindings. The
 /// hjkl-engine crate doesn't talk to an LSP itself — it just raises an
 /// intent that the TUI layer picks up and routes to `sqls`.
@@ -485,6 +515,45 @@ impl<'a> Editor<'a> {
     /// `Host::now`. Patch C (0.1.0) replaces this constructor with the
     /// generic `Editor<'a, B, H>::new(buffer, host, options)` per SPEC.
     pub fn with_host<H: crate::types::Host + 'a>(keybinding_mode: KeybindingMode, host: H) -> Self {
+        Self::with_host_and_options(keybinding_mode, host, Settings::default())
+    }
+
+    /// SPEC-shaped constructor preview. Build an Editor from a buffer,
+    /// host adapter, and [`crate::types::Options`] (vim `:set` defaults).
+    ///
+    /// 0.0.33 (Patch C-γ partial): introduced as the future home of
+    /// `Editor::new(buffer, host, options)` per SPEC §"Editor surface".
+    /// The 0.1.0 freeze patch (Patch C-δ) flips `Editor` generic over
+    /// `<B: Buffer, H: Host>` and renames this method to plain `new`,
+    /// retiring [`Editor::new`] / [`Editor::with_host`] /
+    /// [`Editor::with_host_and_options`] in the same churn. Until then
+    /// the constructor takes the concrete `hjkl_buffer::Buffer` so
+    /// downstream consumers that opt in early still link against the
+    /// in-tree rope buffer.
+    ///
+    /// Consumers that don't need a custom host pass
+    /// [`crate::types::DefaultHost::new()`]; consumers that don't need
+    /// custom options pass [`crate::types::Options::default()`].
+    pub fn with_options<H: crate::types::Host + 'a>(
+        buffer: hjkl_buffer::Buffer,
+        host: H,
+        options: crate::types::Options,
+    ) -> Self {
+        let mut ed =
+            Self::with_host_and_options(KeybindingMode::Vim, host, settings_from_options(&options));
+        ed.buffer = buffer;
+        ed
+    }
+
+    /// Internal: shared core for [`Editor::with_host`] (legacy default
+    /// settings) and [`Editor::with_options`] (SPEC `Options`-derived
+    /// settings). Constructs an empty [`hjkl_buffer::Buffer`] and a
+    /// boxed [`crate::types::EngineHost`] from the typed `host`.
+    fn with_host_and_options<H: crate::types::Host + 'a>(
+        keybinding_mode: KeybindingMode,
+        host: H,
+        settings: Settings,
+    ) -> Self {
         Self {
             _marker: std::marker::PhantomData,
             keybinding_mode,
@@ -504,7 +573,7 @@ impl<'a> Editor<'a> {
             registers: crate::registers::Registers::default(),
             #[cfg(feature = "ratatui")]
             styled_spans: Vec::new(),
-            settings: Settings::default(),
+            settings,
             file_marks: std::collections::HashMap::new(),
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
@@ -1767,6 +1836,12 @@ impl<'a> Editor<'a> {
         }
         // Step 2 — push top forward until cursor's screen row is
         // within the bottom margin (`csr <= height - 1 - margin`).
+        // 0.0.33 (Patch C-γ): fold-iteration goes through the
+        // [`crate::types::FoldProvider`] surface via
+        // [`crate::buffer_impl::BufferFoldProvider`]. The buffer
+        // re-borrow is short-lived — we drop the immutable
+        // [`BufferFoldProvider`] before the mutable
+        // `viewport_mut()` write below.
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
         loop {
             let csr = self.buffer.cursor_screen_row().unwrap_or(0);
@@ -1774,7 +1849,12 @@ impl<'a> Editor<'a> {
                 break;
             }
             let top = self.buffer.viewport().top_row;
-            let Some(next) = self.buffer.next_visible_row(top) else {
+            let row_count = self.buffer.row_count();
+            let next = {
+                let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+                <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::next_visible_row(&folds, top, row_count)
+            };
+            let Some(next) = next else {
                 break;
             };
             // Don't walk past the cursor's row.
@@ -1792,7 +1872,11 @@ impl<'a> Editor<'a> {
                 break;
             }
             let top = self.buffer.viewport().top_row;
-            let Some(prev) = self.buffer.prev_visible_row(top) else {
+            let prev = {
+                let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+                <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::prev_visible_row(&folds, top)
+            };
+            let Some(prev) = prev else {
                 break;
             };
             self.buffer.viewport_mut().top_row = prev;
@@ -2134,6 +2218,34 @@ mod tests {
     #[test]
     fn vim_normal_to_insert() {
         let mut e = Editor::new(KeybindingMode::Vim);
+        e.handle_key(key(KeyCode::Char('i')));
+        assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn with_options_constructs_from_spec_options() {
+        // 0.0.33 (Patch C-γ): SPEC-shaped constructor preview.
+        // Build with custom Options + DefaultHost; confirm the
+        // settings translation honours the SPEC field names.
+        let opts = crate::types::Options {
+            shiftwidth: 4,
+            tabstop: 4,
+            expandtab: true,
+            iskeyword: "@,a-z".to_string(),
+            wrap: crate::types::WrapMode::Word,
+            ..crate::types::Options::default()
+        };
+        let mut e = Editor::with_options(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            opts,
+        );
+        assert_eq!(e.settings().shiftwidth, 4);
+        assert_eq!(e.settings().tabstop, 4);
+        assert!(e.settings().expandtab);
+        assert_eq!(e.settings().iskeyword, "@,a-z");
+        assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Word);
+        // Confirm input plumbing still works.
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
     }
