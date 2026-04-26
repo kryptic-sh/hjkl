@@ -8,153 +8,220 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.26] - 2026-04-26
+
+### Added (Phase 5 trait extraction — keystone for 0.1.0)
+
+- **`ratatui` is now an optional dependency of `hjkl-engine`.** Default features
+  include `ratatui` so existing consumers keep building unchanged.
+  `cargo build -p hjkl-engine --no-default-features` is clean (combines with the
+  `crossterm`-optional landing in 0.0.24 to make wasm / no_std hosts viable).
+  Engine-internal helpers `engine_style_to_ratatui` / `ratatui_style_to_engine`,
+  plus the public `Editor::intern_style`, `Editor::style_table`,
+  `Editor::install_syntax_spans`, and the `Rect`-flavoured `Editor::mouse_click`
+  / `mouse_extend_drag` / `cursor_screen_pos` all sit behind
+  `#[cfg(feature = "ratatui")]`.
+- **Ratatui-free Editor surface for non-terminal hosts.** New ratatui-free
+  equivalents always available regardless of feature flags:
+  - `Editor::install_engine_syntax_spans` — engine-native
+    [`crate::types::Style`] flavour of `install_syntax_spans`.
+  - `Editor::mouse_click_xy` / `mouse_extend_drag_xy` / `cursor_screen_pos_xywh`
+    — same semantics as the `Rect` versions but take `(x, y[, width, height])`
+    directly.
+
+  When the `ratatui` feature is off the engine maintains a parallel
+  `Vec<crate::types::Style>` style intern table; `intern_engine_style` /
+  `engine_style_at` continue to round-trip ids without any ratatui dependency.
+
+- **`hjkl-editor` gains `ratatui` and `crossterm` features.** Default-on for
+  back-compat; both flow through to `hjkl-engine`. `hjkl-editor`'s `hjkl-buffer`
+  dep no longer pins the `ratatui` feature unconditionally — it now flows
+  through the editor's `ratatui` feature, so a downstream consumer disabling it
+  truly drops ratatui from the dep graph.
+- **`hjkl-ratatui` is now the canonical adapter crate.** Pulls `hjkl-engine`
+  with the `ratatui` feature on, so adding `hjkl-ratatui` to a host
+  automatically lights up the ratatui-flavoured Editor surface.
+- **SPEC trait surface lands on `hjkl_engine::types`.** Per
+  `crates/hjkl-engine/SPEC.md`:
+  - `Cursor`: `cursor`, `set_cursor`, `byte_offset`, `pos_at_byte`.
+  - `Query`: `line_count`, `line`, `len_bytes`, `slice` (returns
+    `std::borrow::Cow<'_, str>` so contiguous backends avoid the allocation).
+  - `BufferEdit`: `insert_at`, `delete_range`, `replace_range`. (Distinct trait
+    name from the existing `Edit` value type to avoid a naming clash.)
+  - `Search`: `find_next`, `find_prev` (caller-owned `regex::Regex` per SPEC
+    "Open issues").
+  - `Buffer`: super-trait of all four, sealed via private
+    `mod sealed { pub trait Sealed {} }` so downstream cannot `impl Buffer` from
+    outside the engine family pre-1.0.
+
+  Re-exported from `hjkl_engine` (`SpecBuffer`, `Cursor`, `Query`,
+  `SpecBufferEdit`, `Search`) and
+  `hjkl_editor::spec::{Buffer, Cursor, Query, BufferEdit, Search}`. Trait
+  declarations only — wiring the generic `Editor<B: Buffer, H: Host>` over the
+  in-tree `hjkl_buffer::Buffer` is deferred to a follow-up patch (the impl needs
+  to thread Pos⇄Position conversions through the FSM, which is large enough to
+  warrant its own bump).
+
+- Insert-mode mouse-click undo-break parity tests. Two new unit tests in
+  `hjkl-engine::editor` lock in the 0.0.25 wiring: with `undo_break_on_motion`
+  on (default), a click during an insert session splits the undo group so a
+  single `u` only reverses the post-click run; with `:set noundobreak`, the
+  entire pre/post-click insert collapses into one group.
+
+### Migration
+
+Consumers pinning `=0.0.25` continue to build unchanged when they upgrade. Wasm
+/ no_std hosts can now drop both `crossterm` and `ratatui` via:
+
+```toml
+hjkl-editor = { version = "=0.0.26", default-features = false, features = ["serde"] }
+```
+
+…and reach the engine-native syntax-span / mouse / cursor APIs through the `_xy`
+/ `install_engine_syntax_spans` / `intern_engine_style` methods listed above.
+
 ## [0.0.25] - 2026-04-26
 
 ### Added
 
-- `impl From<crossterm::KeyEvent> for Input` (gated on the `crossterm`
-  feature). Idiomatic conversion replaces the previously private
-  `crossterm_to_input` free fn — the latter remains as a one-line
-  delegating wrapper for the in-tree ratatui-coupled callers.
-- Mouse-position clicks now break the active insert-mode undo group
-  when `undo_break_on_motion` is on, completing the parity gap noted
-  in 0.0.24. `Editor::mouse_click` calls the same
-  `break_undo_group_in_insert` helper used by arrow-key motions.
-- Options round-trip proptest now exercises every settings-backed
-  field: `tabstop`, `shiftwidth`, `textwidth`, `expandtab`,
-  `ignorecase`, `smartcase`, `wrapscan`, `autoindent`,
-  `undo_break_on_motion`, `readonly`, `undo_levels`, `timeout_len`,
-  `iskeyword`, `wrap`. Catches future bridge regressions.
+- `impl From<crossterm::KeyEvent> for Input` (gated on the `crossterm` feature).
+  Idiomatic conversion replaces the previously private `crossterm_to_input` free
+  fn — the latter remains as a one-line delegating wrapper for the in-tree
+  ratatui-coupled callers.
+- Mouse-position clicks now break the active insert-mode undo group when
+  `undo_break_on_motion` is on, completing the parity gap noted in 0.0.24.
+  `Editor::mouse_click` calls the same `break_undo_group_in_insert` helper used
+  by arrow-key motions.
+- Options round-trip proptest now exercises every settings-backed field:
+  `tabstop`, `shiftwidth`, `textwidth`, `expandtab`, `ignorecase`, `smartcase`,
+  `wrapscan`, `autoindent`, `undo_break_on_motion`, `readonly`, `undo_levels`,
+  `timeout_len`, `iskeyword`, `wrap`. Catches future bridge regressions.
 
 ## [0.0.24] - 2026-04-26
 
 ### Added
 
 - **`undo_break_on_motion` real semantics.** Insert-mode arrow keys
-  (`Left`/`Right`/`Up`/`Down`/`Home`/`End`) now break the active undo
-  group when the toggle is on (vim default). With `:set noundobreak`,
-  the entire insert run stays in one group. Mouse-position handling is
-  intentionally deferred — wiring it requires routing mouse events
-  through `vim::step` first.
-- **`crossterm` is now an optional dependency of `hjkl-engine`.**
-  Default features include `crossterm` so existing consumers keep
-  working unchanged. `cargo build -p hjkl-engine --no-default-features`
-  is clean. `Editor::handle_key(KeyEvent)` and the internal
-  `crossterm_to_input` helper sit behind `#[cfg(feature = "crossterm")]`.
-  `Editor::feed_input(PlannedInput)` was refactored to convert SPEC
-  inputs directly to engine inputs (no longer routed through a
-  synthetic crossterm `KeyEvent`) — usable from the no-crossterm
-  surface.
+  (`Left`/`Right`/`Up`/`Down`/`Home`/`End`) now break the active undo group when
+  the toggle is on (vim default). With `:set noundobreak`, the entire insert run
+  stays in one group. Mouse-position handling is intentionally deferred — wiring
+  it requires routing mouse events through `vim::step` first.
+- **`crossterm` is now an optional dependency of `hjkl-engine`.** Default
+  features include `crossterm` so existing consumers keep working unchanged.
+  `cargo build -p hjkl-engine --no-default-features` is clean.
+  `Editor::handle_key(KeyEvent)` and the internal `crossterm_to_input` helper
+  sit behind `#[cfg(feature = "crossterm")]`. `Editor::feed_input(PlannedInput)`
+  was refactored to convert SPEC inputs directly to engine inputs (no longer
+  routed through a synthetic crossterm `KeyEvent`) — usable from the
+  no-crossterm surface.
 
 ### Changed
 
-- `EditorSnapshot::VERSION` documentation now states the lock policy
-  explicitly: 0.0.x bumps freely, **0.1.0 freezes the wire format**,
-  0.2.0+ structural changes require a major bump. Same wording added
-  to `crates/hjkl-engine/SPEC.md` under "Stability commitments →
-  Snapshot wire format".
+- `EditorSnapshot::VERSION` documentation now states the lock policy explicitly:
+  0.0.x bumps freely, **0.1.0 freezes the wire format**, 0.2.0+ structural
+  changes require a major bump. Same wording added to
+  `crates/hjkl-engine/SPEC.md` under "Stability commitments → Snapshot wire
+  format".
 
 ## [0.0.23] - 2026-04-26
 
 ### Added (potentially breaking)
 
-- **`iskeyword` now drives buffer-level word motions.** `Buffer` carries
-  the spec via new `Buffer::iskeyword` / `Buffer::set_iskeyword`. The
-  module-level `is_word` predicate is now spec-aware; `char_kind` reads
-  the spec from `&Buffer`. `w` / `b` / `e` / `ge` (and `W` / `B` / `E`)
-  classify chars against the live spec — completes the partial wiring
-  from 0.0.22 (which only honoured iskeyword for engine-side `*` / `#`).
-- `hjkl-buffer` now exports `is_keyword_char(c, spec)` as the
-  single-source parser; `hjkl-engine` re-uses it via re-export instead
-  of carrying its own copy.
-- New `Editor::set_iskeyword(spec)` syncs `Settings::iskeyword` and
-  pushes the spec onto the buffer in one shot. `apply_options` and
-  `:set iskeyword=...` route through it.
+- **`iskeyword` now drives buffer-level word motions.** `Buffer` carries the
+  spec via new `Buffer::iskeyword` / `Buffer::set_iskeyword`. The module-level
+  `is_word` predicate is now spec-aware; `char_kind` reads the spec from
+  `&Buffer`. `w` / `b` / `e` / `ge` (and `W` / `B` / `E`) classify chars against
+  the live spec — completes the partial wiring from 0.0.22 (which only honoured
+  iskeyword for engine-side `*` / `#`).
+- `hjkl-buffer` now exports `is_keyword_char(c, spec)` as the single-source
+  parser; `hjkl-engine` re-uses it via re-export instead of carrying its own
+  copy.
+- New `Editor::set_iskeyword(spec)` syncs `Settings::iskeyword` and pushes the
+  spec onto the buffer in one shot. `apply_options` and `:set iskeyword=...`
+  route through it.
 
 ### Changed
 
 - The default `Buffer::iskeyword` is `"@,48-57,_,192-255"` (vim parity).
-  Previously hardcoded as `c.is_alphanumeric() || c == '_'`. The new
-  default classifies the same set of ASCII chars but adds Unicode
-  alphabetic coverage (vim's `@` token uses `is_alphabetic`); buffers
-  with non-ASCII alphabetic content may see slightly different word
-  boundaries.
+  Previously hardcoded as `c.is_alphanumeric() || c == '_'`. The new default
+  classifies the same set of ASCII chars but adds Unicode alphabetic coverage
+  (vim's `@` token uses `is_alphabetic`); buffers with non-ASCII alphabetic
+  content may see slightly different word boundaries.
 
 ## [0.0.22] - 2026-04-26
 
 ### Added
 
-- `:set timeoutlen=N` / `:set tm=N` — multi-key sequence timeout. When
-  the user pauses longer than the budget between keys, any pending
-  prefix (`g`-prefix, operator-pending, register selector, count) is
-  cleared before dispatching the new key. New `Settings::timeout_len:
-  Duration` (default 1000ms). New `VimState::clear_pending_prefix()`
-  helper. Uses `std::time::Instant::now()` directly; TODO comment
-  flags swap to `Host::now()` once the trait extraction lands.
-- `:set iskeyword=...` / `:set isk=...` — vim-flavoured word-character
-  spec. Engine-side `*` / `#` word pickup now honours it via the new
-  `is_keyword_char` parser (`@`, `_`, `N-M` ranges, bare codes,
-  literal punctuation). Buffer-level `w` / `b` / `e` motions still use
-  the hardcoded predicate; TODO in `hjkl-buffer::motion` flags the
-  remaining plumbing for the 0.1.0 trait extraction.
-- `:set undobreak` / `:set noundobreak` — toggle for breaking the
-  undo group on insert-mode motions. Field wired through Settings +
-  Options bridge; engine doesn't yet break the undo group on motions,
-  so the toggle is a forward-compat no-op today.
-- `:set` listing surfaces `timeoutlen`, `iskeyword`, `undobreak`
-  columns. Golden snapshot updated.
+- `:set timeoutlen=N` / `:set tm=N` — multi-key sequence timeout. When the user
+  pauses longer than the budget between keys, any pending prefix (`g`-prefix,
+  operator-pending, register selector, count) is cleared before dispatching the
+  new key. New `Settings::timeout_len: Duration` (default 1000ms). New
+  `VimState::clear_pending_prefix()` helper. Uses `std::time::Instant::now()`
+  directly; TODO comment flags swap to `Host::now()` once the trait extraction
+  lands.
+- `:set iskeyword=...` / `:set isk=...` — vim-flavoured word-character spec.
+  Engine-side `*` / `#` word pickup now honours it via the new `is_keyword_char`
+  parser (`@`, `_`, `N-M` ranges, bare codes, literal punctuation). Buffer-level
+  `w` / `b` / `e` motions still use the hardcoded predicate; TODO in
+  `hjkl-buffer::motion` flags the remaining plumbing for the 0.1.0 trait
+  extraction.
+- `:set undobreak` / `:set noundobreak` — toggle for breaking the undo group on
+  insert-mode motions. Field wired through Settings + Options bridge; engine
+  doesn't yet break the undo group on motions, so the toggle is a forward-compat
+  no-op today.
+- `:set` listing surfaces `timeoutlen`, `iskeyword`, `undobreak` columns. Golden
+  snapshot updated.
 
 ## [0.0.21] - 2026-04-26
 
 ### Added
 
 - `:set readonly` / `:set ro` honoured by the engine. `Editor::mutate_edit`
-  short-circuits when `Settings::readonly` is true: no buffer change, no
-  dirty flag, no undo entry, no change-log emission. Returns a self-inverse
-  no-op so callers pushing the inverse onto an undo stack still get a
-  structurally valid round trip.
-- `:set autoindent` / `:set ai` honoured by the insert-mode Enter handler.
-  When on (vim default), Enter copies the leading whitespace of the current
-  line onto the new line. New `Settings::autoindent` field defaults to
-  `true` (vim parity) — a behaviour change from prior 0.0.x where Enter
-  inserted a bare newline. Set `:set noai` to restore the old behaviour.
-- `:set undolevels=N` / `:set ul=N` honoured by `push_undo` and the
-  redo path. Older entries pruned beyond the cap. New `Settings::undo_levels`
-  (default 1000); `0` is treated as unlimited. New `Editor::undo_stack_len`
-  test accessor.
-- `:set` listing surfaces `undolevels`, `autoindent`, `readonly` columns.
-  Golden snapshot updated.
+  short-circuits when `Settings::readonly` is true: no buffer change, no dirty
+  flag, no undo entry, no change-log emission. Returns a self-inverse no-op so
+  callers pushing the inverse onto an undo stack still get a structurally valid
+  round trip.
+- `:set autoindent` / `:set ai` honoured by the insert-mode Enter handler. When
+  on (vim default), Enter copies the leading whitespace of the current line onto
+  the new line. New `Settings::autoindent` field defaults to `true` (vim parity)
+  — a behaviour change from prior 0.0.x where Enter inserted a bare newline. Set
+  `:set noai` to restore the old behaviour.
+- `:set undolevels=N` / `:set ul=N` honoured by `push_undo` and the redo path.
+  Older entries pruned beyond the cap. New `Settings::undo_levels` (default
+  1000); `0` is treated as unlimited. New `Editor::undo_stack_len` test
+  accessor.
+- `:set` listing surfaces `undolevels`, `autoindent`, `readonly` columns. Golden
+  snapshot updated.
 
 ## [0.0.20] - 2026-04-26
 
 ### Added
 
-- `wrapscan` honoured by `/` and `?` searches. When off, search stops
-  at end-of-buffer (forward) or beginning-of-buffer (backward) instead
-  of wrapping. Default on (vim parity). New `Buffer::set_search_wrap` /
+- `wrapscan` honoured by `/` and `?` searches. When off, search stops at
+  end-of-buffer (forward) or beginning-of-buffer (backward) instead of wrapping.
+  Default on (vim parity). New `Buffer::set_search_wrap` /
   `Buffer::search_wraps` accessors on `hjkl-buffer`. Wired through
-  `Settings::wrapscan`, `Options::wrapscan`, and `:set wrapscan` /
-  `:set ws` / `:set nowrapscan`.
+  `Settings::wrapscan`, `Options::wrapscan`, and `:set wrapscan` / `:set ws` /
+  `:set nowrapscan`.
 - `:set` listing includes `wrapscan=on/off`. Golden snapshot updated.
 
 ## [0.0.19] - 2026-04-26
 
 ### Added
 
-- `smartcase` honoured by `/` and `?` searches. When `ignorecase` is on
-  and the pattern contains an uppercase letter, the search compiles
-  case-sensitive (matches vim's combined `ignorecase` + `smartcase`
-  behaviour). Wired through `Settings::smartcase`, `Options::smartcase`,
-  and `:set smartcase` / `:set scs` / `:set nosmartcase`.
-- `:set` listing now includes `smartcase=on/off`. Golden snapshot
-  updated.
+- `smartcase` honoured by `/` and `?` searches. When `ignorecase` is on and the
+  pattern contains an uppercase letter, the search compiles case-sensitive
+  (matches vim's combined `ignorecase` + `smartcase` behaviour). Wired through
+  `Settings::smartcase`, `Options::smartcase`, and `:set smartcase` / `:set scs`
+  / `:set nosmartcase`.
+- `:set` listing now includes `smartcase=on/off`. Golden snapshot updated.
 
 ## [0.0.18] - 2026-04-26
 
 ### Added
 
-- `expandtab` honoured by the insert-mode Tab key. When `Settings::expandtab`
-  is true, Tab inserts `tabstop` spaces; otherwise a literal `\t` (existing
+- `expandtab` honoured by the insert-mode Tab key. When `Settings::expandtab` is
+  true, Tab inserts `tabstop` spaces; otherwise a literal `\t` (existing
   behaviour). Wired through `Options::expandtab`, `current_options` /
   `apply_options`, `:set expandtab` / `:set noexpandtab` / `:set et`.
 - `:set` listing now includes `expandtab=on/off`. Golden snapshot updated.
@@ -163,8 +230,8 @@ patch bumps.
 
 ### Added
 
-- `Options::textwidth` (u32, default 79) — engine-native bridge for the
-  legacy `Settings::textwidth` driving `gq{motion}` reflow. Wired through
+- `Options::textwidth` (u32, default 79) — engine-native bridge for the legacy
+  `Settings::textwidth` driving `gq{motion}` reflow. Wired through
   `current_options` / `apply_options` and `set_by_name("tw"|"textwidth")`.
 
 ## [0.0.16] - 2026-04-26

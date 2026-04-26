@@ -1144,7 +1144,7 @@ fn mark_dirty_after_ex(editor: &mut Editor<'_>) {
     editor.mark_content_dirty();
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "crossterm"))]
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

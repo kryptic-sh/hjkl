@@ -31,10 +31,11 @@ pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
 
 pub use types::{
-    Attrs, BufferId, Color, CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight,
-    HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind,
-    OptionValue, Options, Pos, RenderFrame, Selection, SelectionKind, SelectionSet, SnapshotMode,
-    SpecialKey, Style, Viewport as PlannedViewport, WrapMode,
+    Attrs, Buffer as SpecBuffer, BufferEdit as SpecBufferEdit, BufferId, Color, Cursor,
+    CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight, HighlightKind, Host,
+    Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, OptionValue, Options, Pos,
+    Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey,
+    Style, Viewport as PlannedViewport, WrapMode,
 };
 pub use vim::SearchPrompt;
 

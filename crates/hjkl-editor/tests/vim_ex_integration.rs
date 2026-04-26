@@ -6,6 +6,8 @@
 //! duplicate type IDs that block the in-engine version of these
 //! tests from compiling.
 
+#![cfg(feature = "crossterm")]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_editor::runtime::ex;
 use hjkl_engine::{Editor, KeybindingMode};

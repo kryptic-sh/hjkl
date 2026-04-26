@@ -10,6 +10,8 @@
 //! review` (interactive) or `INSTA_UPDATE=always cargo test --test
 //! golden_ex` (batch). See `CONTRIBUTING.md` for the workflow.
 
+#![cfg(feature = "crossterm")]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_editor::runtime::ex;
 use hjkl_engine::{Editor, KeybindingMode};

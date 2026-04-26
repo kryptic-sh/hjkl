@@ -5174,7 +5174,7 @@ fn extract_inserted(before: &str, after: &str) -> String {
 
 // ─── Tests ────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "crossterm"))]
 mod tests {
     use crate::editor::Editor;
     use crate::{KeybindingMode, VimMode};
@@ -8148,6 +8148,7 @@ mod tests {
         assert_eq!(e.buffer.line(0).unwrap(), "hello");
     }
 
+    #[cfg(feature = "ratatui")]
     #[test]
     fn intern_style_dedups_repeated_styles() {
         use ratatui::style::{Color, Style};
@@ -8162,6 +8163,7 @@ mod tests {
         assert_eq!(e.style_table().len(), 2);
     }
 
+    #[cfg(feature = "ratatui")]
     #[test]
     fn install_syntax_spans_translates_styled_spans() {
         use ratatui::style::{Color, Style};
@@ -8176,6 +8178,7 @@ mod tests {
         assert_eq!(e.style_table()[id as usize].fg, Some(Color::Red));
     }
 
+    #[cfg(feature = "ratatui")]
     #[test]
     fn install_syntax_spans_clamps_sentinel_end() {
         use ratatui::style::{Color, Style};
@@ -8189,6 +8192,7 @@ mod tests {
         assert_eq!(by_row[0][0].end_byte, 5);
     }
 
+    #[cfg(feature = "ratatui")]
     #[test]
     fn install_syntax_spans_drops_zero_width() {
         use ratatui::style::{Color, Style};

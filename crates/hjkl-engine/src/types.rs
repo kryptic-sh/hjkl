@@ -744,6 +744,82 @@ pub enum EngineError {
     SnapshotVersion(u32, u32),
 }
 
+mod sealed {
+    /// Sealing trait for the planned 0.1.0 [`super::Buffer`] surface.
+    /// Pre-1.0 the engine reserves the right to add methods to the
+    /// `Buffer` super-trait without a major bump; downstream cannot
+    /// `impl Buffer` from outside this family.
+    ///
+    /// The in-tree [`hjkl_buffer::Buffer`] gets the sealed marker via
+    /// the engine's own re-export pattern once trait extraction wires
+    /// the FSM through the trait. Until then the marker stays empty.
+    pub trait Sealed {}
+}
+
+/// Cursor sub-trait of [`Buffer`]. Pre-0.1.0; signature follows
+/// SPEC.md §"`Buffer` trait surface".
+///
+/// `Pos` here is the engine's grapheme-indexed [`Pos`] type. Buffer
+/// implementations convert at the boundary if their internal indexing
+/// differs (e.g., the rope's byte indexing).
+pub trait Cursor: Send {
+    /// Active primary cursor position.
+    fn cursor(&self) -> Pos;
+    /// Move the active primary cursor.
+    fn set_cursor(&mut self, pos: Pos);
+    /// Byte offset for `pos`. Used by regex search bridges.
+    fn byte_offset(&self, pos: Pos) -> usize;
+    /// Inverse of [`Self::byte_offset`].
+    fn pos_at_byte(&self, byte: usize) -> Pos;
+}
+
+/// Read-only query sub-trait of [`Buffer`].
+pub trait Query: Send {
+    /// Number of logical lines (excluding the implicit trailing line).
+    fn line_count(&self) -> u32;
+    /// Borrow line `idx` (0-based). Implementations should panic on
+    /// out-of-bounds rather than silently return empty.
+    fn line(&self, idx: u32) -> &str;
+    /// Total buffer length in bytes.
+    fn len_bytes(&self) -> usize;
+    /// Slice for the half-open `range`. May allocate (rope joins)
+    /// or borrow (contiguous storage). Returns
+    /// [`std::borrow::Cow<'_, str>`] so contiguous backends can
+    /// avoid the allocation.
+    fn slice(&self, range: core::ops::Range<Pos>) -> std::borrow::Cow<'_, str>;
+}
+
+/// Mutating sub-trait of [`Buffer`]. Distinct trait name from the
+/// crate-root [`Edit`] struct — this one carries methods, the other
+/// is a value type.
+pub trait BufferEdit: Send {
+    /// Insert `text` at `pos`. Implementations clamp out-of-range
+    /// positions to the document end.
+    fn insert_at(&mut self, pos: Pos, text: &str);
+    /// Delete the half-open `range`.
+    fn delete_range(&mut self, range: core::ops::Range<Pos>);
+    /// Replace the half-open `range` with `replacement`.
+    fn replace_range(&mut self, range: core::ops::Range<Pos>, replacement: &str);
+}
+
+/// Search sub-trait of [`Buffer`]. The pattern is owned by the engine
+/// (see SPEC.md "Open issues"); buffers do not cache compiled regexes.
+pub trait Search: Send {
+    /// First match at-or-after `from`. `None` when no match remains.
+    fn find_next(&self, from: Pos, pat: &regex::Regex) -> Option<core::ops::Range<Pos>>;
+    /// Last match at-or-before `from`.
+    fn find_prev(&self, from: Pos, pat: &regex::Regex) -> Option<core::ops::Range<Pos>>;
+}
+
+/// Buffer super-trait — the pre-1.0 contract every backend implements.
+///
+/// Sealed to the engine's own crate family (in-tree
+/// `hjkl_buffer::Buffer` is the canonical impl). Pre-0.1.0 the engine
+/// reserves the right to add methods on patch bumps; downstream
+/// consumers depend on the full trait without naming
+/// [`sealed::Sealed`].
+pub trait Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

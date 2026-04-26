@@ -84,9 +84,9 @@ pub mod spec {
     //! types support host-side prep (e.g., buffr-modal's `BuffrHost`).
 
     pub use hjkl_engine::types::{
-        Attrs, BufferId, Color, CursorShape, Edit, EngineError, Highlight, HighlightKind, Host,
-        Input, Mode, Modifiers, MouseEvent, MouseKind, Options, Pos, Selection, SelectionKind,
-        SelectionSet, SpecialKey, Style, Viewport,
+        Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, Edit, EngineError,
+        Highlight, HighlightKind, Host, Input, Mode, Modifiers, MouseEvent, MouseKind, Options,
+        Pos, Query, Search, Selection, SelectionKind, SelectionSet, SpecialKey, Style, Viewport,
     };
 }
 

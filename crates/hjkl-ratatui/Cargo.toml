@@ -17,7 +17,14 @@ default = ["crossterm"]
 crossterm = ["dep:crossterm"]
 
 [dependencies]
-hjkl-engine = { path = "../hjkl-engine", version = "=0.0.25", default-features = false }
+# hjkl-ratatui is the canonical adapter crate — it lifts the engine's
+# `ratatui` feature so consumers depending on hjkl-ratatui automatically
+# get the ratatui-flavoured Editor surface. Engine `serde` and
+# `crossterm` features stay opt-in via the engine dep directly when
+# needed.
+hjkl-engine = { path = "../hjkl-engine", version = "=0.0.26", default-features = false, features = [
+  "ratatui",
+] }
 ratatui = "0.29"
 crossterm = { version = "0.28.1", optional = true }
 

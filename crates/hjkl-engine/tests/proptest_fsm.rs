@@ -9,6 +9,8 @@
 //!
 //! First building block toward a `cargo fuzz` harness.
 
+#![cfg(feature = "crossterm")]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Editor, KeybindingMode, VimMode};
 use proptest::prelude::*;
