@@ -23,9 +23,10 @@
 //! ## Usage
 //!
 //! ```no_run
-//! use hjkl_editor::runtime::{Editor, KeybindingMode};
+//! use hjkl_editor::buffer;
+//! use hjkl_editor::runtime::{DefaultHost, Editor, Options};
 //!
-//! let mut editor = Editor::new(KeybindingMode::Vim);
+//! let mut editor = Editor::new(buffer::Buffer::new(), DefaultHost::new(), Options::default());
 //! editor.set_content("hello world");
 //! ```
 //!
@@ -65,6 +66,7 @@ pub mod runtime {
     //! eventually replaces this surface; pre-1.0 churn means the swap
     //! can land on a patch bump.
 
+    pub use hjkl_engine::types::{DefaultHost, Options};
     pub use hjkl_engine::{
         Editor, Input, Key, KeybindingMode, LspIntent, Registers, SearchPrompt, Slot, VimMode,
     };
@@ -97,8 +99,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_editor_constructs() {
-        let _ = runtime::Editor::new(runtime::KeybindingMode::Vim);
+    fn editor_constructs() {
+        let _ = runtime::Editor::new(
+            buffer::Buffer::new(),
+            runtime::DefaultHost::new(),
+            runtime::Options::default(),
+        );
     }
 
     #[test]

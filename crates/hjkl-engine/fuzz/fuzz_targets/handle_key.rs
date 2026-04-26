@@ -10,7 +10,8 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_engine::{Editor, KeybindingMode};
+use hjkl_engine::Editor;
+use hjkl_engine::types::{DefaultHost, Options};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Debug, Arbitrary)]
@@ -91,7 +92,11 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let mut ed = Editor::new(KeybindingMode::Vim);
+    let mut ed = Editor::new(
+        hjkl_buffer::Buffer::new(),
+        DefaultHost::new(),
+        Options::default(),
+    );
     // Seed with the arbitrary text so motions / deletes have something
     // to chew on. Trim to a reasonable size so the bench runs fast.
     let seed = if input.seed_text.len() > 1024 {

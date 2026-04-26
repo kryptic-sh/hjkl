@@ -253,13 +253,11 @@ use crate::buf_helpers::{
     buf_row_count, buf_set_cursor_rc,
 };
 
-pub struct Editor<'a> {
+pub struct Editor<
+    B: crate::types::Buffer = hjkl_buffer::Buffer,
+    H: crate::types::Host = crate::types::DefaultHost,
+> {
     pub keybinding_mode: KeybindingMode,
-    /// Reserved for the lifetime parameter — Editor used to wrap a
-    /// `TextArea<'a>` whose lifetime came from this slot. Phase 7f
-    /// ripped the field but the lifetime stays so downstream
-    /// `Editor<'a>` consumers don't have to churn.
-    _marker: std::marker::PhantomData<&'a ()>,
     /// Set when the user yanks/cuts; caller drains this to write to OS clipboard.
     pub last_yank: Option<String>,
     /// All vim-specific state (mode, pending operator, count, dot-repeat, ...).
@@ -297,11 +295,13 @@ pub struct Editor<'a> {
     /// so the in-tree buffer fold storage stays in sync without host
     /// cooperation. Introduced in 0.0.38 (Patch C-δ.4).
     pub(super) pending_fold_ops: Vec<crate::types::FoldOp>,
-    /// Mirror buffer for the in-flight migration off tui-textarea.
-    /// Phase 7a: content syncs on every `set_content` so the rest of
-    /// the engine can start reading from / writing to it in
-    /// follow-up commits without behaviour changing today.
-    pub(super) buffer: hjkl_buffer::Buffer,
+    /// Buffer storage.
+    ///
+    /// 0.1.0 (Patch C-δ): generic over `B: Buffer` per SPEC §"Editor
+    /// surface". Default `B = hjkl_buffer::Buffer`. The vim FSM body
+    /// and `Editor::mutate_edit` are concrete on `hjkl_buffer::Buffer`
+    /// for 0.1.0 — see SPEC.md §"Out of scope" and `crate::buf_helpers::apply_buffer_edit`.
+    pub(super) buffer: B,
     /// Style intern table for the migration buffer's opaque
     /// `Span::style` ids. Phase 7d-ii-a wiring — `apply_window_spans`
     /// produces `(start, end, Style)` tuples for the textarea; we
@@ -378,16 +378,14 @@ pub struct Editor<'a> {
     /// the single owner now. Buffer motion methods that need it
     /// take a `&mut Option<usize>` parameter.
     pub(crate) sticky_col: Option<usize>,
-    /// Host adapter for clipboard, cursor-shape, time, and (eventually)
-    /// search-prompt / cancellation side-channels. Stored as a boxed
-    /// trait object behind [`crate::types::EngineHost`] so the Editor
-    /// stays non-generic at the type level — Patch C (0.1.0) flips this
-    /// to `Editor<'a, B: Buffer, H: Host>` and erases the indirection.
+    /// Host adapter for clipboard, cursor-shape, time, viewport, and
+    /// search-prompt / cancellation side-channels.
     ///
-    /// Wired in 0.0.29 (Patch B). Defaults to
-    /// [`crate::types::DefaultHost`] when callers use the legacy
-    /// [`Editor::new`] constructor.
-    pub(crate) host: Box<dyn crate::types::EngineHost + 'a>,
+    /// 0.1.0 (Patch C-δ): generic over `H: Host` per SPEC §"Editor
+    /// surface". Default `H = DefaultHost`. The pre-0.1.0 `EngineHost`
+    /// dyn-shim is gone — every method now dispatches through `H`'s
+    /// `Host` trait surface directly.
+    pub(crate) host: H,
     /// Last public mode the cursor-shape emitter saw. Drives
     /// [`Editor::emit_cursor_shape_if_changed`] so `Host::emit_cursor_shape`
     /// fires exactly once per mode transition without sprinkling the
@@ -536,72 +534,20 @@ pub enum LspIntent {
     GotoDefinition,
 }
 
-impl<'a> Editor<'a> {
-    /// Update the active `iskeyword` spec for word motions
-    /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). 0.0.28
-    /// hoisted iskeyword storage out of `Buffer` — `Editor` is the
-    /// single owner now. Equivalent to assigning
-    /// `settings_mut().iskeyword` directly; the dedicated setter is
-    /// retained for source-compatibility with 0.0.27 callers.
-    pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
-        self.settings.iskeyword = spec.into();
-    }
-
-    /// Build an Editor with the [`DefaultHost`](crate::types::DefaultHost)
-    /// no-op host. Source-compatible with 0.0.28 callers; hosts that
-    /// need real clipboard / cursor-shape / time plumbing should call
-    /// [`Editor::with_host`] instead.
-    pub fn new(keybinding_mode: KeybindingMode) -> Self {
-        Self::with_host(keybinding_mode, crate::types::DefaultHost::new())
-    }
-
-    /// Build an Editor with a host adapter. 0.0.29 Patch B plumb-in for
-    /// `Host::write_clipboard`, `Host::emit_cursor_shape`, and
-    /// `Host::now`. Patch C (0.1.0) replaces this constructor with the
-    /// generic `Editor<'a, B, H>::new(buffer, host, options)` per SPEC.
-    pub fn with_host<H: crate::types::Host + 'a>(keybinding_mode: KeybindingMode, host: H) -> Self {
-        Self::with_host_and_options(keybinding_mode, host, Settings::default())
-    }
-
-    /// SPEC-shaped constructor preview. Build an Editor from a buffer,
-    /// host adapter, and [`crate::types::Options`] (vim `:set` defaults).
+impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
+    /// Build an [`Editor`] from a buffer, host adapter, and SPEC options.
     ///
-    /// 0.0.33 (Patch C-γ partial): introduced as the future home of
-    /// `Editor::new(buffer, host, options)` per SPEC §"Editor surface".
-    /// The 0.1.0 freeze patch (Patch C-δ) flips `Editor` generic over
-    /// `<B: Buffer, H: Host>` and renames this method to plain `new`,
-    /// retiring [`Editor::new`] / [`Editor::with_host`] /
-    /// [`Editor::with_host_and_options`] in the same churn. Until then
-    /// the constructor takes the concrete `hjkl_buffer::Buffer` so
-    /// downstream consumers that opt in early still link against the
-    /// in-tree rope buffer.
+    /// 0.1.0 (Patch C-δ): canonical, frozen constructor per SPEC §"Editor
+    /// surface". Replaces the pre-0.1.0 `Editor::new(KeybindingMode)` /
+    /// `with_host` / `with_options` triad — there is no shim.
     ///
     /// Consumers that don't need a custom host pass
     /// [`crate::types::DefaultHost::new()`]; consumers that don't need
     /// custom options pass [`crate::types::Options::default()`].
-    pub fn with_options<H: crate::types::Host + 'a>(
-        buffer: hjkl_buffer::Buffer,
-        host: H,
-        options: crate::types::Options,
-    ) -> Self {
-        let mut ed =
-            Self::with_host_and_options(KeybindingMode::Vim, host, settings_from_options(&options));
-        ed.buffer = buffer;
-        ed
-    }
-
-    /// Internal: shared core for [`Editor::with_host`] (legacy default
-    /// settings) and [`Editor::with_options`] (SPEC `Options`-derived
-    /// settings). Constructs an empty [`hjkl_buffer::Buffer`] and a
-    /// boxed [`crate::types::EngineHost`] from the typed `host`.
-    fn with_host_and_options<H: crate::types::Host + 'a>(
-        keybinding_mode: KeybindingMode,
-        host: H,
-        settings: Settings,
-    ) -> Self {
+    pub fn new(buffer: hjkl_buffer::Buffer, host: H, options: crate::types::Options) -> Self {
+        let settings = settings_from_options(&options);
         Self {
-            _marker: std::marker::PhantomData,
-            keybinding_mode,
+            keybinding_mode: KeybindingMode::Vim,
             last_yank: None,
             vim: VimState::default(),
             undo_stack: Vec::new(),
@@ -611,7 +557,7 @@ impl<'a> Editor<'a> {
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
             pending_fold_ops: Vec::new(),
-            buffer: hjkl_buffer::Buffer::new(),
+            buffer,
             #[cfg(feature = "ratatui")]
             style_table: Vec::new(),
             #[cfg(not(feature = "ratatui"))]
@@ -624,23 +570,46 @@ impl<'a> Editor<'a> {
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
             sticky_col: None,
-            host: Box::new(host),
+            host,
             last_emitted_mode: crate::VimMode::Normal,
             search_state: crate::search::SearchState::new(),
             buffer_spans: Vec::new(),
         }
     }
+}
 
-    /// Borrow the host adapter through the object-safe slice
-    /// [`crate::types::EngineHost`]. Tests and helpers use this to
-    /// inspect the recorded clipboard / cursor-shape state.
-    pub fn host(&self) -> &dyn crate::types::EngineHost {
-        &*self.host
+impl<B: crate::types::Buffer, H: crate::types::Host> Editor<B, H> {
+    /// Borrow the buffer (typed `&B`). Host renders through this via
+    /// `hjkl_buffer::BufferView` when `B = hjkl_buffer::Buffer`.
+    pub fn buffer(&self) -> &B {
+        &self.buffer
     }
 
-    /// Mutably borrow the host adapter (object-safe slice).
-    pub fn host_mut(&mut self) -> &mut dyn crate::types::EngineHost {
-        &mut *self.host
+    /// Mutably borrow the buffer (typed `&mut B`).
+    pub fn buffer_mut(&mut self) -> &mut B {
+        &mut self.buffer
+    }
+
+    /// Borrow the host adapter directly (typed `&H`).
+    pub fn host(&self) -> &H {
+        &self.host
+    }
+
+    /// Mutably borrow the host adapter (typed `&mut H`).
+    pub fn host_mut(&mut self) -> &mut H {
+        &mut self.host
+    }
+}
+
+impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
+    /// Update the active `iskeyword` spec for word motions
+    /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). 0.0.28
+    /// hoisted iskeyword storage out of `Buffer` — `Editor` is the
+    /// single owner now. Equivalent to assigning
+    /// `settings_mut().iskeyword` directly; the dedicated setter is
+    /// retained for source-compatibility with 0.0.27 callers.
+    pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
+        self.settings.iskeyword = spec.into();
     }
 
     /// Emit `Host::emit_cursor_shape` if the public mode has changed
@@ -1071,16 +1040,6 @@ impl<'a> Editor<'a> {
         {
             self.engine_style_table.get(id as usize).copied()
         }
-    }
-
-    /// Borrow the migration buffer. Host renders through this via
-    /// `hjkl_buffer::BufferView`.
-    pub fn buffer(&self) -> &hjkl_buffer::Buffer {
-        &self.buffer
-    }
-
-    pub fn buffer_mut(&mut self) -> &mut hjkl_buffer::Buffer {
-        &mut self.buffer
     }
 
     /// Historical reverse-sync hook from when the textarea mirrored
@@ -2408,6 +2367,7 @@ pub(super) fn crossterm_to_input(key: KeyEvent) -> Input {
 #[cfg(all(test, feature = "crossterm", feature = "ratatui"))]
 mod tests {
     use super::*;
+    use crate::types::Host;
     use crossterm::event::KeyEvent;
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -2422,7 +2382,11 @@ mod tests {
 
     #[test]
     fn vim_normal_to_insert() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.handle_key(key(KeyCode::Char('i')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
     }
@@ -2440,7 +2404,7 @@ mod tests {
             wrap: crate::types::WrapMode::Word,
             ..crate::types::Options::default()
         };
-        let mut e = Editor::with_options(
+        let mut e = Editor::new(
             hjkl_buffer::Buffer::new(),
             crate::types::DefaultHost::new(),
             opts,
@@ -2458,7 +2422,11 @@ mod tests {
     #[test]
     fn feed_input_char_routes_through_handle_key() {
         use crate::{Modifiers, PlannedInput};
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("abc");
         // `i` enters insert mode via SPEC input.
         e.feed_input(PlannedInput::Char('i', Modifiers::default()));
@@ -2471,7 +2439,11 @@ mod tests {
     #[test]
     fn feed_input_special_key_routes() {
         use crate::{Modifiers, PlannedInput, SpecialKey};
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("abc");
         e.feed_input(PlannedInput::Char('i', Modifiers::default()));
         assert_eq!(e.vim_mode(), VimMode::Insert);
@@ -2482,7 +2454,11 @@ mod tests {
     #[test]
     fn feed_input_mouse_paste_focus_resize_no_op() {
         use crate::{MouseEvent, MouseKind, PlannedInput, Pos};
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("abc");
         let mode_before = e.vim_mode();
         let consumed = e.feed_input(PlannedInput::Mouse(MouseEvent {
@@ -2501,7 +2477,11 @@ mod tests {
     #[test]
     fn intern_style_dedups_engine_native_styles() {
         use crate::types::{Attrs, Color, Style};
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         let s = Style {
             fg: Some(Color(255, 0, 0)),
             bg: None,
@@ -2518,7 +2498,11 @@ mod tests {
 
     #[test]
     fn engine_style_at_out_of_range_returns_none() {
-        let e = Editor::new(KeybindingMode::Vim);
+        let e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         assert!(e.engine_style_at(99).is_none());
     }
 
@@ -2528,7 +2512,11 @@ mod tests {
         // produces an InsertBlock buffer edit with one chunk per
         // selected row. take_changes should surface N EditOps,
         // not a single placeholder.
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("aaa\nbbb\nccc\nddd");
         // Place cursor at (0, 0), enter visual-block, extend down 2.
         e.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
@@ -2552,7 +2540,11 @@ mod tests {
 
     #[test]
     fn take_changes_drains_after_insert() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("abc");
         // Empty initially.
         assert!(e.take_changes().is_empty());
@@ -2570,9 +2562,14 @@ mod tests {
 
     #[test]
     fn options_bridge_roundtrip() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         let opts = e.current_options();
-        assert_eq!(opts.shiftwidth, 2); // legacy Settings default
+        // 0.1.0: SPEC-faithful Options::default — shiftwidth=8 / tabstop=8.
+        assert_eq!(opts.shiftwidth, 8);
         assert_eq!(opts.tabstop, 8);
 
         let new_opts = crate::types::Options {
@@ -2591,7 +2588,11 @@ mod tests {
 
     #[test]
     fn selection_highlight_none_in_normal() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         assert!(e.selection_highlight().is_none());
     }
@@ -2599,7 +2600,11 @@ mod tests {
     #[test]
     fn selection_highlight_some_in_visual() {
         use crate::types::HighlightKind;
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         e.handle_key(key(KeyCode::Char('v')));
         e.handle_key(key(KeyCode::Char('l')));
@@ -2615,7 +2620,11 @@ mod tests {
     #[test]
     fn highlights_emit_incsearch_during_active_prompt() {
         use crate::types::HighlightKind;
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo bar foo\nbaz\n");
         // Open the `/` prompt and type `f` `o` `o`.
         e.handle_key(key(KeyCode::Char('/')));
@@ -2633,7 +2642,11 @@ mod tests {
 
     #[test]
     fn highlights_empty_for_blank_prompt() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo");
         e.handle_key(key(KeyCode::Char('/')));
         // Nothing typed yet — prompt active but text empty.
@@ -2644,7 +2657,11 @@ mod tests {
     #[test]
     fn highlights_emit_search_matches() {
         use crate::types::HighlightKind;
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo bar foo\nbaz qux\n");
         // 0.0.35: arm via the engine search state. The buffer
         // accessor still works (deprecated) but new code goes
@@ -2661,14 +2678,22 @@ mod tests {
 
     #[test]
     fn highlights_empty_without_pattern() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo bar");
         assert!(e.highlights_for_line(0).is_empty());
     }
 
     #[test]
     fn highlights_empty_for_out_of_range_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo");
         e.set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
         assert!(e.highlights_for_line(99).is_empty());
@@ -2677,7 +2702,11 @@ mod tests {
     #[test]
     fn render_frame_reflects_mode_and_cursor() {
         use crate::types::{CursorShape, SnapshotMode};
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("alpha\nbeta");
         let f = e.render_frame();
         assert_eq!(f.mode, SnapshotMode::Normal);
@@ -2693,7 +2722,11 @@ mod tests {
     #[test]
     fn snapshot_roundtrips_through_restore() {
         use crate::types::SnapshotMode;
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("alpha\nbeta\ngamma");
         e.jump_cursor(2, 3);
         let snap = e.take_snapshot();
@@ -2701,7 +2734,11 @@ mod tests {
         assert_eq!(snap.cursor, (2, 3));
         assert_eq!(snap.lines.len(), 3);
 
-        let mut other = Editor::new(KeybindingMode::Vim);
+        let mut other = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         other.restore_snapshot(snap).expect("restore");
         assert_eq!(other.cursor(), (2, 3));
         assert_eq!(other.buffer().lines().len(), 3);
@@ -2709,7 +2746,11 @@ mod tests {
 
     #[test]
     fn restore_snapshot_rejects_version_mismatch() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         let mut snap = e.take_snapshot();
         snap.version = 9999;
         match e.restore_snapshot(snap) {
@@ -2723,7 +2764,11 @@ mod tests {
 
     #[test]
     fn take_content_change_returns_some_on_first_dirty() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         let first = e.take_content_change();
         assert!(first.is_some());
@@ -2733,7 +2778,11 @@ mod tests {
 
     #[test]
     fn take_content_change_none_until_mutation() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         // drain
         e.take_content_change();
@@ -2748,7 +2797,11 @@ mod tests {
 
     #[test]
     fn vim_insert_to_normal() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.handle_key(key(KeyCode::Char('i')));
         e.handle_key(key(KeyCode::Esc));
         assert_eq!(e.vim_mode(), VimMode::Normal);
@@ -2756,14 +2809,22 @@ mod tests {
 
     #[test]
     fn vim_normal_to_visual() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.handle_key(key(KeyCode::Char('v')));
         assert_eq!(e.vim_mode(), VimMode::Visual);
     }
 
     #[test]
     fn vim_visual_to_normal() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.handle_key(key(KeyCode::Char('v')));
         e.handle_key(key(KeyCode::Esc));
         assert_eq!(e.vim_mode(), VimMode::Normal);
@@ -2771,7 +2832,11 @@ mod tests {
 
     #[test]
     fn vim_shift_i_moves_to_first_non_whitespace() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("   hello");
         e.jump_cursor(0, 8);
         e.handle_key(shift_key(KeyCode::Char('I')));
@@ -2781,7 +2846,11 @@ mod tests {
 
     #[test]
     fn vim_shift_a_moves_to_end_and_insert() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(shift_key(KeyCode::Char('A')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
@@ -2790,7 +2859,11 @@ mod tests {
 
     #[test]
     fn count_10j_moves_down_10() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content(
             (0..20)
                 .map(|i| format!("line{i}"))
@@ -2807,7 +2880,11 @@ mod tests {
 
     #[test]
     fn count_o_repeats_insert_on_esc() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         for d in "3".chars() {
             e.handle_key(key(KeyCode::Char(d)));
@@ -2825,7 +2902,11 @@ mod tests {
 
     #[test]
     fn count_i_repeats_text_on_esc() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("");
         for d in "3".chars() {
             e.handle_key(key(KeyCode::Char(d)));
@@ -2841,7 +2922,11 @@ mod tests {
 
     #[test]
     fn vim_shift_o_opens_line_above() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(shift_key(KeyCode::Char('O')));
         assert_eq!(e.vim_mode(), VimMode::Insert);
@@ -2851,7 +2936,11 @@ mod tests {
 
     #[test]
     fn vim_gg_goes_to_top() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("a\nb\nc");
         e.jump_cursor(2, 0);
         e.handle_key(key(KeyCode::Char('g')));
@@ -2861,7 +2950,11 @@ mod tests {
 
     #[test]
     fn vim_shift_g_goes_to_bottom() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("a\nb\nc");
         e.handle_key(shift_key(KeyCode::Char('G')));
         assert_eq!(e.cursor().0, 2);
@@ -2869,7 +2962,11 @@ mod tests {
 
     #[test]
     fn vim_dd_deletes_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("first\nsecond");
         e.handle_key(key(KeyCode::Char('d')));
         e.handle_key(key(KeyCode::Char('d')));
@@ -2879,7 +2976,11 @@ mod tests {
 
     #[test]
     fn vim_dw_deletes_word() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         e.handle_key(key(KeyCode::Char('d')));
         e.handle_key(key(KeyCode::Char('w')));
@@ -2889,7 +2990,11 @@ mod tests {
 
     #[test]
     fn vim_yy_yanks_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello\nworld");
         e.handle_key(key(KeyCode::Char('y')));
         e.handle_key(key(KeyCode::Char('y')));
@@ -2898,7 +3003,11 @@ mod tests {
 
     #[test]
     fn vim_yy_does_not_move_cursor() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("first\nsecond\nthird");
         e.jump_cursor(1, 0);
         let before = e.cursor();
@@ -2910,7 +3019,11 @@ mod tests {
 
     #[test]
     fn vim_yw_yanks_word() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         e.handle_key(key(KeyCode::Char('y')));
         e.handle_key(key(KeyCode::Char('w')));
@@ -2920,7 +3033,11 @@ mod tests {
 
     #[test]
     fn vim_cc_changes_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello\nworld");
         e.handle_key(key(KeyCode::Char('c')));
         e.handle_key(key(KeyCode::Char('c')));
@@ -2929,7 +3046,11 @@ mod tests {
 
     #[test]
     fn vim_u_undoes_insert_session_as_chunk() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('i')));
         e.handle_key(key(KeyCode::Enter));
@@ -2943,7 +3064,11 @@ mod tests {
 
     #[test]
     fn vim_undo_redo_roundtrip() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('i')));
         for c in "world".chars() {
@@ -2959,7 +3084,11 @@ mod tests {
 
     #[test]
     fn vim_u_undoes_dd() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("first\nsecond");
         e.handle_key(key(KeyCode::Char('d')));
         e.handle_key(key(KeyCode::Char('d')));
@@ -2971,14 +3100,22 @@ mod tests {
 
     #[test]
     fn vim_ctrl_r_redoes() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(ctrl_key(KeyCode::Char('r')));
     }
 
     #[test]
     fn vim_r_replaces_char() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('r')));
         e.handle_key(key(KeyCode::Char('x')));
@@ -2987,7 +3124,11 @@ mod tests {
 
     #[test]
     fn vim_tilde_toggles_case() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('~')));
         assert_eq!(e.buffer().lines()[0].chars().next(), Some('H'));
@@ -2995,7 +3136,11 @@ mod tests {
 
     #[test]
     fn vim_visual_d_cuts() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('v')));
         e.handle_key(key(KeyCode::Char('l')));
@@ -3007,7 +3152,11 @@ mod tests {
 
     #[test]
     fn vim_visual_c_enters_insert() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         e.handle_key(key(KeyCode::Char('v')));
         e.handle_key(key(KeyCode::Char('l')));
@@ -3017,7 +3166,11 @@ mod tests {
 
     #[test]
     fn vim_normal_unknown_key_consumed() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         // Unknown keys are consumed (swallowed) rather than returning false.
         let consumed = e.handle_key(key(KeyCode::Char('z')));
         assert!(consumed);
@@ -3025,7 +3178,11 @@ mod tests {
 
     #[test]
     fn force_normal_clears_operator() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.handle_key(key(KeyCode::Char('d')));
         e.force_normal();
         assert_eq!(e.vim_mode(), VimMode::Normal);
@@ -3038,13 +3195,17 @@ mod tests {
             .join("\n")
     }
 
-    fn prime_viewport(e: &mut Editor<'_>, height: u16) {
+    fn prime_viewport<H: Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, height: u16) {
         e.set_viewport_height(height);
     }
 
     #[test]
     fn zz_centers_cursor_in_viewport() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content(&many_lines(100));
         prime_viewport(&mut e, 20);
         e.jump_cursor(50, 0);
@@ -3056,7 +3217,11 @@ mod tests {
 
     #[test]
     fn zt_puts_cursor_at_viewport_top_with_scrolloff() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content(&many_lines(100));
         prime_viewport(&mut e, 20);
         e.jump_cursor(50, 0);
@@ -3070,7 +3235,11 @@ mod tests {
 
     #[test]
     fn ctrl_a_increments_number_at_cursor() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("x = 41");
         e.handle_key(ctrl_key(KeyCode::Char('a')));
         assert_eq!(e.buffer().lines()[0], "x = 42");
@@ -3079,7 +3248,11 @@ mod tests {
 
     #[test]
     fn ctrl_a_finds_number_to_right_of_cursor() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("foo 99 bar");
         e.handle_key(ctrl_key(KeyCode::Char('a')));
         assert_eq!(e.buffer().lines()[0], "foo 100 bar");
@@ -3088,7 +3261,11 @@ mod tests {
 
     #[test]
     fn ctrl_a_with_count_adds_count() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("x = 10");
         for d in "5".chars() {
             e.handle_key(key(KeyCode::Char(d)));
@@ -3099,7 +3276,11 @@ mod tests {
 
     #[test]
     fn ctrl_x_decrements_number() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("n=5");
         e.handle_key(ctrl_key(KeyCode::Char('x')));
         assert_eq!(e.buffer().lines()[0], "n=4");
@@ -3107,7 +3288,11 @@ mod tests {
 
     #[test]
     fn ctrl_x_crosses_zero_into_negative() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("v=0");
         e.handle_key(ctrl_key(KeyCode::Char('x')));
         assert_eq!(e.buffer().lines()[0], "v=-1");
@@ -3115,7 +3300,11 @@ mod tests {
 
     #[test]
     fn ctrl_a_on_negative_number_increments_toward_zero() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("a = -5");
         e.handle_key(ctrl_key(KeyCode::Char('a')));
         assert_eq!(e.buffer().lines()[0], "a = -4");
@@ -3123,7 +3312,11 @@ mod tests {
 
     #[test]
     fn ctrl_a_noop_when_no_digit_on_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("no digits here");
         e.handle_key(ctrl_key(KeyCode::Char('a')));
         assert_eq!(e.buffer().lines()[0], "no digits here");
@@ -3131,7 +3324,11 @@ mod tests {
 
     #[test]
     fn zb_puts_cursor_at_viewport_bottom_with_scrolloff() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content(&many_lines(100));
         prime_viewport(&mut e, 20);
         e.jump_cursor(50, 0);
@@ -3152,7 +3349,11 @@ mod tests {
     /// tab dirty (which would then trigger the quit-prompt on `:q`).
     #[test]
     fn set_content_dirties_then_take_dirty_clears() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         assert!(
             e.take_dirty(),
@@ -3163,7 +3364,11 @@ mod tests {
 
     #[test]
     fn content_arc_returns_same_arc_until_mutation() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         let a = e.content_arc();
         let b = e.content_arc();
@@ -3185,7 +3390,11 @@ mod tests {
 
     #[test]
     fn content_arc_cache_invalidated_by_set_content() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("one");
         let a = e.content_arc();
         e.set_content("two");
@@ -3201,7 +3410,11 @@ mod tests {
     /// cursor at `chars().count()` — past where Normal mode lives.
     #[test]
     fn mouse_click_past_eol_lands_on_last_char() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello");
         // Outer editor area: x=0, y=0, width=80. mouse_to_doc_pos
         // reserves row 0 for the tab bar and adds gutter padding,
@@ -3213,7 +3426,11 @@ mod tests {
 
     #[test]
     fn mouse_click_past_eol_handles_multibyte_line() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         // 5 chars, 6 bytes — old code's `String::len()` clamp was
         // wrong here.
         e.set_content("héllo");
@@ -3224,7 +3441,11 @@ mod tests {
 
     #[test]
     fn mouse_click_inside_line_lands_on_clicked_char() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         // Gutter is `lnum_width + 1` = (1-digit row count + 2) + 1
         // pane padding = 4 cells; click col 4 is the first char.
@@ -3241,7 +3462,11 @@ mod tests {
     /// typing more chars, `u` should reverse only the post-click run.
     #[test]
     fn mouse_click_breaks_insert_undo_group_when_undobreak_on() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         let area = ratatui::layout::Rect::new(0, 0, 80, 10);
         // Default settings.undo_break_on_motion = true.
@@ -3276,7 +3501,11 @@ mod tests {
     /// into one undo group, so `u` clears everything.
     #[test]
     fn mouse_click_keeps_one_undo_group_when_undobreak_off() {
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello world");
         e.settings_mut().undo_break_on_motion = false;
         let area = ratatui::layout::Rect::new(0, 0, 80, 10);
@@ -3302,7 +3531,11 @@ mod tests {
     fn host_clipboard_round_trip_via_default_host() {
         // DefaultHost stores write_clipboard in-memory; read_clipboard
         // returns the most recent payload.
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.host_mut().write_clipboard("payload".to_string());
         assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("payload"));
     }
@@ -3312,7 +3545,11 @@ mod tests {
         // `yy` on a single-line buffer must drive `Host::write_clipboard`
         // (the new Patch B side-channel) in addition to the legacy
         // `last_yank` mirror.
-        let mut e = Editor::new(KeybindingMode::Vim);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
         e.set_content("hello\n");
         e.handle_key(key(KeyCode::Char('y')));
         e.handle_key(key(KeyCode::Char('y')));
@@ -3360,12 +3597,13 @@ mod tests {
             }
             fn emit_intent(&mut self, _: Self::Intent) {}
         }
-        let mut e = Editor::with_host(
-            KeybindingMode::Vim,
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
             LeakHost {
                 shapes: shapes_ptr,
                 viewport: crate::types::Viewport::default(),
             },
+            crate::types::Options::default(),
         );
         e.set_content("abc");
         // Normal → Insert: Bar emit.
@@ -3416,12 +3654,13 @@ mod tests {
             }
             fn emit_intent(&mut self, _: Self::Intent) {}
         }
-        let mut e = Editor::with_host(
-            KeybindingMode::Vim,
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
             ClockHost {
                 now: now_ptr,
                 viewport: crate::types::Viewport::default(),
             },
+            crate::types::Options::default(),
         );
         e.set_content("a\nb\nc\n");
         e.jump_cursor(2, 0);

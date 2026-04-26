@@ -10,10 +10,15 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_editor::runtime::ex;
-use hjkl_engine::{Editor, KeybindingMode};
+use hjkl_engine::Editor;
+use hjkl_engine::types::{DefaultHost, Options};
 
-fn editor_with(content: &str) -> Editor<'static> {
-    let mut e = Editor::new(KeybindingMode::Vim);
+fn editor_with(content: &str) -> Editor {
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::new(),
+        DefaultHost::new(),
+        Options::default(),
+    );
     e.set_content(content);
     e
 }
@@ -22,7 +27,7 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn run_keys(e: &mut Editor<'_>, s: &str) {
+fn run_keys<H: hjkl_engine::Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, s: &str) {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '<' {

@@ -14,10 +14,15 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_editor::runtime::ex;
-use hjkl_engine::{Editor, KeybindingMode};
+use hjkl_engine::Editor;
+use hjkl_engine::types::{DefaultHost, Options};
 
-fn editor_with(content: &str) -> Editor<'static> {
-    let mut e = Editor::new(KeybindingMode::Vim);
+fn editor_with(content: &str) -> Editor {
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::new(),
+        DefaultHost::new(),
+        Options::default(),
+    );
     e.set_content(content);
     e
 }

@@ -12,7 +12,8 @@
 #![cfg(feature = "crossterm")]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_engine::{Editor, KeybindingMode, VimMode};
+use hjkl_engine::types::{DefaultHost, Options};
+use hjkl_engine::{Editor, VimMode};
 use proptest::prelude::*;
 
 fn keycode_strategy() -> impl Strategy<Value = KeyCode> {
@@ -80,7 +81,7 @@ proptest! {
     /// settles in a legal mode.
     #[test]
     fn no_panic_on_random_keys(seq in key_sequence_strategy()) {
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello world\nsecond line\n");
         for k in seq {
             let _ = ed.handle_key(k);
@@ -92,7 +93,7 @@ proptest! {
     /// regardless of starting state.
     #[test]
     fn esc_returns_to_normal(prefix in key_sequence_strategy()) {
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello\nworld\n");
         for k in prefix {
             let _ = ed.handle_key(k);
@@ -107,7 +108,11 @@ proptest! {
 
 #[test]
 fn handle_key_no_panic_baseline() {
-    let mut ed = Editor::new(KeybindingMode::Vim);
+    let mut ed = Editor::new(
+        hjkl_buffer::Buffer::new(),
+        DefaultHost::new(),
+        Options::default(),
+    );
     ed.set_content("hello");
     for k in [KeyCode::Char('i'), KeyCode::Char('x'), KeyCode::Esc] {
         ed.handle_key(KeyEvent::new(k, KeyModifiers::NONE));
@@ -127,7 +132,7 @@ proptest! {
     /// preserves the source line text byte-for-byte.
     #[test]
     fn yy_then_p_duplicates_line(text in "[a-z]{1,15}") {
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
         // `yy` then `p`.
         ed.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -148,7 +153,7 @@ proptest! {
         line1 in "[a-z]{1,12}",
     ) {
         let original = format!("{line0}\n{line1}");
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&original);
         let before: Vec<String> = ed.buffer().lines().to_vec();
         // `dd` deletes the first line.
@@ -166,7 +171,7 @@ proptest! {
         text in "[a-z]{1,15}",
         edits in 0u32..5,
     ) {
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
         // Enter insert mode, type some chars, exit.
         ed.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
@@ -206,7 +211,7 @@ proptest! {
         ]),
     ) {
         use hjkl_engine::{Options, WrapMode};
-        let mut ed = Editor::new(KeybindingMode::Vim);
+        let mut ed = Editor::new(hjkl_buffer::Buffer::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello\n");
         let opts = Options {
             tabstop: ts,

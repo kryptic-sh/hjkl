@@ -38,7 +38,7 @@ pub use registers::{Registers, Slot};
 pub use buffer_impl::{BufferFoldProvider, BufferFoldProviderMut};
 pub use types::{
     Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, DefaultHost, Edit,
-    EditorSnapshot, EngineError, EngineHost, FoldOp, FoldProvider, Highlight, HighlightKind, Host,
+    EditorSnapshot, EngineError, FoldOp, FoldProvider, Highlight, HighlightKind, Host,
     Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, NoopFoldProvider, OptionValue,
     Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode,
     SpecialKey, Style, Viewport, WrapMode,

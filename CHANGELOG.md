@@ -8,6 +8,186 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-27
+
+### Patch C-δ — Editor generic flip + SPEC freeze
+
+The first stability-locked release. The pre-1.0 trait-extraction arc (0.0.33 —
+0.0.42) is closed; this patch flips `Editor` generic over
+`<B: Buffer, H: Host>`, drops the pre-0.1.0 dyn-host shim, and freezes the SPEC
+trait surface. `crates/hjkl-engine/PUBLIC_API.md` is the canonical baseline from
+this release onward; CI gates against it.
+
+#### BREAKING — `Editor` generic over `B` + `H`
+
+```rust
+// 0.0.42 (and earlier):
+pub struct Editor<'a> { /* concrete buffer + boxed dyn host */ }
+
+// 0.1.0:
+pub struct Editor<
+    B: hjkl_engine::types::Buffer = hjkl_buffer::Buffer,
+    H: hjkl_engine::types::Host = hjkl_engine::types::DefaultHost,
+> { /* typed buffer + typed host */ }
+```
+
+The `'a` lifetime parameter (vestigial since the textarea field was ripped) is
+removed. Defaults match the in-tree canonical impls so most call sites that
+named `Editor` without a type parameter continue to type-check. Call sites that
+wrote `Editor<'_>` / `Editor<'static>` need to drop the lifetime.
+
+The vim FSM (`crate::vim` free functions, `Editor::mutate_edit`, the change-log
+emitter, and the undo machinery) is bound to the canonical buffer:
+
+```rust
+impl<H: hjkl_engine::types::Host> Editor<hjkl_buffer::Buffer, H> {
+    /* most methods */
+}
+```
+
+The fully generic `<B: Buffer, H: Host>` impl exposes only universal accessors
+(`buffer()` / `buffer_mut()` / `host()` / `host_mut()`). Custom buffer backends
+compile against the trait but cannot run the vim FSM at 0.1.0 — see SPEC.md
+§"Out of scope at 0.1.0" for the rationale (lifting `BufferEdit::apply_edit`
+onto an associated type is post-0.1.0 work).
+
+#### BREAKING — constructor
+
+```rust
+// 0.0.42:
+Editor::new(KeybindingMode::Vim)
+Editor::with_host(KeybindingMode::Vim, host)
+Editor::with_options(buffer, host, options)
+
+// 0.1.0:
+Editor::new(buffer, host, options)
+```
+
+The legacy three-constructor surface is gone. There is no `#[deprecated]` shim —
+every consumer migrates by passing the buffer, host, and `crate::types::Options`
+explicitly. Call sites that don't need a custom host pass
+`crate::types::DefaultHost::new()`; call sites that don't need custom options
+pass `crate::types::Options::default()`.
+
+The `Options::default()` defaults are SPEC-faithful (vim parity, `shiftwidth=8`
+/ `tabstop=8`); the pre-0.1.0 `Settings::default()` defaulted to `shiftwidth=2`
+(sqeel-derived). Tests and consumers that relied on `shiftwidth=2` need to
+construct an `Options` with `shiftwidth: 2` explicitly.
+
+#### BREAKING — `EngineHost` removed
+
+The pre-0.1.0 object-safe shim trait (`EngineHost`) and its blanket
+`impl<H: Host>` are gone. Hosts implement `Host` directly; the `Editor<B, H>`
+generic carries the typed slot. `Editor::host()` now returns `&H` (was
+`&dyn EngineHost`); `Editor::host_mut()` returns `&mut H`. Callers using the
+host accessor need `crate::types::Host` in scope to call its methods through
+trait dispatch.
+
+#### BREAKING — `Buffer` trait sealed (preserved)
+
+The `Buffer` super-trait is sealed via the private
+`crate::types::sealed::Sealed` trait (already in place since 0.0.31). The
+`Sealed` trait is now confirmed `pub(crate)`; downstream cannot
+`impl Buffer for MyType` after this change. The canonical `hjkl_buffer::Buffer`
+keeps its sealed-marker impl in `crate::buffer_impl`.
+
+#### `apply_buffer_edit` decision
+
+The seam between the engine and `hjkl_buffer::Buffer` for the mutate-edit
+channel stays concrete on `&mut hjkl_buffer::Buffer` per the option (c) decision
+documented in 0.0.42's CHANGELOG. SPEC.md §"Out of scope at 0.1.0" calls this
+out explicitly: lifting onto `BufferEdit::Op` (an associated `type Edit;`) is
+post-0.1.0 work — it forces every backend to design its own rich-edit enum and
+rewrites the change-log machinery in terms of `B::Op`. The single seam at
+`crate::buf_helpers::apply_buffer_edit` is the migration funnel for 0.2.0.
+
+#### `EditorSnapshot::VERSION` frozen
+
+`EditorSnapshot::VERSION` (currently `4`) is locked for the entire 0.1.x line.
+Hosts persisting editor state between sessions can rely on the wire format being
+stable; 0.2.0+ structural changes require `VERSION++` together with a
+major-version bump.
+
+#### SPEC.md frozen
+
+`crates/hjkl-engine/SPEC.md` carries an explicit "0.1.0 (frozen 2026-04-27)"
+header. The trait surface (14 `Buffer` methods across `Cursor` / `Query` /
+`BufferEdit` / `Search`), `Host` trait surface, `FoldProvider` + `FoldOp`,
+`Options`, `EditorSnapshot`, and the `Editor::new(buffer, host, options)`
+constructor are all part of the frozen contract. Explicit non-goals: viewport
+math on `Buffer`, `Editor`'s apply-edit funnel as part of the public trait
+surface, and any host-flavoured fold-op enum (engine-canonical only).
+
+#### `PUBLIC_API.md` regenerated
+
+`crates/hjkl-engine/PUBLIC_API.md` is regenerated against 0.1.0 with the
+simplified `cargo +nightly public-api` output. Top-level diff vs the 0.0.39
+baseline:
+
+- `Editor<'a>` → `Editor<B: Buffer, H: Host>` (every method now carries the new
+  type params; the vim FSM impl is on `Editor<hjkl_buffer::Buffer, H>`).
+- `Editor::new(KeybindingMode)` removed; `Editor::new(buffer, host, Options)`
+  added.
+- `Editor::with_host` / `Editor::with_options` removed.
+- `EngineHost` trait + blanket impl removed.
+- `motions::*` free functions now generic over `B: Cursor + Query [+ Search]`
+  (vs concrete `&mut hjkl_buffer::Buffer` at 0.0.39 — they were lifted in 0.0.40
+  but the PUBLIC_API.md hadn't been refreshed since 0.0.33 baseline).
+- `BufferEdit::replace_all` added (already landed in 0.0.41; surfaced in this
+  release's PUBLIC_API.md regeneration).
+
+#### Tests
+
+684 (unchanged from 0.0.42). One test (`bare_set_reports_current_values`)
+updated to assert `shiftwidth=8` per the SPEC-faithful default; one golden
+snapshot (`golden_ex__set_listing.snap`) regenerated for the same reason. The
+vim-FSM-internal `editor_with` helper explicitly sets `shiftwidth: 2` so the
+indent / outdent assertions don't churn.
+
+#### Migration
+
+Consumers updating from 0.0.x:
+
+```rust
+// before
+let mut editor = Editor::new(KeybindingMode::Vim);
+
+// after
+use hjkl_engine::types::{DefaultHost, Options};
+let mut editor = Editor::new(
+    hjkl_buffer::Buffer::new(),
+    DefaultHost::new(),
+    Options::default(),
+);
+```
+
+For consumers that wrote `&mut Editor<'_>` in fn signatures:
+
+```rust
+// before
+fn step(ed: &mut Editor<'_>, input: Input) { ... }
+
+// after
+fn step<H: hjkl_engine::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+) { ... }
+```
+
+For consumers that constructed an `Editor` with a custom host:
+
+```rust
+// before
+let mut editor = Editor::with_host(KeybindingMode::Vim, my_host);
+
+// after
+let mut editor = Editor::new(
+    hjkl_buffer::Buffer::new(),
+    my_host,
+    hjkl_engine::types::Options::default(),
+);
+```
+
 ## [0.0.42] - 2026-04-27
 
 ### Patch C-δ.7 — vim.rs reach replacement, viewport-math relocation

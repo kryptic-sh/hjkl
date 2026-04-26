@@ -16,6 +16,7 @@ cargo-fuzz = true
 
 [dependencies]
 hjkl-engine = { path = ".." }
+hjkl-buffer = { path = "../../hjkl-buffer" }
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 crossterm = "0.28.1"

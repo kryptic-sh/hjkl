@@ -30,7 +30,10 @@ pub enum ExEffect {
 }
 
 /// Parse and execute `input` (without the leading `:`).
-pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
+pub fn run<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    input: &str,
+) -> ExEffect {
     let cmd = input.trim();
     if cmd.is_empty() {
         return ExEffect::None;
@@ -173,7 +176,9 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
 /// [`Editor::set_syntax_fold_ranges`] on every tree-sitter re-parse;
 /// running this command consumes the latest snapshot. No-op when the
 /// host hasn't pushed any ranges yet.
-fn apply_fold_syntax(editor: &mut Editor<'_>) -> ExEffect {
+fn apply_fold_syntax<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> ExEffect {
     let ranges = editor.syntax_fold_ranges().to_vec();
     if ranges.is_empty() {
         return ExEffect::Info("no syntax block ranges available".into());
@@ -194,7 +199,9 @@ fn apply_fold_syntax(editor: &mut Editor<'_>) -> ExEffect {
 /// is expensive). Each row whose successor is more deeply indented
 /// becomes a fold opener; the fold extends to the row before indent
 /// drops back to or below the opener's level.
-fn apply_fold_indent(editor: &mut Editor<'_>) -> ExEffect {
+fn apply_fold_indent<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> ExEffect {
     let lines = editor.buffer().lines().to_vec();
     let total = lines.len();
     if total == 0 {
@@ -256,7 +263,11 @@ fn apply_fold_indent(editor: &mut Editor<'_>) -> ExEffect {
 /// range). With a range, the rows are joined with `\n`, fed via
 /// stdin to `sh -c cmd`, and replaced with stdout. Without a range
 /// the command runs detached and stdout returns as an Info toast.
-fn apply_shell_filter(editor: &mut Editor<'_>, range: Option<Range>, cmd: &str) -> ExEffect {
+fn apply_shell_filter<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    range: Option<Range>,
+    cmd: &str,
+) -> ExEffect {
     if cmd.is_empty() {
         return ExEffect::Error(":! needs a shell command".into());
     }
@@ -365,7 +376,10 @@ fn apply_shell_filter(editor: &mut Editor<'_>, range: Option<Range>, cmd: &str) 
 /// row. Cursor lands on the first row of the inserted content.
 /// Failures (missing file, permission denied) surface as
 /// `ExEffect::Error` toasts.
-fn apply_read_file(editor: &mut Editor<'_>, path: &str) -> ExEffect {
+fn apply_read_file<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    path: &str,
+) -> ExEffect {
     use hjkl_buffer::{Edit, Position};
     if path.is_empty() {
         return ExEffect::Error(":r needs a file path or `!cmd`".into());
@@ -437,7 +451,7 @@ struct Range {
 }
 
 impl Range {
-    fn whole(editor: &Editor<'_>) -> Self {
+    fn whole<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -> Self {
         let last = editor.buffer().lines().len().saturating_sub(1);
         Self {
             start: 0,
@@ -502,7 +516,10 @@ fn parse_address(s: &str) -> Option<(Address, &str)> {
 
 /// Resolve a parsed address against the current editor state. Numeric
 /// addresses are clamped to the buffer; bad marks return an error.
-fn resolve_address(addr: Address, editor: &Editor<'_>) -> Result<usize, String> {
+fn resolve_address<H: hjkl_engine::Host>(
+    addr: Address,
+    editor: &Editor<hjkl_buffer::Buffer, H>,
+) -> Result<usize, String> {
     let last = editor.buffer().lines().len().saturating_sub(1);
     match addr {
         Address::Number(n) => Ok(n.saturating_sub(1).min(last)),
@@ -517,7 +534,10 @@ fn resolve_address(addr: Address, editor: &Editor<'_>) -> Result<usize, String> 
 
 /// Strip a leading range (`%`, `N`, `N,M`, `.,$`, `'a,'b`) from `cmd`.
 /// Returns the resolved 0-based inclusive range plus the remainder.
-fn parse_range<'a>(cmd: &'a str, editor: &Editor<'_>) -> Result<(Option<Range>, &'a str), String> {
+fn parse_range<'a, H: hjkl_engine::Host>(
+    cmd: &'a str,
+    editor: &Editor<hjkl_buffer::Buffer, H>,
+) -> Result<(Option<Range>, &'a str), String> {
     if let Some(rest) = cmd.strip_prefix('%') {
         return Ok((Some(Range::whole(editor)), rest));
     }
@@ -540,7 +560,10 @@ fn parse_range<'a>(cmd: &'a str, editor: &Editor<'_>) -> Result<(Option<Range>, 
 }
 
 /// `:[range]d` — drop every row in the range.
-fn apply_delete_range(editor: &mut Editor<'_>, range: Option<Range>) -> ExEffect {
+fn apply_delete_range<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    range: Option<Range>,
+) -> ExEffect {
     use hjkl_buffer::{Edit, MotionKind, Position};
     let r = Range::or_default(range, Range::single(editor.cursor().0));
     let total = editor.buffer().row_count();
@@ -598,8 +621,8 @@ fn parse_global_prefix(cmd: &str) -> Option<(bool, &str)> {
 /// Run `:[range]g/pat/d` (or its negated variants). Walks the rows in
 /// `range` (whole buffer when None), collects matches, then drops them
 /// in reverse so row indices stay valid through the cascade of deletes.
-fn apply_global(
-    editor: &mut Editor<'_>,
+fn apply_global<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
     range: Option<Range>,
     body: &str,
     negate: bool,
@@ -679,7 +702,10 @@ fn apply_global(
 
 /// `:set [opt ...]` body. Splits on whitespace and applies each token.
 /// Bare `:set` reports the current values for the supported options.
-fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
+fn apply_set<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    body: &str,
+) -> ExEffect {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         let s = editor.settings();
@@ -716,7 +742,10 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
 
 /// Apply a single `:set` token. Supports `name=value`, bare `name`
 /// (turns booleans on), and `noname` (turns booleans off).
-fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
+fn apply_set_token<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    token: &str,
+) -> Result<(), String> {
     if let Some((name, value)) = token.split_once('=') {
         // String-valued options short-circuit the numeric parse.
         if matches!(name, "iskeyword" | "isk") {
@@ -804,7 +833,11 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
 /// `:[range]sort[!][iun]` body — `flags` is whatever followed the
 /// command name (e.g. `!u`, ` un`, `i`). Sorts only the rows in `range`
 /// (or the whole buffer when None).
-fn apply_sort(editor: &mut Editor<'_>, range: Option<Range>, flags: &str) -> ExEffect {
+fn apply_sort<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
+    range: Option<Range>,
+    flags: &str,
+) -> ExEffect {
     let trimmed = flags.trim();
     let mut reverse = false;
     let mut unique = false;
@@ -896,7 +929,7 @@ fn extract_leading_number(line: &str) -> i64 {
 }
 
 /// `:reg` / `:registers` — tabular dump of every non-empty register slot.
-fn format_registers(editor: &Editor<'_>) -> String {
+fn format_registers<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -> String {
     let r = editor.registers();
     let mut lines = vec!["--- Registers ---".to_string()];
     let mut push = |sel: &str, text: &str, linewise: bool| {
@@ -945,7 +978,7 @@ fn display_register(text: &str) -> String {
 
 /// `:marks` — list every set mark with `(line, col)`. Lines are 1-based to
 /// match vim; cols are 0-based.
-fn format_marks(editor: &Editor<'_>) -> String {
+fn format_marks<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
     // 0.0.36: lowercase + uppercase marks share the unified
     // `Editor::marks` map. `marks()` already iterates in BTreeMap
@@ -1049,8 +1082,8 @@ fn unescape(s: &str, _sep: char) -> String {
     s.to_string()
 }
 
-fn apply_substitute(
-    editor: &mut Editor<'_>,
+fn apply_substitute<H: hjkl_engine::Host>(
+    editor: &mut Editor<hjkl_buffer::Buffer, H>,
     range: Option<Range>,
     sub: Substitute,
 ) -> Result<usize, String> {
@@ -1150,7 +1183,7 @@ fn expand_vim_replacement(input: &str) -> String {
 /// rules forbid `impl Editor` from outside the engine crate. Callers
 /// that previously wrote `editor.mark_dirty_after_ex()` now write
 /// `mark_dirty_after_ex(editor)`.
-fn mark_dirty_after_ex(editor: &mut Editor<'_>) {
+fn mark_dirty_after_ex<H: hjkl_engine::Host>(editor: &mut Editor<hjkl_buffer::Buffer, H>) {
     editor.mark_content_dirty();
 }
 
@@ -1159,15 +1192,19 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_engine::Editor;
-    use hjkl_engine::KeybindingMode;
+    use hjkl_engine::types::{DefaultHost, Options};
 
-    fn new(content: &str) -> Editor<'static> {
-        let mut e = Editor::new(KeybindingMode::Vim);
+    fn new(content: &str) -> Editor {
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            DefaultHost::new(),
+            Options::default(),
+        );
         e.set_content(content);
         e
     }
 
-    fn type_keys(e: &mut Editor<'_>, keys: &str) {
+    fn type_keys<H: hjkl_engine::Host>(e: &mut Editor<hjkl_buffer::Buffer, H>, keys: &str) {
         for c in keys.chars() {
             let ev = match c {
                 '\n' => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
@@ -1578,12 +1615,17 @@ mod tests {
 
     #[test]
     fn bare_set_reports_current_values() {
+        // 0.1.0: `Editor::new(buf, host, Options::default())` uses
+        // SPEC-faithful vim defaults (shiftwidth=8, ts=8). The pre-0.1.0
+        // `Editor::new(KeybindingMode)` defaulted to `Settings::default`
+        // (sqeel-derived shiftwidth=2). Asserting against the new
+        // SPEC defaults.
         let mut e = new("x");
         match run(&mut e, "set") {
             ExEffect::Info(msg) => {
-                assert!(msg.contains("shiftwidth=2"));
-                assert!(msg.contains("ignorecase=off"));
-                assert!(msg.contains("wrap=off"));
+                assert!(msg.contains("shiftwidth=8"), "got: {msg}");
+                assert!(msg.contains("ignorecase=off"), "got: {msg}");
+                assert!(msg.contains("wrap=off"), "got: {msg}");
             }
             other => panic!("expected Info, got {other:?}"),
         }

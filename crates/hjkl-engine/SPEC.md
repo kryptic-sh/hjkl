@@ -1,14 +1,35 @@
 # hjkl-engine — SPEC
 
-Draft, 2026-04-26. Source: phase 0 audit (`../../AUDIT.md`) + `MIGRATION.md`
-Spec Lock. This document is the **stability contract** that the public trait
-surface guarantees. Bumps in lockstep with crate version.
+**Status: 0.1.0 (frozen 2026-04-27).** This document is the **stability
+contract** that the public trait surface guarantees. From 0.1.0 onward, breaking
+changes to anything described here require a minor-version bump (per [SemVer]);
+patch bumps preserve every signature.
 
-Status: **0.0.0 imported**. The crate now contains the wholesale sqeel-vim port
-(448 tests passing, exact baseline match) but the public API still matches
-sqeel's, not this SPEC. Phase 5 trait extraction lands the SPEC-described
-surface; until then `ratatui` and `crossterm` are unconditional deps and
-`no_std`/wasm builds are deferred.
+Source: phase 0 audit (`../../AUDIT.md`) + `MIGRATION.md` Spec Lock + the 0.0.33
+— 0.0.42 trait-extraction series (Patches C-α through C-δ.7).
+
+[SemVer]: https://semver.org
+
+## What is frozen at 0.1.0
+
+- The `Buffer` super-trait surface — 14 methods across the four sub-traits
+  `Cursor` / `Query` / `BufferEdit` / `Search`, sealed via private
+  `mod sealed { pub trait Sealed; }`. Pre-0.1.0 churn is over; new methods on
+  these traits require a minor bump from 0.1.0 onward.
+- The `Host` trait surface — clipboard / time / cancellation / search-prompt /
+  display-line bridge / syntax highlights / cursor-shape emit / viewport
+  ownership / `Intent` fan-out. `EngineHost` (the pre-0.1.0 dyn-shim) is
+  removed; hosts implement `Host` directly and the `Editor<B, H>` generic
+  carries the typed slot.
+- The `Editor::new(buffer, host, options)` constructor — the legacy
+  `Editor::new(KeybindingMode)` / `Editor::with_host` / `Editor::with_options`
+  triad is removed.
+- The `EditorSnapshot` wire format — `EditorSnapshot::VERSION` (`4`) is locked
+  for the entire 0.1.x line.
+- The `Options` `:set` surface — vim-faithful defaults (shiftwidth=8 / tabstop=8
+  / `iskeyword="@,48-57,_,192-255"` / etc.).
+- `FoldOp` / `FoldProvider` (the engine-canonical fold-mutation channel
+  introduced in 0.0.38) — both the enum variants and the trait surface.
 
 ## Crate boundaries
 
@@ -83,8 +104,8 @@ pub trait Buffer:
 {}
 ```
 
-Total: **14 methods** (13 from sub-traits + `Query::dirty_gen`). Under
-<40 cap with room.
+Total: **14 methods** (13 from sub-traits + `Query::dirty_gen`). Under <40 cap
+with room.
 
 Sealed via private `mod sealed { pub trait Sealed {} }`. Pre-1.0, downstream
 cannot impl `Buffer` directly. `hjkl-buffer::Rope` implements `Sealed` from
@@ -263,10 +284,12 @@ pub struct Options {
 ## Editor surface
 
 ```rust
-pub struct Editor<B: Buffer, H: Host> { /* private */ }
+pub struct Editor<B: Buffer = hjkl_buffer::Buffer, H: Host = DefaultHost> {
+    /* private */
+}
 
-impl<B: Buffer, H: Host> Editor<B, H> {
-    pub fn new(buffer: B, host: H, options: Options) -> Self;
+impl<H: Host> Editor<hjkl_buffer::Buffer, H> {
+    pub fn new(buffer: hjkl_buffer::Buffer, host: H, options: Options) -> Self;
 
     // Input dispatch
     pub fn input(&mut self, input: Input) -> Result<(), EngineError>;
@@ -310,8 +333,8 @@ breakage from 0.1.0 onward.
 
 ### Snapshot wire format
 
-`EditorSnapshot::VERSION` (currently `3`) tags the serde payload produced by
-`Editor::snapshot` / consumed by `Editor::restore`.
+`EditorSnapshot::VERSION` (currently `4` — frozen at 0.1.0) tags the serde
+payload produced by `Editor::snapshot` / consumed by `Editor::restore`.
 
 - **0.0.x:** `VERSION` bumps with every structural change. Persisted state from
   an older patch release will not round-trip; hosts must reject mismatched
@@ -321,9 +344,59 @@ breakage from 0.1.0 onward.
 - **0.2.0+:** any further structural change to `EditorSnapshot` requires
   `VERSION++` and a major-version bump of `hjkl-engine`.
 
-## Out of scope (engine never owns)
+## Out of scope at 0.1.0
 
-See `MIGRATION.md` "Out of Scope" table.
+Explicit non-goals for the 0.1.x line. These remain post-0.1.0 work and **are
+not part of the frozen surface** — implementations and call sites are free to
+evolve in patch bumps.
+
+### Vim FSM is concrete on `hjkl_buffer::Buffer`
+
+`Editor` is generic over `B: Buffer = hjkl_buffer::Buffer`, but the constructor
+(`Editor::new`) and the entire vim FSM (`crate::vim` free functions,
+`Editor::mutate_edit`, change-log emission, undo machinery) are bound to
+`B = hjkl_buffer::Buffer`:
+
+```rust
+impl<H: Host> Editor<hjkl_buffer::Buffer, H> { /* most methods */ }
+```
+
+The `<B: Buffer, H: Host>` impl block exposes only universal accessors
+(`buffer()` / `buffer_mut()` / `host()` / `host_mut()`). Custom buffer backends
+compile against the trait but cannot run the vim FSM at 0.1.0.
+
+The blocker is `Editor::mutate_edit`, which consumes the rich
+`hjkl_buffer::Edit` enum (8 variants — `InsertChar`, `InsertStr`, `DeleteRange`,
+`JoinLines`, `SplitLines`, `Replace`, `InsertBlock`, `DeleteBlockChunks`) with
+~700 LOC of `do_*` machinery. Lifting that onto `BufferEdit` requires an
+associated `type Edit;` (forces every backend to design its own rich-edit enum
+just to compile) — that's post-0.1.0 work tracked under `BufferEdit::Op`.
+
+The seam between the engine and `hjkl_buffer::Buffer` for the mutate-edit
+channel lives at
+`crate::buf_helpers::apply_buffer_edit(&mut hjkl_buffer::Buffer, hjkl_buffer::Edit) -> hjkl_buffer::Edit`
+— a single concrete reach that 0.2.0 will lift onto a trait associated type
+without touching call sites.
+
+### Viewport math on `Buffer`
+
+The viewport-math fns (`ensure_cursor_visible`, `cursor_screen_row`,
+`max_top_for_height`) are engine free functions over `B: Query [+ Cursor]` +
+`&dyn FoldProvider` + `&Viewport`, lifted out of `hjkl_buffer::Buffer` in
+0.0.42. The buffer-side inherent copies survive 0.1.0 only as a compatibility
+scaffold; 0.2.0 deletes them once every external consumer migrates to
+`crate::viewport_math`.
+
+### `Editor::apply_external_edit` / `Editor::take_changes`
+
+The SPEC §"Editor surface" gestures at `apply_external_edit(edit: Edit)` and
+`take_changes() -> Vec<Edit>`. The change-log emitter (drained via
+`Editor::take_content_change()`) covers the read-side; the `apply_external_edit`
+write-side is wired through `mutate_edit` and is concrete on
+`hjkl_buffer::Buffer` for the same associated-type reason above.
+
+See `MIGRATION.md` "Out of Scope" table for the broader "engine never owns" list
+(file I/O, terminal I/O, LSP transport, tree-sitter, syntax themes, …).
 
 ## Open issues
 
