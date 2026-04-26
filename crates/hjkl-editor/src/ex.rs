@@ -329,10 +329,15 @@ fn apply_shell_filter<H: hjkl_engine::Host>(
         Ok(c) => c,
         Err(e) => return ExEffect::Error(format!("cannot spawn `{cmd}`: {e}")),
     };
-    if let Some(stdin) = child.stdin.as_mut()
-        && let Err(e) = stdin.write_all(payload.as_bytes())
-    {
-        return ExEffect::Error(format!("cannot write to `{cmd}`: {e}"));
+    if let Some(stdin) = child.stdin.as_mut() {
+        match stdin.write_all(payload.as_bytes()) {
+            Ok(()) => {}
+            // Child closed stdin before we finished writing (e.g. `exit 5`).
+            // Fall through to wait_with_output() so its actual exit status
+            // wins instead of masking it as a write error.
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(e) => return ExEffect::Error(format!("cannot write to `{cmd}`: {e}")),
+        }
     }
     let output = match child.wait_with_output() {
         Ok(o) => o,
