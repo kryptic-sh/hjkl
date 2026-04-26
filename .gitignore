@@ -2,3 +2,7 @@
 **/*.rs.bk
 *.swp
 .DS_Store
+
+# hjkl ships libraries — track Cargo.lock for reproducible CI builds
+# (overrides global *.lock ignore)
+!Cargo.lock
