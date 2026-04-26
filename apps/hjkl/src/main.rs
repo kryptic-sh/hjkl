@@ -1,78 +1,39 @@
 //! `hjkl` — standalone vim-modal terminal editor.
 //!
-//! Phase 1 scaffold. Boots a ratatui alternate screen, renders an empty
-//! buffer panel with a status line, and exits cleanly on `Ctrl+C`. No
-//! event loop, no file loading, no motions — Phase 2+ work.
+//! Phase 2: event loop wired, motions work, mode switching, status line,
+//! cursor shape per mode. File loading/saving is Phase 3+.
 
+mod app;
 mod host;
+mod render;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute, terminal,
-};
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, Paragraph},
-};
-use std::io::{self, Stdout, stdout};
+use crossterm::{execute, terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::io::{self, stdout};
 
 #[derive(Parser)]
 #[command(version, about = "Vim-modal terminal editor")]
 struct Args {
-    /// File to open (Phase 1: ignored — empty buffer always).
+    /// File to open. Phase 2: shown in status line; not yet read from disk.
     file: Option<std::path::PathBuf>,
 }
 
 fn main() -> Result<()> {
-    let _args = Args::parse();
-    let _host = host::TuiHost::new();
+    let args = Args::parse();
 
     terminal::enable_raw_mode()?;
     execute!(stdout(), terminal::EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal);
+    let mut app = app::App::new(args.file);
+    let result = app.run(&mut terminal);
 
-    // Restore terminal regardless of `run`'s outcome.
+    // Restore terminal regardless of outcome.
     let _ = terminal::disable_raw_mode();
     let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen);
 
     result
-}
-
-fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    loop {
-        terminal.draw(|frame| {
-            let area = frame.area();
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(1)])
-                .split(area);
-
-            let buffer_panel = Paragraph::new("Phase 1 scaffold — Ctrl+C to exit")
-                .block(Block::default().borders(Borders::ALL).title("hjkl"));
-            frame.render_widget(buffer_panel, chunks[0]);
-
-            let status = Paragraph::new("-- NORMAL --");
-            frame.render_widget(status, chunks[1]);
-        })?;
-
-        if let Event::Key(KeyEvent {
-            code: KeyCode::Char('c'),
-            modifiers,
-            ..
-        }) = event::read()?
-        {
-            if modifiers.contains(KeyModifiers::CONTROL) {
-                break;
-            }
-        }
-    }
-
-    Ok(())
 }
