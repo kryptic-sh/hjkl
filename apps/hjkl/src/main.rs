@@ -1,7 +1,6 @@
 //! `hjkl` — standalone vim-modal terminal editor.
 //!
-//! Phase 2: event loop wired, motions work, mode switching, status line,
-//! cursor shape per mode. File loading/saving is Phase 3+.
+//! Phase 3: file I/O + ex commands (`:w`, `:q`, `:wq`, `:x`) + dirty tracking.
 
 mod app;
 mod host;
@@ -16,19 +15,22 @@ use std::io::{self, stdout};
 #[derive(Parser)]
 #[command(version, about = "Vim-modal terminal editor")]
 struct Args {
-    /// File to open. Phase 2: shown in status line; not yet read from disk.
+    /// File to open. If the file does not exist a new empty buffer is started.
     file: Option<std::path::PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Build app state (may read file from disk) before entering alternate screen
+    // so we can print errors to the normal terminal if the file is unreadable.
+    let mut app = app::App::new(args.file)?;
+
     terminal::enable_raw_mode()?;
     execute!(stdout(), terminal::EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = app::App::new(args.file);
     let result = app.run(&mut terminal);
 
     // Restore terminal regardless of outcome.

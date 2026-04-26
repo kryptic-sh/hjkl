@@ -12,8 +12,11 @@ use hjkl_engine::Editor;
 pub enum ExEffect {
     /// Nothing happened (empty input or already-applied effect).
     None,
-    /// Save the current buffer.
+    /// Save the current buffer to the current filename.
     Save,
+    /// Save to a specific path (`:w <path>`). The caller updates its
+    /// `filename` field so future `:w` writes there.
+    SaveAs(String),
     /// Quit (`:q`, `:q!`, `:wq`, `:x`).
     Quit { force: bool, save: bool },
     /// Unknown command — caller should surface as an error toast.
@@ -109,6 +112,14 @@ pub fn run<H: hjkl_engine::Host>(
         "foldindent" | "foldi" => return apply_fold_indent(editor),
         "foldsyntax" | "folds" => return apply_fold_syntax(editor),
         _ => {}
+    }
+
+    // `:w <path>` — save to a specific file. Caller updates filename.
+    if let Some(path) = cmd.strip_prefix("w ") {
+        let path = path.trim();
+        if !path.is_empty() {
+            return ExEffect::SaveAs(path.to_string());
+        }
     }
 
     // `:[range]sort[!][iun]` — defaults to the whole buffer when no
@@ -1314,6 +1325,15 @@ mod tests {
     fn write_returns_save() {
         let mut e = new("");
         assert_eq!(run(&mut e, "w"), ExEffect::Save);
+    }
+
+    #[test]
+    fn write_path_returns_save_as() {
+        let mut e = new("");
+        assert_eq!(
+            run(&mut e, "w /tmp/foo.txt"),
+            ExEffect::SaveAs("/tmp/foo.txt".to_string())
+        );
     }
 
     #[test]

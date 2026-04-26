@@ -5,7 +5,7 @@
 //! delegates to [`buffer_pane`] and [`status_line`].
 
 use hjkl_buffer::{BufferView, Gutter};
-use hjkl_engine::Host;
+use hjkl_engine::{Host, Query};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -83,7 +83,10 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
 /// Render the one-row status line.
 ///
-/// Layout: `MODE  [* ] filename   line:col  pct%`
+/// When the user is typing a `:` command, the status area shows the command
+/// prompt instead of the normal mode/file/cursor info.
+/// When a status message (ex-command result) is pending, it takes priority
+/// over the normal right-hand cursor position info.
 fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let status = build_status_line(app, area.width);
     let paragraph = Paragraph::new(status);
@@ -92,22 +95,37 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
 /// Build the status line text as a ratatui [`Line`].
 ///
-/// Extracted as a pure-ish function so it's unit-testable.
+/// Priority (highest first):
+/// 1. Command input (user typing `:cmd`) — shows `:{typed_text}`.
+/// 2. Status message (ex-command result) — shown until next keypress.
+/// 3. Normal mode/filename/cursor line.
 fn build_status_line(app: &App, width: u16) -> Line<'static> {
+    // ── Command prompt ───────────────────────────────────────────────────────
+    if let Some(ref cmd) = app.command_input {
+        let content = format!(":{}", cmd.text);
+        // Pad to width so the background fills the row.
+        let padded = format!("{content:<width$}", width = width as usize);
+        return Line::from(vec![Span::styled(
+            padded,
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        )]);
+    }
+
+    // ── Status message (ex-command result) ──────────────────────────────────
+    if let Some(ref msg) = app.status_message {
+        let content = format!(" {msg}");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return Line::from(vec![Span::styled(
+            padded,
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        )]);
+    }
+
+    // ── Normal status line ───────────────────────────────────────────────────
     let mode = app.mode_label();
 
     // Dirty marker — `*` when the buffer has unsaved changes.
-    // `take_dirty` would clear it, so we peek via `content_dirty` indirectly.
-    // We use `editor.take_dirty()` in Phase 3 for save prompts; here we just
-    // read the non-destructive flag.  The engine exposes it only via
-    // `take_dirty()` which clears the flag, so we call it and remember the
-    // result across frames via App::dirty_flag in a future phase. For Phase 2
-    // the "empty buffer is always clean" contract means `dirty_gen > 0`
-    // implies at least one edit happened — but we don't have a non-consuming
-    // peek. Use the buffer's dirty_gen heuristic instead.
-    use hjkl_engine::Query;
-    let is_dirty = app.editor.buffer().dirty_gen() > 0;
-    let dirty = if is_dirty { "*" } else { " " };
+    let dirty = if app.dirty { "*" } else { " " };
 
     let filename: String = app
         .filename
@@ -163,6 +181,12 @@ pub fn format_status_line(
     format!("{left}{spacer}{right}")
 }
 
+/// Format the write-success status message. Used in tests.
+#[cfg(test)]
+pub fn format_write_message(path: &str, lines: usize, bytes: usize) -> String {
+    format!("\"{}\" {}L, {}B written", path, lines, bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +224,11 @@ mod tests {
         let width: u16 = 40;
         let s = format_status_line("INSERT", "myfile.rs", true, 0, 0, 100, width);
         assert_eq!(s.len(), width as usize);
+    }
+
+    #[test]
+    fn write_message_format() {
+        let msg = format_write_message("/tmp/foo.txt", 10, 128);
+        assert_eq!(msg, "\"/tmp/foo.txt\" 10L, 128B written");
     }
 }
