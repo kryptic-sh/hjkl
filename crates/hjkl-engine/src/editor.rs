@@ -1702,6 +1702,9 @@ impl<'a> Editor<'a> {
         if self.vim.is_visual() {
             self.vim.force_normal();
         }
+        // Mouse-position click counts as a motion — break the active
+        // insert-mode undo group when the toggle is on (vim parity).
+        crate::vim::break_undo_group_in_insert(self);
         let (r, c) = self.mouse_to_doc_pos(area, col, row);
         self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
     }
@@ -1828,31 +1831,38 @@ impl<'a> Editor<'a> {
 }
 
 #[cfg(feature = "crossterm")]
-pub(super) fn crossterm_to_input(key: KeyEvent) -> Input {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let k = match key.code {
-        KeyCode::Char(c) => Key::Char(c),
-        KeyCode::Backspace => Key::Backspace,
-        KeyCode::Delete => Key::Delete,
-        KeyCode::Enter => Key::Enter,
-        KeyCode::Left => Key::Left,
-        KeyCode::Right => Key::Right,
-        KeyCode::Up => Key::Up,
-        KeyCode::Down => Key::Down,
-        KeyCode::Home => Key::Home,
-        KeyCode::End => Key::End,
-        KeyCode::Tab => Key::Tab,
-        KeyCode::Esc => Key::Esc,
-        _ => Key::Null,
-    };
-    Input {
-        key: k,
-        ctrl,
-        alt,
-        shift,
+impl From<KeyEvent> for Input {
+    fn from(key: KeyEvent) -> Self {
+        let k = match key.code {
+            KeyCode::Char(c) => Key::Char(c),
+            KeyCode::Backspace => Key::Backspace,
+            KeyCode::Delete => Key::Delete,
+            KeyCode::Enter => Key::Enter,
+            KeyCode::Left => Key::Left,
+            KeyCode::Right => Key::Right,
+            KeyCode::Up => Key::Up,
+            KeyCode::Down => Key::Down,
+            KeyCode::Home => Key::Home,
+            KeyCode::End => Key::End,
+            KeyCode::Tab => Key::Tab,
+            KeyCode::Esc => Key::Esc,
+            _ => Key::Null,
+        };
+        Input {
+            key: k,
+            ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+            alt: key.modifiers.contains(KeyModifiers::ALT),
+            shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        }
     }
+}
+
+/// Crossterm `KeyEvent` → engine `Input`. Thin wrapper that delegates
+/// to the [`From`] impl above; kept as a free fn for the in-tree
+/// callers in the legacy ratatui-coupled paths.
+#[cfg(feature = "crossterm")]
+pub(super) fn crossterm_to_input(key: KeyEvent) -> Input {
+    Input::from(key)
 }
 
 #[cfg(test)]

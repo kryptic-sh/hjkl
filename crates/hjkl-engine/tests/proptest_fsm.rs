@@ -188,7 +188,20 @@ proptest! {
         tw in 1u32..200,
         et in any::<bool>(),
         ic in any::<bool>(),
+        sc in any::<bool>(),
+        ws in any::<bool>(),
+        ai in any::<bool>(),
+        ub in any::<bool>(),
+        ro in any::<bool>(),
+        ul in 0u32..5000,
+        tm_ms in 0u64..10_000,
         wrap_idx in 0u8..3,
+        isk in prop::sample::select(vec![
+            "@,48-57,_,192-255".to_string(),
+            "@,_".to_string(),
+            "@,_,45".to_string(),
+            "48-57".to_string(),
+        ]),
     ) {
         use hjkl_engine::{Options, WrapMode};
         let mut ed = Editor::new(KeybindingMode::Vim);
@@ -199,6 +212,14 @@ proptest! {
             textwidth: tw,
             expandtab: et,
             ignorecase: ic,
+            smartcase: sc,
+            wrapscan: ws,
+            autoindent: ai,
+            undo_break_on_motion: ub,
+            readonly: ro,
+            undo_levels: ul,
+            timeout_len: core::time::Duration::from_millis(tm_ms),
+            iskeyword: isk.clone(),
             wrap: match wrap_idx {
                 0 => WrapMode::None,
                 1 => WrapMode::Char,
@@ -213,6 +234,14 @@ proptest! {
         prop_assert_eq!(echoed.textwidth, opts.textwidth);
         prop_assert_eq!(echoed.expandtab, opts.expandtab);
         prop_assert_eq!(echoed.ignorecase, opts.ignorecase);
+        prop_assert_eq!(echoed.smartcase, opts.smartcase);
+        prop_assert_eq!(echoed.wrapscan, opts.wrapscan);
+        prop_assert_eq!(echoed.autoindent, opts.autoindent);
+        prop_assert_eq!(echoed.undo_break_on_motion, opts.undo_break_on_motion);
+        prop_assert_eq!(echoed.readonly, opts.readonly);
+        prop_assert_eq!(echoed.undo_levels, opts.undo_levels);
+        prop_assert_eq!(echoed.timeout_len, opts.timeout_len);
+        prop_assert_eq!(&echoed.iskeyword, &opts.iskeyword);
         prop_assert_eq!(echoed.wrap, opts.wrap);
     }
 }

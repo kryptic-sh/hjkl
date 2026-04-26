@@ -1401,7 +1401,7 @@ fn begin_insert(ed: &mut Editor<'_>, count: usize, reason: InsertReason) {
 ///
 /// During replay we skip the break — replay shouldn't pollute the
 /// undo stack with intra-replay snapshots.
-fn break_undo_group_in_insert(ed: &mut Editor<'_>) {
+pub(crate) fn break_undo_group_in_insert(ed: &mut Editor<'_>) {
     if !ed.settings.undo_break_on_motion {
         return;
     }

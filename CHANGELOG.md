@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.25] - 2026-04-26
+
+### Added
+
+- `impl From<crossterm::KeyEvent> for Input` (gated on the `crossterm`
+  feature). Idiomatic conversion replaces the previously private
+  `crossterm_to_input` free fn — the latter remains as a one-line
+  delegating wrapper for the in-tree ratatui-coupled callers.
+- Mouse-position clicks now break the active insert-mode undo group
+  when `undo_break_on_motion` is on, completing the parity gap noted
+  in 0.0.24. `Editor::mouse_click` calls the same
+  `break_undo_group_in_insert` helper used by arrow-key motions.
+- Options round-trip proptest now exercises every settings-backed
+  field: `tabstop`, `shiftwidth`, `textwidth`, `expandtab`,
+  `ignorecase`, `smartcase`, `wrapscan`, `autoindent`,
+  `undo_break_on_motion`, `readonly`, `undo_levels`, `timeout_len`,
+  `iskeyword`, `wrap`. Catches future bridge regressions.
+
 ## [0.0.24] - 2026-04-26
 
 ### Added
