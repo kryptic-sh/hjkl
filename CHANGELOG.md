@@ -8,6 +8,26 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-27
+
+### Fixed
+
+- `hjkl-editor` shell filter (`%!cmd`) now tolerates the child closing stdin
+  before all input is consumed. Previously a `BrokenPipe` write error would
+  short-circuit and mask the child's actual exit status (e.g. `%!exit 5`
+  reported "cannot write to `exit 5`: Broken pipe" instead of "command exited
+  5"). Now `BrokenPipe` falls through to `wait_with_output()` so the real exit
+  status wins; other write errors still surface. Fixes a flaky CI failure on
+  `shell_filter_failing_command_errors`.
+
+### CI
+
+- Replaced `release-plz.yml` with a tag-driven `release.yml` matching the
+  org-wide canonical pattern. Runs fmt/clippy/test as a quality gate, then
+  publishes the 4 hjkl crates to crates.io in dep order via an idempotent
+  shell loop (curl-precheck + `cargo publish --locked`). Fires on `git push
+  origin vX.Y.Z`.
+
 ## [0.1.0] - 2026-04-27
 
 ### Patch C-δ — Editor generic flip + SPEC freeze
