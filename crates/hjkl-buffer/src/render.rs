@@ -559,6 +559,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use ratatui::style::{Color, Modifier};

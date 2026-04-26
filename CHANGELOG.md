@@ -8,6 +8,121 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.35] - 2026-04-26
+
+### Patch C-δ.2 — search state on `Editor`
+
+First of the 5-patch sequence to 0.1.0 (per
+`DESIGN_33_METHOD_CLASSIFICATION.md` step 1). The search FSM state
+(pattern + per-row match cache + `wrapscan` flag) moves out of
+`hjkl_buffer::Buffer` and onto `hjkl_engine::Editor`. Multi-window
+hosts that share a buffer between panes no longer leak the
+"current search" across windows that happen to share content.
+
+#### Engine additions
+
+- `hjkl_engine::search` (new public module) — `SearchState` struct
+  (pattern, forward-direction flag, per-row matches cache,
+  generations, `wrap_around`) plus three free functions over
+  `B: Cursor + Query + Search`:
+
+  ```rust
+  pub fn search_forward<B>(buf: &mut B, state: &mut SearchState, skip_current: bool) -> bool;
+  pub fn search_backward<B>(buf: &mut B, state: &mut SearchState, skip_current: bool) -> bool;
+  pub fn search_matches<B>(buf: &B, state: &mut SearchState, dirty_gen: u64, row: usize) -> Vec<(usize, usize)>;
+  ```
+
+- `Editor::search_state(&self)` / `Editor::search_state_mut(&mut self)` —
+  borrow the FSM state.
+- `Editor::set_search_pattern(Option<Regex>)` — install a pattern;
+  clears the cached matches and bridges the regex to the buffer's
+  (deprecated) `set_search_pattern` so the in-tree `BufferView`
+  hlsearch render path keeps painting until 0.0.37 lands the
+  spans → Host pipeline.
+- `Editor::search_advance_forward(skip_current)` /
+  `Editor::search_advance_backward(skip_current)` — `n` / `N`
+  drivers; thin wrappers over the free functions.
+
+#### Engine call-site relocation
+
+- `vim::push_search_pattern` writes to `Editor::search_state` (and
+  bridges to the buffer for the renderer).
+- `Motion::SearchNext`, `word_at_cursor_search`, the search-prompt
+  Enter handler, and `enter_search` no longer call
+  `buffer.search_*` / `buffer.set_search_pattern`. They route
+  through `Editor::search_advance_*` / `Editor::set_search_pattern`.
+- `Editor::highlights_for_line` reads the active pattern from
+  `self.search_state` and pulls match runs through
+  `crate::search::search_matches`.
+- `hjkl_editor::ex` `:noh` clears via `Editor::set_search_pattern(None)`.
+
+#### Buffer surface — soft deprecations (not deletes)
+
+The design doc step 1 prescribes `#[deprecated]` (not removal) so
+the in-tree `BufferView` hlsearch render path and direct
+`hjkl_buffer::Buffer` callers (sqeel-tui's results-list highlight,
+buffr-modal) keep compiling. Removal is queued for 0.1.0.
+
+The following buffer-inherent methods are now `#[deprecated(since
+= "0.0.35", note = "...")]`:
+
+- `Buffer::set_search_pattern`
+- `Buffer::search_pattern`
+- `Buffer::set_search_wrap`
+- `Buffer::search_forward`
+- `Buffer::search_backward`
+- `Buffer::search_matches`
+
+The `Search::find_next` / `Search::find_prev` SPEC trait methods
+stay non-deprecated — they're pure observers, caller-owned regex,
+SPEC-compliant. The `search_wraps()` accessor stays alive (un-
+deprecated) because the in-tree `Search` impl still reads it; the
+wrap policy migrates to a `Search` parameter at 0.1.0.
+
+#### Migration
+
+Callers driving search through `Editor` (sqeel via `:` ex-mode +
+the engine FSM, buffr-modal, inbx) keep working unchanged — the
+engine FSM mutated state lives on `Editor` and the bridge keeps
+`buffer.search_pattern()` mirrored for the renderer.
+
+Direct `hjkl_buffer::Buffer::search_*` callers (rare) get a
+deprecation lint:
+
+| Before                                 | After                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------- |
+| `buffer.set_search_pattern(p)`         | `editor.set_search_pattern(p)` (or `editor.search_state_mut().set_pattern(p)`) |
+| `buffer.search_pattern()`              | `editor.search_state().pattern.as_ref()`                                     |
+| `buffer.search_forward(skip)`          | `editor.search_advance_forward(skip)` (or `hjkl_engine::search::search_forward`) |
+| `buffer.search_backward(skip)`         | `editor.search_advance_backward(skip)`                                       |
+| `buffer.search_matches(row)`           | `hjkl_engine::search::search_matches(&buf, &mut state, dgen, row)`           |
+| `buffer.set_search_wrap(b)`            | `editor.search_state_mut().wrap_around = b`                                  |
+
+The `BufferView` hlsearch render path inside `hjkl-buffer` still
+uses `Buffer::search_pattern()` internally — this is intentional
+for the bridge period and disappears in 0.0.37 when the spans →
+Host pipeline lands.
+
+#### Roadmap
+
+- **0.0.36 (Patch C-δ.3)** — marks consolidation
+  (`vim.marks` + `Editor::file_marks` + `Buffer::marks` → unified
+  `Editor::marks: BTreeMap<char, Pos>`).
+- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline
+  (delete `Buffer::set_spans` / `Buffer::spans`; delete the
+  search-pattern bridge added in this patch).
+- **0.0.38 (Patch C-δ.5)** — fold mutation through
+  `Host::emit_intent(FoldOp)`; `FoldProvider::apply(FoldOp)` and
+  `FoldProvider::invalidate_range` land.
+- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>`
+  generic flip + freeze; delete the deprecated buffer search
+  methods; `cargo public-api` baseline.
+
+Workspace bumps `0.0.34` → `0.0.35`. Member crate pins
+(`=0.0.34` → `=0.0.35`) and `Cargo.lock` updated. Test count went
+from 669 to 674 (+5 from the new `hjkl_engine::search` module
+unit tests).
+
 ## [0.0.34] - 2026-04-26
 
 ### Patch C-δ.1 — viewport relocation onto `Host`

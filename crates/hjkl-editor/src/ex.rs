@@ -86,7 +86,9 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
         }
         "noh" | "nohlsearch" => {
             // Clearing the pattern removes the highlight.
-            editor.buffer_mut().set_search_pattern(None);
+            // 0.0.35: route through the engine search state (which
+            // bridges to the buffer's deprecated `set_search_pattern`).
+            editor.set_search_pattern(None);
             return ExEffect::Ok;
         }
         "reg" | "registers" => return ExEffect::Info(format_registers(editor)),

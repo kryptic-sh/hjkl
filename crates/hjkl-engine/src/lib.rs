@@ -25,6 +25,7 @@ mod editor;
 mod input;
 pub mod motions;
 mod registers;
+pub mod search;
 pub mod types;
 mod vim;
 

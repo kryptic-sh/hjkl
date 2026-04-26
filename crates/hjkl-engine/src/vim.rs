@@ -580,7 +580,9 @@ fn enter_search(ed: &mut Editor<'_>, forward: bool) {
         forward,
     });
     ed.vim.search_history_cursor = None;
-    ed.buffer_mut().set_search_pattern(None);
+    // 0.0.35: clear via the engine search state (and bridge to the
+    // buffer-side pattern for the BufferView hlsearch renderer).
+    ed.set_search_pattern(None);
 }
 
 /// Compile `pattern` into a regex and push it onto the migration
@@ -607,9 +609,14 @@ fn push_search_pattern(ed: &mut Editor<'_>, pattern: &str) {
         regex::Regex::new(&effective).ok()
     };
     let wrap = ed.settings().wrapscan;
-    let buf = ed.buffer_mut();
-    buf.set_search_pattern(compiled);
-    buf.set_search_wrap(wrap);
+    // 0.0.35: route the pattern through Editor's search_state (and
+    // bridge to the buffer for the BufferView hlsearch renderer).
+    ed.set_search_pattern(compiled);
+    ed.search_state_mut().wrap_around = wrap;
+    // Bridge — the buffer's `Search::find_next` impl reads its own
+    // wrap flag; keep both in sync until 0.0.36+ removes the dup.
+    #[allow(deprecated)]
+    ed.buffer_mut().set_search_wrap(wrap);
 }
 
 fn step_search_prompt(ed: &mut Editor<'_>, input: Input) -> bool {
@@ -654,9 +661,9 @@ fn step_search_prompt(ed: &mut Editor<'_>, input: Input) -> bool {
                     push_search_pattern(ed, &pattern);
                     let pre = ed.cursor();
                     if p.forward {
-                        ed.buffer_mut().search_forward(true);
+                        ed.search_advance_forward(true);
                     } else {
-                        ed.buffer_mut().search_backward(true);
+                        ed.search_advance_backward(true);
                     }
                     ed.push_buffer_cursor_to_textarea();
                     if ed.cursor() != pre {
@@ -2299,7 +2306,7 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             if let Some(pattern) = ed.vim.last_search.clone() {
                 push_search_pattern(ed, &pattern);
             }
-            if ed.buffer().search_pattern().is_none() {
+            if ed.search_state().pattern.is_none() {
                 return;
             }
             // `n` repeats the last search in its committed direction;
@@ -2308,9 +2315,9 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             let forward = ed.vim.last_search_forward != *reverse;
             for _ in 0..count.max(1) {
                 if forward {
-                    ed.buffer_mut().search_forward(true);
+                    ed.search_advance_forward(true);
                 } else {
-                    ed.buffer_mut().search_backward(true);
+                    ed.search_advance_backward(true);
                 }
             }
             ed.push_buffer_cursor_to_textarea();
@@ -2427,7 +2434,7 @@ fn word_at_cursor_search(ed: &mut Editor<'_>, forward: bool, whole_word: bool, c
         escaped
     };
     push_search_pattern(ed, &pattern);
-    if ed.buffer().search_pattern().is_none() {
+    if ed.search_state().pattern.is_none() {
         return;
     }
     // Remember the query so `n` / `N` keep working after the jump.
@@ -2435,9 +2442,9 @@ fn word_at_cursor_search(ed: &mut Editor<'_>, forward: bool, whole_word: bool, c
     ed.vim.last_search_forward = forward;
     for _ in 0..count.max(1) {
         if forward {
-            ed.buffer_mut().search_forward(true);
+            ed.search_advance_forward(true);
         } else {
-            ed.buffer_mut().search_backward(true);
+            ed.search_advance_backward(true);
         }
     }
     ed.push_buffer_cursor_to_textarea();
@@ -7064,8 +7071,8 @@ mod tests {
         let mut e = editor_with("foo bar\nbaz");
         run_keys(&mut e, "/bar");
         assert_eq!(e.search_prompt().unwrap().text, "bar");
-        // Pattern set on the migration buffer for live highlight.
-        assert!(e.buffer().search_pattern().is_some());
+        // Pattern set on the engine search state for live highlight.
+        assert!(e.search_state().pattern.is_some());
     }
 
     #[test]
@@ -8015,11 +8022,23 @@ mod tests {
         // All-lowercase pattern → ignorecase wins → compiled regex
         // is case-insensitive.
         run_keys(&mut e, "/foo<CR>");
-        let r1 = e.buffer().search_pattern().unwrap().as_str().to_string();
+        let r1 = e
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
         assert!(r1.starts_with("(?i)"), "lowercase under smartcase: {r1}");
         // Uppercase letter → smartcase flips back to case-sensitive.
         run_keys(&mut e, "/Foo<CR>");
-        let r2 = e.buffer().search_pattern().unwrap().as_str().to_string();
+        let r2 = e
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
         assert!(!r2.starts_with("(?i)"), "mixed-case under smartcase: {r2}");
     }
 
@@ -8048,7 +8067,13 @@ mod tests {
         // so the search pattern should bound that whole token.
         e.jump_cursor(0, 0);
         run_keys(&mut e, "*");
-        let p = e.buffer().search_pattern().unwrap().as_str().to_string();
+        let p = e
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
         assert!(p.contains("foo_bar"), "default iskeyword: {p}");
     }
 
@@ -8074,7 +8099,13 @@ mod tests {
         e.settings_mut().iskeyword = "@,_,45".to_string();
         e.jump_cursor(0, 0);
         run_keys(&mut e, "*");
-        let p = e.buffer().search_pattern().unwrap().as_str().to_string();
+        let p = e
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
         assert!(p.contains("foo-bar"), "dash-as-word: {p}");
     }
 

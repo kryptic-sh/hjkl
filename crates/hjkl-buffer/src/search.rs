@@ -74,16 +74,42 @@ impl Buffer {
     /// Subsequent [`Buffer::search_forward`] / `search_backward`
     /// calls use the new pattern; `n` / `N` repeat the last set
     /// pattern.
+    ///
+    /// **Deprecated since 0.0.35.** Search FSM state migrated from
+    /// `Buffer` to `Editor` per `DESIGN_33_METHOD_CLASSIFICATION.md`
+    /// step 1. New code uses `Editor::set_search_pattern` /
+    /// `Editor::search_state_mut`. Removal queued for 0.1.0.
+    /// The accessor stays alive in 0.0.35 so the in-tree
+    /// `BufferView` hlsearch render path and direct
+    /// `hjkl_buffer::Buffer` callers (e.g. sqeel-tui's results-list
+    /// highlight) keep compiling.
+    #[deprecated(
+        since = "0.0.35",
+        note = "use Editor::set_search_pattern; the buffer-inherent accessor is removed in 0.1.0"
+    )]
     pub fn set_search_pattern(&mut self, re: Option<Regex>) {
         self.search_state_mut().set_pattern(re);
     }
 
+    /// **Deprecated since 0.0.35.** See [`Buffer::set_search_pattern`].
+    /// Read the active pattern via `Editor::search_state().pattern`.
+    /// Kept alive for the `BufferView` hlsearch render path.
     pub fn search_pattern(&self) -> Option<&Regex> {
         self.search_state().pattern.as_ref()
     }
 
     /// Toggle search wrap-around (`wrapscan`). `true` (default) wraps
     /// past buffer ends; `false` stops at the last/first match.
+    ///
+    /// **Deprecated since 0.0.35.** Use
+    /// `Editor::search_state_mut().wrap_around`. Kept alive so
+    /// `Search::find_next` (the SPEC trait method) on the in-tree
+    /// rope can read `search_wraps()` until the wrap policy moves
+    /// to a parameter at 0.1.0.
+    #[deprecated(
+        since = "0.0.35",
+        note = "use Editor::search_state_mut().wrap_around; removed in 0.1.0"
+    )]
     pub fn set_search_wrap(&mut self, wrap: bool) {
         self.search_state_mut().wrap_around = wrap;
     }
@@ -102,6 +128,14 @@ impl Buffer {
     /// re-applies `ensure_cursor_visible` post-search; pure-buffer
     /// callers that want the previous behaviour should follow this
     /// call with `buffer.ensure_cursor_visible(&mut viewport)`.
+    ///
+    /// **Deprecated since 0.0.35.** Use `hjkl_engine::search::search_forward`
+    /// (a free function over `Cursor + Query + Search` plus an engine-
+    /// owned `SearchState`). Removed in 0.1.0.
+    #[deprecated(
+        since = "0.0.35",
+        note = "use hjkl_engine::search::search_forward; removed in 0.1.0"
+    )]
     pub fn search_forward(&mut self, skip_current: bool) -> bool {
         if self.search_pattern().is_none() {
             return false;
@@ -141,6 +175,12 @@ impl Buffer {
     ///
     /// 0.0.34 (Patch C-δ.1): see [`Buffer::search_forward`] — no
     /// longer auto-scrolls.
+    ///
+    /// **Deprecated since 0.0.35.** See [`Buffer::search_forward`].
+    #[deprecated(
+        since = "0.0.35",
+        note = "use hjkl_engine::search::search_backward; removed in 0.1.0"
+    )]
     pub fn search_backward(&mut self, skip_current: bool) -> bool {
         if self.search_pattern().is_none() {
             return false;
@@ -180,6 +220,13 @@ impl Buffer {
 
     /// Match positions on `row` as `(byte_start, byte_end)`. Used
     /// by the render layer to paint search-match bg.
+    ///
+    /// **Deprecated since 0.0.35.** Use
+    /// `hjkl_engine::search::search_matches`. Removed in 0.1.0.
+    #[deprecated(
+        since = "0.0.35",
+        note = "use hjkl_engine::search::search_matches; removed in 0.1.0"
+    )]
     pub fn search_matches(&mut self, row: usize) -> Vec<(usize, usize)> {
         let line = self.line(row).unwrap_or("").to_string();
         let dgen = self.dirty_gen();
@@ -232,6 +279,7 @@ impl Buffer {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

@@ -366,6 +366,15 @@ pub struct Editor<'a> {
     /// fires exactly once per mode transition without sprinkling the
     /// call across every `vim.mode = ...` site.
     pub(crate) last_emitted_mode: crate::VimMode,
+    /// Search FSM state (pattern + per-row match cache + wrapscan).
+    /// 0.0.35: relocated out of `hjkl_buffer::Buffer` per
+    /// `DESIGN_33_METHOD_CLASSIFICATION.md` step 1. The buffer's
+    /// `BufferView` renderer still reads `Buffer::search_pattern()`
+    /// for hlsearch background; the engine mirrors `pattern` to the
+    /// buffer when commit happens so the renderer stays correct
+    /// during the bridge period (removed in 0.0.37 once the spans
+    /// → Host pipeline lands).
+    pub(crate) search_state: crate::search::SearchState,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -580,6 +589,7 @@ impl<'a> Editor<'a> {
             sticky_col: None,
             host: Box::new(host),
             last_emitted_mode: crate::VimMode::Normal,
+            search_state: crate::search::SearchState::new(),
         }
     }
 
@@ -709,6 +719,50 @@ impl<'a> Editor<'a> {
     /// snapshot and overwrite via `*editor.settings_mut() = …`.
     pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
+    }
+
+    /// Borrow the engine search state. Hosts inspecting the
+    /// committed `/` / `?` pattern (e.g. for status-line display)
+    /// read it from here rather than the buffer; the buffer's
+    /// `search_pattern()` accessor is `#[deprecated]` since 0.0.35.
+    pub fn search_state(&self) -> &crate::search::SearchState {
+        &self.search_state
+    }
+
+    /// Mutable engine search state. Hosts driving search programmatically
+    /// (test fixtures, scripted demos) write the pattern through here.
+    /// The buffer's matching `set_search_pattern` accessor remains
+    /// available for direct `hjkl_buffer::Buffer` callers (and the
+    /// in-tree `BufferView` hlsearch render path) but is `#[deprecated]`.
+    pub fn search_state_mut(&mut self) -> &mut crate::search::SearchState {
+        &mut self.search_state
+    }
+
+    /// Convenience wrapper: install `pattern` as the active search
+    /// regex on the engine state, mirror it to the buffer (for the
+    /// `BufferView` renderer's hlsearch background pass), and clear
+    /// the cached row matches. Pass `None` to clear.
+    pub fn set_search_pattern(&mut self, pattern: Option<regex::Regex>) {
+        self.search_state.set_pattern(pattern.clone());
+        // Bridge: keep the buffer-side pattern in sync with the
+        // engine until the spans → Host pipeline lands (0.0.37).
+        // The deprecation lint is silenced here because this is the
+        // single bridge between the two sources of truth.
+        #[allow(deprecated)]
+        self.buffer.set_search_pattern(pattern);
+    }
+
+    /// Drive `n` (or the `/` commit equivalent) — advance the cursor
+    /// to the next match of `search_state.pattern` from the cursor's
+    /// current position. Returns `true` when a match was found.
+    /// `skip_current = true` excludes a match the cursor sits on.
+    pub fn search_advance_forward(&mut self, skip_current: bool) -> bool {
+        crate::search::search_forward(&mut self.buffer, &mut self.search_state, skip_current)
+    }
+
+    /// Drive `N` — symmetric counterpart of [`Editor::search_advance_forward`].
+    pub fn search_advance_backward(&mut self, skip_current: bool) -> bool {
+        crate::search::search_backward(&mut self.buffer, &mut self.search_state, skip_current)
     }
 
     /// Install styled syntax spans using `ratatui::style::Style`. The
@@ -1629,11 +1683,11 @@ impl<'a> Editor<'a> {
                 .collect();
         }
 
-        if self.buffer.search_pattern().is_none() {
+        if self.search_state.pattern.is_none() {
             return Vec::new();
         }
-        self.buffer
-            .search_matches(row)
+        let dgen = self.buffer.dirty_gen();
+        crate::search::search_matches(&self.buffer, &mut self.search_state, dgen, row)
             .into_iter()
             .map(|(start, end)| Highlight {
                 range: Pos {
@@ -2447,9 +2501,10 @@ mod tests {
         use crate::types::HighlightKind;
         let mut e = Editor::new(KeybindingMode::Vim);
         e.set_content("foo bar foo\nbaz qux\n");
-        // Arm a search via buffer's pattern setter.
-        e.buffer_mut()
-            .set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
+        // 0.0.35: arm via the engine search state. The buffer
+        // accessor still works (deprecated) but new code goes
+        // through Editor.
+        e.set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
         let hs = e.highlights_for_line(0);
         assert_eq!(hs.len(), 2);
         for h in &hs {
@@ -2470,8 +2525,7 @@ mod tests {
     fn highlights_empty_for_out_of_range_line() {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.set_content("foo");
-        e.buffer_mut()
-            .set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
+        e.set_search_pattern(Some(regex::Regex::new("foo").unwrap()));
         assert!(e.highlights_for_line(99).is_empty());
     }
 

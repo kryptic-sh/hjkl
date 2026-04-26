@@ -494,6 +494,11 @@ mod tests {
     #[test]
     fn search_find_next_wraps() {
         let mut b = RopeBuffer::from_str("foo\nbar\nfoo");
+        // 0.0.35: `set_search_wrap` is `#[deprecated]` (state moved
+        // to engine SearchState) but the buffer's `find_next` impl
+        // still reads `search_wraps()` until the wrap policy migrates
+        // to a parameter at 0.1.0. Silence the deprecation locally.
+        #[allow(deprecated)]
         b.set_search_wrap(true);
         let pat = Regex::new("foo").unwrap();
         // Starting on row 1: should find row 2's "foo".

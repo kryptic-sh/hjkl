@@ -10,6 +10,12 @@
 //! - Search-next on 10k-line buffer: <1 ms
 //! - Cold load 10 MB file into rope: <50 ms
 
+// 0.0.35: the `set_search_pattern` / `search_forward` accessors are
+// `#[deprecated]`; this bench measures the buffer-side path that
+// remains alive (and called from `BufferView`) until 0.1.0. Allow
+// the deprecation warnings here so the benchmark still runs.
+#![allow(deprecated)]
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hjkl_buffer::{Buffer, Edit, Position};
 use regex::Regex;
