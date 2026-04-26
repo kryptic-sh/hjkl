@@ -153,3 +153,11 @@ Phase 1 is in (`a301658` local, not pushed). Phase 2 is the next dispatch.
   hjkl-editor calls `child.wait_with_output()` without polling
   `host.should_cancel()`. No safe interrupt point without a deeper change to the
   shell exec path. Candidate for 0.1.2 lib enhancement.
+- 2026-04-27: Phase 6 ship-prep complete. Binary publish wired: `build` job
+  added to release.yml with 4-target matrix (linux-gnu zigbuild, windows-msvc,
+  aarch64- darwin, x86_64-darwin); `publish-crates` extended to 5 crates
+  (hjkl-buffer → hjkl-engine → hjkl-editor → hjkl-ratatui → hjkl). Archive name
+  pattern: `hjkl-${TAG}-${target}.tar.gz` / `.zip`. README polished for
+  crates.io. Smoke pass: binary builds clean; runtime exits with ENXIO (no TTY,
+  expected in headless context — not a panic). Pending: user runs BCTP 0.1.2 for
+  first user-facing TUI release.
