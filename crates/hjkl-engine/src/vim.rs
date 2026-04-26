@@ -418,11 +418,6 @@ pub struct VimState {
     /// Forward half — `Ctrl-i` pops from here. Cleared by any new big
     /// jump, matching vim's "branch off trims forward history" rule.
     pub(super) jump_fwd: Vec<(usize, usize)>,
-    /// Buffer-local lowercase marks. `m{a-z}` stores the current
-    /// cursor `(row, col)` under the letter; `'{a-z}` and `` `{a-z} ``
-    /// read it back. Uppercase / global marks aren't supported
-    /// (single-buffer model).
-    pub(super) marks: std::collections::HashMap<char, (usize, usize)>,
     /// Set by `Ctrl-R` in insert mode while waiting for the register
     /// selector. The next typed char names the register; its contents
     /// are inserted inline at the cursor and the flag clears.
@@ -1771,15 +1766,15 @@ fn step_normal(ed: &mut Editor<'_>, input: Input) -> bool {
 }
 
 fn handle_set_mark(ed: &mut Editor<'_>, input: Input) -> bool {
-    if let Key::Char(c) = input.key {
+    if let Key::Char(c) = input.key
+        && (c.is_ascii_lowercase() || c.is_ascii_uppercase())
+    {
+        // 0.0.36: lowercase + uppercase marks share the unified
+        // `Editor::marks` map. Uppercase entries survive
+        // `set_content` so they persist across tab swaps within the
+        // same Editor (the map lives on the Editor, not the buffer).
         let pos = ed.cursor();
-        if c.is_ascii_lowercase() {
-            ed.vim.marks.insert(c, pos);
-        } else if c.is_ascii_uppercase() {
-            // Uppercase marks survive set_content so they persist
-            // across tab swaps within the same Editor.
-            ed.file_marks.insert(c, pos);
-        }
+        ed.set_mark(c, pos);
     }
     true
 }
@@ -1872,8 +1867,7 @@ fn handle_goto_mark(ed: &mut Editor<'_>, input: Input, linewise: bool) -> bool {
     //                  (peeks `jump_back` without popping).
     //   `.`           — the last edit's position.
     let target = match c {
-        'a'..='z' => ed.vim.marks.get(&c).copied(),
-        'A'..='Z' => ed.file_marks.get(&c).copied(),
+        'a'..='z' | 'A'..='Z' => ed.mark(c),
         '\'' | '`' => ed.vim.jump_back.last().copied(),
         '.' => ed.vim.last_edit_pos,
         _ => None,
@@ -7660,13 +7654,14 @@ mod tests {
     }
 
     #[test]
-    fn uppercase_mark_letter_ignored() {
+    fn uppercase_mark_stored_under_uppercase_key() {
         let mut e = editor_with_rows(50, 20);
         e.jump_cursor(5, 3);
         run_keys(&mut e, "mA");
-        // Uppercase marks aren't supported — entry bailed, nothing
-        // stored under 'a' or 'A'.
-        assert!(e.vim.marks.is_empty());
+        // 0.0.36: uppercase marks land in the unified `Editor::marks`
+        // map under the uppercase key — not under 'a'.
+        assert_eq!(e.mark('A'), Some((5, 3)));
+        assert!(e.mark('a').is_none());
     }
 
     #[test]

@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use crate::search::SearchState;
 use crate::{Position, Span, Viewport};
 
@@ -28,9 +26,6 @@ pub struct Buffer {
     /// `Vec<Span>` for that row; rows beyond `spans.len()` get no
     /// styling (host hasn't published them yet).
     spans: Vec<Vec<Span>>,
-    /// Buffer-local marks (`m{a-z}` / `'{a-z}` / `` `{a-z} ``).
-    /// `BTreeMap` so iteration is deterministic for snapshot tests.
-    marks: BTreeMap<char, Position>,
     /// Bumps on every mutation; render cache keys against this so a
     /// per-row Line gets recomputed when its source row changes.
     dirty_gen: u64,
@@ -57,7 +52,6 @@ impl Buffer {
             lines: vec![String::new()],
             cursor: Position::default(),
             spans: Vec::new(),
-            marks: BTreeMap::new(),
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
@@ -78,7 +72,6 @@ impl Buffer {
             lines,
             cursor: Position::default(),
             spans: Vec::new(),
-            marks: BTreeMap::new(),
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
@@ -323,10 +316,6 @@ impl Buffer {
     #[cfg(test)]
     pub(crate) fn set_spans_for_test(&mut self, spans: Vec<Vec<crate::Span>>) {
         self.spans = spans;
-    }
-
-    pub fn marks(&self) -> &BTreeMap<char, Position> {
-        &self.marks
     }
 
     pub fn spans(&self) -> &[Vec<Span>] {

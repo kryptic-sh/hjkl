@@ -319,14 +319,21 @@ pub struct Editor<'a> {
     /// snapshot taken at startup. Read via [`Editor::settings`];
     /// mutate via [`Editor::settings_mut`].
     pub(crate) settings: Settings,
-    /// Vim's uppercase / "file" marks. Survive `set_content` calls so
-    /// they persist across tab swaps within the same Editor — the
-    /// closest the host can get to vim's per-file marks without
-    /// host-side persistence. Lowercase marks stay buffer-local on
-    /// `vim.marks`. Ex commands iterate via [`Editor::file_marks`];
-    /// snapshot persistence goes through
-    /// [`Editor::take_snapshot`] / [`Editor::restore_snapshot`].
-    pub(crate) file_marks: std::collections::HashMap<char, (usize, usize)>,
+    /// Unified named-marks map. Lowercase letters (`'a`–`'z`) are
+    /// per-Editor / "buffer-scope-equivalent" — set by `m{a-z}`, read
+    /// by `'{a-z}` / `` `{a-z} ``. Uppercase letters (`'A`–`'Z`) are
+    /// "file marks" that survive [`Editor::set_content`] calls so
+    /// they persist across tab swaps within the same Editor.
+    ///
+    /// 0.0.36: consolidated from three former storages:
+    /// - `hjkl_buffer::Buffer::marks` (deleted; was unused dead code).
+    /// - `vim::VimState::marks` (lowercase) (deleted).
+    /// - `Editor::file_marks` (uppercase) (replaced by this map).
+    ///
+    /// `BTreeMap` so iteration is deterministic for snapshot tests
+    /// and the `:marks` ex command. Mark-shift on edits is handled
+    /// by [`Editor::shift_marks_after_edit`].
+    pub(crate) marks: std::collections::BTreeMap<char, (usize, usize)>,
     /// Block ranges (`(start_row, end_row)` inclusive) the host has
     /// extracted from a syntax tree. `:foldsyntax` reads these to
     /// populate folds. The host refreshes them on every re-parse via
@@ -583,7 +590,7 @@ impl<'a> Editor<'a> {
             #[cfg(feature = "ratatui")]
             styled_spans: Vec::new(),
             settings,
-            file_marks: std::collections::HashMap::new(),
+            marks: std::collections::BTreeMap::new(),
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
             sticky_col: None,
@@ -651,11 +658,35 @@ impl<'a> Editor<'a> {
     /// Host hook: replace the cached syntax-derived block ranges that
     /// `:foldsyntax` consumes. the host calls this on every re-parse;
     /// the cost is just a `Vec` swap.
-    /// Look up a buffer-local lowercase mark (`'a`–`'z`). Returns
-    /// `(row, col)` if set; `None` otherwise. Uppercase / file marks
-    /// live separately — read those via [`Editor::file_marks`].
+    /// Look up a named mark by character. Returns `(row, col)` if
+    /// set; `None` otherwise. Both lowercase (`'a`–`'z`) and
+    /// uppercase (`'A`–`'Z`) marks live in the same unified
+    /// [`Editor::marks`] map as of 0.0.36.
+    pub fn mark(&self, c: char) -> Option<(usize, usize)> {
+        self.marks.get(&c).copied()
+    }
+
+    /// Set the named mark `c` to `(row, col)`. Used by the FSM's
+    /// `m{a-zA-Z}` keystroke and by [`Editor::restore_snapshot`].
+    pub fn set_mark(&mut self, c: char, pos: (usize, usize)) {
+        self.marks.insert(c, pos);
+    }
+
+    /// Remove the named mark `c` (no-op if unset).
+    pub fn clear_mark(&mut self, c: char) {
+        self.marks.remove(&c);
+    }
+
+    /// Look up a buffer-local lowercase mark (`'a`–`'z`). Kept as a
+    /// thin wrapper over [`Editor::mark`] for source compatibility
+    /// with pre-0.0.36 callers; new code should call
+    /// [`Editor::mark`] directly.
+    #[deprecated(
+        since = "0.0.36",
+        note = "use Editor::mark — lowercase + uppercase marks now live in a single map"
+    )]
     pub fn buffer_mark(&self, c: char) -> Option<(usize, usize)> {
-        self.vim.marks.get(&c).copied()
+        self.mark(c)
     }
 
     /// Discard the most recent undo entry. Used by ex commands that
@@ -668,9 +699,27 @@ impl<'a> Editor<'a> {
         self.undo_stack.pop().is_some()
     }
 
-    /// Read all buffer-local marks set this session.
+    /// Read all named marks set this session — both lowercase
+    /// (`'a`–`'z`) and uppercase (`'A`–`'Z`). Iteration is
+    /// deterministic (BTreeMap-ordered) so snapshot / `:marks`
+    /// output is stable.
+    pub fn marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
+        self.marks.iter().map(|(c, p)| (*c, *p))
+    }
+
+    /// Read all buffer-local lowercase marks. Kept for source
+    /// compatibility with pre-0.0.36 callers (e.g. `:marks` ex
+    /// command); new code should use [`Editor::marks`] which
+    /// iterates the unified map.
+    #[deprecated(
+        since = "0.0.36",
+        note = "use Editor::marks — lowercase + uppercase marks now live in a single map"
+    )]
     pub fn buffer_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
-        self.vim.marks.iter().map(|(c, p)| (*c, *p))
+        self.marks
+            .iter()
+            .filter(|(c, _)| c.is_ascii_lowercase())
+            .map(|(c, p)| (*c, *p))
     }
 
     /// Position the cursor was at when the user last jumped via
@@ -691,8 +740,15 @@ impl<'a> Editor<'a> {
     ///
     /// Mutate via the FSM (`m{A-Z}` keystroke) or via
     /// [`Editor::restore_snapshot`].
+    ///
+    /// 0.0.36: file marks now live in the unified [`Editor::marks`]
+    /// map; this accessor is kept for source compatibility and
+    /// filters the unified map to uppercase entries.
     pub fn file_marks(&self) -> impl Iterator<Item = (char, (usize, usize))> + '_ {
-        self.file_marks.iter().map(|(c, p)| (*c, *p))
+        self.marks
+            .iter()
+            .filter(|(c, _)| c.is_ascii_uppercase())
+            .map(|(c, p)| (*c, *p))
     }
 
     /// Read-only view of the cached syntax-derived block ranges that
@@ -1159,8 +1215,10 @@ impl<'a> Editor<'a> {
         };
         let shift_threshold = drop_end.max(edit_start.saturating_add(1));
 
+        // 0.0.36: lowercase + uppercase marks share the unified
+        // `marks` map; one pass migrates both.
         let mut to_drop: Vec<char> = Vec::new();
-        for (c, (row, _col)) in self.vim.marks.iter_mut() {
+        for (c, (row, _col)) in self.marks.iter_mut() {
             if (edit_start..drop_end).contains(row) {
                 to_drop.push(*c);
             } else if *row >= shift_threshold {
@@ -1168,20 +1226,7 @@ impl<'a> Editor<'a> {
             }
         }
         for c in to_drop {
-            self.vim.marks.remove(&c);
-        }
-
-        // File marks migrate the same way — only the storage differs.
-        let mut to_drop: Vec<char> = Vec::new();
-        for (c, (row, _col)) in self.file_marks.iter_mut() {
-            if (edit_start..drop_end).contains(row) {
-                to_drop.push(*c);
-            } else if *row >= shift_threshold {
-                *row = ((*row as isize) + delta).max(0) as usize;
-            }
-        }
-        for c in to_drop {
-            self.file_marks.remove(&c);
+            self.marks.remove(&c);
         }
 
         let shift_jumps = |entries: &mut Vec<(usize, usize)>| {
@@ -1756,8 +1801,8 @@ impl<'a> Editor<'a> {
         let cursor = (cursor.0 as u32, cursor.1 as u32);
         let lines: Vec<String> = self.buffer.lines().to_vec();
         let viewport_top = self.host.viewport().top_row as u32;
-        let file_marks = self
-            .file_marks
+        let marks = self
+            .marks
             .iter()
             .map(|(c, (r, col))| (*c, (*r as u32, *col as u32)))
             .collect();
@@ -1768,7 +1813,7 @@ impl<'a> Editor<'a> {
             lines,
             viewport_top,
             registers: self.registers.clone(),
-            file_marks,
+            marks,
         }
     }
 
@@ -1795,8 +1840,8 @@ impl<'a> Editor<'a> {
         self.jump_cursor(snap.cursor.0 as usize, snap.cursor.1 as usize);
         self.host.viewport_mut().top_row = snap.viewport_top as usize;
         self.registers = snap.registers;
-        self.file_marks = snap
-            .file_marks
+        self.marks = snap
+            .marks
             .into_iter()
             .map(|(c, (r, col))| (c, (r as usize, col as usize)))
             .collect();

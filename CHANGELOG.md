@@ -8,6 +8,110 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.36] - 2026-04-26
+
+### Patch C-δ.3 — named-marks consolidation onto `Editor`
+
+Second of the 5-patch sequence to 0.1.0 (per
+`DESIGN_33_METHOD_CLASSIFICATION.md` step 2). The three former
+storages for vim's `m{a-zA-Z}` named marks collapse into a single
+`Editor::marks: BTreeMap<char, (usize, usize)>`:
+
+- `hjkl_buffer::Buffer::marks` — was an unused dead field (no
+  reads, no writes, no callers) carried over from a pre-0.0.x
+  prototype. **Hard-deleted**.
+- `hjkl_engine::vim::VimState::marks` — held lowercase
+  (`'a`–`'z`) marks. Field deleted; FSM routes through
+  `Editor::set_mark` / `Editor::mark`.
+- `hjkl_engine::Editor::file_marks` — held uppercase
+  (`'A`–`'Z`) marks. Field renamed and merged into the unified
+  map.
+
+Mark-shift-on-edit semantic (marks pinned at a row drop when that
+row is deleted; marks past the affected band shift by the row
+delta) is preserved — the existing `Editor::shift_marks_after_edit`
+pipeline now operates on the single map in one pass instead of two.
+
+#### Engine additions
+
+- `Editor::mark(char) -> Option<(usize, usize)>` — unified lookup
+  for both lowercase and uppercase marks.
+- `Editor::set_mark(char, (usize, usize))` — unified setter.
+- `Editor::clear_mark(char)` — unified remove.
+- `Editor::marks() -> impl Iterator<Item = (char, (usize, usize))>`
+  — deterministic (BTreeMap-ordered) iteration over every set
+  mark, replacing the prior `buffer_marks()` + `file_marks()` pair.
+
+#### Engine call-site relocation
+
+- `vim::handle_set_mark` (`m{a-zA-Z}` keystroke) writes via
+  `Editor::set_mark` regardless of case.
+- `vim::handle_goto_mark` (`'{a-zA-Z}` / `` `{a-zA-Z} ``) reads
+  via `Editor::mark`.
+- `hjkl-editor::ex` `:marks` listing iterates `Editor::marks()`
+  directly; no separate uppercase merge pass.
+
+#### Buffer surface — breaking
+
+- `hjkl_buffer::Buffer::marks(&self) -> &BTreeMap<char, Position>`
+  is **deleted**. The backing field carried no state (no buffer
+  code ever wrote to it) and no consumer in this workspace called
+  it; the design doc step 2 prescribes hard delete.
+
+#### Snapshot wire format
+
+- `EditorSnapshot::file_marks: HashMap<char, (u32, u32)>`
+  → `EditorSnapshot::marks: BTreeMap<char, (u32, u32)>`. Carries
+  both lowercase and uppercase marks (lowercase round-trips for
+  the first time as a side-effect of the consolidation).
+- `EditorSnapshot::VERSION` `3` → `4`.
+
+#### Editor surface — soft deprecations
+
+The 0.0.35 deprecation pattern continues: existing accessors stay
+compiling but warn so consumers can migrate at their own pace.
+Removal queued for 0.1.0.
+
+- `Editor::buffer_mark` → use `Editor::mark`.
+- `Editor::buffer_marks` → use `Editor::marks` (the unified
+  iterator includes both lowercase and uppercase entries; old
+  callers wanting lowercase-only can `.filter(|(c, _)|
+  c.is_ascii_lowercase())`).
+- `Editor::file_marks` stays compiling (filters to uppercase from
+  the unified map) but is no longer the canonical accessor.
+
+#### Migration
+
+| Before                                  | After                                                         |
+| --------------------------------------- | ------------------------------------------------------------- |
+| `editor.buffer_mark('a')`               | `editor.mark('a')`                                            |
+| `editor.buffer_marks()`                 | `editor.marks()` (now includes uppercase too)                 |
+| `editor.file_marks()` (uppercase iter)  | `editor.marks().filter(|(c, _)| c.is_ascii_uppercase())`      |
+| `buffer.marks()` (engine-internal)      | `editor.marks()`                                              |
+| `EditorSnapshot { file_marks, .. }`     | `EditorSnapshot { marks, .. }` (BTreeMap, both cases)         |
+
+Direct `hjkl_buffer::Buffer::marks` callers (none in this workspace
+or any known consumer): no replacement — the field never held
+useful state. If a host was reading it, the answer was always
+empty. Hosts wanting the FSM's marks read `editor.marks()`.
+
+#### Roadmap
+
+- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline
+  (delete `Buffer::set_spans` / `Buffer::spans`; delete the
+  search-pattern bridge added in 0.0.35).
+- **0.0.38 (Patch C-δ.5)** — fold mutation through
+  `Host::emit_intent(FoldOp)`; `FoldProvider::apply(FoldOp)` and
+  `FoldProvider::invalidate_range` land.
+- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>`
+  generic flip + freeze; delete the deprecated buffer search
+  methods + the deprecated `Editor::buffer_mark` / `buffer_marks`
+  accessors; `cargo public-api` baseline.
+
+Workspace bumps `0.0.35` → `0.0.36`. Member crate pins
+(`=0.0.35` → `=0.0.36`) and `Cargo.lock` updated. Test count
+stays at 674.
+
 ## [0.0.35] - 2026-04-26
 
 ### Patch C-δ.2 — search state on `Editor`

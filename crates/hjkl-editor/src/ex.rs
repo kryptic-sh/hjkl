@@ -499,7 +499,7 @@ fn resolve_address(addr: Address, editor: &Editor<'_>) -> Result<usize, String> 
         Address::Current => Ok(editor.cursor().0),
         Address::Last => Ok(last),
         Address::Mark(c) => editor
-            .buffer_mark(c)
+            .mark(c)
             .map(|(r, _)| r.min(last))
             .ok_or_else(|| format!("mark `{c}` not set")),
     }
@@ -937,13 +937,11 @@ fn display_register(text: &str) -> String {
 /// match vim; cols are 0-based.
 fn format_marks(editor: &Editor<'_>) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
-    let mut entries: Vec<(char, usize, usize)> = editor
-        .buffer_marks()
-        .map(|(c, (r, col))| (c, r, col))
-        .collect();
-    // Uppercase / file marks live separately on Editor.
-    entries.extend(editor.file_marks().map(|(c, (r, col))| (c, r, col)));
-    entries.sort_by_key(|(c, _, _)| *c);
+    // 0.0.36: lowercase + uppercase marks share the unified
+    // `Editor::marks` map. `marks()` already iterates in BTreeMap
+    // (char-ordered) sequence, so no extra sort needed.
+    let entries: Vec<(char, usize, usize)> =
+        editor.marks().map(|(c, (r, col))| (c, r, col)).collect();
     for (c, r, col) in entries {
         lines.push(format!(" {c}    {:>4}  {col:>3}", r + 1));
     }
