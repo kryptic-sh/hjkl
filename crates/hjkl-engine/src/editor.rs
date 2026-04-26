@@ -777,6 +777,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         &mut self.settings
     }
 
+    /// Returns `true` when `:set readonly` is active. Convenience
+    /// accessor for hosts that cannot import the internal [`Settings`]
+    /// type. Phase 5 binary uses this to gate `:w` writes.
+    pub fn is_readonly(&self) -> bool {
+        self.settings.readonly
+    }
+
     /// Borrow the engine search state. Hosts inspecting the
     /// committed `/` / `?` pattern (e.g. for status-line display) or
     /// feeding the active regex into `BufferView::search_pattern`

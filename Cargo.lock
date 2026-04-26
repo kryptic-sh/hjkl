@@ -582,6 +582,7 @@ dependencies = [
  "hjkl-engine",
  "hjkl-ratatui",
  "ratatui",
+ "regex",
 ]
 
 [[package]]

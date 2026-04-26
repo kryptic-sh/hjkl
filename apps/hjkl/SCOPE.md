@@ -140,3 +140,16 @@ Phase 1 is in (`a301658` local, not pushed). Phase 2 is the next dispatch.
 - 2026-04-27: Process = scaffold direct, no upfront design doc; this SCOPE.md is
   retroactive for historical record.
 - 2026-04-27: Phase 1 landed locally (`a301658`).
+- 2026-04-27: Phase 5 arg parsing = approach (a) — manual argv pre-processing
+  before clap; `+N` and `+/pattern` tokens are extracted first, remainder parsed
+  by hand (no clap — clap can't model vim's `+` prefix). Decision: full
+  hand-rolled parser keeps vim parity without fighting clap.
+- 2026-04-27: Phase 5 readonly = app-level guard (`do_save` checks
+  `editor.is_readonly()`) + engine-level mutation block (engine already blocked
+  edits in `mutate_edit`). `Editor::is_readonly()` added to hjkl-engine as a
+  minimal Phase 5 lib addition (Settings is not re-exported; accessor is the
+  cleaner path).
+- 2026-04-27: Phase 5 Ctrl-C during `:!cmd` — DEFERRED. `apply_shell_filter` in
+  hjkl-editor calls `child.wait_with_output()` without polling
+  `host.should_cancel()`. No safe interrupt point without a deeper change to the
+  shell exec path. Candidate for 0.1.2 lib enhancement.

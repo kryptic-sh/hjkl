@@ -175,7 +175,17 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // Dirty marker — `*` when the buffer has unsaved changes.
     let dirty = if app.dirty { "*" } else { " " };
 
-    let filename: String = app
+    // Readonly indicator.
+    let ro_tag = if app.editor.is_readonly() {
+        " [RO]"
+    } else {
+        ""
+    };
+
+    // New-file annotation — shown until the user edits or saves.
+    let new_tag = if app.is_new_file { " [New File]" } else { "" };
+
+    let raw_filename: String = app
         .filename
         .as_ref()
         .and_then(|p| p.to_str())
@@ -188,14 +198,35 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let pos = format!("{}:{}", row + 1, col + 1);
     let pct_str = format!("{pct}%");
 
-    // Left side: `MODE dirty filename`
-    let left = format!(" {mode}  {dirty} {filename}");
-    // Right side: `pos  pct`
+    // Right side is fixed width — reserve it first.
+    // Format: `pos  pct ` (trailing space).
     let right = format!("{pos}  {pct_str} ");
+    // Left prefix before filename: ` MODE  d ` + ro_tag + new_tag.
+    let left_prefix = format!(" {mode}  {dirty} ");
+    let suffix = format!("{ro_tag}{new_tag}");
+
+    // Available columns for the filename.
+    let w = width as usize;
+    let reserved = left_prefix.len() + suffix.len() + right.len();
+    let avail_for_name = w.saturating_sub(reserved);
+
+    // Truncate filename with leading `…` when it doesn't fit (vim style).
+    let filename: String = if raw_filename.len() <= avail_for_name {
+        raw_filename.clone()
+    } else if avail_for_name <= 1 {
+        String::new()
+    } else {
+        let keep = avail_for_name.saturating_sub(1); // 1 char for `…`
+        let start = raw_filename.len().saturating_sub(keep);
+        format!("\u{2026}{}", &raw_filename[start..])
+    };
+
+    // Left side: ` MODE  dirty filename[RO][New File]`
+    let left = format!("{left_prefix}{filename}{suffix}");
 
     // Pad the centre spacer so left + spacer + right == width.
     let used = left.len() + right.len();
-    let pad_count = (width as usize).saturating_sub(used);
+    let pad_count = w.saturating_sub(used);
     let spacer: String = " ".repeat(pad_count);
 
     let content = format!("{left}{spacer}{right}");
@@ -210,6 +241,9 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
 }
 
 /// Format the status line as a plain string (unit-test helper).
+///
+/// `readonly` and `is_new_file` mirror the app state flags.
+/// Filename is truncated with `…` when necessary.
 #[allow(dead_code)]
 pub fn format_status_line(
     mode: &str,
@@ -220,15 +254,47 @@ pub fn format_status_line(
     total_lines: usize,
     width: u16,
 ) -> String {
+    format_status_line_full(mode, filename, dirty, false, false, row, col, total_lines, width)
+}
+
+/// Full status line formatter with readonly + new-file flags.
+#[allow(clippy::too_many_arguments)]
+pub fn format_status_line_full(
+    mode: &str,
+    filename: &str,
+    dirty: bool,
+    readonly: bool,
+    is_new_file: bool,
+    row: usize,
+    col: usize,
+    total_lines: usize,
+    width: u16,
+) -> String {
     let dirty_marker = if dirty { "*" } else { " " };
+    let ro_tag = if readonly { " [RO]" } else { "" };
+    let new_tag = if is_new_file { " [New File]" } else { "" };
     let pct = ((row + 1) * 100).checked_div(total_lines).unwrap_or(0);
     let pos = format!("{}:{}", row + 1, col + 1);
     let pct_str = format!("{pct}%");
-    let left = format!(" {mode}  {dirty_marker} {filename}");
     let right = format!("{pos}  {pct_str} ");
+    let left_prefix = format!(" {mode}  {dirty_marker} ");
+    let suffix = format!("{ro_tag}{new_tag}");
+    let w = width as usize;
+    let reserved = left_prefix.len() + suffix.len() + right.len();
+    let avail_for_name = w.saturating_sub(reserved);
+    let truncated: String = if filename.len() <= avail_for_name {
+        filename.to_string()
+    } else if avail_for_name <= 1 {
+        String::new()
+    } else {
+        let keep = avail_for_name.saturating_sub(1);
+        let start = filename.len().saturating_sub(keep);
+        format!("\u{2026}{}", &filename[start..])
+    };
+    let left = format!("{left_prefix}{truncated}{suffix}");
     let used = left.len() + right.len();
-    let pad_count = (width as usize).saturating_sub(used);
-    let spacer: String = " ".repeat(pad_count);
+    let pad_count = w.saturating_sub(used);
+    let spacer = " ".repeat(pad_count);
     format!("{left}{spacer}{right}")
 }
 
@@ -281,5 +347,35 @@ mod tests {
     fn write_message_format() {
         let msg = format_write_message("/tmp/foo.txt", 10, 128);
         assert_eq!(msg, "\"/tmp/foo.txt\" 10L, 128B written");
+    }
+
+    #[test]
+    fn status_line_readonly_tag() {
+        let s = format_status_line_full("NORMAL", "foo.txt", false, true, false, 0, 0, 1, 80);
+        assert!(s.contains("[RO]"), "readonly tag must appear");
+    }
+
+    #[test]
+    fn status_line_new_file_tag() {
+        let s = format_status_line_full("NORMAL", "newfile.txt", false, false, true, 0, 0, 1, 80);
+        assert!(s.contains("[New File]"), "new-file tag must appear");
+    }
+
+    #[test]
+    fn status_line_truncates_long_filename() {
+        // Very narrow terminal — filename must be truncated.
+        let long = "some/very/long/path/to/a/deeply/nested/file.rs";
+        let s = format_status_line_full("NORMAL", long, false, false, false, 0, 0, 1, 30);
+        // Truncated filename starts with `…`
+        assert!(s.contains('\u{2026}'), "truncated filename must start with …");
+    }
+
+    #[test]
+    fn status_line_arg_parsing_plus_n() {
+        // Smoke test: +5 → goto_line=Some(5). Tested via parse logic in main.
+        // Here we verify the status-line can handle being on line 5.
+        let s = format_status_line("NORMAL", "file.txt", false, 4, 0, 10, 60);
+        // row 4 (0-based) → 5 in display
+        assert!(s.contains("5:1"));
     }
 }

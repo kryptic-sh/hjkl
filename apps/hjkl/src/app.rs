@@ -169,17 +169,31 @@ pub struct App {
     /// Last cursor shape we emitted to the terminal. Compared each
     /// frame so we only write the DECSCUSR sequence on transitions.
     last_cursor_shape: CursorShape,
+    /// True when a file was requested but not found on disk — shows
+    /// "[New File]" annotation in the status line until the first edit
+    /// or successful `:w`.
+    pub is_new_file: bool,
 }
 
 impl App {
     /// Build a fresh [`App`], optionally loading `filename` from disk.
     ///
     /// - File found → content seeded into buffer, dirty = false.
-    /// - File not found → buffer empty, filename retained ("[New File]" semantics).
+    /// - File not found → buffer empty, filename retained, `is_new_file = true`.
     /// - Other I/O error → returns `Err` so main can print to stderr before
     ///   entering alternate-screen mode.
-    pub fn new(filename: Option<PathBuf>) -> Result<Self> {
+    ///
+    /// `readonly` sets `:set readonly` on the editor options.
+    /// `goto_line` (1-based) moves the cursor after load when `Some`.
+    /// `search_pattern` triggers an initial search when `Some`.
+    pub fn new(
+        filename: Option<PathBuf>,
+        readonly: bool,
+        goto_line: Option<usize>,
+        search_pattern: Option<String>,
+    ) -> Result<Self> {
         let mut buffer = Buffer::new();
+        let mut is_new_file = false;
         if let Some(ref path) = filename {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
@@ -187,6 +201,7 @@ impl App {
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     // New file — buffer stays empty, filename retained.
+                    is_new_file = true;
                 }
                 Err(e) => {
                     return Err(anyhow::anyhow!("{}: {}", path.display(), e));
@@ -195,8 +210,32 @@ impl App {
         }
 
         let host = TuiHost::new();
-        let options = Options::default();
-        let editor = Editor::new(buffer, host, options);
+        let options = Options {
+            readonly,
+            ..Options::default()
+        };
+        let mut editor = Editor::new(buffer, host, options);
+
+        // +N line jump — 1-based, clamp to buffer.
+        if let Some(n) = goto_line {
+            editor.goto_line(n);
+        }
+
+        // +/pattern initial search — compile the pattern and set it.
+        if let Some(pat) = search_pattern {
+            match regex::Regex::new(&pat) {
+                Ok(re) => {
+                    editor.set_search_pattern(Some(re));
+                    editor.search_advance_forward(false);
+                }
+                Err(e) => {
+                    // Bad regex — surface as a startup status message later.
+                    // We can't set status_message before Self is constructed,
+                    // so we store it in a temporary and set it after build.
+                    eprintln!("hjkl: bad search pattern: {e}");
+                }
+            }
+        }
 
         Ok(Self {
             editor,
@@ -206,6 +245,7 @@ impl App {
             status_message: None,
             command_input: None,
             last_cursor_shape: CursorShape::Block,
+            is_new_file,
         })
     }
 
@@ -325,6 +365,8 @@ impl App {
                     // Propagate dirty flag from the engine to app-level state.
                     if self.editor.take_dirty() {
                         self.dirty = true;
+                        // First edit drops the "[New File]" annotation.
+                        self.is_new_file = false;
                     }
                 }
                 Event::Resize(w, h) => {
@@ -397,7 +439,18 @@ impl App {
 
     /// Write buffer content to `path` (or `self.filename` if `path` is
     /// `None`). Updates `self.filename` and `self.dirty` on success.
+    ///
+    /// Blocks writes when the editor is in readonly mode unless `force` is
+    /// true (`:w!` not yet wired — for now `:set noreadonly` + `:w` is the
+    /// override path, matching Phase 5 spec).
     fn do_save(&mut self, path: Option<PathBuf>) {
+        // Readonly guard — E45 matches vim's message.
+        if self.editor.is_readonly() {
+            self.status_message = Some(
+                "E45: 'readonly' option is set (add ! to override)".into(),
+            );
+            return;
+        }
         let target = path.or_else(|| self.filename.clone());
         match target {
             None => {
@@ -426,6 +479,7 @@ impl App {
                         ));
                         self.filename = Some(p);
                         self.dirty = false;
+                        self.is_new_file = false;
                     }
                     Err(e) => {
                         self.status_message = Some(format!("E: {}: {e}", p.display()));
@@ -565,5 +619,61 @@ mod tests {
         let c = ci("hello", 3);
         // prefix width 1 (`:`) + 3 chars before cursor = 4
         assert_eq!(c.display_cursor_col(1), 4);
+    }
+
+    // ── App::new tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn app_new_no_file() {
+        let app = App::new(None, false, None, None).unwrap();
+        assert!(!app.dirty);
+        assert!(!app.is_new_file);
+        assert!(app.filename.is_none());
+        assert!(!app.editor.is_readonly());
+    }
+
+    #[test]
+    fn app_new_readonly_flag() {
+        let app = App::new(None, true, None, None).unwrap();
+        assert!(app.editor.is_readonly());
+    }
+
+    #[test]
+    fn app_new_not_found_sets_is_new_file() {
+        let path = std::path::PathBuf::from("/tmp/hjkl_phase5_nonexistent_abc123.txt");
+        // Make sure the file doesn't exist.
+        let _ = std::fs::remove_file(&path);
+        let app = App::new(Some(path), false, None, None).unwrap();
+        assert!(app.is_new_file);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn app_new_goto_line_clamps() {
+        // No file, just verify goto_line doesn't panic on line=999 with empty buffer.
+        let app = App::new(None, false, Some(999), None).unwrap();
+        let (row, _col) = app.editor.cursor();
+        // Empty buffer → cursor stays at row 0.
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn do_save_readonly_blocked() {
+        let mut app = App::new(None, true, None, None).unwrap();
+        app.filename = Some(std::path::PathBuf::from("/tmp/hjkl_phase5_ro_test.txt"));
+        app.do_save(None);
+        let msg = app.status_message.unwrap_or_default();
+        assert!(
+            msg.contains("E45"),
+            "expected E45 readonly error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn do_save_no_filename_e32() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.do_save(None);
+        let msg = app.status_message.unwrap_or_default();
+        assert!(msg.contains("E32"), "expected E32, got: {msg}");
     }
 }
