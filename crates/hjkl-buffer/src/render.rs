@@ -18,7 +18,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
 use crate::wrap::wrap_segments;
-use crate::{Buffer, Selection, Viewport, Wrap};
+use crate::{Buffer, Selection, Span, Viewport, Wrap};
 
 /// Resolves an opaque [`crate::Span::style`] id to a real ratatui
 /// style. The buffer doesn't know about colours; the host (sqeel-vim
@@ -41,6 +41,13 @@ impl<F: Fn(u32) -> Style> StyleResolver for F {
 /// 0.0.34 (Patch C-δ.1): added the [`viewport`] field. The viewport
 /// previously lived on the buffer itself; with the relocation to the
 /// engine `Host`, the renderer takes a borrow per draw.
+///
+/// 0.0.37: added the [`spans`] and [`search_pattern`] fields. Per-row
+/// syntax spans + the active `/` regex used to live on the buffer
+/// (`Buffer::spans` / `Buffer::search_pattern`); both moved out per
+/// step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The host now feeds
+/// each into the view per draw — populated from
+/// `Editor::buffer_spans()` and `Editor::search_state().pattern`.
 pub struct BufferView<'a, R: StyleResolver> {
     pub buffer: &'a Buffer,
     /// Viewport snapshot the host published this frame. Owned by the
@@ -64,9 +71,8 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// trailing space separating the number from text. Pass `None`
     /// to disable. Numbers are 1-based, right-aligned.
     pub gutter: Option<Gutter>,
-    /// Bg painted under cells covered by an active `/` search match
-    /// (read from [`Buffer::search_pattern`]). `Style::default()` to
-    /// disable.
+    /// Bg painted under cells covered by an active `/` search match.
+    /// `Style::default()` to disable.
     pub search_bg: Style,
     /// Per-row gutter signs (LSP diagnostic dots, git diff markers,
     /// …). Painted into the leftmost gutter column after the line
@@ -77,6 +83,23 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// hides the byte range `[start_byte, end_byte)` and paints
     /// `replacement` in its place. Empty slice = no conceals.
     pub conceals: &'a [Conceal],
+    /// Per-row syntax spans the host has computed for this frame.
+    /// `spans[row]` carries the styled byte ranges for that row;
+    /// rows beyond `spans.len()` get no syntax styling. Pass `&[]`
+    /// for hosts without syntax integration.
+    ///
+    /// 0.0.37: lifted out of `Buffer` per step 3 of
+    /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine populates
+    /// this via `Editor::buffer_spans()`.
+    pub spans: &'a [Vec<Span>],
+    /// Active `/` search regex, if any. The renderer paints
+    /// [`Self::search_bg`] under cells that match. Pass `None` to
+    /// disable hlsearch.
+    ///
+    /// 0.0.37: lifted out of `Buffer` (was `Buffer::search_pattern`)
+    /// per step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine
+    /// publishes the pattern via `Editor::search_state().pattern`.
+    pub search_pattern: Option<&'a regex::Regex>,
 }
 
 /// Configuration for the line-number gutter rendered to the left of
@@ -118,7 +141,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         let viewport = *self.viewport;
         let cursor = self.buffer.cursor();
         let lines = self.buffer.lines();
-        let spans = self.buffer.spans();
+        let spans = self.spans;
         let folds = self.buffer.folds();
         let top_row = viewport.top_row;
         let top_col = viewport.top_col;
@@ -267,7 +290,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// charwise `(start_col, end_col_exclusive)` ranges that need
     /// the search bg painted. Empty when no pattern is set.
     fn row_search_ranges(&self, line: &str) -> Vec<(usize, usize)> {
-        let Some(re) = self.buffer.search_pattern() else {
+        let Some(re) = self.search_pattern else {
             return Vec::new();
         };
         re.find_iter(line)
@@ -559,7 +582,6 @@ impl<R: StyleResolver> BufferView<'_, R> {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use ratatui::style::{Color, Modifier};
@@ -605,6 +627,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -631,6 +655,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -658,6 +684,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -670,9 +698,9 @@ mod tests {
     #[test]
     fn syntax_span_fg_resolves_via_table() {
         use crate::Span;
-        let mut b = Buffer::from_str("SELECT foo");
+        let b = Buffer::from_str("SELECT foo");
         let v = vp(20, 1);
-        b.set_spans_for_test(vec![vec![Span::new(0, 6, 7)]]);
+        let spans = vec![vec![Span::new(0, 6, 7)]];
         let resolver = |id: u32| -> Style {
             if id == 7 {
                 Style::default().fg(Color::Red)
@@ -693,6 +721,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &spans,
+            search_pattern: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -720,6 +750,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -734,9 +766,9 @@ mod tests {
     #[test]
     fn search_bg_paints_match_cells() {
         use regex::Regex;
-        let mut b = Buffer::from_str("foo bar foo");
+        let b = Buffer::from_str("foo bar foo");
         let v = vp(20, 1);
-        b.set_search_pattern(Some(Regex::new("foo").unwrap()));
+        let pat = Regex::new("foo").unwrap();
         let view = BufferView {
             buffer: &b,
             viewport: &v,
@@ -750,6 +782,8 @@ mod tests {
             search_bg: Style::default().bg(Color::Magenta),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: Some(&pat),
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -770,7 +804,7 @@ mod tests {
         // the match cells keep their search colour.
         let mut b = Buffer::from_str("foo bar foo");
         let v = vp(20, 1);
-        b.set_search_pattern(Some(Regex::new("foo").unwrap()));
+        let pat = Regex::new("foo").unwrap();
         // Cursor on column 1 (inside first `foo` match).
         b.set_cursor(crate::Position::new(0, 1));
         let view = BufferView {
@@ -786,6 +820,8 @@ mod tests {
             search_bg: Style::default().bg(Color::Magenta),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: Some(&pat),
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -826,6 +862,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &signs,
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "E");
@@ -857,6 +895,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &conceals,
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -886,6 +926,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -915,6 +957,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -940,6 +984,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -965,6 +1011,8 @@ mod tests {
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
+            spans: &[],
+            search_pattern: None,
         }
     }
 
@@ -1120,5 +1168,174 @@ mod tests {
         // Row 2: "gamma"
         assert_eq!(term.cell((0, 2)).unwrap().symbol(), "g");
         assert_eq!(term.cell((4, 2)).unwrap().symbol(), "a");
+    }
+
+    // 0.0.37 — `BufferView` lost `Buffer::spans` / `Buffer::search_pattern`
+    // and now takes them as parameters. The tests below cover the new
+    // shape: empty/missing parameters, multi-row spans, regex hlsearch,
+    // and the interaction with cursor / selection / wrap.
+
+    fn view_with<'a>(
+        b: &'a Buffer,
+        viewport: &'a Viewport,
+        resolver: &'a (impl StyleResolver + 'a),
+        spans: &'a [Vec<Span>],
+        search_pattern: Option<&'a regex::Regex>,
+    ) -> BufferView<'a, impl StyleResolver + 'a> {
+        BufferView {
+            buffer: b,
+            viewport,
+            selection: None,
+            resolver,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default().bg(Color::Magenta),
+            signs: &[],
+            conceals: &[],
+            spans,
+            search_pattern,
+        }
+    }
+
+    #[test]
+    fn empty_spans_param_renders_default_style() {
+        let b = Buffer::from_str("hello");
+        let v = vp(10, 1);
+        let r = no_styles as fn(u32) -> Style;
+        let view = view_with(&b, &v, &r, &[], None);
+        let term = run_render(view, 10, 1);
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
+        assert_eq!(term.cell((0, 0)).unwrap().fg, Color::Reset);
+    }
+
+    #[test]
+    fn spans_param_paints_styled_byte_range() {
+        let b = Buffer::from_str("abcdef");
+        let v = vp(10, 1);
+        let resolver = |id: u32| -> Style {
+            if id == 3 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default()
+            }
+        };
+        let spans = vec![vec![Span::new(0, 3, 3)]];
+        let view = view_with(&b, &v, &resolver, &spans, None);
+        let term = run_render(view, 10, 1);
+        for x in 0..3 {
+            assert_eq!(term.cell((x, 0)).unwrap().fg, Color::Green);
+        }
+        assert_ne!(term.cell((3, 0)).unwrap().fg, Color::Green);
+    }
+
+    #[test]
+    fn spans_param_handles_per_row_overlay() {
+        let b = Buffer::from_str("abc\ndef");
+        let v = vp(10, 2);
+        let resolver = |id: u32| -> Style {
+            if id == 1 {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Green)
+            }
+        };
+        let spans = vec![vec![Span::new(0, 3, 1)], vec![Span::new(0, 3, 2)]];
+        let view = view_with(&b, &v, &resolver, &spans, None);
+        let term = run_render(view, 10, 2);
+        assert_eq!(term.cell((0, 0)).unwrap().fg, Color::Red);
+        assert_eq!(term.cell((0, 1)).unwrap().fg, Color::Green);
+    }
+
+    #[test]
+    fn spans_param_rows_beyond_get_no_styling() {
+        let b = Buffer::from_str("abc\ndef\nghi");
+        let v = vp(10, 3);
+        let resolver = |_: u32| -> Style { Style::default().fg(Color::Red) };
+        // Only row 0 carries spans; rows 1 and 2 inherit default.
+        let spans = vec![vec![Span::new(0, 3, 0)]];
+        let view = view_with(&b, &v, &resolver, &spans, None);
+        let term = run_render(view, 10, 3);
+        assert_eq!(term.cell((0, 0)).unwrap().fg, Color::Red);
+        assert_ne!(term.cell((0, 1)).unwrap().fg, Color::Red);
+        assert_ne!(term.cell((0, 2)).unwrap().fg, Color::Red);
+    }
+
+    #[test]
+    fn search_pattern_none_disables_hlsearch() {
+        let b = Buffer::from_str("foo bar foo");
+        let v = vp(20, 1);
+        let r = no_styles as fn(u32) -> Style;
+        // No regex → no Magenta bg anywhere even though `search_bg` is set.
+        let view = view_with(&b, &v, &r, &[], None);
+        let term = run_render(view, 20, 1);
+        for x in 0..11 {
+            assert_ne!(term.cell((x, 0)).unwrap().bg, Color::Magenta);
+        }
+    }
+
+    #[test]
+    fn search_pattern_regex_paints_match_bg() {
+        use regex::Regex;
+        let b = Buffer::from_str("xyz foo xyz");
+        let v = vp(20, 1);
+        let r = no_styles as fn(u32) -> Style;
+        let pat = Regex::new("foo").unwrap();
+        let view = view_with(&b, &v, &r, &[], Some(&pat));
+        let term = run_render(view, 20, 1);
+        // "foo" is at chars 4..7; bg is Magenta there only.
+        assert_ne!(term.cell((3, 0)).unwrap().bg, Color::Magenta);
+        for x in 4..7 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::Magenta);
+        }
+        assert_ne!(term.cell((7, 0)).unwrap().bg, Color::Magenta);
+    }
+
+    #[test]
+    fn search_pattern_unicode_columns_are_charwise() {
+        use regex::Regex;
+        // "tablé foo" — match "foo" must land on char column 6, not byte.
+        let b = Buffer::from_str("tablé foo");
+        let v = vp(20, 1);
+        let r = no_styles as fn(u32) -> Style;
+        let pat = Regex::new("foo").unwrap();
+        let view = view_with(&b, &v, &r, &[], Some(&pat));
+        let term = run_render(view, 20, 1);
+        // "tablé" is 5 chars + space = 6, then "foo" at 6..9.
+        assert_eq!(term.cell((6, 0)).unwrap().bg, Color::Magenta);
+        assert_eq!(term.cell((8, 0)).unwrap().bg, Color::Magenta);
+        assert_ne!(term.cell((5, 0)).unwrap().bg, Color::Magenta);
+    }
+
+    #[test]
+    fn spans_param_clamps_short_row_overlay() {
+        // Row 0 has 3 chars; span past end shouldn't crash or smear.
+        let b = Buffer::from_str("abc");
+        let v = vp(10, 1);
+        let resolver = |_: u32| -> Style { Style::default().fg(Color::Red) };
+        let spans = vec![vec![Span::new(0, 100, 0)]];
+        let view = view_with(&b, &v, &resolver, &spans, None);
+        let term = run_render(view, 10, 1);
+        for x in 0..3 {
+            assert_eq!(term.cell((x, 0)).unwrap().fg, Color::Red);
+        }
+    }
+
+    #[test]
+    fn spans_and_search_pattern_compose() {
+        // hlsearch bg layers on top of the syntax span fg.
+        use regex::Regex;
+        let b = Buffer::from_str("foo");
+        let v = vp(10, 1);
+        let resolver = |_: u32| -> Style { Style::default().fg(Color::Green) };
+        let spans = vec![vec![Span::new(0, 3, 0)]];
+        let pat = Regex::new("foo").unwrap();
+        let view = view_with(&b, &v, &resolver, &spans, Some(&pat));
+        let term = run_render(view, 10, 1);
+        let cell = term.cell((1, 0)).unwrap();
+        assert_eq!(cell.fg, Color::Green);
+        assert_eq!(cell.bg, Color::Magenta);
     }
 }

@@ -1,7 +1,6 @@
-use crate::search::SearchState;
-use crate::{Position, Span, Viewport};
+use crate::{Position, Viewport};
 
-/// In-memory text buffer + cursor + per-row span cache.
+/// In-memory text buffer + cursor.
 ///
 /// This is the core type the rest of `hjkl-buffer` builds on. The
 /// runtime viewport state the host publishes per render frame
@@ -14,6 +13,15 @@ use crate::{Position, Span, Viewport};
 ///
 /// The `lines` invariant — at least one entry, never empty — is
 /// preserved by every mutation.
+///
+/// 0.0.37: the per-row syntax span cache + the `/` search FSM state
+/// (`pattern`, per-row match cache, `wrapscan`) moved off `Buffer` per
+/// step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. Spans now flow
+/// through the engine's `Editor::buffer_spans` (populated from
+/// `Host::syntax_highlights` / `install_syntax_spans`) and pass into
+/// [`crate::BufferView`] as a slice parameter. Search state lives on
+/// `Editor::search_state`; the renderer takes the active pattern as a
+/// parameter.
 pub struct Buffer {
     /// One entry per visual row. Always non-empty: a freshly
     /// constructed `Buffer` holds a single empty `String` so cursor
@@ -22,17 +30,9 @@ pub struct Buffer {
     /// Charwise cursor. `col` is bound by `lines[row].chars().count()`
     /// in normal mode, one past it in operator-pending / insert.
     cursor: Position,
-    /// External per-row syntax / marker styling. `spans[row]` is a
-    /// `Vec<Span>` for that row; rows beyond `spans.len()` get no
-    /// styling (host hasn't published them yet).
-    spans: Vec<Vec<Span>>,
     /// Bumps on every mutation; render cache keys against this so a
     /// per-row Line gets recomputed when its source row changes.
     dirty_gen: u64,
-    /// Lazy per-row match cache for `/` search. Lives next to the
-    /// other buffer state so the `Buffer` API can drive `n` / `N`
-    /// without the host plumbing a separate index through.
-    search: SearchState,
     /// Manual folds — closed ranges hide rows in the render path.
     /// `pub(crate)` so the [`folds`] module can read/write directly.
     pub(crate) folds: Vec<crate::folds::Fold>,
@@ -51,9 +51,7 @@ impl Buffer {
         Self {
             lines: vec![String::new()],
             cursor: Position::default(),
-            spans: Vec::new(),
             dirty_gen: 0,
-            search: SearchState::new(),
             folds: Vec::new(),
         }
     }
@@ -71,9 +69,7 @@ impl Buffer {
         Self {
             lines,
             cursor: Position::default(),
-            spans: Vec::new(),
             dirty_gen: 0,
-            search: SearchState::new(),
             folds: Vec::new(),
         }
     }
@@ -269,29 +265,10 @@ impl Buffer {
         &mut self.lines
     }
 
-    /// Crate-internal accessor for the search state. Search code
-    /// keeps its lazy match cache here; the public surface is
-    /// [`Buffer::set_search_pattern`] etc.
-    pub(crate) fn search_state(&self) -> &SearchState {
-        &self.search
-    }
-    pub(crate) fn search_state_mut(&mut self) -> &mut SearchState {
-        &mut self.search
-    }
-
     /// Bump the render-cache generation. Crate-internal — every
     /// content mutation calls this so render fingerprints invalidate.
     pub(crate) fn dirty_gen_bump(&mut self) {
         self.dirty_gen = self.dirty_gen.wrapping_add(1);
-    }
-
-    /// Replace the per-row syntax span overlay. Used by the host
-    /// once tree-sitter (or any other producer) has fresh styling
-    /// for the visible window. `spans[row]` corresponds to row
-    /// `row`; rows beyond `spans.len()` get no styling.
-    pub fn set_spans(&mut self, spans: Vec<Vec<crate::Span>>) {
-        self.spans = spans;
-        self.dirty_gen_bump();
     }
 
     /// Replace the buffer's full text in place. Cursor is clamped to
@@ -308,18 +285,6 @@ impl Buffer {
         let cursor = self.clamp_position(self.cursor);
         self.cursor = cursor;
         self.dirty_gen_bump();
-    }
-
-    /// Same as [`Buffer::set_spans`] but exposed for in-crate tests
-    /// without crossing the dirty-gen / lifetime boundaries the
-    /// pub method advertises.
-    #[cfg(test)]
-    pub(crate) fn set_spans_for_test(&mut self, spans: Vec<Vec<crate::Span>>) {
-        self.spans = spans;
-    }
-
-    pub fn spans(&self) -> &[Vec<Span>] {
-        &self.spans
     }
 
     /// Concatenate the rows into a single `String` joined by `\n`.

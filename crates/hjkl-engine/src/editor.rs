@@ -375,13 +375,22 @@ pub struct Editor<'a> {
     pub(crate) last_emitted_mode: crate::VimMode,
     /// Search FSM state (pattern + per-row match cache + wrapscan).
     /// 0.0.35: relocated out of `hjkl_buffer::Buffer` per
-    /// `DESIGN_33_METHOD_CLASSIFICATION.md` step 1. The buffer's
-    /// `BufferView` renderer still reads `Buffer::search_pattern()`
-    /// for hlsearch background; the engine mirrors `pattern` to the
-    /// buffer when commit happens so the renderer stays correct
-    /// during the bridge period (removed in 0.0.37 once the spans
-    /// → Host pipeline lands).
+    /// `DESIGN_33_METHOD_CLASSIFICATION.md` step 1.
+    /// 0.0.37: the buffer-side bridge (`Buffer::search_pattern`) is
+    /// gone; `BufferView` now takes the active regex as a `&Regex`
+    /// parameter, sourced from `Editor::search_state().pattern`.
     pub(crate) search_state: crate::search::SearchState,
+    /// Per-row syntax span overlay. Source of truth for the host's
+    /// renderer ([`hjkl_buffer::BufferView::spans`]). Populated by
+    /// [`Editor::install_syntax_spans`] /
+    /// [`Editor::install_ratatui_syntax_spans`] (and, in due course,
+    /// by `Host::syntax_highlights` once the engine drives that path
+    /// directly).
+    ///
+    /// 0.0.37: lifted out of `hjkl_buffer::Buffer` per step 3 of
+    /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The buffer-side cache +
+    /// `Buffer::set_spans` / `Buffer::spans` accessors are gone.
+    pub(crate) buffer_spans: Vec<Vec<hjkl_buffer::Span>>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -597,6 +606,7 @@ impl<'a> Editor<'a> {
             host: Box::new(host),
             last_emitted_mode: crate::VimMode::Normal,
             search_state: crate::search::SearchState::new(),
+            buffer_spans: Vec::new(),
         }
     }
 
@@ -778,34 +788,27 @@ impl<'a> Editor<'a> {
     }
 
     /// Borrow the engine search state. Hosts inspecting the
-    /// committed `/` / `?` pattern (e.g. for status-line display)
-    /// read it from here rather than the buffer; the buffer's
-    /// `search_pattern()` accessor is `#[deprecated]` since 0.0.35.
+    /// committed `/` / `?` pattern (e.g. for status-line display) or
+    /// feeding the active regex into `BufferView::search_pattern`
+    /// read it from here.
     pub fn search_state(&self) -> &crate::search::SearchState {
         &self.search_state
     }
 
-    /// Mutable engine search state. Hosts driving search programmatically
-    /// (test fixtures, scripted demos) write the pattern through here.
-    /// The buffer's matching `set_search_pattern` accessor remains
-    /// available for direct `hjkl_buffer::Buffer` callers (and the
-    /// in-tree `BufferView` hlsearch render path) but is `#[deprecated]`.
+    /// Mutable engine search state. Hosts driving search
+    /// programmatically (test fixtures, scripted demos) write the
+    /// pattern through here.
     pub fn search_state_mut(&mut self) -> &mut crate::search::SearchState {
         &mut self.search_state
     }
 
-    /// Convenience wrapper: install `pattern` as the active search
-    /// regex on the engine state, mirror it to the buffer (for the
-    /// `BufferView` renderer's hlsearch background pass), and clear
-    /// the cached row matches. Pass `None` to clear.
+    /// Install `pattern` as the active search regex on the engine
+    /// state and clear the cached row matches. Pass `None` to clear.
+    /// 0.0.37: dropped the buffer-side mirror that 0.0.35 introduced
+    /// — `BufferView` now takes the regex through its `search_pattern`
+    /// field per step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`.
     pub fn set_search_pattern(&mut self, pattern: Option<regex::Regex>) {
-        self.search_state.set_pattern(pattern.clone());
-        // Bridge: keep the buffer-side pattern in sync with the
-        // engine until the spans → Host pipeline lands (0.0.37).
-        // The deprecation lint is silenced here because this is the
-        // single bridge between the two sources of truth.
-        #[allow(deprecated)]
-        self.buffer.set_search_pattern(pattern);
+        self.search_state.set_pattern(pattern);
     }
 
     /// Drive `n` (or the `/` commit equivalent) — advance the cursor
@@ -851,7 +854,7 @@ impl<'a> Editor<'a> {
             }
             by_row.push(translated);
         }
-        self.buffer.set_spans(by_row);
+        self.buffer_spans = by_row;
         self.styled_spans = spans;
     }
 
@@ -956,7 +959,7 @@ impl<'a> Editor<'a> {
             #[cfg(feature = "ratatui")]
             ratatui_spans.push(translated_r);
         }
-        self.buffer.set_spans(by_row);
+        self.buffer_spans = by_row;
         #[cfg(feature = "ratatui")]
         {
             self.styled_spans = ratatui_spans;
@@ -986,6 +989,18 @@ impl<'a> Editor<'a> {
     #[cfg(feature = "ratatui")]
     pub fn style_table(&self) -> &[ratatui::style::Style] {
         &self.style_table
+    }
+
+    /// Per-row syntax span overlay, one `Vec<Span>` per buffer row.
+    /// Hosts feed this slice into [`hjkl_buffer::BufferView::spans`]
+    /// per draw frame.
+    ///
+    /// 0.0.37: replaces `editor.buffer().spans()` per step 3 of
+    /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The buffer no longer
+    /// caches spans; they live on the engine and route through the
+    /// `Host::syntax_highlights` pipeline.
+    pub fn buffer_spans(&self) -> &[Vec<hjkl_buffer::Span>] {
+        &self.buffer_spans
     }
 
     /// Intern a SPEC [`crate::types::Style`] and return its opaque id.

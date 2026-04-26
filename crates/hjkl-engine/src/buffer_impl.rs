@@ -242,10 +242,14 @@ impl Search for RopeBuffer {
             return None;
         }
         // Scan the from-row from `start.col` onward, then every row
-        // after, then optionally wrap to rows before. SPEC: "first
-        // match at-or-after `from`". Wrap-around honours the buffer's
-        // current `wrapscan` setting.
-        let wrap = self.search_wraps();
+        // after, then wrap to rows before. SPEC: "first match
+        // at-or-after `from`". 0.0.37: wrap policy now lives on the
+        // engine's `SearchState::wrap_around` (see
+        // `DESIGN_33_METHOD_CLASSIFICATION.md` step 3); the trait
+        // impl always wraps and the engine's `search_*` free
+        // functions are responsible for honouring `wrapscan` by
+        // wrapping or not invoking the trait at all.
+        let wrap = true;
         let from_line = RopeBuffer::line(self, start.row).unwrap_or("");
         let from_byte = start.byte_offset(from_line).min(from_line.len());
         if let Some(m) = pat.find_at(from_line, from_byte) {
@@ -283,7 +287,8 @@ impl Search for RopeBuffer {
         if total == 0 {
             return None;
         }
-        let wrap = self.search_wraps();
+        // 0.0.37: wrap moved to engine SearchState; trait impl always wraps.
+        let wrap = true;
         // Last match at-or-before `from`. We can't run the regex
         // backwards, so iterate matches and pick the last one with
         // start <= from-byte on the from-row, then walk previous rows
@@ -493,13 +498,10 @@ mod tests {
 
     #[test]
     fn search_find_next_wraps() {
-        let mut b = RopeBuffer::from_str("foo\nbar\nfoo");
-        // 0.0.35: `set_search_wrap` is `#[deprecated]` (state moved
-        // to engine SearchState) but the buffer's `find_next` impl
-        // still reads `search_wraps()` until the wrap policy migrates
-        // to a parameter at 0.1.0. Silence the deprecation locally.
-        #[allow(deprecated)]
-        b.set_search_wrap(true);
+        let b = RopeBuffer::from_str("foo\nbar\nfoo");
+        // 0.0.37: wrap policy moved to engine `SearchState::wrap_around`.
+        // The trait impl always wraps; engine code that wants
+        // non-wrap semantics short-circuits before invoking the trait.
         let pat = Regex::new("foo").unwrap();
         // Starting on row 1: should find row 2's "foo".
         let r = Search::find_next(&b, Pos::new(1, 0), &pat).unwrap();

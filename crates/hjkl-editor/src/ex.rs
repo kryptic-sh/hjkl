@@ -86,8 +86,10 @@ pub fn run(editor: &mut Editor<'_>, input: &str) -> ExEffect {
         }
         "noh" | "nohlsearch" => {
             // Clearing the pattern removes the highlight.
-            // 0.0.35: route through the engine search state (which
-            // bridges to the buffer's deprecated `set_search_pattern`).
+            // 0.0.37: route through the engine search state (the
+            // buffer-side mirror that 0.0.35 introduced was removed
+            // in this patch — `BufferView` reads the pattern from
+            // `Editor::search_state()`).
             editor.set_search_pattern(None);
             return ExEffect::Ok;
         }

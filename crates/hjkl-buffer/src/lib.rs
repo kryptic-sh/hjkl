@@ -23,7 +23,6 @@ mod motion;
 mod position;
 #[cfg(feature = "ratatui")]
 mod render;
-mod search;
 mod selection;
 mod span;
 mod viewport;

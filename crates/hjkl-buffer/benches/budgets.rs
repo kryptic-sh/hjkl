@@ -10,11 +10,11 @@
 //! - Search-next on 10k-line buffer: <1 ms
 //! - Cold load 10 MB file into rope: <50 ms
 
-// 0.0.35: the `set_search_pattern` / `search_forward` accessors are
-// `#[deprecated]`; this bench measures the buffer-side path that
-// remains alive (and called from `BufferView`) until 0.1.0. Allow
-// the deprecation warnings here so the benchmark still runs.
-#![allow(deprecated)]
+// 0.0.37: search FSM moved off `Buffer` per step 3 of
+// `DESIGN_33_METHOD_CLASSIFICATION.md`. The bench drives the regex
+// `find_iter` pass directly against the buffer's text (the
+// `BufferView` renderer + the engine's `search_*` free functions both
+// compose this primitive). No deprecated accessors involved.
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hjkl_buffer::{Buffer, Edit, Position};
@@ -69,16 +69,23 @@ fn bench_insert_char(c: &mut Criterion) {
 }
 
 fn bench_search_next(c: &mut Criterion) {
-    let mut buf = make_buffer(10_000, 80);
+    let buf = make_buffer(10_000, 80);
     let re = Regex::new("lazy").expect("regex");
-    buf.set_search_pattern(Some(re));
-    buf.set_cursor(Position::new(0, 0));
     c.bench_function("search_next_10k_lines", |b| {
         b.iter(|| {
-            buf.set_cursor(Position::new(0, 0));
-            let _ = black_box(buf.search_forward(false));
+            // Mirror the engine's `search_forward` per-row scan path:
+            // walk rows from cursor onward and stop at the first row
+            // with a match. The regex compile lives outside the loop;
+            // the work measured is the per-row find_iter scan.
+            for row_idx in 0..buf.row_count() {
+                let line = buf.line(row_idx).unwrap_or("");
+                if black_box(re.find(line)).is_some() {
+                    break;
+                }
+            }
         })
     });
+    let _ = Position::new(0, 0); // silence unused if other benches drift
 }
 
 fn bench_cold_load(c: &mut Criterion) {

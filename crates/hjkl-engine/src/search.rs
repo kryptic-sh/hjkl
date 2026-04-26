@@ -12,12 +12,13 @@
 //! module composes those primitives with the Editor-owned
 //! [`SearchState`] to drive `n` / `N` / `*` / `#` / `/` / `?`.
 //!
-//! Buffer-inherent `search_forward` / `search_backward` /
-//! `search_matches` / `set_search_pattern` accessors are
-//! `#[deprecated]` for 0.0.35 — they still work for direct
-//! `hjkl_buffer::Buffer` callers and the `BufferView` renderer's
-//! hlsearch background pass, but the engine no longer drives them.
-//! Removal is queued for 0.1.0.
+//! 0.0.37: the buffer-inherent `search_forward` / `search_backward`
+//! / `search_matches` / `set_search_pattern` / `search_pattern` /
+//! `set_search_wrap` / `search_wraps` accessors are removed. Search
+//! state lives on `Editor::search_state`, the rendering path
+//! (`BufferView`) takes the active `&Regex` as a parameter, and the
+//! `Search` trait impl always wraps (engine controls non-wrap
+//! semantics).
 
 use regex::Regex;
 
@@ -239,12 +240,10 @@ mod tests {
     #[test]
     fn forward_wraps_to_top() {
         let mut b = Buffer::from_str("zzz\nfoo");
-        // Buffer's find_next reads its own wrap flag — keep it
-        // synced for the bridge period. Deprecated since 0.0.35;
-        // silenced locally because this is exactly the bridge that
-        // becomes superfluous in 0.1.0.
-        #[allow(deprecated)]
-        b.set_search_wrap(true);
+        // 0.0.37: wrap policy lives entirely on `SearchState::wrap_around`;
+        // the buffer-side `set_search_wrap` accessor is gone. Trait
+        // `find_next` always wraps; the engine search free function
+        // honours `s.wrap_around` directly.
         Cursor::set_cursor(&mut b, Pos::new(1, 2));
         let mut s = SearchState::new();
         s.set_pattern(Some(re("zzz")));

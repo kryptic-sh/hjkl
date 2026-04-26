@@ -8,6 +8,111 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.37] - 2026-04-26
+
+### Patch C-δ.4 — spans → Host syntax pipeline + search-pattern mirror removal
+
+Third of the 5-patch sequence to 0.1.0 (per
+`DESIGN_33_METHOD_CLASSIFICATION.md` step 3). Two pieces of state
+that 0.0.34/0.0.35 left as bridges between `hjkl_buffer::Buffer`
+and the engine — the per-row syntax span cache and the active `/`
+search pattern — move out of the buffer entirely. Spans now live
+on `Editor::buffer_spans` (sourced from `Host::syntax_highlights` /
+`install_syntax_spans`); the search regex lives on
+`Editor::search_state.pattern` and reaches the renderer through a
+new `BufferView::search_pattern` field.
+
+#### Buffer surface — breaking
+
+- `hjkl_buffer::Buffer::set_spans(&mut self, Vec<Vec<Span>>)` —
+  **removed**. Spans are no longer cached on the buffer.
+- `hjkl_buffer::Buffer::spans(&self) -> &[Vec<Span>]` —
+  **removed**.
+- `hjkl_buffer::Buffer::set_spans_for_test` — **removed** (was
+  `pub(crate)`; trips no public API).
+- `hjkl_buffer::Buffer::search_pattern(&self) -> Option<&Regex>`
+  — **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::set_search_pattern(&mut self, Option<Regex>)`
+  — **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::set_search_wrap(&mut self, bool)` —
+  **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::search_wraps(&self) -> bool` —
+  **removed**.
+- `hjkl_buffer::Buffer::search_forward(&mut self, bool) -> bool` —
+  **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::search_backward(&mut self, bool) -> bool`
+  — **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::search_matches(&mut self, usize) -> Vec<(usize, usize)>`
+  — **removed** (was `#[deprecated]` since 0.0.35).
+- The per-buffer `spans: Vec<Vec<Span>>` field and the
+  `search: SearchState` field are deleted; the entire
+  `hjkl_buffer/src/search.rs` module is gone.
+
+#### `BufferView` surface — breaking
+
+`hjkl_buffer::BufferView` gains two fields (struct literals must
+add them):
+
+- `pub spans: &'a [Vec<Span>]` — per-row syntax spans the host
+  computed for this frame. Rows beyond `spans.len()` get default
+  styling. Sourced from `Editor::buffer_spans()`. Pass `&[]` for
+  hosts without syntax integration.
+- `pub search_pattern: Option<&'a regex::Regex>` — active `/`
+  regex; renderer paints `search_bg` under matches. Sourced from
+  `Editor::search_state().pattern.as_ref()`. Pass `None` to
+  disable hlsearch.
+
+#### Engine additions
+
+- `hjkl_engine::Editor::buffer_spans() -> &[Vec<hjkl_buffer::Span>]`
+  — replaces `editor.buffer().spans()` for hosts feeding spans
+  into `BufferView`. Populated by
+  `Editor::install_syntax_spans` /
+  `Editor::install_ratatui_syntax_spans`.
+
+#### Engine surface changes
+
+- `Editor::set_search_pattern` no longer mirrors onto the
+  buffer. Hosts that fed the regex into `BufferView` via
+  `editor.buffer().search_pattern()` switch to
+  `editor.search_state().pattern.as_ref()`.
+
+#### `Search` trait impl change
+
+- The in-tree `Search::find_next` / `Search::find_prev` impl on
+  `RopeBuffer` always wraps. Wrap policy (`wrapscan`) lives on
+  `Editor::search_state.wrap_around`; the engine's
+  `search_forward` / `search_backward` free functions short-circuit
+  before invoking the trait when wrap is disabled.
+
+#### Migration table
+
+| Before                                                         | After                                                                                 |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `editor.buffer().spans()`                                      | `editor.buffer_spans()`                                                               |
+| `editor.buffer().search_pattern()`                             | `editor.search_state().pattern.as_ref()`                                              |
+| `buffer.set_spans(spans)`                                      | `editor.install_syntax_spans(spans)` / `install_ratatui_syntax_spans` (host-driven)   |
+| `buffer.set_search_pattern(pat)`                               | `editor.set_search_pattern(pat)`                                                      |
+| `buffer.search_forward(skip)` / `buffer.search_backward(skip)` | `editor.search_advance_forward(skip)` / `editor.search_advance_backward(skip)`        |
+| `buffer.search_matches(row)`                                   | `hjkl_engine::search::search_matches(buf, &mut state, dirty_gen, row)`                |
+| `buffer.set_search_wrap(wrap)`                                 | `editor.search_state_mut().wrap_around = wrap;` (or set `Settings::wrapscan`)         |
+| `BufferView { …, conceals: c }`                                | `BufferView { …, conceals: c, spans: editor.buffer_spans(), search_pattern: editor.search_state().pattern.as_ref() }` |
+
+#### Roadmap
+
+- **0.0.38 (Patch C-δ.5)** — fold mutation through
+  `Host::emit_intent(FoldOp)`. The `add_fold` / `open_fold_at`
+  / `close_fold_at` / `toggle_fold_at` / `open_all_folds` /
+  `close_all_folds` / `clear_all_folds` /
+  `invalidate_folds_in_range` calls in vim FSM route through
+  the host's intent enum; buffer keeps the inherent fold-storage
+  methods so the in-tree `BufferFoldProvider` adapter still
+  works, but the engine no longer reaches them directly.
+- **0.1.0** — `Editor<B, H>` generic flip + trait freeze.
+  `Query::dirty_gen` lands; `EngineHost` shim disappears;
+  inherent-buffer-method callers migrate to the SPEC trait
+  surface; the seal is set.
+
 ## [0.0.36] - 2026-04-26
 
 ### Patch C-δ.3 — named-marks consolidation onto `Editor`

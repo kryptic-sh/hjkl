@@ -575,8 +575,9 @@ fn enter_search(ed: &mut Editor<'_>, forward: bool) {
         forward,
     });
     ed.vim.search_history_cursor = None;
-    // 0.0.35: clear via the engine search state (and bridge to the
-    // buffer-side pattern for the BufferView hlsearch renderer).
+    // 0.0.37: clear via the engine search state (the buffer-side
+    // bridge from 0.0.35 was removed in this patch — the `BufferView`
+    // renderer reads the pattern from `Editor::search_state()`).
     ed.set_search_pattern(None);
 }
 
@@ -604,14 +605,11 @@ fn push_search_pattern(ed: &mut Editor<'_>, pattern: &str) {
         regex::Regex::new(&effective).ok()
     };
     let wrap = ed.settings().wrapscan;
-    // 0.0.35: route the pattern through Editor's search_state (and
-    // bridge to the buffer for the BufferView hlsearch renderer).
+    // 0.0.37: search FSM lives entirely on Editor — pattern + wrap
+    // policy + per-row match cache. The `Search` trait impl always
+    // wraps; engine code honours `wrap_around` before invoking it.
     ed.set_search_pattern(compiled);
     ed.search_state_mut().wrap_around = wrap;
-    // Bridge — the buffer's `Search::find_next` impl reads its own
-    // wrap flag; keep both in sync until 0.0.36+ removes the dup.
-    #[allow(deprecated)]
-    ed.buffer_mut().set_search_wrap(wrap);
 }
 
 fn step_search_prompt(ed: &mut Editor<'_>, input: Input) -> bool {
@@ -8223,7 +8221,7 @@ mod tests {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("SELECT foo");
         e.install_ratatui_syntax_spans(vec![vec![(0, 6, Style::default().fg(Color::Red))]]);
-        let by_row = e.buffer.spans();
+        let by_row = e.buffer_spans();
         assert_eq!(by_row.len(), 1);
         assert_eq!(by_row[0].len(), 1);
         assert_eq!(by_row[0][0].start_byte, 0);
@@ -8242,7 +8240,7 @@ mod tests {
             usize::MAX,
             Style::default().fg(Color::Blue),
         )]]);
-        let by_row = e.buffer.spans();
+        let by_row = e.buffer_spans();
         assert_eq!(by_row[0][0].end_byte, 5);
     }
 
@@ -8252,7 +8250,7 @@ mod tests {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("abc");
         e.install_ratatui_syntax_spans(vec![vec![(2, 2, Style::default().fg(Color::Red))]]);
-        assert!(e.buffer.spans()[0].is_empty());
+        assert!(e.buffer_spans()[0].is_empty());
     }
 
     #[test]
