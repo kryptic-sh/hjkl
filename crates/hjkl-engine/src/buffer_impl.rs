@@ -34,7 +34,7 @@ use hjkl_buffer::Position;
 use regex::Regex;
 
 use crate::types::sealed::Sealed;
-use crate::types::{Buffer, BufferEdit, Cursor, Pos, Query, Search};
+use crate::types::{Buffer, BufferEdit, Cursor, FoldProvider, Pos, Query, Search};
 
 // ── Pos ⇄ Position conversion ──────────────────────────────────────
 
@@ -351,6 +351,50 @@ fn byte_range_to_pos_range(
 // ── Buffer super-trait ─────────────────────────────────────────────
 
 impl Buffer for RopeBuffer {}
+
+// ── Fold provider ──────────────────────────────────────────────────
+
+/// [`FoldProvider`] adapter wrapping a `&hjkl_buffer::Buffer`. Lets
+/// engine call sites ask the buffer's fold storage about visible
+/// rows without reaching into `Buffer::next_visible_row` &c. directly.
+///
+/// Construct with [`BufferFoldProvider::new`]. Hosts that want to
+/// expose their own fold model (a separate fold tree, LSP-derived
+/// folding ranges, …) can implement `FoldProvider` against their own
+/// state and skip this adapter entirely.
+///
+/// Introduced in 0.0.32 (Patch C-β) as part of the fold-iteration
+/// relocation. Fold *storage* still lives on the buffer for
+/// `dirty_gen` / render-cache reasons; only the iteration API moved.
+pub struct BufferFoldProvider<'a> {
+    buffer: &'a RopeBuffer,
+}
+
+impl<'a> BufferFoldProvider<'a> {
+    pub fn new(buffer: &'a RopeBuffer) -> Self {
+        Self { buffer }
+    }
+}
+
+impl FoldProvider for BufferFoldProvider<'_> {
+    fn next_visible_row(&self, row: usize, _row_count: usize) -> Option<usize> {
+        // Buffer ignores the row_count hint — it knows its own size.
+        RopeBuffer::next_visible_row(self.buffer, row)
+    }
+
+    fn prev_visible_row(&self, row: usize) -> Option<usize> {
+        RopeBuffer::prev_visible_row(self.buffer, row)
+    }
+
+    fn is_row_hidden(&self, row: usize) -> bool {
+        RopeBuffer::is_row_hidden(self.buffer, row)
+    }
+
+    fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)> {
+        let f = self.buffer.fold_at_row(row)?;
+        Some((f.start_row, f.end_row, f.closed))
+    }
+}
 
 // ── Tests ──────────────────────────────────────────────────────────
 

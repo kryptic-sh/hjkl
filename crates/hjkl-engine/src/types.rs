@@ -927,6 +927,64 @@ pub trait Search: Send {
 /// [`sealed::Sealed`].
 pub trait Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {}
 
+/// Fold-iteration trait. The engine asks "what's the next visible
+/// row" / "is this row hidden" through this surface so fold storage
+/// can live wherever the host pleases (on the buffer, in a separate
+/// host-side fold tree, or absent entirely).
+///
+/// Introduced in 0.0.32 (Patch C-β). Engine call sites that used to
+/// reach into `hjkl_buffer::Buffer::{next_visible_row,
+/// prev_visible_row, is_row_hidden, fold_at_row}` route through this
+/// trait now. The canonical implementation
+/// [`crate::buffer_impl::BufferFoldProvider`] wraps a
+/// `&hjkl_buffer::Buffer` for hosts that want vim-style folds; hosts
+/// that don't care about folds can use [`NoopFoldProvider`].
+///
+/// The engine carries a `Box<dyn FoldProvider + 'a>` slot today and
+/// looks up rows through it. Once `Editor<B, H>` flips generic
+/// (Patch C-γ) the slot moves onto `Host` directly.
+pub trait FoldProvider: Send {
+    /// First visible row strictly after `row`, skipping hidden rows.
+    /// `None` past the end of the buffer.
+    fn next_visible_row(&self, row: usize, row_count: usize) -> Option<usize>;
+    /// First visible row strictly before `row`. `None` past the top.
+    fn prev_visible_row(&self, row: usize) -> Option<usize>;
+    /// Is `row` currently hidden by a closed fold?
+    fn is_row_hidden(&self, row: usize) -> bool;
+    /// Range `(start_row, end_row, closed)` of the fold containing
+    /// `row`, if any. Lets `za` / `zo` / `zc` find their target
+    /// without iterating the full fold list.
+    fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)>;
+}
+
+/// No-op [`FoldProvider`] for hosts that don't expose folds. Every
+/// row is visible; `is_row_hidden` always returns `false`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopFoldProvider;
+
+impl FoldProvider for NoopFoldProvider {
+    fn next_visible_row(&self, row: usize, row_count: usize) -> Option<usize> {
+        let last = row_count.saturating_sub(1);
+        if last == 0 && row == 0 {
+            return None;
+        }
+        let r = row.checked_add(1)?;
+        (r <= last).then_some(r)
+    }
+
+    fn prev_visible_row(&self, row: usize) -> Option<usize> {
+        row.checked_sub(1)
+    }
+
+    fn is_row_hidden(&self, _row: usize) -> bool {
+        false
+    }
+
+    fn fold_at_row(&self, _row: usize) -> Option<(usize, usize, bool)> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

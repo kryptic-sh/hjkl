@@ -8173,14 +8173,14 @@ mod tests {
 
     #[cfg(feature = "ratatui")]
     #[test]
-    fn intern_style_dedups_repeated_styles() {
+    fn intern_ratatui_style_dedups_repeated_styles() {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("");
         let red = Style::default().fg(Color::Red);
         let blue = Style::default().fg(Color::Blue);
-        let id_r1 = e.intern_style(red);
-        let id_r2 = e.intern_style(red);
-        let id_b = e.intern_style(blue);
+        let id_r1 = e.intern_ratatui_style(red);
+        let id_r2 = e.intern_ratatui_style(red);
+        let id_b = e.intern_ratatui_style(blue);
         assert_eq!(id_r1, id_r2);
         assert_ne!(id_r1, id_b);
         assert_eq!(e.style_table().len(), 2);
@@ -8188,10 +8188,10 @@ mod tests {
 
     #[cfg(feature = "ratatui")]
     #[test]
-    fn install_syntax_spans_translates_styled_spans() {
+    fn install_ratatui_syntax_spans_translates_styled_spans() {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("SELECT foo");
-        e.install_syntax_spans(vec![vec![(0, 6, Style::default().fg(Color::Red))]]);
+        e.install_ratatui_syntax_spans(vec![vec![(0, 6, Style::default().fg(Color::Red))]]);
         let by_row = e.buffer.spans();
         assert_eq!(by_row.len(), 1);
         assert_eq!(by_row[0].len(), 1);
@@ -8203,10 +8203,10 @@ mod tests {
 
     #[cfg(feature = "ratatui")]
     #[test]
-    fn install_syntax_spans_clamps_sentinel_end() {
+    fn install_ratatui_syntax_spans_clamps_sentinel_end() {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("hello");
-        e.install_syntax_spans(vec![vec![(
+        e.install_ratatui_syntax_spans(vec![vec![(
             0,
             usize::MAX,
             Style::default().fg(Color::Blue),
@@ -8217,10 +8217,10 @@ mod tests {
 
     #[cfg(feature = "ratatui")]
     #[test]
-    fn install_syntax_spans_drops_zero_width() {
+    fn install_ratatui_syntax_spans_drops_zero_width() {
         use ratatui::style::{Color, Style};
         let mut e = editor_with("abc");
-        e.install_syntax_spans(vec![vec![(2, 2, Style::default().fg(Color::Red))]]);
+        e.install_ratatui_syntax_spans(vec![vec![(2, 2, Style::default().fg(Color::Red))]]);
         assert!(e.buffer.spans()[0].is_empty());
     }
 

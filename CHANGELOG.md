@@ -8,6 +8,136 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.32] - 2026-04-26
+
+### Patch C-β (partial) — name freeze + additive `FoldProvider`
+
+This patch is the breaking-rename slice of the planned 0.1.0 keystone. The
+0.1.0 cut itself slipped to Patch C-γ because the deeper restructuring it
+requires (Editor generic flip, motion bound lifts, fold-iteration relocation)
+hits borrow-checker constraints that can't be undone without rewiring
+`Editor`'s field layout. Per the `BCTP`-style stop thresholds in the agent
+plan, we land the bits that compose cleanly today (Phases 1, 2, additive 4)
+and ship the larger flip together as Patch C-γ.
+
+#### Phase 1 — `#[deprecated]` aliases removed
+
+The 0.0.31 prefixed-name aliases are gone:
+
+| 0.0.31 (deprecated)             | 0.0.32                       |
+| ------------------------------- | ---------------------------- |
+| `hjkl_engine::SpecBuffer`       | `hjkl_engine::Buffer`        |
+| `hjkl_engine::SpecBufferEdit`   | `hjkl_engine::BufferEdit`    |
+| `hjkl_engine::EditOp`           | `hjkl_engine::Edit`          |
+| `hjkl_engine::PlannedViewport`  | `hjkl_engine::Viewport`      |
+
+Consumers still naming the prefixed forms get hard compile errors. Pin bumps
+(`=0.0.31` → `=0.0.32`) plus the rename are the migration.
+
+#### Phase 2 — `Editor` `_xy` / `_xywh` naming asymmetries resolved
+
+At 0.1.0 freeze the unprefixed name belongs to the engine-native, ratatui-free
+variant ("engine never imports ratatui" per SPEC.md §"Style"). Ratatui-flavoured
+variants take an `_in_rect` suffix or the `ratatui_` prefix. **Breaking** —
+consumers calling these methods need source changes:
+
+| 0.0.31                                                               | 0.0.32                                                                |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `Editor::mouse_click_xy(area_x, area_y, col, row)`                   | `Editor::mouse_click(area_x, area_y, col, row)`                       |
+| `Editor::mouse_click(area, col, row)` (`#[cfg(feature = "ratatui")]`) | `Editor::mouse_click_in_rect(area, col, row)`                         |
+| `Editor::mouse_extend_drag_xy(area_x, area_y, col, row)`             | `Editor::mouse_extend_drag(area_x, area_y, col, row)`                 |
+| `Editor::mouse_extend_drag(area, col, row)`                          | `Editor::mouse_extend_drag_in_rect(area, col, row)`                   |
+| `Editor::cursor_screen_pos_xywh(x, y, w, h)`                         | `Editor::cursor_screen_pos(x, y, w, h)`                               |
+| `Editor::cursor_screen_pos(area)`                                    | `Editor::cursor_screen_pos_in_rect(area)`                             |
+| `Editor::install_engine_syntax_spans(spans)` (engine-native `Style`) | `Editor::install_syntax_spans(spans)`                                 |
+| `Editor::install_syntax_spans(spans)` (ratatui `Style`)              | `Editor::install_ratatui_syntax_spans(spans)`                         |
+| `Editor::intern_engine_style(s)` (engine-native `Style`)             | `Editor::intern_style(s)`                                             |
+| `Editor::intern_style(s)` (ratatui `Style`)                          | `Editor::intern_ratatui_style(s)`                                     |
+
+No deprecation aliases — Rust forbids overloading and the rename collisions
+under feature gates make a back-compat shim impossible.
+
+#### Phase 4 (additive only) — `FoldProvider` trait shipped, call sites NOT relocated
+
+The fold-iteration trait and its provider types land additively:
+
+```rust
+pub trait FoldProvider: Send {
+    fn next_visible_row(&self, row: usize, row_count: usize) -> Option<usize>;
+    fn prev_visible_row(&self, row: usize) -> Option<usize>;
+    fn is_row_hidden(&self, row: usize) -> bool;
+    fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)>;
+}
+
+pub struct NoopFoldProvider;          // every row visible
+pub struct BufferFoldProvider<'a>;    // wraps `&hjkl_buffer::Buffer`
+```
+
+Re-exported at `hjkl_engine::{FoldProvider, NoopFoldProvider, BufferFoldProvider}`
+and `hjkl_editor::spec::{FoldProvider, NoopFoldProvider, BufferFoldProvider}`.
+
+The engine call sites (`editor.rs::scroll_*`, `motions.rs::move_vertical`,
+`motions.rs::move_screen_vertical`) are **NOT** relocated in this patch.
+Reason: motions take `&mut Buffer`, and constructing a `BufferFoldProvider`
+from the same buffer would create a `&Buffer` aliasing the `&mut`. Threading
+a separate fold provider through requires the `Editor<B, H>` generic flip
+(Phase 6) so the host owns the provider on a different field. That work
+ships as Patch C-γ alongside motion bound lifts.
+
+The trait surface is stable now — Patch C-γ flips the call sites without
+re-touching public API.
+
+### Deferred to Patch C-γ
+
+- **Phase 3** — `Editor::new(buffer, host, options)` per SPEC. The current
+  `Editor::new(KeybindingMode)` shim stays; ~74 in-engine test sites use it.
+  The new constructor only delivers value paired with the generic flip.
+- **Phase 5** — motion bound lift to `B: Cursor + Query`. Bodies stay
+  concrete over `hjkl_buffer::Buffer` until Phase 6 lands.
+- **Phase 6** — `Editor<'a, B = hjkl_buffer::Buffer, H = DefaultHost>` generic
+  flip. Touches every method on `Editor` (~3500 LOC); the highest-risk phase.
+- **Phase 7** — SPEC freeze + `cargo public-api` baseline (gated on Phase 6).
+- **Phase 8** — `0.1.0` version cut (gated on Phases 3-7).
+
+### Migration
+
+Consumers calling the renamed methods need source changes. The full
+mapping is in the Phase 2 table above. Typical hits in TUI hosts:
+
+```diff
+-editor.mouse_click(area, col, row);
++editor.mouse_click_in_rect(area, col, row);
+
+-editor.cursor_screen_pos(area);
++editor.cursor_screen_pos_in_rect(area);
+
+-editor.install_syntax_spans(spans);          // ratatui Style
++editor.install_ratatui_syntax_spans(spans);
+
+-editor.intern_style(ratatui_style);
++editor.intern_ratatui_style(ratatui_style);
+
+-editor.install_engine_syntax_spans(spans);    // engine Style
++editor.install_syntax_spans(spans);
+
+-editor.intern_engine_style(engine_style);
++editor.intern_style(engine_style);
+```
+
+Pin bumps: `=0.0.31` → `=0.0.32` in consumer `Cargo.toml`s.
+
+### Test counts
+
+- `cargo test --workspace`: **668 passed** (unchanged).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: green.
+- `cargo check --no-default-features`: green.
+
+### SPEC.md
+
+No structural change. `FoldProvider` is documented in §"Out of scope" / `Host`
+discussions of SPEC.md as the future trait surface — the trait now exists
+additively; relocation of call sites lands at Patch C-γ.
+
 ## [0.0.31] - 2026-04-26
 
 ### Changed (public-API rename pass — pre-0.1.0 freeze prep)

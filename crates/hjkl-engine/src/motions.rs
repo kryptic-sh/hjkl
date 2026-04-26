@@ -4,10 +4,14 @@
 //! into the engine. The bodies are concrete over `hjkl_buffer::Buffer`
 //! today; the 0.1.0 freeze patch will generic-ify them over
 //! `B: Cursor + Query` once the fold-iteration helpers
-//! (`next_visible_row` / `prev_visible_row`) move to a `FoldProvider`
-//! on `Host`. Motions live here, not on `Buffer`, because per
-//! [SPEC.md] "motions don't belong on `Buffer` — they're computed over
-//! the buffer, not delegated to it".
+//! (`next_visible_row` / `prev_visible_row`) move to the
+//! [`crate::types::FoldProvider`] trait shipped additively in 0.0.32
+//! (Patch C-β). The relocation of call sites is gated on the
+//! `Editor<B, H>` generic flip — borrow-checker conflicts make it
+//! impractical to thread `&mut Buffer` + `&FoldProvider` through
+//! today's concrete-`Editor`. Motions live here, not on `Buffer`,
+//! because per [SPEC.md] "motions don't belong on `Buffer` — they're
+//! computed over the buffer, not delegated to it".
 //!
 //! [SPEC.md]: https://github.com/kryptic-sh/hjkl/blob/main/crates/hjkl-engine/SPEC.md
 //!

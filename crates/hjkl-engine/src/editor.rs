@@ -642,15 +642,21 @@ impl<'a> Editor<'a> {
         &mut self.settings
     }
 
-    /// Install styled syntax spans into both the host-visible cache
-    /// (`styled_spans`) and the buffer's opaque-id span table. Drops
-    /// zero-width runs and clamps `end` to the line's char length so
-    /// the buffer cache doesn't see runaway ranges. Replaces the
-    /// previous `set_syntax_spans` + `sync_buffer_spans_from_textarea`
-    /// round-trip. Behind the `ratatui` feature; non-ratatui hosts use
-    /// [`Editor::install_engine_syntax_spans`] (engine-native `Style`).
+    /// Install styled syntax spans using `ratatui::style::Style`. The
+    /// ratatui-flavoured variant of [`Editor::install_syntax_spans`].
+    /// Drops zero-width runs and clamps `end` to the line's char length
+    /// so the buffer cache doesn't see runaway ranges. Behind the
+    /// `ratatui` feature; non-ratatui hosts use the unprefixed
+    /// [`Editor::install_syntax_spans`] (engine-native `Style`).
+    ///
+    /// Renamed from `install_syntax_spans` in 0.0.32 — the unprefixed
+    /// name now belongs to the engine-native variant per SPEC 0.1.0
+    /// freeze ("engine never imports ratatui").
     #[cfg(feature = "ratatui")]
-    pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>) {
+    pub fn install_ratatui_syntax_spans(
+        &mut self,
+        spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
+    ) {
         let line_byte_lens: Vec<usize> = self.buffer.lines().iter().map(|l| l.len()).collect();
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
@@ -661,7 +667,7 @@ impl<'a> Editor<'a> {
                 if end_clamped <= *start {
                     continue;
                 }
-                let id = self.intern_style(*style);
+                let id = self.intern_ratatui_style(*style);
                 translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
             }
             by_row.push(translated);
@@ -739,13 +745,14 @@ impl<'a> Editor<'a> {
     }
 
     /// Install styled syntax spans using the engine-native
-    /// [`crate::types::Style`]. The non-ratatui equivalent of
-    /// [`Editor::install_syntax_spans`]. Always available, regardless
-    /// of the `ratatui` feature.
-    pub fn install_engine_syntax_spans(
-        &mut self,
-        spans: Vec<Vec<(usize, usize, crate::types::Style)>>,
-    ) {
+    /// [`crate::types::Style`]. Always available, regardless of the
+    /// `ratatui` feature. Hosts depending on ratatui can use the
+    /// ratatui-flavoured [`Editor::install_ratatui_syntax_spans`].
+    ///
+    /// Renamed from `install_engine_syntax_spans` in 0.0.32 — at the
+    /// 0.1.0 freeze the unprefixed name is the universally-available
+    /// engine-native variant ("engine never imports ratatui").
+    pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, crate::types::Style)>>) {
         let line_byte_lens: Vec<usize> = self.buffer.lines().iter().map(|l| l.len()).collect();
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         #[cfg(feature = "ratatui")]
@@ -761,7 +768,7 @@ impl<'a> Editor<'a> {
                 if end_clamped <= *start {
                     continue;
                 }
-                let id = self.intern_engine_style(*style);
+                let id = self.intern_style(*style);
                 translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
                 #[cfg(feature = "ratatui")]
                 translated_r.push((*start, end_clamped, engine_style_to_ratatui(*style)));
@@ -778,13 +785,15 @@ impl<'a> Editor<'a> {
     }
 
     /// Intern a `ratatui::style::Style` and return the opaque id used
-    /// in `hjkl_buffer::Span::style`. The render-side `StyleResolver`
-    /// closure (built by [`Editor::style_resolver`]) uses the id to
-    /// look up the style back. Linear-scan dedup — the table grows
+    /// in `hjkl_buffer::Span::style`. The ratatui-flavoured variant of
+    /// [`Editor::intern_style`]. Linear-scan dedup — the table grows
     /// only as new tree-sitter token kinds appear, so it stays tiny.
     /// Behind the `ratatui` feature.
+    ///
+    /// Renamed from `intern_style` in 0.0.32 — at 0.1.0 freeze the
+    /// unprefixed name belongs to the engine-native variant.
     #[cfg(feature = "ratatui")]
-    pub fn intern_style(&mut self, style: ratatui::style::Style) -> u32 {
+    pub fn intern_ratatui_style(&mut self, style: ratatui::style::Style) -> u32 {
         if let Some(idx) = self.style_table.iter().position(|s| *s == style) {
             return idx as u32;
         }
@@ -802,7 +811,7 @@ impl<'a> Editor<'a> {
 
     /// Intern a SPEC [`crate::types::Style`] and return its opaque id.
     /// With the `ratatui` feature on, the id matches the one
-    /// [`intern_style`] would return for the equivalent
+    /// [`Editor::intern_ratatui_style`] would return for the equivalent
     /// `ratatui::Style` (both share the underlying table). With it off,
     /// the engine keeps a parallel `crate::types::Style`-keyed table
     /// — ids are still stable per-editor.
@@ -810,11 +819,15 @@ impl<'a> Editor<'a> {
     /// Hosts that don't depend on ratatui (buffr, future GUI shells)
     /// reach this method to populate the table during syntax span
     /// installation.
-    pub fn intern_engine_style(&mut self, style: crate::types::Style) -> u32 {
+    ///
+    /// Renamed from `intern_engine_style` in 0.0.32 — at 0.1.0 freeze
+    /// the unprefixed name is the universally-available engine-native
+    /// variant.
+    pub fn intern_style(&mut self, style: crate::types::Style) -> u32 {
         #[cfg(feature = "ratatui")]
         {
             let r = engine_style_to_ratatui(style);
-            self.intern_style(r)
+            self.intern_ratatui_style(r)
         }
         #[cfg(not(feature = "ratatui"))]
         {
@@ -1114,9 +1127,13 @@ impl<'a> Editor<'a> {
     /// Returns the cursor's screen position `(x, y)` for the textarea
     /// described by `(area_x, area_y, area_width, area_height)`.
     /// Accounts for line-number gutter and viewport scroll. Returns
-    /// `None` if the cursor is outside the visible viewport.
-    /// Ratatui-free equivalent of [`Editor::cursor_screen_pos`].
-    pub fn cursor_screen_pos_xywh(
+    /// `None` if the cursor is outside the visible viewport. Always
+    /// available (engine-native; no ratatui dependency).
+    ///
+    /// Renamed from `cursor_screen_pos_xywh` in 0.0.32 — the
+    /// ratatui-flavoured `Rect` variant is now
+    /// [`Editor::cursor_screen_pos_in_rect`] (cfg `ratatui`).
+    pub fn cursor_screen_pos(
         &self,
         area_x: u16,
         area_y: u16,
@@ -1138,11 +1155,13 @@ impl<'a> Editor<'a> {
     }
 
     /// Ratatui [`Rect`]-flavoured wrapper around
-    /// [`Editor::cursor_screen_pos_xywh`]. Behind the `ratatui`
-    /// feature.
+    /// [`Editor::cursor_screen_pos`]. Behind the `ratatui` feature.
+    ///
+    /// Renamed from `cursor_screen_pos` in 0.0.32 — the unprefixed
+    /// name now belongs to the engine-native variant.
     #[cfg(feature = "ratatui")]
-    pub fn cursor_screen_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.cursor_screen_pos_xywh(area.x, area.y, area.width, area.height)
+    pub fn cursor_screen_pos_in_rect(&self, area: Rect) -> Option<(u16, u16)> {
+        self.cursor_screen_pos(area.x, area.y, area.width, area.height)
     }
 
     pub fn vim_mode(&self) -> VimMode {
@@ -1898,9 +1917,13 @@ impl<'a> Editor<'a> {
     }
 
     /// Jump cursor to the terminal-space mouse position; exits Visual
-    /// modes if active. Ratatui-free coordinate flavour — pass the
+    /// modes if active. Engine-native coordinate flavour — pass the
     /// outer editor rect's `(x, y)` plus the click `(col, row)`.
-    pub fn mouse_click_xy(&mut self, area_x: u16, area_y: u16, col: u16, row: u16) {
+    /// Always available (no ratatui dependency).
+    ///
+    /// Renamed from `mouse_click_xy` in 0.0.32 — at 0.1.0 freeze the
+    /// unprefixed name belongs to the universally-available variant.
+    pub fn mouse_click(&mut self, area_x: u16, area_y: u16, col: u16, row: u16) {
         if self.vim.is_visual() {
             self.vim.force_normal();
         }
@@ -1912,10 +1935,13 @@ impl<'a> Editor<'a> {
     }
 
     /// Ratatui [`Rect`]-flavoured wrapper around
-    /// [`Editor::mouse_click_xy`]. Behind the `ratatui` feature.
+    /// [`Editor::mouse_click`]. Behind the `ratatui` feature.
+    ///
+    /// Renamed from `mouse_click` in 0.0.32 — the unprefixed name now
+    /// belongs to the engine-native variant.
     #[cfg(feature = "ratatui")]
-    pub fn mouse_click(&mut self, area: Rect, col: u16, row: u16) {
-        self.mouse_click_xy(area.x, area.y, col, row);
+    pub fn mouse_click_in_rect(&mut self, area: Rect, col: u16, row: u16) {
+        self.mouse_click(area.x, area.y, col, row);
     }
 
     /// Begin a mouse-drag selection: anchor at current cursor and enter Visual mode.
@@ -1927,17 +1953,23 @@ impl<'a> Editor<'a> {
     }
 
     /// Extend an in-progress mouse drag to the given terminal-space
-    /// position. Ratatui-free coordinate flavour.
-    pub fn mouse_extend_drag_xy(&mut self, area_x: u16, area_y: u16, col: u16, row: u16) {
+    /// position. Engine-native coordinate flavour. Always available.
+    ///
+    /// Renamed from `mouse_extend_drag_xy` in 0.0.32 — at 0.1.0 freeze
+    /// the unprefixed name belongs to the universally-available variant.
+    pub fn mouse_extend_drag(&mut self, area_x: u16, area_y: u16, col: u16, row: u16) {
         let (r, c) = self.mouse_to_doc_pos_xy(area_x, area_y, col, row);
         self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
     }
 
     /// Ratatui [`Rect`]-flavoured wrapper around
-    /// [`Editor::mouse_extend_drag_xy`]. Behind the `ratatui` feature.
+    /// [`Editor::mouse_extend_drag`]. Behind the `ratatui` feature.
+    ///
+    /// Renamed from `mouse_extend_drag` in 0.0.32 — the unprefixed
+    /// name now belongs to the engine-native variant.
     #[cfg(feature = "ratatui")]
-    pub fn mouse_extend_drag(&mut self, area: Rect, col: u16, row: u16) {
-        self.mouse_extend_drag_xy(area.x, area.y, col, row);
+    pub fn mouse_extend_drag_in_rect(&mut self, area: Rect, col: u16, row: u16) {
+        self.mouse_extend_drag(area.x, area.y, col, row);
     }
 
     pub fn insert_str(&mut self, text: &str) {
@@ -2150,7 +2182,7 @@ mod tests {
     }
 
     #[test]
-    fn intern_engine_style_dedups_with_intern_style() {
+    fn intern_style_dedups_engine_native_styles() {
         use crate::types::{Attrs, Color, Style};
         let mut e = Editor::new(KeybindingMode::Vim);
         let s = Style {
@@ -2158,9 +2190,9 @@ mod tests {
             bg: None,
             attrs: Attrs::BOLD,
         };
-        let id_a = e.intern_engine_style(s);
+        let id_a = e.intern_style(s);
         // Re-interning the same engine style returns the same id.
-        let id_b = e.intern_engine_style(s);
+        let id_b = e.intern_style(s);
         assert_eq!(id_a, id_b);
         // Engine accessor returns the same style back.
         let back = e.engine_style_at(id_a).expect("interned");
@@ -2858,7 +2890,7 @@ mod tests {
         // reserves row 0 for the tab bar and adds gutter padding,
         // so click row 1, way past the line end.
         let area = ratatui::layout::Rect::new(0, 0, 80, 10);
-        e.mouse_click(area, 78, 1);
+        e.mouse_click_in_rect(area, 78, 1);
         assert_eq!(e.cursor(), (0, 4));
     }
 
@@ -2869,7 +2901,7 @@ mod tests {
         // wrong here.
         e.set_content("héllo");
         let area = ratatui::layout::Rect::new(0, 0, 80, 10);
-        e.mouse_click(area, 78, 1);
+        e.mouse_click_in_rect(area, 78, 1);
         assert_eq!(e.cursor(), (0, 4));
     }
 
@@ -2880,9 +2912,9 @@ mod tests {
         // Gutter is `lnum_width + 1` = (1-digit row count + 2) + 1
         // pane padding = 4 cells; click col 4 is the first char.
         let area = ratatui::layout::Rect::new(0, 0, 80, 10);
-        e.mouse_click(area, 4, 1);
+        e.mouse_click_in_rect(area, 4, 1);
         assert_eq!(e.cursor(), (0, 0));
-        e.mouse_click(area, 6, 1);
+        e.mouse_click_in_rect(area, 6, 1);
         assert_eq!(e.cursor(), (0, 2));
     }
 
@@ -2903,7 +2935,7 @@ mod tests {
         e.handle_key(key(KeyCode::Char('A')));
         e.handle_key(key(KeyCode::Char('A')));
         // Mouse click somewhere else on the line (still insert mode).
-        e.mouse_click(area, 10, 1);
+        e.mouse_click_in_rect(area, 10, 1);
         // Type more chars at the new cursor position.
         e.handle_key(key(KeyCode::Char('B')));
         e.handle_key(key(KeyCode::Char('B')));
@@ -2934,7 +2966,7 @@ mod tests {
         e.handle_key(key(KeyCode::Char('i')));
         e.handle_key(key(KeyCode::Char('A')));
         e.handle_key(key(KeyCode::Char('A')));
-        e.mouse_click(area, 10, 1);
+        e.mouse_click_in_rect(area, 10, 1);
         e.handle_key(key(KeyCode::Char('B')));
         e.handle_key(key(KeyCode::Char('B')));
         e.handle_key(key(KeyCode::Esc));
