@@ -64,6 +64,7 @@ pub trait Query: Send {
     fn line(&self, idx: u32) -> &str;
     fn len_bytes(&self) -> usize;
     fn slice(&self, range: core::ops::Range<Pos>) -> alloc::borrow::Cow<'_, str>;
+    fn dirty_gen(&self) -> u64;     // monotonic mutation counter (added 0.0.39)
 }
 
 pub trait Edit: Send {
@@ -82,7 +83,8 @@ pub trait Buffer:
 {}
 ```
 
-Total: **13 methods**. Under <40 cap with room.
+Total: **14 methods** (13 from sub-traits + `Query::dirty_gen`). Under
+<40 cap with room.
 
 Sealed via private `mod sealed { pub trait Sealed {} }`. Pre-1.0, downstream
 cannot impl `Buffer` directly. `hjkl-buffer::Rope` implements `Sealed` from

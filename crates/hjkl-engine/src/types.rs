@@ -966,6 +966,22 @@ pub trait Query: Send {
     /// [`std::borrow::Cow<'_, str>`] so contiguous backends can
     /// avoid the allocation.
     fn slice(&self, range: core::ops::Range<Pos>) -> std::borrow::Cow<'_, str>;
+    /// Monotonic mutation generation counter. Increments on every
+    /// content-changing call (insert / delete / replace / fold-touch
+    /// edit / `set_content`). Read-only ops (cursor moves, queries,
+    /// view changes) leave it untouched.
+    ///
+    /// Engine consumers cache per-row data (search-match positions,
+    /// syntax spans, wrap layout) keyed off this counter — when it
+    /// advances, the cache is invalidated.
+    ///
+    /// Implementations may return any monotonically non-decreasing
+    /// value (zero is fine for non-canonical impls that don't have a
+    /// caching story); the contract is "if `dirty_gen` changed, the
+    /// content **may** have changed."
+    fn dirty_gen(&self) -> u64 {
+        0
+    }
 }
 
 /// Mutating sub-trait of [`Buffer`]. Distinct trait name from the

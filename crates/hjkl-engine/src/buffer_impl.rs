@@ -149,6 +149,10 @@ impl Query for RopeBuffer {
         total + n.saturating_sub(1)
     }
 
+    fn dirty_gen(&self) -> u64 {
+        RopeBuffer::dirty_gen(self)
+    }
+
     fn slice(&self, range: core::ops::Range<Pos>) -> Cow<'_, str> {
         let start = pos_to_position(range.start);
         let end = pos_to_position(range.end);

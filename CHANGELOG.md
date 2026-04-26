@@ -8,6 +8,84 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.39] - 2026-04-26
+
+### Patch C-δ.5 — `Query::dirty_gen` lands; 0.1.0 cut deferred
+
+Fifth and final pre-1.0 keystone patch. The four prior patches
+(0.0.35 → 0.0.38) extracted search state, marks, span pipeline, and
+fold mutation off the `hjkl_buffer::Buffer` trait surface, leaving
+the planned 0.1.0 freeze contingent on three things: (1) one trait
+expansion (`Query::dirty_gen`), (2) the `Editor` generic flip
+(`Editor<'a, B: Buffer, H: Host>` per SPEC §"Editor surface"), and
+(3) constructor unification + `EngineHost` shim removal.
+
+This patch lands (1) cleanly. (2) and (3) are deferred to 0.1.0
+proper after the design doc's stop threshold tripped during the
+flip audit: `Editor` still hits residual concrete `hjkl_buffer::
+Buffer` reaches that the prior patches didn't fully absorb (most
+notably `Editor::set_content`'s `Buffer::from_str`, the
+`Settings::wrap` field's `hjkl_buffer::Wrap` type, and the ~143
+`self.buffer.…` internal call sites in `vim.rs` whose enclosing fns
+take `&mut Editor<'_>`). Per the doc's stop guidance, ship
+`dirty_gen` now, defer the flip by one patch, keep tests green.
+
+#### Trait additions
+
+- `Query::dirty_gen(&self) -> u64` — monotonic mutation counter.
+  Read-only ops leave it untouched; insert / delete / replace /
+  set-content bump it. Default impl returns `0` so non-canonical
+  backends compile without a caching story; the canonical
+  `hjkl_buffer::Buffer` impl forwards to the existing
+  `Buffer::dirty_gen` inherent counter (in place since 0.0.0, used
+  internally for render-cache invalidation).
+
+#### Why `Query` and not a new sub-trait
+
+Per the design doc's resolved question 8.1: a single-method helper
+trait (`BufferStats` etc.) is overkill. Every backend trivially
+provides a counter; living on `Query` keeps the
+`Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed`
+super-trait surface count at 14 methods total (well under the SPEC
+<40 cap).
+
+#### Sealed surface
+
+`mod sealed { pub(crate) trait Sealed {} }` is intact;
+`hjkl_buffer::Buffer` is the canonical (and only) impl of `Sealed`
+in the family. External consumers cannot impl `Buffer` pre-1.0; the
+seal carries through to the 0.1.0 freeze.
+
+#### Snapshot wire format
+
+`EditorSnapshot::VERSION` stays at `4` (last bumped in 0.0.36 for
+the unified `marks` field). 0.1.0 will lock this number; 0.0.39
+does not.
+
+#### What's deferred to 0.1.0
+
+- `Editor<'a>` → `Editor<'a, B: Buffer = hjkl_buffer::Buffer, H: Host = DefaultHost>`
+  generic flip with default type params for back-compat at consumer
+  call sites.
+- Drop `EngineHost` shim (replaced by typed `H: Host`).
+- Unify `Editor::new(KeybindingMode)` / `Editor::with_host` /
+  `Editor::with_options` into a single SPEC-shaped
+  `Editor::new(buf, host, options)`.
+- Add a `BufferEdit::set_all(&mut self, &str)` (or equivalent) so
+  `Editor::set_content` can drop its `Buffer::from_str` reach.
+- Migrate `Settings::wrap: hjkl_buffer::Wrap` to the engine-native
+  `crate::types::WrapMode`; collapse the two enums.
+- Audit + classify the residual ~143 `self.buffer.…` reaches in
+  `vim.rs` against the trait surface.
+- Seal the `PUBLIC_API.md` baseline as the immutable freeze
+  contract.
+
+#### Public-API delta vs 0.0.38
+
+Net: one new trait method (`Query::dirty_gen`) + one new impl line
+on `hjkl_buffer::Buffer`. No removals, no signature changes.
+`PUBLIC_API.md` regenerated against the 0.0.39 surface.
+
 ## [0.0.38] - 2026-04-26
 
 ### Patch C-δ.4 — fold mutation through `FoldProvider::apply(FoldOp)`
