@@ -83,13 +83,13 @@ pub mod spec {
     //! during the churn phase. Trait impls are forthcoming; today the
     //! types support host-side prep (e.g., buffr-modal's `BuffrHost`).
 
-    pub use hjkl_engine::BufferFoldProvider;
     pub use hjkl_engine::types::{
-        Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, Edit, EngineError,
+        Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, Edit, EngineError, FoldOp,
         FoldProvider, Highlight, HighlightKind, Host, Input, Mode, Modifiers, MouseEvent,
         MouseKind, NoopFoldProvider, Options, Pos, Query, Search, Selection, SelectionKind,
         SelectionSet, SpecialKey, Style, Viewport,
     };
+    pub use hjkl_engine::{BufferFoldProvider, BufferFoldProviderMut};
 }
 
 #[cfg(test)]

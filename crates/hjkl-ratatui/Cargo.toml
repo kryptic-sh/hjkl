@@ -22,7 +22,7 @@ crossterm = ["dep:crossterm"]
 # get the ratatui-flavoured Editor surface. Engine `serde` and
 # `crossterm` features stay opt-in via the engine dep directly when
 # needed.
-hjkl-engine = { path = "../hjkl-engine", version = "=0.0.37", default-features = false, features = [
+hjkl-engine = { path = "../hjkl-engine", version = "=0.0.38", default-features = false, features = [
   "ratatui",
 ] }
 ratatui = "0.29"

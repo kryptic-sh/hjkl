@@ -2767,27 +2767,29 @@ fn handle_after_z(ed: &mut Editor<'_>, input: Input) -> bool {
             ed.vim.viewport_pinned = true;
         }
         // Folds — operate on the fold under the cursor (or the
-        // whole buffer for `R` / `M`).
+        // whole buffer for `R` / `M`). Routed through
+        // [`Editor::apply_fold_op`] (0.0.38 Patch C-δ.4) so the host
+        // can observe / veto each op via [`Editor::take_fold_ops`].
         Key::Char('o') => {
-            ed.buffer_mut().open_fold_at(row);
+            ed.apply_fold_op(crate::types::FoldOp::OpenAt(row));
         }
         Key::Char('c') => {
-            ed.buffer_mut().close_fold_at(row);
+            ed.apply_fold_op(crate::types::FoldOp::CloseAt(row));
         }
         Key::Char('a') => {
-            ed.buffer_mut().toggle_fold_at(row);
+            ed.apply_fold_op(crate::types::FoldOp::ToggleAt(row));
         }
         Key::Char('R') => {
-            ed.buffer_mut().open_all_folds();
+            ed.apply_fold_op(crate::types::FoldOp::OpenAll);
         }
         Key::Char('M') => {
-            ed.buffer_mut().close_all_folds();
+            ed.apply_fold_op(crate::types::FoldOp::CloseAll);
         }
         Key::Char('E') => {
-            ed.buffer_mut().clear_all_folds();
+            ed.apply_fold_op(crate::types::FoldOp::ClearAll);
         }
         Key::Char('d') => {
-            ed.buffer_mut().remove_fold_at(row);
+            ed.apply_fold_op(crate::types::FoldOp::RemoveAt(row));
         }
         Key::Char('f') => {
             if matches!(
@@ -2804,7 +2806,11 @@ fn handle_after_z(ed: &mut Editor<'_>, input: Input) -> bool {
                 let cur = ed.cursor().0;
                 let top = anchor_row.min(cur);
                 let bot = anchor_row.max(cur);
-                ed.buffer_mut().add_fold(top, bot, true);
+                ed.apply_fold_op(crate::types::FoldOp::Add {
+                    start_row: top,
+                    end_row: bot,
+                    closed: true,
+                });
                 ed.vim.mode = Mode::Normal;
             } else {
                 // `zf{motion}` / `zf{textobj}` — route through the
@@ -3296,7 +3302,11 @@ fn run_operator_over_range(
             // motion's natural kind. Cursor lands on `top.0` to mirror
             // the visual `zf` path.
             if bot.0 >= top.0 {
-                ed.buffer_mut().add_fold(top.0, bot.0, true);
+                ed.apply_fold_op(crate::types::FoldOp::Add {
+                    start_row: top.0,
+                    end_row: bot.0,
+                    closed: true,
+                });
             }
             ed.buffer_mut()
                 .set_cursor(hjkl_buffer::Position::new(top.0, top.1));
@@ -8610,6 +8620,46 @@ mod tests {
         e.jump_cursor(2, 0);
         run_keys(&mut e, "zd");
         assert!(e.buffer().folds().is_empty());
+    }
+
+    #[test]
+    fn take_fold_ops_observes_z_keystroke_dispatch() {
+        // 0.0.38 (Patch C-δ.4): every `z…` keystroke routes through
+        // `Editor::apply_fold_op`, which queues a `FoldOp` for hosts to
+        // observe via `take_fold_ops` AND applies the op locally so
+        // buffer fold storage stays in sync.
+        use crate::types::FoldOp;
+        let mut e = editor_with("a\nb\nc\nd");
+        e.buffer_mut().add_fold(1, 2, true);
+        e.jump_cursor(1, 0);
+        // Drain any queue from the buffer setup above (none expected,
+        // but be defensive).
+        let _ = e.take_fold_ops();
+        run_keys(&mut e, "zo");
+        run_keys(&mut e, "zM");
+        let ops = e.take_fold_ops();
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], FoldOp::OpenAt(1)));
+        assert!(matches!(ops[1], FoldOp::CloseAll));
+        // Second drain returns empty.
+        assert!(e.take_fold_ops().is_empty());
+    }
+
+    #[test]
+    fn edit_pipeline_emits_invalidate_fold_op() {
+        // The edit pipeline routes its fold invalidation through
+        // `apply_fold_op` so hosts can observe + dedupe.
+        use crate::types::FoldOp;
+        let mut e = editor_with("a\nb\nc\nd");
+        e.buffer_mut().add_fold(1, 2, true);
+        e.jump_cursor(1, 0);
+        let _ = e.take_fold_ops();
+        run_keys(&mut e, "iX<Esc>");
+        let ops = e.take_fold_ops();
+        assert!(
+            ops.iter().any(|op| matches!(op, FoldOp::Invalidate { .. })),
+            "expected at least one Invalidate op, got {ops:?}"
+        );
     }
 
     #[test]

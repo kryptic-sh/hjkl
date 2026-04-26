@@ -180,7 +180,11 @@ fn apply_fold_syntax(editor: &mut Editor<'_>) -> ExEffect {
     }
     let count = ranges.len();
     for (start, end) in ranges {
-        editor.buffer_mut().add_fold(start, end, true);
+        editor.apply_fold_op(hjkl_engine::FoldOp::Add {
+            start_row: start,
+            end_row: end,
+            closed: true,
+        });
     }
     ExEffect::Info(format!("created {count} fold(s)"))
 }
@@ -239,7 +243,11 @@ fn apply_fold_indent(editor: &mut Editor<'_>) -> ExEffect {
     }
     let count = new_folds.len();
     for (start, end) in new_folds {
-        editor.buffer_mut().add_fold(start, end, true);
+        editor.apply_fold_op(hjkl_engine::FoldOp::Add {
+            start_row: start,
+            end_row: end,
+            closed: true,
+        });
     }
     ExEffect::Info(format!("created {count} fold(s)"))
 }

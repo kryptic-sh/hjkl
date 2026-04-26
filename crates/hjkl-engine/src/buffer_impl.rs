@@ -34,7 +34,7 @@ use hjkl_buffer::Position;
 use regex::Regex;
 
 use crate::types::sealed::Sealed;
-use crate::types::{Buffer, BufferEdit, Cursor, FoldProvider, Pos, Query, Search};
+use crate::types::{Buffer, BufferEdit, Cursor, FoldOp, FoldProvider, Pos, Query, Search};
 
 // ── Pos ⇄ Position conversion ──────────────────────────────────────
 
@@ -399,6 +399,89 @@ impl FoldProvider for BufferFoldProvider<'_> {
         let f = self.buffer.fold_at_row(row)?;
         Some((f.start_row, f.end_row, f.closed))
     }
+
+    // `apply` / `invalidate_range` use the trait's default no-op impl
+    // because `BufferFoldProvider` only borrows the buffer immutably.
+    // For fold mutation, use [`BufferFoldProviderMut`] instead.
+}
+
+/// Mutable [`FoldProvider`] adapter wrapping a `&mut hjkl_buffer::Buffer`.
+/// Engine call sites that need to dispatch a [`FoldOp`] (vim's `z…`
+/// keystrokes, the `:fold*` Ex commands, edit-pipeline invalidation)
+/// construct this on the fly from `&mut self.buffer` and call
+/// [`FoldProvider::apply`] / [`FoldProvider::invalidate_range`] on it.
+///
+/// Introduced in 0.0.38 (Patch C-δ.4) as part of routing fold mutation
+/// through the [`FoldProvider`] surface. Fold *storage* still lives
+/// on [`hjkl_buffer::Buffer`] for `dirty_gen` / render-cache reasons;
+/// only the dispatch path moved.
+pub struct BufferFoldProviderMut<'a> {
+    buffer: &'a mut RopeBuffer,
+}
+
+impl<'a> BufferFoldProviderMut<'a> {
+    pub fn new(buffer: &'a mut RopeBuffer) -> Self {
+        Self { buffer }
+    }
+}
+
+impl FoldProvider for BufferFoldProviderMut<'_> {
+    fn next_visible_row(&self, row: usize, _row_count: usize) -> Option<usize> {
+        RopeBuffer::next_visible_row(self.buffer, row)
+    }
+
+    fn prev_visible_row(&self, row: usize) -> Option<usize> {
+        RopeBuffer::prev_visible_row(self.buffer, row)
+    }
+
+    fn is_row_hidden(&self, row: usize) -> bool {
+        RopeBuffer::is_row_hidden(self.buffer, row)
+    }
+
+    fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)> {
+        let f = self.buffer.fold_at_row(row)?;
+        Some((f.start_row, f.end_row, f.closed))
+    }
+
+    fn apply(&mut self, op: FoldOp) {
+        match op {
+            FoldOp::Add {
+                start_row,
+                end_row,
+                closed,
+            } => {
+                self.buffer.add_fold(start_row, end_row, closed);
+            }
+            FoldOp::RemoveAt(row) => {
+                self.buffer.remove_fold_at(row);
+            }
+            FoldOp::OpenAt(row) => {
+                self.buffer.open_fold_at(row);
+            }
+            FoldOp::CloseAt(row) => {
+                self.buffer.close_fold_at(row);
+            }
+            FoldOp::ToggleAt(row) => {
+                self.buffer.toggle_fold_at(row);
+            }
+            FoldOp::OpenAll => {
+                self.buffer.open_all_folds();
+            }
+            FoldOp::CloseAll => {
+                self.buffer.close_all_folds();
+            }
+            FoldOp::ClearAll => {
+                self.buffer.clear_all_folds();
+            }
+            FoldOp::Invalidate { start_row, end_row } => {
+                self.buffer.invalidate_folds_in_range(start_row, end_row);
+            }
+        }
+    }
+
+    fn invalidate_range(&mut self, start_row: usize, end_row: usize) {
+        self.buffer.invalidate_folds_in_range(start_row, end_row);
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
@@ -520,5 +603,86 @@ mod tests {
     fn pos_position_roundtrip() {
         let p = Pos::new(7, 3);
         assert_eq!(position_to_pos(pos_to_position(p)), p);
+    }
+
+    // ── BufferFoldProviderMut dispatch (0.0.38, Patch C-δ.4) ───────
+
+    #[test]
+    fn fold_provider_mut_apply_add_open_close_toggle() {
+        let mut buf = RopeBuffer::from_str("a\nb\nc\nd\ne");
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::Add {
+                start_row: 1,
+                end_row: 3,
+                closed: true,
+            });
+            assert_eq!(p.fold_at_row(2), Some((1, 3, true)));
+            p.apply(FoldOp::OpenAt(2));
+            assert_eq!(p.fold_at_row(2), Some((1, 3, false)));
+            p.apply(FoldOp::CloseAt(2));
+            assert_eq!(p.fold_at_row(2), Some((1, 3, true)));
+            p.apply(FoldOp::ToggleAt(2));
+            assert_eq!(p.fold_at_row(2), Some((1, 3, false)));
+        }
+        assert_eq!(buf.folds().len(), 1);
+    }
+
+    #[test]
+    fn fold_provider_mut_apply_open_close_clear_all() {
+        let mut buf = RopeBuffer::from_str("a\nb\nc\nd\ne");
+        buf.add_fold(0, 1, false);
+        buf.add_fold(2, 3, true);
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::CloseAll);
+        }
+        assert!(buf.folds().iter().all(|f| f.closed));
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::OpenAll);
+        }
+        assert!(buf.folds().iter().all(|f| !f.closed));
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::ClearAll);
+        }
+        assert!(buf.folds().is_empty());
+    }
+
+    #[test]
+    fn fold_provider_mut_invalidate_range_drops_overlapping() {
+        let mut buf = RopeBuffer::from_str("a\nb\nc\nd\ne");
+        buf.add_fold(0, 1, true);
+        buf.add_fold(2, 3, true);
+        buf.add_fold(4, 4, true);
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.invalidate_range(2, 3);
+        }
+        let starts: Vec<usize> = buf.folds().iter().map(|f| f.start_row).collect();
+        assert_eq!(starts, vec![0, 4]);
+    }
+
+    #[test]
+    fn fold_provider_mut_apply_remove_at() {
+        let mut buf = RopeBuffer::from_str("a\nb\nc\nd\ne");
+        buf.add_fold(1, 3, true);
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::RemoveAt(2));
+        }
+        assert!(buf.folds().is_empty());
+    }
+
+    #[test]
+    fn noop_fold_provider_apply_is_noop() {
+        // The default `apply` impl on the trait is a no-op; verify
+        // NoopFoldProvider inherits it without panicking.
+        let mut p = crate::types::NoopFoldProvider;
+        FoldProvider::apply(&mut p, FoldOp::OpenAll);
+        FoldProvider::invalidate_range(&mut p, 0, 5);
+        // Read methods unaffected.
+        assert!(!FoldProvider::is_row_hidden(&p, 3));
     }
 }

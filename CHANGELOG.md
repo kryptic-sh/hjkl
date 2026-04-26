@@ -8,232 +8,297 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.38] - 2026-04-26
+
+### Patch C-δ.4 — fold mutation through `FoldProvider::apply(FoldOp)`
+
+Fourth of the 5-patch sequence to 0.1.0 (per
+`DESIGN_33_METHOD_CLASSIFICATION.md` step 4). The seven buffer-side fold
+mutation methods (`add_fold` / `remove_fold_at` / `open_fold_at` /
+`close_fold_at` / `toggle_fold_at` / `open_all_folds` / `close_all_folds` /
+`clear_all_folds` / `invalidate_folds_in_range`) stay on `hjkl_buffer::Buffer`
+for adapter use, but the **engine no longer calls them directly**. Every `z…`
+keystroke, every `:fold*` Ex command, and the edit pipeline's
+"edits-inside-a-fold open it" invalidation now route through a single canonical
+surface: `hjkl_engine::FoldOp` carried via `Editor::apply_fold_op` and
+dispatched through `FoldProvider::apply`.
+
+`FoldOp` is engine-canonical (per the design doc's resolved question 8.2): hosts
+don't invent their own fold-op enums. Hosts that want to observe the dispatch
+(for separate fold trees, LSP folding ranges, or batching / dedup) drain
+`Editor::take_fold_ops()` each step and fan out to their own `Host::Intent`
+variant if desired. Hosts that just want the in-tree buffer fold storage updated
+do nothing — the engine applies every op locally via `BufferFoldProviderMut`.
+
+#### Engine additions
+
+- `hjkl_engine::FoldOp` — canonical fold-mutation enum in `hjkl_engine::types`.
+  Variants: `Add { start_row, end_row, closed }`, `RemoveAt(row)`,
+  `OpenAt(row)`, `CloseAt(row)`, `ToggleAt(row)`, `OpenAll`, `CloseAll`,
+  `ClearAll`, `Invalidate { start_row, end_row }`. `#[non_exhaustive]` so future
+  `z…` keystrokes can extend it.
+- `FoldProvider::apply(&mut self, op: FoldOp)` — new trait method on the
+  existing `FoldProvider` surface (default impl: no-op, so read-only / stub
+  providers don't need to override).
+- `FoldProvider::invalidate_range(&mut self, start_row, end_row)` — default impl
+  forwards to `apply(FoldOp::Invalidate { … })`.
+- `hjkl_engine::BufferFoldProviderMut<'a>` — mutable fold-provider adapter
+  wrapping `&'a mut hjkl_buffer::Buffer`. Implements the full `FoldProvider`
+  trait; `apply` dispatches to the underlying buffer's fold methods.
+- `Editor::apply_fold_op(FoldOp)` — single dispatch surface for every engine
+  fold mutation. Queues the op for host observation AND applies it locally
+  against the buffer.
+- `Editor::take_fold_ops() -> Vec<FoldOp>` — host drain, mirrors the existing
+  `take_lsp_intent` pattern.
+
+#### Engine surface changes
+
+- Vim FSM `z…` keystrokes (`zo`, `zc`, `za`, `zR`, `zM`, `zE`, `zd`,
+  `zf{motion}`, visual-mode `zf`, operator-driven `zf` over a motion span) all
+  route through `Editor::apply_fold_op`. Behaviour unchanged.
+- `:foldsyntax` and `:foldindent` Ex commands route through
+  `Editor::apply_fold_op` as well.
+- `Editor::mutate_edit`'s "drop folds touched by this edit" call now goes
+  through `apply_fold_op(FoldOp::Invalidate { … })` instead of the buffer's
+  `invalidate_folds_in_range` directly. The edit pipeline's invalidation is
+  therefore observable by hosts via `take_fold_ops`.
+
+#### Buffer surface
+
+- The seven fold mutation methods on `hjkl_buffer::Buffer` (`add_fold`,
+  `remove_fold_at`, `open_fold_at`, `close_fold_at`, `toggle_fold_at`,
+  `open_all_folds`, `close_all_folds`, `clear_all_folds`,
+  `invalidate_folds_in_range`) **remain `pub`**. Per the design doc: "Those
+  buffer-inherent methods don't disappear — they remain on `hjkl_buffer::Buffer`
+  as `pub fn`s for the host adapter to call." `BufferFoldProviderMut::apply`
+  calls into them; engine FSM no longer does. Audit confirmed sqeel / buffr /
+  inbx don't call any of these directly today, so no consumer migration is
+  required for this patch.
+- The fold _read_ methods (`next_visible_row`, `prev_visible_row`,
+  `is_row_hidden`, `fold_at_row`) also remain on `Buffer`;
+  `BufferFoldProvider::new(&buffer)` is the canonical access path. These
+  hard-delete at 0.1.0 alongside the `Editor<B, H>` generic flip.
+
+#### Roadmap
+
+The 0.0.x trait-extraction sequence is on step 4 of 5:
+
+1. ✅ 0.0.34 (Patch C-δ.1) — viewport relocated to Host.
+2. ✅ 0.0.35 — search FSM state moved to Editor.
+3. ✅ 0.0.36 — named marks consolidated onto Editor.
+4. ✅ 0.0.37 (Patch C-δ.3) — spans + search-pattern out of Buffer.
+5. ✅ **0.0.38 (this release)** — fold mutation through
+   `Host::emit_intent`-equivalent surface (`Editor::apply_fold_op` queues for
+   host observation; `BufferFoldProviderMut::apply` handles the local dispatch).
+6. ⏭ **0.1.0 (next cut)** — `Editor<'a, B: Buffer, H: Host>` generic flip +
+   freeze. The `EngineHost` object-safe shim disappears; `BufferFoldProvider`'s
+   read methods (`next_visible_row` etc.) relocate off `hjkl_buffer::Buffer`
+   onto engine-side free functions over `B: Cursor + Query`.
+
 ## [0.0.37] - 2026-04-26
 
 ### Patch C-δ.4 — spans → Host syntax pipeline + search-pattern mirror removal
 
-Third of the 5-patch sequence to 0.1.0 (per
-`DESIGN_33_METHOD_CLASSIFICATION.md` step 3). Two pieces of state
-that 0.0.34/0.0.35 left as bridges between `hjkl_buffer::Buffer`
-and the engine — the per-row syntax span cache and the active `/`
-search pattern — move out of the buffer entirely. Spans now live
-on `Editor::buffer_spans` (sourced from `Host::syntax_highlights` /
+Third of the 5-patch sequence to 0.1.0 (per `DESIGN_33_METHOD_CLASSIFICATION.md`
+step 3). Two pieces of state that 0.0.34/0.0.35 left as bridges between
+`hjkl_buffer::Buffer` and the engine — the per-row syntax span cache and the
+active `/` search pattern — move out of the buffer entirely. Spans now live on
+`Editor::buffer_spans` (sourced from `Host::syntax_highlights` /
 `install_syntax_spans`); the search regex lives on
-`Editor::search_state.pattern` and reaches the renderer through a
-new `BufferView::search_pattern` field.
+`Editor::search_state.pattern` and reaches the renderer through a new
+`BufferView::search_pattern` field.
 
 #### Buffer surface — breaking
 
-- `hjkl_buffer::Buffer::set_spans(&mut self, Vec<Vec<Span>>)` —
-  **removed**. Spans are no longer cached on the buffer.
-- `hjkl_buffer::Buffer::spans(&self) -> &[Vec<Span>]` —
-  **removed**.
-- `hjkl_buffer::Buffer::set_spans_for_test` — **removed** (was
-  `pub(crate)`; trips no public API).
-- `hjkl_buffer::Buffer::search_pattern(&self) -> Option<&Regex>`
-  — **removed** (was `#[deprecated]` since 0.0.35).
-- `hjkl_buffer::Buffer::set_search_pattern(&mut self, Option<Regex>)`
-  — **removed** (was `#[deprecated]` since 0.0.35).
-- `hjkl_buffer::Buffer::set_search_wrap(&mut self, bool)` —
+- `hjkl_buffer::Buffer::set_spans(&mut self, Vec<Vec<Span>>)` — **removed**.
+  Spans are no longer cached on the buffer.
+- `hjkl_buffer::Buffer::spans(&self) -> &[Vec<Span>]` — **removed**.
+- `hjkl_buffer::Buffer::set_spans_for_test` — **removed** (was `pub(crate)`;
+  trips no public API).
+- `hjkl_buffer::Buffer::search_pattern(&self) -> Option<&Regex>` — **removed**
+  (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::set_search_pattern(&mut self, Option<Regex>)` —
   **removed** (was `#[deprecated]` since 0.0.35).
-- `hjkl_buffer::Buffer::search_wraps(&self) -> bool` —
-  **removed**.
-- `hjkl_buffer::Buffer::search_forward(&mut self, bool) -> bool` —
-  **removed** (was `#[deprecated]` since 0.0.35).
-- `hjkl_buffer::Buffer::search_backward(&mut self, bool) -> bool`
-  — **removed** (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::set_search_wrap(&mut self, bool)` — **removed** (was
+  `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::search_wraps(&self) -> bool` — **removed**.
+- `hjkl_buffer::Buffer::search_forward(&mut self, bool) -> bool` — **removed**
+  (was `#[deprecated]` since 0.0.35).
+- `hjkl_buffer::Buffer::search_backward(&mut self, bool) -> bool` — **removed**
+  (was `#[deprecated]` since 0.0.35).
 - `hjkl_buffer::Buffer::search_matches(&mut self, usize) -> Vec<(usize, usize)>`
   — **removed** (was `#[deprecated]` since 0.0.35).
-- The per-buffer `spans: Vec<Vec<Span>>` field and the
-  `search: SearchState` field are deleted; the entire
-  `hjkl_buffer/src/search.rs` module is gone.
+- The per-buffer `spans: Vec<Vec<Span>>` field and the `search: SearchState`
+  field are deleted; the entire `hjkl_buffer/src/search.rs` module is gone.
 
 #### `BufferView` surface — breaking
 
-`hjkl_buffer::BufferView` gains two fields (struct literals must
-add them):
+`hjkl_buffer::BufferView` gains two fields (struct literals must add them):
 
-- `pub spans: &'a [Vec<Span>]` — per-row syntax spans the host
-  computed for this frame. Rows beyond `spans.len()` get default
-  styling. Sourced from `Editor::buffer_spans()`. Pass `&[]` for
-  hosts without syntax integration.
-- `pub search_pattern: Option<&'a regex::Regex>` — active `/`
-  regex; renderer paints `search_bg` under matches. Sourced from
-  `Editor::search_state().pattern.as_ref()`. Pass `None` to
-  disable hlsearch.
+- `pub spans: &'a [Vec<Span>]` — per-row syntax spans the host computed for this
+  frame. Rows beyond `spans.len()` get default styling. Sourced from
+  `Editor::buffer_spans()`. Pass `&[]` for hosts without syntax integration.
+- `pub search_pattern: Option<&'a regex::Regex>` — active `/` regex; renderer
+  paints `search_bg` under matches. Sourced from
+  `Editor::search_state().pattern.as_ref()`. Pass `None` to disable hlsearch.
 
 #### Engine additions
 
-- `hjkl_engine::Editor::buffer_spans() -> &[Vec<hjkl_buffer::Span>]`
-  — replaces `editor.buffer().spans()` for hosts feeding spans
-  into `BufferView`. Populated by
-  `Editor::install_syntax_spans` /
-  `Editor::install_ratatui_syntax_spans`.
+- `hjkl_engine::Editor::buffer_spans() -> &[Vec<hjkl_buffer::Span>]` — replaces
+  `editor.buffer().spans()` for hosts feeding spans into `BufferView`. Populated
+  by `Editor::install_syntax_spans` / `Editor::install_ratatui_syntax_spans`.
 
 #### Engine surface changes
 
-- `Editor::set_search_pattern` no longer mirrors onto the
-  buffer. Hosts that fed the regex into `BufferView` via
-  `editor.buffer().search_pattern()` switch to
+- `Editor::set_search_pattern` no longer mirrors onto the buffer. Hosts that fed
+  the regex into `BufferView` via `editor.buffer().search_pattern()` switch to
   `editor.search_state().pattern.as_ref()`.
 
 #### `Search` trait impl change
 
-- The in-tree `Search::find_next` / `Search::find_prev` impl on
-  `RopeBuffer` always wraps. Wrap policy (`wrapscan`) lives on
-  `Editor::search_state.wrap_around`; the engine's
-  `search_forward` / `search_backward` free functions short-circuit
-  before invoking the trait when wrap is disabled.
+- The in-tree `Search::find_next` / `Search::find_prev` impl on `RopeBuffer`
+  always wraps. Wrap policy (`wrapscan`) lives on
+  `Editor::search_state.wrap_around`; the engine's `search_forward` /
+  `search_backward` free functions short-circuit before invoking the trait when
+  wrap is disabled.
 
 #### Migration table
 
-| Before                                                         | After                                                                                 |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `editor.buffer().spans()`                                      | `editor.buffer_spans()`                                                               |
-| `editor.buffer().search_pattern()`                             | `editor.search_state().pattern.as_ref()`                                              |
-| `buffer.set_spans(spans)`                                      | `editor.install_syntax_spans(spans)` / `install_ratatui_syntax_spans` (host-driven)   |
-| `buffer.set_search_pattern(pat)`                               | `editor.set_search_pattern(pat)`                                                      |
-| `buffer.search_forward(skip)` / `buffer.search_backward(skip)` | `editor.search_advance_forward(skip)` / `editor.search_advance_backward(skip)`        |
-| `buffer.search_matches(row)`                                   | `hjkl_engine::search::search_matches(buf, &mut state, dirty_gen, row)`                |
-| `buffer.set_search_wrap(wrap)`                                 | `editor.search_state_mut().wrap_around = wrap;` (or set `Settings::wrapscan`)         |
+| Before                                                         | After                                                                                                                 |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `editor.buffer().spans()`                                      | `editor.buffer_spans()`                                                                                               |
+| `editor.buffer().search_pattern()`                             | `editor.search_state().pattern.as_ref()`                                                                              |
+| `buffer.set_spans(spans)`                                      | `editor.install_syntax_spans(spans)` / `install_ratatui_syntax_spans` (host-driven)                                   |
+| `buffer.set_search_pattern(pat)`                               | `editor.set_search_pattern(pat)`                                                                                      |
+| `buffer.search_forward(skip)` / `buffer.search_backward(skip)` | `editor.search_advance_forward(skip)` / `editor.search_advance_backward(skip)`                                        |
+| `buffer.search_matches(row)`                                   | `hjkl_engine::search::search_matches(buf, &mut state, dirty_gen, row)`                                                |
+| `buffer.set_search_wrap(wrap)`                                 | `editor.search_state_mut().wrap_around = wrap;` (or set `Settings::wrapscan`)                                         |
 | `BufferView { …, conceals: c }`                                | `BufferView { …, conceals: c, spans: editor.buffer_spans(), search_pattern: editor.search_state().pattern.as_ref() }` |
 
 #### Roadmap
 
-- **0.0.38 (Patch C-δ.5)** — fold mutation through
-  `Host::emit_intent(FoldOp)`. The `add_fold` / `open_fold_at`
-  / `close_fold_at` / `toggle_fold_at` / `open_all_folds` /
-  `close_all_folds` / `clear_all_folds` /
-  `invalidate_folds_in_range` calls in vim FSM route through
-  the host's intent enum; buffer keeps the inherent fold-storage
-  methods so the in-tree `BufferFoldProvider` adapter still
-  works, but the engine no longer reaches them directly.
-- **0.1.0** — `Editor<B, H>` generic flip + trait freeze.
-  `Query::dirty_gen` lands; `EngineHost` shim disappears;
-  inherent-buffer-method callers migrate to the SPEC trait
-  surface; the seal is set.
+- **0.0.38 (Patch C-δ.5)** — fold mutation through `Host::emit_intent(FoldOp)`.
+  The `add_fold` / `open_fold_at` / `close_fold_at` / `toggle_fold_at` /
+  `open_all_folds` / `close_all_folds` / `clear_all_folds` /
+  `invalidate_folds_in_range` calls in vim FSM route through the host's intent
+  enum; buffer keeps the inherent fold-storage methods so the in-tree
+  `BufferFoldProvider` adapter still works, but the engine no longer reaches
+  them directly.
+- **0.1.0** — `Editor<B, H>` generic flip + trait freeze. `Query::dirty_gen`
+  lands; `EngineHost` shim disappears; inherent-buffer-method callers migrate to
+  the SPEC trait surface; the seal is set.
 
 ## [0.0.36] - 2026-04-26
 
 ### Patch C-δ.3 — named-marks consolidation onto `Editor`
 
 Second of the 5-patch sequence to 0.1.0 (per
-`DESIGN_33_METHOD_CLASSIFICATION.md` step 2). The three former
-storages for vim's `m{a-zA-Z}` named marks collapse into a single
+`DESIGN_33_METHOD_CLASSIFICATION.md` step 2). The three former storages for
+vim's `m{a-zA-Z}` named marks collapse into a single
 `Editor::marks: BTreeMap<char, (usize, usize)>`:
 
-- `hjkl_buffer::Buffer::marks` — was an unused dead field (no
-  reads, no writes, no callers) carried over from a pre-0.0.x
-  prototype. **Hard-deleted**.
-- `hjkl_engine::vim::VimState::marks` — held lowercase
-  (`'a`–`'z`) marks. Field deleted; FSM routes through
-  `Editor::set_mark` / `Editor::mark`.
-- `hjkl_engine::Editor::file_marks` — held uppercase
-  (`'A`–`'Z`) marks. Field renamed and merged into the unified
-  map.
+- `hjkl_buffer::Buffer::marks` — was an unused dead field (no reads, no writes,
+  no callers) carried over from a pre-0.0.x prototype. **Hard-deleted**.
+- `hjkl_engine::vim::VimState::marks` — held lowercase (`'a`–`'z`) marks. Field
+  deleted; FSM routes through `Editor::set_mark` / `Editor::mark`.
+- `hjkl_engine::Editor::file_marks` — held uppercase (`'A`–`'Z`) marks. Field
+  renamed and merged into the unified map.
 
-Mark-shift-on-edit semantic (marks pinned at a row drop when that
-row is deleted; marks past the affected band shift by the row
-delta) is preserved — the existing `Editor::shift_marks_after_edit`
-pipeline now operates on the single map in one pass instead of two.
+Mark-shift-on-edit semantic (marks pinned at a row drop when that row is
+deleted; marks past the affected band shift by the row delta) is preserved — the
+existing `Editor::shift_marks_after_edit` pipeline now operates on the single
+map in one pass instead of two.
 
 #### Engine additions
 
-- `Editor::mark(char) -> Option<(usize, usize)>` — unified lookup
-  for both lowercase and uppercase marks.
+- `Editor::mark(char) -> Option<(usize, usize)>` — unified lookup for both
+  lowercase and uppercase marks.
 - `Editor::set_mark(char, (usize, usize))` — unified setter.
 - `Editor::clear_mark(char)` — unified remove.
-- `Editor::marks() -> impl Iterator<Item = (char, (usize, usize))>`
-  — deterministic (BTreeMap-ordered) iteration over every set
-  mark, replacing the prior `buffer_marks()` + `file_marks()` pair.
+- `Editor::marks() -> impl Iterator<Item = (char, (usize, usize))>` —
+  deterministic (BTreeMap-ordered) iteration over every set mark, replacing the
+  prior `buffer_marks()` + `file_marks()` pair.
 
 #### Engine call-site relocation
 
-- `vim::handle_set_mark` (`m{a-zA-Z}` keystroke) writes via
-  `Editor::set_mark` regardless of case.
-- `vim::handle_goto_mark` (`'{a-zA-Z}` / `` `{a-zA-Z} ``) reads
-  via `Editor::mark`.
-- `hjkl-editor::ex` `:marks` listing iterates `Editor::marks()`
-  directly; no separate uppercase merge pass.
+- `vim::handle_set_mark` (`m{a-zA-Z}` keystroke) writes via `Editor::set_mark`
+  regardless of case.
+- `vim::handle_goto_mark` (`'{a-zA-Z}` / `` `{a-zA-Z} ``) reads via
+  `Editor::mark`.
+- `hjkl-editor::ex` `:marks` listing iterates `Editor::marks()` directly; no
+  separate uppercase merge pass.
 
 #### Buffer surface — breaking
 
-- `hjkl_buffer::Buffer::marks(&self) -> &BTreeMap<char, Position>`
-  is **deleted**. The backing field carried no state (no buffer
-  code ever wrote to it) and no consumer in this workspace called
-  it; the design doc step 2 prescribes hard delete.
+- `hjkl_buffer::Buffer::marks(&self) -> &BTreeMap<char, Position>` is
+  **deleted**. The backing field carried no state (no buffer code ever wrote to
+  it) and no consumer in this workspace called it; the design doc step 2
+  prescribes hard delete.
 
 #### Snapshot wire format
 
-- `EditorSnapshot::file_marks: HashMap<char, (u32, u32)>`
-  → `EditorSnapshot::marks: BTreeMap<char, (u32, u32)>`. Carries
-  both lowercase and uppercase marks (lowercase round-trips for
-  the first time as a side-effect of the consolidation).
+- `EditorSnapshot::file_marks: HashMap<char, (u32, u32)>` →
+  `EditorSnapshot::marks: BTreeMap<char, (u32, u32)>`. Carries both lowercase
+  and uppercase marks (lowercase round-trips for the first time as a side-effect
+  of the consolidation).
 - `EditorSnapshot::VERSION` `3` → `4`.
 
 #### Editor surface — soft deprecations
 
-The 0.0.35 deprecation pattern continues: existing accessors stay
-compiling but warn so consumers can migrate at their own pace.
-Removal queued for 0.1.0.
+The 0.0.35 deprecation pattern continues: existing accessors stay compiling but
+warn so consumers can migrate at their own pace. Removal queued for 0.1.0.
 
 - `Editor::buffer_mark` → use `Editor::mark`.
-- `Editor::buffer_marks` → use `Editor::marks` (the unified
-  iterator includes both lowercase and uppercase entries; old
-  callers wanting lowercase-only can `.filter(|(c, _)|
-  c.is_ascii_lowercase())`).
-- `Editor::file_marks` stays compiling (filters to uppercase from
-  the unified map) but is no longer the canonical accessor.
+- `Editor::buffer_marks` → use `Editor::marks` (the unified iterator includes
+  both lowercase and uppercase entries; old callers wanting lowercase-only can
+  `.filter(|(c, _)| c.is_ascii_lowercase())`).
+- `Editor::file_marks` stays compiling (filters to uppercase from the unified
+  map) but is no longer the canonical accessor.
 
 #### Migration
 
-| Before                                  | After                                                         |
-| --------------------------------------- | ------------------------------------------------------------- |
-| `editor.buffer_mark('a')`               | `editor.mark('a')`                                            |
-| `editor.buffer_marks()`                 | `editor.marks()` (now includes uppercase too)                 |
-| `editor.file_marks()` (uppercase iter)  | `editor.marks().filter(|(c, _)| c.is_ascii_uppercase())`      |
-| `buffer.marks()` (engine-internal)      | `editor.marks()`                                              |
-| `EditorSnapshot { file_marks, .. }`     | `EditorSnapshot { marks, .. }` (BTreeMap, both cases)         |
+| Before                                 | After                                                 |
+| -------------------------------------- | ----------------------------------------------------- | ------- | ------------------------ |
+| `editor.buffer_mark('a')`              | `editor.mark('a')`                                    |
+| `editor.buffer_marks()`                | `editor.marks()` (now includes uppercase too)         |
+| `editor.file_marks()` (uppercase iter) | `editor.marks().filter(                               | (c, \_) | c.is_ascii_uppercase())` |
+| `buffer.marks()` (engine-internal)     | `editor.marks()`                                      |
+| `EditorSnapshot { file_marks, .. }`    | `EditorSnapshot { marks, .. }` (BTreeMap, both cases) |
 
-Direct `hjkl_buffer::Buffer::marks` callers (none in this workspace
-or any known consumer): no replacement — the field never held
-useful state. If a host was reading it, the answer was always
-empty. Hosts wanting the FSM's marks read `editor.marks()`.
+Direct `hjkl_buffer::Buffer::marks` callers (none in this workspace or any known
+consumer): no replacement — the field never held useful state. If a host was
+reading it, the answer was always empty. Hosts wanting the FSM's marks read
+`editor.marks()`.
 
 #### Roadmap
 
-- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline
-  (delete `Buffer::set_spans` / `Buffer::spans`; delete the
-  search-pattern bridge added in 0.0.35).
-- **0.0.38 (Patch C-δ.5)** — fold mutation through
-  `Host::emit_intent(FoldOp)`; `FoldProvider::apply(FoldOp)` and
-  `FoldProvider::invalidate_range` land.
-- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>`
-  generic flip + freeze; delete the deprecated buffer search
-  methods + the deprecated `Editor::buffer_mark` / `buffer_marks`
-  accessors; `cargo public-api` baseline.
+- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline (delete
+  `Buffer::set_spans` / `Buffer::spans`; delete the search-pattern bridge added
+  in 0.0.35).
+- **0.0.38 (Patch C-δ.5)** — fold mutation through `Host::emit_intent(FoldOp)`;
+  `FoldProvider::apply(FoldOp)` and `FoldProvider::invalidate_range` land.
+- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>` generic flip +
+  freeze; delete the deprecated buffer search methods + the deprecated
+  `Editor::buffer_mark` / `buffer_marks` accessors; `cargo public-api` baseline.
 
-Workspace bumps `0.0.35` → `0.0.36`. Member crate pins
-(`=0.0.35` → `=0.0.36`) and `Cargo.lock` updated. Test count
-stays at 674.
+Workspace bumps `0.0.35` → `0.0.36`. Member crate pins (`=0.0.35` → `=0.0.36`)
+and `Cargo.lock` updated. Test count stays at 674.
 
 ## [0.0.35] - 2026-04-26
 
 ### Patch C-δ.2 — search state on `Editor`
 
-First of the 5-patch sequence to 0.1.0 (per
-`DESIGN_33_METHOD_CLASSIFICATION.md` step 1). The search FSM state
-(pattern + per-row match cache + `wrapscan` flag) moves out of
-`hjkl_buffer::Buffer` and onto `hjkl_engine::Editor`. Multi-window
-hosts that share a buffer between panes no longer leak the
-"current search" across windows that happen to share content.
+First of the 5-patch sequence to 0.1.0 (per `DESIGN_33_METHOD_CLASSIFICATION.md`
+step 1). The search FSM state (pattern + per-row match cache + `wrapscan` flag)
+moves out of `hjkl_buffer::Buffer` and onto `hjkl_engine::Editor`. Multi-window
+hosts that share a buffer between panes no longer leak the "current search"
+across windows that happen to share content.
 
 #### Engine additions
 
-- `hjkl_engine::search` (new public module) — `SearchState` struct
-  (pattern, forward-direction flag, per-row matches cache,
-  generations, `wrap_around`) plus three free functions over
-  `B: Cursor + Query + Search`:
+- `hjkl_engine::search` (new public module) — `SearchState` struct (pattern,
+  forward-direction flag, per-row matches cache, generations, `wrap_around`)
+  plus three free functions over `B: Cursor + Query + Search`:
 
   ```rust
   pub fn search_forward<B>(buf: &mut B, state: &mut SearchState, skip_current: bool) -> bool;
@@ -241,25 +306,24 @@ hosts that share a buffer between panes no longer leak the
   pub fn search_matches<B>(buf: &B, state: &mut SearchState, dirty_gen: u64, row: usize) -> Vec<(usize, usize)>;
   ```
 
-- `Editor::search_state(&self)` / `Editor::search_state_mut(&mut self)` —
-  borrow the FSM state.
-- `Editor::set_search_pattern(Option<Regex>)` — install a pattern;
-  clears the cached matches and bridges the regex to the buffer's
-  (deprecated) `set_search_pattern` so the in-tree `BufferView`
-  hlsearch render path keeps painting until 0.0.37 lands the
-  spans → Host pipeline.
+- `Editor::search_state(&self)` / `Editor::search_state_mut(&mut self)` — borrow
+  the FSM state.
+- `Editor::set_search_pattern(Option<Regex>)` — install a pattern; clears the
+  cached matches and bridges the regex to the buffer's (deprecated)
+  `set_search_pattern` so the in-tree `BufferView` hlsearch render path keeps
+  painting until 0.0.37 lands the spans → Host pipeline.
 - `Editor::search_advance_forward(skip_current)` /
-  `Editor::search_advance_backward(skip_current)` — `n` / `N`
-  drivers; thin wrappers over the free functions.
+  `Editor::search_advance_backward(skip_current)` — `n` / `N` drivers; thin
+  wrappers over the free functions.
 
 #### Engine call-site relocation
 
-- `vim::push_search_pattern` writes to `Editor::search_state` (and
-  bridges to the buffer for the renderer).
-- `Motion::SearchNext`, `word_at_cursor_search`, the search-prompt
-  Enter handler, and `enter_search` no longer call
-  `buffer.search_*` / `buffer.set_search_pattern`. They route
-  through `Editor::search_advance_*` / `Editor::set_search_pattern`.
+- `vim::push_search_pattern` writes to `Editor::search_state` (and bridges to
+  the buffer for the renderer).
+- `Motion::SearchNext`, `word_at_cursor_search`, the search-prompt Enter
+  handler, and `enter_search` no longer call `buffer.search_*` /
+  `buffer.set_search_pattern`. They route through `Editor::search_advance_*` /
+  `Editor::set_search_pattern`.
 - `Editor::highlights_for_line` reads the active pattern from
   `self.search_state` and pulls match runs through
   `crate::search::search_matches`.
@@ -267,13 +331,13 @@ hosts that share a buffer between panes no longer leak the
 
 #### Buffer surface — soft deprecations (not deletes)
 
-The design doc step 1 prescribes `#[deprecated]` (not removal) so
-the in-tree `BufferView` hlsearch render path and direct
-`hjkl_buffer::Buffer` callers (sqeel-tui's results-list highlight,
-buffr-modal) keep compiling. Removal is queued for 0.1.0.
+The design doc step 1 prescribes `#[deprecated]` (not removal) so the in-tree
+`BufferView` hlsearch render path and direct `hjkl_buffer::Buffer` callers
+(sqeel-tui's results-list highlight, buffr-modal) keep compiling. Removal is
+queued for 0.1.0.
 
-The following buffer-inherent methods are now `#[deprecated(since
-= "0.0.35", note = "...")]`:
+The following buffer-inherent methods are now
+`#[deprecated(since = "0.0.35", note = "...")]`:
 
 - `Buffer::set_search_pattern`
 - `Buffer::search_pattern`
@@ -282,55 +346,51 @@ The following buffer-inherent methods are now `#[deprecated(since
 - `Buffer::search_backward`
 - `Buffer::search_matches`
 
-The `Search::find_next` / `Search::find_prev` SPEC trait methods
-stay non-deprecated — they're pure observers, caller-owned regex,
-SPEC-compliant. The `search_wraps()` accessor stays alive (un-
-deprecated) because the in-tree `Search` impl still reads it; the
-wrap policy migrates to a `Search` parameter at 0.1.0.
+The `Search::find_next` / `Search::find_prev` SPEC trait methods stay
+non-deprecated — they're pure observers, caller-owned regex, SPEC-compliant. The
+`search_wraps()` accessor stays alive (un- deprecated) because the in-tree
+`Search` impl still reads it; the wrap policy migrates to a `Search` parameter
+at 0.1.0.
 
 #### Migration
 
-Callers driving search through `Editor` (sqeel via `:` ex-mode +
-the engine FSM, buffr-modal, inbx) keep working unchanged — the
-engine FSM mutated state lives on `Editor` and the bridge keeps
-`buffer.search_pattern()` mirrored for the renderer.
+Callers driving search through `Editor` (sqeel via `:` ex-mode + the engine FSM,
+buffr-modal, inbx) keep working unchanged — the engine FSM mutated state lives
+on `Editor` and the bridge keeps `buffer.search_pattern()` mirrored for the
+renderer.
 
-Direct `hjkl_buffer::Buffer::search_*` callers (rare) get a
-deprecation lint:
+Direct `hjkl_buffer::Buffer::search_*` callers (rare) get a deprecation lint:
 
-| Before                                 | After                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------- |
-| `buffer.set_search_pattern(p)`         | `editor.set_search_pattern(p)` (or `editor.search_state_mut().set_pattern(p)`) |
-| `buffer.search_pattern()`              | `editor.search_state().pattern.as_ref()`                                     |
-| `buffer.search_forward(skip)`          | `editor.search_advance_forward(skip)` (or `hjkl_engine::search::search_forward`) |
-| `buffer.search_backward(skip)`         | `editor.search_advance_backward(skip)`                                       |
-| `buffer.search_matches(row)`           | `hjkl_engine::search::search_matches(&buf, &mut state, dgen, row)`           |
-| `buffer.set_search_wrap(b)`            | `editor.search_state_mut().wrap_around = b`                                  |
+| Before                         | After                                                                            |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| `buffer.set_search_pattern(p)` | `editor.set_search_pattern(p)` (or `editor.search_state_mut().set_pattern(p)`)   |
+| `buffer.search_pattern()`      | `editor.search_state().pattern.as_ref()`                                         |
+| `buffer.search_forward(skip)`  | `editor.search_advance_forward(skip)` (or `hjkl_engine::search::search_forward`) |
+| `buffer.search_backward(skip)` | `editor.search_advance_backward(skip)`                                           |
+| `buffer.search_matches(row)`   | `hjkl_engine::search::search_matches(&buf, &mut state, dgen, row)`               |
+| `buffer.set_search_wrap(b)`    | `editor.search_state_mut().wrap_around = b`                                      |
 
-The `BufferView` hlsearch render path inside `hjkl-buffer` still
-uses `Buffer::search_pattern()` internally — this is intentional
-for the bridge period and disappears in 0.0.37 when the spans →
-Host pipeline lands.
+The `BufferView` hlsearch render path inside `hjkl-buffer` still uses
+`Buffer::search_pattern()` internally — this is intentional for the bridge
+period and disappears in 0.0.37 when the spans → Host pipeline lands.
 
 #### Roadmap
 
-- **0.0.36 (Patch C-δ.3)** — marks consolidation
-  (`vim.marks` + `Editor::file_marks` + `Buffer::marks` → unified
+- **0.0.36 (Patch C-δ.3)** — marks consolidation (`vim.marks` +
+  `Editor::file_marks` + `Buffer::marks` → unified
   `Editor::marks: BTreeMap<char, Pos>`).
-- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline
-  (delete `Buffer::set_spans` / `Buffer::spans`; delete the
-  search-pattern bridge added in this patch).
-- **0.0.38 (Patch C-δ.5)** — fold mutation through
-  `Host::emit_intent(FoldOp)`; `FoldProvider::apply(FoldOp)` and
-  `FoldProvider::invalidate_range` land.
-- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>`
-  generic flip + freeze; delete the deprecated buffer search
-  methods; `cargo public-api` baseline.
+- **0.0.37 (Patch C-δ.4)** — spans → Host syntax pipeline (delete
+  `Buffer::set_spans` / `Buffer::spans`; delete the search-pattern bridge added
+  in this patch).
+- **0.0.38 (Patch C-δ.5)** — fold mutation through `Host::emit_intent(FoldOp)`;
+  `FoldProvider::apply(FoldOp)` and `FoldProvider::invalidate_range` land.
+- **0.1.0 (Patch C-ε)** — `Editor<'a, B: Buffer, H: Host>` generic flip +
+  freeze; delete the deprecated buffer search methods; `cargo public-api`
+  baseline.
 
-Workspace bumps `0.0.34` → `0.0.35`. Member crate pins
-(`=0.0.34` → `=0.0.35`) and `Cargo.lock` updated. Test count went
-from 669 to 674 (+5 from the new `hjkl_engine::search` module
-unit tests).
+Workspace bumps `0.0.34` → `0.0.35`. Member crate pins (`=0.0.34` → `=0.0.35`)
+and `Cargo.lock` updated. Test count went from 669 to 674 (+5 from the new
+`hjkl_engine::search` module unit tests).
 
 ## [0.0.34] - 2026-04-26
 

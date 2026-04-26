@@ -999,22 +999,75 @@ pub trait Search: Send {
 /// [`sealed::Sealed`].
 pub trait Buffer: Cursor + Query + BufferEdit + Search + sealed::Sealed + Send {}
 
-/// Fold-iteration trait. The engine asks "what's the next visible
-/// row" / "is this row hidden" through this surface so fold storage
-/// can live wherever the host pleases (on the buffer, in a separate
-/// host-side fold tree, or absent entirely).
+/// Canonical fold-mutation op carried through [`FoldProvider::apply`].
 ///
-/// Introduced in 0.0.32 (Patch C-β). Engine call sites that used to
-/// reach into `hjkl_buffer::Buffer::{next_visible_row,
-/// prev_visible_row, is_row_hidden, fold_at_row}` route through this
-/// trait now. The canonical implementation
+/// Introduced in 0.0.38 (Patch C-δ.4). The engine raises one `FoldOp`
+/// per `z…` keystroke / `:fold*` Ex command and dispatches it through
+/// the [`FoldProvider::apply`] surface. Hosts that own the fold storage
+/// (default in-tree wraps `&mut hjkl_buffer::Buffer`) decide how to
+/// apply it — possibly batching, deduping, or vetoing. Hosts without
+/// folds use [`NoopFoldProvider`] which silently discards every op.
+///
+/// `FoldOp` is engine-canonical (per the design doc's resolved
+/// question 8.2): hosts don't invent their own fold-op enums. Each
+/// host that exposes folds embeds a `FoldOp` variant in its `Intent`
+/// enum (or simply observes the engine's pending-fold-op queue via
+/// [`crate::Editor::take_fold_ops`]).
+///
+/// Row indices are zero-based and match the row coordinate space used
+/// by [`hjkl_buffer::Buffer`]'s fold methods.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FoldOp {
+    /// `:fold {start,end}` / `zf{motion}` / visual-mode `zf` — register a
+    /// new fold spanning `[start_row, end_row]` (inclusive). The `closed`
+    /// flag matches the underlying [`hjkl_buffer::Fold::closed`].
+    Add {
+        start_row: usize,
+        end_row: usize,
+        closed: bool,
+    },
+    /// `zd` — drop the fold under `row` if any.
+    RemoveAt(usize),
+    /// `zo` — open the fold under `row` if any.
+    OpenAt(usize),
+    /// `zc` — close the fold under `row` if any.
+    CloseAt(usize),
+    /// `za` — flip the fold under `row` between open / closed.
+    ToggleAt(usize),
+    /// `zR` — open every fold in the buffer.
+    OpenAll,
+    /// `zM` — close every fold in the buffer.
+    CloseAll,
+    /// `zE` — eliminate every fold.
+    ClearAll,
+    /// Edit-driven fold invalidation. Drops every fold touching the
+    /// row range `[start_row, end_row]`. Mirrors vim's "edits inside a
+    /// fold open it" behaviour. Fired by the engine's edit pipeline,
+    /// not bound to a `z…` keystroke.
+    Invalidate { start_row: usize, end_row: usize },
+}
+
+/// Fold-iteration + mutation trait. The engine asks "what's the next
+/// visible row" / "is this row hidden" through this surface, and
+/// dispatches fold mutations through [`FoldProvider::apply`], so fold
+/// storage can live wherever the host pleases (on the buffer, in a
+/// separate host-side fold tree, or absent entirely).
+///
+/// Introduced in 0.0.32 (Patch C-β) for read access; 0.0.38 (Patch
+/// C-δ.4) added [`FoldProvider::apply`] + [`FoldProvider::invalidate_range`]
+/// so engine call sites that used to call
+/// `hjkl_buffer::Buffer::{open,close,toggle,…}_fold_at` directly route
+/// through this trait now. The canonical read-only implementation
 /// [`crate::buffer_impl::BufferFoldProvider`] wraps a
-/// `&hjkl_buffer::Buffer` for hosts that want vim-style folds; hosts
-/// that don't care about folds can use [`NoopFoldProvider`].
+/// `&hjkl_buffer::Buffer`; the canonical mutable implementation
+/// [`crate::buffer_impl::BufferFoldProviderMut`] wraps a
+/// `&mut hjkl_buffer::Buffer`. Hosts that don't care about folds can
+/// use [`NoopFoldProvider`].
 ///
 /// The engine carries a `Box<dyn FoldProvider + 'a>` slot today and
 /// looks up rows through it. Once `Editor<B, H>` flips generic
-/// (Patch C-γ) the slot moves onto `Host` directly.
+/// (Patch C, 0.1.0) the slot moves onto `Host` directly.
 pub trait FoldProvider: Send {
     /// First visible row strictly after `row`, skipping hidden rows.
     /// `None` past the end of the buffer.
@@ -1027,6 +1080,27 @@ pub trait FoldProvider: Send {
     /// `row`, if any. Lets `za` / `zo` / `zc` find their target
     /// without iterating the full fold list.
     fn fold_at_row(&self, row: usize) -> Option<(usize, usize, bool)>;
+
+    /// Apply a [`FoldOp`] to the underlying fold storage. Read-only
+    /// providers (e.g. [`crate::buffer_impl::BufferFoldProvider`] which
+    /// holds a `&Buffer`) and providers that don't track folds (e.g.
+    /// [`NoopFoldProvider`]) implement this as a no-op.
+    ///
+    /// Default impl is a no-op so that read-only / host-stub providers
+    /// don't need to override it; mutable providers
+    /// (e.g. [`crate::buffer_impl::BufferFoldProviderMut`]) override
+    /// this to dispatch to the underlying buffer's fold methods.
+    fn apply(&mut self, op: FoldOp) {
+        let _ = op;
+    }
+
+    /// Drop every fold whose range overlaps `[start_row, end_row]`.
+    /// Edit pipelines call this after a user edit so vim's "edits
+    /// inside a fold open it" behaviour fires. Default impl forwards
+    /// to [`FoldProvider::apply`] with a [`FoldOp::Invalidate`].
+    fn invalidate_range(&mut self, start_row: usize, end_row: usize) {
+        self.apply(FoldOp::Invalidate { start_row, end_row });
+    }
 }
 
 /// No-op [`FoldProvider`] for hosts that don't expose folds. Every

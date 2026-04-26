@@ -277,6 +277,14 @@ pub struct Editor<'a> {
     /// goto-definition). The host app drains this each step and fires
     /// the matching request against its own LSP client.
     pub(super) pending_lsp: Option<LspIntent>,
+    /// Pending [`crate::types::FoldOp`]s raised by `z…` keystrokes,
+    /// the `:fold*` Ex commands, or the edit pipeline's
+    /// "edits-inside-a-fold open it" invalidation. Drained by hosts
+    /// via [`Editor::take_fold_ops`]; the engine also applies each op
+    /// locally through [`crate::buffer_impl::BufferFoldProviderMut`]
+    /// so the in-tree buffer fold storage stays in sync without host
+    /// cooperation. Introduced in 0.0.38 (Patch C-δ.4).
+    pub(super) pending_fold_ops: Vec<crate::types::FoldOp>,
     /// Mirror buffer for the in-flight migration off tui-textarea.
     /// Phase 7a: content syncs on every `set_content` so the rest of
     /// the engine can start reading from / writing to it in
@@ -590,6 +598,7 @@ impl<'a> Editor<'a> {
             cached_content: None,
             viewport_height: AtomicU16::new(0),
             pending_lsp: None,
+            pending_fold_ops: Vec::new(),
             buffer: hjkl_buffer::Buffer::new(),
             #[cfg(feature = "ratatui")]
             style_table: Vec::new(),
@@ -1101,6 +1110,39 @@ impl<'a> Editor<'a> {
         self.pending_lsp.take()
     }
 
+    /// Drain every [`crate::types::FoldOp`] raised since the last
+    /// call. Hosts that mirror the engine's fold storage (or that
+    /// project folds onto a separate fold tree, LSP folding ranges,
+    /// …) drain this each step and dispatch as their own
+    /// [`crate::types::Host::Intent`] requires.
+    ///
+    /// The engine has already applied every op locally against the
+    /// in-tree [`hjkl_buffer::Buffer`] fold storage via
+    /// [`crate::buffer_impl::BufferFoldProviderMut`], so hosts that
+    /// don't track folds independently can ignore the queue
+    /// (or simply never call this drain).
+    ///
+    /// Introduced in 0.0.38 (Patch C-δ.4).
+    pub fn take_fold_ops(&mut self) -> Vec<crate::types::FoldOp> {
+        std::mem::take(&mut self.pending_fold_ops)
+    }
+
+    /// Dispatch a [`crate::types::FoldOp`] through the canonical fold
+    /// surface: queue it for host observation (drained by
+    /// [`Editor::take_fold_ops`]) and apply it locally against the
+    /// in-tree buffer fold storage via
+    /// [`crate::buffer_impl::BufferFoldProviderMut`]. Engine call sites
+    /// (vim FSM `z…` chords, `:fold*` Ex commands, edit-pipeline
+    /// invalidation) route every fold mutation through this method.
+    ///
+    /// Introduced in 0.0.38 (Patch C-δ.4).
+    pub fn apply_fold_op(&mut self, op: crate::types::FoldOp) {
+        use crate::types::FoldProvider;
+        self.pending_fold_ops.push(op);
+        let mut provider = crate::buffer_impl::BufferFoldProviderMut::new(&mut self.buffer);
+        provider.apply(op);
+    }
+
     /// Refresh the host viewport's height from the cached
     /// `viewport_height_value()`. Called from the per-step
     /// boilerplate; was the textarea → buffer mirror before Phase 7f
@@ -1180,7 +1222,10 @@ impl<'a> Editor<'a> {
         // catches the common single-line / multi-line edit shapes.
         let lo = pre_row.min(pos.row);
         let hi = pre_row.max(pos.row);
-        self.buffer.invalidate_folds_in_range(lo, hi);
+        self.apply_fold_op(crate::types::FoldOp::Invalidate {
+            start_row: lo,
+            end_row: hi,
+        });
         self.vim.last_edit_pos = Some((pos.row, pos.col));
         // Append to the change-list ring (skip when the cursor sits on
         // the same cell as the last entry — back-to-back keystrokes on
