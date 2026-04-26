@@ -420,6 +420,17 @@ pub enum LspIntent {
 }
 
 impl<'a> Editor<'a> {
+    /// Update the active `iskeyword` spec for word motions
+    /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). Mirrors the
+    /// new spec onto the underlying buffer so motion classification
+    /// updates instantly. Use this instead of mutating
+    /// `settings_mut().iskeyword` directly so the buffer stays in sync.
+    pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
+        let spec = spec.into();
+        self.settings.iskeyword = spec.clone();
+        self.buffer.set_iskeyword(spec);
+    }
+
     pub fn new(keybinding_mode: KeybindingMode) -> Self {
         Self {
             _marker: std::marker::PhantomData,
@@ -1216,7 +1227,7 @@ impl<'a> Editor<'a> {
         self.settings.autoindent = opts.autoindent;
         self.settings.undo_levels = opts.undo_levels;
         self.settings.undo_break_on_motion = opts.undo_break_on_motion;
-        self.settings.iskeyword = opts.iskeyword.clone();
+        self.set_iskeyword(opts.iskeyword.clone());
         self.settings.timeout_len = opts.timeout_len;
     }
 

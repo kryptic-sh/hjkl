@@ -8,6 +8,32 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.23] - 2026-04-26
+
+### Added (potentially breaking)
+
+- **`iskeyword` now drives buffer-level word motions.** `Buffer` carries
+  the spec via new `Buffer::iskeyword` / `Buffer::set_iskeyword`. The
+  module-level `is_word` predicate is now spec-aware; `char_kind` reads
+  the spec from `&Buffer`. `w` / `b` / `e` / `ge` (and `W` / `B` / `E`)
+  classify chars against the live spec — completes the partial wiring
+  from 0.0.22 (which only honoured iskeyword for engine-side `*` / `#`).
+- `hjkl-buffer` now exports `is_keyword_char(c, spec)` as the
+  single-source parser; `hjkl-engine` re-uses it via re-export instead
+  of carrying its own copy.
+- New `Editor::set_iskeyword(spec)` syncs `Settings::iskeyword` and
+  pushes the spec onto the buffer in one shot. `apply_options` and
+  `:set iskeyword=...` route through it.
+
+### Changed
+
+- The default `Buffer::iskeyword` is `"@,48-57,_,192-255"` (vim parity).
+  Previously hardcoded as `c.is_alphanumeric() || c == '_'`. The new
+  default classifies the same set of ASCII chars but adds Unicode
+  alphabetic coverage (vim's `@` token uses `is_alphabetic`); buffers
+  with non-ASCII alphabetic content may see slightly different word
+  boundaries.
+
 ## [0.0.22] - 2026-04-26
 
 ### Added

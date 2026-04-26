@@ -708,7 +708,7 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
     if let Some((name, value)) = token.split_once('=') {
         // String-valued options short-circuit the numeric parse.
         if matches!(name, "iskeyword" | "isk") {
-            editor.settings_mut().iskeyword = value.to_string();
+            editor.set_iskeyword(value);
             return Ok(());
         }
         let parsed: usize = value

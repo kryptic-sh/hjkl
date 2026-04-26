@@ -32,6 +32,7 @@ mod wrap;
 pub use buffer::Buffer;
 pub use edit::{Edit, MotionKind};
 pub use folds::Fold;
+pub use motion::is_keyword_char;
 pub use position::Position;
 #[cfg(feature = "ratatui")]
 pub use render::{BufferView, Gutter, Sign, StyleResolver};

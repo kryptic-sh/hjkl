@@ -510,19 +510,50 @@ impl Buffer {
     }
 }
 
-/// True if `c` qualifies as a word character (vim's small `w`).
-///
-/// TODO(iskeyword): hjkl-engine carries a configurable `iskeyword`
-/// spec on `Settings`/`Options`; the engine-side `*` / `#` word
-/// pickup honours it via `vim::is_keyword_char`. Buffer-level word
-/// motions (`w` / `b` / `e` / `W` / `B` / `E`) still use this
-/// hardcoded predicate. Plumbing the spec through requires either a
-/// stored `iskeyword: String` on `Buffer` + accessor or threading it
-/// through every `char_kind` callsite (~17 sites). Lands with the
-/// 0.1.0 trait extraction so the new `Buffer` trait can carry it
-/// cleanly.
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+/// Match `c` against a vim-style `iskeyword` spec. Tokens are
+/// comma-separated; understood forms: `@` (any alphabetic),
+/// `_` (literal underscore), `N-M` (decimal char-code range, inclusive),
+/// bare integer `N` (single char code), single ASCII punctuation char
+/// (literal). Unknown tokens are ignored.
+pub fn is_keyword_char(c: char, spec: &str) -> bool {
+    for raw in spec.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token == "@" {
+            if c.is_alphabetic() {
+                return true;
+            }
+            continue;
+        }
+        if let Some((lo, hi)) = token.split_once('-')
+            && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
+        {
+            if (lo..=hi).contains(&(c as u32)) {
+                return true;
+            }
+            continue;
+        }
+        if let Ok(n) = token.parse::<u32>() {
+            if c as u32 == n {
+                return true;
+            }
+            continue;
+        }
+        let mut chars = token.chars();
+        if let (Some(only), None) = (chars.next(), chars.next())
+            && c == only
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// True if `c` qualifies as a word character under `spec`.
+fn is_word(c: char, spec: &str) -> bool {
+    is_keyword_char(c, spec)
 }
 
 /// Classify a char into vim's three "word kinds" so transitions
@@ -535,10 +566,10 @@ enum CharKind {
     Space,
 }
 
-fn char_kind(c: char, big: bool) -> CharKind {
+fn char_kind(buf: &Buffer, c: char, big: bool) -> CharKind {
     if c.is_whitespace() {
         CharKind::Space
-    } else if big || is_word(c) {
+    } else if big || is_word(c, buf.iskeyword()) {
         // `Big` collapses Word + Punct into a single non-space bucket
         // so `W` / `B` / `E` skip across punctuation runs.
         CharKind::Word
@@ -578,14 +609,14 @@ fn char_at(buf: &Buffer, pos: Position) -> Option<char> {
 }
 
 fn next_word_start(buf: &Buffer, from: Position, big: bool) -> Option<Position> {
-    let start_kind = char_at(buf, from).map(|c| char_kind(c, big));
+    let start_kind = char_at(buf, from).map(|c| char_kind(buf, c, big));
     let mut cur = from;
     // Skip the rest of the current word kind. Vim treats line
     // breaks as whitespace separators for `w`, so a row crossing
     // implicitly ends the current word — break and let the
     // skip-space pass handle anything beyond.
     if let Some(kind) = start_kind {
-        while char_at(buf, cur).map(|c| char_kind(c, big)) == Some(kind) {
+        while char_at(buf, cur).map(|c| char_kind(buf, c, big)) == Some(kind) {
             let prev_row = cur.row;
             match step_forward(buf, cur) {
                 Some(next) => {
@@ -600,7 +631,7 @@ fn next_word_start(buf: &Buffer, from: Position, big: bool) -> Option<Position> 
     }
     // Skip whitespace runs (within row + across rows) to land on
     // the next non-space char.
-    while char_at(buf, cur).map(|c| char_kind(c, big)) == Some(CharKind::Space) {
+    while char_at(buf, cur).map(|c| char_kind(buf, c, big)) == Some(CharKind::Space) {
         match step_forward(buf, cur) {
             Some(next) => cur = next,
             None => return Some(end_of_buffer(buf)),
@@ -621,16 +652,16 @@ fn end_of_buffer(buf: &Buffer) -> Position {
 fn prev_word_start(buf: &Buffer, from: Position, big: bool) -> Option<Position> {
     let mut cur = step_back(buf, from)?;
     // Skip whitespace backwards.
-    while char_at(buf, cur).map(|c| char_kind(c, big)) == Some(CharKind::Space) {
+    while char_at(buf, cur).map(|c| char_kind(buf, c, big)) == Some(CharKind::Space) {
         cur = step_back(buf, cur)?;
     }
-    let target_kind = char_at(buf, cur).map(|c| char_kind(c, big))?;
+    let target_kind = char_at(buf, cur).map(|c| char_kind(buf, c, big))?;
     // Walk back while the previous char is still the same kind.
     loop {
         let Some(prev) = step_back(buf, cur) else {
             return Some(cur);
         };
-        if char_at(buf, prev).map(|c| char_kind(c, big)) == Some(target_kind) {
+        if char_at(buf, prev).map(|c| char_kind(buf, c, big)) == Some(target_kind) {
             cur = prev;
         } else {
             return Some(cur);
@@ -647,7 +678,7 @@ fn prev_word_end(buf: &Buffer, from: Position, big: bool) -> Option<Position> {
     loop {
         // Skip whitespace; if it spans across a row boundary, the
         // step_back walk handles the row crossing for us.
-        if char_at(buf, cur).map(|c| char_kind(c, big)) == Some(CharKind::Space) {
+        if char_at(buf, cur).map(|c| char_kind(buf, c, big)) == Some(CharKind::Space) {
             cur = step_back(buf, cur)?;
             continue;
         }
@@ -671,7 +702,7 @@ fn prev_word_end(buf: &Buffer, from: Position, big: bool) -> Option<Position> {
 /// implicit whitespace at end-of-line.
 fn char_kind_or_space(buf: &Buffer, pos: Position, big: bool) -> CharKind {
     char_at(buf, pos)
-        .map(|c| char_kind(c, big))
+        .map(|c| char_kind(buf, c, big))
         .unwrap_or(CharKind::Space)
 }
 
@@ -692,15 +723,15 @@ fn next_word_end(buf: &Buffer, from: Position, big: bool) -> Option<Position> {
     // Vim's `e` advances at least one cell, then walks forward
     // until the *next* char is a different kind (or eof).
     let mut cur = step_forward(buf, from)?;
-    while char_at(buf, cur).map(|c| char_kind(c, big)) == Some(CharKind::Space) {
+    while char_at(buf, cur).map(|c| char_kind(buf, c, big)) == Some(CharKind::Space) {
         cur = step_forward(buf, cur)?;
     }
-    let kind = char_at(buf, cur).map(|c| char_kind(c, big))?;
+    let kind = char_at(buf, cur).map(|c| char_kind(buf, c, big))?;
     loop {
         let Some(next) = step_forward(buf, cur) else {
             return Some(cur);
         };
-        if char_at(buf, next).map(|c| char_kind(c, big)) == Some(kind) {
+        if char_at(buf, next).map(|c| char_kind(buf, c, big)) == Some(kind) {
             cur = next;
         } else {
             return Some(cur);

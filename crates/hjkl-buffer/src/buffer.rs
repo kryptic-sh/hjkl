@@ -42,6 +42,11 @@ pub struct Buffer {
     /// Manual folds — closed ranges hide rows in the render path.
     /// `pub(crate)` so the [`folds`] module can read/write directly.
     pub(crate) folds: Vec<crate::folds::Fold>,
+    /// Vim-flavoured `iskeyword` spec driving word-motion classification
+    /// (`w` / `b` / `e` / `ge`). Engine pushes the live setting via
+    /// [`Buffer::set_iskeyword`] whenever the host changes the option.
+    /// Default `"@,48-57,_,192-255"` matches vim.
+    pub(crate) iskeyword: String,
 }
 
 impl Default for Buffer {
@@ -64,6 +69,7 @@ impl Buffer {
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
+            iskeyword: "@,48-57,_,192-255".to_string(),
         }
     }
 
@@ -87,11 +93,25 @@ impl Buffer {
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
+            iskeyword: "@,48-57,_,192-255".to_string(),
         }
     }
 
     pub fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    /// Active vim-flavoured `iskeyword` spec. Word motions
+    /// (`w` / `b` / `e` / `ge`) classify chars against this.
+    pub fn iskeyword(&self) -> &str {
+        &self.iskeyword
+    }
+
+    /// Replace the `iskeyword` spec. Hosts call this whenever the
+    /// matching engine option changes so word motions immediately
+    /// pick up the new classification.
+    pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
+        self.iskeyword = spec.into();
     }
 
     pub fn line(&self, row: usize) -> Option<&str> {

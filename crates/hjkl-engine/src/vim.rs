@@ -4258,48 +4258,10 @@ fn is_wordchar(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// Match `c` against a vim-style `iskeyword` spec. Tokens are
-/// comma-separated; understood forms: `@` (any alphabetic),
-/// `_` (literal underscore), `N-M` (decimal char-code range, inclusive),
-/// bare integer `N` (single char code), single ASCII punctuation char
-/// (literal). Unknown tokens are ignored. The default spec
-/// `"@,48-57,_,192-255"` matches vim's `keyword=...` default.
-pub(crate) fn is_keyword_char(c: char, spec: &str) -> bool {
-    for raw in spec.split(',') {
-        let token = raw.trim();
-        if token.is_empty() {
-            continue;
-        }
-        if token == "@" {
-            if c.is_alphabetic() {
-                return true;
-            }
-            continue;
-        }
-        if let Some((lo, hi)) = token.split_once('-')
-            && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
-        {
-            if (lo..=hi).contains(&(c as u32)) {
-                return true;
-            }
-            continue;
-        }
-        if let Ok(n) = token.parse::<u32>() {
-            if c as u32 == n {
-                return true;
-            }
-            continue;
-        }
-        // Single literal char (covers `_` and any ASCII punctuation).
-        let mut chars = token.chars();
-        if let (Some(only), None) = (chars.next(), chars.next())
-            && c == only
-        {
-            return true;
-        }
-    }
-    false
-}
+// `is_keyword_char` lives in hjkl-buffer (used by word motions);
+// engine re-uses it via `hjkl_buffer::is_keyword_char` so there's
+// one parser, one default, one bug surface.
+pub(crate) use hjkl_buffer::is_keyword_char;
 
 fn word_text_object(
     ed: &Editor<'_>,
@@ -8028,6 +7990,22 @@ mod tests {
         run_keys(&mut e, "*");
         let p = e.buffer().search_pattern().unwrap().as_str().to_string();
         assert!(p.contains("foo_bar"), "default iskeyword: {p}");
+    }
+
+    #[test]
+    fn w_motion_respects_custom_iskeyword() {
+        // `foo-bar baz`. With the default spec, `-` is NOT a word char,
+        // so `foo` / `-` / `bar` / ` ` / `baz` are 5 transitions and a
+        // single `w` from col 0 lands on `-` (col 3).
+        let mut e = editor_with("foo-bar baz");
+        run_keys(&mut e, "w");
+        assert_eq!(e.cursor().1, 3, "default iskeyword: {:?}", e.cursor());
+        // Re-set with `-` (45) treated as a word char. Now `foo-bar` is
+        // one token; `w` from col 0 should jump to `baz` (col 8).
+        let mut e2 = editor_with("foo-bar baz");
+        e2.set_iskeyword("@,_,45");
+        run_keys(&mut e2, "w");
+        assert_eq!(e2.cursor().1, 8, "dash-as-word: {:?}", e2.cursor());
     }
 
     #[test]
