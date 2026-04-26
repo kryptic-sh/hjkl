@@ -18,10 +18,6 @@ pub struct Buffer {
     /// Charwise cursor. `col` is bound by `lines[row].chars().count()`
     /// in normal mode, one past it in operator-pending / insert.
     cursor: Position,
-    /// Last vertical-motion column (vim's `curswant`). `None` until
-    /// the first `j`/`k` so the buffer can bootstrap from the live
-    /// cursor column.
-    sticky_col: Option<usize>,
     /// Where the buffer is scrolled to + how big the visible region
     /// is. Width / height come from the host on each draw.
     viewport: Viewport,
@@ -42,11 +38,6 @@ pub struct Buffer {
     /// Manual folds — closed ranges hide rows in the render path.
     /// `pub(crate)` so the [`folds`] module can read/write directly.
     pub(crate) folds: Vec<crate::folds::Fold>,
-    /// Vim-flavoured `iskeyword` spec driving word-motion classification
-    /// (`w` / `b` / `e` / `ge`). Engine pushes the live setting via
-    /// [`Buffer::set_iskeyword`] whenever the host changes the option.
-    /// Default `"@,48-57,_,192-255"` matches vim.
-    pub(crate) iskeyword: String,
 }
 
 impl Default for Buffer {
@@ -62,14 +53,12 @@ impl Buffer {
         Self {
             lines: vec![String::new()],
             cursor: Position::default(),
-            sticky_col: None,
             viewport: Viewport::default(),
             spans: Vec::new(),
             marks: BTreeMap::new(),
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
-            iskeyword: "@,48-57,_,192-255".to_string(),
         }
     }
 
@@ -86,32 +75,17 @@ impl Buffer {
         Self {
             lines,
             cursor: Position::default(),
-            sticky_col: None,
             viewport: Viewport::default(),
             spans: Vec::new(),
             marks: BTreeMap::new(),
             dirty_gen: 0,
             search: SearchState::new(),
             folds: Vec::new(),
-            iskeyword: "@,48-57,_,192-255".to_string(),
         }
     }
 
     pub fn lines(&self) -> &[String] {
         &self.lines
-    }
-
-    /// Active vim-flavoured `iskeyword` spec. Word motions
-    /// (`w` / `b` / `e` / `ge`) classify chars against this.
-    pub fn iskeyword(&self) -> &str {
-        &self.iskeyword
-    }
-
-    /// Replace the `iskeyword` spec. Hosts call this whenever the
-    /// matching engine option changes so word motions immediately
-    /// pick up the new classification.
-    pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
-        self.iskeyword = spec.into();
     }
 
     pub fn line(&self, row: usize) -> Option<&str> {
@@ -120,10 +94,6 @@ impl Buffer {
 
     pub fn cursor(&self) -> Position {
         self.cursor
-    }
-
-    pub fn sticky_col(&self) -> Option<usize> {
-        self.sticky_col
     }
 
     pub fn viewport(&self) -> Viewport {
@@ -150,13 +120,6 @@ impl Buffer {
         let line_chars = self.lines[row].chars().count();
         let col = pos.col.min(line_chars);
         self.cursor = Position::new(row, col);
-    }
-
-    /// Replace the sticky col (vim's `curswant`). Motion code sets
-    /// this after vertical / horizontal moves; the buffer doesn't
-    /// touch it on its own.
-    pub fn set_sticky_col(&mut self, col: Option<usize>) {
-        self.sticky_col = col;
     }
 
     /// Bring the cursor into the visible viewport, scrolling by the
@@ -343,8 +306,8 @@ impl Buffer {
         self.dirty_gen_bump();
     }
 
-    /// Replace the buffer's full text in place. Cursor + sticky col
-    /// are clamped to the new content; viewport stays put. Used
+    /// Replace the buffer's full text in place. Cursor is clamped to
+    /// the new content; viewport stays put. Used
     /// during the migration off tui-textarea so the buffer can mirror
     /// the textarea's content after every edit without rebuilding
     /// the whole struct.

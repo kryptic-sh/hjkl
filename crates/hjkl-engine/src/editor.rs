@@ -342,6 +342,15 @@ pub struct Editor<'a> {
     /// Sealed at 0.1.0 trait extraction.
     /// Drained by [`Editor::take_changes`].
     pub(crate) change_log: Vec<crate::types::Edit>,
+    /// Vim's "sticky column" (curswant). `None` before the first
+    /// motion — the next vertical motion bootstraps from the live
+    /// cursor column. Horizontal motions refresh this to the new
+    /// column; vertical motions read it back so bouncing through a
+    /// shorter row doesn't drag the cursor to col 0. Hoisted out of
+    /// `hjkl_buffer::Buffer` (and `VimState`) in 0.0.28 — Editor is
+    /// the single owner now. Buffer motion methods that need it
+    /// take a `&mut Option<usize>` parameter.
+    pub(crate) sticky_col: Option<usize>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -439,14 +448,13 @@ pub enum LspIntent {
 
 impl<'a> Editor<'a> {
     /// Update the active `iskeyword` spec for word motions
-    /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). Mirrors the
-    /// new spec onto the underlying buffer so motion classification
-    /// updates instantly. Use this instead of mutating
-    /// `settings_mut().iskeyword` directly so the buffer stays in sync.
+    /// (`w`/`b`/`e`/`ge` and engine-side `*`/`#` pickup). 0.0.28
+    /// hoisted iskeyword storage out of `Buffer` — `Editor` is the
+    /// single owner now. Equivalent to assigning
+    /// `settings_mut().iskeyword` directly; the dedicated setter is
+    /// retained for source-compatibility with 0.0.27 callers.
     pub fn set_iskeyword(&mut self, spec: impl Into<String>) {
-        let spec = spec.into();
-        self.settings.iskeyword = spec.clone();
-        self.buffer.set_iskeyword(spec);
+        self.settings.iskeyword = spec.into();
     }
 
     pub fn new(keybinding_mode: KeybindingMode) -> Self {
@@ -473,7 +481,23 @@ impl<'a> Editor<'a> {
             file_marks: std::collections::HashMap::new(),
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
+            sticky_col: None,
         }
+    }
+
+    /// Vim's sticky column (curswant). `None` before the first motion;
+    /// hosts shouldn't normally need to read this directly — it's
+    /// surfaced for migration off `Buffer::sticky_col` and for
+    /// snapshot tests.
+    pub fn sticky_col(&self) -> Option<usize> {
+        self.sticky_col
+    }
+
+    /// Replace the sticky column. Hosts should rarely touch this —
+    /// motion code maintains it through the standard horizontal /
+    /// vertical motion paths.
+    pub fn set_sticky_col(&mut self, col: Option<usize>) {
+        self.sticky_col = col;
     }
 
     /// Host hook: replace the cached syntax-derived block ranges that
@@ -801,11 +825,12 @@ impl<'a> Editor<'a> {
         self.pending_lsp.take()
     }
 
-    /// Refresh the buffer's host-side state — sticky col + viewport
-    /// height. Called from the per-step boilerplate; was the textarea
-    /// → buffer mirror before Phase 7f put Buffer in charge.
+    /// Refresh the buffer's host-side state — viewport height.
+    /// Called from the per-step boilerplate; was the textarea →
+    /// buffer mirror before Phase 7f put Buffer in charge. 0.0.28
+    /// hoisted sticky_col out of `Buffer` so this no longer touches
+    /// it.
     pub(crate) fn sync_buffer_from_textarea(&mut self) {
-        self.buffer.set_sticky_col(self.vim.sticky_col);
         let height = self.viewport_height_value();
         self.buffer.viewport_mut().height = height;
     }

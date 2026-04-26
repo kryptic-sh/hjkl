@@ -8,6 +8,77 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.28] - 2026-04-26
+
+### Changed (Patch A — `sticky_col` + `iskeyword` hoist to `Editor`)
+
+- **`sticky_col` (vim's `curswant`) is now stored on `Editor`.** The single
+  source of truth for the desired vertical-motion column moves out of both
+  `hjkl_buffer::Buffer` and the engine-internal `VimState`. New accessors:
+  - `Editor::sticky_col() -> Option<usize>`
+  - `Editor::set_sticky_col(Option<usize>)`
+  Buffer motion methods that need the sticky value
+  (`Buffer::move_up` / `move_down` / `move_screen_up` / `move_screen_down`)
+  now take a `&mut Option<usize>` parameter so the caller owns the storage.
+- **`iskeyword` is now stored only on `Editor::settings.iskeyword`.** Buffer
+  no longer mirrors it. `Editor::set_iskeyword(...)` keeps working
+  (source-compatible with 0.0.27) but no longer writes back into the buffer.
+  Buffer word motions (`Buffer::move_word_fwd` / `move_word_back` /
+  `move_word_end` / `move_word_end_back`) now take `iskeyword: &str` as a
+  parameter so the host can change it without re-publishing onto the buffer.
+- This unblocks Patch C (`Editor<B: Buffer, H: Host>` generic-ification at
+  0.1.0): the audit identified `sticky_col` and `iskeyword` as vim-FSM
+  concerns that don't belong on the SPEC `Buffer` trait surface. They had
+  to come off `Buffer` before the FSM-internal motion helpers can be
+  relocated into the engine as free functions over `B: Cursor + Query`.
+
+### Removed (breaking — `hjkl_buffer::Buffer` public API)
+
+- `Buffer::sticky_col()` — read `Editor::sticky_col()` instead.
+- `Buffer::set_sticky_col(...)` — call `Editor::set_sticky_col(...)`
+  instead.
+- `Buffer::iskeyword()` — read `Editor::settings.iskeyword` instead.
+- `Buffer::set_iskeyword(...)` — call `Editor::set_iskeyword(...)` (which
+  now only mutates `Editor::settings.iskeyword`) instead.
+- The `pub fn refresh_sticky_col_from_cursor` helper on `Buffer` is gone;
+  horizontal motions no longer touch a buffer-side sticky field. The
+  engine's existing `apply_sticky_col` already manages this from the
+  Editor side.
+- `Buffer::move_up`, `move_down`, `move_screen_up`, `move_screen_down` —
+  signature changed to take `sticky_col: &mut Option<usize>`. Callers
+  mirroring the engine pattern thread `&mut editor.sticky_col` through.
+- `Buffer::move_word_fwd`, `move_word_back`, `move_word_end`,
+  `move_word_end_back` — signature changed to take `iskeyword: &str` as
+  the third / fourth positional argument.
+
+### Migration (downstream consumers)
+
+The buffer's `sticky_col` / `iskeyword` storage was an implementation
+detail mirrored from `Editor` since 0.0.23. **No known consumer reads or
+writes these fields directly** — sqeel, buffr, and inbx use the editor-
+level accessors. If a host did call `buffer.sticky_col()` /
+`buffer.set_sticky_col(...)` / `buffer.iskeyword()` /
+`buffer.set_iskeyword(...)` directly, swap to the matching `Editor`
+methods listed above. The `:set iskeyword=...` ex command keeps working
+end-to-end via `Editor::set_iskeyword`.
+
+If a host called `Buffer::move_up` / `move_down` / `move_screen_up` /
+`move_screen_down` / `move_word_*` directly (rather than through the
+engine's motion grammar), thread the new `sticky_col` / `iskeyword`
+parameters through.
+
+### Roadmap
+
+- **Patch A — this release (0.0.28)**: `sticky_col` + `iskeyword` off
+  `Buffer`.
+- **Patch B (0.0.29)**: `Host` wiring — clipboard, cursor-shape emit,
+  fold provider, `host.now()`. Lifts the remaining engine ↔ host
+  side-channels onto the SPEC `Host` trait surface.
+- **Patch C (0.1.0)**: `Editor<'a, B: Buffer = ..., H: Host = ...>`
+  flip, motion / fold / viewport-scroll helpers relocated into the
+  engine as free functions over `B: Cursor + Query`, public surface
+  freezes.
+
 ## [0.0.27] - 2026-04-26
 
 ### Added (canonical `Buffer` impl)

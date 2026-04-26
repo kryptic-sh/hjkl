@@ -359,14 +359,6 @@ pub struct VimState {
     /// separately and use it for block bounds / insert-column
     /// computations. Updated by h/l only.
     pub(super) block_vcol: usize,
-    /// Vim's "sticky column" (curswant). `None` before the first
-    /// motion — the next vertical motion bootstraps from the current
-    /// cursor column. Horizontal motions refresh this to the new
-    /// cursor column; vertical motions *read* it to restore the
-    /// cursor on the destination row when that row is long enough,
-    /// so bouncing through a shorter or empty line doesn't drag the
-    /// cursor back to column 0.
-    pub(super) sticky_col: Option<usize>,
     /// Track whether the last yank/cut was linewise (drives `p`/`P` layout).
     pub(super) yank_linewise: bool,
     /// Active register selector — set by `"reg` prefix, consumed by
@@ -933,7 +925,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
             ed.buffer_mut().move_left(1);
             ed.push_buffer_cursor_to_textarea();
         }
-        ed.vim.sticky_col = Some(ed.cursor().1);
+        ed.sticky_col = Some(ed.cursor().1);
         return true;
     }
 
@@ -949,7 +941,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
                 }
                 // Find the previous word start by stepping the buffer
                 // cursor (vim `b` semantics) and snapshot it.
-                ed.buffer_mut().move_word_back(false, 1);
+                ed.buffer.move_word_back(false, 1, &ed.settings.iskeyword);
                 let word_start = ed.buffer().cursor();
                 if word_start == cursor {
                     return true;
@@ -1226,12 +1218,12 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
             false
         }
         Key::Up => {
-            ed.buffer_mut().move_up(1);
+            ed.buffer.move_up(1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Down => {
-            ed.buffer_mut().move_down(1);
+            ed.buffer.move_down(1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
@@ -1884,7 +1876,7 @@ fn handle_goto_mark(ed: &mut Editor<'_>, input: Input, linewise: bool) -> bool {
     if ed.cursor() != pre {
         push_jump(ed, pre);
     }
-    ed.vim.sticky_col = Some(ed.cursor().1);
+    ed.sticky_col = Some(ed.cursor().1);
     true
 }
 
@@ -1968,7 +1960,7 @@ fn jump_back(ed: &mut Editor<'_>) {
     ed.vim.jump_fwd.push(cur);
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.vim.sticky_col = Some(c);
+    ed.sticky_col = Some(c);
 }
 
 /// `Ctrl-i` / `Tab` — redo the last `Ctrl-o`. Saves the current cursor
@@ -1984,7 +1976,7 @@ fn jump_forward(ed: &mut Editor<'_>) {
     }
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.vim.sticky_col = Some(c);
+    ed.sticky_col = Some(c);
 }
 
 /// Clamp a stored `(row, col)` to the live buffer in case edits
@@ -2044,7 +2036,7 @@ fn scroll_cursor_rows(ed: &mut Editor<'_>, delta: isize) {
         .set_cursor(hjkl_buffer::Position::new(target, 0));
     ed.buffer_mut().move_first_non_blank();
     ed.push_buffer_cursor_to_textarea();
-    ed.vim.sticky_col = Some(ed.buffer().cursor().col);
+    ed.sticky_col = Some(ed.buffer().cursor().col);
 }
 
 // ─── Motion parsing ────────────────────────────────────────────────────────
@@ -2129,10 +2121,10 @@ fn execute_motion(ed: &mut Editor<'_>, motion: Motion, count: usize) {
 /// to bootstrap the sticky value on the very first motion.
 fn apply_sticky_col(ed: &mut Editor<'_>, motion: &Motion, pre_col: usize) {
     if is_vertical_motion(motion) {
-        let want = ed.vim.sticky_col.unwrap_or(pre_col);
+        let want = ed.sticky_col.unwrap_or(pre_col);
         // Record the desired column so the next vertical motion sees
         // it even if we currently clamped to a shorter row.
-        ed.vim.sticky_col = Some(want);
+        ed.sticky_col = Some(want);
         let (row, _) = ed.cursor();
         let line_len = ed.buffer().lines()[row].chars().count();
         // Clamp to the last char on non-empty lines (vim normal-mode
@@ -2144,7 +2136,7 @@ fn apply_sticky_col(ed: &mut Editor<'_>, motion: &Motion, pre_col: usize) {
     } else {
         // Horizontal motion or non-motion: sticky column tracks the
         // new cursor column so the *next* vertical motion aims there.
-        ed.vim.sticky_col = Some(ed.cursor().1);
+        ed.sticky_col = Some(ed.cursor().1);
     }
 }
 
@@ -2184,51 +2176,57 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             // Final col is set by `apply_sticky_col` below — push the
             // post-move row to the textarea and let sticky tracking
             // finish the work.
-            ed.buffer_mut().move_up(count);
+            ed.buffer.move_up(count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
-            ed.buffer_mut().move_down(count);
+            ed.buffer.move_down(count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
-            ed.buffer_mut().move_screen_up(count);
+            ed.buffer.move_screen_up(count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
-            ed.buffer_mut().move_screen_down(count);
+            ed.buffer.move_screen_down(count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
-            ed.buffer_mut().move_word_fwd(false, count);
+            ed.buffer
+                .move_word_fwd(false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordBack => {
-            ed.buffer_mut().move_word_back(false, count);
+            ed.buffer
+                .move_word_back(false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEnd => {
-            ed.buffer_mut().move_word_end(false, count);
+            ed.buffer
+                .move_word_end(false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordFwd => {
-            ed.buffer_mut().move_word_fwd(true, count);
+            ed.buffer.move_word_fwd(true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordBack => {
-            ed.buffer_mut().move_word_back(true, count);
+            ed.buffer
+                .move_word_back(true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEnd => {
-            ed.buffer_mut().move_word_end(true, count);
+            ed.buffer.move_word_end(true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEndBack => {
-            ed.buffer_mut().move_word_end_back(false, count);
+            ed.buffer
+                .move_word_end_back(false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEndBack => {
-            ed.buffer_mut().move_word_end_back(true, count);
+            ed.buffer
+                .move_word_end_back(true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineStart => {
@@ -3024,7 +3022,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             });
             // After insert, cursor sits on the surviving content one row
             // down — step back up onto the freshly-empty line.
-            ed.buffer_mut().move_up(1);
+            ed.buffer.move_up(1, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
             true
         }
@@ -4967,7 +4965,7 @@ fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
         }
     }
     // Any paste re-anchors the sticky column to the new cursor position.
-    ed.vim.sticky_col = Some(ed.buffer().cursor().col);
+    ed.sticky_col = Some(ed.buffer().cursor().col);
 }
 
 pub(crate) fn do_undo(ed: &mut Editor<'_>) {
@@ -5095,7 +5093,7 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
                     at: Position::new(row, 0),
                     text: "\n".to_string(),
                 });
-                ed.buffer_mut().move_up(1);
+                ed.buffer.move_up(1, &mut ed.sticky_col);
             } else {
                 let line_chars = ed
                     .buffer()
@@ -7889,12 +7887,19 @@ mod tests {
     }
 
     #[test]
-    fn buffer_sticky_col_mirrors_vim_state() {
+    fn editor_sticky_col_tracks_horizontal_motion() {
         let mut e = editor_with("longline\nhi\nlongline");
+        // `fl` from col 0 lands on the next `l` past the cursor —
+        // "longline" → second `l` is at col 4. Horizontal motion
+        // should refresh sticky to that column so the next `j`
+        // picks it up across the short row.
         run_keys(&mut e, "fl");
+        let landed = e.cursor().1;
+        assert!(landed > 0, "fl should have moved");
         run_keys(&mut e, "j");
-        // Sticky col should be set; buffer carries the same value.
-        assert_eq!(e.buffer.sticky_col(), e.vim.sticky_col);
+        // Editor is the single owner of sticky_col (0.0.28). The
+        // sticky value was set from the post-`fl` column.
+        assert_eq!(e.sticky_col(), Some(landed));
     }
 
     #[test]
