@@ -18,7 +18,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
 use crate::wrap::wrap_segments;
-use crate::{Buffer, Selection, Wrap};
+use crate::{Buffer, Selection, Viewport, Wrap};
 
 /// Resolves an opaque [`crate::Span::style`] id to a real ratatui
 /// style. The buffer doesn't know about colours; the host (sqeel-vim
@@ -37,8 +37,16 @@ impl<F: Fn(u32) -> Style> StyleResolver for F {
 /// Render-time wrapper around `&Buffer` that carries the optional
 /// [`Selection`] + a [`StyleResolver`]. Created per draw, dropped
 /// when the frame is done — cheap, holds only refs.
+///
+/// 0.0.34 (Patch C-δ.1): added the [`viewport`] field. The viewport
+/// previously lived on the buffer itself; with the relocation to the
+/// engine `Host`, the renderer takes a borrow per draw.
 pub struct BufferView<'a, R: StyleResolver> {
     pub buffer: &'a Buffer,
+    /// Viewport snapshot the host published this frame. Owned by the
+    /// engine `Host`; the renderer borrows for the duration of the
+    /// draw.
+    pub viewport: &'a Viewport,
     pub selection: Option<Selection>,
     pub resolver: &'a R,
     /// Bg painted across the cursor row (vim's `cursorline`). Pass
@@ -107,7 +115,7 @@ pub struct Conceal {
 
 impl<R: StyleResolver> Widget for BufferView<'_, R> {
     fn render(self, area: Rect, term_buf: &mut TermBuffer) {
-        let viewport = self.buffer.viewport();
+        let viewport = *self.viewport;
         let cursor = self.buffer.cursor();
         let lines = self.buffer.lines();
         let spans = self.buffer.spans();
@@ -567,13 +575,25 @@ mod tests {
         Style::default()
     }
 
+    /// Build a default viewport for plain (no-wrap) tests.
+    fn vp(width: u16, height: u16) -> Viewport {
+        Viewport {
+            top_row: 0,
+            top_col: 0,
+            width,
+            height,
+            wrap: Wrap::None,
+            text_width: width,
+        }
+    }
+
     #[test]
     fn renders_plain_chars_into_terminal_buffer() {
-        let mut b = Buffer::from_str("hello\nworld");
-        b.viewport_mut().width = 20;
-        b.viewport_mut().height = 5;
+        let b = Buffer::from_str("hello\nworld");
+        let v = vp(20, 5);
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -595,11 +615,11 @@ mod tests {
     #[test]
     fn cursor_cell_gets_reversed_style() {
         let mut b = Buffer::from_str("abc");
-        b.viewport_mut().width = 10;
-        b.viewport_mut().height = 1;
+        let v = vp(10, 1);
         b.set_cursor(crate::Position::new(0, 1));
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -619,11 +639,11 @@ mod tests {
     #[test]
     fn selection_bg_applies_only_to_selected_cells() {
         use crate::{Position, Selection};
-        let mut b = Buffer::from_str("abcdef");
-        b.viewport_mut().width = 10;
-        b.viewport_mut().height = 1;
+        let b = Buffer::from_str("abcdef");
+        let v = vp(10, 1);
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: Some(Selection::Char {
                 anchor: Position::new(0, 1),
                 head: Position::new(0, 3),
@@ -650,8 +670,7 @@ mod tests {
     fn syntax_span_fg_resolves_via_table() {
         use crate::Span;
         let mut b = Buffer::from_str("SELECT foo");
-        b.viewport_mut().width = 20;
-        b.viewport_mut().height = 1;
+        let v = vp(20, 1);
         b.set_spans_for_test(vec![vec![Span::new(0, 6, 7)]]);
         let resolver = |id: u32| -> Style {
             if id == 7 {
@@ -662,6 +681,7 @@ mod tests {
         };
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &resolver,
             cursor_line_bg: Style::default(),
@@ -681,11 +701,11 @@ mod tests {
 
     #[test]
     fn gutter_renders_right_aligned_line_numbers() {
-        let mut b = Buffer::from_str("a\nb\nc");
-        b.viewport_mut().width = 10;
-        b.viewport_mut().height = 3;
+        let b = Buffer::from_str("a\nb\nc");
+        let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -714,11 +734,11 @@ mod tests {
     fn search_bg_paints_match_cells() {
         use regex::Regex;
         let mut b = Buffer::from_str("foo bar foo");
-        b.viewport_mut().width = 20;
-        b.viewport_mut().height = 1;
+        let v = vp(20, 1);
         b.set_search_pattern(Some(Regex::new("foo").unwrap()));
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -748,13 +768,13 @@ mod tests {
         // otherwise overwrite the search bg with column bg — verify
         // the match cells keep their search colour.
         let mut b = Buffer::from_str("foo bar foo");
-        b.viewport_mut().width = 20;
-        b.viewport_mut().height = 1;
+        let v = vp(20, 1);
         b.set_search_pattern(Some(Regex::new("foo").unwrap()));
         // Cursor on column 1 (inside first `foo` match).
         b.set_cursor(crate::Position::new(0, 1));
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -773,9 +793,8 @@ mod tests {
 
     #[test]
     fn highest_priority_sign_wins_per_row_and_overwrites_gutter() {
-        let mut b = Buffer::from_str("a\nb\nc");
-        b.viewport_mut().width = 10;
-        b.viewport_mut().height = 3;
+        let b = Buffer::from_str("a\nb\nc");
+        let v = vp(10, 3);
         let signs = [
             Sign {
                 row: 0,
@@ -792,6 +811,7 @@ mod tests {
         ];
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -815,9 +835,8 @@ mod tests {
 
     #[test]
     fn conceal_replaces_byte_range() {
-        let mut b = Buffer::from_str("see https://example.com end");
-        b.viewport_mut().width = 30;
-        b.viewport_mut().height = 1;
+        let b = Buffer::from_str("see https://example.com end");
+        let v = vp(30, 1);
         let conceals = vec![Conceal {
             row: 0,
             start_byte: 4,                             // start of "https"
@@ -826,6 +845,7 @@ mod tests {
         }];
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -849,12 +869,12 @@ mod tests {
     #[test]
     fn closed_fold_collapses_rows_and_paints_marker() {
         let mut b = Buffer::from_str("a\nb\nc\nd\ne");
-        b.viewport_mut().width = 30;
-        b.viewport_mut().height = 5;
+        let v = vp(30, 5);
         // Fold rows 1-3 closed. Visible should be: 'a', marker, 'e'.
         b.add_fold(1, 3, true);
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -879,11 +899,11 @@ mod tests {
     #[test]
     fn open_fold_renders_normally() {
         let mut b = Buffer::from_str("a\nb\nc");
-        b.viewport_mut().width = 5;
-        b.viewport_mut().height = 3;
+        let v = vp(5, 3);
         b.add_fold(0, 2, false); // open
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -903,12 +923,12 @@ mod tests {
 
     #[test]
     fn horizontal_scroll_clips_left_chars() {
-        let mut b = Buffer::from_str("abcdefgh");
-        b.viewport_mut().width = 4;
-        b.viewport_mut().height = 1;
-        b.viewport_mut().top_col = 3;
+        let b = Buffer::from_str("abcdefgh");
+        let mut v = vp(4, 1);
+        v.top_col = 3;
         let view = BufferView {
             buffer: &b,
+            viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
@@ -927,11 +947,13 @@ mod tests {
 
     fn make_wrap_view<'a>(
         b: &'a Buffer,
+        viewport: &'a Viewport,
         resolver: &'a (impl StyleResolver + 'a),
         gutter: Option<Gutter>,
     ) -> BufferView<'a, impl StyleResolver + 'a> {
         BufferView {
             buffer: b,
+            viewport,
             selection: None,
             resolver,
             cursor_line_bg: Style::default(),
@@ -970,16 +992,17 @@ mod tests {
 
     #[test]
     fn wrap_char_paints_continuation_rows() {
-        let mut b = Buffer::from_str("abcdefghij");
-        {
-            let v = b.viewport_mut();
-            v.width = 4;
-            v.height = 3;
-            v.wrap = Wrap::Char;
-            v.text_width = 4;
-        }
+        let b = Buffer::from_str("abcdefghij");
+        let v = Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: 4,
+            height: 3,
+            wrap: Wrap::Char,
+            text_width: 4,
+        };
         let r = no_styles as fn(u32) -> Style;
-        let view = make_wrap_view(&b, &r, None);
+        let view = make_wrap_view(&b, &v, &r, None);
         let term = run_render(view, 4, 3);
         // Row 0: "abcd"
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -994,21 +1017,22 @@ mod tests {
 
     #[test]
     fn wrap_char_gutter_blank_on_continuation() {
-        let mut b = Buffer::from_str("abcdefgh");
-        {
-            let v = b.viewport_mut();
-            v.width = 6;
-            v.height = 3;
-            v.wrap = Wrap::Char;
+        let b = Buffer::from_str("abcdefgh");
+        let v = Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: 6,
+            height: 3,
+            wrap: Wrap::Char,
             // Text area = 6 - 3 (gutter width) = 3.
-            v.text_width = 3;
-        }
+            text_width: 3,
+        };
         let r = no_styles as fn(u32) -> Style;
         let gutter = Gutter {
             width: 3,
             style: Style::default().fg(Color::Yellow),
         };
-        let view = make_wrap_view(&b, &r, Some(gutter));
+        let view = make_wrap_view(&b, &v, &r, Some(gutter));
         let term = run_render(view, 6, 3);
         // Row 0: "  1" + "abc"
         assert_eq!(term.cell((1, 0)).unwrap().symbol(), "1");
@@ -1024,17 +1048,18 @@ mod tests {
     #[test]
     fn wrap_char_cursor_lands_on_correct_segment() {
         let mut b = Buffer::from_str("abcdefghij");
-        {
-            let v = b.viewport_mut();
-            v.width = 4;
-            v.height = 3;
-            v.wrap = Wrap::Char;
-            v.text_width = 4;
-        }
+        let v = Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: 4,
+            height: 3,
+            wrap: Wrap::Char,
+            text_width: 4,
+        };
         // Cursor on 'g' (col 6) should land on row 1, col 2.
         b.set_cursor(crate::Position::new(0, 6));
         let r = no_styles as fn(u32) -> Style;
-        let mut view = make_wrap_view(&b, &r, None);
+        let mut view = make_wrap_view(&b, &v, &r, None);
         view.cursor_style = Style::default().add_modifier(Modifier::REVERSED);
         let term = run_render(view, 4, 3);
         assert!(
@@ -1048,17 +1073,18 @@ mod tests {
     #[test]
     fn wrap_char_eol_cursor_placeholder_on_last_segment() {
         let mut b = Buffer::from_str("abcdef");
-        {
-            let v = b.viewport_mut();
-            v.width = 4;
-            v.height = 3;
-            v.wrap = Wrap::Char;
-            v.text_width = 4;
-        }
+        let v = Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: 4,
+            height: 3,
+            wrap: Wrap::Char,
+            text_width: 4,
+        };
         // Past-end cursor at col 6.
         b.set_cursor(crate::Position::new(0, 6));
         let r = no_styles as fn(u32) -> Style;
-        let mut view = make_wrap_view(&b, &r, None);
+        let mut view = make_wrap_view(&b, &v, &r, None);
         view.cursor_style = Style::default().add_modifier(Modifier::REVERSED);
         let term = run_render(view, 4, 3);
         // Last segment is row 1 ("ef"), placeholder at x = 6 - 4 = 2.
@@ -1072,16 +1098,17 @@ mod tests {
 
     #[test]
     fn wrap_word_breaks_at_whitespace() {
-        let mut b = Buffer::from_str("alpha beta gamma");
-        {
-            let v = b.viewport_mut();
-            v.width = 8;
-            v.height = 3;
-            v.wrap = Wrap::Word;
-            v.text_width = 8;
-        }
+        let b = Buffer::from_str("alpha beta gamma");
+        let v = Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: 8,
+            height: 3,
+            wrap: Wrap::Word,
+            text_width: 8,
+        };
         let r = no_styles as fn(u32) -> Style;
-        let view = make_wrap_view(&b, &r, None);
+        let view = make_wrap_view(&b, &v, &r, None);
         let term = run_render(view, 8, 3);
         // Row 0: "alpha "
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");

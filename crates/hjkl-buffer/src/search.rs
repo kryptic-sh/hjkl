@@ -96,6 +96,12 @@ impl Buffer {
     /// Move the cursor to the next match starting from (or just
     /// after, when `skip_current = true`) the cursor. Wraps end-of-
     /// buffer to row 0. Returns `true` when a match was found.
+    ///
+    /// 0.0.34 (Patch C-δ.1): no longer auto-scrolls — viewport state
+    /// lives on the engine `Host` now, not the buffer. The engine
+    /// re-applies `ensure_cursor_visible` post-search; pure-buffer
+    /// callers that want the previous behaviour should follow this
+    /// call with `buffer.ensure_cursor_visible(&mut viewport)`.
     pub fn search_forward(&mut self, skip_current: bool) -> bool {
         if self.search_pattern().is_none() {
             return false;
@@ -110,7 +116,6 @@ impl Buffer {
             self.find_match_in_row(cursor.row, start_byte, skip_current, /*forward=*/ true)
         {
             self.set_cursor(pos);
-            self.ensure_cursor_visible();
             return true;
         }
         // Scan rows after cursor, then optionally wrap to rows before.
@@ -121,7 +126,6 @@ impl Buffer {
             let row = (cursor.row + offset) % total;
             if let Some(pos) = self.find_match_in_row(row, 0, false, true) {
                 self.set_cursor(pos);
-                self.ensure_cursor_visible();
                 return true;
             }
             if row == cursor.row {
@@ -134,6 +138,9 @@ impl Buffer {
     /// Move to the previous match. Symmetric with `search_forward`
     /// but walks rows backwards and picks the rightmost match in
     /// each row.
+    ///
+    /// 0.0.34 (Patch C-δ.1): see [`Buffer::search_forward`] — no
+    /// longer auto-scrolls.
     pub fn search_backward(&mut self, skip_current: bool) -> bool {
         if self.search_pattern().is_none() {
             return false;
@@ -150,7 +157,6 @@ impl Buffer {
             /*forward=*/ false,
         ) {
             self.set_cursor(pos);
-            self.ensure_cursor_visible();
             return true;
         }
         let total = self.row_count();
@@ -163,7 +169,6 @@ impl Buffer {
                 self.find_match_in_row(row, usize::MAX, false, /*forward=*/ false)
             {
                 self.set_cursor(pos);
-                self.ensure_cursor_visible();
                 return true;
             }
             if row == cursor.row {

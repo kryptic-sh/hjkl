@@ -449,15 +449,28 @@ impl Options {
     }
 }
 
-/// Visible region of a buffer. The host writes `top_line` and `height`
-/// per render frame; the engine reads to decide where the cursor must
-/// land for visibility (cf. `scroll_off`).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Viewport {
-    pub top_line: u32,
-    pub height: u32,
-    pub scroll_off: u32,
-}
+/// Visible region of a buffer — the runtime viewport state the host
+/// owns and mutates per render frame.
+///
+/// 0.0.34 (Patch C-δ.1): semantic ownership moved from
+/// [`hjkl_buffer::Buffer`] to [`Host`]. The struct still lives in
+/// `hjkl-buffer` (alongside [`hjkl_buffer::Wrap`] and the rope-walking
+/// `wrap_segments` math it depends on) so the dependency graph stays
+/// `engine → buffer`; the engine re-exports it as
+/// [`crate::types::Viewport`] (this alias) for hosts that program to
+/// the SPEC surface.
+///
+/// The architectural decision is "viewport lives on Host, not Buffer":
+/// vim logic must work in GUI hosts (variable-width fonts, pixel
+/// canvases, soft-wrap by pixel) as well as TUI hosts, so the runtime
+/// viewport state is expressed in cells/rows/cols and is owned by the
+/// host. `top_row` and `top_col` are the first visible row / column
+/// (`top_col` is a char index).
+///
+/// `wrap` and `text_width` together drive soft-wrap-aware scrolling
+/// and motion. `text_width` is the cell width of the text area
+/// (i.e., `width` minus any gutter the host renders).
+pub use hjkl_buffer::Viewport;
 
 /// Opaque buffer identifier owned by the host. Engine echoes it back
 /// in [`Host::Intent`] variants for buffer-list operations
@@ -600,6 +613,18 @@ pub trait Host: Send {
     /// cursor in the requested shape.
     fn emit_cursor_shape(&mut self, shape: CursorShape);
 
+    // ── Viewport (host owns runtime viewport state) ──
+
+    /// Borrow the host's viewport. The host writes `width`/`height`/
+    /// `text_width`/`wrap` per render frame; the engine reads/writes
+    /// `top_row` / `top_col` to scroll. 0.0.34 (Patch C-δ.1) moved
+    /// this off [`hjkl_buffer::Buffer`] onto `Host`.
+    fn viewport(&self) -> &Viewport;
+
+    /// Mutable viewport access. Engine motion + scroll code routes
+    /// here when scrolloff math advances `top_row`.
+    fn viewport_mut(&mut self) -> &mut Viewport;
+
     // ── Custom intent fan-out ──
 
     /// Host-defined event the engine raises (LSP request, fold op,
@@ -623,6 +648,8 @@ pub trait EngineHost: Send {
     fn should_cancel(&self) -> bool;
     fn prompt_search(&mut self) -> Option<String>;
     fn emit_cursor_shape(&mut self, shape: CursorShape);
+    fn viewport(&self) -> &Viewport;
+    fn viewport_mut(&mut self) -> &mut Viewport;
 }
 
 impl<H: Host + ?Sized> EngineHost for H {
@@ -644,6 +671,12 @@ impl<H: Host + ?Sized> EngineHost for H {
     fn emit_cursor_shape(&mut self, shape: CursorShape) {
         <Self as Host>::emit_cursor_shape(self, shape)
     }
+    fn viewport(&self) -> &Viewport {
+        <Self as Host>::viewport(self)
+    }
+    fn viewport_mut(&mut self) -> &mut Viewport {
+        <Self as Host>::viewport_mut(self)
+    }
 }
 
 /// Default no-op [`Host`] implementation. Suitable for tests, headless
@@ -664,6 +697,7 @@ pub struct DefaultHost {
     clipboard: Option<String>,
     last_cursor_shape: CursorShape,
     started: std::time::Instant,
+    viewport: Viewport,
 }
 
 impl Default for DefaultHost {
@@ -673,11 +707,35 @@ impl Default for DefaultHost {
 }
 
 impl DefaultHost {
+    /// Default viewport size for headless / test hosts: 80x24, no
+    /// soft-wrap. Matches the conventional terminal default.
+    pub const DEFAULT_VIEWPORT: Viewport = Viewport {
+        top_row: 0,
+        top_col: 0,
+        width: 80,
+        height: 24,
+        wrap: hjkl_buffer::Wrap::None,
+        text_width: 80,
+    };
+
     pub fn new() -> Self {
         Self {
             clipboard: None,
             last_cursor_shape: CursorShape::Block,
             started: std::time::Instant::now(),
+            viewport: Self::DEFAULT_VIEWPORT,
+        }
+    }
+
+    /// Construct a [`DefaultHost`] with a custom initial viewport.
+    /// Useful for tests that want to exercise scrolloff math at a
+    /// specific window size.
+    pub fn with_viewport(viewport: Viewport) -> Self {
+        Self {
+            clipboard: None,
+            last_cursor_shape: CursorShape::Block,
+            started: std::time::Instant::now(),
+            viewport,
         }
     }
 
@@ -708,6 +766,14 @@ impl Host for DefaultHost {
 
     fn emit_cursor_shape(&mut self, shape: CursorShape) {
         self.last_cursor_shape = shape;
+    }
+
+    fn viewport(&self) -> &Viewport {
+        &self.viewport
+    }
+
+    fn viewport_mut(&mut self) -> &mut Viewport {
+        &mut self.viewport
     }
 
     fn emit_intent(&mut self, _intent: Self::Intent) {}

@@ -938,17 +938,17 @@ impl<'a> Editor<'a> {
     /// no-op; call sites can remain in place during the migration.
     pub(crate) fn push_buffer_cursor_to_textarea(&mut self) {}
 
-    /// Force the buffer viewport's top row without touching the
+    /// Force the host viewport's top row without touching the
     /// cursor. Used by tests that simulate a scroll without the
     /// SCROLLOFF cursor adjustment that `scroll_down` / `scroll_up`
-    /// apply. Note: does not touch the textarea — the migration
-    /// buffer's viewport is what `BufferView` renders from, and the
-    /// textarea's own scroll path would clamp the cursor into its
-    /// (often-zero) visible window.
+    /// apply.
+    ///
+    /// 0.0.34 (Patch C-δ.1): writes through `Host::viewport_mut`
+    /// instead of the (now-deleted) `Buffer::viewport_mut`.
     pub fn set_viewport_top(&mut self, row: usize) {
         let last = self.buffer.row_count().saturating_sub(1);
         let target = row.min(last);
-        self.buffer.viewport_mut().top_row = target;
+        self.host.viewport_mut().top_row = target;
     }
 
     /// Set the cursor to `(row, col)`, clamped to the buffer's
@@ -976,14 +976,15 @@ impl<'a> Editor<'a> {
         self.pending_lsp.take()
     }
 
-    /// Refresh the buffer's host-side state — viewport height.
-    /// Called from the per-step boilerplate; was the textarea →
-    /// buffer mirror before Phase 7f put Buffer in charge. 0.0.28
-    /// hoisted sticky_col out of `Buffer` so this no longer touches
-    /// it.
+    /// Refresh the host viewport's height from the cached
+    /// `viewport_height_value()`. Called from the per-step
+    /// boilerplate; was the textarea → buffer mirror before Phase 7f
+    /// put Buffer in charge. 0.0.28 hoisted sticky_col out of
+    /// `Buffer`. 0.0.34 (Patch C-δ.1) routes the height write through
+    /// `Host::viewport_mut`.
     pub(crate) fn sync_buffer_from_textarea(&mut self) {
         let height = self.viewport_height_value();
-        self.buffer.viewport_mut().height = height;
+        self.host.viewport_mut().height = height;
     }
 
     /// Was the full textarea → buffer content sync. Buffer is the
@@ -1189,7 +1190,7 @@ impl<'a> Editor<'a> {
     /// the stored viewport top so subsequent calls remain accurate.
     pub fn cursor_screen_row(&mut self, height: u16) -> u16 {
         let cursor = self.buffer.cursor().row;
-        let top = self.buffer.viewport().top_row;
+        let top = self.host.viewport().top_row;
         cursor.saturating_sub(top).min(height as usize - 1) as u16
     }
 
@@ -1210,7 +1211,7 @@ impl<'a> Editor<'a> {
         area_height: u16,
     ) -> Option<(u16, u16)> {
         let pos = self.buffer.cursor();
-        let v = self.buffer.viewport();
+        let v = self.host.viewport();
         if pos.row < v.top_row || pos.col < v.top_col {
             return None;
         }
@@ -1671,7 +1672,7 @@ impl<'a> Editor<'a> {
             cursor_row: cursor_row as u32,
             cursor_col: cursor_col as u32,
             cursor_shape: shape,
-            viewport_top: self.buffer.viewport().top_row as u32,
+            viewport_top: self.host.viewport().top_row as u32,
             line_count: self.buffer.lines().len() as u32,
         }
     }
@@ -1700,7 +1701,7 @@ impl<'a> Editor<'a> {
         let cursor = self.cursor();
         let cursor = (cursor.0 as u32, cursor.1 as u32);
         let lines: Vec<String> = self.buffer.lines().to_vec();
-        let viewport_top = self.buffer.viewport().top_row as u32;
+        let viewport_top = self.host.viewport().top_row as u32;
         let file_marks = self
             .file_marks
             .iter()
@@ -1738,9 +1739,7 @@ impl<'a> Editor<'a> {
         let text = snap.lines.join("\n");
         self.set_content(&text);
         self.jump_cursor(snap.cursor.0 as usize, snap.cursor.1 as usize);
-        let mut vp = self.buffer.viewport();
-        vp.top_row = snap.viewport_top as usize;
-        *self.buffer.viewport_mut() = vp;
+        self.host.viewport_mut().top_row = snap.viewport_top as usize;
         self.registers = snap.registers;
         self.file_marks = snap
             .file_marks
@@ -1786,7 +1785,7 @@ impl<'a> Editor<'a> {
     pub(crate) fn ensure_cursor_in_scrolloff(&mut self) {
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
         if height == 0 {
-            self.buffer.ensure_cursor_visible();
+            self.buffer.ensure_cursor_visible(self.host.viewport_mut());
             return;
         }
         // Cap margin at (height - 1) / 2 so the upper + lower bands
@@ -1795,13 +1794,13 @@ impl<'a> Editor<'a> {
         let margin = Self::SCROLLOFF.min(height.saturating_sub(1) / 2);
         // Soft-wrap path: scrolloff math runs in *screen rows*, not
         // doc rows, since a wrapped doc row spans many visual lines.
-        if !matches!(self.buffer.viewport().wrap, hjkl_buffer::Wrap::None) {
+        if !matches!(self.host.viewport().wrap, hjkl_buffer::Wrap::None) {
             self.ensure_scrolloff_wrap(height, margin);
             return;
         }
         let cursor_row = self.buffer.cursor().row;
         let last_row = self.buffer.row_count().saturating_sub(1);
-        let v = self.buffer.viewport_mut();
+        let v = self.host.viewport_mut();
         // Top edge: cursor_row should sit at >= top_row + margin.
         if cursor_row < v.top_row + margin {
             v.top_row = cursor_row.saturating_sub(margin);
@@ -1819,7 +1818,7 @@ impl<'a> Editor<'a> {
         // Defer to Buffer for column-side scroll (no scrolloff for
         // horizontal scrolling — vim default `sidescrolloff = 0`).
         let cursor = self.buffer.cursor();
-        self.buffer.viewport_mut().ensure_visible(cursor);
+        self.host.viewport_mut().ensure_visible(cursor);
     }
 
     /// Soft-wrap-aware scrolloff. Walks `top_row` one visible doc row
@@ -1830,25 +1829,29 @@ impl<'a> Editor<'a> {
         let cursor_row = self.buffer.cursor().row;
         // Step 1 — cursor above viewport: snap top to cursor row,
         // then we'll fix up the margin below.
-        if cursor_row < self.buffer.viewport().top_row {
-            self.buffer.viewport_mut().top_row = cursor_row;
-            self.buffer.viewport_mut().top_col = 0;
+        if cursor_row < self.host.viewport().top_row {
+            let v = self.host.viewport_mut();
+            v.top_row = cursor_row;
+            v.top_col = 0;
         }
         // Step 2 — push top forward until cursor's screen row is
         // within the bottom margin (`csr <= height - 1 - margin`).
         // 0.0.33 (Patch C-γ): fold-iteration goes through the
         // [`crate::types::FoldProvider`] surface via
-        // [`crate::buffer_impl::BufferFoldProvider`]. The buffer
-        // re-borrow is short-lived — we drop the immutable
-        // [`BufferFoldProvider`] before the mutable
-        // `viewport_mut()` write below.
+        // [`crate::buffer_impl::BufferFoldProvider`]. 0.0.34 (Patch
+        // C-δ.1): `cursor_screen_row` / `max_top_for_height` now take
+        // a `&Viewport` parameter; the host owns the viewport, so the
+        // disjoint `(self.host, self.buffer)` borrows split cleanly.
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
         loop {
-            let csr = self.buffer.cursor_screen_row().unwrap_or(0);
+            let csr = self
+                .buffer
+                .cursor_screen_row(self.host.viewport())
+                .unwrap_or(0);
             if csr <= max_csr {
                 break;
             }
-            let top = self.buffer.viewport().top_row;
+            let top = self.host.viewport().top_row;
             let row_count = self.buffer.row_count();
             let next = {
                 let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
@@ -1859,19 +1862,22 @@ impl<'a> Editor<'a> {
             };
             // Don't walk past the cursor's row.
             if next > cursor_row {
-                self.buffer.viewport_mut().top_row = cursor_row;
+                self.host.viewport_mut().top_row = cursor_row;
                 break;
             }
-            self.buffer.viewport_mut().top_row = next;
+            self.host.viewport_mut().top_row = next;
         }
         // Step 3 — pull top backward until cursor's screen row is
         // past the top margin (`csr >= margin`).
         loop {
-            let csr = self.buffer.cursor_screen_row().unwrap_or(0);
+            let csr = self
+                .buffer
+                .cursor_screen_row(self.host.viewport())
+                .unwrap_or(0);
             if csr >= margin {
                 break;
             }
-            let top = self.buffer.viewport().top_row;
+            let top = self.host.viewport().top_row;
             let prev = {
                 let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
                 <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::prev_visible_row(&folds, top)
@@ -1879,31 +1885,31 @@ impl<'a> Editor<'a> {
             let Some(prev) = prev else {
                 break;
             };
-            self.buffer.viewport_mut().top_row = prev;
+            self.host.viewport_mut().top_row = prev;
         }
         // Step 4 — clamp top so the buffer's bottom doesn't leave
         // blank rows below it. `max_top_for_height` walks segments
         // backward from the last row until it accumulates `height`
         // screen rows.
-        let max_top = self.buffer.max_top_for_height(height);
-        if self.buffer.viewport().top_row > max_top {
-            self.buffer.viewport_mut().top_row = max_top;
+        let max_top = self.buffer.max_top_for_height(self.host.viewport(), height);
+        if self.host.viewport().top_row > max_top {
+            self.host.viewport_mut().top_row = max_top;
         }
-        self.buffer.viewport_mut().top_col = 0;
+        self.host.viewport_mut().top_col = 0;
     }
 
     fn scroll_viewport(&mut self, delta: i16) {
         if delta == 0 {
             return;
         }
-        // Bump the buffer's viewport top within bounds.
+        // Bump the host viewport's top within bounds.
         let total_rows = self.buffer.row_count() as isize;
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
-        let cur_top = self.buffer.viewport().top_row as isize;
+        let cur_top = self.host.viewport().top_row as isize;
         let new_top = (cur_top + delta as isize)
             .max(0)
             .min((total_rows - 1).max(0)) as usize;
-        self.buffer.viewport_mut().top_row = new_top;
+        self.host.viewport_mut().top_row = new_top;
         // Mirror to textarea so its viewport reads (still consumed by
         // a couple of helpers) stay accurate.
         let _ = cur_top;
@@ -1946,7 +1952,7 @@ impl<'a> Editor<'a> {
             return;
         }
         let cur_row = self.buffer.cursor().row;
-        let cur_top = self.buffer.viewport().top_row;
+        let cur_top = self.host.viewport().top_row;
         // Scrolloff awareness: `zt` lands the cursor at the top edge
         // of the viable area (top + margin), `zb` at the bottom edge
         // (top + height - 1 - margin). Match the cap used by
@@ -1963,7 +1969,7 @@ impl<'a> Editor<'a> {
         if new_top == cur_top {
             return;
         }
-        self.buffer.viewport_mut().top_row = new_top;
+        self.host.viewport_mut().top_row = new_top;
     }
 
     /// Translate a terminal mouse position into a (row, col) inside
@@ -1982,7 +1988,7 @@ impl<'a> Editor<'a> {
         let lnum_width = lines.len().to_string().len() as u16 + 2;
         let content_x = area_x.saturating_add(1).saturating_add(lnum_width);
         let rel_row = row.saturating_sub(inner_top) as usize;
-        let top = self.buffer.viewport().top_row;
+        let top = self.host.viewport().top_row;
         let doc_row = (top + rel_row).min(lines.len().saturating_sub(1));
         let rel_col = col.saturating_sub(content_x) as usize;
         let line_chars = lines.get(doc_row).map(|l| l.chars().count()).unwrap_or(0);
@@ -2845,7 +2851,7 @@ mod tests {
         e.jump_cursor(50, 0);
         e.handle_key(key(KeyCode::Char('z')));
         e.handle_key(key(KeyCode::Char('z')));
-        assert_eq!(e.buffer().viewport().top_row, 40);
+        assert_eq!(e.host().viewport().top_row, 40);
         assert_eq!(e.cursor().0, 50);
     }
 
@@ -2859,7 +2865,7 @@ mod tests {
         e.handle_key(key(KeyCode::Char('t')));
         // Cursor lands at top of viable area = top + SCROLLOFF (5).
         // Viewport top therefore sits at cursor - 5.
-        assert_eq!(e.buffer().viewport().top_row, 45);
+        assert_eq!(e.host().viewport().top_row, 45);
         assert_eq!(e.cursor().0, 50);
     }
 
@@ -2935,7 +2941,7 @@ mod tests {
         // Cursor lands at bottom of viable area = top + height - 1 -
         // SCROLLOFF. For height 20, scrolloff 5: cursor at top + 14,
         // so top = cursor - 14 = 36.
-        assert_eq!(e.buffer().viewport().top_row, 36);
+        assert_eq!(e.host().viewport().top_row, 36);
         assert_eq!(e.cursor().0, 50);
     }
 
@@ -3128,7 +3134,10 @@ mod tests {
         // host. (Host: Send rules out Rc/RefCell.)
         let shapes_ptr: &'static std::sync::Mutex<Vec<crate::types::CursorShape>> =
             Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
-        struct LeakHost(&'static std::sync::Mutex<Vec<crate::types::CursorShape>>);
+        struct LeakHost {
+            shapes: &'static std::sync::Mutex<Vec<crate::types::CursorShape>>,
+            viewport: crate::types::Viewport,
+        }
         impl crate::types::Host for LeakHost {
             type Intent = ();
             fn write_clipboard(&mut self, _: String) {}
@@ -3142,11 +3151,23 @@ mod tests {
                 None
             }
             fn emit_cursor_shape(&mut self, s: crate::types::CursorShape) {
-                self.0.lock().unwrap().push(s);
+                self.shapes.lock().unwrap().push(s);
+            }
+            fn viewport(&self) -> &crate::types::Viewport {
+                &self.viewport
+            }
+            fn viewport_mut(&mut self) -> &mut crate::types::Viewport {
+                &mut self.viewport
             }
             fn emit_intent(&mut self, _: Self::Intent) {}
         }
-        let mut e = Editor::with_host(KeybindingMode::Vim, LeakHost(shapes_ptr));
+        let mut e = Editor::with_host(
+            KeybindingMode::Vim,
+            LeakHost {
+                shapes: shapes_ptr,
+                viewport: crate::types::Viewport::default(),
+            },
+        );
         e.set_content("abc");
         // Normal → Insert: Bar emit.
         e.handle_key(key(KeyCode::Char('i')));
@@ -3171,7 +3192,10 @@ mod tests {
         // wall-clock progress.
         let now_ptr: &'static std::sync::Mutex<core::time::Duration> =
             Box::leak(Box::new(std::sync::Mutex::new(core::time::Duration::ZERO)));
-        struct ClockHost(&'static std::sync::Mutex<core::time::Duration>);
+        struct ClockHost {
+            now: &'static std::sync::Mutex<core::time::Duration>,
+            viewport: crate::types::Viewport,
+        }
         impl crate::types::Host for ClockHost {
             type Intent = ();
             fn write_clipboard(&mut self, _: String) {}
@@ -3179,15 +3203,27 @@ mod tests {
                 None
             }
             fn now(&self) -> core::time::Duration {
-                *self.0.lock().unwrap()
+                *self.now.lock().unwrap()
             }
             fn prompt_search(&mut self) -> Option<String> {
                 None
             }
             fn emit_cursor_shape(&mut self, _: crate::types::CursorShape) {}
+            fn viewport(&self) -> &crate::types::Viewport {
+                &self.viewport
+            }
+            fn viewport_mut(&mut self) -> &mut crate::types::Viewport {
+                &mut self.viewport
+            }
             fn emit_intent(&mut self, _: Self::Intent) {}
         }
-        let mut e = Editor::with_host(KeybindingMode::Vim, ClockHost(now_ptr));
+        let mut e = Editor::with_host(
+            KeybindingMode::Vim,
+            ClockHost {
+                now: now_ptr,
+                viewport: crate::types::Viewport::default(),
+            },
+        );
         e.set_content("a\nb\nc\n");
         e.jump_cursor(2, 0);
         // First `g` — host time = 0ms, lands in g-pending.

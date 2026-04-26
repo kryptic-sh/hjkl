@@ -2196,11 +2196,13 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
-            crate::motions::move_screen_up(&mut ed.buffer, count, &mut ed.sticky_col);
+            let v = *ed.host.viewport();
+            crate::motions::move_screen_up(&mut ed.buffer, &v, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
-            crate::motions::move_screen_down(&mut ed.buffer, count, &mut ed.sticky_col);
+            let v = *ed.host.viewport();
+            crate::motions::move_screen_down(&mut ed.buffer, &v, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
@@ -2314,15 +2316,18 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportTop => {
-            crate::motions::move_viewport_top(ed.buffer_mut(), count.saturating_sub(1));
+            let v = *ed.host().viewport();
+            crate::motions::move_viewport_top(ed.buffer_mut(), &v, count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportMiddle => {
-            crate::motions::move_viewport_middle(ed.buffer_mut());
+            let v = *ed.host().viewport();
+            crate::motions::move_viewport_middle(ed.buffer_mut(), &v);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportBottom => {
-            crate::motions::move_viewport_bottom(ed.buffer_mut(), count.saturating_sub(1));
+            let v = *ed.host().viewport();
+            crate::motions::move_viewport_bottom(ed.buffer_mut(), &v, count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LastNonBlank => {
@@ -7353,7 +7358,7 @@ mod tests {
         let mut e = Editor::new(KeybindingMode::Vim);
         e.set_content(&lines.join("\n"));
         e.set_viewport_height(viewport);
-        let v = e.buffer_mut().viewport_mut();
+        let v = e.host_mut().viewport_mut();
         v.height = viewport;
         v.width = text_width;
         v.text_width = text_width;
@@ -7371,7 +7376,7 @@ mod tests {
         let mut e = editor_with_wrap_lines(&lines, 12, 4);
         e.jump_cursor(4, 0);
         e.ensure_cursor_in_scrolloff();
-        let csr = e.buffer().cursor_screen_row().unwrap();
+        let csr = e.buffer().cursor_screen_row(e.host().viewport()).unwrap();
         assert!(csr <= 6, "csr={csr}");
     }
 
@@ -7385,7 +7390,7 @@ mod tests {
         e.ensure_cursor_in_scrolloff();
         e.jump_cursor(2, 0);
         e.ensure_cursor_in_scrolloff();
-        let csr = e.buffer().cursor_screen_row().unwrap();
+        let csr = e.buffer().cursor_screen_row(e.host().viewport()).unwrap();
         // SCROLLOFF.min((height - 1) / 2) = 5.min(5) = 5.
         assert!(csr >= 5, "csr={csr}");
     }
@@ -7400,7 +7405,7 @@ mod tests {
         // row 3 (3 segs) + row 2 (3 segs) + row 1 (3 segs) = 12 —
         // max_top = row 1. Margin can't be honoured at EOF (matches
         // vim's behaviour — scrolloff is a soft constraint).
-        let top = e.buffer().viewport().top_row;
+        let top = e.host().viewport().top_row;
         assert_eq!(top, 1);
     }
 
@@ -7448,7 +7453,7 @@ mod tests {
         let mut e = editor_with_rows(100, 10);
         e.jump_cursor(50, 0);
         e.set_viewport_top(45);
-        let top = e.buffer().viewport().top_row;
+        let top = e.host().viewport().top_row;
         run_keys(&mut e, "H");
         assert_eq!(e.cursor().0, top);
         assert_eq!(e.cursor().1, 2);
@@ -7459,7 +7464,7 @@ mod tests {
         let mut e = editor_with_rows(100, 10);
         e.jump_cursor(50, 0);
         e.set_viewport_top(45);
-        let top = e.buffer().viewport().top_row;
+        let top = e.host().viewport().top_row;
         run_keys(&mut e, "L");
         assert_eq!(e.cursor().0, top + 9);
     }
@@ -7469,7 +7474,7 @@ mod tests {
         let mut e = editor_with_rows(100, 10);
         e.jump_cursor(50, 0);
         e.set_viewport_top(45);
-        let top = e.buffer().viewport().top_row;
+        let top = e.host().viewport().top_row;
         run_keys(&mut e, "M");
         // 10-row viewport: middle is top + 4.
         assert_eq!(e.cursor().0, top + 4);
@@ -7504,7 +7509,7 @@ mod tests {
         let mut e = editor_with_rows(100, 10);
         e.jump_cursor(50, 0);
         e.set_viewport_top(45);
-        let top = e.buffer().viewport().top_row;
+        let top = e.host().viewport().top_row;
         run_keys(&mut e, "3H");
         assert_eq!(e.cursor().0, top + 2);
     }

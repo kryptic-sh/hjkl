@@ -8,6 +8,116 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.34] - 2026-04-26
+
+### Patch C-δ.1 — viewport relocation onto `Host`
+
+Architectural lock: **viewport lives on `Host`, not `Buffer`, not `Editor`.**
+Vim logic must run in GUI hosts (variable-width fonts, pixel canvases, soft-wrap
+by pixel) as well as TUI hosts; the runtime viewport state is expressed in
+cells/rows/cols and is owned by the host. Buffer-side wrap math (rope-walking)
+stays in `hjkl-buffer` and now consumes a `&Viewport` parameter.
+
+This is a focused subset of the 0.1.0 keystone (per the prior C-δ
+stop-and-report). Motions-generic (Phase D) and `Editor<B, H>` flip (Phase B)
+ship in **0.0.35 / Patch C-δ.2**, then 0.1.0 freeze.
+
+#### Buffer changes (breaking)
+
+- `Buffer::viewport()` and `Buffer::viewport_mut()` are **deleted**. The
+  `viewport: Viewport` field is gone from `Buffer`.
+- `Buffer::ensure_cursor_visible(&mut self)` now takes `&mut Viewport`:
+  ```rust
+  // before
+  buffer.ensure_cursor_visible();
+  // after
+  buffer.ensure_cursor_visible(&mut viewport);
+  ```
+- `Buffer::cursor_screen_row(&self) -> Option<usize>` →
+  `Buffer::cursor_screen_row(&self, viewport: &Viewport) -> Option<usize>`.
+- `Buffer::screen_rows_between(&self, start, end)` →
+  `Buffer::screen_rows_between(&self, viewport: &Viewport, start, end)`.
+- `Buffer::max_top_for_height(&self, height)` →
+  `Buffer::max_top_for_height(&self, viewport: &Viewport, height)`.
+- The `Viewport` struct itself stays in `hjkl-buffer` (it depends on
+  `hjkl_buffer::{Wrap, Position}` and the rope-walking `wrap_segments` math),
+  and is re-exported from `hjkl_engine::types::Viewport` so SPEC consumers keep
+  their import path. The placeholder shape (`top_line/height/scroll_off`) on
+  `hjkl_engine::types::Viewport` is replaced by the working shape
+  (`top_row/top_col/width/height/wrap/text_width`).
+
+#### Search auto-scroll change (path **a** chosen)
+
+- `Buffer::search_forward` / `search_backward` no longer call
+  `ensure_cursor_visible` after a hit. Search becomes a pure observer that moves
+  the cursor only. Engine call sites re-apply visibility through
+  `Editor::ensure_cursor_in_scrolloff` (which already runs at end-of-step).
+  Hosts that drive the buffer directly should follow `search_*` with
+  `buffer.ensure_cursor_visible(&mut viewport)`.
+
+Rationale: cleaner separation; the alternative (path b — adding a
+`viewport: &mut Viewport` arg to four search methods) churned the API more
+without buying anything since the engine already re-runs scrolloff math.
+
+#### Renderer change (breaking)
+
+- `hjkl_buffer::BufferView` gains a `viewport: &'a Viewport` field.
+  ```rust
+  let view = hjkl_buffer::BufferView {
+      buffer: &buf,
+      viewport: &my_viewport,   // NEW
+      // ...rest unchanged
+  };
+  ```
+
+#### `Host` trait grows viewport methods
+
+```rust
+pub trait Host: Send {
+    // ...existing...
+    fn viewport(&self) -> &Viewport;
+    fn viewport_mut(&mut self) -> &mut Viewport;
+}
+```
+
+Mirrored on `EngineHost` (the object-safe slice the boxed editor host uses).
+`DefaultHost` carries a `viewport: Viewport` field defaulting to 80×24, plus a
+`DefaultHost::with_viewport(vp)` constructor for non-default sizes.
+
+#### Engine call-site relocation
+
+All ~15 reaches in `editor.rs` from `self.buffer.viewport*()` route to
+`self.host.viewport*()`. Scrolloff math (`ensure_cursor_in_scrolloff`,
+`ensure_scrolloff_wrap`) splits the disjoint `(self.buffer, self.host)` borrow
+cleanly. `Editor::set_viewport_top`, `scroll_viewport`, `scroll_cursor_to`,
+snapshot/restore, `cursor_screen_row` getter, and the mouse hit-test all read
+viewport from the host.
+
+Motion bodies that read viewport (`H` / `M` / `L` and `gj` / `gk`'s wrap path)
+gained a `&Viewport` parameter; vim FSM dispatch sites copy
+`*ed.host().viewport()` (Viewport is `Copy`) and pass it in to keep the
+disjoint-borrow story clean.
+
+#### Migration cheat-sheet
+
+| Crate / file:line                                        | Before                                        | After                                                                                 |
+| -------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **sqeel** `sqeel-tui/src/lib.rs:785,786`                 | `editor.buffer().viewport().top_row`          | `editor.host().viewport().top_row`                                                    |
+| **sqeel** `sqeel-tui/src/lib.rs:3571,3572`               | `editor.buffer().viewport().top_*`            | `editor.host().viewport().top_*`                                                      |
+| **sqeel** `sqeel-tui/src/lib.rs:4373`                    | `let v = editor.buffer_mut().viewport_mut();` | `let v = editor.host_mut().viewport_mut();`                                           |
+| **sqeel** `sqeel-tui/src/lib.rs:4427`                    | `BufferView { buffer: editor.buffer(), … }`   | `BufferView { buffer: editor.buffer(), viewport: editor.host().viewport(), … }`       |
+| **sqeel** `sqeel-tui/src/host.rs` (`SqeelHost`)          | impl missing `viewport`/`viewport_mut`        | add `viewport: hjkl_buffer::Viewport` field + impl                                    |
+| **buffr** `crates/buffr-modal/src/host.rs` (`BuffrHost`) | impl missing `viewport`/`viewport_mut`        | same — add field + impl                                                               |
+| **inbx** `apps/inbx/src/runtime/*`                       | uses `runtime::Editor` re-exports only        | host impls (if any) need viewport methods; no direct `Buffer::viewport()` calls today |
+
+Workspace bumps `0.0.33` → `0.0.34`. Member crate pins (`=0.0.33` → `=0.0.34`)
+and `Cargo.lock` updated.
+
+**Next patch (0.0.35 / C-δ.2):** motions-generic (`B: Cursor + Query`) +
+`Editor<'a, B: Buffer, H: Host>` flip. Then 0.1.0 cut (Patch C-ε): seal the
+`Buffer` trait family, freeze `EditorSnapshot::VERSION`, take the
+`cargo public-api` baseline.
+
 ## [0.0.33] - 2026-04-26
 
 ### Patch C-γ (partial) — fold relocation + SPEC constructor preview

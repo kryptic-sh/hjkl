@@ -176,13 +176,26 @@ pub fn move_down(buf: &mut Buffer, count: usize, sticky_col: &mut Option<usize>)
 /// wrap, walks one screen segment at a time, crossing into the
 /// previous doc row only after exhausting the current row's
 /// segments. `sticky_col` ownership matches [`move_up`].
-pub fn move_screen_up(buf: &mut Buffer, count: usize, sticky_col: &mut Option<usize>) {
-    move_screen_vertical(buf, -(count.max(1) as isize), sticky_col);
+///
+/// 0.0.34 (Patch C-δ.1): viewport now lives on the engine `Host`;
+/// callers pass `host.viewport()`.
+pub fn move_screen_up(
+    buf: &mut Buffer,
+    viewport: &hjkl_buffer::Viewport,
+    count: usize,
+    sticky_col: &mut Option<usize>,
+) {
+    move_screen_vertical(buf, viewport, -(count.max(1) as isize), sticky_col);
 }
 
 /// `gj` — `count` visual rows down. See [`move_screen_up`].
-pub fn move_screen_down(buf: &mut Buffer, count: usize, sticky_col: &mut Option<usize>) {
-    move_screen_vertical(buf, count.max(1) as isize, sticky_col);
+pub fn move_screen_down(
+    buf: &mut Buffer,
+    viewport: &hjkl_buffer::Viewport,
+    count: usize,
+    sticky_col: &mut Option<usize>,
+) {
+    move_screen_vertical(buf, viewport, count.max(1) as isize, sticky_col);
 }
 
 /// `gg` — first row, first non-blank.
@@ -377,41 +390,50 @@ pub fn find_char_on_line(buf: &mut Buffer, ch: char, forward: bool, till: bool) 
 /// `H` — top of the visible viewport plus `offset` rows
 /// (0-based; vim uses 1-based count where bare `H` = 0). Lands
 /// on the first non-blank of the resolved row.
-pub fn move_viewport_top(buf: &mut Buffer, offset: usize) {
-    let v = buf.viewport();
+///
+/// 0.0.34 (Patch C-δ.1): viewport reads route through the host.
+pub fn move_viewport_top(buf: &mut Buffer, viewport: &hjkl_buffer::Viewport, offset: usize) {
     let last = buf.row_count().saturating_sub(1);
-    let target = v.top_row.saturating_add(offset).min(last);
+    let target = viewport.top_row.saturating_add(offset).min(last);
     buf.set_cursor(Position::new(target, 0));
     move_first_non_blank(buf);
 }
 
 /// `M` — middle row of the visible viewport.
-pub fn move_viewport_middle(buf: &mut Buffer) {
-    let v = buf.viewport();
+pub fn move_viewport_middle(buf: &mut Buffer, viewport: &hjkl_buffer::Viewport) {
     let last = buf.row_count().saturating_sub(1);
-    let height = v.height as usize;
-    let visible_bot = v.top_row.saturating_add(height.saturating_sub(1)).min(last);
-    let mid = v.top_row + (visible_bot - v.top_row) / 2;
+    let height = viewport.height as usize;
+    let visible_bot = viewport
+        .top_row
+        .saturating_add(height.saturating_sub(1))
+        .min(last);
+    let mid = viewport.top_row + (visible_bot - viewport.top_row) / 2;
     buf.set_cursor(Position::new(mid, 0));
     move_first_non_blank(buf);
 }
 
 /// `L` — bottom of the visible viewport, minus `offset` rows.
-pub fn move_viewport_bottom(buf: &mut Buffer, offset: usize) {
-    let v = buf.viewport();
+pub fn move_viewport_bottom(buf: &mut Buffer, viewport: &hjkl_buffer::Viewport, offset: usize) {
     let last = buf.row_count().saturating_sub(1);
-    let height = v.height as usize;
-    let visible_bot = v.top_row.saturating_add(height.saturating_sub(1)).min(last);
-    let target = visible_bot.saturating_sub(offset).max(v.top_row);
+    let height = viewport.height as usize;
+    let visible_bot = viewport
+        .top_row
+        .saturating_add(height.saturating_sub(1))
+        .min(last);
+    let target = visible_bot.saturating_sub(offset).max(viewport.top_row);
     buf.set_cursor(Position::new(target, 0));
     move_first_non_blank(buf);
 }
 
 // ── Internals ───────────────────────────────────────────────────────
 
-fn move_screen_vertical(buf: &mut Buffer, delta: isize, sticky_col: &mut Option<usize>) {
-    let v = buf.viewport();
-    if matches!(v.wrap, Wrap::None) || v.text_width == 0 {
+fn move_screen_vertical(
+    buf: &mut Buffer,
+    viewport: &hjkl_buffer::Viewport,
+    delta: isize,
+    sticky_col: &mut Option<usize>,
+) {
+    if matches!(viewport.wrap, Wrap::None) || viewport.text_width == 0 {
         move_vertical(buf, delta, sticky_col);
         return;
     }
@@ -420,12 +442,12 @@ fn move_screen_vertical(buf: &mut Buffer, delta: isize, sticky_col: &mut Option<
     // same visual column even when crossing short visual lines.
     let cursor = buf.cursor();
     let line = buf.line(cursor.row).unwrap_or("");
-    let segs = wrap::wrap_segments(line, v.text_width, v.wrap);
+    let segs = wrap::wrap_segments(line, viewport.text_width, viewport.wrap);
     let seg_idx = wrap::segment_for_col(&segs, cursor.col);
     let visual_col = cursor.col.saturating_sub(segs[seg_idx].0);
     let down = delta > 0;
     for _ in 0..delta.unsigned_abs() {
-        if !step_screen(buf, down, visual_col) {
+        if !step_screen(buf, viewport, down, visual_col) {
             break;
         }
     }
@@ -435,11 +457,15 @@ fn move_screen_vertical(buf: &mut Buffer, delta: isize, sticky_col: &mut Option<
 /// One visual-row step under wrap. Returns false when stepping
 /// would leave the buffer (top of buffer for `down=false`,
 /// bottom for `down=true`).
-fn step_screen(buf: &mut Buffer, down: bool, visual_col: usize) -> bool {
-    let v = buf.viewport();
+fn step_screen(
+    buf: &mut Buffer,
+    viewport: &hjkl_buffer::Viewport,
+    down: bool,
+    visual_col: usize,
+) -> bool {
     let cursor = buf.cursor();
     let line = buf.line(cursor.row).unwrap_or("");
-    let segs = wrap::wrap_segments(line, v.text_width, v.wrap);
+    let segs = wrap::wrap_segments(line, viewport.text_width, viewport.wrap);
     let seg_idx = wrap::segment_for_col(&segs, cursor.col);
     if down {
         if seg_idx + 1 < segs.len() {
@@ -452,7 +478,7 @@ fn step_screen(buf: &mut Buffer, down: bool, visual_col: usize) -> bool {
             return false;
         };
         let next_line = buf.line(next_row).unwrap_or("");
-        let next_segs = wrap::wrap_segments(next_line, v.text_width, v.wrap);
+        let next_segs = wrap::wrap_segments(next_line, viewport.text_width, viewport.wrap);
         let (s, e) = next_segs[0];
         let target = clamp_to_segment(s, e, visual_col, next_line);
         buf.set_cursor(Position::new(next_row, target));
@@ -468,7 +494,7 @@ fn step_screen(buf: &mut Buffer, down: bool, visual_col: usize) -> bool {
             return false;
         };
         let prev_line = buf.line(prev_row).unwrap_or("");
-        let prev_segs = wrap::wrap_segments(prev_line, v.text_width, v.wrap);
+        let prev_segs = wrap::wrap_segments(prev_line, viewport.text_width, viewport.wrap);
         let (s, e) = *prev_segs.last().unwrap_or(&(0, 0));
         let target = clamp_to_segment(s, e, visual_col, prev_line);
         buf.set_cursor(Position::new(prev_row, target));
@@ -910,27 +936,36 @@ mod tests {
     #[test]
     fn move_viewport_top_with_offset() {
         let mut b = Buffer::from_str("a\nb\nc\nd\ne\nf");
-        b.viewport_mut().top_row = 1;
-        b.viewport_mut().height = 4;
-        move_viewport_top(&mut b, 2);
+        let v = hjkl_buffer::Viewport {
+            top_row: 1,
+            height: 4,
+            ..Default::default()
+        };
+        move_viewport_top(&mut b, &v, 2);
         assert_eq!(at(&b), Position::new(3, 0));
     }
 
     #[test]
     fn move_viewport_middle_picks_center_of_visible() {
         let mut b = Buffer::from_str("a\nb\nc\nd\ne");
-        b.viewport_mut().top_row = 0;
-        b.viewport_mut().height = 5;
-        move_viewport_middle(&mut b);
+        let v = hjkl_buffer::Viewport {
+            top_row: 0,
+            height: 5,
+            ..Default::default()
+        };
+        move_viewport_middle(&mut b, &v);
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
     #[test]
     fn move_viewport_bottom_with_offset() {
         let mut b = Buffer::from_str("a\nb\nc\nd\ne");
-        b.viewport_mut().top_row = 0;
-        b.viewport_mut().height = 5;
-        move_viewport_bottom(&mut b, 1);
+        let v = hjkl_buffer::Viewport {
+            top_row: 0,
+            height: 5,
+            ..Default::default()
+        };
+        move_viewport_bottom(&mut b, &v, 1);
         assert_eq!(at(&b), Position::new(3, 0));
     }
 
@@ -999,20 +1034,25 @@ mod tests {
         assert_eq!(at(&b), Position::new(0, 1));
     }
 
-    fn enable_wrap(b: &mut Buffer, mode: Wrap, text_width: u16) {
-        let v = b.viewport_mut();
-        v.wrap = mode;
-        v.text_width = text_width;
-        v.height = 10;
+    fn make_wrap_viewport(mode: Wrap, text_width: u16) -> hjkl_buffer::Viewport {
+        hjkl_buffer::Viewport {
+            top_row: 0,
+            top_col: 0,
+            width: text_width,
+            height: 10,
+            wrap: mode,
+            text_width,
+        }
     }
 
     #[test]
     fn screen_down_falls_back_to_move_down_when_wrap_off() {
         let mut b = Buffer::from_str("a\nb\nc");
+        let v = hjkl_buffer::Viewport::default();
         let mut sticky = None;
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(1, 0));
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
@@ -1020,32 +1060,32 @@ mod tests {
     fn screen_down_walks_within_wrapped_row() {
         // 12-char line, width 4 → segments (0,4), (4,8), (8,12).
         let mut b = Buffer::from_str("aaaabbbbcccc\nx");
-        enable_wrap(&mut b, Wrap::Char, 4);
+        let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 1));
         let mut sticky = None;
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         // visual_col = 1 → next segment starts at 4 → land col 5.
         assert_eq!(at(&b), Position::new(0, 5));
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(0, 9));
         // Past the last segment crosses to the next doc row.
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(1, 0));
     }
 
     #[test]
     fn screen_up_walks_within_wrapped_row() {
         let mut b = Buffer::from_str("aaaabbbbcccc");
-        enable_wrap(&mut b, Wrap::Char, 4);
+        let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 9));
         let mut sticky = None;
-        move_screen_up(&mut b, 1, &mut sticky);
+        move_screen_up(&mut b, &v, 1, &mut sticky);
         // visual_col = 9 - 8 = 1 → previous segment col = 4 + 1 = 5.
         assert_eq!(at(&b), Position::new(0, 5));
-        move_screen_up(&mut b, 1, &mut sticky);
+        move_screen_up(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(0, 1));
         // Already on first segment of first row — no further move.
-        move_screen_up(&mut b, 1, &mut sticky);
+        move_screen_up(&mut b, &v, 1, &mut sticky);
         assert_eq!(at(&b), Position::new(0, 1));
     }
 
@@ -1055,13 +1095,13 @@ mod tests {
         // row is only 1 char. Visual col 4 should clamp to row 1's
         // last col (0) when crossing into the short row.
         let mut b = Buffer::from_str("aaaaaabb\nx");
-        enable_wrap(&mut b, Wrap::Char, 6);
+        let v = make_wrap_viewport(Wrap::Char, 6);
         b.set_cursor(Position::new(0, 4));
         let mut sticky = None;
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         // visual_col = 4 → segment 1 is (6, 8); want=10 clamps to 7.
         assert_eq!(at(&b), Position::new(0, 7));
-        move_screen_down(&mut b, 1, &mut sticky);
+        move_screen_down(&mut b, &v, 1, &mut sticky);
         // crosses into row 1, segment (0, 1) — clamps to col 0.
         assert_eq!(at(&b), Position::new(1, 0));
     }
@@ -1069,10 +1109,10 @@ mod tests {
     #[test]
     fn screen_down_count_compounds() {
         let mut b = Buffer::from_str("aaaabbbbcccc");
-        enable_wrap(&mut b, Wrap::Char, 4);
+        let v = make_wrap_viewport(Wrap::Char, 4);
         b.set_cursor(Position::new(0, 0));
         let mut sticky = None;
-        move_screen_down(&mut b, 2, &mut sticky);
+        move_screen_down(&mut b, &v, 2, &mut sticky);
         assert_eq!(at(&b), Position::new(0, 8));
     }
 
