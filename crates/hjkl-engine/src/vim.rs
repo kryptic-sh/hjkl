@@ -444,6 +444,13 @@ pub struct VimState {
     /// — typing or backspacing in the prompt resets it so the next
     /// `Ctrl-P` starts from the most recent entry again.
     pub(super) search_history_cursor: Option<usize>,
+    /// Wall-clock instant of the last keystroke. Drives the
+    /// `:set timeoutlen` multi-key timeout — if `now() - last_input_at`
+    /// exceeds the configured budget, any pending prefix is cleared
+    /// before the new key dispatches. `None` before the first key.
+    /// TODO: swap `Instant::now()` for `Host::now()` once the trait
+    /// extraction lands so macro replay stays deterministic.
+    pub(super) last_input_at: Option<std::time::Instant>,
 }
 
 const SEARCH_HISTORY_MAX: usize = 100;
@@ -528,6 +535,22 @@ impl VimState {
         self.pending = Pending::None;
         self.count = 0;
         self.insert_session = None;
+    }
+
+    /// Reset every prefix-tracking field so the next keystroke starts
+    /// a fresh sequence. Drives `:set timeoutlen` — when the user
+    /// pauses past the configured budget, [`crate::vim::step`] calls
+    /// this before dispatching the new key.
+    ///
+    /// Resets: `pending`, `count`, `pending_register`,
+    /// `insert_pending_register`. Does NOT touch `mode`,
+    /// `insert_session`, marks, jump list, or visual anchors —
+    /// those aren't part of the in-flight chord.
+    pub(crate) fn clear_pending_prefix(&mut self) {
+        self.pending = Pending::None;
+        self.count = 0;
+        self.pending_register = None;
+        self.insert_pending_register = false;
     }
 
     pub fn is_visual(&self) -> bool {
@@ -761,6 +784,24 @@ pub fn step(ed: &mut Editor<'_>, input: Input) -> bool {
     // to land in the migration buffer before motion handlers that
     // call into `Buffer::move_*` see a stale state.
     ed.sync_buffer_content_from_textarea();
+    // `:set timeoutlen` — if the user paused longer than the budget
+    // since the last keystroke and a chord is in flight, drop the
+    // pending prefix so the new key starts fresh. TODO: swap
+    // `Instant::now()` for `Host::now()` once the trait extraction
+    // lands so macro replay stays deterministic.
+    let now = std::time::Instant::now();
+    if let Some(prev) = ed.vim.last_input_at
+        && now.duration_since(prev) > ed.settings.timeout_len
+    {
+        let chord_in_flight = !matches!(ed.vim.pending, Pending::None)
+            || ed.vim.count != 0
+            || ed.vim.pending_register.is_some()
+            || ed.vim.insert_pending_register;
+        if chord_in_flight {
+            ed.vim.clear_pending_prefix();
+        }
+    }
+    ed.vim.last_input_at = Some(now);
     // Macro stop: a bare `q` ends an active recording before any
     // other handler sees the key (so `q` itself doesn't get
     // recorded). Replays don't trigger this — they finish on their
@@ -2312,7 +2353,8 @@ fn word_at_cursor_search(ed: &mut Editor<'_>, forward: bool, whole_word: bool, c
         return;
     }
     // Expand around cursor to a word boundary.
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let spec = ed.settings().iskeyword.clone();
+    let is_word = |c: char| is_keyword_char(c, &spec);
     let mut start = col.min(chars.len().saturating_sub(1));
     while start > 0 && is_word(chars[start - 1]) {
         start -= 1;
@@ -4214,6 +4256,49 @@ fn tag_text_object(ed: &Editor<'_>, inner: bool) -> Option<((usize, usize), (usi
 
 fn is_wordchar(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+/// Match `c` against a vim-style `iskeyword` spec. Tokens are
+/// comma-separated; understood forms: `@` (any alphabetic),
+/// `_` (literal underscore), `N-M` (decimal char-code range, inclusive),
+/// bare integer `N` (single char code), single ASCII punctuation char
+/// (literal). Unknown tokens are ignored. The default spec
+/// `"@,48-57,_,192-255"` matches vim's `keyword=...` default.
+pub(crate) fn is_keyword_char(c: char, spec: &str) -> bool {
+    for raw in spec.split(',') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token == "@" {
+            if c.is_alphabetic() {
+                return true;
+            }
+            continue;
+        }
+        if let Some((lo, hi)) = token.split_once('-')
+            && let (Ok(lo), Ok(hi)) = (lo.parse::<u32>(), hi.parse::<u32>())
+        {
+            if (lo..=hi).contains(&(c as u32)) {
+                return true;
+            }
+            continue;
+        }
+        if let Ok(n) = token.parse::<u32>() {
+            if c as u32 == n {
+                return true;
+            }
+            continue;
+        }
+        // Single literal char (covers `_` and any ASCII punctuation).
+        let mut chars = token.chars();
+        if let (Some(only), None) = (chars.next(), chars.next())
+            && c == only
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn word_text_object(
@@ -7931,6 +8016,58 @@ mod tests {
         e.jump_cursor(0, 7);
         run_keys(&mut e, "i<CR>");
         assert_eq!(e.buffer.line(1).unwrap(), "");
+    }
+
+    #[test]
+    fn iskeyword_default_treats_alnum_underscore_as_word() {
+        let mut e = editor_with("foo_bar baz");
+        // `*` searches for the word at the cursor — picks up everything
+        // matching iskeyword. With default spec, `foo_bar` is one word,
+        // so the search pattern should bound that whole token.
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "*");
+        let p = e.buffer().search_pattern().unwrap().as_str().to_string();
+        assert!(p.contains("foo_bar"), "default iskeyword: {p}");
+    }
+
+    #[test]
+    fn iskeyword_with_dash_treats_dash_as_word_char() {
+        let mut e = editor_with("foo-bar baz");
+        e.settings_mut().iskeyword = "@,_,45".to_string();
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "*");
+        let p = e.buffer().search_pattern().unwrap().as_str().to_string();
+        assert!(p.contains("foo-bar"), "dash-as-word: {p}");
+    }
+
+    #[test]
+    fn timeoutlen_drops_pending_g_prefix() {
+        use std::time::{Duration, Instant};
+        let mut e = editor_with("a\nb\nc");
+        e.jump_cursor(2, 0);
+        // First `g` lands us in g-pending state.
+        run_keys(&mut e, "g");
+        assert!(matches!(e.vim.pending, super::Pending::G));
+        // Push last_input_at into the past beyond the default timeout.
+        e.vim.last_input_at = Some(Instant::now() - Duration::from_secs(60));
+        // Second `g` arrives "late" — timeout fires, prefix is cleared,
+        // and the bare `g` is re-dispatched: nothing happens at the
+        // engine level because `g` alone isn't a complete command.
+        run_keys(&mut e, "g");
+        // Cursor must still be at row 2 — `gg` was NOT completed.
+        assert_eq!(e.cursor().0, 2, "timeout must abandon g-prefix");
+    }
+
+    #[test]
+    fn undobreak_round_trips_through_options() {
+        let e = editor_with("");
+        let opts = e.current_options();
+        assert!(opts.undo_break_on_motion);
+        let mut e2 = editor_with("");
+        let mut new_opts = opts.clone();
+        new_opts.undo_break_on_motion = false;
+        e2.apply_options(&new_opts);
+        assert!(!e2.current_options().undo_break_on_motion);
     }
 
     #[test]

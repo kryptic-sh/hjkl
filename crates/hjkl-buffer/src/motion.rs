@@ -511,6 +511,16 @@ impl Buffer {
 }
 
 /// True if `c` qualifies as a word character (vim's small `w`).
+///
+/// TODO(iskeyword): hjkl-engine carries a configurable `iskeyword`
+/// spec on `Settings`/`Options`; the engine-side `*` / `#` word
+/// pickup honours it via `vim::is_keyword_char`. Buffer-level word
+/// motions (`w` / `b` / `e` / `W` / `B` / `E`) still use this
+/// hardcoded predicate. Plumbing the spec through requires either a
+/// stored `iskeyword: String` on `Buffer` + accessor or threading it
+/// through every `char_kind` callsite (~17 sites). Lands with the
+/// 0.1.0 trait extraction so the new `Buffer` trait can carry it
+/// cleanly.
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }

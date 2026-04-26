@@ -677,16 +677,19 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
             hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  textwidth={}  undolevels={}  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  readonly={}  wrap={}",
+            "shiftwidth={}  tabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  undobreak={}  readonly={}  wrap={}",
             s.shiftwidth,
             s.tabstop,
             s.textwidth,
             s.undo_levels,
+            s.timeout_len.as_millis(),
+            s.iskeyword,
             if s.expandtab { "on" } else { "off" },
             if s.ignore_case { "on" } else { "off" },
             if s.smartcase { "on" } else { "off" },
             if s.wrapscan { "on" } else { "off" },
             if s.autoindent { "on" } else { "off" },
+            if s.undo_break_on_motion { "on" } else { "off" },
             if s.readonly { "on" } else { "off" },
             wrap,
         ));
@@ -703,6 +706,11 @@ fn apply_set(editor: &mut Editor<'_>, body: &str) -> ExEffect {
 /// (turns booleans on), and `noname` (turns booleans off).
 fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
     if let Some((name, value)) = token.split_once('=') {
+        // String-valued options short-circuit the numeric parse.
+        if matches!(name, "iskeyword" | "isk") {
+            editor.settings_mut().iskeyword = value.to_string();
+            return Ok(());
+        }
         let parsed: usize = value
             .parse()
             .map_err(|_| format!("bad value `{value}` for :set {name}"))?;
@@ -728,6 +736,10 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
             "undolevels" | "ul" => {
                 editor.settings_mut().undo_levels = parsed.min(u32::MAX as usize) as u32;
             }
+            "timeoutlen" | "tm" => {
+                editor.settings_mut().timeout_len =
+                    core::time::Duration::from_millis(parsed as u64);
+            }
             other => return Err(format!("unknown :set option `{other}`")),
         }
         return Ok(());
@@ -743,6 +755,7 @@ fn apply_set_token(editor: &mut Editor<'_>, token: &str) -> Result<(), String> {
         "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
         "expandtab" | "et" => editor.settings_mut().expandtab = value,
         "autoindent" | "ai" => editor.settings_mut().autoindent = value,
+        "undobreak" => editor.settings_mut().undo_break_on_motion = value,
         "readonly" | "ro" => editor.settings_mut().readonly = value,
         "wrap" => {
             editor.settings_mut().wrap = if value {

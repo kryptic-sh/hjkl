@@ -8,6 +8,30 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-04-26
+
+### Added
+
+- `:set timeoutlen=N` / `:set tm=N` — multi-key sequence timeout. When
+  the user pauses longer than the budget between keys, any pending
+  prefix (`g`-prefix, operator-pending, register selector, count) is
+  cleared before dispatching the new key. New `Settings::timeout_len:
+  Duration` (default 1000ms). New `VimState::clear_pending_prefix()`
+  helper. Uses `std::time::Instant::now()` directly; TODO comment
+  flags swap to `Host::now()` once the trait extraction lands.
+- `:set iskeyword=...` / `:set isk=...` — vim-flavoured word-character
+  spec. Engine-side `*` / `#` word pickup now honours it via the new
+  `is_keyword_char` parser (`@`, `_`, `N-M` ranges, bare codes,
+  literal punctuation). Buffer-level `w` / `b` / `e` motions still use
+  the hardcoded predicate; TODO in `hjkl-buffer::motion` flags the
+  remaining plumbing for the 0.1.0 trait extraction.
+- `:set undobreak` / `:set noundobreak` — toggle for breaking the
+  undo group on insert-mode motions. Field wired through Settings +
+  Options bridge; engine doesn't yet break the undo group on motions,
+  so the toggle is a forward-compat no-op today.
+- `:set` listing surfaces `timeoutlen`, `iskeyword`, `undobreak`
+  columns. Golden snapshot updated.
+
 ## [0.0.21] - 2026-04-26
 
 ### Added

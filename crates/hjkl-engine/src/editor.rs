@@ -369,6 +369,24 @@ pub struct Settings {
     /// bound. `0` means unlimited. Matches vim's `:set undolevels`.
     /// Default `1000`.
     pub undo_levels: u32,
+    /// When `true`, cursor motions inside insert mode break the
+    /// current undo group (so a single `u` only reverses the run of
+    /// keystrokes that preceded the motion). Default `true`.
+    /// Currently a no-op — engine doesn't yet break the undo group
+    /// on insert-mode motions; field is wired through `:set
+    /// undobreak` for forward compatibility.
+    pub undo_break_on_motion: bool,
+    /// Vim-flavoured "what counts as a word" character class.
+    /// Comma-separated tokens: `@` = `is_alphabetic()`, `_` = literal
+    /// `_`, `48-57` = decimal char range, bare integer = single char
+    /// code, single ASCII punctuation = literal. Default
+    /// `"@,48-57,_,192-255"` matches vim.
+    pub iskeyword: String,
+    /// Multi-key sequence timeout (e.g. `gg`, `dd`). When the user
+    /// pauses longer than this between keys, any pending prefix is
+    /// abandoned and the next key starts a fresh sequence. Matches
+    /// vim's `:set timeoutlen` / `:set tm` (millis). Default 1000ms.
+    pub timeout_len: core::time::Duration,
 }
 
 impl Default for Settings {
@@ -385,6 +403,9 @@ impl Default for Settings {
             readonly: false,
             autoindent: true,
             undo_levels: 1000,
+            undo_break_on_motion: true,
+            iskeyword: "@,48-57,_,192-255".to_string(),
+            timeout_len: core::time::Duration::from_millis(1000),
         }
     }
 }
@@ -1167,6 +1188,9 @@ impl<'a> Editor<'a> {
             readonly: self.settings.readonly,
             autoindent: self.settings.autoindent,
             undo_levels: self.settings.undo_levels,
+            undo_break_on_motion: self.settings.undo_break_on_motion,
+            iskeyword: self.settings.iskeyword.clone(),
+            timeout_len: self.settings.timeout_len,
             ..crate::types::Options::default()
         }
     }
@@ -1191,6 +1215,9 @@ impl<'a> Editor<'a> {
         self.settings.readonly = opts.readonly;
         self.settings.autoindent = opts.autoindent;
         self.settings.undo_levels = opts.undo_levels;
+        self.settings.undo_break_on_motion = opts.undo_break_on_motion;
+        self.settings.iskeyword = opts.iskeyword.clone();
+        self.settings.timeout_len = opts.timeout_len;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
