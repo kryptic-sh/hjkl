@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "apps/*"]
 exclude = ["crates/hjkl-engine/fuzz"]
 
 [workspace.package]

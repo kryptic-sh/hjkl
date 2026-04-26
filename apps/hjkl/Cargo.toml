@@ -1,0 +1,28 @@
+[package]
+name = "hjkl"
+description = "Vim-modal terminal editor: standalone TUI built on the hjkl engine."
+keywords = ["vim", "modal", "editor", "tui", "ratatui"]
+categories = ["text-editors", "command-line-utilities"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[[bin]]
+name = "hjkl"
+path = "src/main.rs"
+
+[dependencies]
+hjkl-buffer = { path = "../../crates/hjkl-buffer", version = "=0.1.1" }
+hjkl-engine = { path = "../../crates/hjkl-engine", version = "=0.1.1" }
+hjkl-editor = { path = "../../crates/hjkl-editor", version = "=0.1.1" }
+hjkl-ratatui = { path = "../../crates/hjkl-ratatui", version = "=0.1.1" }
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive"] }
+arboard = "3"
+anyhow = "1"
