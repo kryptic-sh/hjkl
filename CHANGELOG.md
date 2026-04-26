@@ -8,6 +8,84 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.41] - 2026-04-27
+
+### Patch C-δ.6 — editor.rs / vim.rs reach replacement
+
+Second of three patches before 0.1.0. Reroutes the `self.buffer.…` reaches in
+`crates/hjkl-engine/src/editor.rs` and `crates/hjkl-engine/src/vim.rs` through
+the SPEC trait surface (`Cursor` / `Query` / `BufferEdit` / `Search`) so that
+`Editor`'s body could compile against any `B: Buffer` once the generic flip
+lands. `Editor::buffer` is still typed as `hjkl_buffer::Buffer` for now — the
+generic flip is the FINAL patch (0.1.0).
+
+#### Reaches eliminated
+
+- editor.rs: 68 → 6 (one is a comment line, four are intentionally-resistant
+  reaches documented below).
+- vim.rs (non-test): 2 → 0.
+
+#### Trait additions
+
+- `BufferEdit::replace_all(&mut self, text: &str)` — single-shot whole-buffer
+  rebuild. Default impl forwards to
+  `replace_range(Pos::ORIGIN..Pos { line: u32::MAX, col: u32::MAX }, text)` so
+  non-canonical backends compile without the override; the canonical
+  `hjkl_buffer::Buffer` impl forwards to its existing inherent `replace_all`
+  fast path. Justified: `Editor::set_content` / `Editor::restore` /
+  snapshot-replay paths express "replace whole buffer" cleanly only with this
+  primitive — synthesising the same operation through `replace_range` requires
+  the caller to know the buffer's end position, which the trait surface doesn't
+  expose. Buffer trait surface is now 14 methods (cap is 40, defensive limit
+  20).
+
+#### New free helpers
+
+`crates/hjkl-engine/src/editor.rs` now carries six private cast helpers
+(`buf_cursor_rc` / `buf_cursor_row` / `buf_cursor_pos` / `buf_set_cursor_rc` /
+`buf_row_count` / `buf_line` / `buf_lines_to_vec`) that wrap the trait calls and
+translate at the `Pos { line: u32, col: u32 }` ⇄
+`Position { row: usize, col: usize }` boundary. Same pattern as motion.rs's
+`read_cursor` / `write_cursor` / `read_line` introduced in 0.0.40. Localized the
+cast plumbing so the call-site diff stayed terse.
+
+#### Resistant reaches (documented in source)
+
+Four `self.buffer.…` reaches in `editor.rs` could not be lifted onto the trait
+surface without breaking SPEC §"motions don't belong on `Buffer`" or expanding
+the trait beyond the discipline cap:
+
+- `Editor::mutate_edit` line 1298 — `self.buffer.apply_edit(edit) -> inverse`.
+  The undo funnel consumes a `hjkl_buffer::Edit` value type and depends on the
+  inherent method's "return the inverse edit" contract. Lifting requires either
+  `BufferEdit::apply_edit(&mut self, edit: Self::Edit) -> Self::Edit` (an
+  associated type expansion) or relocating the entire change-log + fold-
+  invalidation pipeline. Deferred to 0.1.0.
+- `Editor::ensure_cursor_in_scrolloff` line 2036 —
+  `Buffer::ensure_cursor_visible`.
+- `Editor::ensure_scrolloff_wrap` lines 2095, 2121 —
+  `Buffer::cursor_screen_row`.
+- `Editor::ensure_scrolloff_wrap` line 2142 — `Buffer::max_top_for_height`.
+
+The last three are viewport-math helpers SPEC explicitly excludes from the
+`Buffer` trait surface ("motions don't belong on `Buffer` — they're computed
+over the buffer, not delegated to it"). 0.1.0 relocates them as engine-side free
+fns over `B: Query [+ FoldProvider] + Viewport`; deferred to keep this patch's
+diff bounded.
+
+#### Tests
+
+684 (was 682; +2 for `BufferEdit::replace_all` — one round-trip on the canonical
+`hjkl_buffer::Buffer` impl, one mock-buffer compile-test that locks in the
+default impl's `replace_range(ORIGIN..MAX, text)` routing).
+
+#### Roadmap
+
+- **0.1.0 — `Editor<B, H>` flip + freeze.** Replace
+  `Editor::buffer: hjkl_buffer::Buffer` with `B: Buffer`, drop the `EngineHost`
+  shim, unify the constructor surface, lift the four resistant reaches above
+  through trait expansions / free-fn relocation.
+
 ## [0.0.40] - 2026-04-26
 
 ### Patch C-δ.5 — motion bound lift

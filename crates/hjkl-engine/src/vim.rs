@@ -1418,8 +1418,12 @@ pub(crate) fn break_undo_group_in_insert(ed: &mut Editor<'_>) {
         return;
     }
     ed.push_undo();
-    let lines = ed.buffer.lines().to_vec();
-    let row = ed.buffer.cursor().row;
+    let n = crate::types::Query::line_count(&ed.buffer) as usize;
+    let mut lines: Vec<String> = Vec::with_capacity(n);
+    for r in 0..n {
+        lines.push(crate::types::Query::line(&ed.buffer, r as u32).to_string());
+    }
+    let row = crate::types::Cursor::cursor(&ed.buffer).line as usize;
     if let Some(ref mut session) = ed.vim.insert_session {
         session.before_lines = lines;
         session.row_min = row;

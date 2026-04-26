@@ -241,6 +241,79 @@ pub(super) enum CursorScrollTarget {
     Bottom,
 }
 
+// ── Trait-surface cast helpers ────────────────────────────────────
+//
+// 0.0.41 (Patch C-δ.6): replace direct `self.buffer.…` reaches in
+// editor.rs with calls that go through the `Cursor` / `Query` /
+// `BufferEdit` / `Search` trait surface (see `types.rs`). The bodies
+// of `Editor` still carry `Position { row: usize, col: usize }`-shape
+// arithmetic; these helpers cast at the boundary so call sites stay
+// terse. Mirrors the pattern lifted into `motions.rs` in 0.0.40.
+
+/// Read the cursor as a `(row, col)` `usize` tuple — the shape every
+/// editor-side body expects. One inline cast at the trait boundary.
+#[inline]
+fn buf_cursor_rc<B: crate::types::Cursor + ?Sized>(b: &B) -> (usize, usize) {
+    let p = crate::types::Cursor::cursor(b);
+    (p.line as usize, p.col as usize)
+}
+
+/// Read the cursor row.
+#[inline]
+fn buf_cursor_row<B: crate::types::Cursor + ?Sized>(b: &B) -> usize {
+    crate::types::Cursor::cursor(b).line as usize
+}
+
+/// Read the cursor as an `hjkl_buffer::Position` — the shape the
+/// concrete-buffer call sites consumed before the trait routing.
+#[inline]
+fn buf_cursor_pos<B: crate::types::Cursor + ?Sized>(b: &B) -> hjkl_buffer::Position {
+    let p = crate::types::Cursor::cursor(b);
+    hjkl_buffer::Position::new(p.line as usize, p.col as usize)
+}
+
+/// Set the cursor from `(row, col)` `usize` coordinates.
+#[inline]
+fn buf_set_cursor_rc<B: crate::types::Cursor + ?Sized>(b: &mut B, row: usize, col: usize) {
+    crate::types::Cursor::set_cursor(
+        b,
+        crate::types::Pos {
+            line: row as u32,
+            col: col as u32,
+        },
+    );
+}
+
+/// Number of rows.
+#[inline]
+fn buf_row_count<B: crate::types::Query + ?Sized>(b: &B) -> usize {
+    crate::types::Query::line_count(b) as usize
+}
+
+/// Borrow line `row`, returning `None` for out-of-bounds. Mirrors the
+/// pre-0.0.41 `hjkl_buffer::Buffer::line(row) -> Option<&str>` shape.
+#[inline]
+fn buf_line<B: crate::types::Query + ?Sized>(b: &B, row: usize) -> Option<&str> {
+    let n = crate::types::Query::line_count(b) as usize;
+    if row >= n {
+        return None;
+    }
+    Some(crate::types::Query::line(b, row as u32))
+}
+
+/// Snapshot every line into a `Vec<String>`. Allocates — call sites
+/// that previously borrowed `lines() -> &[String]` and immediately
+/// `.to_vec()`'d / `.iter().map(...)`'d collapse cleanly onto this.
+#[inline]
+fn buf_lines_to_vec<B: crate::types::Query + ?Sized>(b: &B) -> Vec<String> {
+    let n = crate::types::Query::line_count(b) as usize;
+    let mut out = Vec::with_capacity(n);
+    for r in 0..n {
+        out.push(crate::types::Query::line(b, r as u32).to_string());
+    }
+    out
+}
+
 pub struct Editor<'a> {
     pub keybinding_mode: KeybindingMode,
     /// Reserved for the lifetime parameter — Editor used to wrap a
@@ -848,7 +921,9 @@ impl<'a> Editor<'a> {
         &mut self,
         spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     ) {
-        let line_byte_lens: Vec<usize> = self.buffer.lines().iter().map(|l| l.len()).collect();
+        let line_byte_lens: Vec<usize> = (0..buf_row_count(&self.buffer))
+            .map(|r| buf_line(&self.buffer, r).map(str::len).unwrap_or(0))
+            .collect();
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
             let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
@@ -944,7 +1019,9 @@ impl<'a> Editor<'a> {
     /// 0.1.0 freeze the unprefixed name is the universally-available
     /// engine-native variant ("engine never imports ratatui").
     pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, crate::types::Style)>>) {
-        let line_byte_lens: Vec<usize> = self.buffer.lines().iter().map(|l| l.len()).collect();
+        let line_byte_lens: Vec<usize> = (0..buf_row_count(&self.buffer))
+            .map(|r| buf_line(&self.buffer, r).map(str::len).unwrap_or(0))
+            .collect();
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         #[cfg(feature = "ratatui")]
         let mut ratatui_spans: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
@@ -1080,7 +1157,7 @@ impl<'a> Editor<'a> {
     /// 0.0.34 (Patch C-δ.1): writes through `Host::viewport_mut`
     /// instead of the (now-deleted) `Buffer::viewport_mut`.
     pub fn set_viewport_top(&mut self, row: usize) {
-        let last = self.buffer.row_count().saturating_sub(1);
+        let last = buf_row_count(&self.buffer).saturating_sub(1);
         let target = row.min(last);
         self.host.viewport_mut().top_row = target;
     }
@@ -1089,7 +1166,7 @@ impl<'a> Editor<'a> {
     /// content. Hosts use this for goto-line, jump-to-mark, and
     /// programmatic cursor placement.
     pub fn jump_cursor(&mut self, row: usize, col: usize) {
-        self.buffer.set_cursor(hjkl_buffer::Position::new(row, col));
+        buf_set_cursor_rc(&mut self.buffer, row, col);
     }
 
     /// `(row, col)` cursor read sourced from the migration buffer.
@@ -1100,8 +1177,7 @@ impl<'a> Editor<'a> {
     /// `self.textarea.cursor()` so call sites keep working unchanged
     /// once the textarea field is ripped.
     pub fn cursor(&self) -> (usize, usize) {
-        let pos = self.buffer.cursor();
-        (pos.row, pos.col)
+        buf_cursor_rc(&self.buffer)
     }
 
     /// Drain any pending LSP intent raised by the last key. Returns
@@ -1203,35 +1279,41 @@ impl<'a> Editor<'a> {
         if self.settings.readonly {
             let _ = edit;
             return hjkl_buffer::Edit::InsertStr {
-                at: self.buffer.cursor(),
+                at: buf_cursor_pos(&self.buffer),
                 text: String::new(),
             };
         }
-        let pre_row = self.buffer.cursor().row;
-        let pre_rows = self.buffer.row_count();
+        let pre_row = buf_cursor_row(&self.buffer);
+        let pre_rows = buf_row_count(&self.buffer);
         // Map the underlying buffer edit to a SPEC EditOp for
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
         self.change_log.extend(edit_to_editops(&edit));
+        // `apply_edit` is intentionally a concrete reach: it returns
+        // the inverse edit for undo and consumes a `hjkl_buffer::Edit`
+        // value type. Routing this through the `BufferEdit` trait
+        // would require a new `apply_edit` trait method that returns
+        // `Self::Edit` — deferred to the 0.1.0 freeze patch. See
+        // CHANGELOG `0.0.41` "resistant reaches".
         let inverse = self.buffer.apply_edit(edit);
-        let pos = self.buffer.cursor();
+        let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
         // Drop any folds the edit's range overlapped — vim opens the
         // surrounding fold automatically when you edit inside it. The
         // approximation here invalidates folds covering either the
         // pre-edit cursor row or the post-edit cursor row, which
         // catches the common single-line / multi-line edit shapes.
-        let lo = pre_row.min(pos.row);
-        let hi = pre_row.max(pos.row);
+        let lo = pre_row.min(pos_row);
+        let hi = pre_row.max(pos_row);
         self.apply_fold_op(crate::types::FoldOp::Invalidate {
             start_row: lo,
             end_row: hi,
         });
-        self.vim.last_edit_pos = Some((pos.row, pos.col));
+        self.vim.last_edit_pos = Some((pos_row, pos_col));
         // Append to the change-list ring (skip when the cursor sits on
         // the same cell as the last entry — back-to-back keystrokes on
         // one column shouldn't pollute the ring). A new edit while
         // walking the ring trims the forward half, vim style.
-        let entry = (pos.row, pos.col);
+        let entry = (pos_row, pos_col);
         if self.vim.change_list.last() != Some(&entry) {
             if let Some(idx) = self.vim.change_list_cursor.take() {
                 self.vim.change_list.truncate(idx + 1);
@@ -1248,7 +1330,7 @@ impl<'a> Editor<'a> {
         // Shift / drop marks + jump-list entries to track the row
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
-        let post_rows = self.buffer.row_count();
+        let post_rows = buf_row_count(&self.buffer);
         let delta = post_rows as isize - pre_rows as isize;
         if delta != 0 {
             self.shift_marks_after_edit(pre_row, delta);
@@ -1348,7 +1430,7 @@ impl<'a> Editor<'a> {
     /// Returns the cursor's row within the visible textarea (0-based), updating
     /// the stored viewport top so subsequent calls remain accurate.
     pub fn cursor_screen_row(&mut self, height: u16) -> u16 {
-        let cursor = self.buffer.cursor().row;
+        let cursor = buf_cursor_row(&self.buffer);
         let top = self.host.viewport().top_row;
         cursor.saturating_sub(top).min(height as usize - 1) as u16
     }
@@ -1369,14 +1451,14 @@ impl<'a> Editor<'a> {
         area_width: u16,
         area_height: u16,
     ) -> Option<(u16, u16)> {
-        let pos = self.buffer.cursor();
+        let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
         let v = self.host.viewport();
-        if pos.row < v.top_row || pos.col < v.top_col {
+        if pos_row < v.top_row || pos_col < v.top_col {
             return None;
         }
-        let lnum_width = self.buffer.row_count().to_string().len() as u16 + 2;
-        let dy = (pos.row - v.top_row) as u16;
-        let dx = (pos.col - v.top_col) as u16;
+        let lnum_width = buf_row_count(&self.buffer).to_string().len() as u16 + 2;
+        let dy = (pos_row - v.top_row) as u16;
+        let dx = (pos_col - v.top_col) as u16;
         if dy >= area_height || dx + lnum_width >= area_width {
             return None;
         }
@@ -1436,7 +1518,7 @@ impl<'a> Editor<'a> {
             return None;
         }
         let anchor = self.vim.visual_line_anchor;
-        let cursor = self.buffer.cursor().row;
+        let cursor = buf_cursor_row(&self.buffer);
         Some((anchor.min(cursor), anchor.max(cursor)))
     }
 
@@ -1445,7 +1527,7 @@ impl<'a> Editor<'a> {
             return None;
         }
         let (ar, ac) = self.vim.block_anchor;
-        let cr = self.buffer.cursor().row;
+        let cr = buf_cursor_row(&self.buffer);
         let cc = self.vim.block_vcol;
         let top = ar.min(cr);
         let bot = ar.max(cr);
@@ -1464,7 +1546,7 @@ impl<'a> Editor<'a> {
         match self.vim_mode() {
             VimMode::Visual => {
                 let (ar, ac) = self.vim.visual_anchor;
-                let head = self.buffer.cursor();
+                let head = buf_cursor_pos(&self.buffer);
                 Some(Selection::Char {
                     anchor: Position::new(ar, ac),
                     head,
@@ -1472,7 +1554,7 @@ impl<'a> Editor<'a> {
             }
             VimMode::VisualLine => {
                 let anchor_row = self.vim.visual_line_anchor;
-                let head_row = self.buffer.cursor().row;
+                let head_row = buf_cursor_row(&self.buffer);
                 Some(Selection::Line {
                     anchor_row,
                     head_row,
@@ -1480,7 +1562,7 @@ impl<'a> Editor<'a> {
             }
             VimMode::VisualBlock => {
                 let (ar, ac) = self.vim.block_anchor;
-                let cr = self.buffer.cursor().row;
+                let cr = buf_cursor_row(&self.buffer);
                 let cc = self.vim.block_vcol;
                 Some(Selection::Block {
                     anchor: Position::new(ar, ac),
@@ -1497,7 +1579,14 @@ impl<'a> Editor<'a> {
     }
 
     pub fn content(&self) -> String {
-        let mut s = self.buffer.lines().join("\n");
+        let n = buf_row_count(&self.buffer);
+        let mut s = String::new();
+        for r in 0..n {
+            if r > 0 {
+                s.push('\n');
+            }
+            s.push_str(crate::types::Query::line(&self.buffer, r as u32));
+        }
         s.push('\n');
         s
     }
@@ -1524,7 +1613,7 @@ impl<'a> Editor<'a> {
             lines.push(String::new());
         }
         let _ = lines;
-        self.buffer = hjkl_buffer::Buffer::from_str(text);
+        crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.mark_content_dirty();
@@ -1707,7 +1796,7 @@ impl<'a> Editor<'a> {
                 } else {
                     (head_row, anchor_row)
                 };
-                let last_col = self.buffer.line(bot).map(|l| l.len()).unwrap_or(0);
+                let last_col = buf_line(&self.buffer, bot).map(|l| l.len()).unwrap_or(0);
                 ((top, 0), (bot, last_col))
             }
             hjkl_buffer::Selection::Block { anchor, head } => {
@@ -1757,7 +1846,7 @@ impl<'a> Editor<'a> {
     pub fn highlights_for_line(&mut self, line: u32) -> Vec<crate::types::Highlight> {
         use crate::types::{Highlight, HighlightKind, Pos};
         let row = line as usize;
-        if row >= self.buffer.lines().len() {
+        if row >= buf_row_count(&self.buffer) {
             return Vec::new();
         }
 
@@ -1770,7 +1859,7 @@ impl<'a> Editor<'a> {
             let Ok(re) = regex::Regex::new(&prompt.text) else {
                 return Vec::new();
             };
-            let Some(haystack) = self.buffer.line(row) else {
+            let Some(haystack) = buf_line(&self.buffer, row) else {
                 return Vec::new();
             };
             return re
@@ -1791,7 +1880,7 @@ impl<'a> Editor<'a> {
         if self.search_state.pattern.is_none() {
             return Vec::new();
         }
-        let dgen = self.buffer.dirty_gen();
+        let dgen = crate::types::Query::dirty_gen(&self.buffer);
         crate::search::search_matches(&self.buffer, &mut self.search_state, dgen, row)
             .into_iter()
             .map(|(start, end)| Highlight {
@@ -1832,7 +1921,7 @@ impl<'a> Editor<'a> {
             cursor_col: cursor_col as u32,
             cursor_shape: shape,
             viewport_top: self.host.viewport().top_row as u32,
-            line_count: self.buffer.lines().len() as u32,
+            line_count: crate::types::Query::line_count(&self.buffer),
         }
     }
 
@@ -1859,7 +1948,7 @@ impl<'a> Editor<'a> {
         };
         let cursor = self.cursor();
         let cursor = (cursor.0 as u32, cursor.1 as u32);
-        let lines: Vec<String> = self.buffer.lines().to_vec();
+        let lines: Vec<String> = buf_lines_to_vec(&self.buffer);
         let viewport_top = self.host.viewport().top_row as u32;
         let marks = self
             .marks
@@ -1957,8 +2046,8 @@ impl<'a> Editor<'a> {
             self.ensure_scrolloff_wrap(height, margin);
             return;
         }
-        let cursor_row = self.buffer.cursor().row;
-        let last_row = self.buffer.row_count().saturating_sub(1);
+        let cursor_row = buf_cursor_row(&self.buffer);
+        let last_row = buf_row_count(&self.buffer).saturating_sub(1);
         let v = self.host.viewport_mut();
         // Top edge: cursor_row should sit at >= top_row + margin.
         if cursor_row < v.top_row + margin {
@@ -1976,7 +2065,7 @@ impl<'a> Editor<'a> {
         }
         // Defer to Buffer for column-side scroll (no scrolloff for
         // horizontal scrolling — vim default `sidescrolloff = 0`).
-        let cursor = self.buffer.cursor();
+        let cursor = buf_cursor_pos(&self.buffer);
         self.host.viewport_mut().ensure_visible(cursor);
     }
 
@@ -1985,7 +2074,7 @@ impl<'a> Editor<'a> {
     /// `[margin, height - 1 - margin]`, then clamps `top_row` so the
     /// buffer's bottom never leaves blank rows below it.
     fn ensure_scrolloff_wrap(&mut self, height: usize, margin: usize) {
-        let cursor_row = self.buffer.cursor().row;
+        let cursor_row = buf_cursor_row(&self.buffer);
         // Step 1 — cursor above viewport: snap top to cursor row,
         // then we'll fix up the margin below.
         if cursor_row < self.host.viewport().top_row {
@@ -2011,7 +2100,7 @@ impl<'a> Editor<'a> {
                 break;
             }
             let top = self.host.viewport().top_row;
-            let row_count = self.buffer.row_count();
+            let row_count = buf_row_count(&self.buffer);
             let next = {
                 let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
                 <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::next_visible_row(&folds, top, row_count)
@@ -2062,7 +2151,7 @@ impl<'a> Editor<'a> {
             return;
         }
         // Bump the host viewport's top within bounds.
-        let total_rows = self.buffer.row_count() as isize;
+        let total_rows = buf_row_count(&self.buffer) as isize;
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
         let cur_top = self.host.viewport().top_row as isize;
         let new_top = (cur_top + delta as isize)
@@ -2077,29 +2166,25 @@ impl<'a> Editor<'a> {
         }
         // Apply scrolloff: keep the cursor at least SCROLLOFF rows
         // from the visible viewport edges.
-        let cursor = self.buffer.cursor();
+        let (cursor_row, cursor_col) = buf_cursor_rc(&self.buffer);
         let margin = Self::SCROLLOFF.min(height / 2);
         let min_row = new_top + margin;
         let max_row = new_top + height.saturating_sub(1).saturating_sub(margin);
-        let target_row = cursor.row.clamp(min_row, max_row.max(min_row));
-        if target_row != cursor.row {
-            let line_len = self
-                .buffer
-                .line(target_row)
+        let target_row = cursor_row.clamp(min_row, max_row.max(min_row));
+        if target_row != cursor_row {
+            let line_len = buf_line(&self.buffer, target_row)
                 .map(|l| l.chars().count())
                 .unwrap_or(0);
-            let target_col = cursor.col.min(line_len.saturating_sub(1));
-            self.buffer
-                .set_cursor(hjkl_buffer::Position::new(target_row, target_col));
+            let target_col = cursor_col.min(line_len.saturating_sub(1));
+            buf_set_cursor_rc(&mut self.buffer, target_row, target_col);
         }
     }
 
     pub fn goto_line(&mut self, line: usize) {
         let row = line.saturating_sub(1);
-        let max = self.buffer.row_count().saturating_sub(1);
+        let max = buf_row_count(&self.buffer).saturating_sub(1);
         let target = row.min(max);
-        self.buffer
-            .set_cursor(hjkl_buffer::Position::new(target, 0));
+        buf_set_cursor_rc(&mut self.buffer, target, 0);
     }
 
     /// Scroll so the cursor row lands at the given viewport position:
@@ -2110,7 +2195,7 @@ impl<'a> Editor<'a> {
         if height == 0 {
             return;
         }
-        let cur_row = self.buffer.cursor().row;
+        let cur_row = buf_cursor_row(&self.buffer);
         let cur_top = self.host.viewport().top_row;
         // Scrolloff awareness: `zt` lands the cursor at the top edge
         // of the viable area (top + margin), `zb` at the bottom edge
@@ -2142,15 +2227,17 @@ impl<'a> Editor<'a> {
     /// Ratatui-free; [`Editor::mouse_to_doc_pos`] (behind the
     /// `ratatui` feature) is a thin `Rect`-flavoured wrapper.
     fn mouse_to_doc_pos_xy(&self, area_x: u16, area_y: u16, col: u16, row: u16) -> (usize, usize) {
-        let lines = self.buffer.lines();
+        let n = buf_row_count(&self.buffer);
         let inner_top = area_y.saturating_add(1); // tab bar row
-        let lnum_width = lines.len().to_string().len() as u16 + 2;
+        let lnum_width = n.to_string().len() as u16 + 2;
         let content_x = area_x.saturating_add(1).saturating_add(lnum_width);
         let rel_row = row.saturating_sub(inner_top) as usize;
         let top = self.host.viewport().top_row;
-        let doc_row = (top + rel_row).min(lines.len().saturating_sub(1));
+        let doc_row = (top + rel_row).min(n.saturating_sub(1));
         let rel_col = col.saturating_sub(content_x) as usize;
-        let line_chars = lines.get(doc_row).map(|l| l.chars().count()).unwrap_or(0);
+        let line_chars = buf_line(&self.buffer, doc_row)
+            .map(|l| l.chars().count())
+            .unwrap_or(0);
         let last_col = line_chars.saturating_sub(1);
         (doc_row, rel_col.min(last_col))
     }
@@ -2158,11 +2245,13 @@ impl<'a> Editor<'a> {
     /// Jump the cursor to the given 1-based line/column, clamped to the document.
     pub fn jump_to(&mut self, line: usize, col: usize) {
         let r = line.saturating_sub(1);
-        let max_row = self.buffer.row_count().saturating_sub(1);
+        let max_row = buf_row_count(&self.buffer).saturating_sub(1);
         let r = r.min(max_row);
-        let line_len = self.buffer.line(r).map(|l| l.chars().count()).unwrap_or(0);
+        let line_len = buf_line(&self.buffer, r)
+            .map(|l| l.chars().count())
+            .unwrap_or(0);
         let c = col.saturating_sub(1).min(line_len);
-        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
+        buf_set_cursor_rc(&mut self.buffer, r, c);
     }
 
     /// Jump cursor to the terminal-space mouse position; exits Visual
@@ -2180,7 +2269,7 @@ impl<'a> Editor<'a> {
         // insert-mode undo group when the toggle is on (vim parity).
         crate::vim::break_undo_group_in_insert(self);
         let (r, c) = self.mouse_to_doc_pos_xy(area_x, area_y, col, row);
-        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
+        buf_set_cursor_rc(&mut self.buffer, r, c);
     }
 
     /// Ratatui [`Rect`]-flavoured wrapper around
@@ -2208,7 +2297,7 @@ impl<'a> Editor<'a> {
     /// the unprefixed name belongs to the universally-available variant.
     pub fn mouse_extend_drag(&mut self, area_x: u16, area_y: u16, col: u16, row: u16) {
         let (r, c) = self.mouse_to_doc_pos_xy(area_x, area_y, col, row);
-        self.buffer.set_cursor(hjkl_buffer::Position::new(r, c));
+        buf_set_cursor_rc(&mut self.buffer, r, c);
     }
 
     /// Ratatui [`Rect`]-flavoured wrapper around
@@ -2222,45 +2311,40 @@ impl<'a> Editor<'a> {
     }
 
     pub fn insert_str(&mut self, text: &str) {
-        let pos = self.buffer.cursor();
-        self.buffer.apply_edit(hjkl_buffer::Edit::InsertStr {
-            at: pos,
-            text: text.to_string(),
-        });
+        let pos = crate::types::Cursor::cursor(&self.buffer);
+        crate::types::BufferEdit::insert_at(&mut self.buffer, pos, text);
         self.push_buffer_content_to_textarea();
         self.mark_content_dirty();
     }
 
     pub fn accept_completion(&mut self, completion: &str) {
-        use hjkl_buffer::{Edit, MotionKind, Position};
-        let cursor = self.buffer.cursor();
-        let line = self.buffer.line(cursor.row).unwrap_or("").to_string();
+        use crate::types::{BufferEdit, Cursor as CursorTrait, Pos};
+        let cursor_pos = CursorTrait::cursor(&self.buffer);
+        let cursor_row = cursor_pos.line as usize;
+        let cursor_col = cursor_pos.col as usize;
+        let line = buf_line(&self.buffer, cursor_row).unwrap_or("").to_string();
         let chars: Vec<char> = line.chars().collect();
-        let prefix_len = chars[..cursor.col.min(chars.len())]
+        let prefix_len = chars[..cursor_col.min(chars.len())]
             .iter()
             .rev()
             .take_while(|c| c.is_alphanumeric() || **c == '_')
             .count();
         if prefix_len > 0 {
-            let start = Position::new(cursor.row, cursor.col - prefix_len);
-            self.buffer.apply_edit(Edit::DeleteRange {
-                start,
-                end: cursor,
-                kind: MotionKind::Char,
-            });
+            let start = Pos {
+                line: cursor_row as u32,
+                col: (cursor_col - prefix_len) as u32,
+            };
+            BufferEdit::delete_range(&mut self.buffer, start..cursor_pos);
         }
-        let cursor = self.buffer.cursor();
-        self.buffer.apply_edit(Edit::InsertStr {
-            at: cursor,
-            text: completion.to_string(),
-        });
+        let cursor = CursorTrait::cursor(&self.buffer);
+        BufferEdit::insert_at(&mut self.buffer, cursor, completion);
         self.push_buffer_content_to_textarea();
         self.mark_content_dirty();
     }
 
     pub(super) fn snapshot(&self) -> (Vec<String>, (usize, usize)) {
-        let pos = self.buffer.cursor();
-        (self.buffer.lines().to_vec(), (pos.row, pos.col))
+        let rc = buf_cursor_rc(&self.buffer);
+        (buf_lines_to_vec(&self.buffer), rc)
     }
 
     /// Walk one step back through the undo history. Equivalent to the
@@ -2311,9 +2395,8 @@ impl<'a> Editor<'a> {
     /// paths. Marks the editor dirty.
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
         let text = lines.join("\n");
-        self.buffer.replace_all(&text);
-        self.buffer
-            .set_cursor(hjkl_buffer::Position::new(cursor.0, cursor.1));
+        crate::types::BufferEdit::replace_all(&mut self.buffer, &text);
+        buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
         self.mark_content_dirty();
     }
 

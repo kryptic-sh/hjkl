@@ -995,6 +995,22 @@ pub trait BufferEdit: Send {
     fn delete_range(&mut self, range: core::ops::Range<Pos>);
     /// Replace the half-open `range` with `replacement`.
     fn replace_range(&mut self, range: core::ops::Range<Pos>, replacement: &str);
+    /// Replace the entire buffer content with `text`. The cursor is
+    /// clamped to the surviving content. Used by `:e!` / undo
+    /// restore / snapshot replay where expressing "replace whole
+    /// buffer" via [`replace_range`] would require knowing the end
+    /// position. Default impl uses [`replace_range`] with a
+    /// best-effort end (`u32::MAX` / `u32::MAX`); the canonical
+    /// in-tree impl overrides it for a single-shot rebuild.
+    fn replace_all(&mut self, text: &str) {
+        self.replace_range(
+            Pos::ORIGIN..Pos {
+                line: u32::MAX,
+                col: u32::MAX,
+            },
+            text,
+        );
+    }
 }
 
 /// Search sub-trait of [`Buffer`]. The pattern is owned by the engine

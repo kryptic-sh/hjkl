@@ -229,6 +229,12 @@ impl BufferEdit for RopeBuffer {
             with: replacement.to_string(),
         });
     }
+
+    fn replace_all(&mut self, text: &str) {
+        // Forward to the inherent in-tree fast path which rebuilds
+        // the line vector in one pass + bumps `dirty_gen`.
+        RopeBuffer::replace_all(self, text);
+    }
 }
 
 #[inline]
@@ -648,6 +654,89 @@ mod tests {
         assert_eq!(b.as_string(), "hello");
         BufferEdit::replace_range(&mut b, Pos::new(0, 0)..Pos::new(0, 5), "HI");
         assert_eq!(b.as_string(), "HI");
+    }
+
+    /// Default `BufferEdit::replace_all` impl forwards to
+    /// `replace_range(ORIGIN..MAX, text)`. Non-canonical backends that
+    /// don't override `replace_all` rely on this; locked in here with
+    /// a minimal mock that records the calls.
+    #[test]
+    fn buffer_edit_default_replace_all_routes_through_replace_range() {
+        struct MockBuf {
+            cursor: Pos,
+            lines: Vec<String>,
+            last_replace_range: Option<core::ops::Range<Pos>>,
+        }
+        impl Sealed for MockBuf {}
+        impl Cursor for MockBuf {
+            fn cursor(&self) -> Pos {
+                self.cursor
+            }
+            fn set_cursor(&mut self, p: Pos) {
+                self.cursor = p;
+            }
+            fn byte_offset(&self, _p: Pos) -> usize {
+                0
+            }
+            fn pos_at_byte(&self, _b: usize) -> Pos {
+                Pos::ORIGIN
+            }
+        }
+        impl Query for MockBuf {
+            fn line_count(&self) -> u32 {
+                self.lines.len() as u32
+            }
+            fn line(&self, idx: u32) -> &str {
+                &self.lines[idx as usize]
+            }
+            fn len_bytes(&self) -> usize {
+                0
+            }
+            fn slice(&self, _r: core::ops::Range<Pos>) -> Cow<'_, str> {
+                Cow::Borrowed("")
+            }
+        }
+        impl BufferEdit for MockBuf {
+            fn insert_at(&mut self, _p: Pos, _t: &str) {}
+            fn delete_range(&mut self, _r: core::ops::Range<Pos>) {}
+            fn replace_range(&mut self, range: core::ops::Range<Pos>, _t: &str) {
+                self.last_replace_range = Some(range);
+            }
+        }
+        impl Search for MockBuf {
+            fn find_next(&self, _f: Pos, _p: &Regex) -> Option<core::ops::Range<Pos>> {
+                None
+            }
+            fn find_prev(&self, _f: Pos, _p: &Regex) -> Option<core::ops::Range<Pos>> {
+                None
+            }
+        }
+        impl Buffer for MockBuf {}
+
+        let mut m = MockBuf {
+            cursor: Pos::ORIGIN,
+            lines: vec!["hi".into()],
+            last_replace_range: None,
+        };
+        BufferEdit::replace_all(&mut m, "new content");
+        let r = m
+            .last_replace_range
+            .expect("default impl must hit replace_range");
+        assert_eq!(r.start, Pos::ORIGIN);
+        assert_eq!(r.end.line, u32::MAX);
+        assert_eq!(r.end.col, u32::MAX);
+    }
+
+    #[test]
+    fn buffer_edit_replace_all_rebuilds_content() {
+        let mut b = RopeBuffer::from_str("hello\nworld");
+        Cursor::set_cursor(&mut b, Pos::new(1, 3));
+        BufferEdit::replace_all(&mut b, "alpha\nbeta\ngamma");
+        assert_eq!(b.as_string(), "alpha\nbeta\ngamma");
+        assert_eq!(Query::line_count(&b), 3);
+        // Cursor clamped to surviving content (`replace_all` invariant).
+        let c = Cursor::cursor(&b);
+        assert!((c.line as usize) < Query::line_count(&b) as usize);
     }
 
     #[test]
