@@ -23,7 +23,7 @@
 //!
 //! Until then this module ships the canonical impl + a compile-time
 //! assertion that `hjkl_buffer::Buffer` satisfies the trait, so
-//! downstream callers can write `fn f<B: hjkl_engine::SpecBuffer>(…)`
+//! downstream callers can write `fn f<B: hjkl_engine::Buffer>(…)`
 //! today and the engine's own `Editor` becomes generic over `B` in a
 //! follow-up patch without breaking the trait contract.
 

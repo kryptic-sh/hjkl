@@ -8,6 +8,78 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.31] - 2026-04-26
+
+### Changed (public-API rename pass — pre-0.1.0 freeze prep)
+
+The 0.1.0 cut freezes the trait surface; once frozen, renames need a
+semver-major bump. This patch is the last cheap window in the 0.0.x churn
+series to clean up names that got shoehorned in mid-refactor (Phase 5 trait
+extraction, 0.0.26).
+
+Every rename ships with a `#[deprecated]` type alias at the OLD name so
+consumers pinning `=0.0.30` keep building unchanged. The deprecated aliases
+are deleted at the 0.1.0 cut (Patch C-β).
+
+#### `hjkl_engine` re-export rename table
+
+| 0.0.30                          | 0.0.31                       | Why                                                                                                                                            |
+| ------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hjkl_engine::SpecBuffer`       | `hjkl_engine::Buffer`        | The "Spec" prefix was a 0.0.26 stop-gap — `crate::types::Buffer` doesn't clash with anything at the engine root, so the SPEC-named re-export wins. |
+| `hjkl_engine::SpecBufferEdit`   | `hjkl_engine::BufferEdit`    | Same reasoning. The trait-vs-value-type clash (`BufferEdit` trait vs `Edit` struct) lives inside `crate::types`; at the engine root no clash exists. |
+| `hjkl_engine::EditOp`           | `hjkl_engine::Edit`          | The `EditOp` rename was needed because `hjkl_buffer::Edit` is also a value type, but `hjkl_buffer::Edit` isn't re-exported from `hjkl_engine` — no clash. |
+| `hjkl_engine::PlannedViewport`  | `hjkl_engine::Viewport`      | Nothing else uses the `Viewport` name at the engine root — the "Planned" prefix was redundant.                                                 |
+
+#### Concerns evaluated, decisions, and "leave as-is" rationale
+
+| Concern                                   | Decision      | Why                                                                                                                                                                          |
+| ----------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hjkl_engine::PlannedInput`               | leave         | `crate::input::Input` (legacy) and `crate::types::Input` (SPEC) are both reachable; `PlannedInput` is a useful disambiguation. The legacy `Input` goes away at 0.1.0; rename then. |
+| `hjkl_engine::types::sealed`              | leave         | Already `pub(crate)`. Verified no public surface leaks the seal.                                                                                                              |
+| `Editor::new` vs `Editor::with_host`      | leave         | `Editor::new` keeps the back-compat `DefaultHost` shim; `with_host` is the real one. Patch C-β at 0.1.0 swaps to `Editor::new(buffer, host, options)` per SPEC.               |
+| `EngineHost` vs `Host`                    | leave         | `EngineHost` is the object-safe slice the boxed-trait-object slot needs. The name carries useful intent — "this is the engine's internal slice".                             |
+| `Editor::mouse_click(Rect)` vs `mouse_click_xy` | leave         | Rust forbids overloading; renaming `mouse_click_xy` → `mouse_click` while keeping the `Rect` form requires the `Rect` form to take a different name, breaking `editor.mouse_click(rect, …)` call sites. The `_xy` suffix carries genuine signal ("raw x/y, no Rect"); ratatui-Rect is a sugar layer. **Documented for SPEC review at 0.1.0.** |
+| `Editor::install_syntax_spans` vs `install_engine_syntax_spans` | leave | Same shape — rename while keeping back-compat would require feature-gating two methods with the same name. Defer to 0.1.0.                                                 |
+| `Editor::cursor_screen_pos(Rect)` vs `cursor_screen_pos_xywh` | leave | Same.                                                                                                                                                                       |
+| `Editor::intern_style(ratatui)` vs `intern_engine_style` | leave | Same — rename plus alias produces a same-name conflict under feature combinations. Defer to 0.1.0.                                                                          |
+| `pub mod motions`                         | leave (`pub`) | Curated re-export at the engine root would pollute the namespace with 24 names. The explicit module path (`hjkl_engine::motions::move_word_fwd`) is the right shape.        |
+
+The five `Editor` method asymmetries (`mouse_click`/`cursor_screen_pos` /
+`install_syntax_spans` / `intern_style` and the drag pair) are **flagged for
+SPEC review at 0.1.0**. The naming asymmetry is real, but resolving it cleanly
+requires a breaking change (Rust's no-overloading rule prevents a same-name
+deprecated alias under feature gates). The 0.1.0 cut is the right place to
+pick the canonical names and break.
+
+### Migration (downstream consumers)
+
+No source change required — every renamed re-export ships with a
+`#[deprecated]` type alias at the old name. Consumers see
+`#[deprecated]`-flavoured warnings and update at their leisure:
+
+```text
+warning: use of deprecated type alias `hjkl_engine::SpecBuffer`:
+         renamed to `hjkl_engine::Buffer`
+```
+
+Pin bumps (`=0.0.30` → `=0.0.31`) in consumer `Cargo.toml`s suffice. At
+0.1.0, the deprecated aliases are deleted and the `#[deprecated]` warnings
+turn into hard compile errors — schedule the swap before then.
+
+### Test counts
+
+- `cargo test --workspace`: **668 passed** (unchanged from 0.0.30 — the
+  rename pass is a no-op for runtime behaviour).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`:
+  green (no internal call sites trigger the new deprecation warnings).
+- `cargo check --no-default-features`: green.
+
+### SPEC.md
+
+No change. The SPEC names (`Buffer`, `BufferEdit`, `Edit`, `Viewport`)
+already match the new re-exports — this patch makes the actual API match
+the SPEC, which is the whole point.
+
 ## [0.0.30] - 2026-04-26
 
 ### Changed (Patch C-α — motion / viewport-helper relocation)

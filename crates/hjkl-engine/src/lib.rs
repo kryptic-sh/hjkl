@@ -33,13 +33,46 @@ pub use input::{Input, Key};
 pub use registers::{Registers, Slot};
 
 pub use types::{
-    Attrs, Buffer as SpecBuffer, BufferEdit as SpecBufferEdit, BufferId, Color, Cursor,
-    CursorShape, DefaultHost, Edit as EditOp, EditorSnapshot, EngineError, EngineHost, Highlight,
-    HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind,
-    OptionValue, Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet,
-    SnapshotMode, SpecialKey, Style, Viewport as PlannedViewport, WrapMode,
+    Attrs, Buffer, BufferEdit, BufferId, Color, Cursor, CursorShape, DefaultHost, Edit,
+    EditorSnapshot, EngineError, EngineHost, Highlight, HighlightKind, Host, Input as PlannedInput,
+    Mode, Modifiers, MouseEvent, MouseKind, OptionValue, Options, Pos, Query, RenderFrame, Search,
+    Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey, Style, Viewport, WrapMode,
 };
 pub use vim::SearchPrompt;
+
+// ── Deprecated re-export aliases (slated for removal at 0.1.0) ──────────
+//
+// 0.0.26 introduced these prefixed names because trait extraction collided
+// with the legacy `Edit` value type and the in-crate `Input`/`Viewport`
+// shapes. The clashes are resolved at the engine-root surface today, so the
+// canonical re-exports drop the prefix. The old names are kept as
+// `#[deprecated]` type aliases so consumers pinning `=0.0.30` migrate at
+// their own pace; they are deleted at the 0.1.0 cut.
+
+// Trait aliases — `pub use` is the only way to re-export a trait under a
+// new name; type aliases reject traits. The `#[deprecated]` attribute
+// applies to the alias itself (consumers naming `SpecBuffer` get the
+// warning; consumers naming `Buffer` directly do not).
+
+/// Deprecated alias for [`Buffer`]. Renamed in 0.0.31 — the "Spec" prefix
+/// was a 0.0.26 stop-gap that is no longer needed.
+#[deprecated(since = "0.0.31", note = "renamed to `hjkl_engine::Buffer`")]
+pub use Buffer as SpecBuffer;
+
+/// Deprecated alias for [`BufferEdit`]. Renamed in 0.0.31 — the "Spec"
+/// prefix was a 0.0.26 stop-gap that is no longer needed.
+#[deprecated(since = "0.0.31", note = "renamed to `hjkl_engine::BufferEdit`")]
+pub use BufferEdit as SpecBufferEdit;
+
+/// Deprecated alias for [`Edit`]. Renamed in 0.0.31 — the prior `EditOp`
+/// disambiguation is no longer needed at this surface.
+#[deprecated(since = "0.0.31", note = "renamed to `hjkl_engine::Edit`")]
+pub type EditOp = Edit;
+
+/// Deprecated alias for [`Viewport`]. Renamed in 0.0.31 — the "Planned"
+/// prefix was a 0.0.26 stop-gap that is no longer needed.
+#[deprecated(since = "0.0.31", note = "renamed to `hjkl_engine::Viewport`")]
+pub type PlannedViewport = Viewport;
 
 /// Which keyboard discipline the editor uses. Currently vim-only, but
 /// kept as an enum so future emacs / plain bindings can slot in without
