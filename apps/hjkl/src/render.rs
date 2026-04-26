@@ -46,6 +46,10 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 }
 
 /// Render the buffer pane with line numbers, text, and the cursor.
+///
+/// The buffer-pane cursor is suppressed when the user is typing in the
+/// command line (`:` prompt or `/`/`?` search prompt), because the
+/// terminal cursor belongs to the bottom row in those states.
 fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let gutter = Gutter {
         width: GUTTER_WIDTH,
@@ -55,6 +59,13 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let selection = app.editor.buffer_selection();
     let buffer_spans = app.editor.buffer_spans();
     let search_pattern = app.editor.search_state().pattern.as_ref();
+
+    // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
+    let search_bg = if search_pattern.is_some() {
+        Style::default().bg(Color::Rgb(147, 103, 0)).fg(Color::White)
+    } else {
+        Style::default()
+    };
 
     let view = BufferView {
         buffer: app.editor.buffer(),
@@ -66,7 +77,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         selection_bg: Style::default().bg(Color::Blue),
         cursor_style: Style::default().add_modifier(Modifier::REVERSED),
         gutter: Some(gutter),
-        search_bg: Style::default(),
+        search_bg,
         signs: &[],
         conceals: &[],
         spans: buffer_spans,
@@ -75,50 +86,87 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     frame.render_widget(view, area);
 
-    // Position the terminal cursor so the OS/terminal sees it correctly.
-    if let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area) {
+    // Suppress the buffer-pane cursor while the user is typing in the
+    // command line or search prompt — the cursor belongs to the status row.
+    let in_prompt = app.command_input.is_some() || app.editor.search_prompt().is_some();
+    if !in_prompt
+        && let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area)
+    {
         frame.set_cursor_position((cx, cy));
     }
 }
 
 /// Render the one-row status line.
 ///
-/// When the user is typing a `:` command, the status area shows the command
-/// prompt instead of the normal mode/file/cursor info.
-/// When a status message (ex-command result) is pending, it takes priority
-/// over the normal right-hand cursor position info.
+/// When the user is typing a `:` command or a `/`/`?` search, the status
+/// area shows the prompt instead of the normal mode/file/cursor info, and
+/// the terminal cursor is moved to the insertion point.
 fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let status = build_status_line(app, area.width);
+    let (status, cursor_col) = build_status_line(app, area.width);
     let paragraph = Paragraph::new(status);
     frame.render_widget(paragraph, area);
+
+    // Move the terminal cursor to the insertion point in the prompt row.
+    if let Some(col) = cursor_col {
+        frame.set_cursor_position((area.x + col, area.y));
+    }
 }
 
 /// Build the status line text as a ratatui [`Line`].
 ///
+/// Returns `(line, Some(cursor_col))` when a prompt is active so the
+/// caller can position the terminal cursor at the insertion point.
+///
 /// Priority (highest first):
 /// 1. Command input (user typing `:cmd`) — shows `:{typed_text}`.
-/// 2. Status message (ex-command result) — shown until next keypress.
-/// 3. Normal mode/filename/cursor line.
-fn build_status_line(app: &App, width: u16) -> Line<'static> {
-    // ── Command prompt ───────────────────────────────────────────────────────
+/// 2. Engine search prompt (`/` or `?`) — shows `/{typed_text}`.
+/// 3. Status message (ex-command result) — shown until next keypress.
+/// 4. Normal mode/filename/cursor line.
+fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
+    // ── Command prompt (`:`) ─────────────────────────────────────────────────
     if let Some(ref cmd) = app.command_input {
         let content = format!(":{}", cmd.text);
         // Pad to width so the background fills the row.
         let padded = format!("{content:<width$}", width = width as usize);
-        return Line::from(vec![Span::styled(
-            padded,
-            Style::default().bg(Color::DarkGray).fg(Color::White),
-        )]);
+        let cursor_col = cmd.display_cursor_col(1); // 1 = width of `:`
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            )]),
+            Some(cursor_col),
+        );
+    }
+
+    // ── Engine search prompt (`/` or `?`) ────────────────────────────────────
+    if let Some(sp) = app.editor.search_prompt() {
+        let prefix = if sp.forward { '/' } else { '?' };
+        let content = format!("{prefix}{}", sp.text);
+        let padded = format!("{content:<width$}", width = width as usize);
+        // cursor position inside the prompt text (byte-counted in ASCII context)
+        let cursor_col = 1u16 + sp.text[..sp.cursor.min(sp.text.len())]
+            .chars()
+            .count() as u16;
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            )]),
+            Some(cursor_col),
+        );
     }
 
     // ── Status message (ex-command result) ──────────────────────────────────
     if let Some(ref msg) = app.status_message {
         let content = format!(" {msg}");
         let padded = format!("{content:<width$}", width = width as usize);
-        return Line::from(vec![Span::styled(
-            padded,
-            Style::default().bg(Color::DarkGray).fg(Color::White),
-        )]);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            )]),
+            None,
+        );
     }
 
     // ── Normal status line ───────────────────────────────────────────────────
@@ -152,10 +200,13 @@ fn build_status_line(app: &App, width: u16) -> Line<'static> {
 
     let content = format!("{left}{spacer}{right}");
 
-    Line::from(vec![Span::styled(
-        content,
-        Style::default().bg(Color::DarkGray).fg(Color::White),
-    )])
+    (
+        Line::from(vec![Span::styled(
+            content,
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        )]),
+        None,
+    )
 }
 
 /// Format the status line as a plain string (unit-test helper).
