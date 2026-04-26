@@ -8,6 +8,88 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.29] - 2026-04-26
+
+### Added (Patch B — `Host` trait wired into `Editor`)
+
+- **`Editor` now carries a `host: Box<dyn EngineHost + 'a>` slot.** Engine
+  side-channels for clipboard, cursor-shape, and time read/write through the
+  SPEC `Host` trait instead of inherent fields. Patch C (0.1.0) replaces the
+  boxed object with a generic `Editor<'a, B: Buffer, H: Host>` parameter; this
+  patch wires the plumbing without flipping the public type.
+- **`Editor::with_host(keybinding_mode, host)`** — new constructor taking any
+  `H: Host + 'a`. Hosts that need real clipboard / cursor-shape / `now()`
+  plumbing call this; the legacy `Editor::new(keybinding_mode)` is preserved as
+  a back-compat shim that wires `DefaultHost::new()` internally so 0.0.28-era
+  callers keep building unchanged.
+- **`Editor::host()` / `Editor::host_mut()`** — accessors returning the
+  object-safe slice `&dyn EngineHost` / `&mut dyn EngineHost`. Tests use these
+  to assert the recorded clipboard / cursor-shape sequence; production code
+  rarely needs them.
+- **`crate::types::EngineHost`** — object-safe slice of the SPEC `Host` trait
+  used internally so `Editor` can box-erase host implementations without naming
+  the host's `Intent` associated type. Not implemented directly — blanket-impl
+  forwards from any `H: Host`.
+- **`crate::types::DefaultHost`** — no-op `Host` implementation. Suitable for
+  tests, headless embedding, or any host that doesn't yet need clipboard /
+  cursor-shape / cancellation plumbing. `write_clipboard` stores in-memory
+  (round-trip-only); `now` returns `Instant::now()` elapsed since construction;
+  `prompt_search` returns `None`; `emit_cursor_shape` records the most recent
+  shape (readable via `DefaultHost::last_cursor_shape`); `emit_intent` discards
+  (`type Intent = ();`).
+
+### Changed (engine ↔ host side-channel rewiring)
+
+- **Yank / cut paths now drive `Host::write_clipboard`.** Every
+  `last_yank = Some(text)` site in the FSM (yank, delete, change, substitute,
+  paste-to- cut, blockwise yank, mouse-cut funnel) now also queues the payload
+  onto the host's clipboard. The legacy `Editor::last_yank: Option<String>`
+  field is retained so 0.0.28-era hosts that drained it directly keep working;
+  it will be removed at 0.1.0.
+- **`:set timeoutlen` math now reads `Host::now()`.** The chord-timeout (`gg` /
+  `dd` / `<C-w>v` etc.) compares two `Duration` values from `Host::now()` rather
+  than two `Instant::now()` snapshots, so macro replay / headless drivers stay
+  deterministic regardless of wall-clock skew.
+  `VimState::last_input_at: Option<Instant>` is preserved for snapshot tests
+  that observe it directly; the new
+  `VimState::last_input_host_at: Option<Duration>` field carries the
+  host-monotonic reading the timeout check itself uses.
+- **Cursor-shape emit on every mode transition.** `Editor::feed_input` and
+  `Editor::handle_key` call a new internal `emit_cursor_shape_if_changed()`
+  after each input step. Insert mode emits `CursorShape::Bar`, every other
+  public mode emits `CursorShape::Block`. The emit is debounced — only fires
+  when `vim_mode()` actually changes. Hosts implement `Host::emit_cursor_shape`
+  to repaint accordingly.
+
+### Migration (downstream consumers)
+
+- **No source change required for hosts using `Editor::new(...)`.** The
+  back-compat shim wires `DefaultHost` internally; clipboard becomes a no-op
+  (still round-trips through `last_yank`), cursor-shape goes to a recorder slot,
+  `now()` reads wall-clock elapsed.
+- **Hosts already implementing `hjkl_engine::Host`** (e.g. `SqeelHost`,
+  `BuffrHost`) plug straight in via `Editor::with_host(..., host)`. Their
+  `write_clipboard` / `emit_cursor_shape` / `now()` will start receiving
+  engine-driven events the moment the host swaps `Editor::new(...)` →
+  `Editor::with_host(..., host)`.
+- **Fold provider (`next_visible_row` / `prev_visible_row` / `is_row_hidden` /
+  `fold_at_line`) is NOT moved to `Host` in this patch.** Audit found the
+  iteration is tightly coupled to buffer-private fold storage — relocating the
+  iteration without first hoisting the storage buys nothing and risks a
+  half-done split. Fold storage stays on `hjkl_buffer::Buffer` for now; the
+  engine's existing `Buffer::next_visible_row` / `prev_visible_row` calls
+  remain. Patch C (0.1.0) revisits this once the motion / fold / viewport-scroll
+  helpers are relocated as free functions over `B: Cursor + Query`.
+
+### Roadmap
+
+- **Patch A (0.0.28)**: ✅ `sticky_col` + `iskeyword` off `Buffer`.
+- **Patch B (this release, 0.0.29)**: ✅ `Host` wiring — clipboard, cursor-shape
+  emit, `Host::now()`. Fold provider deferred to Patch C.
+- **Patch C (0.1.0)**: `Editor<'a, B: Buffer = ..., H: Host = ...>` flip,
+  fold-iteration relocation, motion / fold / viewport-scroll helpers relocated
+  as free functions over `B: Cursor + Query`, public surface freezes.
+
 ## [0.0.28] - 2026-04-26
 
 ### Changed (Patch A — `sticky_col` + `iskeyword` hoist to `Editor`)
@@ -16,68 +98,62 @@ patch bumps.
   source of truth for the desired vertical-motion column moves out of both
   `hjkl_buffer::Buffer` and the engine-internal `VimState`. New accessors:
   - `Editor::sticky_col() -> Option<usize>`
-  - `Editor::set_sticky_col(Option<usize>)`
-  Buffer motion methods that need the sticky value
-  (`Buffer::move_up` / `move_down` / `move_screen_up` / `move_screen_down`)
-  now take a `&mut Option<usize>` parameter so the caller owns the storage.
-- **`iskeyword` is now stored only on `Editor::settings.iskeyword`.** Buffer
-  no longer mirrors it. `Editor::set_iskeyword(...)` keeps working
+  - `Editor::set_sticky_col(Option<usize>)` Buffer motion methods that need the
+    sticky value (`Buffer::move_up` / `move_down` / `move_screen_up` /
+    `move_screen_down`) now take a `&mut Option<usize>` parameter so the caller
+    owns the storage.
+- **`iskeyword` is now stored only on `Editor::settings.iskeyword`.** Buffer no
+  longer mirrors it. `Editor::set_iskeyword(...)` keeps working
   (source-compatible with 0.0.27) but no longer writes back into the buffer.
   Buffer word motions (`Buffer::move_word_fwd` / `move_word_back` /
   `move_word_end` / `move_word_end_back`) now take `iskeyword: &str` as a
   parameter so the host can change it without re-publishing onto the buffer.
 - This unblocks Patch C (`Editor<B: Buffer, H: Host>` generic-ification at
-  0.1.0): the audit identified `sticky_col` and `iskeyword` as vim-FSM
-  concerns that don't belong on the SPEC `Buffer` trait surface. They had
-  to come off `Buffer` before the FSM-internal motion helpers can be
-  relocated into the engine as free functions over `B: Cursor + Query`.
+  0.1.0): the audit identified `sticky_col` and `iskeyword` as vim-FSM concerns
+  that don't belong on the SPEC `Buffer` trait surface. They had to come off
+  `Buffer` before the FSM-internal motion helpers can be relocated into the
+  engine as free functions over `B: Cursor + Query`.
 
 ### Removed (breaking — `hjkl_buffer::Buffer` public API)
 
 - `Buffer::sticky_col()` — read `Editor::sticky_col()` instead.
-- `Buffer::set_sticky_col(...)` — call `Editor::set_sticky_col(...)`
-  instead.
+- `Buffer::set_sticky_col(...)` — call `Editor::set_sticky_col(...)` instead.
 - `Buffer::iskeyword()` — read `Editor::settings.iskeyword` instead.
-- `Buffer::set_iskeyword(...)` — call `Editor::set_iskeyword(...)` (which
-  now only mutates `Editor::settings.iskeyword`) instead.
+- `Buffer::set_iskeyword(...)` — call `Editor::set_iskeyword(...)` (which now
+  only mutates `Editor::settings.iskeyword`) instead.
 - The `pub fn refresh_sticky_col_from_cursor` helper on `Buffer` is gone;
-  horizontal motions no longer touch a buffer-side sticky field. The
-  engine's existing `apply_sticky_col` already manages this from the
-  Editor side.
+  horizontal motions no longer touch a buffer-side sticky field. The engine's
+  existing `apply_sticky_col` already manages this from the Editor side.
 - `Buffer::move_up`, `move_down`, `move_screen_up`, `move_screen_down` —
-  signature changed to take `sticky_col: &mut Option<usize>`. Callers
-  mirroring the engine pattern thread `&mut editor.sticky_col` through.
+  signature changed to take `sticky_col: &mut Option<usize>`. Callers mirroring
+  the engine pattern thread `&mut editor.sticky_col` through.
 - `Buffer::move_word_fwd`, `move_word_back`, `move_word_end`,
-  `move_word_end_back` — signature changed to take `iskeyword: &str` as
-  the third / fourth positional argument.
+  `move_word_end_back` — signature changed to take `iskeyword: &str` as the
+  third / fourth positional argument.
 
 ### Migration (downstream consumers)
 
-The buffer's `sticky_col` / `iskeyword` storage was an implementation
-detail mirrored from `Editor` since 0.0.23. **No known consumer reads or
-writes these fields directly** — sqeel, buffr, and inbx use the editor-
-level accessors. If a host did call `buffer.sticky_col()` /
-`buffer.set_sticky_col(...)` / `buffer.iskeyword()` /
-`buffer.set_iskeyword(...)` directly, swap to the matching `Editor`
-methods listed above. The `:set iskeyword=...` ex command keeps working
-end-to-end via `Editor::set_iskeyword`.
+The buffer's `sticky_col` / `iskeyword` storage was an implementation detail
+mirrored from `Editor` since 0.0.23. **No known consumer reads or writes these
+fields directly** — sqeel, buffr, and inbx use the editor- level accessors. If a
+host did call `buffer.sticky_col()` / `buffer.set_sticky_col(...)` /
+`buffer.iskeyword()` / `buffer.set_iskeyword(...)` directly, swap to the
+matching `Editor` methods listed above. The `:set iskeyword=...` ex command
+keeps working end-to-end via `Editor::set_iskeyword`.
 
 If a host called `Buffer::move_up` / `move_down` / `move_screen_up` /
-`move_screen_down` / `move_word_*` directly (rather than through the
-engine's motion grammar), thread the new `sticky_col` / `iskeyword`
-parameters through.
+`move_screen_down` / `move_word_*` directly (rather than through the engine's
+motion grammar), thread the new `sticky_col` / `iskeyword` parameters through.
 
 ### Roadmap
 
-- **Patch A — this release (0.0.28)**: `sticky_col` + `iskeyword` off
-  `Buffer`.
-- **Patch B (0.0.29)**: `Host` wiring — clipboard, cursor-shape emit,
-  fold provider, `host.now()`. Lifts the remaining engine ↔ host
-  side-channels onto the SPEC `Host` trait surface.
-- **Patch C (0.1.0)**: `Editor<'a, B: Buffer = ..., H: Host = ...>`
-  flip, motion / fold / viewport-scroll helpers relocated into the
-  engine as free functions over `B: Cursor + Query`, public surface
-  freezes.
+- **Patch A — this release (0.0.28)**: `sticky_col` + `iskeyword` off `Buffer`.
+- **Patch B (0.0.29)**: `Host` wiring — clipboard, cursor-shape emit, fold
+  provider, `host.now()`. Lifts the remaining engine ↔ host side-channels onto
+  the SPEC `Host` trait surface.
+- **Patch C (0.1.0)**: `Editor<'a, B: Buffer = ..., H: Host = ...>` flip, motion
+  / fold / viewport-scroll helpers relocated into the engine as free functions
+  over `B: Cursor + Query`, public surface freezes.
 
 ## [0.0.27] - 2026-04-26
 

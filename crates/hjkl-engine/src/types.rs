@@ -607,6 +607,112 @@ pub trait Host: Send {
     fn emit_intent(&mut self, intent: Self::Intent);
 }
 
+/// Object-safe slice of [`Host`] used by the engine internally so an
+/// `Editor` can carry a `Box<dyn EngineHost + 'a>` without naming the
+/// host's `Intent` associated type. Hosts never implement this directly
+/// — a blanket impl forwards to the SPEC [`Host`] trait.
+///
+/// Patch B (0.0.29) wires this trait into [`crate::Editor`] for
+/// clipboard, cursor-shape, and time side-channels. Patch C (0.1.0)
+/// flips `Editor` to `Editor<'a, B: Buffer, H: Host>` and erases this
+/// shim in favour of a fully generic host slot.
+pub trait EngineHost: Send {
+    fn write_clipboard(&mut self, text: String);
+    fn read_clipboard(&mut self) -> Option<String>;
+    fn now(&self) -> core::time::Duration;
+    fn should_cancel(&self) -> bool;
+    fn prompt_search(&mut self) -> Option<String>;
+    fn emit_cursor_shape(&mut self, shape: CursorShape);
+}
+
+impl<H: Host + ?Sized> EngineHost for H {
+    fn write_clipboard(&mut self, text: String) {
+        <Self as Host>::write_clipboard(self, text)
+    }
+    fn read_clipboard(&mut self) -> Option<String> {
+        <Self as Host>::read_clipboard(self)
+    }
+    fn now(&self) -> core::time::Duration {
+        <Self as Host>::now(self)
+    }
+    fn should_cancel(&self) -> bool {
+        <Self as Host>::should_cancel(self)
+    }
+    fn prompt_search(&mut self) -> Option<String> {
+        <Self as Host>::prompt_search(self)
+    }
+    fn emit_cursor_shape(&mut self, shape: CursorShape) {
+        <Self as Host>::emit_cursor_shape(self, shape)
+    }
+}
+
+/// Default no-op [`Host`] implementation. Suitable for tests, headless
+/// embedding, or any host that doesn't yet need clipboard / cursor-shape
+/// / cancellation plumbing.
+///
+/// Behaviour:
+/// - `write_clipboard` stores the most recent payload in an in-memory
+///   slot; `read_clipboard` returns it. Round-trip-only — no OS-level
+///   clipboard touched.
+/// - `now` returns wall-clock duration since construction.
+/// - `prompt_search` returns `None` (search is aborted).
+/// - `emit_cursor_shape` records the most recent shape; readable via
+///   [`DefaultHost::last_cursor_shape`].
+/// - `emit_intent` discards intents (intent type is `()`).
+#[derive(Debug)]
+pub struct DefaultHost {
+    clipboard: Option<String>,
+    last_cursor_shape: CursorShape,
+    started: std::time::Instant,
+}
+
+impl Default for DefaultHost {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DefaultHost {
+    pub fn new() -> Self {
+        Self {
+            clipboard: None,
+            last_cursor_shape: CursorShape::Block,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    /// Most recent cursor shape requested by the engine.
+    pub fn last_cursor_shape(&self) -> CursorShape {
+        self.last_cursor_shape
+    }
+}
+
+impl Host for DefaultHost {
+    type Intent = ();
+
+    fn write_clipboard(&mut self, text: String) {
+        self.clipboard = Some(text);
+    }
+
+    fn read_clipboard(&mut self) -> Option<String> {
+        self.clipboard.clone()
+    }
+
+    fn now(&self) -> core::time::Duration {
+        self.started.elapsed()
+    }
+
+    fn prompt_search(&mut self) -> Option<String> {
+        None
+    }
+
+    fn emit_cursor_shape(&mut self, shape: CursorShape) {
+        self.last_cursor_shape = shape;
+    }
+
+    fn emit_intent(&mut self, _intent: Self::Intent) {}
+}
+
 /// Engine render frame consumed by the host once per redraw.
 ///
 /// Borrow-style — the engine builds it on demand from its internal

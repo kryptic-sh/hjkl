@@ -440,9 +440,15 @@ pub struct VimState {
     /// `:set timeoutlen` multi-key timeout — if `now() - last_input_at`
     /// exceeds the configured budget, any pending prefix is cleared
     /// before the new key dispatches. `None` before the first key.
-    /// TODO: swap `Instant::now()` for `Host::now()` once the trait
-    /// extraction lands so macro replay stays deterministic.
+    /// 0.0.29 (Patch B): `:set timeoutlen` math now reads
+    /// [`crate::types::Host::now`] via `last_input_host_at`. This
+    /// `Instant`-flavoured field stays for snapshot tests that still
+    /// observe it directly.
     pub(super) last_input_at: Option<std::time::Instant>,
+    /// `Host::now()` reading at the last keystroke. Drives
+    /// `:set timeoutlen` so macro replay / headless drivers stay
+    /// deterministic regardless of wall-clock skew.
+    pub(super) last_input_host_at: Option<core::time::Duration>,
 }
 
 const SEARCH_HISTORY_MAX: usize = 100;
@@ -778,13 +784,18 @@ pub fn step(ed: &mut Editor<'_>, input: Input) -> bool {
     ed.sync_buffer_content_from_textarea();
     // `:set timeoutlen` — if the user paused longer than the budget
     // since the last keystroke and a chord is in flight, drop the
-    // pending prefix so the new key starts fresh. TODO: swap
-    // `Instant::now()` for `Host::now()` once the trait extraction
-    // lands so macro replay stays deterministic.
+    // pending prefix so the new key starts fresh. 0.0.29 (Patch B):
+    // chord-timeout math now reads `Host::now()` so macro replay /
+    // headless drivers stay deterministic. The legacy
+    // `Instant::now()`-backed `last_input_at` field is retained for
+    // snapshot tests that still observe it.
     let now = std::time::Instant::now();
-    if let Some(prev) = ed.vim.last_input_at
-        && now.duration_since(prev) > ed.settings.timeout_len
-    {
+    let host_now = ed.host.now();
+    let timed_out = match ed.vim.last_input_host_at {
+        Some(prev) => host_now.saturating_sub(prev) > ed.settings.timeout_len,
+        None => false,
+    };
+    if timed_out {
         let chord_in_flight = !matches!(ed.vim.pending, Pending::None)
             || ed.vim.count != 0
             || ed.vim.pending_register.is_some()
@@ -794,6 +805,7 @@ pub fn step(ed: &mut Editor<'_>, input: Input) -> bool {
         }
     }
     ed.vim.last_input_at = Some(now);
+    ed.vim.last_input_host_at = Some(host_now);
     // Macro stop: a bare `q` ends an active recording before any
     // other handler sees the key (so `q` itself doesn't get
     // recorded). Replays don't trigger this — they finish on their
@@ -3246,7 +3258,7 @@ fn run_operator_over_range(
         Operator::Yank => {
             let text = read_vim_range(ed, top, bot, kind);
             if !text.is_empty() {
-                ed.last_yank = Some(text.clone());
+                ed.record_yank_to_host(text.clone());
                 ed.record_yank(text, matches!(kind, MotionKind::Linewise));
             }
             ed.buffer_mut()
@@ -3468,7 +3480,7 @@ fn execute_line_op(ed: &mut Editor<'_>, op: Operator, count: usize) {
             // yy must not move the cursor.
             let text = read_vim_range(ed, (row, col), (end_row, 0), MotionKind::Linewise);
             if !text.is_empty() {
-                ed.last_yank = Some(text.clone());
+                ed.record_yank_to_host(text.clone());
                 ed.record_yank(text, true);
             }
             ed.buffer_mut()
@@ -3524,7 +3536,7 @@ fn execute_line_op(ed: &mut Editor<'_>, op: Operator, count: usize) {
                 });
             }
             if !payload.is_empty() {
-                ed.last_yank = Some(payload.clone());
+                ed.record_yank_to_host(payload.clone());
                 ed.record_delete(payload, true);
             }
             ed.buffer_mut().set_cursor(Position::new(row, 0));
@@ -3574,7 +3586,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                 Operator::Yank => {
                     let text = read_vim_range(ed, (top, 0), (bot, 0), MotionKind::Linewise);
                     if !text.is_empty() {
-                        ed.last_yank = Some(text.clone());
+                        ed.record_yank_to_host(text.clone());
                         ed.record_yank(text, true);
                     }
                     ed.buffer_mut()
@@ -3614,7 +3626,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                         });
                     }
                     if !payload.is_empty() {
-                        ed.last_yank = Some(payload.clone());
+                        ed.record_yank_to_host(payload.clone());
                         ed.record_delete(payload, true);
                     }
                     ed.buffer_mut().set_cursor(Position::new(top, 0));
@@ -3658,7 +3670,7 @@ fn apply_visual_operator(ed: &mut Editor<'_>, op: Operator) {
                 Operator::Yank => {
                     let text = read_vim_range(ed, top, bot, MotionKind::Inclusive);
                     if !text.is_empty() {
-                        ed.last_yank = Some(text.clone());
+                        ed.record_yank_to_host(text.clone());
                         ed.record_yank(text, false);
                     }
                     ed.buffer_mut()
@@ -3767,7 +3779,7 @@ fn apply_block_operator(ed: &mut Editor<'_>, op: Operator) {
     match op {
         Operator::Yank => {
             if !yank.is_empty() {
-                ed.last_yank = Some(yank.clone());
+                ed.record_yank_to_host(yank.clone());
                 ed.record_yank(yank, false);
             }
             ed.vim.mode = Mode::Normal;
@@ -3777,7 +3789,7 @@ fn apply_block_operator(ed: &mut Editor<'_>, op: Operator) {
             ed.push_undo();
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
-                ed.last_yank = Some(yank.clone());
+                ed.record_yank_to_host(yank.clone());
                 ed.record_delete(yank, false);
             }
             ed.vim.mode = Mode::Normal;
@@ -3787,7 +3799,7 @@ fn apply_block_operator(ed: &mut Editor<'_>, op: Operator) {
             ed.push_undo();
             delete_block_contents(ed, top, bot, left, right);
             if !yank.is_empty() {
-                ed.last_yank = Some(yank.clone());
+                ed.record_yank_to_host(yank.clone());
                 ed.record_delete(yank, false);
             }
             ed.jump_cursor(top, left);
@@ -4659,7 +4671,7 @@ fn cut_vim_range(
         _ => String::new(),
     };
     if !text.is_empty() {
-        ed.last_yank = Some(text.clone());
+        ed.record_yank_to_host(text.clone());
         ed.record_delete(text.clone(), matches!(kind, MotionKind::Linewise));
     }
     ed.push_buffer_cursor_to_textarea();
@@ -4691,7 +4703,7 @@ fn delete_to_eol(ed: &mut Editor<'_>) {
     if let Edit::InsertStr { text, .. } = inverse
         && !text.is_empty()
     {
-        ed.last_yank = Some(text.clone());
+        ed.record_yank_to_host(text.clone());
         ed.vim.yank_linewise = false;
         ed.set_yank(text);
     }
@@ -8071,8 +8083,16 @@ mod tests {
         // First `g` lands us in g-pending state.
         run_keys(&mut e, "g");
         assert!(matches!(e.vim.pending, super::Pending::G));
-        // Push last_input_at into the past beyond the default timeout.
+        // Push last_input timestamps into the past beyond the default
+        // timeout. 0.0.29 (Patch B) drives `:set timeoutlen` off
+        // `Host::now()` (monotonic Duration), so shrink the timeout
+        // window to a nanosecond and zero out the host slot — any
+        // wall-clock progress between this line and the next step
+        // exceeds it. The Instant-flavoured field is rewound for
+        // snapshot tests that still observe it directly.
+        e.settings.timeout_len = Duration::from_nanos(0);
         e.vim.last_input_at = Some(Instant::now() - Duration::from_secs(60));
+        e.vim.last_input_host_at = Some(Duration::ZERO);
         // Second `g` arrives "late" — timeout fires, prefix is cleared,
         // and the bare `g` is re-dispatched: nothing happens at the
         // engine level because `g` alone isn't a complete command.

@@ -33,10 +33,10 @@ pub use registers::{Registers, Slot};
 
 pub use types::{
     Attrs, Buffer as SpecBuffer, BufferEdit as SpecBufferEdit, BufferId, Color, Cursor,
-    CursorShape, Edit as EditOp, EditorSnapshot, EngineError, Highlight, HighlightKind, Host,
-    Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind, OptionValue, Options, Pos,
-    Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode, SpecialKey,
-    Style, Viewport as PlannedViewport, WrapMode,
+    CursorShape, DefaultHost, Edit as EditOp, EditorSnapshot, EngineError, EngineHost, Highlight,
+    HighlightKind, Host, Input as PlannedInput, Mode, Modifiers, MouseEvent, MouseKind,
+    OptionValue, Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet,
+    SnapshotMode, SpecialKey, Style, Viewport as PlannedViewport, WrapMode,
 };
 pub use vim::SearchPrompt;
 

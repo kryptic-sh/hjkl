@@ -351,6 +351,21 @@ pub struct Editor<'a> {
     /// the single owner now. Buffer motion methods that need it
     /// take a `&mut Option<usize>` parameter.
     pub(crate) sticky_col: Option<usize>,
+    /// Host adapter for clipboard, cursor-shape, time, and (eventually)
+    /// search-prompt / cancellation side-channels. Stored as a boxed
+    /// trait object behind [`crate::types::EngineHost`] so the Editor
+    /// stays non-generic at the type level — Patch C (0.1.0) flips this
+    /// to `Editor<'a, B: Buffer, H: Host>` and erases the indirection.
+    ///
+    /// Wired in 0.0.29 (Patch B). Defaults to
+    /// [`crate::types::DefaultHost`] when callers use the legacy
+    /// [`Editor::new`] constructor.
+    pub(crate) host: Box<dyn crate::types::EngineHost + 'a>,
+    /// Last public mode the cursor-shape emitter saw. Drives
+    /// [`Editor::emit_cursor_shape_if_changed`] so `Host::emit_cursor_shape`
+    /// fires exactly once per mode transition without sprinkling the
+    /// call across every `vim.mode = ...` site.
+    pub(crate) last_emitted_mode: crate::VimMode,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -457,7 +472,19 @@ impl<'a> Editor<'a> {
         self.settings.iskeyword = spec.into();
     }
 
+    /// Build an Editor with the [`DefaultHost`](crate::types::DefaultHost)
+    /// no-op host. Source-compatible with 0.0.28 callers; hosts that
+    /// need real clipboard / cursor-shape / time plumbing should call
+    /// [`Editor::with_host`] instead.
     pub fn new(keybinding_mode: KeybindingMode) -> Self {
+        Self::with_host(keybinding_mode, crate::types::DefaultHost::new())
+    }
+
+    /// Build an Editor with a host adapter. 0.0.29 Patch B plumb-in for
+    /// `Host::write_clipboard`, `Host::emit_cursor_shape`, and
+    /// `Host::now`. Patch C (0.1.0) replaces this constructor with the
+    /// generic `Editor<'a, B, H>::new(buffer, host, options)` per SPEC.
+    pub fn with_host<H: crate::types::Host + 'a>(keybinding_mode: KeybindingMode, host: H) -> Self {
         Self {
             _marker: std::marker::PhantomData,
             keybinding_mode,
@@ -482,7 +509,49 @@ impl<'a> Editor<'a> {
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
             sticky_col: None,
+            host: Box::new(host),
+            last_emitted_mode: crate::VimMode::Normal,
         }
+    }
+
+    /// Borrow the host adapter through the object-safe slice
+    /// [`crate::types::EngineHost`]. Tests and helpers use this to
+    /// inspect the recorded clipboard / cursor-shape state.
+    pub fn host(&self) -> &dyn crate::types::EngineHost {
+        &*self.host
+    }
+
+    /// Mutably borrow the host adapter (object-safe slice).
+    pub fn host_mut(&mut self) -> &mut dyn crate::types::EngineHost {
+        &mut *self.host
+    }
+
+    /// Emit `Host::emit_cursor_shape` if the public mode has changed
+    /// since the last emit. Engine calls this at the end of every input
+    /// step so mode transitions surface to the host without sprinkling
+    /// the call across every `vim.mode = ...` site.
+    pub(crate) fn emit_cursor_shape_if_changed(&mut self) {
+        let mode = self.vim_mode();
+        if mode == self.last_emitted_mode {
+            return;
+        }
+        let shape = match mode {
+            crate::VimMode::Insert => crate::types::CursorShape::Bar,
+            _ => crate::types::CursorShape::Block,
+        };
+        self.host.emit_cursor_shape(shape);
+        self.last_emitted_mode = mode;
+    }
+
+    /// Record a yank/cut payload. Writes both the legacy
+    /// [`Editor::last_yank`] field (drained directly by 0.0.28-era
+    /// hosts) and the new [`crate::types::Host::write_clipboard`]
+    /// side-channel (Patch B). Consumers should migrate to a `Host`
+    /// impl whose `write_clipboard` queues the platform-clipboard
+    /// write; the `last_yank` mirror will be removed at 0.1.0.
+    pub(crate) fn record_yank_to_host(&mut self, text: String) {
+        self.host.write_clipboard(text.clone());
+        self.last_yank = Some(text);
     }
 
     /// Vim's sticky column (curswant). `None` before the first motion;
@@ -1280,7 +1349,9 @@ impl<'a> Editor<'a> {
             alt: mods.alt,
             shift: mods.shift,
         };
-        vim::step(self, event)
+        let consumed = vim::step(self, event);
+        self.emit_cursor_shape_if_changed();
+        consumed
     }
 
     /// Drain the pending change log produced by buffer mutations.
@@ -1972,7 +2043,9 @@ impl<'a> Editor<'a> {
         if input.key == Key::Null {
             return false;
         }
-        vim::step(self, input)
+        let consumed = vim::step(self, input);
+        self.emit_cursor_shape_if_changed();
+        consumed
     }
 }
 
@@ -2872,5 +2945,118 @@ mod tests {
             "with undobreak off, single `u` must reverse whole insert: {line:?}"
         );
         assert_eq!(line, "hello world");
+    }
+
+    // ── Patch B (0.0.29): Host trait wired into Editor ──
+
+    #[test]
+    fn host_clipboard_round_trip_via_default_host() {
+        // DefaultHost stores write_clipboard in-memory; read_clipboard
+        // returns the most recent payload.
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.host_mut().write_clipboard("payload".to_string());
+        assert_eq!(e.host_mut().read_clipboard().as_deref(), Some("payload"));
+    }
+
+    #[test]
+    fn host_records_clipboard_on_yank() {
+        // `yy` on a single-line buffer must drive `Host::write_clipboard`
+        // (the new Patch B side-channel) in addition to the legacy
+        // `last_yank` mirror.
+        let mut e = Editor::new(KeybindingMode::Vim);
+        e.set_content("hello\n");
+        e.handle_key(key(KeyCode::Char('y')));
+        e.handle_key(key(KeyCode::Char('y')));
+        // Clipboard cache holds the linewise yank.
+        let clip = e.host_mut().read_clipboard();
+        assert!(
+            clip.as_deref().unwrap_or("").starts_with("hello"),
+            "host clipboard should carry the yank: {clip:?}"
+        );
+        // Legacy mirror still populated for 0.0.28-era hosts.
+        assert!(e.last_yank.as_deref().unwrap_or("").starts_with("hello"));
+    }
+
+    #[test]
+    fn host_cursor_shape_via_shared_recorder() {
+        // Recording host backed by a leaked `Mutex` so the test can
+        // inspect the emit sequence after the editor has consumed the
+        // host. (Host: Send rules out Rc/RefCell.)
+        let shapes_ptr: &'static std::sync::Mutex<Vec<crate::types::CursorShape>> =
+            Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
+        struct LeakHost(&'static std::sync::Mutex<Vec<crate::types::CursorShape>>);
+        impl crate::types::Host for LeakHost {
+            type Intent = ();
+            fn write_clipboard(&mut self, _: String) {}
+            fn read_clipboard(&mut self) -> Option<String> {
+                None
+            }
+            fn now(&self) -> core::time::Duration {
+                core::time::Duration::ZERO
+            }
+            fn prompt_search(&mut self) -> Option<String> {
+                None
+            }
+            fn emit_cursor_shape(&mut self, s: crate::types::CursorShape) {
+                self.0.lock().unwrap().push(s);
+            }
+            fn emit_intent(&mut self, _: Self::Intent) {}
+        }
+        let mut e = Editor::with_host(KeybindingMode::Vim, LeakHost(shapes_ptr));
+        e.set_content("abc");
+        // Normal → Insert: Bar emit.
+        e.handle_key(key(KeyCode::Char('i')));
+        // Insert → Normal: Block emit.
+        e.handle_key(key(KeyCode::Esc));
+        let shapes = shapes_ptr.lock().unwrap().clone();
+        assert_eq!(
+            shapes,
+            vec![
+                crate::types::CursorShape::Bar,
+                crate::types::CursorShape::Block,
+            ],
+            "host should observe Insert(Bar) → Normal(Block) transitions"
+        );
+    }
+
+    #[test]
+    fn host_now_drives_chord_timeout_deterministically() {
+        // Custom host whose `now()` is host-controlled; we drive it
+        // forward by `timeout_len + 1ms` between the first `g` and
+        // the second so the chord-timeout fires regardless of
+        // wall-clock progress.
+        let now_ptr: &'static std::sync::Mutex<core::time::Duration> =
+            Box::leak(Box::new(std::sync::Mutex::new(core::time::Duration::ZERO)));
+        struct ClockHost(&'static std::sync::Mutex<core::time::Duration>);
+        impl crate::types::Host for ClockHost {
+            type Intent = ();
+            fn write_clipboard(&mut self, _: String) {}
+            fn read_clipboard(&mut self) -> Option<String> {
+                None
+            }
+            fn now(&self) -> core::time::Duration {
+                *self.0.lock().unwrap()
+            }
+            fn prompt_search(&mut self) -> Option<String> {
+                None
+            }
+            fn emit_cursor_shape(&mut self, _: crate::types::CursorShape) {}
+            fn emit_intent(&mut self, _: Self::Intent) {}
+        }
+        let mut e = Editor::with_host(KeybindingMode::Vim, ClockHost(now_ptr));
+        e.set_content("a\nb\nc\n");
+        e.jump_cursor(2, 0);
+        // First `g` — host time = 0ms, lands in g-pending.
+        e.handle_key(key(KeyCode::Char('g')));
+        // Advance host time well past timeout_len (default 1000ms).
+        *now_ptr.lock().unwrap() = core::time::Duration::from_secs(60);
+        // Second `g` — chord-timeout fires; bare `g` re-dispatches and
+        // does nothing on its own. Cursor must NOT have jumped to row 0.
+        e.handle_key(key(KeyCode::Char('g')));
+        assert_eq!(
+            e.cursor().0,
+            2,
+            "Host::now() must drive `:set timeoutlen` deterministically"
+        );
     }
 }
