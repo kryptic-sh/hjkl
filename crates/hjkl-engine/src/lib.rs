@@ -20,6 +20,7 @@
 //! - [`KeybindingMode`] / [`VimMode`] — mode enums used by host apps.
 //! - [`ex::run`] / [`ex::ExEffect`] — drive ex-mode commands.
 
+mod buffer_impl;
 mod editor;
 mod input;
 mod registers;

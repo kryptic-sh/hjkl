@@ -744,15 +744,16 @@ pub enum EngineError {
     SnapshotVersion(u32, u32),
 }
 
-mod sealed {
+pub(crate) mod sealed {
     /// Sealing trait for the planned 0.1.0 [`super::Buffer`] surface.
     /// Pre-1.0 the engine reserves the right to add methods to the
     /// `Buffer` super-trait without a major bump; downstream cannot
     /// `impl Buffer` from outside this family.
     ///
-    /// The in-tree [`hjkl_buffer::Buffer`] gets the sealed marker via
-    /// the engine's own re-export pattern once trait extraction wires
-    /// the FSM through the trait. Until then the marker stays empty.
+    /// The in-tree [`hjkl_buffer::Buffer`] is the canonical impl; the
+    /// `Sealed` marker for it lives in `crate::buffer_impl`. The module
+    /// itself stays `pub(crate)` so the sibling impl module can name
+    /// the trait while keeping the seal closed to the outside world.
     pub trait Sealed {}
 }
 

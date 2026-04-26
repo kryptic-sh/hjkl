@@ -8,6 +8,66 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.27] - 2026-04-26
+
+### Added (canonical `Buffer` impl)
+
+- **`impl Buffer for hjkl_buffer::Buffer`** lands in a new
+  `hjkl-engine::buffer_impl` module, wiring all four sub-traits onto the in-tree
+  rope-backed buffer. The seal (`crate::types::sealed::Sealed`) flips from
+  `mod sealed` to `pub(crate) mod sealed` so the canonical impl can name the
+  marker; downstream remains locked out (the module is still crate-private).
+  - `Cursor`: `cursor`, `set_cursor`, `byte_offset`, `pos_at_byte` —
+    Pos⇄Position conversion lives in the impl. `byte_offset` and `pos_at_byte`
+    walk the rope's line table; the round-trip identity is covered by the new
+    `cursor_byte_offset_and_inverse` test.
+  - `Query`: `line_count`, `line`, `len_bytes`, `slice`. Single-line slices
+    borrow (returning `Cow::Borrowed`); multi-line slices allocate a join.
+    `Query::line` panics on out-of-bounds per SPEC, where
+    `hjkl_buffer::Buffer::line` returns `Option`.
+  - `BufferEdit`: `insert_at`, `delete_range`, `replace_range`. Routed through
+    `Buffer::apply_edit` so the buffer's existing dirty-gen + fold + render
+    cache invalidation paths fire as expected.
+  - `Search`: `find_next` / `find_prev`. Caller-owned `regex::Regex` per SPEC;
+    honours the buffer's `wrapscan` setting. Distinct from the buffer's own
+    `search_forward` / `search_backward` (which mutate the cursor); the trait
+    variants are pure observers returning the matched range.
+- **Compile-time assertion** that the in-tree buffer satisfies the SPEC trait
+  surface — `assert_buffer::<hjkl_buffer::Buffer>()` runs in
+  `buffer_impl::tests::rope_buffer_implements_spec_buffer`. If the trait surface
+  diverges from the impl, the test fails to compile.
+
+### Deferred — `Editor<B: Buffer, H: Host>` generic-ification
+
+The original 0.0.27 plan was to generic-ify the `Editor` struct over `B: Buffer`
+in this same patch. **Audit of the engine→buffer call surface during
+implementation found 46 distinct concrete `hjkl_buffer::Buffer` methods reached
+from `editor.rs` + `vim.rs`** (motions: 24; folds: 8; viewport: 4;
+search-cursor: 4; misc: 6). Only 13 of those map onto the SPEC trait surface —
+the rest are **explicitly out of scope** per SPEC.md ("motions don't belong on
+`Buffer` — they're computed over the buffer, not delegated to it").
+
+Generic-ifying `Editor` therefore requires the **24-motion relocation** SPEC.md
+describes — moving the motion / fold / viewport-scroll helpers out of
+`hjkl-buffer` and into `hjkl-engine` as free functions over `B: Cursor + Query`.
+That's a multi-thousand-LOC, multi-module refactor and lands as its own patch.
+Not blocking the canonical impl; downstream callers can already write
+`fn f<B: hjkl_engine::SpecBuffer>(…)` against the trait.
+
+### Migration
+
+- No public-API changes. Consumers pinning `=0.0.26` keep building unchanged.
+  `hjkl_engine::SpecBuffer` (re-export of `crate::types::Buffer`) is the
+  canonical trait-bound for new code; existing concrete `&hjkl_buffer::Buffer`
+  callers can continue using the buffer's inherent methods.
+- 0.0.x series continues — `Editor<B, H>` generic-ification requires hoisting
+  `sticky_col` (curswant), `iskeyword`, fold-aware row iteration, and viewport
+  state out of `Buffer` first (none are on the SPEC trait surface, none can be
+  added without violating SPEC's <40-method cap). Next patches: A (0.0.28)
+  curswant + iskeyword off `Buffer` into `Editor`; B (0.0.29) `Host` wiring
+  (clipboard, cursor-shape emit, fold provider, `host.now()`); C (0.1.0)
+  `Editor<'a, B: Buffer = …, H: Host = …>` flip + freeze.
+
 ## [0.0.26] - 2026-04-26
 
 ### Added (Phase 5 trait extraction — keystone for 0.1.0)
