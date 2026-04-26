@@ -934,7 +934,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
         // actually sees the cursor — not one cell to the right.
         let col = ed.cursor().1;
         if col > 0 {
-            ed.buffer_mut().move_left(1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
         ed.sticky_col = Some(ed.cursor().1);
@@ -953,7 +953,7 @@ fn step_insert(ed: &mut Editor<'_>, input: Input) -> bool {
                 }
                 // Find the previous word start by stepping the buffer
                 // cursor (vim `b` semantics) and snapshot it.
-                ed.buffer.move_word_back(false, 1, &ed.settings.iskeyword);
+                crate::motions::move_word_back(&mut ed.buffer, false, 1, &ed.settings.iskeyword);
                 let word_start = ed.buffer().cursor();
                 if word_start == cursor {
                     return true;
@@ -1218,34 +1218,34 @@ fn handle_insert_key(ed: &mut Editor<'_>, input: Input) -> bool {
             }
         }
         Key::Left => {
-            ed.buffer_mut().move_left(1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Right => {
             // Insert mode allows the cursor one past the last char so the
             // next typed letter appends — use the operator-context move.
-            ed.buffer_mut().move_right_to_end(1);
+            crate::motions::move_right_to_end(ed.buffer_mut(), 1);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Up => {
-            ed.buffer.move_up(1, &mut ed.sticky_col);
+            crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Down => {
-            ed.buffer.move_down(1, &mut ed.sticky_col);
+            crate::motions::move_down(&mut ed.buffer, 1, &mut ed.sticky_col);
             break_undo_group_in_insert(ed);
             false
         }
         Key::Home => {
-            ed.buffer_mut().move_line_start();
+            crate::motions::move_line_start(ed.buffer_mut());
             break_undo_group_in_insert(ed);
             false
         }
         Key::End => {
-            ed.buffer_mut().move_line_end();
+            crate::motions::move_line_end(ed.buffer_mut());
             break_undo_group_in_insert(ed);
             false
         }
@@ -2046,7 +2046,7 @@ fn scroll_cursor_rows(ed: &mut Editor<'_>, delta: isize) {
     let target = (row as isize + delta).max(0).min(last_row as isize) as usize;
     ed.buffer_mut()
         .set_cursor(hjkl_buffer::Position::new(target, 0));
-    ed.buffer_mut().move_first_non_blank();
+    crate::motions::move_first_non_blank(ed.buffer_mut());
     ed.push_buffer_cursor_to_textarea();
     ed.sticky_col = Some(ed.buffer().cursor().col);
 }
@@ -2170,7 +2170,7 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
     match motion {
         Motion::Left => {
             // `h` — Buffer clamps at col 0 (no wrap), matching vim.
-            ed.buffer_mut().move_left(count);
+            crate::motions::move_left(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Right => {
@@ -2178,9 +2178,9 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             // one past the last char so the range includes it; cursor
             // context clamps at the last char.
             if as_operator {
-                ed.buffer_mut().move_right_to_end(count);
+                crate::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
-                ed.buffer_mut().move_right_in_line(count);
+                crate::motions::move_right_in_line(ed.buffer_mut(), count);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -2188,79 +2188,78 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             // Final col is set by `apply_sticky_col` below — push the
             // post-move row to the textarea and let sticky tracking
             // finish the work.
-            ed.buffer.move_up(count, &mut ed.sticky_col);
+            crate::motions::move_up(&mut ed.buffer, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::Down => {
-            ed.buffer.move_down(count, &mut ed.sticky_col);
+            crate::motions::move_down(&mut ed.buffer, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenUp => {
-            ed.buffer.move_screen_up(count, &mut ed.sticky_col);
+            crate::motions::move_screen_up(&mut ed.buffer, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ScreenDown => {
-            ed.buffer.move_screen_down(count, &mut ed.sticky_col);
+            crate::motions::move_screen_down(&mut ed.buffer, count, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordFwd => {
-            ed.buffer
-                .move_word_fwd(false, count, &ed.settings.iskeyword);
+            crate::motions::move_word_fwd(&mut ed.buffer, false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordBack => {
-            ed.buffer
-                .move_word_back(false, count, &ed.settings.iskeyword);
+            crate::motions::move_word_back(&mut ed.buffer, false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEnd => {
-            ed.buffer
-                .move_word_end(false, count, &ed.settings.iskeyword);
+            crate::motions::move_word_end(&mut ed.buffer, false, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordFwd => {
-            ed.buffer.move_word_fwd(true, count, &ed.settings.iskeyword);
+            crate::motions::move_word_fwd(&mut ed.buffer, true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordBack => {
-            ed.buffer
-                .move_word_back(true, count, &ed.settings.iskeyword);
+            crate::motions::move_word_back(&mut ed.buffer, true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEnd => {
-            ed.buffer.move_word_end(true, count, &ed.settings.iskeyword);
+            crate::motions::move_word_end(&mut ed.buffer, true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::WordEndBack => {
-            ed.buffer
-                .move_word_end_back(false, count, &ed.settings.iskeyword);
+            crate::motions::move_word_end_back(
+                &mut ed.buffer,
+                false,
+                count,
+                &ed.settings.iskeyword,
+            );
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::BigWordEndBack => {
-            ed.buffer
-                .move_word_end_back(true, count, &ed.settings.iskeyword);
+            crate::motions::move_word_end_back(&mut ed.buffer, true, count, &ed.settings.iskeyword);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineStart => {
-            ed.buffer_mut().move_line_start();
+            crate::motions::move_line_start(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FirstNonBlank => {
-            ed.buffer_mut().move_first_non_blank();
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineEnd => {
             // Vim normal-mode `$` lands on the last char, not one past it.
-            ed.buffer_mut().move_line_end();
+            crate::motions::move_line_end(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::FileTop => {
             // `count gg` jumps to line `count` (first non-blank);
             // bare `gg` lands at the top.
             if count > 1 {
-                ed.buffer_mut().move_bottom(count);
+                crate::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                ed.buffer_mut().move_top();
+                crate::motions::move_top(ed.buffer_mut());
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -2268,9 +2267,9 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             // `count G` jumps to line `count`; bare `G` lands at
             // the buffer bottom (`Buffer::move_bottom(0)`).
             if count > 1 {
-                ed.buffer_mut().move_bottom(count);
+                crate::motions::move_bottom(ed.buffer_mut(), count);
             } else {
-                ed.buffer_mut().move_bottom(0);
+                crate::motions::move_bottom(ed.buffer_mut(), 0);
             }
             ed.push_buffer_cursor_to_textarea();
         }
@@ -2315,20 +2314,19 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportTop => {
-            ed.buffer_mut().move_viewport_top(count.saturating_sub(1));
+            crate::motions::move_viewport_top(ed.buffer_mut(), count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportMiddle => {
-            ed.buffer_mut().move_viewport_middle();
+            crate::motions::move_viewport_middle(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ViewportBottom => {
-            ed.buffer_mut()
-                .move_viewport_bottom(count.saturating_sub(1));
+            crate::motions::move_viewport_bottom(ed.buffer_mut(), count.saturating_sub(1));
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LastNonBlank => {
-            ed.buffer_mut().move_last_non_blank();
+            crate::motions::move_last_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::LineMiddle => {
@@ -2344,11 +2342,11 @@ fn apply_motion_cursor_ctx(ed: &mut Editor<'_>, motion: &Motion, count: usize, a
             ed.jump_cursor(row, target);
         }
         Motion::ParagraphPrev => {
-            ed.buffer_mut().move_paragraph_prev(count);
+            crate::motions::move_paragraph_prev(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::ParagraphNext => {
-            ed.buffer_mut().move_paragraph_next(count);
+            crate::motions::move_paragraph_next(ed.buffer_mut(), count);
             ed.push_buffer_cursor_to_textarea();
         }
         Motion::SentencePrev => {
@@ -2375,12 +2373,12 @@ fn move_first_non_whitespace(ed: &mut Editor<'_>) {
     // across before delegating, then push the result back so the
     // textarea reflects the resolved column too.
     ed.sync_buffer_content_from_textarea();
-    ed.buffer_mut().move_first_non_blank();
+    crate::motions::move_first_non_blank(ed.buffer_mut());
     ed.push_buffer_cursor_to_textarea();
 }
 
 fn find_char_on_line(ed: &mut Editor<'_>, ch: char, forward: bool, till: bool) -> bool {
-    let moved = ed.buffer_mut().find_char_on_line(ch, forward, till);
+    let moved = crate::motions::find_char_on_line(ed.buffer_mut(), ch, forward, till);
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -2388,7 +2386,7 @@ fn find_char_on_line(ed: &mut Editor<'_>, ch: char, forward: bool, till: bool) -
 }
 
 fn matching_bracket(ed: &mut Editor<'_>) -> bool {
-    let moved = ed.buffer_mut().match_bracket();
+    let moved = crate::motions::match_bracket(ed.buffer_mut());
     if moved {
         ed.push_buffer_cursor_to_textarea();
     }
@@ -2984,14 +2982,14 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             true
         }
         Key::Char('a') => {
-            ed.buffer_mut().move_right_to_end(1);
+            crate::motions::move_right_to_end(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
             begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::A));
             true
         }
         Key::Char('A') => {
-            ed.buffer_mut().move_line_end();
-            ed.buffer_mut().move_right_to_end(1);
+            crate::motions::move_line_end(ed.buffer_mut());
+            crate::motions::move_right_to_end(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
             begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::ShiftA));
             true
@@ -3034,7 +3032,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             });
             // After insert, cursor sits on the surviving content one row
             // down — step back up onto the freshly-empty line.
-            ed.buffer.move_up(1, &mut ed.sticky_col);
+            crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
             ed.push_buffer_cursor_to_textarea();
             true
         }
@@ -3086,7 +3084,7 @@ fn handle_normal_only(ed: &mut Editor<'_>, input: &Input, count: usize) -> bool 
             ed.push_undo();
             delete_to_eol(ed);
             // Vim parks the cursor on the new last char.
-            ed.buffer_mut().move_left(1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
             if !ed.vim.replaying {
                 ed.vim.last_change = Some(LastChange::DeleteToEol { inserted: None });
@@ -4819,7 +4817,7 @@ fn replace_char(ed: &mut Editor<'_>, ch: char, count: usize) {
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     }
     // Vim leaves the cursor on the last replaced char.
-    ed.buffer_mut().move_left(1);
+    crate::motions::move_left(ed.buffer_mut(), 1);
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -4949,7 +4947,7 @@ fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
                 row + 1
             };
             ed.buffer_mut().set_cursor(Position::new(target_row, 0));
-            ed.buffer_mut().move_first_non_blank();
+            crate::motions::move_first_non_blank(ed.buffer_mut());
             ed.push_buffer_cursor_to_textarea();
         } else {
             // Charwise paste. `P` inserts at cursor (shifting cell
@@ -4972,7 +4970,7 @@ fn do_paste(ed: &mut Editor<'_>, before: bool, count: usize) {
             });
             // Vim parks the cursor on the last char of the pasted
             // text (do_insert_str leaves it one past the end).
-            ed.buffer_mut().move_left(1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
     }
@@ -5014,7 +5012,7 @@ fn replay_insert_and_finish(ed: &mut Editor<'_>, text: &str) {
     });
     if ed.vim.insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
-            ed.buffer_mut().move_left(1);
+            crate::motions::move_left(ed.buffer_mut(), 1);
             ed.push_buffer_cursor_to_textarea();
         }
         ed.vim.mode = Mode::Normal;
@@ -5105,7 +5103,7 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
                     at: Position::new(row, 0),
                     text: "\n".to_string(),
                 });
-                ed.buffer.move_up(1, &mut ed.sticky_col);
+                crate::motions::move_up(&mut ed.buffer, 1, &mut ed.sticky_col);
             } else {
                 let line_chars = ed
                     .buffer()
@@ -5135,12 +5133,12 @@ fn replay_last_change(ed: &mut Editor<'_>, outer_count: usize) {
                 InsertEntry::I => {}
                 InsertEntry::ShiftI => move_first_non_whitespace(ed),
                 InsertEntry::A => {
-                    ed.buffer_mut().move_right_to_end(1);
+                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
                 InsertEntry::ShiftA => {
-                    ed.buffer_mut().move_line_end();
-                    ed.buffer_mut().move_right_to_end(1);
+                    crate::motions::move_line_end(ed.buffer_mut());
+                    crate::motions::move_right_to_end(ed.buffer_mut(), 1);
                     ed.push_buffer_cursor_to_textarea();
                 }
             }

@@ -8,6 +8,122 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.30] - 2026-04-26
+
+### Changed (Patch C-α — motion / viewport-helper relocation)
+
+- **24 vim motion helpers and 3 viewport-relative motions move from
+  `hjkl_buffer::Buffer` to a new `hjkl_engine::motions` module.** Per [SPEC.md],
+  "motions don't belong on `Buffer` — they're computed over the buffer, not
+  delegated to it". The bodies are now free functions taking
+  `&mut hjkl_buffer::Buffer` (concrete; the planned 0.1.0 freeze patch lifts the
+  bound to `B: Cursor + Query` once the fold-iteration helpers move to
+  `Host::FoldProvider`). Engine FSM (`vim.rs`) and `editor.rs` now call e.g.
+  `hjkl_engine::motions::move_word_fwd(&mut ed.buffer, false, count, &iskeyword)`
+  rather than `ed.buffer.move_word_fwd(false, count, &iskeyword)`. Relocated
+  motions:
+  - Horizontal: `move_left`, `move_right_in_line`, `move_right_to_end`,
+    `move_line_start`, `move_first_non_blank`, `move_line_end`,
+    `move_last_non_blank`, `move_paragraph_prev`, `move_paragraph_next`.
+  - Vertical: `move_up`, `move_down`, `move_screen_up`, `move_screen_down`,
+    `move_top`, `move_bottom`.
+  - Word: `move_word_fwd`, `move_word_back`, `move_word_end`,
+    `move_word_end_back`.
+  - Find / match: `match_bracket`, `find_char_on_line`.
+  - Viewport-relative: `move_viewport_top`, `move_viewport_middle`,
+    `move_viewport_bottom`.
+- **Tests for the 24 motions follow the bodies into
+  `hjkl_engine::motions::tests`.** They verify identical semantics (sticky-col
+  carry, fold-aware vertical stepping, wrap-aware screen motion) against the
+  same `hjkl_buffer::Buffer` they exercised before.
+- **`hjkl_buffer::wrap` is now a public module** so the engine motion module can
+  call `wrap::wrap_segments` / `wrap::segment_for_col` directly. Previously
+  crate-private; the only consumer was the buffer itself (motion + render). The
+  exported surface stays minimal — two free functions and the `Wrap` enum
+  (already re-exported).
+- **`hjkl_buffer::motion` shrinks to host the `is_keyword_char` parser only**
+  (still re-exported from the crate root unchanged). The `iskeyword`-spec parser
+  has no buffer dependency, so it stays alongside the data it parses; the engine
+  motion module re-uses it via `hjkl_buffer::is_keyword_char`.
+
+### Removed (breaking — `hjkl_buffer::Buffer` inherent API)
+
+The 24 inherent motion methods on `hjkl_buffer::Buffer` are gone. Hosts that
+called them directly (rather than through `hjkl_engine::Editor`) swap to the
+engine free-function form:
+
+| 0.0.29                                 | 0.0.30                                                       |
+| -------------------------------------- | ------------------------------------------------------------ |
+| `buf.move_left(n)`                     | `hjkl_engine::motions::move_left(&mut buf, n)`               |
+| `buf.move_word_fwd(big, n, isk)`       | `hjkl_engine::motions::move_word_fwd(&mut buf, big, n, isk)` |
+| `buf.move_up(n, &mut sticky)`          | `hjkl_engine::motions::move_up(&mut buf, n, &mut sticky)`    |
+| `buf.match_bracket()`                  | `hjkl_engine::motions::match_bracket(&mut buf)`              |
+| `buf.find_char_on_line(ch, fwd, till)` | `hjkl_engine::motions::find_char_on_line(&mut buf, …)`       |
+| `buf.move_viewport_top(off)`           | `hjkl_engine::motions::move_viewport_top(&mut buf, off)`     |
+| (… same shape for the remaining 18 …)  | (… same shape …)                                             |
+
+The fold-iteration helpers (`next_visible_row`, `prev_visible_row`,
+`is_row_hidden`, `fold_at_row`, `folds`, `add_fold`, `open_fold_at`,
+`close_fold_at`, `toggle_fold_at`, `open_all_folds`, `close_all_folds`,
+`clear_all_folds`, `remove_fold_at`, `invalidate_folds_in_range`) **stay on
+`hjkl_buffer::Buffer`** for now — see "Deferred to follow-up" below.
+
+### Migration (downstream consumers)
+
+Sqeel, buffr, and inbx **need only a pin bump** — their source compiles
+unchanged because they all drive motions through `hjkl_engine::Editor` rather
+than calling buffer motion methods directly. Bump the `=0.0.29` pin in each
+consumer's root `Cargo.toml` to `=0.0.30`:
+
+```toml
+hjkl-engine = "=0.0.30"
+hjkl-buffer = "=0.0.30"
+hjkl-editor = "=0.0.30"   # if used
+hjkl-ratatui = "=0.0.30"  # if used
+```
+
+If a host did call a buffer motion inherent method (e.g. embedding host code
+that bypasses the engine FSM), swap to the `hjkl_engine::motions::*` free
+function with a `&mut buffer` first parameter.
+
+### Deferred to follow-up (the 0.1.0 freeze)
+
+Patch C's full scope envisaged folding three changes into one cut:
+
+1. **Motion / viewport-helper relocation** ✅ landed in this release.
+2. **Fold provider relocation onto `Host`** (Path X) — _deferred_. Audit
+   reconfirmed the fold storage on `hjkl_buffer::Buffer` is tightly coupled to
+   the buffer's dirty-gen + render-cache invariants; moving the _iteration
+   helpers_ without first hoisting the _storage_ buys a half-done split. The
+   motion module currently calls `buf.next_visible_row` / `buf.prev_visible_row`
+   directly until the fold storage moves to a `Host::FoldProvider`. Tracking
+   issue: the 0.1.0 patch will introduce `FoldProvider` on `Host`, move the
+   iteration helpers, and lift the motion bound to `B: Cursor + Query`.
+3. **`Editor<'a, B: Buffer = …, H: Host = …>` generic flip** — _deferred_.
+   Requires (2) to land first; the motion bodies still take the concrete
+   `hjkl_buffer::Buffer`, so the generic parameter has no teeth yet.
+
+Splitting the patch lets 0.0.30 ship the relocation cleanly today; the 0.1.0 cut
+bundles fold relocation + generic flip + freeze contract in one step. Per
+CHANGELOG `[0.0.27]`'s "Better to land a clean 0.0.30 than a broken 0.1.0".
+
+### Test counts
+
+- `cargo test --workspace`: **668 passed** (was 663 — +5 from new motion-module
+  relocation tests + iskeyword unit coverage).
+- `cargo check --workspace --no-default-features`: green.
+
+### Roadmap
+
+- **Patch C-α — this release (0.0.30)**: 24 motions + 3 viewport- relative
+  motions hosted in `hjkl_engine::motions` as free functions.
+- **Patch C-β / 0.1.0**: `Host::FoldProvider`, fold-iteration helper relocation,
+  motion bound lift to `B: Cursor + Query`, `Editor<B, H>` generic flip with
+  default type params for back-compat, public surface freezes.
+
+[SPEC.md]:
+  https://github.com/kryptic-sh/hjkl/blob/main/crates/hjkl-engine/SPEC.md
+
 ## [0.0.29] - 2026-04-26
 
 ### Added (Patch B — `Host` trait wired into `Editor`)

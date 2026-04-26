@@ -23,6 +23,7 @@
 mod buffer_impl;
 mod editor;
 mod input;
+pub mod motions;
 mod registers;
 pub mod types;
 mod vim;

@@ -27,7 +27,7 @@ mod search;
 mod selection;
 mod span;
 mod viewport;
-mod wrap;
+pub mod wrap;
 
 pub use buffer::Buffer;
 pub use edit::{Edit, MotionKind};
