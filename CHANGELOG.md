@@ -8,6 +8,143 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.0.42] - 2026-04-27
+
+### Patch C-δ.7 — vim.rs reach replacement, viewport-math relocation
+
+Cleanup patch before the 0.1.0 generic flip. Drives the editor + vim free fns to
+a clean trait-routed substrate so 0.1.0 can flip
+`Editor::buffer: hjkl_buffer::Buffer` → `B: Buffer` without touching the call
+sites.
+
+#### Reaches eliminated
+
+- `vim.rs`: 151 `ed.buffer().…` / `ed.buffer_mut().…` reaches → 0 (test-mod
+  reaches against the public `Editor::buffer()` accessor are unchanged — those
+  are consumer code, not internal "reaches"). Multi-line
+  `ed\n  .buffer()\n  .line(r)\n  …` patterns collapse to single-line
+  `buf_line_chars(&ed.buffer, r)` calls.
+- `editor.rs`: 4 resistant reaches flagged in 0.0.41 → 0:
+  - `Editor::mutate_edit`'s `self.buffer.apply_edit(edit)` → centralized in
+    [`crate::buf_helpers::apply_buffer_edit`] (option (c) — see "apply_edit
+    naming decision" below).
+  - `Editor::ensure_cursor_in_scrolloff`'s `self.buffer.ensure_cursor_visible` →
+    routes through [`crate::viewport_math::ensure_cursor_visible`].
+  - `Editor::ensure_scrolloff_wrap`'s `self.buffer.cursor_screen_row` (×2) →
+    routes through [`crate::viewport_math::cursor_screen_row`].
+  - `Editor::ensure_scrolloff_wrap`'s `self.buffer.max_top_for_height` → routes
+    through [`crate::viewport_math::max_top_for_height`].
+- `search.rs`: already lifted to `B: Cursor + Query + Search` in 0.0.40 (Patch
+  C-δ.5); no further work needed.
+
+#### `apply_edit` naming decision — option (c)
+
+The 0.0.41 CHANGELOG flagged three options for the resistant `apply_edit` reach:
+
+- (a) Rename engine `crate::types::Edit` → `EditOp`, re-export
+  `hjkl_buffer::Edit` as `hjkl_engine::Edit`, lift `apply_edit` onto
+  `BufferEdit` with the rich enum.
+- (b) Keep engine `crate::types::Edit`, re-export `hjkl_buffer::Edit` under a
+  different name, lift `apply_edit` with that name.
+- (c) Don't lift onto the trait — keep `apply_edit` as a free fn over the
+  concrete `&mut hjkl_buffer::Buffer`. Centralize the reach in one engine module
+  so `Editor::mutate_edit` no longer carries a `self.buffer.<inherent>` hop.
+
+**0.0.42 picks option (c).** Rationale:
+
+- `hjkl_buffer::Edit` is the rich buffer-side enum (8 variants — `InsertChar`,
+  `InsertStr`, `DeleteRange`, `JoinLines`, `SplitLines`, `Replace`,
+  `InsertBlock`, `DeleteBlockChunks`) with ~700 LOC of `do_*` machinery in
+  `hjkl-buffer`. Lifting it onto `BufferEdit` requires either an associated
+  `Edit` type (forces every backend to design its own rich-edit enum just to
+  compile) or duplicating all 8 variants on the trait surface (busts the
+  discipline cap of 20).
+- `crate::types::Edit` is a separate value type (`Range<Pos>` + `String`
+  replacement) used by the change-log emitter; it's intentionally simpler and
+  lossy for block / join / split ops. Renaming it churns every downstream
+  consumer of `crate::types::Edit` for no functional gain at 0.0.42.
+- Centralizing the reach in [`crate::buf_helpers::apply_buffer_edit`] keeps
+  `Editor::mutate_edit` trait-shaped at the call site (no
+  `self.buffer.<inherent>` hop in the editor body). The single seam at the free
+  fn lets 0.1.0 flip cleanly when the `B: Buffer` generic lands —
+  `apply_buffer_edit` becomes
+  `BufferEdit::apply_edit(&mut self, op: Self::Edit) -> Self::Edit` with
+  `type Edit;` so backends pick their own edit enum.
+
+This reach is therefore intentional and survives 0.0.42 unchanged in shape;
+0.1.0 will lift it onto the trait with an associated type.
+
+#### New module: `crate::buf_helpers`
+
+Promoted out of `editor.rs` (where the helpers were `fn` — file-private in
+0.0.41) so `vim.rs` free fns can route their reaches through the same primitives
+the editor body uses. Eight `pub(crate)` helpers:
+
+- `buf_cursor_rc`, `buf_cursor_row`, `buf_cursor_pos` — cursor reads.
+- `buf_set_cursor_rc`, `buf_set_cursor_pos` — cursor writes.
+- `buf_row_count`, `buf_line`, `buf_lines_to_vec`, `buf_line_chars`,
+  `buf_line_bytes` — `Query` trait reads.
+- `apply_buffer_edit` — the centralized `apply_edit` reach (see option (c)
+  decision above).
+
+Each helper takes `B: <Trait> + ?Sized` so they compile against the in-tree
+`hjkl_buffer::Buffer` and the engine's mock buffers (used by motion / search /
+vim trait-routing tests). The `Pos { line: u32, col: u32 }` ⇄
+`Position { row: usize, col: usize }` cast lives at the boundary so call sites
+stay terse.
+
+#### New module: `crate::viewport_math`
+
+Three viewport-math fns relocated from `hjkl_buffer::Buffer` (where SPEC.md
+"Viewport on Host" excludes them) onto engine free fns over
+`B: Query [+ Cursor]` + `&dyn FoldProvider` + `&Viewport`:
+
+- `viewport_math::ensure_cursor_visible(buf, folds, &mut viewport)` — replaces
+  `Buffer::ensure_cursor_visible`.
+- `viewport_math::cursor_screen_row(buf, folds, &viewport) -> Option<usize>` —
+  replaces `Buffer::cursor_screen_row`.
+- `viewport_math::max_top_for_height(buf, folds, &viewport, height)` — replaces
+  `Buffer::max_top_for_height`.
+
+Behavior is byte-for-byte identical to the prior buffer-inherent implementation;
+the lift is purely a re-homing. The buffer-side `Buffer::ensure_cursor_visible`
+/ `cursor_screen_row` / `max_top_for_height` inherent methods stay in place
+because `vim.rs` test code (and the buffer crate's own tests) still call them
+through the public Editor accessor — 0.1.0 removes those copies once every
+consumer migrates.
+
+#### Borrow-checker patterns
+
+The viewport-math call sites in `editor.rs` borrow `&self.buffer` (immutable,
+through `BufferFoldProvider::new`) and `self.host.viewport_mut()` (mutable) in
+the same statement. This compiles because `buffer` and `host` live on distinct
+`Editor` fields, so disjoint-field borrow splitting handles it. The
+`ensure_scrolloff_wrap` loops construct `BufferFoldProvider` per-iteration
+rather than hoisting to satisfy the same constraint when the body of the loop
+mutates `self.host.viewport_mut().top_row`.
+
+#### Trait surface
+
+Buffer trait surface is unchanged at **14 methods** (cap 40, defensive 20).
+Option (c) for `apply_edit` avoided a trait expansion; the viewport-math lift is
+into engine free fns, not onto the trait.
+
+#### Tests
+
+684 (unchanged from 0.0.41). All existing tests pass without modification —
+behaviour is preserved. The vim.rs in-test reaches against the public
+`Editor::buffer()` accessor remain as-is and exercise the trait routing through
+the editor.
+
+#### Roadmap
+
+- **0.1.0 — `Editor<B, H>` flip + freeze.** Replace
+  `Editor::buffer: hjkl_buffer::Buffer` with `B: Buffer`, drop the `EngineHost`
+  shim, unify the constructor surface, lift `apply_edit` onto `BufferEdit` with
+  `type Edit;`, drop the buffer-side `ensure_cursor_visible` /
+  `cursor_screen_row` / `max_top_for_height` inherent methods (every consumer
+  now goes through `crate::viewport_math`).
+
 ## [0.0.41] - 2026-04-27
 
 ### Patch C-δ.6 — editor.rs / vim.rs reach replacement

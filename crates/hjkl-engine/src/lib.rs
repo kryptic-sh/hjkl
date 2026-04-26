@@ -20,6 +20,7 @@
 //! - [`KeybindingMode`] / [`VimMode`] — mode enums used by host apps.
 //! - [`ex::run`] / [`ex::ExEffect`] — drive ex-mode commands.
 
+mod buf_helpers;
 mod buffer_impl;
 mod editor;
 mod input;
@@ -27,6 +28,7 @@ pub mod motions;
 mod registers;
 pub mod search;
 pub mod types;
+mod viewport_math;
 mod vim;
 
 pub use editor::{Editor, LspIntent};

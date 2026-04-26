@@ -243,76 +243,15 @@ pub(super) enum CursorScrollTarget {
 
 // ── Trait-surface cast helpers ────────────────────────────────────
 //
-// 0.0.41 (Patch C-δ.6): replace direct `self.buffer.…` reaches in
-// editor.rs with calls that go through the `Cursor` / `Query` /
-// `BufferEdit` / `Search` trait surface (see `types.rs`). The bodies
-// of `Editor` still carry `Position { row: usize, col: usize }`-shape
-// arithmetic; these helpers cast at the boundary so call sites stay
-// terse. Mirrors the pattern lifted into `motions.rs` in 0.0.40.
+// 0.0.42 (Patch C-δ.7): the helpers introduced in 0.0.41 were
+// promoted to [`crate::buf_helpers`] so `vim.rs` free fns can route
+// their reaches through the same primitives. Re-import via
+// `use` so the editor body keeps its terse call shape.
 
-/// Read the cursor as a `(row, col)` `usize` tuple — the shape every
-/// editor-side body expects. One inline cast at the trait boundary.
-#[inline]
-fn buf_cursor_rc<B: crate::types::Cursor + ?Sized>(b: &B) -> (usize, usize) {
-    let p = crate::types::Cursor::cursor(b);
-    (p.line as usize, p.col as usize)
-}
-
-/// Read the cursor row.
-#[inline]
-fn buf_cursor_row<B: crate::types::Cursor + ?Sized>(b: &B) -> usize {
-    crate::types::Cursor::cursor(b).line as usize
-}
-
-/// Read the cursor as an `hjkl_buffer::Position` — the shape the
-/// concrete-buffer call sites consumed before the trait routing.
-#[inline]
-fn buf_cursor_pos<B: crate::types::Cursor + ?Sized>(b: &B) -> hjkl_buffer::Position {
-    let p = crate::types::Cursor::cursor(b);
-    hjkl_buffer::Position::new(p.line as usize, p.col as usize)
-}
-
-/// Set the cursor from `(row, col)` `usize` coordinates.
-#[inline]
-fn buf_set_cursor_rc<B: crate::types::Cursor + ?Sized>(b: &mut B, row: usize, col: usize) {
-    crate::types::Cursor::set_cursor(
-        b,
-        crate::types::Pos {
-            line: row as u32,
-            col: col as u32,
-        },
-    );
-}
-
-/// Number of rows.
-#[inline]
-fn buf_row_count<B: crate::types::Query + ?Sized>(b: &B) -> usize {
-    crate::types::Query::line_count(b) as usize
-}
-
-/// Borrow line `row`, returning `None` for out-of-bounds. Mirrors the
-/// pre-0.0.41 `hjkl_buffer::Buffer::line(row) -> Option<&str>` shape.
-#[inline]
-fn buf_line<B: crate::types::Query + ?Sized>(b: &B, row: usize) -> Option<&str> {
-    let n = crate::types::Query::line_count(b) as usize;
-    if row >= n {
-        return None;
-    }
-    Some(crate::types::Query::line(b, row as u32))
-}
-
-/// Snapshot every line into a `Vec<String>`. Allocates — call sites
-/// that previously borrowed `lines() -> &[String]` and immediately
-/// `.to_vec()`'d / `.iter().map(...)`'d collapse cleanly onto this.
-#[inline]
-fn buf_lines_to_vec<B: crate::types::Query + ?Sized>(b: &B) -> Vec<String> {
-    let n = crate::types::Query::line_count(b) as usize;
-    let mut out = Vec::with_capacity(n);
-    for r in 0..n {
-        out.push(crate::types::Query::line(b, r as u32).to_string());
-    }
-    out
-}
+use crate::buf_helpers::{
+    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_lines_to_vec,
+    buf_row_count, buf_set_cursor_rc,
+};
 
 pub struct Editor<'a> {
     pub keybinding_mode: KeybindingMode,
@@ -1289,13 +1228,12 @@ impl<'a> Editor<'a> {
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
         self.change_log.extend(edit_to_editops(&edit));
-        // `apply_edit` is intentionally a concrete reach: it returns
-        // the inverse edit for undo and consumes a `hjkl_buffer::Edit`
-        // value type. Routing this through the `BufferEdit` trait
-        // would require a new `apply_edit` trait method that returns
-        // `Self::Edit` — deferred to the 0.1.0 freeze patch. See
-        // CHANGELOG `0.0.41` "resistant reaches".
-        let inverse = self.buffer.apply_edit(edit);
+        // 0.0.42 (Patch C-δ.7): the `apply_edit` reach is centralized
+        // in [`crate::buf_helpers::apply_buffer_edit`] (option (c) of
+        // the 0.0.42 plan — see that fn's doc comment). The free fn
+        // takes `&mut hjkl_buffer::Buffer` so the editor body itself
+        // no longer carries a `self.buffer.<inherent>` hop.
+        let inverse = apply_buffer_edit(&mut self.buffer, edit);
         let (pos_row, pos_col) = buf_cursor_rc(&self.buffer);
         // Drop any folds the edit's range overlapped — vim opens the
         // surrounding fold automatically when you edit inside it. The
@@ -2033,7 +1971,18 @@ impl<'a> Editor<'a> {
     pub(crate) fn ensure_cursor_in_scrolloff(&mut self) {
         let height = self.viewport_height.load(Ordering::Relaxed) as usize;
         if height == 0 {
-            self.buffer.ensure_cursor_visible(self.host.viewport_mut());
+            // 0.0.42 (Patch C-δ.7): viewport math lifted onto engine
+            // free fns over `B: Query [+ Cursor]` + `&dyn FoldProvider`.
+            // Disjoint-field borrow split: `self.buffer` (immutable via
+            // `folds` snapshot + cursor) and `self.host` (mutable
+            // viewport ref) live on distinct struct fields, so one
+            // statement satisfies the borrow checker.
+            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+            crate::viewport_math::ensure_cursor_visible(
+                &self.buffer,
+                &folds,
+                self.host.viewport_mut(),
+            );
             return;
         }
         // Cap margin at (height - 1) / 2 so the upper + lower bands
@@ -2092,10 +2041,10 @@ impl<'a> Editor<'a> {
         // disjoint `(self.host, self.buffer)` borrows split cleanly.
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
         loop {
-            let csr = self
-                .buffer
-                .cursor_screen_row(self.host.viewport())
-                .unwrap_or(0);
+            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+            let csr =
+                crate::viewport_math::cursor_screen_row(&self.buffer, &folds, self.host.viewport())
+                    .unwrap_or(0);
             if csr <= max_csr {
                 break;
             }
@@ -2118,10 +2067,10 @@ impl<'a> Editor<'a> {
         // Step 3 — pull top backward until cursor's screen row is
         // past the top margin (`csr >= margin`).
         loop {
-            let csr = self
-                .buffer
-                .cursor_screen_row(self.host.viewport())
-                .unwrap_or(0);
+            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+            let csr =
+                crate::viewport_math::cursor_screen_row(&self.buffer, &folds, self.host.viewport())
+                    .unwrap_or(0);
             if csr >= margin {
                 break;
             }
@@ -2139,7 +2088,15 @@ impl<'a> Editor<'a> {
         // blank rows below it. `max_top_for_height` walks segments
         // backward from the last row until it accumulates `height`
         // screen rows.
-        let max_top = self.buffer.max_top_for_height(self.host.viewport(), height);
+        let max_top = {
+            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+            crate::viewport_math::max_top_for_height(
+                &self.buffer,
+                &folds,
+                self.host.viewport(),
+                height,
+            )
+        };
         if self.host.viewport().top_row > max_top {
             self.host.viewport_mut().top_row = max_top;
         }
