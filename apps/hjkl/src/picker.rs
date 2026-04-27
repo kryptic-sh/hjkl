@@ -13,7 +13,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hjkl_buffer::Buffer;
 use hjkl_form::{Input as EngineInput, Key as EngineKey, TextFieldEditor};
+
+/// Cap preview reads at this many lines so giant files don't stall the
+/// render path.
+const PREVIEW_MAX_LINES: usize = 200;
+/// Skip preview entirely past this byte count — likely a binary or
+/// large generated artefact that wouldn't render usefully anyway.
+const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 
 /// Outcome of routing one key event into the picker.
 pub enum PickerEvent {
@@ -49,6 +57,21 @@ pub struct FilePicker {
     /// Background scan thread — joined on drop is implicit (detached).
     /// Held for liveness only; reads happen via `candidates`.
     _scan: Option<JoinHandle<()>>,
+    /// Picker root (cwd at open). Preview reads resolve relative paths
+    /// against this so the right pane works no matter what the editor's
+    /// cwd has since become.
+    root: PathBuf,
+    /// Path the preview buffer currently holds (relative form, matching
+    /// `candidates`). `None` when nothing is loaded.
+    preview_path: Option<PathBuf>,
+    /// Cached preview content. Empty buffer when the file couldn't be
+    /// loaded (binary, too big, I/O error). The renderer reads this
+    /// directly via `BufferView`.
+    preview_buffer: Buffer,
+    /// Status tag for the preview pane title — populated when a file
+    /// is skipped (binary / oversize / I/O error). Empty when the
+    /// preview is the file's actual content.
+    preview_status: String,
 }
 
 impl FilePicker {
@@ -81,7 +104,50 @@ impl FilePicker {
             last_query: String::new(),
             last_seen_count: 0,
             _scan: handle,
+            root: cwd.to_path_buf(),
+            preview_path: None,
+            preview_buffer: Buffer::new(),
+            preview_status: String::new(),
         }
+    }
+
+    /// Borrow the cached preview buffer for the renderer's right pane.
+    pub fn preview_buffer(&self) -> &Buffer {
+        &self.preview_buffer
+    }
+
+    /// Status tag for the preview pane title (e.g. "binary",
+    /// "1.0MB — too large"). Empty when the preview is regular
+    /// content.
+    pub fn preview_status(&self) -> &str {
+        &self.preview_status
+    }
+
+    /// Path currently loaded into the preview, in the same relative
+    /// form as `candidates`. `None` when no path is selected.
+    pub fn preview_path(&self) -> Option<&Path> {
+        self.preview_path.as_deref()
+    }
+
+    /// Refresh the preview buffer if the selection now points at a
+    /// different path than the cached one. Called from the renderer.
+    /// Cheap when the selection hasn't moved (path equality check
+    /// only).
+    pub fn refresh_preview(&mut self) {
+        let target = self.selected_path();
+        if target.as_deref() == self.preview_path.as_deref() {
+            return;
+        }
+        self.preview_path = target.clone();
+        let Some(rel) = target else {
+            self.preview_buffer = Buffer::new();
+            self.preview_status.clear();
+            return;
+        };
+        let abs = self.root.join(&rel);
+        let (content, status) = load_preview(&abs);
+        self.preview_buffer = Buffer::from_str(&content);
+        self.preview_status = status;
     }
 
     /// True once the background walk has finished. Used by the renderer
@@ -229,6 +295,39 @@ impl FilePicker {
         let wrapped = next.rem_euclid(len);
         self.selected = wrapped as usize;
     }
+}
+
+/// Load a single file for the preview pane. Returns `(content,
+/// status)`: when `status` is non-empty the file was skipped (binary /
+/// oversized / I/O error) and `content` is empty.
+fn load_preview(abs: &Path) -> (String, String) {
+    let meta = match std::fs::metadata(abs) {
+        Ok(m) => m,
+        Err(e) => return (String::new(), format!("{e}")),
+    };
+    if meta.len() > PREVIEW_MAX_BYTES {
+        let mb = meta.len() as f64 / 1_048_576.0;
+        return (String::new(), format!("{mb:.1}MB — too large"));
+    }
+    let bytes = match std::fs::read(abs) {
+        Ok(b) => b,
+        Err(e) => return (String::new(), format!("{e}")),
+    };
+    // Binary heuristic: presence of a NUL byte in the first 8KB.
+    let scan_end = bytes.len().min(8192);
+    if bytes[..scan_end].contains(&0u8) {
+        return (String::new(), "binary".into());
+    }
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(s) => s,
+        Err(_) => return (String::new(), "non-utf8".into()),
+    };
+    let truncated: String = text
+        .lines()
+        .take(PREVIEW_MAX_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (truncated, String::new())
 }
 
 /// Background walker — streams `is_file()` entries into `out`, gitignore-

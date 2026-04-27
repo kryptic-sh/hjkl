@@ -446,14 +446,24 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         None => return,
     };
     picker.refresh();
+    picker.refresh_preview();
 
-    let area = centered_rect(70, 70, buf_area);
+    let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
+
+    // Split horizontally: left half hosts input + list, right half is
+    // the preview pane.
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let left_area = cols[0];
+    let right_area = cols[1];
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(1)])
-        .split(area);
+        .split(left_area);
     let input_area = layout[0];
     let list_area = layout[1];
 
@@ -507,6 +517,72 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         state.select(Some(picker.selected.min(visible.len().saturating_sub(1))));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
+
+    picker_preview_pane(frame, picker, right_area);
+}
+
+/// Render the preview pane via `BufferView` so the gutter, line
+/// numbers, and per-row layout match the editor proper. No syntax
+/// highlights for now — the preview's `Buffer` has no spans table.
+fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::FilePicker, area: Rect) {
+    let path_label = picker
+        .preview_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(none)".into());
+    let status = picker.preview_status();
+    let title = if status.is_empty() {
+        format!(" preview — {path_label} ")
+    } else {
+        format!(" preview — {path_label} [{status}] ")
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if !status.is_empty() {
+        // Skipped (binary / oversized / I/O error) — show the status
+        // tag in the body too for visibility on narrow terminals where
+        // the title might be clipped.
+        let para = Paragraph::new(format!("  ({status})"));
+        frame.render_widget(para, inner);
+        return;
+    }
+
+    let buf = picker.preview_buffer();
+    let line_count = buf.line_count() as usize;
+    let gw = gutter_width(line_count.max(1));
+    let viewport = hjkl_buffer::Viewport {
+        top_row: 0,
+        top_col: 0,
+        width: inner.width.saturating_sub(gw),
+        height: inner.height,
+        text_width: inner.width.saturating_sub(gw),
+        ..hjkl_buffer::Viewport::default()
+    };
+    let resolver = |_: u32| Style::default();
+    let view = BufferView {
+        buffer: buf,
+        viewport: &viewport,
+        selection: None,
+        resolver: &resolver,
+        cursor_line_bg: Style::default(),
+        cursor_column_bg: Style::default(),
+        selection_bg: Style::default(),
+        cursor_style: Style::default(),
+        gutter: Some(Gutter {
+            width: gw,
+            style: Style::default().fg(Color::DarkGray),
+        }),
+        search_bg: Style::default(),
+        signs: &[],
+        conceals: &[],
+        spans: &[],
+        search_pattern: None,
+    };
+    frame.render_widget(view, inner);
 }
 
 /// Compute a centered Rect of `pct_x`% × `pct_y`% of `area`.
