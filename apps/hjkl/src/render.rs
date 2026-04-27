@@ -231,24 +231,40 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Normal status line ───────────────────────────────────────────────────
+    // ── Normal status line (lualine-style colored sections) ─────────────────
+    // Palette derived from default-dark.toml (hjkl-tree-sitter): mode
+    // colours map to keyword (purple), string (green), function.builtin
+    // (blue) so the status bar visually matches the syntax theme.
+    const HJ_BASE: Color = Color::Rgb(46, 52, 64); // overall bg fill
+    const HJ_SURFACE: Color = Color::Rgb(59, 66, 82); // mid sections (filename / position)
+    const HJ_TEXT: Color = Color::Rgb(216, 222, 233); // default fg
+    const HJ_BLUE: Color = Color::Rgb(94, 129, 172); // NORMAL
+    const HJ_GREEN: Color = Color::Rgb(163, 190, 140); // INSERT
+    const HJ_PURPLE: Color = Color::Rgb(204, 153, 204); // VISUAL*
+    const HJ_RED: Color = Color::Rgb(255, 170, 170); // dirty marker
+    const HJ_DARK: Color = Color::Rgb(46, 52, 64); // mode-fg (dark on bright)
+
     let mode = app.mode_label();
+    let mode_color = match mode {
+        "INSERT" => HJ_GREEN,
+        "VISUAL" | "VISUAL LINE" | "VISUAL BLOCK" => HJ_PURPLE,
+        _ => HJ_BLUE,
+    };
+    let mode_style = Style::default()
+        .bg(mode_color)
+        .fg(HJ_DARK)
+        .add_modifier(Modifier::BOLD);
+    let mid_style = Style::default().bg(HJ_SURFACE).fg(HJ_TEXT);
+    let fill_style = Style::default().bg(HJ_BASE).fg(HJ_TEXT);
+    let dirty_style = Style::default().bg(HJ_SURFACE).fg(HJ_RED);
 
-    // Dirty marker — `*` when the buffer has unsaved changes.
-    let dirty = if app.dirty { "*" } else { " " };
-
-    // Readonly indicator.
+    // Tags & markers
     let ro_tag = if app.editor.is_readonly() {
         " [RO]"
     } else {
         ""
     };
-
-    // New-file annotation — shown until the user edits or saves.
     let new_tag = if app.is_new_file { " [New File]" } else { "" };
-    // Untracked annotation — file exists in a git workdir but isn't in
-    // HEAD. Suppressed when [New File] applies (file isn't on disk yet,
-    // [New File] is the more informative tag).
     let untracked_tag = if app.is_untracked && !app.is_new_file {
         " [Untracked]"
     } else {
@@ -265,49 +281,51 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let (row, col) = app.editor.cursor();
     let line_count = app.editor.buffer().line_count() as usize;
     let pct = ((row + 1) * 100).checked_div(line_count).unwrap_or(0);
-    let pos = format!("{}:{}", row + 1, col + 1);
-    let pct_str = format!("{pct}%");
 
-    // Right side is fixed width — reserve it first.
-    // Format: `pos  pct ` (trailing space).
-    let right = format!("{pos}  {pct_str} ");
-    // Left prefix before filename: ` MODE  d ` + ro_tag + new_tag.
-    let left_prefix = format!(" {mode}  {dirty} ");
+    // Section text (each block has 1-space padding both sides).
+    let mode_block = format!(" {mode} ");
+    let pos_block = format!(" {}:{} ", row + 1, col + 1);
+    let pct_block = format!(" {pct}% ");
+    let dirty_block = if app.dirty { " ● " } else { "" };
     let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
 
-    // Available columns for the filename.
+    // Filename block — surface bg, with leading + trailing space.
+    // Truncate with leading `…` if the line doesn't fit.
     let w = width as usize;
-    let reserved = left_prefix.len() + suffix.len() + right.len();
+    let reserved = mode_block.len()
+        + 2 /* leading + trailing space around filename */
+        + suffix.len()
+        + dirty_block.len()
+        + pos_block.len()
+        + pct_block.len();
     let avail_for_name = w.saturating_sub(reserved);
-
-    // Truncate filename with leading `…` when it doesn't fit (vim style).
     let filename: String = if raw_filename.len() <= avail_for_name {
         raw_filename.clone()
     } else if avail_for_name <= 1 {
         String::new()
     } else {
-        let keep = avail_for_name.saturating_sub(1); // 1 char for `…`
+        let keep = avail_for_name.saturating_sub(1);
         let start = raw_filename.len().saturating_sub(keep);
         format!("\u{2026}{}", &raw_filename[start..])
     };
+    let mid_block = format!(" {filename}{suffix} ");
 
-    // Left side: ` MODE  dirty filename[RO][New File]`
-    let left = format!("{left_prefix}{filename}{suffix}");
+    // Spacer fills the gap between mid and the right-side blocks.
+    let used =
+        mode_block.len() + mid_block.len() + dirty_block.len() + pos_block.len() + pct_block.len();
+    let spacer: String = " ".repeat(w.saturating_sub(used));
 
-    // Pad the centre spacer so left + spacer + right == width.
-    let used = left.len() + right.len();
-    let pad_count = w.saturating_sub(used);
-    let spacer: String = " ".repeat(pad_count);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(6);
+    spans.push(Span::styled(mode_block, mode_style));
+    spans.push(Span::styled(mid_block, mid_style));
+    if !dirty_block.is_empty() {
+        spans.push(Span::styled(dirty_block.to_string(), dirty_style));
+    }
+    spans.push(Span::styled(spacer, fill_style));
+    spans.push(Span::styled(pos_block, mid_style));
+    spans.push(Span::styled(pct_block, mode_style));
 
-    let content = format!("{left}{spacer}{right}");
-
-    (
-        Line::from(vec![Span::styled(
-            content,
-            Style::default().bg(Color::DarkGray).fg(Color::White),
-        )]),
-        None,
-    )
+    (Line::from(spans), None)
 }
 
 /// Format the status line as a plain string (unit-test helper).
