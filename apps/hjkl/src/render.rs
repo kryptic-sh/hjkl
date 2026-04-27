@@ -448,10 +448,10 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     picker.refresh();
     picker.refresh_preview();
 
-    // Wider popup when the preview pane is on; narrower single-column
-    // form when the source opted out.
+    // Popup size is fixed regardless of preview state — the list just
+    // takes the full width when the source opted out.
     let with_preview = picker.has_preview();
-    let area = centered_rect(if with_preview { 80 } else { 60 }, 70, buf_area);
+    let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
 
     // Split horizontally only when the preview pane is wanted; else the
