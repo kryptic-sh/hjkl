@@ -138,6 +138,26 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
 }
 
+/// Render a prompt status row: prompt content on the left, a right-aligned
+/// `[I]` (Insert) or `[N]` (Normal) mode tag for users on terminals that
+/// don't render cursor-shape changes (or who want a discoverable visual cue).
+fn prompt_line(content: &str, mode: hjkl_form::VimMode, width: u16) -> Line<'static> {
+    let (tag, tag_style) = match mode {
+        hjkl_form::VimMode::Insert => (
+            " [I]",
+            Style::default().bg(Color::DarkGray).fg(Color::Yellow),
+        ),
+        _ => (" [N]", Style::default().bg(Color::DarkGray).fg(Color::Gray)),
+    };
+    let body_width = (width as usize).saturating_sub(tag.len());
+    let visible: String = content.chars().take(body_width).collect();
+    let body = format!("{visible:<body_width$}");
+    Line::from(vec![
+        Span::styled(body, Style::default().bg(Color::DarkGray).fg(Color::White)),
+        Span::styled(tag, tag_style),
+    ])
+}
+
 /// Build the status line text as a ratatui [`Line`].
 ///
 /// Returns `(line, Some(cursor_col))` when a prompt is active so the
@@ -154,16 +174,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let text = field.text();
         let display: String = text.lines().next().unwrap_or("").to_string();
         let content = format!(":{display}");
-        let padded = format!("{content:<width$}", width = width as usize);
-        // Cursor is (row, col) in chars; for single-line prompt row is
-        // always 0. Prefix `:` adds one column.
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
         return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default().bg(Color::DarkGray).fg(Color::White),
-            )]),
+            prompt_line(&content, field.vim_mode(), width),
             Some(cursor_col),
         );
     }
@@ -177,14 +191,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let text = field.text();
         let display: String = text.lines().next().unwrap_or("").to_string();
         let content = format!("{prefix}{display}");
-        let padded = format!("{content:<width$}", width = width as usize);
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
         return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default().bg(Color::DarkGray).fg(Color::White),
-            )]),
+            prompt_line(&content, field.vim_mode(), width),
             Some(cursor_col),
         );
     }

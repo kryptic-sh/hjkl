@@ -187,7 +187,22 @@ impl App {
             }
 
             // Emit cursor shape before the draw call, once per transition.
-            let current_shape = self.editor.host().cursor_shape();
+            // When a prompt is active, derive shape from the prompt field's
+            // vim mode (Insert → Bar, Normal/Visual → Block) so the user
+            // sees mode feedback while editing the prompt itself.
+            let current_shape = if let Some(ref f) = self.command_field {
+                match f.vim_mode() {
+                    hjkl_form::VimMode::Insert => CursorShape::Bar,
+                    _ => CursorShape::Block,
+                }
+            } else if let Some(ref f) = self.search_field {
+                match f.vim_mode() {
+                    hjkl_form::VimMode::Insert => CursorShape::Bar,
+                    _ => CursorShape::Block,
+                }
+            } else {
+                self.editor.host().cursor_shape()
+            };
             if current_shape != self.last_cursor_shape {
                 match current_shape {
                     CursorShape::Block => {
