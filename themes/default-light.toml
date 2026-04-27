@@ -1,0 +1,53 @@
+# hjkl default-light theme
+# Capture-name dot-fallback applies: "keyword.control" falls back to "keyword" if not found.
+# Colors are #rrggbb hex strings.
+
+default             = { fg = "#2e3440" }
+
+"keyword"           = { fg = "#7b368f", bold = true }
+"keyword.control"   = { fg = "#c0392b", bold = true }
+"keyword.return"    = { fg = "#c0392b", bold = true }
+"keyword.operator"  = { fg = "#7b368f" }
+
+"string"            = { fg = "#2d8a3e" }
+"string.escape"     = { fg = "#c0720c" }
+"string.special"    = { fg = "#1f6f8b" }
+
+"comment"           = { fg = "#868e9c", italic = true }
+
+"number"            = { fg = "#8e3a8e" }
+
+"function"          = { fg = "#1f6f8b" }
+"function.builtin"  = { fg = "#2b52a0" }
+"function.method"   = { fg = "#1f6f8b" }
+"function.macro"    = { fg = "#1f6f8b", bold = true }
+
+"type"              = { fg = "#b5770d" }
+"type.builtin"      = { fg = "#b5770d", bold = true }
+
+"variable"          = { fg = "#2e3440" }
+"variable.builtin"  = { fg = "#c0392b" }
+"variable.parameter" = { fg = "#2e3440", italic = true }
+
+"constant"          = { fg = "#8e3a8e" }
+"constant.builtin"  = { fg = "#8e3a8e", bold = true }
+
+"punctuation"       = { fg = "#5c6474" }
+"punctuation.bracket" = { fg = "#5c6474" }
+"punctuation.delimiter" = { fg = "#5c6474" }
+
+"operator"          = { fg = "#2b52a0" }
+
+# Markdown
+"tag"               = { fg = "#2b52a0" }
+"heading"           = { fg = "#1f6f8b", bold = true }
+"link"              = { fg = "#2b52a0", underline = true }
+"code"              = { fg = "#2d8a3e" }
+
+# TOML
+"property"          = { fg = "#1f6f8b" }
+"table"             = { fg = "#b5770d" }
+
+# SQL
+"keyword.sql"       = { fg = "#7b368f", bold = true }
+"identifier"        = { fg = "#2e3440" }
