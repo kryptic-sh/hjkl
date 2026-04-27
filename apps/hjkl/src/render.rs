@@ -218,6 +218,34 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── Perf overlay (toggled via `:perf`) ──────────────────────────────────
+    if app.perf_overlay {
+        let p = &app.last_perf;
+        let content = format!(
+            " perf  total={}µs src={} parse={} hl={} byrow={} diag={} install={} sig={} git={} | runs={} hits={} thr={} ",
+            app.last_recompute_us,
+            p.source_build_us,
+            p.parse_us,
+            p.highlight_us,
+            p.by_row_us,
+            p.diag_us,
+            app.last_install_us,
+            app.last_signature_us,
+            app.last_git_us,
+            app.recompute_runs,
+            app.recompute_hits,
+            app.recompute_throttled,
+        );
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default().bg(Color::DarkGray).fg(Color::White),
+            )]),
+            None,
+        );
+    }
+
     // ── Status message (ex-command result) ──────────────────────────────────
     if let Some(ref msg) = app.status_message {
         let content = format!(" {msg}");
