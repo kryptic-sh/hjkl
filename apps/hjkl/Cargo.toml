@@ -32,6 +32,7 @@ anyhow = "1"
 regex = "1"
 git2 = { version = "0.19", default-features = false }
 ignore = "0.4"
+ec4rs = "1"
 
 [dev-dependencies]
 tempfile = "3"

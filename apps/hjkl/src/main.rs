@@ -4,6 +4,7 @@
 //! terminal resize, status-line truncation.
 
 mod app;
+mod editorconfig;
 mod git;
 mod host;
 mod picker;

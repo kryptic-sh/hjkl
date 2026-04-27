@@ -241,7 +241,11 @@ pub(super) fn build_slot(
     }
 
     let host = TuiHost::new();
-    let mut editor = Editor::new(buffer, host, Options::default());
+    let mut ec_opts = Options::default();
+    if let Some(ref p) = path {
+        crate::editorconfig::overlay_for_path(&mut ec_opts, p);
+    }
+    let mut editor = Editor::new(buffer, host, ec_opts);
     if let Ok(size) = crossterm::terminal::size() {
         let vp = editor.host_mut().viewport_mut();
         vp.width = size.0;
