@@ -12,8 +12,10 @@ Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) + rope buffer.
 
 ## Status
 
-`0.2.0` — full multi-buffer editing with tree-sitter highlighting and fuzzy
-picker. See [SCOPE.md](SCOPE.md) for the full feature roadmap.
+`0.3.0` — multi-buffer editing, fuzzy file/buffer/grep pickers with
+syntax-highlighted preview, tree-sitter highlighting + comment-marker overlay,
+smart indent, `.editorconfig`, and `softtabstop`. See [SCOPE.md](SCOPE.md) for
+the full feature roadmap.
 
 ## Install
 
@@ -92,8 +94,16 @@ hjkl +picker          # open fuzzy file picker immediately
 - [`hjkl-engine`](https://crates.io/crates/hjkl-engine) — modal-editing FSM
 - [`hjkl-editor`](https://crates.io/crates/hjkl-editor) — ex commands, search,
   shell exec
+- [`hjkl-tree-sitter`](https://crates.io/crates/hjkl-tree-sitter) — bundled
+  tree-sitter grammars + Neovim-flavoured highlight themes
+- [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) — system clipboard
+  adapter
+- [`hjkl-form`](https://crates.io/crates/hjkl-form) — single-line form input
+  built on the engine (used by pickers, `:` / `/` prompts)
+- [`hjkl-picker`](https://crates.io/crates/hjkl-picker) — fuzzy picker subsystem
+  (`Picker`, `PickerLogic`, `FileSource`, `RgSource`, scorer)
 - [`hjkl-ratatui`](https://crates.io/crates/hjkl-ratatui) — ratatui rendering
-  adapters
+  adapters + shared spinner
 
 See [SPEC.md](../../crates/hjkl-engine/SPEC.md) for the frozen 0.1.0 trait
 surface.
