@@ -215,10 +215,7 @@ mod tests {
         let config = reg.by_name("json").unwrap();
         let mut h = Highlighter::new(config).unwrap();
         let spans = h.highlight(br#"{"key": "value"}"#);
-        assert!(
-            !spans.is_empty(),
-            "expected spans for JSON; got none"
-        );
+        assert!(!spans.is_empty(), "expected spans for JSON; got none");
     }
 
     #[test]
@@ -227,10 +224,7 @@ mod tests {
         let config = reg.by_name("toml").unwrap();
         let mut h = Highlighter::new(config).unwrap();
         let spans = h.highlight(b"[package]\nname = \"foo\"\n");
-        assert!(
-            !spans.is_empty(),
-            "expected spans for TOML; got none"
-        );
+        assert!(!spans.is_empty(), "expected spans for TOML; got none");
     }
 
     #[test]
@@ -239,10 +233,7 @@ mod tests {
         let config = reg.by_name("sql").unwrap();
         let mut h = Highlighter::new(config).unwrap();
         let spans = h.highlight(b"SELECT id FROM users;");
-        assert!(
-            !spans.is_empty(),
-            "expected spans for SQL; got none"
-        );
+        assert!(!spans.is_empty(), "expected spans for SQL; got none");
     }
 
     #[test]
