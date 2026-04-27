@@ -22,8 +22,8 @@ crossterm = ["hjkl-engine/crossterm"]
 ratatui = ["hjkl-engine/ratatui", "hjkl-buffer/ratatui"]
 
 [dependencies]
-hjkl-engine = { path = "../hjkl-engine", version = "=0.1.1", default-features = false }
-hjkl-buffer = { path = "../hjkl-buffer", version = "=0.1.1" }
+hjkl-engine = { path = "../hjkl-engine", version = "=0.2.0", default-features = false }
+hjkl-buffer = { path = "../hjkl-buffer", version = "=0.2.0" }
 regex = "1"
 
 [dev-dependencies]
