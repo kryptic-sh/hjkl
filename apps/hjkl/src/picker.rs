@@ -407,16 +407,20 @@ impl Picker {
         self.preview_label.as_deref()
     }
 
-    /// Labels and highlight char positions for the first `n` filtered items.
+    /// Labels and highlight char positions for every filtered item.
+    ///
+    /// `refresh()` already caps `filtered` at 500 entries, so this stays
+    /// bounded. Returning all of them lets the renderer's `List` + `ListState`
+    /// scroll naturally — truncating here would prevent the user from
+    /// navigating past the initially-visible window.
     ///
     /// For sources that implement `label_match_positions` (e.g. `RgSource`),
     /// the override positions replace the fuzzy-scorer positions so that
     /// highlighted chars stay within the content portion of the label.
-    pub fn visible_entries(&self, n: usize) -> Vec<(String, Vec<usize>)> {
+    pub fn visible_entries(&self) -> Vec<(String, Vec<usize>)> {
         let query = &self.last_query;
         self.filtered
             .iter()
-            .take(n)
             .map(|e| {
                 let label = self.source.label(e.idx);
                 let positions = self

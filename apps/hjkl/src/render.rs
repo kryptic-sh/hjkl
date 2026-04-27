@@ -596,8 +596,7 @@ fn render_picker_input_and_list(
         frame.set_cursor_position((cx, cy));
     }
 
-    let visible_rows = list_area.height.saturating_sub(2) as usize;
-    let entries = picker.visible_entries(visible_rows.max(1));
+    let entries = picker.visible_entries();
     let match_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
