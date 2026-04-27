@@ -27,6 +27,24 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// Resolve a path for buffer-list matching. Two paths that point to
+/// the same file should compare equal here even when one is relative
+/// and the other absolute. We try `canonicalize` first (only works for
+/// files that exist on disk) and fall back to lexical absolutization
+/// for new-file paths.
+fn canon_for_match(p: &std::path::Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c;
+    }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
 /// Hash + byte-length of the buffer's canonical line content (lines
 /// joined by `\n` — same shape as what `:w` writes, modulo the trailing
 /// newline). Used to detect "buffer matches the saved snapshot" so undo
@@ -130,6 +148,10 @@ pub struct App {
     slots: Vec<BufferSlot>,
     /// Index into `slots` of the currently active buffer.
     active: usize,
+    /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
+    /// slots created via `:e <new-path>` or replacements after `:bd` on
+    /// the last slot consume the next value.
+    next_buffer_id: BufferId,
     /// Set to `true` when the FSM or Ctrl-C wants to quit.
     pub exit_requested: bool,
     /// Last ex-command result (Info / Error / write confirmation).
@@ -309,6 +331,7 @@ impl App {
         Ok(Self {
             slots: vec![slot],
             active: 0,
+            next_buffer_id: 1,
             exit_requested: false,
             status_message: None,
             command_field: None,
@@ -778,6 +801,33 @@ impl App {
             return;
         }
 
+        // Multi-buffer commands (Phase C) — `bn`/`bp`/`bd`/`ls` are not
+        // in the engine's COMMAND_NAMES table, so canonicalization
+        // leaves them as-is. Match raw spellings here.
+        match cmd {
+            "bn" | "bnext" => {
+                self.buffer_next();
+                return;
+            }
+            "bp" | "bN" | "bprev" | "bprevious" | "bNext" => {
+                self.buffer_prev();
+                return;
+            }
+            "bd" | "bdelete" => {
+                self.buffer_delete(false);
+                return;
+            }
+            "bd!" | "bdelete!" => {
+                self.buffer_delete(true);
+                return;
+            }
+            "ls" | "buffers" | "files" => {
+                self.status_message = Some(self.list_buffers());
+                return;
+            }
+            _ => {}
+        }
+
         if cmd == "edit" || cmd == "edit!" || cmd.starts_with("edit ") || cmd.starts_with("edit!") {
             let force = cmd.starts_with("edit!");
             let arg = if let Some(rest) = cmd.strip_prefix("edit!") {
@@ -889,16 +939,20 @@ impl App {
     }
 
     /// Open or reload a file via `:e [path]` / `:e!`.
+    ///
+    /// Switch-or-create semantics (Phase C):
+    /// - `:e` with no arg → reload current buffer (blocked when dirty
+    ///   unless `force`).
+    /// - `:e %` → reload current (`%` expands to current filename).
+    /// - `:e <path>` where `<path>` matches an open slot → switch to it.
+    /// - `:e <path>` for a new path → load the file in a new slot,
+    ///   append, and switch active. The previous slot is untouched.
     fn do_edit(&mut self, arg: &str, force: bool) {
-        let path_str = if arg.is_empty() {
-            match &self.active().filename {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None => {
-                    self.status_message = Some("E32: No file name".into());
-                    return;
-                }
-            }
-        } else if arg.contains('%') {
+        if arg.is_empty() {
+            self.reload_current(force);
+            return;
+        }
+        let path_str = if arg.contains('%') {
             let curr = match self.active().filename.as_ref().and_then(|p| p.to_str()) {
                 Some(s) => s,
                 None => {
@@ -910,23 +964,75 @@ impl App {
         } else {
             arg.to_string()
         };
+        let path = PathBuf::from(&path_str);
+        let target = canon_for_match(&path);
 
+        // Switch when the path matches an open slot.
+        if let Some(idx) = self
+            .slots
+            .iter()
+            .position(|s| s.filename.as_deref().map(canon_for_match) == Some(target.clone()))
+        {
+            if idx == self.active {
+                self.reload_current(force);
+                return;
+            }
+            self.switch_to(idx);
+            self.status_message = Some(format!(
+                "switched to buffer {}: \"{}\"",
+                idx + 1,
+                self.active()
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            ));
+            return;
+        }
+
+        // Otherwise create a new slot.
+        match self.open_new_slot(path) {
+            Ok(idx) => {
+                self.active = idx;
+                let line_count = self.active().editor.buffer().line_count() as usize;
+                let path_display = self
+                    .active()
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                self.status_message = Some(format!("\"{path_display}\" {line_count}L"));
+                self.refresh_git_signs_force();
+            }
+            Err(msg) => {
+                self.status_message = Some(msg);
+            }
+        }
+    }
+
+    /// Reload the active slot from disk (`:e` no-arg / `:e %`).
+    fn reload_current(&mut self, force: bool) {
+        let path = match self.active().filename.clone() {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("E32: No file name".into());
+                return;
+            }
+        };
         if !force && self.active().dirty {
             self.status_message =
                 Some("E37: No write since last change (add ! to override)".into());
             return;
         }
-
-        let path = PathBuf::from(&path_str);
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                self.status_message = Some(format!("E484: Can't open file {path_str}: {e}"));
+                self.status_message =
+                    Some(format!("E484: Can't open file {}: {e}", path.display()));
                 return;
             }
         };
         let trimmed = content.strip_suffix('\n').unwrap_or(&content);
-
         let line_count = trimmed.lines().count();
         let byte_count = content.len();
         self.active_mut().editor.set_content(trimmed);
@@ -936,17 +1042,14 @@ impl App {
             vp.top_row = 0;
             vp.top_col = 0;
         }
-        self.active_mut().filename = Some(path.clone());
         self.active_mut().is_new_file = false;
         let buffer_id = self.active().buffer_id;
         self.syntax.set_language_for_path(buffer_id, &path);
         self.syntax.reset(buffer_id);
         self.active_mut().last_recompute_key = None;
-        // Wipe the previous file's spans up-front.
         self.active_mut()
             .editor
             .install_ratatui_syntax_spans(Vec::new());
-        // Synchronous viewport-only preview.
         let (vp_top, vp_height) = {
             let vp = self.active().editor.host().viewport();
             (vp.top_row, vp.height as usize)
@@ -962,7 +1065,200 @@ impl App {
         self.recompute_and_install();
         self.active_mut().snapshot_saved();
         self.refresh_git_signs_force();
-        self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
+        self.status_message = Some(format!(
+            "\"{}\" {line_count}L, {byte_count}B",
+            path.display()
+        ));
+    }
+
+    /// Allocate a fresh `BufferId` and load `path` into a new slot.
+    /// Returns the index of the newly pushed slot (does NOT switch).
+    fn open_new_slot(&mut self, path: PathBuf) -> Result<usize, String> {
+        let mut buffer = Buffer::new();
+        let mut is_new_file = false;
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                let content = content.strip_suffix('\n').unwrap_or(&content);
+                BufferEdit::replace_all(&mut buffer, content);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                is_new_file = true;
+            }
+            Err(e) => return Err(format!("E484: Can't open file {}: {e}", path.display())),
+        }
+        let host = TuiHost::new();
+        let mut editor = Editor::new(buffer, host, Options::default());
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
+        let buffer_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+        self.syntax.set_language_for_path(buffer_id, &path);
+        let (vp_top, vp_height) = {
+            let vp = editor.host().viewport();
+            (vp.top_row, vp.height as usize)
+        };
+        if let Some(out) = self
+            .syntax
+            .preview_render(buffer_id, editor.buffer(), vp_top, vp_height)
+        {
+            editor.install_ratatui_syntax_spans(out.spans);
+        }
+        self.syntax
+            .submit_render(buffer_id, editor.buffer(), vp_top, vp_height);
+        let initial_dg = editor.buffer().dirty_gen();
+        let (key, signs) = if let Some(out) = self
+            .syntax
+            .wait_for_initial_result(Duration::from_millis(150))
+        {
+            let k = out.key;
+            editor.install_ratatui_syntax_spans(out.spans);
+            (Some(k), out.signs)
+        } else {
+            (Some((initial_dg, vp_top, vp_height)), Vec::new())
+        };
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
+        let mut slot = BufferSlot {
+            buffer_id,
+            editor,
+            filename: Some(path),
+            dirty: false,
+            is_new_file,
+            is_untracked: false,
+            diag_signs: signs,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            last_recompute_at: Instant::now() - Duration::from_secs(1),
+            last_recompute_key: key,
+            saved_hash: 0,
+            saved_len: 0,
+        };
+        slot.snapshot_saved();
+        self.slots.push(slot);
+        Ok(self.slots.len() - 1)
+    }
+
+    /// Switch active to `idx` and refresh its viewport spans.
+    fn switch_to(&mut self, idx: usize) {
+        self.active = idx;
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = self.active_mut().editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
+        let buffer_id = self.active().buffer_id;
+        let (vp_top, vp_height) = {
+            let vp = self.active().editor.host().viewport();
+            (vp.top_row, vp.height as usize)
+        };
+        if let Some(out) =
+            self.syntax
+                .preview_render(buffer_id, self.active().editor.buffer(), vp_top, vp_height)
+        {
+            self.active_mut()
+                .editor
+                .install_ratatui_syntax_spans(out.spans);
+        }
+        self.active_mut().last_recompute_key = None;
+        self.recompute_and_install();
+        self.refresh_git_signs_force();
+    }
+
+    /// `:bnext` — cycle active forward. No-op when only one slot.
+    fn buffer_next(&mut self) {
+        if self.slots.len() <= 1 {
+            self.status_message = Some("only one buffer open".into());
+            return;
+        }
+        let next = (self.active + 1) % self.slots.len();
+        self.switch_to(next);
+    }
+
+    /// `:bprev` — cycle active backward. No-op when only one slot.
+    fn buffer_prev(&mut self) {
+        if self.slots.len() <= 1 {
+            self.status_message = Some("only one buffer open".into());
+            return;
+        }
+        let prev = (self.active + self.slots.len() - 1) % self.slots.len();
+        self.switch_to(prev);
+    }
+
+    /// `:bdelete[!]` — close the active slot. With more than one slot
+    /// open the slot is removed; on the last slot the buffer is reset
+    /// to an empty unnamed scratch buffer (vim parity for `:bd` on the
+    /// only buffer leaving an empty editor instead of quitting).
+    fn buffer_delete(&mut self, force: bool) {
+        if !force && self.active().dirty {
+            self.status_message =
+                Some("E89: No write since last change (add ! to override)".into());
+            return;
+        }
+        if self.slots.len() == 1 {
+            let old_id = self.active().buffer_id;
+            self.syntax.forget(old_id);
+            let new_id = self.next_buffer_id;
+            self.next_buffer_id += 1;
+            let host = TuiHost::new();
+            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            if let Ok(size) = crossterm::terminal::size() {
+                let vp = editor.host_mut().viewport_mut();
+                vp.width = size.0;
+                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+            }
+            let _ = editor.take_content_edits();
+            let _ = editor.take_content_reset();
+            let slot = &mut self.slots[0];
+            slot.buffer_id = new_id;
+            slot.editor = editor;
+            slot.filename = None;
+            slot.dirty = false;
+            slot.is_new_file = false;
+            slot.is_untracked = false;
+            slot.diag_signs.clear();
+            slot.git_signs.clear();
+            slot.last_git_dirty_gen = None;
+            slot.last_recompute_key = None;
+            slot.saved_hash = 0;
+            slot.saved_len = 0;
+            slot.snapshot_saved();
+            self.status_message = Some("buffer closed (replaced with [No Name])".into());
+            return;
+        }
+        let removed = self.slots.remove(self.active);
+        self.syntax.forget(removed.buffer_id);
+        if self.active >= self.slots.len() {
+            self.active = self.slots.len() - 1;
+        }
+        let target = self.active;
+        self.switch_to(target);
+        let name = removed
+            .filename
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "[No Name]".into());
+        self.status_message = Some(format!("buffer closed: \"{name}\""));
+    }
+
+    /// `:ls` / `:buffers` — render the buffer list to a single status
+    /// line. Marks: `%` active, `+` modified.
+    fn list_buffers(&self) -> String {
+        let mut parts = Vec::with_capacity(self.slots.len());
+        for (i, slot) in self.slots.iter().enumerate() {
+            let active = if i == self.active { '%' } else { ' ' };
+            let modf = if slot.dirty { '+' } else { ' ' };
+            let name = slot
+                .filename
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "[No Name]".into());
+            parts.push(format!("{}:{active}{modf} \"{name}\"", i + 1));
+        }
+        parts.join(" | ")
     }
 
     /// Submit a new viewport-scoped parse on the syntax worker and install
@@ -1410,5 +1706,162 @@ mod tests {
         app.dispatch_ex("e");
         let msg = app.status_message.unwrap_or_default();
         assert!(msg.contains("E32"), "expected E32, got: {msg}");
+    }
+
+    // ── Phase C: multi-buffer tests ─────────────────────────────────────────
+
+    #[test]
+    fn edit_new_path_appends_slot_and_switches() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_b.txt");
+        std::fs::write(&path_a, "alpha\n").unwrap();
+        std::fs::write(&path_b, "beta\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        assert_eq!(app.slots.len(), 1);
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        assert_eq!(app.slots.len(), 2);
+        assert_eq!(app.active, 1);
+        assert_eq!(
+            app.active().editor.buffer().lines(),
+            vec!["beta".to_string()]
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn edit_existing_path_switches_to_open_slot() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_switch_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_switch_b.txt");
+        std::fs::write(&path_a, "alpha\n").unwrap();
+        std::fs::write(&path_b, "beta\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        assert_eq!(app.active, 1);
+        // Re-open path_a → switch back, no third slot.
+        app.dispatch_ex(&format!("e {}", path_a.display()));
+        assert_eq!(app.slots.len(), 2);
+        assert_eq!(app.active, 0);
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn edit_other_open_path_does_not_block_on_dirty() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_dirty_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_dirty_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.active_mut().dirty = true;
+        // Switching to a *different* file must not be gated on the
+        // current slot's dirty flag — the slot isn't being destroyed.
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        assert_eq!(app.active, 1);
+        assert!(app.slots[0].dirty, "slot 0 should remain dirty");
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn bnext_bprev_cycle_active() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_cycle_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_cycle_b.txt");
+        let path_c = std::env::temp_dir().join("hjkl_phc_cycle_c.txt");
+        for p in [&path_a, &path_b, &path_c] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.dispatch_ex(&format!("e {}", path_c.display()));
+        assert_eq!(app.active, 2);
+        app.dispatch_ex("bn");
+        assert_eq!(app.active, 0, "wrap forward to 0");
+        app.dispatch_ex("bn");
+        assert_eq!(app.active, 1);
+        app.dispatch_ex("bp");
+        assert_eq!(app.active, 0);
+        app.dispatch_ex("bp");
+        assert_eq!(app.active, 2, "wrap backward to last");
+        for p in [&path_a, &path_b, &path_c] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn bnext_no_op_with_single_slot() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.dispatch_ex("bn");
+        assert_eq!(app.active, 0);
+        assert_eq!(app.slots.len(), 1);
+    }
+
+    #[test]
+    fn bdelete_blocks_dirty_without_force() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_bd_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_bd_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.active_mut().dirty = true;
+        app.dispatch_ex("bd");
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(msg.contains("E89"), "expected E89, got: {msg}");
+        assert_eq!(app.slots.len(), 2);
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn bdelete_force_removes_dirty_slot() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_bdforce_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_bdforce_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.active_mut().dirty = true;
+        app.dispatch_ex("bd!");
+        assert_eq!(app.slots.len(), 1);
+        assert_eq!(app.active, 0);
+        assert_eq!(app.active().editor.buffer().lines(), vec!["a".to_string()]);
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn bdelete_on_last_slot_resets_to_no_name() {
+        let path = std::env::temp_dir().join("hjkl_phc_bd_last.txt");
+        std::fs::write(&path, "content\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        app.dispatch_ex("bd");
+        assert_eq!(app.slots.len(), 1);
+        assert!(app.active().filename.is_none());
+        let lines = app.active().editor.buffer().lines();
+        assert!(
+            lines.is_empty() || (lines.len() == 1 && lines[0].is_empty()),
+            "expected empty scratch buffer, got: {lines:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ls_lists_all_buffers_with_active_marker() {
+        let path_a = std::env::temp_dir().join("hjkl_phc_ls_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phc_ls_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.dispatch_ex("ls");
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(msg.contains("1: "), "expected slot 1 entry, got: {msg}");
+        assert!(
+            msg.contains("2:%"),
+            "active marker missing on slot 2: {msg}"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
     }
 }
