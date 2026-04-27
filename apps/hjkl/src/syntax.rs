@@ -33,9 +33,8 @@ pub type BufferId = u64;
 /// and a [`PerfBreakdown`] describing where the worker spent its time.
 #[derive(Debug, Clone)]
 pub struct RenderOutput {
-    /// Buffer this result belongs to. The App routes spans + signs to
-    /// the matching slot.
-    #[allow(dead_code)] // Phase A: single buffer, App ignores the id.
+    /// Routes spans/signs back to the matching BufferSlot in App::slots.
+    #[allow(dead_code)] // Routing not yet wired; field is set by the worker.
     pub buffer_id: BufferId,
     pub spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     pub signs: Vec<Sign>,
@@ -102,12 +101,12 @@ struct ParseRequest {
 }
 
 /// Control + data messages the worker thread waits on.
-#[allow(dead_code)] // Reset / Forget unused until Phase B wires close handling.
 enum Msg {
     /// Set / replace the highlighter for a buffer. `None` detaches (no
     /// highlighter → parse requests for this buffer are dropped).
     SetLanguage(BufferId, Option<&'static LanguageConfig>),
     /// Drop the retained tree for a buffer so the next parse is cold.
+    #[allow(dead_code)] // Phase B: wired via ParseRequest.reset flag for now.
     Reset(BufferId),
     /// Remove all worker state for a buffer (highlighter, retained
     /// tree, parse-cache key). Sent on buffer close.
@@ -188,7 +187,7 @@ impl SyntaxWorker {
     }
 
     /// Drop a buffer's retained tree so the next parse for it is cold.
-    #[allow(dead_code)] // Phase B will fire this on buffer-language change.
+    #[allow(dead_code)] // Phase B: reset is currently routed via ParseRequest.reset.
     pub fn reset(&self, id: BufferId) {
         self.enqueue_control(Msg::Reset(id));
     }
@@ -551,7 +550,6 @@ impl SyntaxLayer {
     }
 
     /// Drop all state for a buffer. Call on close.
-    #[allow(dead_code)] // Phase B will fire this on `:bd` / picker-close.
     pub fn forget(&mut self, id: BufferId) {
         self.clients.remove(&id);
         self.worker.forget(id);

@@ -155,7 +155,7 @@ pub enum AnyPicker {
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
-    pub slots: Vec<BufferSlot>,
+    slots: Vec<BufferSlot>,
     /// Index into `slots` of the currently active buffer.
     pub active: usize,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
@@ -203,6 +203,15 @@ pub struct App {
     pub recompute_hits: u64,
     pub recompute_throttled: u64,
     pub recompute_runs: u64,
+}
+
+/// Resolve the cursor shape for an active prompt field (`command_field` or
+/// `search_field`). Insert mode → Bar; anything else → Block.
+fn prompt_cursor_shape(field: &hjkl_form::TextFieldEditor) -> CursorShape {
+    match field.vim_mode() {
+        hjkl_form::VimMode::Insert => CursorShape::Bar,
+        _ => CursorShape::Block,
+    }
 }
 
 impl App {
@@ -445,15 +454,9 @@ impl App {
 
             // Emit cursor shape before the draw call, once per transition.
             let current_shape = if let Some(ref f) = self.command_field {
-                match f.vim_mode() {
-                    hjkl_form::VimMode::Insert => CursorShape::Bar,
-                    _ => CursorShape::Block,
-                }
+                prompt_cursor_shape(f)
             } else if let Some(ref f) = self.search_field {
-                match f.vim_mode() {
-                    hjkl_form::VimMode::Insert => CursorShape::Bar,
-                    _ => CursorShape::Block,
-                }
+                prompt_cursor_shape(f)
             } else {
                 self.active().editor.host().cursor_shape()
             };
@@ -689,7 +692,7 @@ impl App {
     }
 
     /// Open the fuzzy file picker.
-    pub fn open_picker(&mut self) {
+    pub(crate) fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = crate::picker::FileSource::new(cwd);
         self.picker = Some(AnyPicker::File(crate::picker::FilePicker::new(source)));
@@ -697,7 +700,7 @@ impl App {
     }
 
     /// Open the buffer picker over the currently open slots.
-    pub fn open_buffer_picker(&mut self) {
+    pub(crate) fn open_buffer_picker(&mut self) {
         let source = crate::picker::BufferSource::new(
             &self.slots,
             |s| {
@@ -1456,10 +1459,19 @@ impl App {
         self.refresh_git_signs_force();
     }
 
-    /// `:bnext` — cycle active forward. No-op when only one slot.
-    fn buffer_next(&mut self) {
+    /// Returns `true` when multiple slots are open; otherwise sets the
+    /// "only one buffer open" status message and returns `false`.
+    fn require_multi_buffer(&mut self) -> bool {
         if self.slots.len() <= 1 {
             self.status_message = Some("only one buffer open".into());
+            return false;
+        }
+        true
+    }
+
+    /// `:bnext` — cycle active forward. No-op when only one slot.
+    fn buffer_next(&mut self) {
+        if !self.require_multi_buffer() {
             return;
         }
         let next = (self.active + 1) % self.slots.len();
@@ -1468,8 +1480,7 @@ impl App {
 
     /// `:bprev` — cycle active backward. No-op when only one slot.
     fn buffer_prev(&mut self) {
-        if self.slots.len() <= 1 {
-            self.status_message = Some("only one buffer open".into());
+        if !self.require_multi_buffer() {
             return;
         }
         let prev = (self.active + self.slots.len() - 1) % self.slots.len();
@@ -1478,8 +1489,7 @@ impl App {
 
     /// `<C-^>` / `:b#` — switch to the previously-active buffer slot.
     fn buffer_alt(&mut self) {
-        if self.slots.len() <= 1 {
-            self.status_message = Some("only one buffer open".into());
+        if !self.require_multi_buffer() {
             return;
         }
         match self.prev_active {
@@ -1570,7 +1580,7 @@ impl App {
 
     /// Submit a new viewport-scoped parse on the syntax worker and install
     /// whatever the worker has produced since the last frame.
-    pub fn recompute_and_install(&mut self) {
+    pub(crate) fn recompute_and_install(&mut self) {
         const RECOMPUTE_THROTTLE: Duration = Duration::from_millis(100);
         let buffer_id = self.active().buffer_id;
         let (top, height) = {
