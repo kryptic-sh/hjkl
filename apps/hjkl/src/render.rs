@@ -474,7 +474,8 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     } else {
         " (scanning…)".to_string()
     };
-    let title = format!(" picker — {matched}/{total}{scan_tag} ");
+    let kind = picker.title();
+    let title = format!(" picker — {kind} — {matched}/{total}{scan_tag} ");
 
     let query_text = picker.query.text();
     let display: String = query_text.lines().next().unwrap_or("").to_string();
@@ -495,11 +496,8 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     }
 
     let visible_rows = list_area.height.saturating_sub(2) as usize;
-    let visible = picker.visible(visible_rows.max(1));
-    let items: Vec<ListItem> = visible
-        .iter()
-        .map(|p| ListItem::new(p.to_string_lossy().into_owned()))
-        .collect();
+    let labels = picker.visible_labels(visible_rows.max(1));
+    let items: Vec<ListItem> = labels.iter().map(|s| ListItem::new(s.clone())).collect();
     let list_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -513,8 +511,8 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         )
         .highlight_symbol("▶ ");
     let mut state = ListState::default();
-    if !visible.is_empty() {
-        state.select(Some(picker.selected.min(visible.len().saturating_sub(1))));
+    if !labels.is_empty() {
+        state.select(Some(picker.selected.min(labels.len().saturating_sub(1))));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
 
@@ -525,15 +523,12 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
 /// numbers, and per-row layout match the editor proper. No syntax
 /// highlights for now — the preview's `Buffer` has no spans table.
 fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::FilePicker, area: Rect) {
-    let path_label = picker
-        .preview_path()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "(none)".into());
+    let label = picker.preview_label().unwrap_or("(none)").to_string();
     let status = picker.preview_status();
     let title = if status.is_empty() {
-        format!(" preview — {path_label} ")
+        format!(" preview — {label} ")
     } else {
-        format!(" preview — {path_label} [{status}] ")
+        format!(" preview — {label} [{status}] ")
     };
     let block = Block::default()
         .borders(Borders::ALL)

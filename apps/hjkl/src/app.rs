@@ -593,13 +593,14 @@ impl App {
     /// `:picker`, and the `+picker` startup arg.
     pub fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        self.picker = Some(crate::picker::FilePicker::open(&cwd));
+        let source = crate::picker::FileSource::new(cwd);
+        self.picker = Some(crate::picker::FilePicker::new(source));
         self.pending_leader = false;
     }
 
-    /// Route a key event to the active picker. Submitting a path runs
-    /// it through `do_edit` so the open path matches `:e <path>` exactly
-    /// (dirty checks, syntax detection, content reset).
+    /// Route a key event to the active picker. Selection emits a
+    /// [`crate::picker::PickerAction`] which we dispatch — keeps the
+    /// App agnostic to which source the picker is currently driving.
     fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
         let picker = match self.picker.as_mut() {
             Some(p) => p,
@@ -610,8 +611,18 @@ impl App {
             crate::picker::PickerEvent::Cancel => {
                 self.picker = None;
             }
-            crate::picker::PickerEvent::Select(path) => {
+            crate::picker::PickerEvent::Select(action) => {
                 self.picker = None;
+                self.dispatch_picker_action(action);
+            }
+        }
+    }
+
+    /// Apply a picker selection. Add new arms here as new sources land
+    /// (buffer switch, grep result jump, etc.).
+    fn dispatch_picker_action(&mut self, action: crate::picker::PickerAction) {
+        match action {
+            crate::picker::PickerAction::OpenPath(path) => {
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
             }
