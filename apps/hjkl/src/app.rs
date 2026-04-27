@@ -23,6 +23,17 @@ use crate::syntax::{self, SyntaxLayer};
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// Direction of an active host-driven search prompt. `/` opens a
+/// forward prompt, `?` opens a backward one. The direction is recorded
+/// alongside [`App::search_field`] so the commit path can call the
+/// matching `Editor::search_advance_*` and persist the direction onto
+/// the engine's `last_search_forward` for future `n` / `N` repeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDir {
+    Forward,
+    Backward,
+}
+
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// The live editor — buffer + FSM + host, all in one.
@@ -41,6 +52,15 @@ pub struct App {
     /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
     /// (h/l/w/b/dw/diw/...) work inside the prompt.
     pub command_field: Option<TextFieldEditor>,
+    /// Active `/` (forward) / `?` (backward) search prompt. `Some`
+    /// while the user is typing — Phase J3 lifts the prompt out of
+    /// the engine and into the host so it shares the
+    /// [`TextFieldEditor`] primitive (vim motions inside the prompt).
+    pub search_field: Option<TextFieldEditor>,
+    /// Direction of the active `search_field` (or the most recent
+    /// committed search direction; engine's `last_search_forward` is
+    /// the source of truth post-commit).
+    pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal. Compared each
     /// frame so we only write the DECSCUSR sequence on transitions.
     last_cursor_shape: CursorShape,
@@ -146,6 +166,8 @@ impl App {
             dirty: false,
             status_message: None,
             command_field: None,
+            search_field: None,
+            search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             is_new_file,
             syntax,
@@ -188,13 +210,18 @@ impl App {
             match event::read()? {
                 Event::Key(key) => {
                     // Ctrl-C is the hard-exit shortcut independent of the FSM,
-                    // BUT while the `:` palette is open Ctrl-C should cancel
-                    // the prompt instead of quitting the app.
+                    // BUT while a host prompt (`:` palette or `/` `?` search)
+                    // is open Ctrl-C should cancel the prompt instead of
+                    // quitting the app.
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         if self.command_field.is_some() {
                             self.command_field = None;
+                            continue;
+                        }
+                        if self.search_field.is_some() {
+                            self.cancel_search_prompt();
                             continue;
                         }
                         break;
@@ -212,6 +239,15 @@ impl App {
                         continue;
                     }
 
+                    // ── Search prompt (`/` `?`) ──────────────────────────────
+                    if self.search_field.is_some() {
+                        self.handle_search_field_key(key);
+                        if self.exit_requested {
+                            break;
+                        }
+                        continue;
+                    }
+
                     // ── Intercept `:` in Normal mode to open command prompt ──
                     if key.code == KeyCode::Char(':')
                         && key.modifiers == KeyModifiers::NONE
@@ -219,6 +255,20 @@ impl App {
                     {
                         self.open_command_prompt();
                         continue;
+                    }
+
+                    // ── Intercept `/` and `?` in Normal mode ─────────────────
+                    if key.modifiers == KeyModifiers::NONE
+                        && self.editor.vim_mode() == VimMode::Normal
+                    {
+                        if key.code == KeyCode::Char('/') {
+                            self.open_search_prompt(SearchDir::Forward);
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('?') {
+                            self.open_search_prompt(SearchDir::Backward);
+                            continue;
+                        }
                     }
 
                     // ── Normal editor key handling ───────────────────────────
@@ -303,6 +353,139 @@ impl App {
 
         // Otherwise forward to the inner field's vim FSM.
         field.handle_input(input);
+    }
+
+    /// Open the `/` (forward) or `?` (backward) search prompt. Lands
+    /// the user in Insert at end-of-line; clears any prior search
+    /// highlight so the live-preview only highlights matches of the
+    /// *current* prompt buffer.
+    fn open_search_prompt(&mut self, dir: SearchDir) {
+        let mut field = TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        self.search_field = Some(field);
+        self.search_dir = dir;
+        self.editor.set_search_pattern(None);
+    }
+
+    /// Cancel the search prompt without committing. Restores the most
+    /// recent committed pattern (if any) so the user's last successful
+    /// search keeps highlighting and `n` / `N` keep working — matches
+    /// the engine's pre-J3 behaviour on Esc.
+    fn cancel_search_prompt(&mut self) {
+        self.search_field = None;
+        let last = self.editor.last_search().map(str::to_owned);
+        match last {
+            Some(p) if !p.is_empty() => {
+                if let Ok(re) = regex::Regex::new(&p) {
+                    self.editor.set_search_pattern(Some(re));
+                } else {
+                    self.editor.set_search_pattern(None);
+                }
+            }
+            _ => self.editor.set_search_pattern(None),
+        }
+    }
+
+    /// Route a key event to the active `/` `?` search field.
+    /// - Insert + Esc → Normal (motions on prompt line). Highlight
+    ///   stays so the user can review what they've typed.
+    /// - Normal + Esc → cancel: restore previous committed pattern.
+    /// - Enter (any mode) → commit: run search, advance cursor.
+    /// - Any other key → forward to field; on dirty change re-run the
+    ///   live-preview pattern compile.
+    fn handle_search_field_key(&mut self, key: crossterm::event::KeyEvent) {
+        let input: EngineInput = key.into();
+        let field = match self.search_field.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if input.key == EngineKey::Enter {
+            let pattern = field.text();
+            self.search_field = None;
+            self.commit_search(&pattern);
+            return;
+        }
+
+        if input.key == EngineKey::Esc {
+            if field.vim_mode() == VimMode::Insert {
+                field.enter_normal();
+            } else {
+                self.cancel_search_prompt();
+            }
+            return;
+        }
+
+        let dirty = field.handle_input(input);
+        if dirty {
+            self.live_preview_search();
+        }
+    }
+
+    /// Recompile the prompt's text into a regex and push it to the
+    /// engine. Empty input or invalid regex (mid-typing `[`, etc.) →
+    /// clear the highlight without surfacing an error, matching the
+    /// engine's pre-J3 behaviour.
+    fn live_preview_search(&mut self) {
+        let pattern = match self.search_field.as_ref() {
+            Some(f) => f.text(),
+            None => return,
+        };
+        if pattern.is_empty() {
+            self.editor.set_search_pattern(None);
+            return;
+        }
+        let case_insensitive = self.editor.settings().ignore_case
+            && !(self.editor.settings().smartcase && pattern.chars().any(|c| c.is_uppercase()));
+        let effective: std::borrow::Cow<'_, str> = if case_insensitive {
+            std::borrow::Cow::Owned(format!("(?i){pattern}"))
+        } else {
+            std::borrow::Cow::Borrowed(pattern.as_str())
+        };
+        match regex::Regex::new(&effective) {
+            Ok(re) => self.editor.set_search_pattern(Some(re)),
+            Err(_) => self.editor.set_search_pattern(None),
+        }
+    }
+
+    /// Commit the search prompt's pattern. Empty input re-runs the
+    /// previous search (vim parity); otherwise the new pattern becomes
+    /// the active one and the cursor advances to the first match in
+    /// the prompt's direction. Updates the engine's `last_search` so
+    /// `n` / `N` repeat with the right text + direction.
+    fn commit_search(&mut self, pattern: &str) {
+        let effective: Option<String> = if pattern.is_empty() {
+            self.editor.last_search().map(str::to_owned)
+        } else {
+            Some(pattern.to_owned())
+        };
+        let Some(p) = effective else {
+            self.editor.set_search_pattern(None);
+            return;
+        };
+        let case_insensitive = self.editor.settings().ignore_case
+            && !(self.editor.settings().smartcase && p.chars().any(|c| c.is_uppercase()));
+        let compile_src: std::borrow::Cow<'_, str> = if case_insensitive {
+            std::borrow::Cow::Owned(format!("(?i){p}"))
+        } else {
+            std::borrow::Cow::Borrowed(p.as_str())
+        };
+        match regex::Regex::new(&compile_src) {
+            Ok(re) => {
+                self.editor.set_search_pattern(Some(re));
+                let forward = self.search_dir == SearchDir::Forward;
+                if forward {
+                    self.editor.search_advance_forward(true);
+                } else {
+                    self.editor.search_advance_backward(true);
+                }
+                self.editor.set_last_search(Some(p), forward);
+            }
+            Err(e) => {
+                self.editor.set_search_pattern(None);
+                self.status_message = Some(format!("E: bad search pattern: {e}"));
+            }
+        }
     }
 
     /// Execute an ex command string (without the leading `:`).
@@ -545,6 +728,125 @@ mod tests {
         }
         assert!(app.command_field.is_none());
         assert!(!app.exit_requested);
+    }
+
+    // ── Search prompt (`/` `?`) tests ───────────────────────────────────────
+
+    fn type_search(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.handle_search_field_key(key(KeyCode::Char(c)));
+        }
+    }
+
+    fn seed_buffer(app: &mut App, content: &str) {
+        BufferEdit::replace_all(app.editor.buffer_mut(), content);
+    }
+
+    #[test]
+    fn search_open_and_type_drives_live_preview() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "foo bar foo baz");
+        app.open_search_prompt(SearchDir::Forward);
+        assert!(app.search_field.is_some());
+        type_search(&mut app, "foo");
+        assert_eq!(app.search_field.as_ref().unwrap().text(), "foo");
+        // Live-preview installed a regex onto the engine.
+        assert!(app.editor.search_state().pattern.is_some());
+    }
+
+    #[test]
+    fn search_more_typing_updates_pattern() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "foobar foozle");
+        app.open_search_prompt(SearchDir::Forward);
+        type_search(&mut app, "foo");
+        let p1 = app
+            .editor
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
+        type_search(&mut app, "z");
+        let p2 = app
+            .editor
+            .search_state()
+            .pattern
+            .as_ref()
+            .unwrap()
+            .as_str()
+            .to_string();
+        assert_ne!(p1, p2, "pattern must update on further typing");
+    }
+
+    #[test]
+    fn search_motion_in_normal_edits_prompt_and_updates_highlight() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "alpha beta\ngamma");
+        app.open_search_prompt(SearchDir::Forward);
+        type_search(&mut app, "alpha beta");
+        // Esc once — Insert→Normal.
+        app.handle_search_field_key(key(KeyCode::Esc));
+        assert_eq!(
+            app.search_field.as_ref().unwrap().vim_mode(),
+            VimMode::Normal
+        );
+        // `b` walks a word back; `db` deletes back-a-word.
+        app.handle_search_field_key(key(KeyCode::Char('b')));
+        app.handle_search_field_key(key(KeyCode::Char('d')));
+        app.handle_search_field_key(key(KeyCode::Char('b')));
+        let new_text = app.search_field.as_ref().unwrap().text();
+        assert!(
+            new_text.len() < "alpha beta".len(),
+            "prompt text shrank: {new_text:?}"
+        );
+    }
+
+    #[test]
+    fn search_enter_commits_and_advances_cursor() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "alpha\nbeta\nfoo here\ndone");
+        app.open_search_prompt(SearchDir::Forward);
+        type_search(&mut app, "foo");
+        app.handle_search_field_key(key(KeyCode::Enter));
+        assert!(app.search_field.is_none());
+        // Cursor lands on the 'foo' on row 2.
+        let (row, col) = app.editor.cursor();
+        assert_eq!(row, 2);
+        assert_eq!(col, 0);
+        assert_eq!(app.editor.last_search(), Some("foo"));
+        assert!(app.editor.last_search_forward());
+    }
+
+    #[test]
+    fn search_esc_twice_cancels_and_clears_when_no_prior_search() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "abc def");
+        app.open_search_prompt(SearchDir::Forward);
+        type_search(&mut app, "abc");
+        // Esc once → Normal.
+        app.handle_search_field_key(key(KeyCode::Esc));
+        assert!(app.search_field.is_some());
+        // Esc twice → cancel.
+        app.handle_search_field_key(key(KeyCode::Esc));
+        assert!(app.search_field.is_none());
+        // No prior committed search — pattern cleared.
+        assert!(app.editor.search_state().pattern.is_none());
+    }
+
+    #[test]
+    fn search_backward_prompt_uses_question_dir() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "foo here\nbar there\nfoo again");
+        // Move cursor to row 2 first so `?foo` walks backward to row 0.
+        app.editor.goto_line(3);
+        app.open_search_prompt(SearchDir::Backward);
+        type_search(&mut app, "foo");
+        app.handle_search_field_key(key(KeyCode::Enter));
+        let (row, _) = app.editor.cursor();
+        assert_eq!(row, 0);
+        assert!(!app.editor.last_search_forward());
     }
 
     // ── App::new tests ──────────────────────────────────────────────────────

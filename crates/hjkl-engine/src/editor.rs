@@ -1725,6 +1725,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.last_search.as_deref()
     }
 
+    /// Whether the last committed search was a forward `/` (`true`) or
+    /// a backward `?` (`false`). `n` and `N` consult this to honour the
+    /// direction the user committed.
+    pub fn last_search_forward(&self) -> bool {
+        self.vim.last_search_forward
+    }
+
+    /// Set the most recent committed search text + direction. Used by
+    /// host-driven prompts (e.g. apps/hjkl's `/` `?` prompt that lives
+    /// outside the engine's vim FSM) so `n` / `N` repeat the host's
+    /// most recent commit with the right direction. Pass `None` /
+    /// `true` to clear.
+    pub fn set_last_search(&mut self, text: Option<String>, forward: bool) {
+        self.vim.last_search = text;
+        self.vim.last_search_forward = forward;
+    }
+
     /// Start/end `(row, col)` of the active char-wise Visual selection
     /// (inclusive on both ends, positionally ordered). `None` when not
     /// in Visual mode.

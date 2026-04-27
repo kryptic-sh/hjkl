@@ -75,7 +75,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     let selection = app.editor.buffer_selection();
     let buffer_spans = app.editor.buffer_spans();
     let search_pattern = app.editor.search_state().pattern.as_ref();
-    let in_prompt = app.command_field.is_some() || app.editor.search_prompt().is_some();
+    let in_prompt = app.command_field.is_some() || app.search_field.is_some();
 
     // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
     let search_bg = if search_pattern.is_some() {
@@ -168,13 +168,18 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Engine search prompt (`/` or `?`) ────────────────────────────────────
-    if let Some(sp) = app.editor.search_prompt() {
-        let prefix = if sp.forward { '/' } else { '?' };
-        let content = format!("{prefix}{}", sp.text);
+    // ── Host search prompt (`/` or `?`) ──────────────────────────────────────
+    if let Some(ref field) = app.search_field {
+        let prefix = match app.search_dir {
+            crate::app::SearchDir::Forward => '/',
+            crate::app::SearchDir::Backward => '?',
+        };
+        let text = field.text();
+        let display: String = text.lines().next().unwrap_or("").to_string();
+        let content = format!("{prefix}{display}");
         let padded = format!("{content:<width$}", width = width as usize);
-        // cursor position inside the prompt text (byte-counted in ASCII context)
-        let cursor_col = 1u16 + sp.text[..sp.cursor.min(sp.text.len())].chars().count() as u16;
+        let (_, ccol) = field.cursor();
+        let cursor_col = 1u16 + ccol as u16;
         return (
             Line::from(vec![Span::styled(
                 padded,
