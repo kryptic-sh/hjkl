@@ -26,6 +26,8 @@
 //! their nearest RGB approximation in the engine direction.
 #![forbid(unsafe_code)]
 
+pub mod form;
+
 use hjkl_engine::{Attrs, Color, Style};
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
 

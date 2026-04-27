@@ -660,6 +660,7 @@ version = "0.2.0"
 dependencies = [
  "crossterm",
  "hjkl-engine",
+ "hjkl-form",
  "ratatui",
 ]
 
