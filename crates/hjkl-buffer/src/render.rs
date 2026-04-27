@@ -467,12 +467,10 @@ impl<R: StyleResolver> BufferView<'_, R> {
             }
         }
 
-        // Tab width for `\t` expansion — fixed at 4 cells aligned to tab
-        // stops within the line. (Eventual `:set tabstop` integration
-        // would wire this through; hardcoding for now keeps the renderer
-        // engine-agnostic and avoids a BufferView field break across the
-        // 16+ construction sites.)
-        const TAB_WIDTH: usize = 4;
+        // Tab width for `\t` expansion — host publishes via
+        // `Viewport::tab_width` (driven by engine's `:set tabstop`).
+        // `effective_tab_width` falls back to 4 when unset.
+        let tab_width = self.viewport.effective_tab_width();
         let mut byte_offset: usize = 0;
         let mut line_col: usize = 0;
         let mut chars_iter = line.chars().enumerate().peekable();
@@ -521,12 +519,12 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 let _ = consumed;
                 continue;
             }
-            // Visible cell count: tabs expand to the next TAB_WIDTH stop
+            // Visible cell count: tabs expand to the next tab_width stop
             // based on `line_col` (visible column in the *line*, not the
-            // segment), so a tab at line column 0 paints TAB_WIDTH cells
+            // segment), so a tab at line column 0 paints tab_width cells
             // and a tab at line column 3 paints 1 cell.
             let visible_width = if ch == '\t' {
-                TAB_WIDTH - (line_col % TAB_WIDTH)
+                tab_width - (line_col % tab_width)
             } else {
                 ch.width().unwrap_or(1)
             };
@@ -654,6 +652,7 @@ mod tests {
             height,
             wrap: Wrap::None,
             text_width: width,
+            tab_width: 0,
         }
     }
 
@@ -1098,6 +1097,7 @@ mod tests {
             height: 3,
             wrap: Wrap::Char,
             text_width: 4,
+            tab_width: 0,
         };
         let r = no_styles as fn(u32) -> Style;
         let view = make_wrap_view(&b, &v, &r, None);
@@ -1124,6 +1124,7 @@ mod tests {
             wrap: Wrap::Char,
             // Text area = 6 - 3 (gutter width) = 3.
             text_width: 3,
+            tab_width: 0,
         };
         let r = no_styles as fn(u32) -> Style;
         let gutter = Gutter {
@@ -1154,6 +1155,7 @@ mod tests {
             height: 3,
             wrap: Wrap::Char,
             text_width: 4,
+            tab_width: 0,
         };
         // Cursor on 'g' (col 6) should land on row 1, col 2.
         b.set_cursor(crate::Position::new(0, 6));
@@ -1179,6 +1181,7 @@ mod tests {
             height: 3,
             wrap: Wrap::Char,
             text_width: 4,
+            tab_width: 0,
         };
         // Past-end cursor at col 6.
         b.set_cursor(crate::Position::new(0, 6));
@@ -1205,6 +1208,7 @@ mod tests {
             height: 3,
             wrap: Wrap::Word,
             text_width: 8,
+            tab_width: 0,
         };
         let r = no_styles as fn(u32) -> Style;
         let view = make_wrap_view(&b, &v, &r, None);

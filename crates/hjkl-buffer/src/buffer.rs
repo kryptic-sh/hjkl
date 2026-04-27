@@ -353,6 +353,7 @@ mod tests {
             height,
             wrap: crate::Wrap::Char,
             text_width: width,
+            tab_width: 0,
         }
     }
 
@@ -449,6 +450,7 @@ mod tests {
             height: 2,
             wrap: crate::Wrap::None,
             text_width: 4,
+            tab_width: 0,
         };
         b.set_cursor(Position::new(4, 0));
         b.ensure_cursor_visible(&mut v);

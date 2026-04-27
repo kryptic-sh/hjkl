@@ -60,10 +60,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // `width` is the text-area width (gutter excluded) — `Viewport::ensure_visible`
     // uses it as the horizontal cursor band, and the cursor lives in the text area.
     {
+        let tabstop = app.active().editor.settings().tabstop as u16;
         let vp = app.active_mut().editor.host_mut().viewport_mut();
         vp.width = text_width;
         vp.height = buf_area.height;
         vp.text_width = text_width;
+        vp.tab_width = tabstop;
     }
     // Publish height to the engine's atomic so scrolloff (5-row margin) engages.
     app.active_mut().editor.set_viewport_height(buf_area.height);

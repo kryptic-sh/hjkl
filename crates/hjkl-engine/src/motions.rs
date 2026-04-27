@@ -1201,6 +1201,7 @@ mod tests {
             height: 10,
             wrap: mode,
             text_width,
+            tab_width: 0,
         }
     }
 

@@ -1738,8 +1738,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // correct cell when the line contains tabs (which the renderer
         // expands to TAB_WIDTH stops). Tab width must match the renderer.
         let line = self.buffer.line(pos_row).unwrap_or("");
-        let visual_pos = visual_col_for_char(line, pos_col);
-        let visual_top = visual_col_for_char(line, v.top_col);
+        let tab_width = if v.tab_width == 0 {
+            4
+        } else {
+            v.tab_width as usize
+        };
+        let visual_pos = visual_col_for_char(line, pos_col, tab_width);
+        let visual_top = visual_col_for_char(line, v.top_col, tab_width);
         let dx = (visual_pos - visual_top) as u16;
         if dy >= area_height || dx + lnum_width >= area_width {
             return None;
@@ -2741,24 +2746,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 }
 
-/// Tab width used by `cursor_screen_pos` when converting char column to
-/// visual column. Must match the renderer's `TAB_WIDTH` in
-/// `hjkl-buffer::render::paint_row` so the cursor lands on the correct
-/// expanded cell.
-const TAB_WIDTH_FOR_CURSOR: usize = 4;
-
 /// Visual column of the character at `char_col` in `line`, treating `\t`
-/// as expansion to the next [`TAB_WIDTH_FOR_CURSOR`] stop and every other
-/// char as 1 cell wide. Wide-char support (CJK, emoji) is a separate
-/// concern — the cursor math elsewhere also assumes single-cell chars.
-fn visual_col_for_char(line: &str, char_col: usize) -> usize {
+/// as expansion to the next `tab_width` stop and every other char as
+/// 1 cell wide. Wide-char support (CJK, emoji) is a separate concern —
+/// the cursor math elsewhere also assumes single-cell chars.
+fn visual_col_for_char(line: &str, char_col: usize, tab_width: usize) -> usize {
     let mut visual = 0usize;
     for (i, ch) in line.chars().enumerate() {
         if i >= char_col {
             break;
         }
         if ch == '\t' {
-            visual += TAB_WIDTH_FOR_CURSOR - (visual % TAB_WIDTH_FOR_CURSOR);
+            visual += tab_width - (visual % tab_width);
         } else {
             visual += 1;
         }

@@ -690,6 +690,7 @@ impl DefaultHost {
         height: 24,
         wrap: hjkl_buffer::Wrap::None,
         text_width: 80,
+        tab_width: 0,
     };
 
     pub fn new() -> Self {

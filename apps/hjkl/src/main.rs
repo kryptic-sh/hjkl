@@ -18,8 +18,6 @@ use std::io::{self, stdout};
 
 /// Parsed arguments after pre-processing the `+N` / `+/pattern` tokens.
 pub struct Args {
-    //isthis is a test
-    // this is a test
     /// Files to open. The first is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty a new empty buffer is started.
     pub files: Vec<std::path::PathBuf>,

@@ -26,6 +26,11 @@ pub struct Viewport {
     /// and motion code; ignored when `wrap == Wrap::None`. Set to 0
     /// before the first frame; wrap math falls back to no-op then.
     pub text_width: u16,
+    /// Cells per `\t` expansion stop. The renderer uses this to align
+    /// tab characters; cursor_screen_pos uses it to map char column to
+    /// visual column. `0` is treated as the renderer's fallback (4) so
+    /// hosts that don't publish a value still render legibly.
+    pub tab_width: u16,
 }
 
 impl Viewport {
@@ -37,6 +42,17 @@ impl Viewport {
             height: 0,
             wrap: Wrap::None,
             text_width: 0,
+            tab_width: 0,
+        }
+    }
+
+    /// Effective tab width — falls back to 4 when `tab_width == 0` so
+    /// uninitialized viewports still expand tabs sensibly.
+    pub fn effective_tab_width(self) -> usize {
+        if self.tab_width == 0 {
+            4
+        } else {
+            self.tab_width as usize
         }
     }
 
@@ -90,6 +106,7 @@ mod tests {
             height,
             wrap: Wrap::None,
             text_width: 80,
+            tab_width: 0,
         }
     }
 
