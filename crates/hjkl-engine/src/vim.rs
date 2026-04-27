@@ -4415,9 +4415,12 @@ fn tag_text_object<H: crate::types::Host>(
     // Walk `<...>` tokens. Track open tags on a stack; on a matching
     // close pop and consider the pair a candidate when the cursor lies
     // inside its content range. Innermost wins (replace whenever a
-    // tighter range turns up).
+    // tighter range turns up). Also track the first complete pair that
+    // starts at or after the cursor so we can fall back to a forward
+    // scan (targets.vim-style) when the cursor isn't inside any tag.
     let mut stack: Vec<(usize, usize, String)> = Vec::new(); // (open_start, content_start, name)
     let mut innermost: Option<(usize, usize, usize, usize)> = None;
+    let mut next_after: Option<(usize, usize, usize, usize)> = None;
     let mut i = 0;
     while i < chars.len() {
         if chars[i] != '<' {
@@ -4446,8 +4449,8 @@ fn tag_text_object<H: crate::types::Host>(
                 let (open_start, content_start, _) = stack[stack_idx].clone();
                 stack.truncate(stack_idx);
                 let content_end = i;
+                let candidate = (open_start, content_start, content_end, close_end);
                 if cursor_idx >= content_start && cursor_idx <= content_end {
-                    let candidate = (open_start, content_start, content_end, close_end);
                     innermost = match innermost {
                         Some((_, cs, ce, _)) if cs <= content_start && content_end <= ce => {
                             Some(candidate)
@@ -4455,6 +4458,8 @@ fn tag_text_object<H: crate::types::Host>(
                         None => Some(candidate),
                         existing => existing,
                     };
+                } else if open_start >= cursor_idx && next_after.is_none() {
+                    next_after = Some(candidate);
                 }
             }
         } else if !trimmed.ends_with('/') {
@@ -4470,7 +4475,7 @@ fn tag_text_object<H: crate::types::Host>(
         i = close_end;
     }
 
-    let (open_start, content_start, content_end, close_end) = innermost?;
+    let (open_start, content_start, content_end, close_end) = innermost.or(next_after)?;
     if inner {
         Some((idx_to_pos(content_start), idx_to_pos(content_end)))
     } else {
@@ -4613,8 +4618,12 @@ fn bracket_text_object<H: crate::types::Host>(
     let (row, col) = ed.cursor();
     let lines = buf_lines_to_vec(&ed.buffer);
     let lines = lines.as_slice();
-    // Walk backward from cursor to find unbalanced opening.
-    let open_pos = find_open_bracket(lines, row, col, open, close)?;
+    // Walk backward from cursor to find unbalanced opening. When the
+    // cursor isn't inside any pair, fall back to scanning forward for
+    // the next opening bracket (targets.vim-style: `ci(` works when
+    // cursor is before the `(` on the same line or below).
+    let open_pos = find_open_bracket(lines, row, col, open, close)
+        .or_else(|| find_next_open(lines, row, col, open))?;
     let close_pos = find_close_bracket(lines, open_pos.0, open_pos.1 + 1, open, close)?;
     // End positions are *exclusive*.
     if inner {
@@ -4700,6 +4709,26 @@ fn find_close_bracket(
         r += 1;
         c = 0;
     }
+}
+
+/// Forward scan from `(row, col)` for the next occurrence of `open`.
+/// Multi-line. Used by bracket text objects to support targets.vim-style
+/// "search forward when not currently inside a pair" behaviour.
+fn find_next_open(lines: &[String], row: usize, col: usize, open: char) -> Option<(usize, usize)> {
+    let mut r = row;
+    let mut c = col;
+    while r < lines.len() {
+        let chars: Vec<char> = lines[r].chars().collect();
+        while c < chars.len() {
+            if chars[c] == open {
+                return Some((r, c));
+            }
+            c += 1;
+        }
+        r += 1;
+        c = 0;
+    }
+    None
 }
 
 fn advance_pos(lines: &[String], pos: (usize, usize)) -> (usize, usize) {
@@ -6430,6 +6459,61 @@ mod tests {
         run_keys(&mut e, "va{");
         run_keys(&mut e, "y");
         assert_eq!(e.last_yank.as_deref(), Some("{x}"));
+    }
+
+    #[test]
+    fn ci_paren_forward_scans_when_cursor_before_pair() {
+        // targets.vim-style: cursor at start of `foo`, ci( jumps to next
+        // `(...)` pair on the same line and replaces the contents.
+        let mut e = editor_with("foo(bar)");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "ci(NEW<Esc>");
+        assert_eq!(e.buffer().lines()[0], "foo(NEW)");
+    }
+
+    #[test]
+    fn ci_paren_forward_scans_across_lines() {
+        let mut e = editor_with("first\nfoo(bar)\nlast");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "ci(NEW<Esc>");
+        assert_eq!(e.buffer().lines()[1], "foo(NEW)");
+    }
+
+    #[test]
+    fn ci_brace_forward_scans_when_cursor_before_pair() {
+        let mut e = editor_with("let x = {y};");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "ci{NEW<Esc>");
+        assert_eq!(e.buffer().lines()[0], "let x = {NEW};");
+    }
+
+    #[test]
+    fn cit_forward_scans_when_cursor_before_tag() {
+        // Cursor at column 0 (before `<b>`), cit jumps into the next tag
+        // pair and replaces its contents.
+        let mut e = editor_with("text <b>hello</b> rest");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "citNEW<Esc>");
+        assert_eq!(e.buffer().lines()[0], "text <b>NEW</b> rest");
+    }
+
+    #[test]
+    fn dat_forward_scans_when_cursor_before_tag() {
+        // dat = delete around tag — including the `<b>...</b>` markup.
+        let mut e = editor_with("text <b>hello</b> rest");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "dat");
+        assert_eq!(e.buffer().lines()[0], "text  rest");
+    }
+
+    #[test]
+    fn ci_paren_still_works_when_cursor_inside() {
+        // Regression: forward-scan fallback must not break the
+        // canonical "cursor inside the pair" case.
+        let mut e = editor_with("fn(a, b)");
+        e.jump_cursor(0, 4);
+        run_keys(&mut e, "ci(NEW<Esc>");
+        assert_eq!(e.buffer().lines()[0], "fn(NEW)");
     }
 
     #[test]
