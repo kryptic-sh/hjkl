@@ -383,16 +383,14 @@ impl App {
                     // ── Normal editor key handling ───────────────────────────
                     self.editor.handle_key(key);
 
-                    // Propagate dirty flag from the engine to app-level state.
+                    // Recompute syntax only when content actually changed.
+                    // Motion keys (j/k/h/l/w/b/...) leave content untouched,
+                    // so re-parsing 100k lines on every keystroke is pure waste.
                     if self.editor.take_dirty() {
                         self.dirty = true;
-                        // First edit drops the "[New File]" annotation.
                         self.is_new_file = false;
+                        self.recompute_and_install();
                     }
-
-                    // Recompute syntax spans after every key (v0 sync path;
-                    // documents are small — profile in Phase E).
-                    self.recompute_and_install();
                 }
                 Event::Resize(w, h) => {
                     let vp = self.editor.host_mut().viewport_mut();
@@ -470,8 +468,8 @@ impl App {
                 // Engine applied the substitution in-place; propagate dirty.
                 if self.editor.take_dirty() {
                     self.dirty = true;
+                    self.recompute_and_install();
                 }
-                self.recompute_and_install();
                 self.status_message = Some(format!("{count} substitution(s)"));
             }
             ExEffect::Info(msg) => {
