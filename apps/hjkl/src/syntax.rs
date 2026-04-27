@@ -12,11 +12,27 @@ use std::path::Path;
 use hjkl_engine::Query;
 use hjkl_tree_sitter::{DotFallbackTheme, Highlighter, InputEdit, LanguageRegistry, Point, Theme};
 
+/// Cached `(source, row_starts)` keyed off buffer identity (dirty_gen +
+/// shape). Built once per buffer mutation and reused across scroll-only
+/// frames so per-frame work is just the viewport-scoped highlight query.
+struct RenderCache {
+    dirty_gen: u64,
+    len_bytes: usize,
+    line_count: u32,
+    source: String,
+    row_starts: Vec<usize>,
+    /// dirty_gen of the buffer when `parse_incremental` last ran
+    /// successfully. When the current `dirty_gen` matches, the retained
+    /// tree is still valid and we can skip the reparse entirely.
+    parsed_dirty_gen: Option<u64>,
+}
+
 /// Per-`App` syntax highlighting layer.
 pub struct SyntaxLayer {
     registry: LanguageRegistry,
     highlighter: Option<Highlighter>,
     theme: Box<dyn Theme>,
+    cache: Option<RenderCache>,
 }
 
 impl SyntaxLayer {
@@ -26,6 +42,7 @@ impl SyntaxLayer {
             registry: LanguageRegistry::new(),
             highlighter: None,
             theme,
+            cache: None,
         }
     }
 
@@ -107,32 +124,71 @@ impl SyntaxLayer {
     ) -> Option<Vec<Vec<(usize, usize, ratatui::style::Style)>>> {
         let highlighter = self.highlighter.as_mut()?;
 
-        let row_count = buffer.line_count() as usize;
+        let dg = buffer.dirty_gen();
+        let lb = buffer.len_bytes();
+        let lc = buffer.line_count();
+        let row_count = lc as usize;
 
-        // Build full source: lines joined by '\n' (no trailing newline) —
-        // matches the engine's canonical byte rendering used by
-        // `Query::byte_of_row` and the engine's `ContentEdit` byte math.
-        let mut source = String::with_capacity(buffer.len_bytes());
-        for r in 0..row_count {
-            if r > 0 {
-                source.push('\n');
+        // Rebuild source + row_starts only when the buffer has changed.
+        // Pure scroll frames hit the cache and skip the O(N) string join +
+        // newline scan, leaving only the viewport-scoped highlight query.
+        let needs_rebuild = match &self.cache {
+            Some(c) => c.dirty_gen != dg || c.len_bytes != lb || c.line_count != lc,
+            None => true,
+        };
+        if needs_rebuild {
+            let mut source = String::with_capacity(lb);
+            for r in 0..row_count {
+                if r > 0 {
+                    source.push('\n');
+                }
+                source.push_str(buffer.line(r as u32));
             }
-            source.push_str(buffer.line(r as u32));
+            let mut row_starts: Vec<usize> = vec![0];
+            for (i, &b) in source.as_bytes().iter().enumerate() {
+                if b == b'\n' {
+                    row_starts.push(i + 1);
+                }
+            }
+            self.cache = Some(RenderCache {
+                dirty_gen: dg,
+                len_bytes: lb,
+                line_count: lc,
+                source,
+                row_starts,
+                parsed_dirty_gen: None,
+            });
         }
-        let bytes = source.as_bytes();
+        let bytes = self.cache.as_ref().unwrap().source.as_bytes();
 
-        // Cold parse on first frame (no retained tree) so we always
-        // succeed regardless of file size; subsequent frames go through
-        // the timed incremental path.
-        if highlighter.tree().is_none() {
-            highlighter.parse_initial(bytes);
-        } else if !highlighter.parse_incremental(bytes) {
-            // Timed-out parse: skip this frame's render. Spans table from
-            // the previous render is still installed on the editor; next
-            // frame will retry. Return None so the caller doesn't reinstall
-            // an empty / stale table.
-            return None;
+        // Skip the reparse entirely when the buffer hasn't mutated since
+        // the last successful parse — the retained tree is still valid,
+        // we only need the viewport-scoped query.
+        let parse_needed = self
+            .cache
+            .as_ref()
+            .and_then(|c| c.parsed_dirty_gen)
+            .map(|g| g != dg)
+            .unwrap_or(true);
+
+        if parse_needed {
+            // Cold parse on first frame (no retained tree) so we always
+            // succeed regardless of file size; subsequent frames go through
+            // the timed incremental path.
+            if highlighter.tree().is_none() {
+                highlighter.parse_initial(bytes);
+            } else if !highlighter.parse_incremental(bytes) {
+                // Timed-out parse: skip this frame's render. Spans table from
+                // the previous render is still installed on the editor; next
+                // frame will retry. Return None so the caller doesn't reinstall
+                // an empty / stale table.
+                return None;
+            }
+            self.cache.as_mut().unwrap().parsed_dirty_gen = Some(dg);
         }
+        let cache = self.cache.as_ref().expect("cache populated above");
+        let bytes = cache.source.as_bytes();
+        let row_starts = &cache.row_starts;
 
         // Compute viewport byte range. byte_of_row clamps past-end to
         // len_bytes so the +1 row beyond the visible range is safe.
@@ -142,15 +198,6 @@ impl SyntaxLayer {
         let vp_end = vp_end.max(vp_start);
 
         let flat_spans = highlighter.highlight_range(bytes, vp_start..vp_end);
-
-        // Build a newline-offset table over the full source for O(1)
-        // row/col lookup of each span's local bytes.
-        let mut row_starts: Vec<usize> = vec![0];
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == b'\n' {
-                row_starts.push(i + 1);
-            }
-        }
 
         let mut by_row: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
             vec![Vec::new(); row_count];
