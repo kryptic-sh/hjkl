@@ -426,6 +426,14 @@ pub struct SyntaxLayer {
     /// `submit_render` (no point sending a parse with no highlighter)
     /// and to know whether to ship the next request as `reset: true`.
     has_language: bool,
+    /// Active language config — kept on the main thread so
+    /// `preview_render` can spin up a one-shot Highlighter without
+    /// going through the worker.
+    current_lang: Option<&'static LanguageConfig>,
+    /// Active theme — cloned to the worker on spawn / `set_theme`, kept
+    /// on the layer so `preview_render` can resolve capture styles
+    /// without crossing the worker boundary.
+    theme: Arc<dyn Theme + Send + Sync>,
     worker: SyntaxWorker,
     cache: Option<RenderCache>,
     /// Edits queued since the last submit; flushed into the next
@@ -447,10 +455,12 @@ pub struct SyntaxLayer {
 impl SyntaxLayer {
     /// Create a new layer with no language attached and the given theme.
     pub fn new(theme: Arc<dyn Theme + Send + Sync>) -> Self {
-        let worker = SyntaxWorker::spawn(theme);
+        let worker = SyntaxWorker::spawn(Arc::clone(&theme));
         Self {
             registry: LanguageRegistry::new(),
             has_language: false,
+            current_lang: None,
+            theme,
             worker,
             cache: None,
             pending_edits: Vec::new(),
@@ -469,11 +479,13 @@ impl SyntaxLayer {
         match self.registry.detect_for_path(path) {
             Some(config) => {
                 self.worker.set_language(Some(config));
+                self.current_lang = Some(config);
                 self.has_language = true;
                 true
             }
             None => {
                 self.worker.set_language(None);
+                self.current_lang = None;
                 self.has_language = false;
                 false
             }
@@ -482,7 +494,86 @@ impl SyntaxLayer {
 
     /// Swap the active theme. Next render call will use the new theme.
     pub fn set_theme(&mut self, theme: Arc<dyn Theme + Send + Sync>) {
+        self.theme = Arc::clone(&theme);
         self.worker.set_theme(theme);
+    }
+
+    /// Synchronous viewport-only preview render. Builds a
+    /// `String` containing **only** the visible rows, parses it from
+    /// scratch with a one-shot `Highlighter`, runs `highlight_range` over
+    /// the slice, and returns a `RenderOutput` whose `spans` table is
+    /// padded with empty rows above the viewport so the install path
+    /// indexes the right rows.
+    ///
+    /// Cost is proportional to the visible region (a few KB for typical
+    /// terminals), so this completes in well under a millisecond even
+    /// when the full file would take 100ms+ to parse. Used at startup so
+    /// the very first frame has highlights regardless of where in the
+    /// file the viewport landed.
+    ///
+    /// The slice doesn't begin at a syntactically valid root for most
+    /// grammars, so structural captures (function signatures, types) may
+    /// not all fire — but token-level captures (keyword, identifier,
+    /// string, comment, number) do, which is what the eye picks up
+    /// first. The worker's full parse arrives moments later and replaces
+    /// the preview with the structurally-correct spans.
+    ///
+    /// Returns `None` when no language is attached or when the viewport
+    /// is empty.
+    pub fn preview_render(
+        &self,
+        buffer: &impl Query,
+        viewport_top: usize,
+        viewport_height: usize,
+    ) -> Option<RenderOutput> {
+        let cfg = self.current_lang?;
+        let row_count = buffer.line_count() as usize;
+        if row_count == 0 || viewport_height == 0 {
+            return None;
+        }
+        let vp_top = viewport_top.min(row_count);
+        let vp_end_row = (vp_top + viewport_height).min(row_count);
+        if vp_end_row <= vp_top {
+            return None;
+        }
+
+        let mut source = String::new();
+        for r in vp_top..vp_end_row {
+            if r > vp_top {
+                source.push('\n');
+            }
+            source.push_str(buffer.line(r as u32));
+        }
+        let bytes = source.as_bytes();
+        let mut row_starts: Vec<usize> = vec![0];
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' {
+                row_starts.push(i + 1);
+            }
+        }
+        let local_row_count = vp_end_row - vp_top;
+
+        let mut h = Highlighter::new(cfg).ok()?;
+        h.parse_initial(bytes);
+        let flat_spans = h.highlight_range(bytes, 0..bytes.len());
+
+        let local_by_row = build_by_row(
+            &flat_spans,
+            bytes,
+            &row_starts,
+            local_row_count,
+            self.theme.as_ref(),
+        );
+
+        let mut spans: Vec<Vec<(usize, usize, ratatui::style::Style)>> = vec![Vec::new(); vp_top];
+        spans.extend(local_by_row);
+
+        Some(RenderOutput {
+            spans,
+            signs: Vec::new(),
+            key: (buffer.dirty_gen(), viewport_top, viewport_height),
+            perf: PerfBreakdown::default(),
+        })
     }
 
     /// Ask the worker to drop the retained tree on the next parse so

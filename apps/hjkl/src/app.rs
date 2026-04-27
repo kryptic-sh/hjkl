@@ -226,12 +226,17 @@ impl App {
         }
         let initial_vp_top = editor.host().viewport().top_row;
         let initial_vp_height = editor.host().viewport().height as usize;
-        // Submit an initial parse on the worker. The first frame may
-        // render with no highlights for a few ms while the worker warms
-        // up — acceptable, and far better than blocking startup on a
-        // 100ms cold parse for a 1.3MB Rust file.
+        // Synchronous viewport-only preview so the first frame has
+        // highlights regardless of file size or viewport position
+        // (`+N` deep into a big file still paints colored). The worker
+        // then runs the full parse in the background and its result
+        // replaces the preview on the next event-loop iteration.
         let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
         let initial_dg = editor.buffer().dirty_gen();
+        if let Some(out) = syntax.preview_render(editor.buffer(), initial_vp_top, initial_vp_height)
+        {
+            editor.install_ratatui_syntax_spans(out.spans);
+        }
         syntax.submit_render(editor.buffer(), initial_vp_top, initial_vp_height);
         let initial_key: Option<(u64, usize, usize)> =
             if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150)) {
@@ -240,11 +245,10 @@ impl App {
                 initial_signs = out.signs;
                 Some(key)
             } else {
-                // Worker didn't finish in the budget — first frame paints
-                // without highlights, the next event-loop iteration's
-                // recompute_and_install drains the result. Snapshot the
-                // key we submitted so the cache hit logic still works on
-                // the next call with the same (dg, vp_top, vp_height).
+                // Worker didn't finish in the budget — preview spans are
+                // already installed, the next event-loop iteration's
+                // recompute_and_install drains the worker result and
+                // upgrades to the structurally-correct spans + signs.
                 Some((initial_dg, initial_vp_top, initial_vp_height))
             };
         // Drain any ContentEdit / reset state seeded during construction
