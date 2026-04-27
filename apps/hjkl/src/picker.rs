@@ -949,14 +949,84 @@ impl PickerLogic for RgSource {
                         let _ = child.wait();
                     }
 
+                    GrepBackend::Findstr => {
+                        // Windows-native findstr: findstr /S /N /R <pattern> <root>\*
+                        // Output format: path:line:text — same as grep -n, reuse parse_grep_line.
+                        let search_glob = root.join("*");
+                        let child = std::process::Command::new("findstr")
+                            .args([
+                                "/S",
+                                "/N",
+                                "/R",
+                                &q,
+                                search_glob.to_str().unwrap_or("*"),
+                            ])
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null())
+                            .spawn();
+
+                        let mut child = match child {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+
+                        let stdout = match child.stdout.take() {
+                            Some(s) => s,
+                            None => return,
+                        };
+
+                        let reader = BufReader::new(stdout);
+                        let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+                        let mut total = 0usize;
+                        const FINDSTR_CAP: usize = 1000;
+
+                        for line_result in reader.lines() {
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                            let raw = match line_result {
+                                Ok(l) => l,
+                                Err(_) => continue,
+                            };
+                            if raw.is_empty() {
+                                continue;
+                            }
+                            if let Some(m) = parse_grep_line(&raw, &root) {
+                                batch.push(m);
+                                total += 1;
+                                if batch.len() >= 32
+                                    && let Ok(mut g) = items.lock()
+                                {
+                                    g.extend(batch.drain(..));
+                                }
+                                if total >= FINDSTR_CAP {
+                                    let _ = child.kill();
+                                    break;
+                                }
+                            }
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                        }
+                        // Flush remaining batch.
+                        if !batch.is_empty()
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.extend(batch.drain(..));
+                        }
+                        let _ = child.wait();
+                    }
+
                     GrepBackend::Neither => {
-                        // Neither rg nor grep available — push sentinel item.
+                        // No search tool found — push sentinel item.
                         if let Ok(mut g) = items.lock() {
                             g.push(RgMatch {
                                 path: PathBuf::new(),
                                 line: 0,
                                 _col: 0,
-                                text: "ripgrep not found — install ripgrep or grep to use :rg"
+                                text: "no grep tool found — install ripgrep, grep, or findstr to use :rg"
                                     .into(),
                             });
                         }
@@ -1042,7 +1112,9 @@ enum GrepBackend {
     Rg,
     /// POSIX `grep` — fallback when ripgrep is not installed.
     Grep,
-    /// Neither tool found on PATH.
+    /// Windows-native `findstr` — fallback on vanilla Windows.
+    Findstr,
+    /// No supported search tool found on PATH.
     Neither,
 }
 
@@ -1068,6 +1140,16 @@ fn detect_grep_backend() -> GrepBackend {
         .unwrap_or(false)
     {
         return GrepBackend::Grep;
+    }
+    if std::process::Command::new("findstr")
+        .arg("/?")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return GrepBackend::Findstr;
     }
     GrepBackend::Neither
 }
