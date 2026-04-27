@@ -202,7 +202,12 @@ impl App {
         if let Some(ref path) = filename {
             match std::fs::read_to_string(path) {
                 Ok(content) => {
-                    BufferEdit::replace_all(&mut buffer, &content);
+                    // Strip one trailing newline (vim default): a file
+                    // ending in `\n` is the EOL of its last line, not
+                    // a separator before an empty trailing line. Save
+                    // re-appends one.
+                    let content = content.strip_suffix('\n').unwrap_or(&content);
+                    BufferEdit::replace_all(&mut buffer, content);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     // New file — buffer stays empty, filename retained.
