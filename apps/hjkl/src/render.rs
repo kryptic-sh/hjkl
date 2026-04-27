@@ -86,6 +86,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if app.picker.is_some() {
         picker_overlay(frame, app, buf_area);
     }
+
+    // Info popup (`:reg`, `:marks`, `:jumps`, `:changes`) renders on top of
+    // the picker overlay so it always shows.
+    if app.info_popup.is_some() {
+        info_popup_overlay(frame, app, buf_area);
+    }
 }
 
 /// Render the one-row buffer/tab line at the top of the screen.
@@ -271,6 +277,36 @@ fn prompt_line(content: &str, mode: hjkl_form::VimMode, width: u16) -> Line<'sta
     ])
 }
 
+/// Count search matches in the buffer and return `(current_idx, total)`.
+/// `current_idx` is 1-based (the match the cursor is on or just passed).
+/// Returns `None` when no pattern is active or there are no matches.
+/// Caps at 10 000 matches to avoid stalling on huge files.
+fn search_count(app: &App) -> Option<(usize, usize)> {
+    const MATCH_CAP: usize = 10_000;
+    let st = app.active().editor.search_state();
+    let pat = st.pattern.as_ref()?;
+    let buf = app.active().editor.buffer();
+    let (cursor_row, cursor_col) = app.active().editor.cursor();
+    let mut total = 0usize;
+    let mut current_idx = 0usize;
+    'outer: for (row_idx, line) in buf.lines().iter().enumerate() {
+        for m in pat.find_iter(line) {
+            total += 1;
+            if (row_idx, m.start()) <= (cursor_row, cursor_col) {
+                current_idx = total;
+            }
+            if total >= MATCH_CAP {
+                break 'outer;
+            }
+        }
+    }
+    if total == 0 {
+        None
+    } else {
+        Some((current_idx, total))
+    }
+}
+
 /// Build the status line text as a ratatui [`Line`].
 ///
 /// Returns `(line, Some(cursor_col))` when a prompt is active so the
@@ -418,6 +454,21 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         Some(reg) => format!(" REC @{reg} "),
         None => String::new(),
     };
+    // Pending count + operator block (vim "showcmd").
+    let pending_block: String = {
+        let pc = app.active().editor.pending_count();
+        let po = app.active().editor.pending_op();
+        match (pc, po) {
+            (Some(n), Some(op)) => format!(" {n}{op} "),
+            (Some(n), None) => format!(" {n} "),
+            (None, Some(op)) => format!(" {op} "),
+            (None, None) => String::new(),
+        }
+    };
+    // Search count block `[idx/total]`.
+    let search_count_block: String = search_count(app)
+        .map(|(idx, total)| format!(" [{idx}/{total}] "))
+        .unwrap_or_default();
     let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
 
     // Filename block — surface bg, with leading + trailing space.
@@ -425,9 +476,11 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let w = width as usize;
     let reserved = mode_block.len()
         + rec_block.len()
+        + pending_block.len()
         + 2 /* leading + trailing space around filename */
         + suffix.len()
         + dirty_block.len()
+        + search_count_block.len()
         + pos_block.len()
         + pct_block.len();
     let avail_for_name = w.saturating_sub(reserved);
@@ -445,8 +498,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // Spacer fills the gap between mid and the right-side blocks.
     let used = mode_block.len()
         + rec_block.len()
+        + pending_block.len()
         + mid_block.len()
         + dirty_block.len()
+        + search_count_block.len()
         + pos_block.len()
         + pct_block.len();
     let spacer: String = " ".repeat(w.saturating_sub(used));
@@ -455,15 +510,25 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         .bg(HJ_RED)
         .fg(HJ_DARK)
         .add_modifier(Modifier::BOLD);
+    let pending_style = Style::default()
+        .bg(HJ_SURFACE)
+        .fg(HJ_TEXT)
+        .add_modifier(Modifier::ITALIC);
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(7);
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
     spans.push(Span::styled(mode_block, mode_style));
     if !rec_block.is_empty() {
         spans.push(Span::styled(rec_block, rec_style));
     }
+    if !pending_block.is_empty() {
+        spans.push(Span::styled(pending_block, pending_style));
+    }
     spans.push(Span::styled(mid_block, mid_style));
     if !dirty_block.is_empty() {
         spans.push(Span::styled(dirty_block.to_string(), dirty_style));
+    }
+    if !search_count_block.is_empty() {
+        spans.push(Span::styled(search_count_block, mid_style));
     }
     spans.push(Span::styled(spacer, fill_style));
     spans.push(Span::styled(pos_block, mid_style));
@@ -739,6 +804,27 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
         search_pattern: None,
     };
     frame.render_widget(view, inner);
+}
+
+/// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
+/// output. Rendered on top of the buffer pane; any key dismisses it.
+fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
+    let text = match app.info_popup.as_ref() {
+        Some(t) => t,
+        None => return,
+    };
+    let area = centered_rect(80, 60, buf_area);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" info ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let para = Paragraph::new(text.clone());
+    frame.render_widget(para, inner);
 }
 
 /// Compute a centered Rect of `pct_x`% × `pct_y`% of `area`.

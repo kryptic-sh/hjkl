@@ -161,6 +161,10 @@ pub struct App {
     /// Last ex-command result (Info / Error / write confirmation).
     /// Shown in the status line; cleared on next keypress.
     pub status_message: Option<String>,
+    /// Multi-line info popup (e.g. from `:reg`, `:marks`, `:jumps`,
+    /// `:changes`). When `Some`, rendered as a centered overlay; any
+    /// keypress dismisses it without dispatching to the editor.
+    pub info_popup: Option<String>,
     /// Active `:` command input. `Some` while the user is typing an ex
     /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
     /// (h/l/w/b/dw/diw/...) work inside the prompt.
@@ -364,6 +368,7 @@ impl App {
             prev_active: None,
             exit_requested: false,
             status_message: None,
+            info_popup: None,
             command_field: None,
             search_field: None,
             picker: None,
