@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::host::TuiHost;
 use crate::render;
-use crate::syntax::{self, SyntaxLayer};
+use crate::syntax::{self, SYNTAX_WINDOW_MARGIN, SyntaxLayer};
 
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
@@ -178,6 +178,9 @@ pub struct App {
     /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
     /// and active theme. Recomputed on every buffer-mutating event.
     syntax: SyntaxLayer,
+    /// `top_row` of the viewport at the time of the last syntax recompute.
+    /// `None` forces a recompute on the first frame regardless of dirty state.
+    last_highlight_top: Option<usize>,
 }
 
 impl App {
@@ -253,7 +256,9 @@ impl App {
         if let Some(ref path) = filename {
             syntax.set_language_for_path(path);
         }
-        if let Some(spans) = syntax.recompute(editor.buffer()) {
+        let initial_vp_top = editor.host().viewport().top_row;
+        let initial_vp_height = editor.host().viewport().height as usize;
+        if let Some(spans) = syntax.recompute(editor.buffer(), initial_vp_top, initial_vp_height) {
             editor.install_ratatui_syntax_spans(spans);
         }
 
@@ -267,6 +272,7 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             is_new_file,
             syntax,
+            last_highlight_top: Some(initial_vp_top),
         })
     }
 
@@ -383,13 +389,21 @@ impl App {
                     // ── Normal editor key handling ───────────────────────────
                     self.editor.handle_key(key);
 
-                    // Recompute syntax only when content actually changed.
-                    // Motion keys (j/k/h/l/w/b/...) leave content untouched,
-                    // so re-parsing 100k lines on every keystroke is pure waste.
-                    if self.editor.take_dirty() {
+                    // Recompute when content changed or when the viewport has
+                    // scrolled past half the cache margin (approaching the edge
+                    // of the previously highlighted window).
+                    let did_dirty = self.editor.take_dirty();
+                    if did_dirty {
                         self.dirty = true;
                         self.is_new_file = false;
+                    }
+                    let vp_top = self.editor.host().viewport().top_row;
+                    let scrolled = self
+                        .last_highlight_top
+                        .is_none_or(|t| vp_top.abs_diff(t) >= SYNTAX_WINDOW_MARGIN / 2);
+                    if did_dirty || scrolled {
                         self.recompute_and_install();
+                        self.last_highlight_top = Some(vp_top);
                     }
                 }
                 Event::Resize(w, h) => {
@@ -534,11 +548,15 @@ impl App {
         }
     }
 
-    /// Recompute syntax spans and install them into the editor.
+    /// Recompute syntax spans for the current viewport window and install them.
     ///
     /// No-op when no language is attached (highlighter is `None`).
     pub fn recompute_and_install(&mut self) {
-        if let Some(spans) = self.syntax.recompute(self.editor.buffer()) {
+        let (top, height) = {
+            let vp = self.editor.host().viewport();
+            (vp.top_row, vp.height as usize)
+        };
+        if let Some(spans) = self.syntax.recompute(self.editor.buffer(), top, height) {
             self.editor.install_ratatui_syntax_spans(spans);
         }
     }
