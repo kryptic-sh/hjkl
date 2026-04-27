@@ -2459,6 +2459,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let max = buf_row_count(&self.buffer).saturating_sub(1);
         let target = row.min(max);
         buf_set_cursor_rc(&mut self.buffer, target, 0);
+        // Vim: `:N` / `+N` jump scrolls the viewport too — without this
+        // the cursor lands off-screen and the user has to scroll
+        // manually to see it.
+        self.ensure_cursor_in_scrolloff();
     }
 
     /// Scroll so the cursor row lands at the given viewport position:
