@@ -106,10 +106,16 @@ pub struct BufferView<'a, R: StyleResolver> {
 /// the text area. `width` is the total cell count reserved
 /// (including any trailing spacer); the renderer right-aligns the
 /// 1-based row number into the leftmost `width - 1` cells.
-#[derive(Debug, Clone, Copy)]
+///
+/// `line_offset` is added to the displayed line number, so a host
+/// rendering a windowed view of a larger document (e.g. picker preview
+/// of a 7000-line buffer) can show the original line numbers instead
+/// of starting at 1.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Gutter {
     pub width: u16,
     pub style: Style,
+    pub line_offset: usize,
 }
 
 /// Single-cell marker painted into the leftmost gutter column for a
@@ -404,7 +410,11 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let y = area.y + screen_row;
         // Total gutter cells, leaving one trailing spacer column.
         let number_width = gutter.width.saturating_sub(1) as usize;
-        let label = format!("{:>width$}", doc_row + 1, width = number_width);
+        let label = format!(
+            "{:>width$}",
+            doc_row + 1 + gutter.line_offset,
+            width = number_width
+        );
         let mut x = area.x;
         for ch in label.chars() {
             if x >= area.x + gutter.width.saturating_sub(1) {
@@ -746,6 +756,7 @@ mod tests {
             gutter: Some(Gutter {
                 width: 4,
                 style: Style::default().fg(Color::Yellow),
+                line_offset: 0,
             }),
             search_bg: Style::default(),
             signs: &[],
@@ -858,6 +869,7 @@ mod tests {
             gutter: Some(Gutter {
                 width: 3,
                 style: Style::default().fg(Color::DarkGray),
+                line_offset: 0,
             }),
             search_bg: Style::default(),
             signs: &signs,
@@ -1080,6 +1092,7 @@ mod tests {
         let gutter = Gutter {
             width: 3,
             style: Style::default().fg(Color::Yellow),
+            line_offset: 0,
         };
         let view = make_wrap_view(&b, &v, &r, Some(gutter));
         let term = run_render(view, 6, 3);

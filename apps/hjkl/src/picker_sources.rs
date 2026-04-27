@@ -31,7 +31,12 @@ pub struct BufferEntry {
     /// File path, used for tree-sitter language detection.
     pub path: Option<PathBuf>,
     /// 0-based cursor row at picker-open time, used to place the preview.
+    /// In window-local coordinates (relative to the snapshot start).
     pub cursor_row: usize,
+    /// Original-buffer row of the first line in `content`. Added to gutter
+    /// labels so the preview shows real document line numbers when the
+    /// snapshot is a window of a larger buffer.
+    pub window_start: usize,
 }
 
 /// Source for the buffer picker. Enumerates all open slots at the
@@ -49,6 +54,7 @@ impl BufferSource {
         content_of: impl Fn(&S) -> String,
         path_of: impl Fn(&S) -> Option<PathBuf>,
         cursor_row_of: impl Fn(&S) -> usize,
+        window_start_of: impl Fn(&S) -> usize,
     ) -> Self {
         let entries = slots
             .iter()
@@ -60,6 +66,7 @@ impl BufferSource {
                 content: content_of(s),
                 path: path_of(s),
                 cursor_row: cursor_row_of(s),
+                window_start: window_start_of(s),
             })
             .collect();
         Self { entries }
@@ -121,6 +128,10 @@ impl PickerLogic for BufferSource {
 
     fn preview_match_row(&self, idx: usize) -> Option<usize> {
         self.entries.get(idx).map(|e| e.cursor_row)
+    }
+
+    fn preview_line_offset(&self, idx: usize) -> usize {
+        self.entries.get(idx).map(|e| e.window_start).unwrap_or(0)
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -243,6 +254,10 @@ impl PickerLogic for HighlightedBufferSource {
 
     fn preview_match_row(&self, idx: usize) -> Option<usize> {
         self.inner.preview_match_row(idx)
+    }
+
+    fn preview_line_offset(&self, idx: usize) -> usize {
+        self.inner.preview_line_offset(idx)
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -492,6 +507,10 @@ impl PickerLogic for HighlightedRgSource {
 
     fn preview_match_row(&self, idx: usize) -> Option<usize> {
         self.inner.preview_match_row(idx)
+    }
+
+    fn preview_line_offset(&self, idx: usize) -> usize {
+        self.inner.preview_line_offset(idx)
     }
 
     fn select(&self, idx: usize) -> PickerAction {

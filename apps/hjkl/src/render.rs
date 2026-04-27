@@ -149,6 +149,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     let gutter = Gutter {
         width: gutter_width,
         style: Style::default().fg(Color::DarkGray),
+        line_offset: 0,
     };
 
     let selection = app.active().editor.buffer_selection();
@@ -701,6 +702,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
         gutter: Some(Gutter {
             width: gw,
             style: Style::default().fg(Color::DarkGray),
+            line_offset: picker.preview_line_offset(),
         }),
         search_bg: Style::default(),
         signs: &[],

@@ -74,6 +74,16 @@ pub trait PickerLogic: Send + 'static {
         None
     }
 
+    /// Added to the gutter line numbers in the preview. Sources that
+    /// snapshot a window of a larger document (e.g. buffer picker
+    /// snapshotting ±N lines around the cursor) use this so the gutter
+    /// shows the original document line numbers rather than restarting
+    /// at 1. Default 0.
+    fn preview_line_offset(&self, idx: usize) -> usize {
+        let _ = idx;
+        0
+    }
+
     /// Translate the picked row into an action.
     fn select(&self, idx: usize) -> PickerAction;
 

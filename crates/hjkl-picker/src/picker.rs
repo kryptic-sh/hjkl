@@ -61,6 +61,9 @@ pub struct Picker {
     preview_top_row: usize,
     /// Row to mark with `cursor_line_bg` in the preview (grep match line).
     preview_match_row: Option<usize>,
+    /// Offset added to gutter line numbers in the preview (for windowed
+    /// snapshots like buffer picker).
+    preview_line_offset: usize,
 }
 
 impl Picker {
@@ -91,6 +94,7 @@ impl Picker {
             preview_spans: PreviewSpans::default(),
             preview_top_row: 0,
             preview_match_row: None,
+            preview_line_offset: 0,
         };
         // Block briefly for the first batch of items so the first
         // render already has a populated list and a loaded preview.
@@ -260,6 +264,7 @@ impl Picker {
             self.preview_spans = PreviewSpans::default();
             self.preview_top_row = 0;
             self.preview_match_row = None;
+            self.preview_line_offset = 0;
             return;
         };
         let label = self.source.label(idx);
@@ -270,6 +275,7 @@ impl Picker {
         self.preview_spans = spans;
         self.preview_top_row = self.source.preview_top_row(idx);
         self.preview_match_row = self.source.preview_match_row(idx);
+        self.preview_line_offset = self.source.preview_line_offset(idx);
     }
 
     /// Initial top row for the preview viewport.
@@ -280,6 +286,11 @@ impl Picker {
     /// Row to mark with `cursor_line_bg` in the preview, if any.
     pub fn preview_match_row(&self) -> Option<usize> {
         self.preview_match_row
+    }
+
+    /// Offset added to gutter line numbers in the preview pane.
+    pub fn preview_line_offset(&self) -> usize {
+        self.preview_line_offset
     }
 
     /// Per-row spans + style table for the preview pane.

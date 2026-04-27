@@ -10,8 +10,9 @@ use super::App;
 const BUFFER_PREVIEW_WINDOW_RADIUS: usize = 250;
 
 /// Snapshot a window of `buf` around the cursor as a `String`, returning
-/// the content and the cursor row index *within that window* (0-based).
-fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize) {
+/// the content, the cursor row *within that window* (0-based), and the
+/// original-buffer row of the first line in the window (`window_start`).
+fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize, usize) {
     let cursor_row = buf.cursor().row;
     let total = buf.row_count();
     let start = cursor_row.saturating_sub(BUFFER_PREVIEW_WINDOW_RADIUS);
@@ -23,7 +24,7 @@ fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize) {
             content.push('\n');
         }
     }
-    (content, cursor_row - start)
+    (content, cursor_row - start, start)
 }
 
 impl App {
@@ -50,6 +51,7 @@ impl App {
             |s| snapshot_buffer_window(s.editor.buffer()).0,
             |s| s.filename.clone(),
             |s| snapshot_buffer_window(s.editor.buffer()).1,
+            |s| snapshot_buffer_window(s.editor.buffer()).2,
         );
         let source = Box::new(crate::picker::HighlightedBufferSource::new(inner));
         self.picker = Some(crate::picker::Picker::new(source));
