@@ -161,7 +161,7 @@ jobs:
           publish_if_new() {
             local crate=$1
             local url="https://crates.io/api/v1/crates/${crate}/${VERSION}"
-            if curl -fsS -o /dev/null "$url"; then
+            if curl -fsS -A "hjkl-release-ci" -o /dev/null "$url"; then
               echo "::notice::${crate}@${VERSION} already on crates.io, skipping"
               return 0
             fi
