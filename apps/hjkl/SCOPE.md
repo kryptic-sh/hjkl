@@ -130,6 +130,17 @@ Phase 1 is in (`a301658` local, not pushed). Phase 2 is the next dispatch.
 - Splits + tabs.
 - Folding render path (engine support is already there via `FoldProvider`).
 
+## Multi-buffer phases (landed 2026-04-28)
+
+| Phase        | Scope                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| **A**        | Multiplex `SyntaxLayer`/`Worker` by `BufferId`; per-buffer highlight state isolated.             |
+| **B**        | Lift per-buffer state into `BufferSlot` struct; single-buffer parity preserved.                  |
+| **C**        | `:e` switch-or-create; `:bn` / `:bp` / `:bd` / `:ls` ex commands.                                |
+| **D**        | Multi-file CLI (`hjkl a.rs b.rs c.rs`); tab line; alt buffer (`Ctrl-^`); picker integration.     |
+| **E**        | `:b` / `:bfirst` / `:blast` / `:wa` / `:qa` / `:wqa`; `Shift-H`/`Shift-L`; helix `:q` semantics. |
+| Module split | `app.rs` split into module tree (`buffers`, `picker`, `render`, `commands`, …). 2026-04-28.      |
+
 ## Decisions log
 
 - 2026-04-27: Crate layout = single umbrella `apps/hjkl/` + future
@@ -155,9 +166,10 @@ Phase 1 is in (`a301658` local, not pushed). Phase 2 is the next dispatch.
   shell exec path. Candidate for 0.1.2 lib enhancement.
 - 2026-04-27: Phase 6 ship-prep complete. Binary publish wired: `build` job
   added to release.yml with 4-target matrix (linux-gnu zigbuild, windows-msvc,
-  aarch64- darwin, x86_64-darwin); `publish-crates` extended to 5 crates
+  aarch64-darwin, x86_64-darwin); `publish-crates` extended to 5 crates
   (hjkl-buffer → hjkl-engine → hjkl-editor → hjkl-ratatui → hjkl). Archive name
   pattern: `hjkl-${TAG}-${target}.tar.gz` / `.zip`. README polished for
   crates.io. Smoke pass: binary builds clean; runtime exits with ENXIO (no TTY,
   expected in headless context — not a panic). Pending: user runs BCTP 0.1.2 for
   first user-facing TUI release.
+- 2026-04-28: Multi-buffer Phases A–E landed; `app.rs` split into module tree.

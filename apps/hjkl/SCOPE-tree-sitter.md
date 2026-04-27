@@ -84,12 +84,12 @@ Sqeel keeps:
 
 ## Phasing
 
-| Phase | Scope                                                                                                                                                                                                                         |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **B** | Create `hjkl-tree-sitter` crate. Generic `Highlighter`, `Syntax`, `Theme`, `Registry`. Bundle 5 grammars: `rust`, `markdown`, `json`, `toml`, `sequel` (SQL). Default light + dark themes.                                    |
-| **C** | Refactor sqeel to consume `hjkl-tree-sitter`. Drop `sqeel-core::highlight`'s generic bits, keep `Dialect` + SQL helpers. Update `sqeel-tui::highlight_thread` to use the generic worker (or move worker to hjkl-tree-sitter). |
-| **D** | Wire syntax highlighting in the `hjkl` binary. File-extension dispatch via `Registry`. Render via ratatui spans with theme styles. Default light + dark themes selectable via `:set background={light,dark}`.                 |
-| **E** | BCTP — hjkl 0.2.0 (new crate added to publish chain → bumps minor since binary now has a new feature; sqeel 0.2.0 (consumer migration is BREAKING for sqeel-core API).                                                        |
+| Phase | Scope                                                                                                                                                                                                                                                 |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **B** | Create `hjkl-tree-sitter` crate. Generic `Highlighter`, `Syntax`, `Theme`, `Registry`. Bundle 5 grammars: `rust`, `markdown`, `json`, `toml`, `sequel` (SQL). Default light + dark themes. **(landed 2026-04-28)**                                    |
+| **C** | Refactor sqeel to consume `hjkl-tree-sitter`. Drop `sqeel-core::highlight`'s generic bits, keep `Dialect` + SQL helpers. Update `sqeel-tui::highlight_thread` to use the generic worker (or move worker to hjkl-tree-sitter). **(landed 2026-04-28)** |
+| **D** | Wire syntax highlighting in the `hjkl` binary. File-extension dispatch via `Registry`. Render via ratatui spans with theme styles. Default light + dark themes selectable via `:set background={light,dark}`. **(landed 2026-04-28)**                 |
+| **E** | BCTP — hjkl 0.2.0 (new crate added to publish chain → bumps minor since binary now has a new feature; sqeel 0.2.0 (consumer migration is BREAKING for sqeel-core API). **(pending — run BCTP when ready)**                                            |
 
 ## Languages bundled in v0
 

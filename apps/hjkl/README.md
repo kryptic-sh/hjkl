@@ -24,9 +24,11 @@ Or grab a pre-built binary from the
 ```bash
 hjkl                  # empty buffer
 hjkl file.txt         # open file
+hjkl a.rs b.rs c.rs  # open multiple files
 hjkl -R file.txt      # read-only
 hjkl +42 file.txt     # jump to line 42
 hjkl +/foo file.txt   # search for "foo" on open
+hjkl +picker          # open fuzzy file picker immediately
 ```
 
 <!-- screenshot placeholder -->
@@ -45,11 +47,22 @@ hjkl +/foo file.txt   # search for "foo" on open
 - Terminal resize handled mid-frame
 - Read-only guard (`-R` flag + engine-level mutation block)
 - Jump to line (`+N`) and search-on-open (`+/pattern`)
+- **Multi-buffer**: open many files (`hjkl a.rs b.rs c.rs`); tab line at top
+  when more than one buffer is open; switch with `:bn` / `:bp` / `:bd[!]` /
+  `:bfirst` / `:blast` / `:b N` / `:b name` / `:ls` / `:buffers`; alt buffer
+  (`Ctrl-^` / `:b#`); cycle with `Shift-H` / `Shift-L` and `gt` / `gT` / `]b` /
+  `[b`; bulk save/quit with `:wa` / `:qa[!]` / `:wqa[!]`; helix-style `:q`
+  closes the active slot when more than one buffer is open
+- **Fuzzy file picker** (`<Space><Space>` / `<Space>f` / `:picker` /
+  `hjkl +picker`) with syntax-highlighted preview
+- **Buffer picker** (`<Space>b` / `:bpicker`)
+- **Tree-sitter syntax highlighting** (Rust, Markdown, JSON, TOML, SQL bundled)
+- **Per-buffer git diff signs** (`+` / `~` / `_` in the gutter) and tree-sitter
+  diagnostic signs
 
 ## What's deferred
 
-- Splits / tabs / multiple buffers
-- Syntax highlighting
+- Splits / multiple windows
 - Plugins / config files
 - LSP
 

@@ -8,6 +8,25 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-buffer support** in `apps/hjkl`: open many files at once
+  (`hjkl a.rs b.rs c.rs`); tab line at top of screen when more than one buffer
+  is open; switch buffers with `:bn` / `:bp` / `:bd[!]` / `:bfirst` / `:blast` /
+  `:b N` / `:b name` / `:ls` / `:buffers`; alt buffer via `Ctrl-^` or `:b#`;
+  cycle with `Shift-H` / `Shift-L` and `gt` / `gT` / `]b` / `[b`; bulk save/quit
+  with `:wa` / `:qa[!]` / `:wqa[!]`; helix-style `:q` closes the active slot
+  when more than one buffer is open rather than exiting.
+- **Fuzzy file picker** (`<Space><Space>` / `<Space>f` / `:picker` /
+  `hjkl +picker`) with syntax-highlighted preview pane.
+- **Buffer picker** (`<Space>b` / `:bpicker`) — switch open buffers via the same
+  fuzzy UI.
+- **Multi-file CLI** — `hjkl a.rs b.rs c.rs` opens all files as named slots.
+- **Tab line** at the top of the screen listing all open buffers; rendered only
+  when more than one buffer is open.
+- **Tree-sitter syntax highlighting** in the buffer pane and picker preview
+  (Rust, Markdown, JSON, TOML, SQL bundled via `hjkl-tree-sitter`).
+
 ## [0.1.1] - 2026-04-27
 
 ### Fixed
@@ -24,9 +43,9 @@ patch bumps.
 
 - Replaced `release-plz.yml` with a tag-driven `release.yml` matching the
   org-wide canonical pattern. Runs fmt/clippy/test as a quality gate, then
-  publishes the 4 hjkl crates to crates.io in dep order via an idempotent
-  shell loop (curl-precheck + `cargo publish --locked`). Fires on `git push
-  origin vX.Y.Z`.
+  publishes the 4 hjkl crates to crates.io in dep order via an idempotent shell
+  loop (curl-precheck + `cargo publish --locked`). Fires on
+  `git push origin vX.Y.Z`.
 
 ## [0.1.0] - 2026-04-27
 
