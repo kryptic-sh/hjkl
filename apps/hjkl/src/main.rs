@@ -4,6 +4,7 @@
 //! terminal resize, status-line truncation.
 
 mod app;
+mod git;
 mod host;
 mod render;
 mod syntax;

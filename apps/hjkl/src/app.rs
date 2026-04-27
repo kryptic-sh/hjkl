@@ -76,6 +76,10 @@ pub struct App {
     /// current viewport. Refreshed by `recompute_and_install`; read by
     /// `render::buffer_pane`.
     pub diag_signs: Vec<hjkl_buffer::Sign>,
+    /// Git diff signs (`+` / `~` / `_`) against HEAD. Computed once per
+    /// file change (open / `:w` / `:e`) and filtered to the viewport
+    /// per-frame in the renderer.
+    pub git_signs: Vec<hjkl_buffer::Sign>,
 }
 
 impl App {
@@ -165,6 +169,11 @@ impl App {
         let _ = editor.take_content_edits();
         let _ = editor.take_content_reset();
 
+        let initial_git = filename
+            .as_deref()
+            .map(crate::git::signs_for)
+            .unwrap_or_default();
+
         Ok(Self {
             editor,
             filename,
@@ -178,7 +187,19 @@ impl App {
             is_new_file,
             syntax,
             diag_signs: initial_signs,
+            git_signs: initial_git,
         })
+    }
+
+    /// Refresh git diff signs for the current file. Called after `:w`
+    /// and `:e` since both can change the on-disk content's relationship
+    /// to HEAD.
+    fn refresh_git_signs(&mut self) {
+        self.git_signs = self
+            .filename
+            .as_deref()
+            .map(crate::git::signs_for)
+            .unwrap_or_default();
     }
 
     /// Main event loop. Draws every frame, routes key events through
@@ -668,6 +689,7 @@ impl App {
                         self.filename = Some(p);
                         self.dirty = false;
                         self.is_new_file = false;
+                        self.refresh_git_signs();
                     }
                     Err(e) => {
                         self.status_message = Some(format!("E: {}: {e}", p.display()));
@@ -731,6 +753,7 @@ impl App {
         self.syntax.set_language_for_path(&path);
         self.syntax.reset();
         self.recompute_and_install();
+        self.refresh_git_signs();
         self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
     }
 

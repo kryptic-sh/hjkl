@@ -77,6 +77,25 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     let search_pattern = app.editor.search_state().pattern.as_ref();
     let in_prompt = app.command_field.is_some() || app.search_field.is_some();
 
+    // Merge diagnostic + git signs, filtered to the visible viewport so
+    // BufferView's per-row linear scan stays cheap on large files.
+    let vp_top = app.editor.host().viewport().top_row;
+    let vp_bot = vp_top + area.height as usize;
+    let mut visible_signs: Vec<hjkl_buffer::Sign> = app
+        .diag_signs
+        .iter()
+        .copied()
+        .filter(|s| s.row >= vp_top && s.row < vp_bot)
+        .chain(
+            app.git_signs
+                .iter()
+                .copied()
+                .filter(|s| s.row >= vp_top && s.row < vp_bot),
+        )
+        .collect();
+    // Stable sort by row keeps BufferView's max_by_key dedupe deterministic.
+    visible_signs.sort_by_key(|s| s.row);
+
     // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
     let search_bg = if search_pattern.is_some() {
         Style::default()
@@ -107,7 +126,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         },
         gutter: Some(gutter),
         search_bg,
-        signs: &app.diag_signs,
+        signs: &visible_signs,
         conceals: &[],
         spans: buffer_spans,
         search_pattern,
