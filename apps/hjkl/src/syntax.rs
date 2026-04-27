@@ -290,6 +290,97 @@ mod tests {
     }
 
     #[test]
+    fn first_load_highlights_entire_viewport() {
+        // Repro: open a multi-line buffer, do a single first-load
+        // parse_and_render at viewport (0, 30) on a 50-row buffer.
+        // Every row that contains a Rust keyword or punctuation should
+        // produce at least one styled span. This covers the case where
+        // tree-sitter's `set_byte_range` could exclude matches whose
+        // anchor node falls outside the queried range.
+        let mut content = String::new();
+        for i in 0..50 {
+            content.push_str(&format!("fn f{i}() {{ let x = {i}; }}\n"));
+        }
+        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
+
+        let mut layer = default_layer();
+        assert!(layer.set_language_for_path(Path::new("a.rs")));
+
+        // First load: viewport top=0, height=30. With set_byte_range
+        // filtering matches by anchor, multi-node matches whose anchor
+        // node sits in early rows but captures span into row 29 must
+        // still emit captures for row 29.
+        let by_row = layer.parse_and_render(&buf, 0, 30).unwrap();
+
+        // Each of rows 0..30 contains "fn", "let", numeric literals — all
+        // should produce at least one span in a working highlighter.
+        for (r, row) in by_row.iter().take(30).enumerate() {
+            assert!(
+                !row.is_empty(),
+                "row {r} has no highlight spans on first load (content: {:?})",
+                buf.line(r)
+            );
+        }
+    }
+
+    #[test]
+    fn cache_then_resize_returns_full_viewport_spans() {
+        // App::new calls parse_and_render with viewport_height=0 (atomic
+        // init value), populating the cache + parsed_dirty_gen. The
+        // subsequent frame, after the terminal size is known, must
+        // produce spans for the full viewport — even though `parse_needed`
+        // is false (cache hit, no buffer mutation).
+        let mut content = String::new();
+        for i in 0..50 {
+            content.push_str(&format!("fn f{i}() {{ let x = {i}; }}\n"));
+        }
+        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
+
+        let mut layer = default_layer();
+        layer.set_language_for_path(Path::new("a.rs"));
+
+        // Mimic App::new: initial parse with vp_height = 0.
+        let _ = layer.parse_and_render(&buf, 0, 0).unwrap();
+
+        // Mimic the post-resize frame: same dirty_gen, larger viewport.
+        let by_row = layer.parse_and_render(&buf, 0, 30).unwrap();
+        for (r, row) in by_row.iter().take(30).enumerate() {
+            assert!(
+                !row.is_empty(),
+                "row {r} has no spans after viewport resize on cache hit"
+            );
+        }
+    }
+
+    #[test]
+    fn first_load_full_viewport_matches_full_parse() {
+        // Stronger version: the spans returned by a viewport-scoped first
+        // load must equal the spans a full-buffer parse would return for
+        // the same row range. Catches set_byte_range under-counting.
+        let mut content = String::new();
+        for i in 0..50 {
+            content.push_str(&format!("fn f{i}() {{ let x = {i}; }}\n"));
+        }
+        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
+
+        let mut narrow = default_layer();
+        narrow.set_language_for_path(Path::new("a.rs"));
+        let narrow_by_row = narrow.parse_and_render(&buf, 0, 30).unwrap();
+
+        let mut full = default_layer();
+        full.set_language_for_path(Path::new("a.rs"));
+        // Viewport height covers the entire buffer.
+        let full_by_row = full.parse_and_render(&buf, 0, 100).unwrap();
+
+        for r in 0..30 {
+            assert_eq!(
+                narrow_by_row[r], full_by_row[r],
+                "row {r} differs between viewport-scoped and full parse"
+            );
+        }
+    }
+
+    #[test]
     fn incremental_path_matches_cold_for_small_edit() {
         // Simulate the app loop: parse, edit, parse_and_render, compare
         // to a fresh cold parse of the post-edit buffer.

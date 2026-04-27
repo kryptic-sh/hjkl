@@ -50,6 +50,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // Publish height to the engine's atomic so scrolloff (5-row margin) engages.
     app.editor.set_viewport_height(buf_area.height);
 
+    // Refresh syntax spans against the now-current viewport. On the first
+    // frame, App::new ran the initial parse with `viewport.height = 0`
+    // (the atomic's init value) so only row 0 had spans installed. With
+    // the source/tree cache + parse-skip on unchanged buffers, this call
+    // is ~140µs even on 100k-line files.
+    app.recompute_and_install();
+
     buffer_pane(frame, app, buf_area, gw);
     status_line(frame, app, status_area);
 }
