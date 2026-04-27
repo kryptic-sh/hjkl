@@ -59,6 +59,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let selection = app.editor.buffer_selection();
     let buffer_spans = app.editor.buffer_spans();
     let search_pattern = app.editor.search_state().pattern.as_ref();
+    let in_prompt = app.command_input.is_some() || app.editor.search_prompt().is_some();
 
     // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
     let search_bg = if search_pattern.is_some() {
@@ -83,7 +84,11 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         cursor_line_bg: Style::default(),
         cursor_column_bg: Style::default(),
         selection_bg: Style::default().bg(Color::Blue),
-        cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+        cursor_style: if in_prompt {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        },
         gutter: Some(gutter),
         search_bg,
         signs: &[],
@@ -96,7 +101,6 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     // Suppress the buffer-pane cursor while the user is typing in the
     // command line or search prompt — the cursor belongs to the status row.
-    let in_prompt = app.command_input.is_some() || app.editor.search_prompt().is_some();
     if !in_prompt && let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area) {
         frame.set_cursor_position((cx, cy));
     }
