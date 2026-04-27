@@ -72,6 +72,10 @@ pub struct App {
     /// and active theme. Recomputed on every render via the engine's
     /// ContentEdit + viewport-scoped query path.
     syntax: SyntaxLayer,
+    /// Diagnostic gutter signs (tree-sitter ERROR / MISSING) for the
+    /// current viewport. Refreshed by `recompute_and_install`; read by
+    /// `render::buffer_pane`.
+    pub diag_signs: Vec<hjkl_buffer::Sign>,
 }
 
 impl App {
@@ -149,10 +153,12 @@ impl App {
         }
         let initial_vp_top = editor.host().viewport().top_row;
         let initial_vp_height = editor.host().viewport().height as usize;
-        if let Some(spans) =
+        let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
+        if let Some(out) =
             syntax.parse_and_render(editor.buffer(), initial_vp_top, initial_vp_height)
         {
-            editor.install_ratatui_syntax_spans(spans);
+            editor.install_ratatui_syntax_spans(out.spans);
+            initial_signs = out.signs;
         }
         // Drain any ContentEdit / reset state seeded during construction
         // so the first event-loop iteration starts clean.
@@ -171,6 +177,7 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             is_new_file,
             syntax,
+            diag_signs: initial_signs,
         })
     }
 
@@ -736,11 +743,12 @@ impl App {
             let vp = self.editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
-        if let Some(spans) = self
+        if let Some(out) = self
             .syntax
             .parse_and_render(self.editor.buffer(), top, height)
         {
-            self.editor.install_ratatui_syntax_spans(spans);
+            self.editor.install_ratatui_syntax_spans(out.spans);
+            self.diag_signs = out.signs;
         }
     }
 

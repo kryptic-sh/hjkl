@@ -9,8 +9,30 @@
 
 use std::path::Path;
 
+use hjkl_buffer::Sign;
 use hjkl_engine::Query;
 use hjkl_tree_sitter::{DotFallbackTheme, Highlighter, InputEdit, LanguageRegistry, Point, Theme};
+
+/// Per-frame output of [`SyntaxLayer::parse_and_render`]: the styled
+/// span table plus diagnostic signs for the gutter (one per row with a
+/// tree-sitter ERROR / MISSING node intersecting the viewport).
+#[derive(Debug, Clone)]
+pub struct RenderOutput {
+    pub spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
+    pub signs: Vec<Sign>,
+}
+
+impl PartialEq for RenderOutput {
+    fn eq(&self, other: &Self) -> bool {
+        self.spans == other.spans
+            && self.signs.len() == other.signs.len()
+            && self
+                .signs
+                .iter()
+                .zip(other.signs.iter())
+                .all(|(a, b)| a.row == b.row && a.ch == b.ch && a.priority == b.priority)
+    }
+}
 
 /// Cached `(source, row_starts)` keyed off buffer identity (dirty_gen +
 /// shape). Built once per buffer mutation and reused across scroll-only
@@ -112,8 +134,10 @@ impl SyntaxLayer {
 
     /// Reparse the buffer (incremental when a tree is retained, cold
     /// otherwise) and run the highlights query scoped to the viewport
-    /// byte range. Returns per-row styled spans sized to the **full**
-    /// row count so stale rows clear correctly when content shrinks.
+    /// byte range. Returns per-row styled spans (sized to the **full**
+    /// row count so stale rows clear correctly when content shrinks)
+    /// and gutter [`Sign`]s for tree-sitter ERROR / MISSING nodes
+    /// intersecting the viewport.
     ///
     /// Returns `None` when no language is attached.
     pub fn parse_and_render(
@@ -121,7 +145,7 @@ impl SyntaxLayer {
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
-    ) -> Option<Vec<Vec<(usize, usize, ratatui::style::Style)>>> {
+    ) -> Option<RenderOutput> {
         let highlighter = self.highlighter.as_mut()?;
 
         let dg = buffer.dirty_gen();
@@ -238,7 +262,32 @@ impl SyntaxLayer {
             }
         }
 
-        Some(by_row)
+        // Diagnostics: tree-sitter ERROR / MISSING nodes intersecting the
+        // viewport, deduped to one Sign per row (priority 100; red 'E').
+        let errors = highlighter.parse_errors_range(bytes, vp_start..vp_end);
+        let mut signs: Vec<Sign> = Vec::new();
+        let mut last_row: Option<usize> = None;
+        let err_style = ratatui::style::Style::default().fg(ratatui::style::Color::Red);
+        for err in &errors {
+            let r = row_starts
+                .partition_point(|&rs| rs <= err.byte_range.start)
+                .saturating_sub(1);
+            if last_row == Some(r) {
+                continue;
+            }
+            last_row = Some(r);
+            signs.push(Sign {
+                row: r,
+                ch: 'E',
+                style: err_style,
+                priority: 100,
+            });
+        }
+
+        Some(RenderOutput {
+            spans: by_row,
+            signs,
+        })
     }
 }
 
@@ -259,9 +308,9 @@ mod tests {
         let mut layer = default_layer();
         assert!(layer.set_language_for_path(Path::new("a.rs")));
         let by_row = layer.parse_and_render(&buf, 0, 10).unwrap();
-        assert_eq!(by_row.len(), buf.row_count());
+        assert_eq!(by_row.spans.len(), buf.row_count());
         assert!(
-            by_row.iter().any(|r| !r.is_empty()),
+            by_row.spans.iter().any(|r| !r.is_empty()),
             "expected at least one styled span"
         );
     }
@@ -314,7 +363,7 @@ mod tests {
 
         // Each of rows 0..30 contains "fn", "let", numeric literals — all
         // should produce at least one span in a working highlighter.
-        for (r, row) in by_row.iter().take(30).enumerate() {
+        for (r, row) in by_row.spans.iter().take(30).enumerate() {
             assert!(
                 !row.is_empty(),
                 "row {r} has no highlight spans on first load (content: {:?})",
@@ -344,7 +393,7 @@ mod tests {
 
         // Mimic the post-resize frame: same dirty_gen, larger viewport.
         let by_row = layer.parse_and_render(&buf, 0, 30).unwrap();
-        for (r, row) in by_row.iter().take(30).enumerate() {
+        for (r, row) in by_row.spans.iter().take(30).enumerate() {
             assert!(
                 !row.is_empty(),
                 "row {r} has no spans after viewport resize on cache hit"
@@ -374,10 +423,44 @@ mod tests {
 
         for r in 0..30 {
             assert_eq!(
-                narrow_by_row[r], full_by_row[r],
+                narrow_by_row.spans[r], full_by_row.spans[r],
                 "row {r} differs between viewport-scoped and full parse"
             );
         }
+    }
+
+    #[test]
+    fn diagnostics_emit_sign_for_syntax_error() {
+        // Source with a syntax error mid-line. Tree-sitter should produce
+        // an ERROR / MISSING node; SyntaxLayer should turn it into a Sign
+        // on that row.
+        let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
+        let mut layer = default_layer();
+        layer.set_language_for_path(Path::new("a.rs"));
+        let out = layer.parse_and_render(&buf, 0, 10).unwrap();
+        assert!(
+            !out.signs.is_empty(),
+            "expected at least one diagnostic sign for `let x = ;`"
+        );
+        // The error sits on row 1.
+        assert!(
+            out.signs.iter().any(|s| s.row == 1 && s.ch == 'E'),
+            "expected an 'E' sign on row 1; got {:?}",
+            out.signs
+        );
+    }
+
+    #[test]
+    fn diagnostics_clean_source_no_signs() {
+        let buf = Buffer::from_str("fn main() { let x = 1; }\n");
+        let mut layer = default_layer();
+        layer.set_language_for_path(Path::new("a.rs"));
+        let out = layer.parse_and_render(&buf, 0, 10).unwrap();
+        assert!(
+            out.signs.is_empty(),
+            "expected no signs; got {:?}",
+            out.signs
+        );
     }
 
     #[test]

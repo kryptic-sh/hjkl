@@ -107,7 +107,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         },
         gutter: Some(gutter),
         search_bg,
-        signs: &[],
+        signs: &app.diag_signs,
         conceals: &[],
         spans: buffer_spans,
         search_pattern,
