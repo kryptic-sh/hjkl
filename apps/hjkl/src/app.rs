@@ -224,6 +224,16 @@ impl App {
         if let Some(ref path) = filename {
             syntax.set_language_for_path(path);
         }
+        // Sync host viewport to the real terminal size before sizing the
+        // preview / submitting the initial parse — otherwise the
+        // placeholder 80×24 from `TuiHost::new` underbakes the preview
+        // and the bottom of the screen shows up uncolored on first
+        // paint.
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
         let initial_vp_top = editor.host().viewport().top_row;
         let initial_vp_height = editor.host().viewport().height as usize;
         // Synchronous viewport-only preview so the first frame has
