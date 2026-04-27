@@ -559,6 +559,24 @@ impl App {
                         continue;
                     }
 
+                    // ── Shift-H / Shift-L cycle buffers ──────────────────────
+                    // Only when more than one buffer is open; with a single
+                    // slot fall through to the engine's H/L viewport motions.
+                    if self.active().editor.vim_mode() == VimMode::Normal
+                        && self.slots.len() > 1
+                        && (key.modifiers == KeyModifiers::SHIFT
+                            || key.modifiers == KeyModifiers::NONE)
+                    {
+                        if key.code == KeyCode::Char('H') {
+                            self.buffer_prev();
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('L') {
+                            self.buffer_next();
+                            continue;
+                        }
+                    }
+
                     // ── Buffer-motion pending state ──────────────────────────
                     if self.active().editor.vim_mode() == VimMode::Normal
                         && key.modifiers == KeyModifiers::NONE
