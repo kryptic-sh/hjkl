@@ -1,0 +1,410 @@
+//! `App` — owns the editor + host, drives the event loop.
+
+use anyhow::Result;
+use hjkl_buffer::Buffer;
+use hjkl_engine::{BufferEdit, Host};
+use hjkl_engine::{CursorShape, Editor, Options, VimMode};
+use hjkl_form::TextFieldEditor;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use crate::host::TuiHost;
+use crate::syntax::{self, BufferId, SyntaxLayer};
+
+mod buffer_ops;
+mod event_loop;
+mod ex_dispatch;
+mod picker_glue;
+mod prompt;
+mod syntax_glue;
+#[cfg(test)]
+mod tests;
+
+/// Height reserved for the status line at the bottom of the screen.
+pub const STATUS_LINE_HEIGHT: u16 = 1;
+
+/// Height of the buffer/tab line at the top of the screen, when shown.
+pub const BUFFER_LINE_HEIGHT: u16 = 1;
+
+/// Resolve a path for buffer-list matching. Two paths that point to
+/// the same file should compare equal here even when one is relative
+/// and the other absolute. We try `canonicalize` first (only works for
+/// files that exist on disk) and fall back to lexical absolutization
+/// for new-file paths.
+fn canon_for_match(p: &std::path::Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c;
+    }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        cwd.join(p)
+    } else {
+        p.to_path_buf()
+    }
+}
+
+/// Hash + byte-length of the buffer's canonical line content (lines
+/// joined by `\n` — same shape as what `:w` writes, modulo the trailing
+/// newline). Used to detect "buffer matches the saved snapshot" so undo
+/// back to the saved state clears the dirty flag.
+fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
+    let mut hasher = DefaultHasher::new();
+    let mut len = 0usize;
+    let lines = editor.buffer().lines();
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            b'\n'.hash(&mut hasher);
+            len += 1;
+        }
+        l.hash(&mut hasher);
+        len += l.len();
+    }
+    (hasher.finish(), len)
+}
+
+/// Direction of an active host-driven search prompt. `/` opens a
+/// forward prompt, `?` opens a backward one. The direction is recorded
+/// alongside [`App::search_field`] so the commit path can call the
+/// matching `Editor::search_advance_*` and persist the direction onto
+/// the engine's `last_search_forward` for future `n` / `N` repeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchDir {
+    Forward,
+    Backward,
+}
+
+/// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
+/// Phase C will add bnext / bdelete / switch-or-create.
+pub struct BufferSlot {
+    /// Stable id used to multiplex the SyntaxLayer / Worker.
+    pub buffer_id: BufferId,
+    /// The live editor — buffer + FSM + host, all in one.
+    pub editor: Editor<Buffer, TuiHost>,
+    /// File path shown in status line and used for `:w` saves.
+    pub filename: Option<PathBuf>,
+    /// Persistent dirty flag. Set when `editor.take_dirty()` returns `true`;
+    /// cleared after a successful `:w` save.
+    pub dirty: bool,
+    /// True when a file was requested but not found on disk — shows
+    /// "[New File]" annotation in the status line until the first edit
+    /// or successful `:w`.
+    pub is_new_file: bool,
+    /// `true` when the current file is in a git repo but not in HEAD —
+    /// drives the `[Untracked]` status-line tag. Refreshed alongside
+    /// `git_signs`.
+    pub is_untracked: bool,
+    /// Diagnostic gutter signs (tree-sitter ERROR / MISSING) for the
+    /// current viewport. Refreshed by `recompute_and_install`; read by
+    /// `render::buffer_pane`.
+    pub diag_signs: Vec<hjkl_buffer::Sign>,
+    /// Git diff signs (`+` / `~` / `_`) against HEAD. Recomputed
+    /// whenever the buffer's `dirty_gen` advances so unsaved edits
+    /// show in the gutter live. Filtered to the viewport per-frame
+    /// in the renderer.
+    pub git_signs: Vec<hjkl_buffer::Sign>,
+    /// `dirty_gen` of the buffer when `git_signs` was last rebuilt.
+    /// `None` = stale, force recompute on next render.
+    last_git_dirty_gen: Option<u64>,
+    /// Wall-clock time of the last successful git_signs refresh — used
+    /// to throttle the libgit2 diff to ~4 Hz during active typing on
+    /// large files.
+    last_git_refresh_at: Instant,
+    /// Wall-clock time of the last syntax recompute+install.
+    last_recompute_at: Instant,
+    /// `(dirty_gen, vp_top, vp_height)` snapshot of the last call to
+    /// `recompute_and_install`. When the next call has identical
+    /// inputs, the syntax span recompute + install is skipped.
+    last_recompute_key: Option<(u64, usize, usize)>,
+    /// Hash + byte-length of the buffer content as it was at the most
+    /// recent save (or load).
+    saved_hash: u64,
+    saved_len: usize,
+}
+
+impl BufferSlot {
+    /// Snapshot the loaded content so undo-to-saved clears dirty.
+    fn snapshot_saved(&mut self) {
+        let (h, l) = buffer_signature(&self.editor);
+        self.saved_hash = h;
+        self.saved_len = l;
+        self.dirty = false;
+    }
+
+    /// Sync `self.dirty` against a fresh content comparison.
+    fn refresh_dirty_against_saved(&mut self) -> u128 {
+        let t = std::time::Instant::now();
+        let (h, l) = buffer_signature(&self.editor);
+        let elapsed = t.elapsed().as_micros();
+        self.dirty = h != self.saved_hash || l != self.saved_len;
+        elapsed
+    }
+}
+
+/// Wrapper that lets `App::picker` hold either a file picker or a buffer
+/// picker without boxing the trait.
+pub enum AnyPicker {
+    File(crate::picker::FilePicker),
+    Buffer(crate::picker::BufferPicker),
+}
+
+/// Top-level application state. Everything the event loop and renderer need.
+pub struct App {
+    /// All open buffer slots. Never empty — always at least one slot.
+    slots: Vec<BufferSlot>,
+    /// Index into `slots` of the currently active buffer.
+    pub active: usize,
+    /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
+    /// slots created via `:e <new-path>` or replacements after `:bd` on
+    /// the last slot consume the next value.
+    next_buffer_id: BufferId,
+    /// The slot that was active just before the most recent `switch_to`
+    /// call. Used by `<C-^>` / `:b#` to jump to the alternate buffer.
+    pub prev_active: Option<usize>,
+    /// Set to `true` when the FSM or Ctrl-C wants to quit.
+    pub exit_requested: bool,
+    /// Last ex-command result (Info / Error / write confirmation).
+    /// Shown in the status line; cleared on next keypress.
+    pub status_message: Option<String>,
+    /// Active `:` command input. `Some` while the user is typing an ex
+    /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
+    /// (h/l/w/b/dw/diw/...) work inside the prompt.
+    pub command_field: Option<TextFieldEditor>,
+    /// Active `/` (forward) / `?` (backward) search prompt.
+    pub search_field: Option<TextFieldEditor>,
+    /// Active file or buffer picker overlay.
+    pub picker: Option<AnyPicker>,
+    /// `true` after the user pressed `<Space>` in normal mode and we're
+    /// waiting for the next key to resolve the leader sequence.
+    pub pending_leader: bool,
+    /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
+    /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
+    /// once the motion is resolved or forwarded to the engine.
+    pub pending_buffer_motion: Option<char>,
+    /// Direction of the active `search_field`.
+    pub search_dir: SearchDir,
+    /// Last cursor shape we emitted to the terminal.
+    last_cursor_shape: CursorShape,
+    /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
+    /// and active theme. Multiplexed by BufferId (Phase A API).
+    syntax: SyntaxLayer,
+    /// Toggled by `:perf`. When true, render shows last-frame timings.
+    pub perf_overlay: bool,
+    pub last_recompute_us: u128,
+    pub last_install_us: u128,
+    pub last_signature_us: u128,
+    pub last_git_us: u128,
+    pub last_perf: crate::syntax::PerfBreakdown,
+    /// Counters surfaced in `:perf` so the user can verify cache ratios.
+    pub recompute_hits: u64,
+    pub recompute_throttled: u64,
+    pub recompute_runs: u64,
+}
+
+/// Resolve the cursor shape for an active prompt field (`command_field` or
+/// `search_field`). Insert mode → Bar; anything else → Block.
+fn prompt_cursor_shape(field: &hjkl_form::TextFieldEditor) -> CursorShape {
+    match field.vim_mode() {
+        hjkl_form::VimMode::Insert => CursorShape::Bar,
+        _ => CursorShape::Block,
+    }
+}
+
+impl App {
+    /// Return a shared reference to the active buffer slot.
+    pub fn active(&self) -> &BufferSlot {
+        &self.slots[self.active]
+    }
+
+    /// Return a mutable reference to the active buffer slot.
+    pub fn active_mut(&mut self) -> &mut BufferSlot {
+        &mut self.slots[self.active]
+    }
+
+    /// Return a shared slice of all buffer slots.
+    pub fn slots(&self) -> &[BufferSlot] {
+        &self.slots
+    }
+
+    /// Return the index of the currently active slot.
+    pub fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Build a fresh [`App`], optionally loading `filename` from disk.
+    ///
+    /// - File found → content seeded into buffer, dirty = false.
+    /// - File not found → buffer empty, filename retained, `is_new_file = true`.
+    /// - Other I/O error → returns `Err` so main can print to stderr before
+    ///   entering alternate-screen mode.
+    ///
+    /// `readonly` sets `:set readonly` on the editor options.
+    /// `goto_line` (1-based) moves the cursor after load when `Some`.
+    /// `search_pattern` triggers an initial search when `Some`.
+    pub fn new(
+        filename: Option<PathBuf>,
+        readonly: bool,
+        goto_line: Option<usize>,
+        search_pattern: Option<String>,
+    ) -> Result<Self> {
+        let mut buffer = Buffer::new();
+        let mut is_new_file = false;
+        if let Some(ref path) = filename {
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    // Strip one trailing newline (vim default): a file
+                    // ending in `\n` is the EOL of its last line, not
+                    // a separator before an empty trailing line. Save
+                    // re-appends one.
+                    let content = content.strip_suffix('\n').unwrap_or(&content);
+                    BufferEdit::replace_all(&mut buffer, content);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // New file — buffer stays empty, filename retained.
+                    is_new_file = true;
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("{}: {}", path.display(), e));
+                }
+            }
+        }
+
+        let host = TuiHost::new();
+        let options = Options {
+            readonly,
+            ..Options::default()
+        };
+        let mut editor = Editor::new(buffer, host, options);
+
+        // +N line jump — 1-based, clamp to buffer.
+        if let Some(n) = goto_line {
+            editor.goto_line(n);
+        }
+
+        // +/pattern initial search — compile the pattern and set it.
+        if let Some(pat) = search_pattern {
+            match regex::Regex::new(&pat) {
+                Ok(re) => {
+                    editor.set_search_pattern(Some(re));
+                    editor.search_advance_forward(false);
+                }
+                Err(e) => {
+                    eprintln!("hjkl: bad search pattern: {e}");
+                }
+            }
+        }
+
+        // Build syntax layer (dark theme default) and detect language for
+        // the opened file, then run an initial highlight pass.
+        let mut syntax = syntax::default_layer();
+        let buffer_id: BufferId = 0;
+        if let Some(ref path) = filename {
+            syntax.set_language_for_path(buffer_id, path);
+        }
+        // Sync host viewport to the real terminal size before sizing the
+        // preview / submitting the initial parse.
+        if let Ok(size) = crossterm::terminal::size() {
+            let vp = editor.host_mut().viewport_mut();
+            vp.width = size.0;
+            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        }
+        let initial_vp_top = editor.host().viewport().top_row;
+        let initial_vp_height = editor.host().viewport().height as usize;
+        // Synchronous viewport-only preview so the first frame has
+        // highlights regardless of file size or viewport position.
+        let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
+        let initial_dg = editor.buffer().dirty_gen();
+        if let Some(out) = syntax.preview_render(
+            buffer_id,
+            editor.buffer(),
+            initial_vp_top,
+            initial_vp_height,
+        ) {
+            editor.install_ratatui_syntax_spans(out.spans);
+        }
+        syntax.submit_render(
+            buffer_id,
+            editor.buffer(),
+            initial_vp_top,
+            initial_vp_height,
+        );
+        let initial_key: Option<(u64, usize, usize)> =
+            if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150)) {
+                let key = out.key;
+                editor.install_ratatui_syntax_spans(out.spans);
+                initial_signs = out.signs;
+                Some(key)
+            } else {
+                Some((initial_dg, initial_vp_top, initial_vp_height))
+            };
+        // Drain any ContentEdit / reset state seeded during construction.
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
+
+        let mut slot = BufferSlot {
+            buffer_id,
+            editor,
+            filename,
+            dirty: false,
+            is_new_file,
+            is_untracked: false,
+            diag_signs: initial_signs,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            last_recompute_at: Instant::now() - Duration::from_secs(1),
+            last_recompute_key: initial_key,
+            saved_hash: 0,
+            saved_len: 0,
+        };
+        // Snapshot the loaded content so undo-to-saved clears dirty.
+        slot.snapshot_saved();
+
+        Ok(Self {
+            slots: vec![slot],
+            active: 0,
+            next_buffer_id: 1,
+            prev_active: None,
+            exit_requested: false,
+            status_message: None,
+            command_field: None,
+            search_field: None,
+            picker: None,
+            pending_leader: false,
+            pending_buffer_motion: None,
+            search_dir: SearchDir::Forward,
+            last_cursor_shape: CursorShape::Block,
+            syntax,
+            perf_overlay: false,
+            last_recompute_us: 0,
+            last_install_us: 0,
+            last_signature_us: 0,
+            last_git_us: 0,
+            last_perf: crate::syntax::PerfBreakdown::default(),
+            recompute_hits: 0,
+            recompute_throttled: 0,
+            recompute_runs: 0,
+        })
+    }
+
+    /// Mode label for the status line.
+    pub fn mode_label(&self) -> &'static str {
+        match self.active().editor.vim_mode() {
+            VimMode::Normal => "NORMAL",
+            VimMode::Insert => "INSERT",
+            VimMode::Visual => "VISUAL",
+            VimMode::VisualLine => "VISUAL LINE",
+            VimMode::VisualBlock => "VISUAL BLOCK",
+        }
+    }
+
+    /// Public entry point for loading an extra file from the CLI into a new
+    /// slot without switching the active buffer. Used by `main` to handle
+    /// `hjkl a.rs b.rs c.rs` — slots 1…N are populated here after `App::new`
+    /// opens slot 0.
+    pub fn open_extra(&mut self, path: PathBuf) -> Result<(), String> {
+        self.open_new_slot(path).map(|_| ())
+    }
+}
