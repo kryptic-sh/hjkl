@@ -26,7 +26,7 @@ hjkl-clipboard = { path = "../../crates/hjkl-clipboard", version = "=0.3.0" }
 hjkl-form = { path = "../../crates/hjkl-form", version = "=0.3.0" }
 hjkl-picker = { path = "../../crates/hjkl-picker", version = "=0.3.0" }
 ratatui = "0.29"
-crossterm = "0.28"
+crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 regex = "1"
