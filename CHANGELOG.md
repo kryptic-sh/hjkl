@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-28
+
 ### Added
 
 - **Multi-buffer support** in `apps/hjkl`: open many files at once
