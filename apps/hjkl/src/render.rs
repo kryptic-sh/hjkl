@@ -16,9 +16,12 @@ use ratatui::{
 
 use crate::app::{App, STATUS_LINE_HEIGHT};
 
-/// Gutter width: 4 cells (3 digits + 1 spacer). Matches the Phase 2
-/// spec layout. Grows to 5 at 10 000 lines; fine for Phase 2.
-const GUTTER_WIDTH: u16 = 4;
+/// Gutter width formula — matches `Editor::cursor_screen_pos`'s
+/// `lnum_width = line_count.to_string().len() + 2`. The renderer must
+/// agree with the engine or terminal cursor lands off by one column.
+fn gutter_width(line_count: usize) -> u16 {
+    line_count.to_string().len() as u16 + 2
+}
 
 /// Render one complete frame into `frame`.
 pub fn frame(frame: &mut Frame, app: &mut App) {
@@ -32,16 +35,18 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     let buf_area = chunks[0];
     let status_area = chunks[1];
 
+    let gw = gutter_width(app.editor.buffer().line_count() as usize);
+
     // Tell the host the text area dimensions so scrolloff math is accurate.
     // text_width excludes the gutter.
     {
         let vp = app.editor.host_mut().viewport_mut();
         vp.width = buf_area.width;
         vp.height = buf_area.height;
-        vp.text_width = buf_area.width.saturating_sub(GUTTER_WIDTH);
+        vp.text_width = buf_area.width.saturating_sub(gw);
     }
 
-    buffer_pane(frame, app, buf_area);
+    buffer_pane(frame, app, buf_area, gw);
     status_line(frame, app, status_area);
 }
 
@@ -50,9 +55,9 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 /// The buffer-pane cursor is suppressed when the user is typing in the
 /// command line (`:` prompt or `/`/`?` search prompt), because the
 /// terminal cursor belongs to the bottom row in those states.
-fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gutter_width: u16) {
     let gutter = Gutter {
-        width: GUTTER_WIDTH,
+        width: gutter_width,
         style: Style::default().fg(Color::DarkGray),
     };
 
