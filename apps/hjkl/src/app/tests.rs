@@ -604,8 +604,8 @@ fn buffer_source_select_returns_switch_buffer() {
     );
     // Index 0 corresponds to the first entry (the only slot).
     match source.select(0) {
-        PickerAction::SwitchBuffer(i) => assert_eq!(i, 0),
-        _ => panic!("expected SwitchBuffer(0)"),
+        PickerAction::SwitchSlot(i) => assert_eq!(i, 0),
+        _ => panic!("expected SwitchSlot(0)"),
     }
     let _ = std::fs::remove_file(&path);
 }

@@ -8,7 +8,7 @@ impl App {
     /// Open the fuzzy file picker.
     pub(crate) fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let source = Box::new(crate::picker::FileSource::new(cwd));
+        let source = Box::new(crate::picker::HighlightedFileSource::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
@@ -34,7 +34,7 @@ impl App {
     /// the query with `pattern`.
     pub(crate) fn open_grep_picker(&mut self, pattern: Option<&str>) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let source = Box::new(crate::picker::RgSource::new(cwd));
+        let source = Box::new(crate::picker::HighlightedRgSource::new(cwd));
         self.picker = Some(match pattern {
             Some(p) if !p.is_empty() => crate::picker::Picker::new_with_query(source, p),
             _ => crate::picker::Picker::new(source),
@@ -65,7 +65,7 @@ impl App {
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
             }
-            crate::picker::PickerAction::SwitchBuffer(idx) => {
+            crate::picker::PickerAction::SwitchSlot(idx) => {
                 if idx < self.slots.len() {
                     self.switch_to(idx);
                 }

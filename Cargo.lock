@@ -681,6 +681,7 @@ dependencies = [
  "hjkl-editor",
  "hjkl-engine",
  "hjkl-form",
+ "hjkl-picker",
  "hjkl-ratatui",
  "hjkl-tree-sitter",
  "ignore",
@@ -739,6 +740,20 @@ version = "0.2.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
+]
+
+[[package]]
+name = "hjkl-picker"
+version = "0.2.0"
+dependencies = [
+ "crossterm",
+ "hjkl-buffer",
+ "hjkl-engine",
+ "hjkl-form",
+ "ignore",
+ "ratatui",
+ "regex",
+ "tempfile",
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ hjkl-ratatui = { path = "../../crates/hjkl-ratatui", version = "=0.2.0" }
 hjkl-tree-sitter = { path = "../../crates/hjkl-tree-sitter", version = "=0.2.0" }
 hjkl-clipboard = { path = "../../crates/hjkl-clipboard", version = "=0.2.0" }
 hjkl-form = { path = "../../crates/hjkl-form", version = "=0.2.0" }
+hjkl-picker = { path = "../../crates/hjkl-picker", version = "=0.2.0" }
 ratatui = "0.29"
 crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
