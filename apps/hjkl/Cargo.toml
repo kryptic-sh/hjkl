@@ -30,7 +30,7 @@ crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 regex = "1"
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.20", default-features = false }
 ignore = "0.4"
 ec4rs = "1"
 
