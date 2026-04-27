@@ -722,8 +722,9 @@ impl PickerLogic for RgSource {
             .and_then(|g| {
                 g.get(idx).map(|m| {
                     let path = m.path.display().to_string();
-                    let text = if m.text.len() > 80 {
-                        format!("{}…", &m.text[..79])
+                    let text = if m.text.chars().count() > 80 {
+                        let cut: String = m.text.chars().take(79).collect();
+                        format!("{cut}…")
                     } else {
                         m.text.clone()
                     };
