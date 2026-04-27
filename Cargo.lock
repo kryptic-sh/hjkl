@@ -748,7 +748,6 @@ version = "0.2.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-engine",
  "hjkl-form",
  "ignore",
  "ratatui",
