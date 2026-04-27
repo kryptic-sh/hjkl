@@ -111,6 +111,9 @@ impl App {
                                 KeyCode::Char('b') => {
                                     self.open_buffer_picker();
                                 }
+                                KeyCode::Char('/') => {
+                                    self.open_grep_picker(None);
+                                }
                                 _ => {}
                             }
                         }

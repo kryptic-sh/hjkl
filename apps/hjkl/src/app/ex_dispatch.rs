@@ -51,6 +51,13 @@ impl App {
             return;
         }
 
+        // `:rg [pattern]` — open the ripgrep content-search picker.
+        if cmd == "rg" || cmd.starts_with("rg ") {
+            let pattern = cmd.strip_prefix("rg ").map(str::trim);
+            self.open_grep_picker(pattern);
+            return;
+        }
+
         // E1 — `:b [num|name]` — must be matched BEFORE the `bn`/`bp` block.
         if cmd == "b" || cmd.starts_with("b ") {
             let arg = cmd.strip_prefix("b ").map(str::trim).unwrap_or("").trim();

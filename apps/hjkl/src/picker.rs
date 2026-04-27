@@ -1,20 +1,20 @@
 //! Modal fuzzy picker — popup overlay over the editor pane.
 //!
-//! Generic over a [`PickerSource`] so the same UI hosts file pickers,
-//! buffer pickers, grep pickers, etc. The current concrete source is
-//! [`FileSource`] (gitignore-aware cwd walk).
+//! Non-generic: the picker holds a `Box<dyn PickerLogic>` so new sources
+//! (file, buffer, grep, …) can be added without touching any enum or match
+//! arm elsewhere in the codebase.
 //!
-//! Triggered by `<leader><space>` / `<leader>f`, the `:picker` ex
-//! command, or the `+picker` startup arg. Uses
-//! [`hjkl_form::TextFieldEditor`] for the query input (vim grammar
-//! inside the prompt) and a background thread (when the source needs
-//! one) to stream candidates in.
+//! Triggered by `<leader><space>` / `<leader>f`, `:picker`, `<Space>/`,
+//! `:rg <pattern>`, etc.  Uses [`hjkl_form::TextFieldEditor`] for the query
+//! input (vim grammar inside the prompt) and a background thread (when the
+//! source spawns one) to stream candidates in.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_buffer::{Buffer, Span as BufferSpan};
@@ -29,6 +29,9 @@ const PREVIEW_MAX_LINES: usize = 200;
 /// large generated artefact that wouldn't render usefully anyway.
 const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 
+/// Debounce delay for `RequeryMode::Spawn` sources (milliseconds).
+const REQUERY_DEBOUNCE_MS: u64 = 150;
+
 /// Action emitted when the user picks an item. The App dispatches each
 /// variant to the right machinery.
 pub enum PickerAction {
@@ -36,6 +39,69 @@ pub enum PickerAction {
     OpenPath(PathBuf),
     /// Switch to an already-open buffer slot by index.
     SwitchBuffer(usize),
+    /// Open the path at a specific 1-based line number.
+    OpenPathAtLine(PathBuf, u32),
+    /// No-op action (used for error sentinel items).
+    None,
+}
+
+/// How the picker reacts when the query string changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RequeryMode {
+    /// Filter the existing in-memory item vec. `enumerate` is called once
+    /// at open with `query = None`; subsequent query changes just re-score.
+    FilterInMemory,
+    /// Re-spawn the source for every debounced query change. `enumerate` is
+    /// called with `query = Some(q)` after each debounce interval; the
+    /// source resets its item vec each time.
+    Spawn,
+}
+
+/// Fully-erased source for one kind of picker. The picker only talks to
+/// the source via opaque `usize` indices into the source's internal item vec.
+pub trait PickerLogic: Send + 'static {
+    /// Title shown above the input row (e.g. "files", "buffers", "grep").
+    fn title(&self) -> &str;
+
+    /// Number of items currently available (grows as enumeration progresses).
+    fn item_count(&self) -> usize;
+
+    /// Display label for the row at `idx`.
+    fn label(&self, idx: usize) -> String;
+
+    /// Text the fuzzy scorer scores against. May equal `label`.
+    fn match_text(&self, idx: usize) -> String;
+
+    /// Whether this source wants the preview pane.
+    fn has_preview(&self) -> bool {
+        true
+    }
+
+    /// Build the preview pane for the row. Default: empty buffer.
+    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
+        let _ = idx;
+        (Buffer::new(), String::new(), PreviewSpans::default())
+    }
+
+    /// Translate the picked row into an action.
+    fn select(&self, idx: usize) -> PickerAction;
+
+    /// How the picker should react when the query changes.
+    fn requery_mode(&self) -> RequeryMode {
+        RequeryMode::FilterInMemory
+    }
+
+    /// Re-enumerate items.
+    ///
+    /// - `FilterInMemory` sources: called once at open with `query = None`.
+    /// - `Spawn` sources: called on every debounced query change with
+    ///   `query = Some(q)`. Must reset the internal item vec before pushing
+    ///   new items.
+    ///
+    /// `cancel` is set to `true` by the picker when a newer requery
+    /// supersedes this one — long-running threads should poll it and bail.
+    fn enumerate(&mut self, query: Option<&str>, cancel: Arc<AtomicBool>)
+    -> Option<JoinHandle<()>>;
 }
 
 /// Per-row span table + style table for the preview pane. The
@@ -52,82 +118,6 @@ pub struct PreviewSpans {
     pub styles: Vec<RatStyle>,
 }
 
-/// Source-side abstraction for one kind of picker. Implementations
-/// stream items into the picker's `ItemSink` (synchronously or via a
-/// background thread), describe each item for the list and the match
-/// scorer, build a preview, and convert a selected item into a
-/// [`PickerAction`].
-pub trait PickerSource: Send + Sync + 'static {
-    /// Per-row payload. `Send + Sync` so the scan can run on a worker;
-    /// `Clone` so the picker can hand selected items back to the app
-    /// without lock-spanning.
-    type Item: Clone + Send + Sync + 'static;
-
-    /// Title shown above the input row (e.g. "files", "buffers").
-    fn title(&self) -> &'static str;
-
-    /// Display label for the list row.
-    fn label(&self, item: &Self::Item) -> String;
-
-    /// Text used for fuzzy match scoring. Often the same as `label`,
-    /// but a buffer source might want to score against the path while
-    /// labelling with extra metadata (`● src/main.rs (modified)`).
-    fn match_text(&self, item: &Self::Item) -> String;
-
-    /// Whether this source wants the preview pane. Sources without
-    /// useful per-item content (command palettes, simple action lists)
-    /// override to `false` and skip implementing `preview`.
-    fn has_preview(&self) -> bool {
-        true
-    }
-
-    /// Build the preview-pane content. Returns `(buffer, status,
-    /// spans)`. Status is empty for normal content; non-empty is a
-    /// placeholder reason ("binary", "1.0MB — too large", I/O error
-    /// message). Spans are an empty `PreviewSpans` when the source
-    /// doesn't tokenise (in which case the preview renders unstyled).
-    /// Only called when `has_preview()` returns `true`.
-    fn preview(&self, _item: &Self::Item) -> (Buffer, String, PreviewSpans) {
-        (Buffer::new(), String::new(), PreviewSpans::default())
-    }
-
-    /// Translate the highlighted item into an action when the user
-    /// presses Enter.
-    fn select(&self, item: &Self::Item) -> PickerAction;
-
-    /// Stream items into `sink`. Sources with synchronous data should
-    /// push everything and call `sink.finish()` inline (returning
-    /// `None`); sources doing I/O should spawn a thread and return its
-    /// handle so the picker can hold liveness for as long as it's
-    /// open.
-    fn enumerate(self: Arc<Self>, sink: ItemSink<Self::Item>) -> Option<JoinHandle<()>>;
-}
-
-/// Channel-like sink into the picker's candidate buffer. Sources push
-/// items here from `enumerate`; the picker reads via its own
-/// `Arc<Mutex<Vec<Item>>>` snapshot.
-pub struct ItemSink<I> {
-    items: Arc<Mutex<Vec<I>>>,
-    done: Arc<AtomicBool>,
-}
-
-impl<I> ItemSink<I> {
-    /// Append an iterator of items in one lock acquisition. Preferred
-    /// over per-item push when the source can batch. For single items,
-    /// use `extend(std::iter::once(item))`.
-    pub fn extend(&self, items: impl IntoIterator<Item = I>) {
-        if let Ok(mut g) = self.items.lock() {
-            g.extend(items);
-        }
-    }
-
-    /// Mark the scan as complete. The picker shows a "scanning…"
-    /// indicator until this is called.
-    pub fn finish(&self) {
-        self.done.store(true, Ordering::Release);
-    }
-}
-
 /// Outcome of routing one key event into the picker.
 pub enum PickerEvent {
     /// Key consumed; picker stays open.
@@ -142,62 +132,54 @@ pub enum PickerEvent {
 /// source item vec together with the char positions that satisfied the
 /// fuzzy match (used by the renderer to highlight matched chars).
 pub(crate) struct FilteredEntry {
-    /// Index into the `Picker::items` vec.
+    /// Index into the source's internal item vec.
     pub idx: usize,
     /// Char-indices in the item's label where needle chars matched.
     /// Empty when the query is empty (no highlight needed).
     pub matches: Vec<usize>,
 }
 
-/// Generic picker state. Lives in `App::picker` while open.
-pub struct Picker<S: PickerSource> {
+/// Non-generic picker state. Lives in `App::picker` while open.
+pub struct Picker {
     /// Query input — vim modal text field. Lands in Insert at open so
     /// the user types immediately.
     pub query: TextFieldEditor,
     /// Source providing the items, labels, preview, and select action.
-    source: Arc<S>,
-    /// Discovered items (source's `enumerate` appends; picker reads).
-    items: Arc<Mutex<Vec<S::Item>>>,
+    source: Box<dyn PickerLogic>,
     /// Ranked filtered entries for the current query.
     filtered: Vec<FilteredEntry>,
     /// Selection index into `filtered`.
     pub selected: usize,
-    /// Set to `true` by the source when its enumeration finishes.
-    scan_done: Arc<AtomicBool>,
     /// Last query string the filter ran against.
     last_query: String,
-    /// Last `items.len()` the filter ran against.
+    /// Last item count the filter ran against.
     last_seen_count: usize,
+    /// Cancel flag for the current background scan.
+    cancel: Arc<AtomicBool>,
     /// Background scan thread (when the source spawned one). Held for
     /// liveness only.
     _scan: Option<JoinHandle<()>>,
-    /// Index into `items` whose preview is currently cached.
+    /// Debounce timestamp: fire requery when `Instant::now() >= requery_at`.
+    requery_at: Option<Instant>,
+    /// Index into the source whose preview is currently cached.
     preview_idx: Option<usize>,
     /// Cached preview content. Empty when nothing is selected.
     preview_buffer: Buffer,
     /// Status tag for the preview pane title.
     preview_status: String,
-    /// Cached label for the preview header (saves a clone-from-Item
-    /// each render).
+    /// Cached label for the preview header.
     preview_label: Option<String>,
-    /// Per-row spans + style table for the preview buffer. Empty when
-    /// the source doesn't tokenise.
+    /// Per-row spans + style table for the preview buffer.
     preview_spans: PreviewSpans,
 }
 
-impl<S: PickerSource> Picker<S> {
-    /// Build a new picker over `source`. Kicks off enumeration
-    /// immediately so candidates start streaming in before the user
-    /// types their first character.
-    pub fn new(source: S) -> Self {
-        let source = Arc::new(source);
-        let items = Arc::new(Mutex::new(Vec::<S::Item>::new()));
-        let scan_done = Arc::new(AtomicBool::new(false));
-        let sink = ItemSink {
-            items: Arc::clone(&items),
-            done: Arc::clone(&scan_done),
-        };
-        let handle = Arc::clone(&source).enumerate(sink);
+impl Picker {
+    /// Build a new picker over `source`. Kicks off enumeration immediately
+    /// so candidates start streaming in before the user types their first
+    /// character.
+    pub fn new(mut source: Box<dyn PickerLogic>) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let handle = source.enumerate(None, Arc::clone(&cancel));
 
         let mut query = TextFieldEditor::new(true);
         query.enter_insert_at_end();
@@ -205,13 +187,13 @@ impl<S: PickerSource> Picker<S> {
         let mut me = Self {
             query,
             source,
-            items,
             filtered: Vec::new(),
             selected: 0,
-            scan_done,
             last_query: String::new(),
             last_seen_count: 0,
+            cancel,
             _scan: handle,
+            requery_at: None,
             preview_idx: None,
             preview_buffer: Buffer::new(),
             preview_status: String::new(),
@@ -219,39 +201,38 @@ impl<S: PickerSource> Picker<S> {
             preview_spans: PreviewSpans::default(),
         };
         // Block briefly for the first batch of items so the first
-        // render already has a populated list and a loaded preview —
-        // otherwise the preview pane stays blank until the next event-
-        // loop tick (~120ms) catches up to the streaming scan.
-        me.wait_for_items(std::time::Duration::from_millis(30));
+        // render already has a populated list and a loaded preview.
+        me.wait_for_items(Duration::from_millis(30));
         me.refresh();
         me.refresh_preview();
         me
     }
 
-    /// Spin up to `timeout` waiting for the source to push at least
-    /// one item. Cheap polling — short enough that even synchronous
-    /// sources (which call `finish()` before returning from
-    /// `enumerate`) just see the first poll return.
-    fn wait_for_items(&self, timeout: std::time::Duration) {
-        let deadline = std::time::Instant::now() + timeout;
+    /// Build a new picker with a pre-populated query string.
+    pub fn new_with_query(source: Box<dyn PickerLogic>, initial_query: &str) -> Self {
+        let mut me = Self::new(source);
+        me.query.set_text(initial_query);
+        me.refresh();
+        me.refresh_preview();
+        me
+    }
+
+    /// Spin up to `timeout` waiting for the source to push at least one item.
+    fn wait_for_items(&self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
         loop {
-            if let Ok(g) = self.items.lock()
-                && !g.is_empty()
-            {
+            if self.source.item_count() > 0 {
                 return;
             }
-            if self.scan_done.load(Ordering::Acquire) {
+            if Instant::now() >= deadline {
                 return;
             }
-            if std::time::Instant::now() >= deadline {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 
-    /// Title from the source (e.g. "files").
-    pub fn title(&self) -> &'static str {
+    /// Title from the source.
+    pub fn title(&self) -> &str {
         self.source.title()
     }
 
@@ -260,14 +241,14 @@ impl<S: PickerSource> Picker<S> {
         self.source.has_preview()
     }
 
-    /// True once the source has signalled `finish()`.
+    /// True once the background thread has finished (or none was started).
     pub fn scan_done(&self) -> bool {
-        self.scan_done.load(Ordering::Acquire)
+        self._scan.as_ref().map(|h| h.is_finished()).unwrap_or(true)
     }
 
     /// Total candidate count (regardless of filter).
     pub fn total(&self) -> usize {
-        self.items.lock().map(|c| c.len()).unwrap_or(0)
+        self.source.item_count()
     }
 
     /// Number of candidates currently passing the query filter.
@@ -275,26 +256,56 @@ impl<S: PickerSource> Picker<S> {
         self.filtered.len()
     }
 
+    /// Tick — called each render frame. Handles debounce expiry for
+    /// `RequeryMode::Spawn` sources.
+    pub fn tick(&mut self, now: Instant) {
+        if self.source.requery_mode() != RequeryMode::Spawn {
+            return;
+        }
+        let Some(at) = self.requery_at else { return };
+        if now < at {
+            return;
+        }
+        self.requery_at = None;
+        // Signal previous scan to stop.
+        self.cancel.store(true, Ordering::Release);
+        let new_cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = Arc::clone(&new_cancel);
+        let q = self.query.text();
+        let handle = self.source.enumerate(Some(&q), new_cancel);
+        self._scan = handle;
+        // Reset filter state so refresh re-scores against new items.
+        self.filtered.clear();
+        self.selected = 0;
+        self.last_query.clear();
+        self.last_seen_count = 0;
+        self.preview_idx = None;
+    }
+
     /// Re-run the filter if the query or candidate count changed.
     /// Returns `true` when `filtered` was rebuilt.
     pub fn refresh(&mut self) -> bool {
-        let items = match self.items.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
+        let count = self.source.item_count();
         let q = self.query.text();
         let q_changed = q != self.last_query;
-        let count_changed = items.len() != self.last_seen_count;
+        let count_changed = count != self.last_seen_count;
         if !q_changed && !count_changed {
             return false;
         }
+
+        // For Spawn sources, a query change schedules a requery rather than
+        // filtering in-memory.
+        if self.source.requery_mode() == RequeryMode::Spawn && q_changed {
+            self.requery_at = Some(Instant::now() + Duration::from_millis(REQUERY_DEBOUNCE_MS));
+        }
+
         self.last_query.clone_from(&q);
-        self.last_seen_count = items.len();
+        self.last_seen_count = count;
 
         let q_lower = q.to_lowercase();
         let mut scored: Vec<(i64, usize, String, Vec<usize>)> = Vec::new();
-        for (i, item) in items.iter().enumerate() {
-            let m = self.source.match_text(item);
+        for i in 0..count {
+            let m = self.source.match_text(i);
             let m_lower = m.to_lowercase();
             let (sc, positions) = if q.is_empty() {
                 (0i64, Vec::new())
@@ -306,9 +317,7 @@ impl<S: PickerSource> Picker<S> {
             };
             scored.push((sc, i, m_lower, positions));
         }
-        // Score desc; ties broken by lowercased match text asc so the
-        // ordering is stable across renders even when the source's
-        // emission order changes.
+        // Score desc; ties broken by lowercased match text asc.
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
         scored.truncate(500);
         self.filtered = scored
@@ -321,9 +330,8 @@ impl<S: PickerSource> Picker<S> {
         true
     }
 
-    /// Refresh the preview if the selection now points at a different
-    /// item than the cached one. No-op when the source opted out of
-    /// previews via `has_preview() == false`.
+    /// Refresh the preview if the selection now points at a different item
+    /// than the cached one.
     pub fn refresh_preview(&mut self) {
         if !self.source.has_preview() {
             return;
@@ -340,17 +348,8 @@ impl<S: PickerSource> Picker<S> {
             self.preview_spans = PreviewSpans::default();
             return;
         };
-        // Snapshot the item so we can drop the lock before calling
-        // `source.preview` (which may do disk I/O).
-        let item = match self.items.lock() {
-            Ok(g) => match g.get(idx) {
-                Some(i) => i.clone(),
-                None => return,
-            },
-            Err(_) => return,
-        };
-        let label = self.source.label(&item);
-        let (buf, status, spans) = self.source.preview(&item);
+        let label = self.source.label(idx);
+        let (buf, status, spans) = self.source.preview(idx);
         self.preview_buffer = buf;
         self.preview_status = status;
         self.preview_label = Some(label);
@@ -367,8 +366,7 @@ impl<S: PickerSource> Picker<S> {
         &self.preview_buffer
     }
 
-    /// Status tag (`"binary"`, `"1.2MB — too large"`, …). Empty when
-    /// the preview is normal content.
+    /// Status tag. Empty when the preview is normal content.
     pub fn preview_status(&self) -> &str {
         &self.preview_status
     }
@@ -378,31 +376,19 @@ impl<S: PickerSource> Picker<S> {
         self.preview_label.as_deref()
     }
 
-    /// Labels and fuzzy-match char positions for the first `n` filtered
-    /// items. The renderer uses this to highlight matched characters.
-    /// `matches` contains char-indices into the label string.
+    /// Labels and fuzzy-match char positions for the first `n` filtered items.
     pub fn visible_entries(&self, n: usize) -> Vec<(String, Vec<usize>)> {
-        let items = match self.items.lock() {
-            Ok(g) => g,
-            Err(_) => return Vec::new(),
-        };
         self.filtered
             .iter()
             .take(n)
-            .filter_map(|e| {
-                items
-                    .get(e.idx)
-                    .map(|it| (self.source.label(it), e.matches.clone()))
-            })
+            .map(|e| (self.source.label(e.idx), e.matches.clone()))
             .collect()
     }
 
     /// Action for the currently highlighted item, if any.
     fn selected_action(&self) -> Option<PickerAction> {
         let idx = self.filtered.get(self.selected)?.idx;
-        let items = self.items.lock().ok()?;
-        let item = items.get(idx)?;
-        Some(self.source.select(item))
+        Some(self.source.select(idx))
     }
 
     /// Route a key event. Special keys (Esc / Enter / C-n / C-p / Up /
@@ -464,13 +450,7 @@ impl<S: PickerSource> Picker<S> {
     }
 }
 
-/// Convenience alias for the file-picker form, since it's currently
-/// the only concrete source. New sources get their own alias next to
-/// `FileSource`.
-pub type FilePicker = Picker<FileSource>;
-
-/// Convenience alias for the buffer-picker.
-pub type BufferPicker = Picker<BufferSource>;
+// ── BufferSource ─────────────────────────────────────────────────────────────
 
 /// Snapshot of one open buffer slot for use in the buffer picker.
 #[derive(Clone)]
@@ -484,8 +464,7 @@ pub struct BufferEntry {
 }
 
 /// Source for the buffer picker. Enumerates all open slots at the
-/// moment the picker is opened — the picker is modal so this snapshot
-/// is fine.
+/// moment the picker is opened.
 pub struct BufferSource {
     entries: Vec<BufferEntry>,
 }
@@ -510,59 +489,66 @@ impl BufferSource {
     }
 }
 
-impl PickerSource for BufferSource {
-    type Item = BufferEntry;
-
-    fn title(&self) -> &'static str {
+impl PickerLogic for BufferSource {
+    fn title(&self) -> &str {
         "buffers"
     }
 
-    fn label(&self, item: &BufferEntry) -> String {
-        if item.dirty {
-            format!("● {}", item.name)
-        } else {
-            format!("  {}", item.name)
+    fn item_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        match self.entries.get(idx) {
+            Some(e) => {
+                if e.dirty {
+                    format!("● {}", e.name)
+                } else {
+                    format!("  {}", e.name)
+                }
+            }
+            None => String::new(),
         }
     }
 
-    fn match_text(&self, item: &BufferEntry) -> String {
-        // Must match the format of `label` so that the scorer's char
-        // positions align with what the renderer highlights.
-        self.label(item)
+    fn match_text(&self, idx: usize) -> String {
+        // Must match `label` so scorer char positions align with what the
+        // renderer highlights.
+        self.label(idx)
     }
 
-    /// Buffer picker has no per-item disk content to preview.
-    /// TODO: add a live-buffer snapshot preview in a future iteration.
     fn has_preview(&self) -> bool {
         false
     }
 
-    fn select(&self, item: &BufferEntry) -> PickerAction {
-        PickerAction::SwitchBuffer(item.idx)
+    fn select(&self, idx: usize) -> PickerAction {
+        match self.entries.get(idx) {
+            Some(e) => PickerAction::SwitchBuffer(e.idx),
+            None => PickerAction::None,
+        }
     }
 
-    fn enumerate(self: Arc<Self>, sink: ItemSink<Self::Item>) -> Option<JoinHandle<()>> {
-        // All entries are in memory — push synchronously and finish.
-        sink.extend(self.entries.iter().cloned());
-        sink.finish();
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        _cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        // All entries already in memory — nothing to do.
         None
     }
 }
 
-/// File-source: gitignore-aware cwd walker. Items are paths relative
-/// to `root`, preview reads from disk capped at `PREVIEW_MAX_LINES` /
+// ── FileSource ───────────────────────────────────────────────────────────────
+
+/// File-source: gitignore-aware cwd walker. Items are paths relative to
+/// `root`, preview reads from disk capped at `PREVIEW_MAX_LINES` /
 /// `PREVIEW_MAX_BYTES` with a binary-byte heuristic.
 pub struct FileSource {
     root: PathBuf,
-    /// Tree-sitter language registry; preview detects language by
-    /// extension here.
+    items: Arc<Mutex<Vec<PathBuf>>>,
+    scan_done: Arc<AtomicBool>,
     registry: LanguageRegistry,
-    /// Theme used to resolve capture names to ratatui styles.
     theme: Arc<dyn Theme + Send + Sync>,
-    /// Per-language `Highlighter` cache keyed by `LanguageConfig.name`.
-    /// Compiling a `Query` is the costly part (~10-20ms for Rust); we
-    /// pay that once per language and reuse the highlighter for every
-    /// subsequent preview of the same file type.
     highlighters: Mutex<HashMap<&'static str, Highlighter>>,
 }
 
@@ -570,59 +556,14 @@ impl FileSource {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
             registry: LanguageRegistry::new(),
             theme: Arc::new(DotFallbackTheme::dark()),
             highlighters: Mutex::new(HashMap::new()),
         }
     }
-}
 
-impl PickerSource for FileSource {
-    type Item = PathBuf;
-
-    fn title(&self) -> &'static str {
-        "files"
-    }
-
-    fn label(&self, item: &PathBuf) -> String {
-        item.to_string_lossy().into_owned()
-    }
-
-    fn match_text(&self, item: &PathBuf) -> String {
-        item.to_string_lossy().into_owned()
-    }
-
-    fn preview(&self, item: &PathBuf) -> (Buffer, String, PreviewSpans) {
-        let abs = self.root.join(item);
-        let (content, status) = load_preview(&abs);
-        if !status.is_empty() {
-            return (Buffer::from_str(&content), status, PreviewSpans::default());
-        }
-        let spans = self.highlight(&abs, &content);
-        (Buffer::from_str(&content), status, spans)
-    }
-
-    fn select(&self, item: &PathBuf) -> PickerAction {
-        PickerAction::OpenPath(item.clone())
-    }
-
-    fn enumerate(self: Arc<Self>, sink: ItemSink<Self::Item>) -> Option<JoinHandle<()>> {
-        let me = self;
-        thread::Builder::new()
-            .name("hjkl-picker-scan".into())
-            .spawn(move || scan_walk(me.root.as_path(), &sink))
-            .ok()
-    }
-}
-
-impl FileSource {
-    /// Highlight the preview content. Detects language from the path,
-    /// gets/compiles a `Highlighter` for it, parses the (already
-    /// truncated) source, and builds per-row spans plus a style table
-    /// the renderer can index into via the `Span.style` field.
-    ///
-    /// Returns an empty `PreviewSpans` for unknown languages or on any
-    /// parse / lock error — preview still renders, just unstyled.
     fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
         let Some(cfg) = self.registry.detect_for_path(abs) else {
             return PreviewSpans::default();
@@ -642,62 +583,424 @@ impl FileSource {
         let bytes = content.as_bytes();
         h.parse_initial(bytes);
         let flat: Vec<HighlightSpan> = h.highlight_range(bytes, 0..bytes.len());
-
-        // Row starts (offset of the first byte of each row). Mirrors
-        // the helper in `syntax.rs`.
-        let mut row_starts: Vec<usize> = vec![0];
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == b'\n' {
-                row_starts.push(i + 1);
-            }
-        }
-        let row_count = row_starts.len();
-
-        // Intern each unique ratatui style into `styles`; record the
-        // index so multiple spans sharing a style refer to the same id.
-        let mut styles: Vec<RatStyle> = Vec::new();
-        let mut by_row: Vec<Vec<BufferSpan>> = vec![Vec::new(); row_count];
-        for span in &flat {
-            let Some(rat) = self.theme.style(span.capture()).map(|s| s.to_ratatui()) else {
-                continue;
-            };
-            let style_id = match styles.iter().position(|s| *s == rat) {
-                Some(i) => i,
-                None => {
-                    styles.push(rat);
-                    styles.len() - 1
-                }
-            } as u32;
-            let span_start = span.byte_range.start;
-            let span_end = span.byte_range.end;
-            let start_row = row_starts
-                .partition_point(|&rs| rs <= span_start)
-                .saturating_sub(1);
-            let mut row = start_row;
-            while row < row_count {
-                let row_byte_start = row_starts[row];
-                let row_byte_end = row_starts
-                    .get(row + 1)
-                    .map(|&s| s.saturating_sub(1))
-                    .unwrap_or(bytes.len());
-                if row_byte_start >= span_end {
-                    break;
-                }
-                let local_start = span_start.saturating_sub(row_byte_start);
-                let local_end = span_end.min(row_byte_end) - row_byte_start;
-                if local_end > local_start {
-                    by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
-                }
-                row += 1;
-            }
-        }
-        PreviewSpans { by_row, styles }
+        build_preview_spans(&flat, bytes, &*self.theme)
     }
 }
 
-/// Load a single file for the preview pane. Returns `(content,
-/// status)`: when `status` is non-empty the file was skipped (binary /
-/// oversized / I/O error) and `content` is empty.
+impl PickerLogic for FileSource {
+    fn title(&self) -> &str {
+        "files"
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|p| p.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
+        let path = match self.items.lock().ok().and_then(|g| g.get(idx).cloned()) {
+            Some(p) => p,
+            None => return (Buffer::new(), String::new(), PreviewSpans::default()),
+        };
+        let abs = self.root.join(&path);
+        let (content, status) = load_preview(&abs);
+        if !status.is_empty() {
+            return (Buffer::from_str(&content), status, PreviewSpans::default());
+        }
+        let spans = self.highlight(&abs, &content);
+        (Buffer::from_str(&content), status, spans)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self.items.lock().ok().and_then(|g| g.get(idx).cloned()) {
+            Some(p) => PickerAction::OpenPath(p),
+            None => PickerAction::None,
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let root = self.root.clone();
+        // Reset for re-enumerate.
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        thread::Builder::new()
+            .name("hjkl-picker-scan".into())
+            .spawn(move || scan_walk(&root, &items, &done, &cancel))
+            .ok()
+    }
+}
+
+// ── RgSource ─────────────────────────────────────────────────────────────────
+
+/// One ripgrep match result.
+pub struct RgMatch {
+    pub path: PathBuf,
+    pub line: u32, // 1-based
+    pub _col: u32, // 1-based, byte column (reserved for future use)
+    pub text: String,
+}
+
+/// Source for the ripgrep content-search picker.
+pub struct RgSource {
+    root: PathBuf,
+    items: Arc<Mutex<Vec<RgMatch>>>,
+    registry: LanguageRegistry,
+    theme: Arc<dyn Theme + Send + Sync>,
+    highlighters: Mutex<HashMap<&'static str, Highlighter>>,
+}
+
+impl RgSource {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            registry: LanguageRegistry::new(),
+            theme: Arc::new(DotFallbackTheme::dark()),
+            highlighters: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
+        let Some(cfg) = self.registry.detect_for_path(abs) else {
+            return PreviewSpans::default();
+        };
+        let mut hl_cache = match self.highlighters.lock() {
+            Ok(g) => g,
+            Err(_) => return PreviewSpans::default(),
+        };
+        let h = match hl_cache.entry(cfg.name) {
+            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(cfg) {
+                Ok(h) => v.insert(h),
+                Err(_) => return PreviewSpans::default(),
+            },
+        };
+        h.reset();
+        let bytes = content.as_bytes();
+        h.parse_initial(bytes);
+        let flat: Vec<HighlightSpan> = h.highlight_range(bytes, 0..bytes.len());
+        build_preview_spans(&flat, bytes, &*self.theme)
+    }
+}
+
+impl PickerLogic for RgSource {
+    fn title(&self) -> &str {
+        "grep"
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        RequeryMode::Spawn
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx).map(|m| {
+                    let path = m.path.display().to_string();
+                    let text = if m.text.len() > 80 {
+                        format!("{}…", &m.text[..79])
+                    } else {
+                        m.text.clone()
+                    };
+                    format!("{}:{}: {}", path, m.line, text)
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        true
+    }
+
+    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
+        let (path, line) = match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
+        {
+            Some(v) => v,
+            None => return (Buffer::new(), String::new(), PreviewSpans::default()),
+        };
+        // Sentinel: no path means rg wasn't found.
+        if path.as_os_str().is_empty() {
+            return (Buffer::new(), String::new(), PreviewSpans::default());
+        }
+        let abs = self.root.join(&path);
+        let (content, status) = load_preview(&abs);
+        if !status.is_empty() {
+            return (Buffer::from_str(&content), status, PreviewSpans::default());
+        }
+        let spans = self.highlight(&abs, &content);
+
+        // Build a window of lines around the match line.
+        let all_lines: Vec<&str> = content.lines().collect();
+        let match_row = (line as usize).saturating_sub(1);
+        let start = match_row.saturating_sub(2);
+        let end = (start + PREVIEW_MAX_LINES).min(all_lines.len());
+        let window: String = all_lines[start..end].join("\n");
+
+        let status_tag = format!("line {line}");
+        (Buffer::from_str(&window), status_tag, spans)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
+        {
+            Some((path, line)) if !path.as_os_str().is_empty() => {
+                PickerAction::OpenPathAtLine(path, line)
+            }
+            _ => PickerAction::None,
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        // Reset items for the new query.
+        if let Ok(mut g) = self.items.lock() {
+            g.clear();
+        }
+
+        let q = match query {
+            Some(q) if !q.trim().is_empty() => q.to_owned(),
+            // Empty query → show nothing.
+            _ => return None,
+        };
+
+        let items = Arc::clone(&self.items);
+        let root = self.root.clone();
+
+        thread::Builder::new()
+            .name("hjkl-rg-scan".into())
+            .spawn(move || {
+                let child = std::process::Command::new("rg")
+                    .args([
+                        "--json",
+                        "--no-config",
+                        "--smart-case",
+                        "--max-count",
+                        "200",
+                        &q,
+                        root.to_str().unwrap_or("."),
+                    ])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+
+                let mut child = match child {
+                    Ok(c) => c,
+                    Err(_) => {
+                        // ripgrep not found — push a sentinel error item.
+                        if let Ok(mut g) = items.lock() {
+                            g.push(RgMatch {
+                                path: PathBuf::new(),
+                                line: 0,
+                                _col: 0,
+                                text: "ripgrep not found — install ripgrep to use :rg".into(),
+                            });
+                        }
+                        return;
+                    }
+                };
+
+                let stdout = match child.stdout.take() {
+                    Some(s) => s,
+                    None => return,
+                };
+
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stdout);
+                let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+
+                for line_result in reader.lines() {
+                    if cancel.load(Ordering::Acquire) {
+                        let _ = child.kill();
+                        return;
+                    }
+                    let line = match line_result {
+                        Ok(l) => l,
+                        Err(_) => continue,
+                    };
+                    if let Some(rg_match) = parse_rg_json_line(&line, &root) {
+                        batch.push(rg_match);
+                        if batch.len() >= 32
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.extend(batch.drain(..));
+                        }
+                    }
+                    if cancel.load(Ordering::Acquire) {
+                        let _ = child.kill();
+                        return;
+                    }
+                }
+                // Flush remaining batch.
+                if !batch.is_empty()
+                    && let Ok(mut g) = items.lock()
+                {
+                    g.extend(batch.drain(..));
+                }
+                let _ = child.wait();
+            })
+            .ok()
+    }
+}
+
+/// Parse one JSON line from `rg --json` output. Returns `Some(RgMatch)` for
+/// lines of `"type":"match"`, `None` for everything else.
+fn parse_rg_json_line(line: &str, root: &Path) -> Option<RgMatch> {
+    if !line.contains("\"type\":\"match\"") {
+        return None;
+    }
+
+    let path_text = extract_json_string(line, "\"path\":{\"text\":")?;
+    let line_number: u32 = extract_json_u32(line, "\"line_number\":")?;
+    let col: u32 = extract_json_u32(line, "\"start\":").unwrap_or(0) + 1;
+    let match_text = extract_json_string(line, "\"lines\":{\"text\":").unwrap_or_default();
+    let match_text = match_text.trim_end_matches('\n').to_owned();
+
+    let abs_path = PathBuf::from(&path_text);
+    let rel_path = abs_path
+        .strip_prefix(root)
+        .map(|p| p.to_path_buf())
+        .unwrap_or(abs_path);
+
+    Some(RgMatch {
+        path: rel_path,
+        line: line_number,
+        _col: col,
+        text: match_text,
+    })
+}
+
+/// Extract a JSON string value that immediately follows the given key pattern.
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let start = json.find(key)? + key.len();
+    let rest = &json[start..];
+    let rest = rest.trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let inner = &rest[1..];
+    let mut result = String::new();
+    let mut chars = inner.chars();
+    loop {
+        match chars.next()? {
+            '"' => break,
+            '\\' => match chars.next()? {
+                '"' => result.push('"'),
+                '\\' => result.push('\\'),
+                'n' => result.push('\n'),
+                't' => result.push('\t'),
+                c => {
+                    result.push('\\');
+                    result.push(c);
+                }
+            },
+            c => result.push(c),
+        }
+    }
+    Some(result)
+}
+
+/// Extract a u32 JSON number value that immediately follows the given key pattern.
+fn extract_json_u32(json: &str, key: &str) -> Option<u32> {
+    let start = json.find(key)? + key.len();
+    let rest = json[start..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Build `PreviewSpans` from a flat list of highlight spans.
+fn build_preview_spans(flat: &[HighlightSpan], bytes: &[u8], theme: &dyn Theme) -> PreviewSpans {
+    let mut row_starts: Vec<usize> = vec![0];
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            row_starts.push(i + 1);
+        }
+    }
+    let row_count = row_starts.len();
+
+    let mut styles: Vec<RatStyle> = Vec::new();
+    let mut by_row: Vec<Vec<BufferSpan>> = vec![Vec::new(); row_count];
+    for span in flat {
+        let Some(rat) = theme.style(span.capture()).map(|s| s.to_ratatui()) else {
+            continue;
+        };
+        let style_id = match styles.iter().position(|s| *s == rat) {
+            Some(i) => i,
+            None => {
+                styles.push(rat);
+                styles.len() - 1
+            }
+        } as u32;
+        let span_start = span.byte_range.start;
+        let span_end = span.byte_range.end;
+        let start_row = row_starts
+            .partition_point(|&rs| rs <= span_start)
+            .saturating_sub(1);
+        let mut row = start_row;
+        while row < row_count {
+            let row_byte_start = row_starts[row];
+            let row_byte_end = row_starts
+                .get(row + 1)
+                .map(|&s| s.saturating_sub(1))
+                .unwrap_or(bytes.len());
+            if row_byte_start >= span_end {
+                break;
+            }
+            let local_start = span_start.saturating_sub(row_byte_start);
+            let local_end = span_end.min(row_byte_end) - row_byte_start;
+            if local_end > local_start {
+                by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
+            }
+            row += 1;
+        }
+    }
+    PreviewSpans { by_row, styles }
+}
+
+/// Load a single file for the preview pane. Returns `(content, status)`.
 fn load_preview(abs: &Path) -> (String, String) {
     let meta = match std::fs::metadata(abs) {
         Ok(m) => m,
@@ -727,10 +1030,14 @@ fn load_preview(abs: &Path) -> (String, String) {
     (truncated, String::new())
 }
 
-/// Background walker — streams `is_file()` entries into `sink`,
-/// gitignore-aware via `ignore::WalkBuilder`. Calls `sink.finish()`
-/// on completion so the picker can stop showing "scanning…".
-fn scan_walk(root: &Path, sink: &ItemSink<PathBuf>) {
+/// Background walker — streams `is_file()` entries into `items`,
+/// gitignore-aware via `ignore::WalkBuilder`.
+fn scan_walk(
+    root: &Path,
+    items: &Arc<Mutex<Vec<PathBuf>>>,
+    done: &Arc<AtomicBool>,
+    cancel: &Arc<AtomicBool>,
+) {
     let walk = ignore::WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
@@ -740,6 +1047,9 @@ fn scan_walk(root: &Path, sink: &ItemSink<PathBuf>) {
     let mut total = 0usize;
     const HARD_CAP: usize = 50_000;
     for entry in walk {
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -757,15 +1067,19 @@ fn scan_walk(root: &Path, sink: &ItemSink<PathBuf>) {
             .unwrap_or(path);
         batch.push(rel);
         total += 1;
-        if batch.len() >= 256 {
-            sink.extend(batch.drain(..));
+        if batch.len() >= 256
+            && let Ok(mut g) = items.lock()
+        {
+            g.extend(batch.drain(..));
         }
         if total >= HARD_CAP {
             break;
         }
     }
-    sink.extend(batch.drain(..));
-    sink.finish();
+    if let Ok(mut g) = items.lock() {
+        g.extend(batch.drain(..));
+    }
+    done.store(true, Ordering::Release);
 }
 
 /// Subsequence-based fuzzy score. Returns `None` when not all needle
@@ -792,7 +1106,6 @@ fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
     let mut total: i64 = 0;
     let mut prev_match = false;
     let mut positions: Vec<usize> = Vec::new();
-    // Track previous char for boundary detection.
     let mut prev_ch: Option<char> = None;
     for (ci, ch) in haystack.chars().enumerate() {
         if let Some(&nc) = needle_chars.peek() {
@@ -802,7 +1115,7 @@ fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
                 }
                 let at_boundary = prev_ch
                     .map(|p| matches!(p, '/' | '_' | '-' | '.' | ' '))
-                    .unwrap_or(true); // ci == 0
+                    .unwrap_or(true);
                 if at_boundary {
                     total += 8;
                 }
@@ -867,8 +1180,32 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("notes.txt");
         std::fs::write(&path, "hello world\nthis is plain text\n").unwrap();
-        let source = FileSource::new(tmp.path().to_path_buf());
-        let (_buf, status, spans) = source.preview(&PathBuf::from("notes.txt"));
+
+        let mut source = FileSource::new(tmp.path().to_path_buf());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let _handle = source.enumerate(None, Arc::clone(&cancel));
+        // Wait for the scan thread to populate items.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if source.item_count() > 0 {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let count = source.item_count();
+        let mut found_idx = None;
+        for i in 0..count {
+            if source.label(i).contains("notes.txt") {
+                found_idx = Some(i);
+                break;
+            }
+        }
+        let idx = found_idx.expect("notes.txt should appear in FileSource");
+        let (_buf, status, spans) = source.preview(idx);
         assert!(status.is_empty(), "unexpected status: {status:?}");
         assert!(spans.styles.is_empty(), "got {} styles", spans.styles.len());
         for row in &spans.by_row {

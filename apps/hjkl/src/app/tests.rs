@@ -565,7 +565,7 @@ fn buffer_source_new_produces_n_entries() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     assert_eq!(app.slots.len(), 2);
 
-    let source = crate::picker::BufferSource::new(
+    let source = Box::new(crate::picker::BufferSource::new(
         &app.slots,
         |s| {
             s.filename
@@ -575,9 +575,9 @@ fn buffer_source_new_produces_n_entries() {
                 .to_owned()
         },
         |s| s.dirty,
-    );
+    ));
     // Build a Picker from the source — it calls enumerate internally.
-    let mut picker = crate::picker::BufferPicker::new(source);
+    let mut picker = crate::picker::Picker::new(source);
     picker.refresh();
     assert_eq!(picker.total(), 2, "expected 2 entries");
     assert!(picker.scan_done(), "scan_done must be set");
@@ -587,7 +587,7 @@ fn buffer_source_new_produces_n_entries() {
 
 #[test]
 fn buffer_source_select_returns_switch_buffer() {
-    use crate::picker::{BufferSource, PickerAction, PickerSource};
+    use crate::picker::{BufferSource, PickerAction, PickerLogic};
     let path = std::env::temp_dir().join("hjkl_d4_sel.txt");
     std::fs::write(&path, "x\n").unwrap();
     let app = App::new(Some(path.clone()), false, None, None).unwrap();
@@ -602,12 +602,8 @@ fn buffer_source_select_returns_switch_buffer() {
         },
         |s| s.dirty,
     );
-    let entry = crate::picker::BufferEntry {
-        idx: 0,
-        name: "foo".into(),
-        dirty: false,
-    };
-    match source.select(&entry) {
+    // Index 0 corresponds to the first entry (the only slot).
+    match source.select(0) {
         PickerAction::SwitchBuffer(i) => assert_eq!(i, 0),
         _ => panic!("expected SwitchBuffer(0)"),
     }

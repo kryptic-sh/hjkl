@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{AnyPicker, App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
+use crate::app::{App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = line_count.to_string().len() + 2`. The renderer must
@@ -524,47 +524,43 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
 
-    match app.picker.as_mut() {
-        Some(AnyPicker::File(p)) => {
-            p.refresh();
-            p.refresh_preview();
+    let p = match app.picker.as_mut() {
+        Some(p) => p,
+        None => return,
+    };
 
-            const PREVIEW_MIN_WIDTH: u16 = 80;
-            let with_preview = p.has_preview() && area.width >= PREVIEW_MIN_WIDTH;
+    // Tick debounce for Spawn sources.
+    p.tick(std::time::Instant::now());
 
-            let (left_area, preview_area) = if with_preview {
-                let cols = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(area);
-                (cols[0], Some(cols[1]))
-            } else {
-                (area, None)
-            };
+    p.refresh();
+    p.refresh_preview();
 
-            render_picker_input_and_list(frame, p, left_area);
+    const PREVIEW_MIN_WIDTH: u16 = 80;
+    let with_preview = p.has_preview() && area.width >= PREVIEW_MIN_WIDTH;
 
-            if let Some(right) = preview_area {
-                picker_preview_pane(frame, p, right);
-            }
-        }
-        Some(AnyPicker::Buffer(p)) => {
-            p.refresh();
-            // Buffer picker has no preview — use full popup width.
-            render_picker_input_and_list(frame, p, area);
-        }
-        None => {}
+    let (left_area, preview_area) = if with_preview {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        (area, None)
+    };
+
+    render_picker_input_and_list(frame, p, left_area);
+
+    if let Some(right) = preview_area {
+        picker_preview_pane(frame, p, right);
     }
 }
 
-/// Shared input + list rendering for any `Picker<S>`.
-fn render_picker_input_and_list<S>(
+/// Shared input + list rendering for the non-generic `Picker`.
+fn render_picker_input_and_list(
     frame: &mut Frame,
-    picker: &mut crate::picker::Picker<S>,
+    picker: &mut crate::picker::Picker,
     left_area: Rect,
-) where
-    S: crate::picker::PickerSource,
-{
+) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(1)])
@@ -648,9 +644,8 @@ fn render_picker_input_and_list<S>(
 }
 
 /// Render the preview pane via `BufferView` so the gutter, line
-/// numbers, and per-row layout match the editor proper. No syntax
-/// highlights for now — the preview's `Buffer` has no spans table.
-fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::FilePicker, area: Rect) {
+/// numbers, and per-row layout match the editor proper.
+fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: Rect) {
     let label = picker.preview_label().unwrap_or("(none)").to_string();
     let status = picker.preview_status();
     let title = if status.is_empty() {

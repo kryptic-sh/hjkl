@@ -143,13 +143,6 @@ impl BufferSlot {
     }
 }
 
-/// Wrapper that lets `App::picker` hold either a file picker or a buffer
-/// picker without boxing the trait.
-pub enum AnyPicker {
-    File(crate::picker::FilePicker),
-    Buffer(crate::picker::BufferPicker),
-}
-
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
@@ -174,8 +167,8 @@ pub struct App {
     pub command_field: Option<TextFieldEditor>,
     /// Active `/` (forward) / `?` (backward) search prompt.
     pub search_field: Option<TextFieldEditor>,
-    /// Active file or buffer picker overlay.
-    pub picker: Option<AnyPicker>,
+    /// Active picker overlay (file, buffer, grep, …).
+    pub picker: Option<crate::picker::Picker>,
     /// `true` after the user pressed `<Space>` in normal mode and we're
     /// waiting for the next key to resolve the leader sequence.
     pub pending_leader: bool,
