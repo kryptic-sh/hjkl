@@ -193,16 +193,17 @@ mod tests {
     }
 
     #[test]
-    fn untracked_file_marks_every_row_added() {
+    fn untracked_file_emits_no_signs() {
+        // Untracked files no longer flood the gutter with `+`; the
+        // `[Untracked]` status-line tag carries the signal instead.
         let tmp = TempDir::new().unwrap();
         git(tmp.path(), &["init", "-q", "-b", "main"]);
         let f = tmp.path().join("u.txt");
         std::fs::write(&f, "a\nb\nc\n").unwrap();
         let bytes = std::fs::read(&f).unwrap();
         let signs = signs_for_bytes(&f, &bytes);
-        // 3 rows, all '+'.
-        assert_eq!(signs.len(), 3);
-        assert!(signs.iter().all(|s| s.ch == '+'));
+        assert!(signs.is_empty(), "expected no signs; got {signs:?}");
+        assert!(is_untracked(&f), "expected is_untracked=true");
     }
 
     #[test]
