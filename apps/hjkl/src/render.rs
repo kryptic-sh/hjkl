@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, STATUS_LINE_HEIGHT};
+use crate::app::{App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = line_count.to_string().len() + 2`. The renderer must
@@ -27,13 +27,24 @@ fn gutter_width(line_count: usize) -> u16 {
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(STATUS_LINE_HEIGHT)])
-        .split(area);
-
-    let buf_area = chunks[0];
-    let status_area = chunks[1];
+    let multi = app.slots().len() > 1;
+    let (buf_area, status_area, bufline_area) = if multi {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(BUFFER_LINE_HEIGHT),
+                Constraint::Min(1),
+                Constraint::Length(STATUS_LINE_HEIGHT),
+            ])
+            .split(area);
+        (chunks[1], chunks[2], Some(chunks[0]))
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(STATUS_LINE_HEIGHT)])
+            .split(area);
+        (chunks[0], chunks[1], None)
+    };
 
     let gw = gutter_width(app.active().editor.buffer().line_count() as usize);
     let text_width = buf_area.width.saturating_sub(gw);
@@ -57,6 +68,9 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // is ~140µs even on 100k-line files.
     app.recompute_and_install();
 
+    if let Some(bl_area) = bufline_area {
+        buffer_line(frame, app, bl_area);
+    }
     buffer_pane(frame, app, buf_area, gw);
     status_line(frame, app, status_area);
 
@@ -65,6 +79,65 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if app.picker.is_some() {
         picker_overlay(frame, app, buf_area);
     }
+}
+
+/// Render the one-row buffer/tab line at the top of the screen.
+///
+/// Shows all open slots with the active one highlighted and a `+` marker
+/// on dirty slots. Only called when `app.slots.len() > 1`.
+fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
+    let active_style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(Color::Gray);
+    let sep_style = Style::default().fg(Color::DarkGray);
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let max_width = area.width as usize;
+    let mut used = 0usize;
+
+    for (i, slot) in app.slots().iter().enumerate() {
+        let base_name = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[No Name]");
+        let label = if slot.dirty {
+            format!(" {}+ ", base_name)
+        } else {
+            format!(" {} ", base_name)
+        };
+
+        // Separator between entries (not before the first).
+        let sep = if i == 0 { "" } else { "│" };
+        let entry_width = sep.len() + label.len();
+
+        // If adding this entry would overflow, truncate remaining with `…`.
+        if used + entry_width > max_width {
+            // Always include the active slot even if it means skipping earlier
+            // entries — but for simplicity, just hard-truncate the end.
+            if used < max_width {
+                spans.push(Span::styled("…".to_string(), sep_style));
+            }
+            break;
+        }
+
+        if i > 0 {
+            spans.push(Span::styled("│".to_string(), sep_style));
+        }
+        let style = if i == app.active_index() {
+            active_style
+        } else {
+            inactive_style
+        };
+        spans.push(Span::styled(label, style));
+        used += entry_width;
+    }
+
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
 }
 
 /// Render the buffer pane with line numbers, text, and the cursor.
@@ -698,5 +771,10 @@ mod tests {
         let s = format_status_line("NORMAL", "file.txt", false, 4, 0, 10, 60);
         // row 4 (0-based) → 5 in display
         assert!(s.contains("5:1"));
+    }
+
+    #[test]
+    fn buffer_line_height_is_one() {
+        assert_eq!(crate::app::BUFFER_LINE_HEIGHT, 1);
     }
 }

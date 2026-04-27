@@ -27,6 +27,9 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// Height of the buffer/tab line at the top of the screen, when shown.
+pub const BUFFER_LINE_HEIGHT: u16 = 1;
+
 /// Resolve a path for buffer-list matching. Two paths that point to
 /// the same file should compare equal here even when one is relative
 /// and the other absolute. We try `canonicalize` first (only works for
@@ -197,6 +200,16 @@ impl App {
     /// Return a mutable reference to the active buffer slot.
     pub fn active_mut(&mut self) -> &mut BufferSlot {
         &mut self.slots[self.active]
+    }
+
+    /// Return a shared slice of all buffer slots.
+    pub fn slots(&self) -> &[BufferSlot] {
+        &self.slots
+    }
+
+    /// Return the index of the currently active slot.
+    pub fn active_index(&self) -> usize {
+        self.active
     }
 
     /// Build a fresh [`App`], optionally loading `filename` from disk.
