@@ -6,6 +6,7 @@
 mod app;
 mod host;
 mod render;
+mod syntax;
 
 use anyhow::Result;
 use crossterm::{execute, terminal};

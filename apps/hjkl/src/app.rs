@@ -10,12 +10,14 @@ use hjkl_buffer::Buffer;
 use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
+use hjkl_tree_sitter::DotFallbackTheme;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::path::PathBuf;
 
 use crate::host::TuiHost;
 use crate::render;
+use crate::syntax::{self, SyntaxLayer};
 
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
@@ -173,6 +175,9 @@ pub struct App {
     /// "[New File]" annotation in the status line until the first edit
     /// or successful `:w`.
     pub is_new_file: bool,
+    /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
+    /// and active theme. Recomputed on every buffer-mutating event.
+    syntax: SyntaxLayer,
 }
 
 impl App {
@@ -237,6 +242,16 @@ impl App {
             }
         }
 
+        // Build syntax layer (dark theme default) and detect language for
+        // the opened file, then run an initial highlight pass.
+        let mut syntax = syntax::default_layer();
+        if let Some(ref path) = filename {
+            syntax.set_language_for_path(path);
+        }
+        if let Some(spans) = syntax.recompute(editor.buffer()) {
+            editor.install_ratatui_syntax_spans(spans);
+        }
+
         Ok(Self {
             editor,
             filename,
@@ -246,6 +261,7 @@ impl App {
             command_input: None,
             last_cursor_shape: CursorShape::Block,
             is_new_file,
+            syntax,
         })
     }
 
@@ -368,6 +384,10 @@ impl App {
                         // First edit drops the "[New File]" annotation.
                         self.is_new_file = false;
                     }
+
+                    // Recompute syntax spans after every key (v0 sync path;
+                    // documents are small — profile in Phase E).
+                    self.recompute_and_install();
                 }
                 Event::Resize(w, h) => {
                     let vp = self.editor.host_mut().viewport_mut();
@@ -386,6 +406,29 @@ impl App {
 
     /// Execute an ex command string (without the leading `:`).
     fn dispatch_ex(&mut self, cmd: &str) {
+        // Intercept `:set background={dark,light}` before the engine sees it.
+        // Theme awareness is a binary-local concern; the engine has no theme API.
+        if let Some(rest) = cmd.strip_prefix("set background=") {
+            match rest.trim() {
+                "dark" => {
+                    self.syntax.set_theme(Box::new(DotFallbackTheme::dark()));
+                    self.recompute_and_install();
+                    self.status_message = Some("background=dark".into());
+                    return;
+                }
+                "light" => {
+                    self.syntax.set_theme(Box::new(DotFallbackTheme::light()));
+                    self.recompute_and_install();
+                    self.status_message = Some("background=light".into());
+                    return;
+                }
+                other => {
+                    self.status_message = Some(format!("E: unknown background value: {other}"));
+                    return;
+                }
+            }
+        }
+
         match ex::run(&mut self.editor, cmd) {
             ExEffect::None => {}
             ExEffect::Ok => {}
@@ -423,6 +466,7 @@ impl App {
                 if self.editor.take_dirty() {
                     self.dirty = true;
                 }
+                self.recompute_and_install();
                 self.status_message = Some(format!("{count} substitution(s)"));
             }
             ExEffect::Info(msg) => {
@@ -484,6 +528,15 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    /// Recompute syntax spans and install them into the editor.
+    ///
+    /// No-op when no language is attached (highlighter is `None`).
+    pub fn recompute_and_install(&mut self) {
+        if let Some(spans) = self.syntax.recompute(self.editor.buffer()) {
+            self.editor.install_ratatui_syntax_spans(spans);
         }
     }
 

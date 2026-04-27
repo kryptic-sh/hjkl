@@ -69,11 +69,17 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         Style::default()
     };
 
+    // Bind the style table after the viewport mutation above to avoid a
+    // double-borrow on `app.editor` (host_mut() and style_table() both
+    // require access to the editor).
+    let style_table = app.editor.style_table().to_owned();
+    let resolver = move |id: u32| style_table.get(id as usize).copied().unwrap_or_default();
+
     let view = BufferView {
         buffer: app.editor.buffer(),
         viewport: app.editor.host().viewport(),
         selection,
-        resolver: &(|_: u32| Style::default()),
+        resolver: &resolver,
         cursor_line_bg: Style::default(),
         cursor_column_bg: Style::default(),
         selection_bg: Style::default().bg(Color::Blue),
