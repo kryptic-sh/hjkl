@@ -46,8 +46,12 @@ impl Syntax {
 }
 
 /// Default parser timeout for `parse_incremental`, in microseconds.
-/// 500ms keeps even pathological large-file scrolls responsive.
-const DEFAULT_PARSE_TIMEOUT_MICROS: u64 = 500_000;
+/// `0` = no timeout (fast path that takes the direct `Parser::parse`
+/// call instead of the streaming callback form). Tree-sitter's
+/// incremental parse is µs-scale for small edits, so the timeout
+/// guard is rarely needed; callers that want it can opt in via
+/// `set_parse_timeout_micros`.
+const DEFAULT_PARSE_TIMEOUT_MICROS: u64 = 0;
 
 /// Stateful syntax highlighter for a single language.
 ///
@@ -110,25 +114,36 @@ impl Highlighter {
     /// longer line up. Callers should skip the highlight pass and retry
     /// next frame.
     pub fn parse_incremental(&mut self, source: &[u8]) -> bool {
-        // tree-sitter 0.26 removed `set_timeout_micros`; cancellation
-        // is now driven by a progress callback. Wall-clock budget keeps
-        // the same semantic: cancel if the parse exceeds the budget.
-        let bytes = source;
-        let len = bytes.len();
-        let deadline = if self.parse_timeout_micros == 0 {
-            None
-        } else {
-            Some(Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros))
-        };
+        // Use Parser::parse directly — tree-sitter's incremental path
+        // expects a contiguous byte slice for the new source. The
+        // streaming callback form of parse_with_options interacts
+        // poorly with the 0.26 incremental parser and produced full
+        // reparses (~100ms on 1.3MB Rust) where this form completes
+        // in microseconds for small edits.
+        //
+        // Timeout is enforced via parse_with_options when the caller
+        // explicitly sets `parse_timeout_micros`; default (no timeout)
+        // takes the fast path here.
+        if self.parse_timeout_micros == 0 {
+            let result = self.parser.parse(source, self.tree.as_ref());
+            return match result {
+                Some(t) => {
+                    self.tree = Some(t);
+                    true
+                }
+                None => false,
+            };
+        }
+        let deadline = Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros);
         let mut progress = move |_state: &tree_sitter::ParseState| {
-            if let Some(d) = deadline
-                && Instant::now() >= d
-            {
+            if Instant::now() >= deadline {
                 return std::ops::ControlFlow::Break(());
             }
             std::ops::ControlFlow::Continue(())
         };
         let mut opts = ParseOptions::new().progress_callback(&mut progress);
+        let bytes = source;
+        let len = bytes.len();
         let result = self.parser.parse_with_options(
             &mut |i, _| {
                 if i < len {
