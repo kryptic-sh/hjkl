@@ -1,13 +1,13 @@
 //! `TuiHost` — terminal `Host` adapter for the standalone `hjkl` binary.
 //!
-//! Phase 1 scaffold. Implements [`hjkl_engine::Host`] with the minimum
-//! surface needed for `Editor<B, H>` to compile against this host:
+//! Implements [`hjkl_engine::Host`] with the minimum surface needed for
+//! `Editor<B, H>` to compile against this host:
 //!
 //! - Owns the runtime [`Viewport`] (engine reads/writes scroll offsets,
 //!   the renderer publishes width/height per frame).
 //! - Tracks last-emitted [`CursorShape`] so the renderer can repaint.
-//! - Stub clipboard methods (no-op for now — `arboard` wiring lands in
-//!   Phase 3 alongside OSC52 passthrough).
+//! - Real clipboard via [`hjkl_clipboard::Clipboard`] (arboard + OSC 52
+//!   fallback; SSH-aware).
 //! - Unit `Intent` type — the standalone binary doesn't fan out LSP /
 //!   fold / buffer-list requests yet. Phase 4+ swaps this for a real
 //!   enum once intents start firing.
@@ -15,6 +15,7 @@
 //! Mirrors the shape of `sqeel-tui::SqeelHost` so the eventual switch
 //! to `Editor<B, H>` is a single-callsite swap.
 
+use hjkl_clipboard::Clipboard;
 use hjkl_engine::{CursorShape, Host, Viewport};
 use std::time::Instant;
 
@@ -23,6 +24,7 @@ pub struct TuiHost {
     last_cursor_shape: CursorShape,
     started: Instant,
     cancel: bool,
+    clipboard: Clipboard,
     viewport: Viewport,
 }
 
@@ -36,6 +38,7 @@ impl TuiHost {
             last_cursor_shape: CursorShape::Block,
             started: Instant::now(),
             cancel: false,
+            clipboard: Clipboard::new(),
             viewport: Viewport {
                 top_row: 0,
                 top_col: 0,
@@ -69,13 +72,12 @@ impl Default for TuiHost {
 impl Host for TuiHost {
     type Intent = ();
 
-    fn write_clipboard(&mut self, _text: String) {
-        // Phase 3: queue into an arboard-backed outbox + flush on tick.
+    fn write_clipboard(&mut self, text: String) {
+        self.clipboard.set_text(&text);
     }
 
     fn read_clipboard(&mut self) -> Option<String> {
-        // Phase 3: return cached arboard read, refreshed on focus events.
-        None
+        self.clipboard.get_text()
     }
 
     fn now(&self) -> std::time::Duration {

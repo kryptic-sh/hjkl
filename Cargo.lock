@@ -590,10 +590,10 @@ name = "hjkl"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "arboard",
  "clap",
  "crossterm",
  "hjkl-buffer",
+ "hjkl-clipboard",
  "hjkl-editor",
  "hjkl-engine",
  "hjkl-ratatui",
@@ -611,6 +611,13 @@ dependencies = [
  "ratatui",
  "regex",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "hjkl-clipboard"
+version = "0.1.1"
+dependencies = [
+ "arboard",
 ]
 
 [[package]]
