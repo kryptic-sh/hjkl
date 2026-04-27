@@ -586,7 +586,7 @@ fn render_picker_input_and_list(
         .border_style(Style::default().fg(Color::Cyan));
     let input_inner = input_block.inner(input_area);
     frame.render_widget(input_block, input_area);
-    let input_para = Paragraph::new(format!("> {display}"));
+    let input_para = Paragraph::new(format!("/ {display}"));
     frame.render_widget(input_para, input_inner);
 
     let (_, ccol) = picker.query.cursor();
