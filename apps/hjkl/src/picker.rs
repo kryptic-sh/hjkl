@@ -533,7 +533,9 @@ impl PickerSource for BufferSource {
     }
 
     fn match_text(&self, item: &BufferEntry) -> String {
-        item.name.clone()
+        // Must match the format of `label` so that the scorer's char
+        // positions align with what the renderer highlights.
+        self.label(item)
     }
 
     /// Buffer picker has no per-item disk content to preview.
