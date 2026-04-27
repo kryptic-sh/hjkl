@@ -637,7 +637,6 @@ fn render_picker_input_and_list<S>(
         .highlight_style(
             Style::default()
                 .bg(Color::Rgb(60, 70, 100))
-                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
