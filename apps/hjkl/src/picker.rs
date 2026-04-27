@@ -174,7 +174,7 @@ impl<S: PickerSource> Picker<S> {
         let mut query = TextFieldEditor::new(true);
         query.enter_insert_at_end();
 
-        Self {
+        let mut me = Self {
             query,
             source,
             items,
@@ -188,6 +188,36 @@ impl<S: PickerSource> Picker<S> {
             preview_buffer: Buffer::new(),
             preview_status: String::new(),
             preview_label: None,
+        };
+        // Block briefly for the first batch of items so the first
+        // render already has a populated list and a loaded preview —
+        // otherwise the preview pane stays blank until the next event-
+        // loop tick (~120ms) catches up to the streaming scan.
+        me.wait_for_items(std::time::Duration::from_millis(30));
+        me.refresh();
+        me.refresh_preview();
+        me
+    }
+
+    /// Spin up to `timeout` waiting for the source to push at least
+    /// one item. Cheap polling — short enough that even synchronous
+    /// sources (which call `finish()` before returning from
+    /// `enumerate`) just see the first poll return.
+    fn wait_for_items(&self, timeout: std::time::Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Ok(g) = self.items.lock()
+                && !g.is_empty()
+            {
+                return;
+            }
+            if self.scan_done.load(Ordering::Acquire) {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
 
