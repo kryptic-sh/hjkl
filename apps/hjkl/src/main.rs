@@ -3,6 +3,21 @@
 //! Phase 5: polish — readonly mode, +linenum, +/pattern, file-not-found UX,
 //! terminal resize, status-line truncation.
 
+// TODO: test
+// This is another test
+// FIX: another
+// FIXME: another
+
+// Unrelated
+
+// TODO: test
+// this one is multiline
+// TODO: test
+
+// FIXME: another
+// NOTE: another
+// INFO: another
+
 mod app;
 mod git;
 mod host;
