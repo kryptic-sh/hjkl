@@ -1071,6 +1071,14 @@ impl App {
         ));
     }
 
+    /// Public entry point for loading an extra file from the CLI into a new
+    /// slot without switching the active buffer. Used by `main` to handle
+    /// `hjkl a.rs b.rs c.rs` — slots 1…N are populated here after `App::new`
+    /// opens slot 0.
+    pub fn open_extra(&mut self, path: PathBuf) -> Result<(), String> {
+        self.open_new_slot(path).map(|_| ())
+    }
+
     /// Allocate a fresh `BufferId` and load `path` into a new slot.
     /// Returns the index of the newly pushed slot (does NOT switch).
     fn open_new_slot(&mut self, path: PathBuf) -> Result<usize, String> {
@@ -1844,6 +1852,30 @@ mod tests {
             "expected empty scratch buffer, got: {lines:?}"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_extra_adds_slot_and_leaves_active_zero() {
+        let path_a = std::env::temp_dir().join("hjkl_open_extra_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_open_extra_b.txt");
+        std::fs::write(&path_a, "first\n").unwrap();
+        std::fs::write(&path_b, "second\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        assert_eq!(app.slots.len(), 1);
+        assert_eq!(app.active, 0);
+        app.open_extra(path_b.clone()).unwrap();
+        assert_eq!(app.slots.len(), 2, "extra slot should have been added");
+        assert_eq!(app.active, 0, "active must stay at 0 after open_extra");
+        assert_eq!(
+            app.slots[0].editor.buffer().lines(),
+            vec!["first".to_string()]
+        );
+        assert_eq!(
+            app.slots[1].editor.buffer().lines(),
+            vec!["second".to_string()]
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
     }
 
     #[test]

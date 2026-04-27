@@ -17,8 +17,9 @@ use std::io::{self, stdout};
 
 /// Parsed arguments after pre-processing the `+N` / `+/pattern` tokens.
 pub struct Args {
-    /// File to open. If the file does not exist a new empty buffer is started.
-    pub file: Option<std::path::PathBuf>,
+    /// Files to open. The first is the active buffer; the rest are loaded into
+    /// additional slots in argv order. If empty a new empty buffer is started.
+    pub files: Vec<std::path::PathBuf>,
     /// Jump to this 1-based line after load (`+N`).
     pub line: Option<usize>,
     /// Search for this pattern after load (`+/pattern`).
@@ -38,7 +39,7 @@ fn parse_args() -> Result<Args> {
     let mut readonly = false;
     let mut perf = false;
     let mut picker = false;
-    let mut file: Option<std::path::PathBuf> = None;
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 1usize;
     while i < raw.len() {
         let arg = &raw[i];
@@ -69,12 +70,12 @@ fn parse_args() -> Result<Args> {
             eprintln!("hjkl: unknown flag: {arg}");
             std::process::exit(1);
         } else {
-            file = Some(std::path::PathBuf::from(arg));
+            files.push(std::path::PathBuf::from(arg));
         }
         i += 1;
     }
     Ok(Args {
-        file,
+        files,
         line,
         pattern,
         readonly,
@@ -85,7 +86,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_help() {
     println!(
-        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  +perf            Enable :perf overlay at startup\n  +picker          Open the file picker at startup\n  -h, --help       Show this help\n  -V, --version    Print version",
+        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]...\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  +perf            Enable :perf overlay at startup\n  +picker          Open the file picker at startup\n  -h, --help       Show this help\n  -V, --version    Print version",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -95,7 +96,20 @@ fn main() -> Result<()> {
 
     // Build app state (may read file from disk) before entering alternate screen
     // so we can print errors to the normal terminal if the file is unreadable.
-    let mut app = app::App::new(args.file, args.readonly, args.line, args.pattern)?;
+    let mut app = app::App::new(
+        args.files.first().cloned(),
+        args.readonly,
+        args.line,
+        args.pattern,
+    )?;
+    // Load any additional files into extra slots (argv order). Errors are
+    // printed to stderr but do not abort — the editor opens with whatever
+    // could be loaded.
+    for path in args.files.into_iter().skip(1) {
+        if let Err(e) = app.open_extra(path) {
+            eprintln!("hjkl: {e}");
+        }
+    }
     if args.perf {
         app.perf_overlay = true;
     }
