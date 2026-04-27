@@ -13,6 +13,8 @@ use hjkl_engine::{CursorShape, Editor, Options, VimMode};
 use hjkl_form::TextFieldEditor;
 use hjkl_tree_sitter::DotFallbackTheme;
 use ratatui::{Terminal, backend::CrosstermBackend};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Stdout;
 use std::path::PathBuf;
 
@@ -22,6 +24,25 @@ use crate::syntax::{self, SyntaxLayer};
 
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
+
+/// Hash + byte-length of the buffer's canonical line content (lines
+/// joined by `\n` — same shape as what `:w` writes, modulo the trailing
+/// newline). Used to detect "buffer matches the saved snapshot" so undo
+/// back to the saved state clears the dirty flag.
+fn app_buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
+    let mut hasher = DefaultHasher::new();
+    let mut len = 0usize;
+    let lines = editor.buffer().lines();
+    for (i, l) in lines.iter().enumerate() {
+        if i > 0 {
+            b'\n'.hash(&mut hasher);
+            len += 1;
+        }
+        l.hash(&mut hasher);
+        len += l.len();
+    }
+    (hasher.finish(), len)
+}
 
 /// Direction of an active host-driven search prompt. `/` opens a
 /// forward prompt, `?` opens a backward one. The direction is recorded
@@ -88,6 +109,14 @@ pub struct App {
     /// drives the `[Untracked]` status-line tag. Refreshed alongside
     /// `git_signs`.
     pub is_untracked: bool,
+    /// Hash + byte-length of the buffer content as it was at the most
+    /// recent save (or load). Compared against the live buffer on every
+    /// dirty event so undoing back to the saved state clears the dirty
+    /// flag — `editor.take_dirty()` only tracks "did anything change"
+    /// monotonically, so a content-equality check is needed for the
+    /// "buffer matches disk again" case.
+    saved_hash: u64,
+    saved_len: usize,
 }
 
 impl App {
@@ -177,7 +206,7 @@ impl App {
         let _ = editor.take_content_edits();
         let _ = editor.take_content_reset();
 
-        Ok(Self {
+        let mut app = Self {
             editor,
             filename,
             exit_requested: false,
@@ -193,7 +222,31 @@ impl App {
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
             is_untracked: false,
-        })
+            saved_hash: 0,
+            saved_len: 0,
+        };
+        // Snapshot the loaded content so undo-to-saved clears dirty.
+        let (h, l) = app_buffer_signature(&app.editor);
+        app.saved_hash = h;
+        app.saved_len = l;
+        Ok(app)
+    }
+
+    /// Sync `self.dirty` against a fresh content comparison. Called
+    /// after the engine reports `take_dirty()` so undo back to the
+    /// saved state clears the flag.
+    fn refresh_dirty_against_saved(&mut self) {
+        let (h, l) = app_buffer_signature(&self.editor);
+        self.dirty = h != self.saved_hash || l != self.saved_len;
+    }
+
+    /// Refresh the saved-content snapshot. Called after `:w` and after
+    /// a successful `:e` load so the dirty check has the right baseline.
+    fn snapshot_saved(&mut self) {
+        let (h, l) = app_buffer_signature(&self.editor);
+        self.saved_hash = h;
+        self.saved_len = l;
+        self.dirty = false;
     }
 
     /// Recompute git diff signs from the current buffer content (vs
@@ -340,10 +393,14 @@ impl App {
                     // ── Normal editor key handling ───────────────────────────
                     self.editor.handle_key(key);
 
-                    // Drain dirty for the persistent UI flag.
+                    // Drain dirty for the persistent UI flag. Compare
+                    // against the saved snapshot so undo back to the
+                    // saved state clears the flag.
                     if self.editor.take_dirty() {
-                        self.dirty = true;
-                        self.is_new_file = false;
+                        self.refresh_dirty_against_saved();
+                        if self.dirty {
+                            self.is_new_file = false;
+                        }
                     }
                     // Fan engine ContentEdits into the syntax tree (or
                     // reset the tree entirely on bulk replace) and
@@ -647,7 +704,7 @@ impl App {
                 // and fan ContentEdits into the syntax tree before the next
                 // recompute so the retained tree stays in sync.
                 if self.editor.take_dirty() {
-                    self.dirty = true;
+                    self.refresh_dirty_against_saved();
                     if self.editor.take_content_reset() {
                         self.syntax.reset();
                     }
@@ -710,8 +767,8 @@ impl App {
                             byte_count,
                         ));
                         self.filename = Some(p);
-                        self.dirty = false;
                         self.is_new_file = false;
+                        self.snapshot_saved();
                         self.refresh_git_signs();
                     }
                     Err(e) => {
@@ -771,11 +828,11 @@ impl App {
         let byte_count = content.len();
         self.editor.set_content(trimmed);
         self.filename = Some(path.clone());
-        self.dirty = false;
         self.is_new_file = false;
         self.syntax.set_language_for_path(&path);
         self.syntax.reset();
         self.recompute_and_install();
+        self.snapshot_saved();
         self.refresh_git_signs();
         self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
     }
@@ -1111,6 +1168,33 @@ mod tests {
         app.dispatch_ex("e!");
         assert_eq!(app.editor.buffer().lines(), vec!["disk".to_string()]);
         assert!(!app.dirty);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn undo_to_saved_state_clears_dirty() {
+        // Open a file, edit it (dirty=true), then undo back to the
+        // loaded state. dirty should clear because the buffer matches
+        // the saved snapshot again — even though the engine's
+        // dirty_gen is monotonic.
+        let path = std::env::temp_dir().join("hjkl_undo_clears_dirty.txt");
+        std::fs::write(&path, "alpha\nbravo\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        assert!(!app.dirty);
+        // Simulate an edit by inserting a char in Insert mode.
+        app.editor.handle_key(key(KeyCode::Char('i')));
+        app.editor.handle_key(key(KeyCode::Char('X')));
+        if app.editor.take_dirty() {
+            app.refresh_dirty_against_saved();
+        }
+        assert!(app.dirty, "edit should mark dirty");
+        // Esc + undo back to clean.
+        app.editor.handle_key(key(KeyCode::Esc));
+        app.editor.handle_key(key(KeyCode::Char('u')));
+        if app.editor.take_dirty() {
+            app.refresh_dirty_against_saved();
+        }
+        assert!(!app.dirty, "undo to saved state should clear dirty");
         let _ = std::fs::remove_file(&path);
     }
 
