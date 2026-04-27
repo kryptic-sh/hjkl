@@ -601,8 +601,34 @@ fn render_picker_input_and_list<S>(
     }
 
     let visible_rows = list_area.height.saturating_sub(2) as usize;
-    let labels = picker.visible_labels(visible_rows.max(1));
-    let items: Vec<ListItem> = labels.iter().map(|s| ListItem::new(s.clone())).collect();
+    let entries = picker.visible_entries(visible_rows.max(1));
+    let match_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let items: Vec<ListItem> = entries
+        .iter()
+        .map(|(label, matches)| {
+            if matches.is_empty() {
+                // No query or no match positions — render plain text.
+                return ListItem::new(label.clone());
+            }
+            let spans: Vec<Span> = label
+                .chars()
+                .enumerate()
+                .map(|(ci, ch)| {
+                    let s = ch.to_string();
+                    if matches.contains(&ci) {
+                        Span::styled(s, match_style)
+                    } else {
+                        Span::raw(s)
+                    }
+                })
+                .collect();
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    // Keep labels for length check below.
+    let label_count = entries.len();
     let list_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
@@ -616,8 +642,8 @@ fn render_picker_input_and_list<S>(
         )
         .highlight_symbol("▶ ");
     let mut state = ListState::default();
-    if !labels.is_empty() {
-        state.select(Some(picker.selected.min(labels.len().saturating_sub(1))));
+    if label_count > 0 {
+        state.select(Some(picker.selected.min(label_count.saturating_sub(1))));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
 }

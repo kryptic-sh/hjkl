@@ -145,6 +145,17 @@ pub enum PickerEvent {
     Select(PickerAction),
 }
 
+/// One entry in the filtered/ranked list. Stores the index into the
+/// source item vec together with the char positions that satisfied the
+/// fuzzy match (used by the renderer to highlight matched chars).
+pub(crate) struct FilteredEntry {
+    /// Index into the `Picker::items` vec.
+    pub idx: usize,
+    /// Char-indices in the item's label where needle chars matched.
+    /// Empty when the query is empty (no highlight needed).
+    pub matches: Vec<usize>,
+}
+
 /// Generic picker state. Lives in `App::picker` while open.
 pub struct Picker<S: PickerSource> {
     /// Query input — vim modal text field. Lands in Insert at open so
@@ -154,8 +165,8 @@ pub struct Picker<S: PickerSource> {
     source: Arc<S>,
     /// Discovered items (source's `enumerate` appends; picker reads).
     items: Arc<Mutex<Vec<S::Item>>>,
-    /// Indices into `items` ranked by score for the current query.
-    filtered: Vec<usize>,
+    /// Ranked filtered entries for the current query.
+    filtered: Vec<FilteredEntry>,
     /// Selection index into `filtered`.
     pub selected: usize,
     /// Set to `true` by the source when its enumeration finishes.
@@ -288,26 +299,29 @@ impl<S: PickerSource> Picker<S> {
         self.last_seen_count = items.len();
 
         let q_lower = q.to_lowercase();
-        let mut scored: Vec<(i64, usize, String)> = Vec::new();
+        let mut scored: Vec<(i64, usize, String, Vec<usize>)> = Vec::new();
         for (i, item) in items.iter().enumerate() {
             let m = self.source.match_text(item);
             let m_lower = m.to_lowercase();
-            let sc = if q.is_empty() {
-                0
+            let (sc, positions) = if q.is_empty() {
+                (0i64, Vec::new())
             } else {
                 match score(&m_lower, &q_lower) {
                     Some(v) => v,
                     None => continue,
                 }
             };
-            scored.push((sc, i, m_lower));
+            scored.push((sc, i, m_lower, positions));
         }
         // Score desc; ties broken by lowercased match text asc so the
         // ordering is stable across renders even when the source's
         // emission order changes.
         scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
         scored.truncate(500);
-        self.filtered = scored.into_iter().map(|(_, i, _)| i).collect();
+        self.filtered = scored
+            .into_iter()
+            .map(|(_, idx, _, matches)| FilteredEntry { idx, matches })
+            .collect();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -321,7 +335,7 @@ impl<S: PickerSource> Picker<S> {
         if !self.source.has_preview() {
             return;
         }
-        let target_idx = self.filtered.get(self.selected).copied();
+        let target_idx = self.filtered.get(self.selected).map(|e| e.idx);
         if target_idx == self.preview_idx {
             return;
         }
@@ -371,10 +385,10 @@ impl<S: PickerSource> Picker<S> {
         self.preview_label.as_deref()
     }
 
-    /// Labels for the first `n` filtered items — what the renderer
-    /// puts in the list rows. Avoids exposing `S::Item` to render
-    /// code.
-    pub fn visible_labels(&self, n: usize) -> Vec<String> {
+    /// Labels and fuzzy-match char positions for the first `n` filtered
+    /// items. The renderer uses this to highlight matched characters.
+    /// `matches` contains char-indices into the label string.
+    pub fn visible_entries(&self, n: usize) -> Vec<(String, Vec<usize>)> {
         let items = match self.items.lock() {
             Ok(g) => g,
             Err(_) => return Vec::new(),
@@ -382,13 +396,17 @@ impl<S: PickerSource> Picker<S> {
         self.filtered
             .iter()
             .take(n)
-            .filter_map(|&i| items.get(i).map(|it| self.source.label(it)))
+            .filter_map(|e| {
+                items
+                    .get(e.idx)
+                    .map(|it| (self.source.label(it), e.matches.clone()))
+            })
             .collect()
     }
 
     /// Action for the currently highlighted item, if any.
     fn selected_action(&self) -> Option<PickerAction> {
-        let idx = *self.filtered.get(self.selected)?;
+        let idx = self.filtered.get(self.selected)?.idx;
         let items = self.items.lock().ok()?;
         let item = items.get(idx)?;
         Some(self.source.select(item))
@@ -758,6 +776,12 @@ fn scan_walk(root: &Path, sink: &ItemSink<PathBuf>) {
 /// Subsequence-based fuzzy score. Returns `None` when not all needle
 /// characters appear (in order) in the haystack.
 ///
+/// On success returns `Some((score, positions))` where `positions` is
+/// a list of **char indices** (not byte indices) in `haystack` where
+/// each character of `needle` matched, in order. Char indices are used
+/// so the renderer can walk `haystack.chars().enumerate()` and check
+/// membership directly without any byte-to-char conversion.
+///
 /// Bonuses:
 /// - `+8` per match at a word boundary (start, after `/`, `_`, `-`,
 ///   `.`, ` `).
@@ -765,35 +789,43 @@ fn scan_walk(root: &Path, sink: &ItemSink<PathBuf>) {
 /// - `+1` base hit per matched char.
 ///
 /// Penalty: `-len(haystack)/8` so shorter overall paths win on ties.
-fn score(haystack: &str, needle: &str) -> Option<i64> {
-    let h = haystack.as_bytes();
-    let n = needle.as_bytes();
-    let mut hi = 0usize;
-    let mut ni = 0usize;
+fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
+    if needle.is_empty() {
+        return Some((0, Vec::new()));
+    }
+    let mut needle_chars = needle.chars().peekable();
     let mut total: i64 = 0;
     let mut prev_match = false;
-    while ni < n.len() && hi < h.len() {
-        if h[hi] == n[ni] {
-            if prev_match {
-                total += 5;
+    let mut positions: Vec<usize> = Vec::new();
+    // Track previous char for boundary detection.
+    let mut prev_ch: Option<char> = None;
+    for (ci, ch) in haystack.chars().enumerate() {
+        if let Some(&nc) = needle_chars.peek() {
+            if ch == nc {
+                if prev_match {
+                    total += 5;
+                }
+                let at_boundary = prev_ch
+                    .map(|p| matches!(p, '/' | '_' | '-' | '.' | ' '))
+                    .unwrap_or(true); // ci == 0
+                if at_boundary {
+                    total += 8;
+                }
+                total += 1;
+                prev_match = true;
+                positions.push(ci);
+                needle_chars.next();
+            } else {
+                prev_match = false;
             }
-            let at_boundary = hi == 0 || matches!(h[hi - 1], b'/' | b'_' | b'-' | b'.' | b' ');
-            if at_boundary {
-                total += 8;
-            }
-            total += 1;
-            prev_match = true;
-            ni += 1;
-        } else {
-            prev_match = false;
         }
-        hi += 1;
+        prev_ch = Some(ch);
     }
-    if ni < n.len() {
+    if needle_chars.peek().is_some() {
         return None;
     }
-    total -= h.len() as i64 / 8;
-    Some(total)
+    total -= haystack.chars().count() as i64 / 8;
+    Some((total, positions))
 }
 
 #[cfg(test)]
@@ -809,16 +841,30 @@ mod tests {
 
     #[test]
     fn score_word_boundary_beats_mid_word() {
-        let a = score("src/main.rs", "main").unwrap();
-        let b = score("src/domain.rs", "main").unwrap();
+        let (a, _) = score("src/main.rs", "main").unwrap();
+        let (b, _) = score("src/domain.rs", "main").unwrap();
         assert!(a > b);
     }
 
     #[test]
     fn score_shorter_wins_on_ties() {
-        let a = score("a/b/foo.rs", "foo").unwrap();
-        let b = score("a/b/c/d/e/foo.rs", "foo").unwrap();
+        let (a, _) = score("a/b/foo.rs", "foo").unwrap();
+        let (b, _) = score("a/b/c/d/e/foo.rs", "foo").unwrap();
         assert!(a > b);
+    }
+
+    #[test]
+    fn score_returns_match_positions() {
+        // 'f' is at char index 0, 'b' is at char index 4 in "foo_bar".
+        let (_, positions) = score("foo_bar", "fb").unwrap();
+        assert_eq!(positions, vec![0, 4]);
+    }
+
+    #[test]
+    fn score_match_positions_skip_unmatched() {
+        // 'h' at index 0, 'w' at index 6 in "hello world".
+        let (_, positions) = score("hello world", "hw").unwrap();
+        assert_eq!(positions, vec![0, 6]);
     }
 
     #[test]
