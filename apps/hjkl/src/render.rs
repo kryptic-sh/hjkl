@@ -75,7 +75,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     let selection = app.editor.buffer_selection();
     let buffer_spans = app.editor.buffer_spans();
     let search_pattern = app.editor.search_state().pattern.as_ref();
-    let in_prompt = app.command_input.is_some() || app.editor.search_prompt().is_some();
+    let in_prompt = app.command_field.is_some() || app.editor.search_prompt().is_some();
 
     // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
     let search_bg = if search_pattern.is_some() {
@@ -150,11 +150,15 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// 4. Normal mode/filename/cursor line.
 fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // ── Command prompt (`:`) ─────────────────────────────────────────────────
-    if let Some(ref cmd) = app.command_input {
-        let content = format!(":{}", cmd.text);
-        // Pad to width so the background fills the row.
+    if let Some(ref field) = app.command_field {
+        let text = field.text();
+        let display: String = text.lines().next().unwrap_or("").to_string();
+        let content = format!(":{display}");
         let padded = format!("{content:<width$}", width = width as usize);
-        let cursor_col = cmd.display_cursor_col(1); // 1 = width of `:`
+        // Cursor is (row, col) in chars; for single-line prompt row is
+        // always 0. Prefix `:` adds one column.
+        let (_, ccol) = field.cursor();
+        let cursor_col = 1u16 + ccol as u16;
         return (
             Line::from(vec![Span::styled(
                 padded,
