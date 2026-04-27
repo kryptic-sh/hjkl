@@ -3,7 +3,6 @@
 
 use crate::field::Field;
 use crate::form::{Form, FormEvent, FormMode};
-use crate::submit::SubmitOutcome;
 use crate::validate::validate_field;
 use hjkl_engine::{Input, Key, VimMode, step};
 
@@ -209,19 +208,9 @@ impl Form {
     /// Run all validators; if all pass, fire the submit closure.
     /// Returns the appropriate `FormEvent`.
     fn try_submit_event(&mut self) -> FormEvent {
-        let mut had_error = false;
-        for field in &mut self.fields {
-            if !validate_field(field) {
-                had_error = true;
-            }
-        }
-        self.bump_dirty();
-        if had_error {
-            return FormEvent::ValidationFailed;
-        }
-        match self.submit.take() {
-            Some(submit) => FormEvent::Submitted(submit()),
-            None => FormEvent::Submitted(SubmitOutcome::Ok),
+        match self.try_submit() {
+            Some(outcome) => FormEvent::Submitted(outcome),
+            None => FormEvent::ValidationFailed,
         }
     }
 }
