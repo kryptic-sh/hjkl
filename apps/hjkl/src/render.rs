@@ -571,7 +571,14 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::FilePicker, ar
         text_width: inner.width.saturating_sub(gw),
         ..hjkl_buffer::Viewport::default()
     };
-    let resolver = |_: u32| Style::default();
+    let preview_spans = picker.preview_spans();
+    let resolver = |id: u32| {
+        preview_spans
+            .styles
+            .get(id as usize)
+            .copied()
+            .unwrap_or_default()
+    };
     let view = BufferView {
         buffer: buf,
         viewport: &viewport,
@@ -588,7 +595,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::FilePicker, ar
         search_bg: Style::default(),
         signs: &[],
         conceals: &[],
-        spans: &[],
+        spans: &preview_spans.by_row,
         search_pattern: None,
     };
     frame.render_widget(view, inner);

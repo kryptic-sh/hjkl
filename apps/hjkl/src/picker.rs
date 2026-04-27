@@ -10,14 +10,17 @@
 //! inside the prompt) and a background thread (when the source needs
 //! one) to stream candidates in.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_buffer::Buffer;
+use hjkl_buffer::{Buffer, Span as BufferSpan};
 use hjkl_form::{Input as EngineInput, Key as EngineKey, TextFieldEditor};
+use hjkl_tree_sitter::{DotFallbackTheme, HighlightSpan, Highlighter, LanguageRegistry, Theme};
+use ratatui::style::Style as RatStyle;
 
 /// Cap preview reads at this many lines so giant files don't stall the
 /// render path.
@@ -31,6 +34,20 @@ const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 pub enum PickerAction {
     /// Open the path in the editor (routes through `do_edit`).
     OpenPath(PathBuf),
+}
+
+/// Per-row span table + style table for the preview pane. The
+/// `BufferView` consumer takes `Vec<Vec<Span>>` plus a resolver
+/// closure mapping `style: u32` → ratatui `Style`; both live here so
+/// the renderer can wire them together cheaply.
+#[derive(Default)]
+pub struct PreviewSpans {
+    /// One vec per buffer row, each entry covering a half-open byte
+    /// range with an opaque style id.
+    pub by_row: Vec<Vec<BufferSpan>>,
+    /// Style id → ratatui style. Index with the `style` field of each
+    /// `BufferSpan`.
+    pub styles: Vec<RatStyle>,
 }
 
 /// Source-side abstraction for one kind of picker. Implementations
@@ -62,12 +79,14 @@ pub trait PickerSource: Send + Sync + 'static {
         true
     }
 
-    /// Build the preview-pane content. Status is empty for normal
-    /// content; non-empty is a placeholder reason ("binary", "1.0MB —
-    /// too large", I/O error message). Only called when
-    /// `has_preview()` returns `true`.
-    fn preview(&self, _item: &Self::Item) -> (Buffer, String) {
-        (Buffer::new(), String::new())
+    /// Build the preview-pane content. Returns `(buffer, status,
+    /// spans)`. Status is empty for normal content; non-empty is a
+    /// placeholder reason ("binary", "1.0MB — too large", I/O error
+    /// message). Spans are an empty `PreviewSpans` when the source
+    /// doesn't tokenise (in which case the preview renders unstyled).
+    /// Only called when `has_preview()` returns `true`.
+    fn preview(&self, _item: &Self::Item) -> (Buffer, String, PreviewSpans) {
+        (Buffer::new(), String::new(), PreviewSpans::default())
     }
 
     /// Translate the highlighted item into an action when the user
@@ -155,6 +174,9 @@ pub struct Picker<S: PickerSource> {
     /// Cached label for the preview header (saves a clone-from-Item
     /// each render).
     preview_label: Option<String>,
+    /// Per-row spans + style table for the preview buffer. Empty when
+    /// the source doesn't tokenise.
+    preview_spans: PreviewSpans,
 }
 
 impl<S: PickerSource> Picker<S> {
@@ -188,6 +210,7 @@ impl<S: PickerSource> Picker<S> {
             preview_buffer: Buffer::new(),
             preview_status: String::new(),
             preview_label: None,
+            preview_spans: PreviewSpans::default(),
         };
         // Block briefly for the first batch of items so the first
         // render already has a populated list and a loaded preview —
@@ -305,6 +328,7 @@ impl<S: PickerSource> Picker<S> {
             self.preview_buffer = Buffer::new();
             self.preview_status.clear();
             self.preview_label = None;
+            self.preview_spans = PreviewSpans::default();
             return;
         };
         // Snapshot the item so we can drop the lock before calling
@@ -317,10 +341,16 @@ impl<S: PickerSource> Picker<S> {
             Err(_) => return,
         };
         let label = self.source.label(&item);
-        let (buf, status) = self.source.preview(&item);
+        let (buf, status, spans) = self.source.preview(&item);
         self.preview_buffer = buf;
         self.preview_status = status;
         self.preview_label = Some(label);
+        self.preview_spans = spans;
+    }
+
+    /// Per-row spans + style table for the preview pane.
+    pub fn preview_spans(&self) -> &PreviewSpans {
+        &self.preview_spans
     }
 
     /// Borrow the preview buffer for `BufferView` rendering.
@@ -431,11 +461,26 @@ pub type FilePicker = Picker<FileSource>;
 /// `PREVIEW_MAX_BYTES` with a binary-byte heuristic.
 pub struct FileSource {
     root: PathBuf,
+    /// Tree-sitter language registry; preview detects language by
+    /// extension here.
+    registry: LanguageRegistry,
+    /// Theme used to resolve capture names to ratatui styles.
+    theme: Arc<dyn Theme + Send + Sync>,
+    /// Per-language `Highlighter` cache keyed by `LanguageConfig.name`.
+    /// Compiling a `Query` is the costly part (~10-20ms for Rust); we
+    /// pay that once per language and reuse the highlighter for every
+    /// subsequent preview of the same file type.
+    highlighters: Mutex<HashMap<&'static str, Highlighter>>,
 }
 
 impl FileSource {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            registry: LanguageRegistry::new(),
+            theme: Arc::new(DotFallbackTheme::dark()),
+            highlighters: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -454,10 +499,14 @@ impl PickerSource for FileSource {
         item.to_string_lossy().into_owned()
     }
 
-    fn preview(&self, item: &PathBuf) -> (Buffer, String) {
+    fn preview(&self, item: &PathBuf) -> (Buffer, String, PreviewSpans) {
         let abs = self.root.join(item);
         let (content, status) = load_preview(&abs);
-        (Buffer::from_str(&content), status)
+        if !status.is_empty() {
+            return (Buffer::from_str(&content), status, PreviewSpans::default());
+        }
+        let spans = self.highlight(&abs, &content);
+        (Buffer::from_str(&content), status, spans)
     }
 
     fn select(&self, item: &PathBuf) -> PickerAction {
@@ -470,6 +519,86 @@ impl PickerSource for FileSource {
             .name("hjkl-picker-scan".into())
             .spawn(move || scan_walk(me.root.as_path(), &sink))
             .ok()
+    }
+}
+
+impl FileSource {
+    /// Highlight the preview content. Detects language from the path,
+    /// gets/compiles a `Highlighter` for it, parses the (already
+    /// truncated) source, and builds per-row spans plus a style table
+    /// the renderer can index into via the `Span.style` field.
+    ///
+    /// Returns an empty `PreviewSpans` for unknown languages or on any
+    /// parse / lock error — preview still renders, just unstyled.
+    fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
+        let Some(cfg) = self.registry.detect_for_path(abs) else {
+            return PreviewSpans::default();
+        };
+        let mut hl_cache = match self.highlighters.lock() {
+            Ok(g) => g,
+            Err(_) => return PreviewSpans::default(),
+        };
+        let h = match hl_cache.entry(cfg.name) {
+            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(cfg) {
+                Ok(h) => v.insert(h),
+                Err(_) => return PreviewSpans::default(),
+            },
+        };
+        h.reset();
+        let bytes = content.as_bytes();
+        h.parse_initial(bytes);
+        let flat: Vec<HighlightSpan> = h.highlight_range(bytes, 0..bytes.len());
+
+        // Row starts (offset of the first byte of each row). Mirrors
+        // the helper in `syntax.rs`.
+        let mut row_starts: Vec<usize> = vec![0];
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' {
+                row_starts.push(i + 1);
+            }
+        }
+        let row_count = row_starts.len();
+
+        // Intern each unique ratatui style into `styles`; record the
+        // index so multiple spans sharing a style refer to the same id.
+        let mut styles: Vec<RatStyle> = Vec::new();
+        let mut by_row: Vec<Vec<BufferSpan>> = vec![Vec::new(); row_count];
+        for span in &flat {
+            let Some(rat) = self.theme.style(span.capture()).map(|s| s.to_ratatui()) else {
+                continue;
+            };
+            let style_id = match styles.iter().position(|s| *s == rat) {
+                Some(i) => i,
+                None => {
+                    styles.push(rat);
+                    styles.len() - 1
+                }
+            } as u32;
+            let span_start = span.byte_range.start;
+            let span_end = span.byte_range.end;
+            let start_row = row_starts
+                .partition_point(|&rs| rs <= span_start)
+                .saturating_sub(1);
+            let mut row = start_row;
+            while row < row_count {
+                let row_byte_start = row_starts[row];
+                let row_byte_end = row_starts
+                    .get(row + 1)
+                    .map(|&s| s.saturating_sub(1))
+                    .unwrap_or(bytes.len());
+                if row_byte_start >= span_end {
+                    break;
+                }
+                let local_start = span_start.saturating_sub(row_byte_start);
+                let local_end = span_end.min(row_byte_end) - row_byte_start;
+                if local_end > local_start {
+                    by_row[row].push(BufferSpan::new(local_start, local_end, style_id));
+                }
+                row += 1;
+            }
+        }
+        PreviewSpans { by_row, styles }
     }
 }
 
