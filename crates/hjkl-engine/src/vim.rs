@@ -3326,9 +3326,13 @@ fn handle_normal_only<H: crate::types::Host>(
             ed.sync_buffer_content_from_textarea();
             let row = buf_cursor_pos(&ed.buffer).row;
             let line_chars = buf_line_chars(&ed.buffer, row);
+            // Smart/auto-indent based on the current line (becomes the
+            // "previous" line for the freshly-opened line below).
+            let prev_line = buf_line(&ed.buffer, row).unwrap_or_default();
+            let indent = compute_enter_indent(&ed.settings, prev_line);
             ed.mutate_edit(Edit::InsertStr {
                 at: Position::new(row, line_chars),
-                text: "\n".to_string(),
+                text: format!("\n{indent}"),
             });
             ed.push_buffer_cursor_to_textarea();
             true
@@ -3339,14 +3343,30 @@ fn handle_normal_only<H: crate::types::Host>(
             begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: true });
             ed.sync_buffer_content_from_textarea();
             let row = buf_cursor_pos(&ed.buffer).row;
+            // The line opened above sits between row-1 and the current
+            // row. Smart/auto-indent off the line above when there is
+            // one; otherwise copy the current line's leading whitespace.
+            let indent = if row > 0 {
+                let above = buf_line(&ed.buffer, row - 1).unwrap_or_default();
+                compute_enter_indent(&ed.settings, above)
+            } else {
+                let cur = buf_line(&ed.buffer, row).unwrap_or_default();
+                cur.chars()
+                    .take_while(|c| *c == ' ' || *c == '\t')
+                    .collect::<String>()
+            };
             ed.mutate_edit(Edit::InsertStr {
                 at: Position::new(row, 0),
-                text: "\n".to_string(),
+                text: format!("{indent}\n"),
             });
             // After insert, cursor sits on the surviving content one row
-            // down — step back up onto the freshly-empty line.
+            // down — step back up onto the freshly-opened line, then to
+            // the end of its indent so insert mode picks up where the
+            // user expects to type.
             let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
             crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+            let new_row = buf_cursor_pos(&ed.buffer).row;
+            buf_set_cursor_rc(&mut ed.buffer, new_row, indent.chars().count());
             ed.push_buffer_cursor_to_textarea();
             true
         }
