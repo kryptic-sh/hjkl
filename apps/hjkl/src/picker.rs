@@ -740,4 +740,18 @@ mod tests {
         let b = score("a/b/c/d/e/foo.rs", "foo").unwrap();
         assert!(a > b);
     }
+
+    #[test]
+    fn txt_preview_has_no_highlight_spans() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notes.txt");
+        std::fs::write(&path, "hello world\nthis is plain text\n").unwrap();
+        let source = FileSource::new(tmp.path().to_path_buf());
+        let (_buf, status, spans) = source.preview(&PathBuf::from("notes.txt"));
+        assert!(status.is_empty(), "unexpected status: {status:?}");
+        assert!(spans.styles.is_empty(), "got {} styles", spans.styles.len());
+        for row in &spans.by_row {
+            assert!(row.is_empty(), "unexpected spans on row: {row:?}");
+        }
+    }
 }
