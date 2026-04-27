@@ -110,6 +110,12 @@ pub struct App {
     /// to throttle the libgit2 diff to ~4 Hz during active typing on
     /// large files.
     last_git_refresh_at: Instant,
+    /// `(dirty_gen, vp_top, vp_height)` snapshot of the last call to
+    /// `recompute_and_install`. When the next call has identical
+    /// inputs, the syntax span recompute + install is skipped — the
+    /// editor's `buffer_spans` table is still the right answer.
+    /// This makes pure-scroll-into-cache and idle-redraw frames free.
+    last_recompute_key: Option<(u64, usize, usize)>,
     /// `true` when the current file is in a git repo but not in HEAD —
     /// drives the `[Untracked]` status-line tag. Refreshed alongside
     /// `git_signs`.
@@ -227,6 +233,7 @@ impl App {
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
             last_git_refresh_at: Instant::now(),
+            last_recompute_key: None,
             is_untracked: false,
             saved_hash: 0,
             saved_len: 0,
@@ -887,17 +894,28 @@ impl App {
     ///
     /// No-op when no language is attached (highlighter is `None`) or
     /// when the incremental parse timed out (caller retries next frame).
+    /// Frame-level skip: when `(dirty_gen, vp_top, vp_height)` matches
+    /// the last call's inputs, the heavy parse + install path is
+    /// bypassed entirely — the editor's `buffer_spans` is still right.
     pub fn recompute_and_install(&mut self) {
         let (top, height) = {
             let vp = self.editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
+        let dg = self.editor.buffer().dirty_gen();
+        let key = (dg, top, height);
+        if self.last_recompute_key == Some(key) {
+            // Buffer + viewport unchanged: nothing to redo. git_signs
+            // has its own cache so we don't even need to call it.
+            return;
+        }
         if let Some(out) = self
             .syntax
             .parse_and_render(self.editor.buffer(), top, height)
         {
             self.editor.install_ratatui_syntax_spans(out.spans);
             self.diag_signs = out.signs;
+            self.last_recompute_key = Some(key);
         }
         self.refresh_git_signs();
     }

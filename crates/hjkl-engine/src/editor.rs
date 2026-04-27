@@ -1134,12 +1134,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         &mut self,
         spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     ) {
-        let line_byte_lens: Vec<usize> = (0..buf_row_count(&self.buffer))
-            .map(|r| buf_line(&self.buffer, r).map(str::len).unwrap_or(0))
-            .collect();
+        // Look up `line_byte_lens` lazily — only fetch a row's length
+        // when it has at least one span. On a 100k-line file with
+        // ~50 visible rows, this avoids an O(N) buffer walk per frame.
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
-            let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
+            if row_spans.is_empty() {
+                by_row.push(Vec::new());
+                continue;
+            }
+            let line_len = buf_line(&self.buffer, row).map(str::len).unwrap_or(0);
             let mut translated = Vec::with_capacity(row_spans.len());
             for (start, end, style) in row_spans {
                 let end_clamped = (*end).min(line_len);
