@@ -188,7 +188,10 @@ mod tests {
         let theme = DotFallbackTheme::dark();
         // "function.method.builtin" not in theme -> falls to "function"
         let s = theme.style("function.method.builtin");
-        assert!(s.is_some(), "expected fallback style for 'function.method.builtin'");
+        assert!(
+            s.is_some(),
+            "expected fallback style for 'function.method.builtin'"
+        );
     }
 
     #[test]

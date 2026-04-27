@@ -62,7 +62,9 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 
     // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
     let search_bg = if search_pattern.is_some() {
-        Style::default().bg(Color::Rgb(147, 103, 0)).fg(Color::White)
+        Style::default()
+            .bg(Color::Rgb(147, 103, 0))
+            .fg(Color::White)
     } else {
         Style::default()
     };
@@ -89,9 +91,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     // Suppress the buffer-pane cursor while the user is typing in the
     // command line or search prompt — the cursor belongs to the status row.
     let in_prompt = app.command_input.is_some() || app.editor.search_prompt().is_some();
-    if !in_prompt
-        && let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area)
-    {
+    if !in_prompt && let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area) {
         frame.set_cursor_position((cx, cy));
     }
 }
@@ -144,9 +144,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let content = format!("{prefix}{}", sp.text);
         let padded = format!("{content:<width$}", width = width as usize);
         // cursor position inside the prompt text (byte-counted in ASCII context)
-        let cursor_col = 1u16 + sp.text[..sp.cursor.min(sp.text.len())]
-            .chars()
-            .count() as u16;
+        let cursor_col = 1u16 + sp.text[..sp.cursor.min(sp.text.len())].chars().count() as u16;
         return (
             Line::from(vec![Span::styled(
                 padded,
@@ -254,7 +252,17 @@ pub fn format_status_line(
     total_lines: usize,
     width: u16,
 ) -> String {
-    format_status_line_full(mode, filename, dirty, false, false, row, col, total_lines, width)
+    format_status_line_full(
+        mode,
+        filename,
+        dirty,
+        false,
+        false,
+        row,
+        col,
+        total_lines,
+        width,
+    )
 }
 
 /// Full status line formatter with readonly + new-file flags.
@@ -367,7 +375,10 @@ mod tests {
         let long = "some/very/long/path/to/a/deeply/nested/file.rs";
         let s = format_status_line_full("NORMAL", long, false, false, false, 0, 0, 1, 30);
         // Truncated filename starts with `…`
-        assert!(s.contains('\u{2026}'), "truncated filename must start with …");
+        assert!(
+            s.contains('\u{2026}'),
+            "truncated filename must start with …"
+        );
     }
 
     #[test]

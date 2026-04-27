@@ -446,9 +446,7 @@ impl App {
     fn do_save(&mut self, path: Option<PathBuf>) {
         // Readonly guard — E45 matches vim's message.
         if self.editor.is_readonly() {
-            self.status_message = Some(
-                "E45: 'readonly' option is set (add ! to override)".into(),
-            );
+            self.status_message = Some("E45: 'readonly' option is set (add ! to override)".into());
             return;
         }
         let target = path.or_else(|| self.filename.clone());
