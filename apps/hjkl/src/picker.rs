@@ -285,12 +285,13 @@ impl Picker {
         let q = self.query.text();
         let handle = self.source.enumerate(Some(&q), new_cancel);
         self._scan = handle;
-        // Invalidate cache markers so the next refresh() re-scores against
-        // new items. Do NOT clear `filtered` here — keep showing the previous
-        // results until the first new batch lands (prevents flash).
+        // `refresh()` already set `last_query = q` when it scheduled this
+        // requery, so don't clear it here — clearing would make the next
+        // refresh see q as "changed" again and re-schedule another spawn,
+        // looping forever every 150ms. Reset `selected` so the cursor
+        // doesn't dangle past the new (eventually-shorter) result list,
+        // and `preview_idx` so the preview rebuilds against fresh items.
         self.selected = 0;
-        self.last_query.clear();
-        self.last_seen_count = 0;
         self.preview_idx = None;
     }
 
