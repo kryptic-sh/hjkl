@@ -8,10 +8,10 @@ use hjkl_buffer::{BufferView, Gutter};
 use hjkl_engine::{Host, Query};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
 use crate::app::{App, STATUS_LINE_HEIGHT};
@@ -59,6 +59,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 
     buffer_pane(frame, app, buf_area, gw);
     status_line(frame, app, status_area);
+
+    // Picker overlay sits on top of the buffer pane. Renders last so
+    // its `Clear` widget masks the editor content beneath it.
+    if app.picker.is_some() {
+        picker_overlay(frame, app, buf_area);
+    }
 }
 
 /// Render the buffer pane with line numbers, text, and the cursor.
@@ -75,7 +81,8 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     let selection = app.editor.buffer_selection();
     let buffer_spans = app.editor.buffer_spans();
     let search_pattern = app.editor.search_state().pattern.as_ref();
-    let in_prompt = app.command_field.is_some() || app.search_field.is_some();
+    let in_prompt =
+        app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
 
     // Merge diagnostic + git signs, filtered to the visible viewport so
     // BufferView's per-row linear scan stays cheap on large files.
@@ -428,6 +435,92 @@ pub fn format_status_line_full(
 #[cfg(test)]
 pub fn format_write_message(path: &str, lines: usize, bytes: usize) -> String {
     format!("\"{}\" {}L, {}B written", path, lines, bytes)
+}
+
+/// Centered popup containing the picker's query input + scrollable
+/// result list. Drawn on top of the buffer pane via `Clear` so the
+/// editor content beneath is masked.
+fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
+    let picker = match app.picker.as_mut() {
+        Some(p) => p,
+        None => return,
+    };
+    picker.refresh();
+
+    let area = centered_rect(70, 70, buf_area);
+    frame.render_widget(Clear, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+    let input_area = layout[0];
+    let list_area = layout[1];
+
+    let total = picker.total();
+    let matched = picker.matched();
+    let scan_tag = if picker.scan_done() {
+        "".to_string()
+    } else {
+        " (scanning…)".to_string()
+    };
+    let title = format!(" picker — {matched}/{total}{scan_tag} ");
+
+    let query_text = picker.query.text();
+    let display: String = query_text.lines().next().unwrap_or("").to_string();
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(Color::Cyan));
+    let input_inner = input_block.inner(input_area);
+    frame.render_widget(input_block, input_area);
+    let input_para = Paragraph::new(format!("> {display}"));
+    frame.render_widget(input_para, input_inner);
+
+    let (_, ccol) = picker.query.cursor();
+    let cx = input_inner.x + 2 + ccol as u16;
+    let cy = input_inner.y;
+    if cx < input_inner.x + input_inner.width && cy < input_inner.y + input_inner.height {
+        frame.set_cursor_position((cx, cy));
+    }
+
+    let visible_rows = list_area.height.saturating_sub(2) as usize;
+    let visible = picker.visible(visible_rows.max(1));
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|p| ListItem::new(p.to_string_lossy().into_owned()))
+        .collect();
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let list = List::new(items)
+        .block(list_block)
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(60, 70, 100))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+    let mut state = ListState::default();
+    if !visible.is_empty() {
+        state.select(Some(picker.selected.min(visible.len().saturating_sub(1))));
+    }
+    frame.render_stateful_widget(list, list_area, &mut state);
+}
+
+/// Compute a centered Rect of `pct_x`% × `pct_y`% of `area`.
+fn centered_rect(pct_x: u16, pct_y: u16, area: Rect) -> Rect {
+    let width = area.width.saturating_mul(pct_x) / 100;
+    let height = area.height.saturating_mul(pct_y) / 100;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 #[cfg(test)]

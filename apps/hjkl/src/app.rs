@@ -80,6 +80,14 @@ pub struct App {
     /// the engine and into the host so it shares the
     /// [`TextFieldEditor`] primitive (vim motions inside the prompt).
     pub search_field: Option<TextFieldEditor>,
+    /// Active file picker overlay. `Some` while the user is browsing
+    /// the fuzzy-find list (`<leader><space>`, `<leader>f`, or
+    /// `:picker`).
+    pub picker: Option<crate::picker::FilePicker>,
+    /// `true` after the user pressed `<Space>` in normal mode and we're
+    /// waiting for the next key to resolve the leader sequence (e.g.
+    /// `<Space>f`). Cleared on the next keystroke regardless of match.
+    pub pending_leader: bool,
     /// Direction of the active `search_field` (or the most recent
     /// committed search direction; engine's `last_search_forward` is
     /// the source of truth post-commit).
@@ -274,6 +282,8 @@ impl App {
             status_message: None,
             command_field: None,
             search_field: None,
+            picker: None,
+            pending_leader: false,
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             is_new_file,
@@ -482,6 +492,39 @@ impl App {
                         continue;
                     }
 
+                    // ── Picker overlay (`<leader><space>`, `:picker`) ────────
+                    if self.picker.is_some() {
+                        self.handle_picker_key(key);
+                        if self.exit_requested {
+                            break;
+                        }
+                        continue;
+                    }
+
+                    // ── Leader resolution (`<Space>` followed by next key) ──
+                    if self.pending_leader && self.editor.vim_mode() == VimMode::Normal {
+                        self.pending_leader = false;
+                        // `<Space><Space>` and `<Space>f` both open the
+                        // file picker. Anything else cancels the leader
+                        // sequence silently and is dropped — vim drops
+                        // unmapped follow-ups too.
+                        if key.modifiers == KeyModifiers::NONE
+                            && (key.code == KeyCode::Char(' ') || key.code == KeyCode::Char('f'))
+                        {
+                            self.open_picker();
+                        }
+                        continue;
+                    }
+
+                    // ── Leader prefix (`<Space>` in normal mode) ─────────────
+                    if key.code == KeyCode::Char(' ')
+                        && key.modifiers == KeyModifiers::NONE
+                        && self.editor.vim_mode() == VimMode::Normal
+                    {
+                        self.pending_leader = true;
+                        continue;
+                    }
+
                     // ── Intercept `:` in Normal mode to open command prompt ──
                     if key.code == KeyCode::Char(':')
                         && key.modifiers == KeyModifiers::NONE
@@ -543,6 +586,36 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Open the fuzzy file picker rooted at the current working
+    /// directory. Triggered by `<leader><space>`, `<leader>f`,
+    /// `:picker`, and the `+picker` startup arg.
+    pub fn open_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        self.picker = Some(crate::picker::FilePicker::open(&cwd));
+        self.pending_leader = false;
+    }
+
+    /// Route a key event to the active picker. Submitting a path runs
+    /// it through `do_edit` so the open path matches `:e <path>` exactly
+    /// (dirty checks, syntax detection, content reset).
+    fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
+        let picker = match self.picker.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        match picker.handle_key(key) {
+            crate::picker::PickerEvent::None => {}
+            crate::picker::PickerEvent::Cancel => {
+                self.picker = None;
+            }
+            crate::picker::PickerEvent::Select(path) => {
+                self.picker = None;
+                let s = path.to_string_lossy().to_string();
+                self.do_edit(&s, false);
+            }
+        }
     }
 
     /// Open the `:` ex-command prompt. Resets to an empty single-line
@@ -787,6 +860,13 @@ impl App {
                     return;
                 }
             }
+        }
+
+        // `:picker` — open the fuzzy file picker. Binary-local because
+        // the picker is host-level UI, not part of the engine's grammar.
+        if cmd == "picker" {
+            self.open_picker();
+            return;
         }
 
         // `:edit [path]` / `:edit!` — open or reload a file. Binary-local

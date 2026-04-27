@@ -6,6 +6,7 @@
 mod app;
 mod git;
 mod host;
+mod picker;
 mod render;
 mod syntax;
 
@@ -26,6 +27,8 @@ pub struct Args {
     pub readonly: bool,
     /// Enable the `:perf` overlay at startup (`+perf`).
     pub perf: bool,
+    /// Open the file picker at startup (`+picker`).
+    pub picker: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -34,6 +37,7 @@ fn parse_args() -> Result<Args> {
     let mut pattern: Option<String> = None;
     let mut readonly = false;
     let mut perf = false;
+    let mut picker = false;
     let mut file: Option<std::path::PathBuf> = None;
     let mut i = 1usize;
     while i < raw.len() {
@@ -56,6 +60,8 @@ fn parse_args() -> Result<Args> {
                 line = Some(n);
             } else if rest == "perf" {
                 perf = true;
+            } else if rest == "picker" {
+                picker = true;
             } else {
                 eprintln!("hjkl: ignoring unknown +cmd: {arg}");
             }
@@ -73,12 +79,13 @@ fn parse_args() -> Result<Args> {
         pattern,
         readonly,
         perf,
+        picker,
     })
 }
 
 fn print_help() {
     println!(
-        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  +perf            Enable :perf overlay at startup\n  -h, --help       Show this help\n  -V, --version    Print version",
+        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  +perf            Enable :perf overlay at startup\n  +picker          Open the file picker at startup\n  -h, --help       Show this help\n  -V, --version    Print version",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -91,6 +98,9 @@ fn main() -> Result<()> {
     let mut app = app::App::new(args.file, args.readonly, args.line, args.pattern)?;
     if args.perf {
         app.perf_overlay = true;
+    }
+    if args.picker {
+        app.open_picker();
     }
 
     terminal::enable_raw_mode()?;
