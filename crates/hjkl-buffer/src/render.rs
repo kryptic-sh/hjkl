@@ -467,7 +467,14 @@ impl<R: StyleResolver> BufferView<'_, R> {
             }
         }
 
+        // Tab width for `\t` expansion — fixed at 4 cells aligned to tab
+        // stops within the line. (Eventual `:set tabstop` integration
+        // would wire this through; hardcoding for now keeps the renderer
+        // engine-agnostic and avoids a BufferView field break across the
+        // 16+ construction sites.)
+        const TAB_WIDTH: usize = 4;
         let mut byte_offset: usize = 0;
+        let mut line_col: usize = 0;
         let mut chars_iter = line.chars().enumerate().peekable();
         while let Some((col_idx, ch)) = chars_iter.next() {
             let ch_byte_len = ch.len_utf8();
@@ -514,14 +521,24 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 let _ = consumed;
                 continue;
             }
+            // Visible cell count: tabs expand to the next TAB_WIDTH stop
+            // based on `line_col` (visible column in the *line*, not the
+            // segment), so a tab at line column 0 paints TAB_WIDTH cells
+            // and a tab at line column 3 paints 1 cell.
+            let visible_width = if ch == '\t' {
+                TAB_WIDTH - (line_col % TAB_WIDTH)
+            } else {
+                ch.width().unwrap_or(1)
+            };
             // Skip chars to the left of the segment start (horizontal
             // scroll for `Wrap::None`, segment offset for wrap modes).
             if col_idx < seg_start {
+                line_col += visible_width;
                 byte_offset += ch_byte_len;
                 continue;
             }
             // Stop when we run out of horizontal room.
-            let width = ch.width().unwrap_or(1) as u16;
+            let width = visible_width as u16;
             if screen_x + width > row_end_x {
                 break;
             }
@@ -552,11 +569,22 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 style = style.patch(self.cursor_style);
             }
 
-            if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
+            if ch == '\t' {
+                // Paint tab as `visible_width` space cells carrying the
+                // resolved style — tab/text bg/cursor-line bg all paint
+                // through the expansion.
+                for k in 0..width {
+                    if let Some(cell) = term_buf.cell_mut((screen_x + k, y)) {
+                        cell.set_char(' ');
+                        cell.set_style(style);
+                    }
+                }
+            } else if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
                 cell.set_char(ch);
                 cell.set_style(style);
             }
             screen_x += width;
+            line_col += visible_width;
             byte_offset += ch_byte_len;
         }
 
