@@ -573,7 +573,7 @@ fn render_picker_input_and_list(
     let scan_tag = if picker.scan_done() {
         "".to_string()
     } else {
-        " (scanning…)".to_string()
+        format!(" {} scanning", hjkl_ratatui::spinner::frame())
     };
     let kind = picker.title();
     let title = format!(" picker — {kind} — {matched}/{total}{scan_tag} ");

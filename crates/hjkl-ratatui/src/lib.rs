@@ -28,6 +28,7 @@
 
 pub mod form;
 pub mod prompt;
+pub mod spinner;
 
 use hjkl_engine::{Attrs, Color, Style};
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
