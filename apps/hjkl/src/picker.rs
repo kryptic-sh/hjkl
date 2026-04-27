@@ -112,16 +112,9 @@ pub struct ItemSink<I> {
 }
 
 impl<I> ItemSink<I> {
-    /// Append a single item.
-    #[allow(dead_code)] // Future sources may push one-at-a-time.
-    pub fn push(&self, item: I) {
-        if let Ok(mut g) = self.items.lock() {
-            g.push(item);
-        }
-    }
-
     /// Append an iterator of items in one lock acquisition. Preferred
-    /// over per-item `push` when the source can batch.
+    /// over per-item push when the source can batch. For single items,
+    /// use `extend(std::iter::once(item))`.
     pub fn extend(&self, items: impl IntoIterator<Item = I>) {
         if let Ok(mut g) = self.items.lock() {
             g.extend(items);

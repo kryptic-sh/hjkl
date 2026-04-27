@@ -155,7 +155,7 @@ pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
     slots: Vec<BufferSlot>,
     /// Index into `slots` of the currently active buffer.
-    pub active: usize,
+    active: usize,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
     /// the last slot consume the next value.
