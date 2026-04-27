@@ -246,6 +246,14 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
 
     // New-file annotation — shown until the user edits or saves.
     let new_tag = if app.is_new_file { " [New File]" } else { "" };
+    // Untracked annotation — file exists in a git workdir but isn't in
+    // HEAD. Suppressed when [New File] applies (file isn't on disk yet,
+    // [New File] is the more informative tag).
+    let untracked_tag = if app.is_untracked && !app.is_new_file {
+        " [Untracked]"
+    } else {
+        ""
+    };
 
     let raw_filename: String = app
         .filename
@@ -265,7 +273,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let right = format!("{pos}  {pct_str} ");
     // Left prefix before filename: ` MODE  d ` + ro_tag + new_tag.
     let left_prefix = format!(" {mode}  {dirty} ");
-    let suffix = format!("{ro_tag}{new_tag}");
+    let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
 
     // Available columns for the filename.
     let w = width as usize;

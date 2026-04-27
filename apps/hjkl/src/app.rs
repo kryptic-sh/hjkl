@@ -84,6 +84,10 @@ pub struct App {
     /// `dirty_gen` of the buffer when `git_signs` was last rebuilt.
     /// `None` = stale, force recompute on next render.
     last_git_dirty_gen: Option<u64>,
+    /// `true` when the current file is in a git repo but not in HEAD —
+    /// drives the `[Untracked]` status-line tag. Refreshed alongside
+    /// `git_signs`.
+    pub is_untracked: bool,
 }
 
 impl App {
@@ -188,6 +192,7 @@ impl App {
             diag_signs: initial_signs,
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
+            is_untracked: false,
         })
     }
 
@@ -216,6 +221,7 @@ impl App {
             bytes.push(b'\n');
         }
         self.git_signs = crate::git::signs_for_bytes(&path, &bytes);
+        self.is_untracked = crate::git::is_untracked(&path);
         self.last_git_dirty_gen = Some(dg);
     }
 

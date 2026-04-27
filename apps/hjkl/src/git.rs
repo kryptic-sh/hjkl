@@ -59,10 +59,12 @@ fn try_signs_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Sign>, git2::
     let style_mod = Style::default().fg(Color::Yellow);
     let style_del = Style::default().fg(Color::Red);
 
+    // Untracked or no HEAD → no per-line signs (status line carries
+    // the `[Untracked]` tag instead; per-line `+` floods are noise).
     let head = match repo.head() {
         Ok(h) => h,
         Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
-            return Ok(untracked_bytes_signs(current, style_add));
+            return Ok(Vec::new());
         }
         Err(e) => return Err(e),
     };
@@ -70,7 +72,7 @@ fn try_signs_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Sign>, git2::
     let entry = match tree.get_path(&rel) {
         Ok(e) => e,
         Err(e) if e.code() == ErrorCode::NotFound => {
-            return Ok(untracked_bytes_signs(current, style_add));
+            return Ok(Vec::new());
         }
         Err(e) => return Err(e),
     };
@@ -120,19 +122,43 @@ fn try_signs_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Sign>, git2::
     Ok(signs)
 }
 
-fn untracked_bytes_signs(current: &[u8], style: Style) -> Vec<Sign> {
-    let Ok(s) = std::str::from_utf8(current) else {
-        return Vec::new();
+/// `true` when the file exists in a git workdir but isn't present in
+/// the HEAD tree (newly created, never committed). Drives the
+/// `[Untracked]` status-line tag — distinct from the diff-signs path
+/// which returns empty for untracked files (no per-line `+` flood).
+pub fn is_untracked(path: &Path) -> bool {
+    try_is_untracked(path).unwrap_or(false)
+}
+
+fn try_is_untracked(path: &Path) -> Result<bool, git2::Error> {
+    let canon_path = path
+        .canonicalize()
+        .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+    let parent = canon_path.parent().unwrap_or(Path::new("."));
+    let repo = Repository::discover(parent)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| git2::Error::from_str("bare repo has no workdir"))?;
+    let rel = canon_path
+        .strip_prefix(
+            workdir
+                .canonicalize()
+                .map_err(|e| git2::Error::from_str(&e.to_string()))?,
+        )
+        .map_err(|_| git2::Error::from_str("path outside repo workdir"))?;
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
+            return Ok(true);
+        }
+        Err(e) => return Err(e),
     };
-    let n = s.lines().count();
-    (0..n)
-        .map(|row| Sign {
-            row,
-            ch: '+',
-            style,
-            priority: PRIORITY,
-        })
-        .collect()
+    let tree = head.peel_to_tree()?;
+    match tree.get_path(rel) {
+        Ok(_) => Ok(false),
+        Err(e) if e.code() == ErrorCode::NotFound => Ok(true),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
