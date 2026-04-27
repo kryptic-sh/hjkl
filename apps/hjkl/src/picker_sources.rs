@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
-use hjkl_tree_sitter::{DotFallbackTheme, Highlighter, LanguageRegistry, Theme};
+use hjkl_tree_sitter::{CommentMarkerPass, DotFallbackTheme, Highlighter, LanguageRegistry, Theme};
 
 // ── BufferSource ─────────────────────────────────────────────────────────────
 
@@ -192,7 +192,8 @@ impl HighlightedBufferSource {
         h.reset();
         let bytes = content.as_bytes();
         h.parse_initial(bytes);
-        let flat = h.highlight_range(bytes, 0..bytes.len());
+        let mut flat = h.highlight_range(bytes, 0..bytes.len());
+        CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
             .into_iter()
@@ -314,7 +315,8 @@ impl HighlightedFileSource {
         h.reset();
         let bytes = content.as_bytes();
         h.parse_initial(bytes);
-        let flat = h.highlight_range(bytes, 0..bytes.len());
+        let mut flat = h.highlight_range(bytes, 0..bytes.len());
+        CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
             .into_iter()
@@ -433,7 +435,8 @@ impl HighlightedRgSource {
         h.reset();
         let bytes = content.as_bytes();
         h.parse_initial(bytes);
-        let flat = h.highlight_range(bytes, 0..bytes.len());
+        let mut flat = h.highlight_range(bytes, 0..bytes.len());
+        CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
             .into_iter()

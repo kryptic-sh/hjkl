@@ -20,12 +20,14 @@
 //! }
 //! ```
 
+pub mod comment_markers;
 pub mod highlighter;
 pub mod languages;
 pub mod registry;
 pub mod theme;
 
 // Flat re-exports for the primary public API surface.
+pub use comment_markers::{CommentMarkerPass, MarkerWord, default_markers};
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use registry::{LanguageConfig, LanguageRegistry, detect_language_for_path};
 pub use theme::{DotFallbackTheme, Style, Theme};

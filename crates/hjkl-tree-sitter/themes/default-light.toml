@@ -51,3 +51,18 @@ default             = { fg = "#2e3440" }
 # SQL
 "keyword.sql"       = { fg = "#7b368f", bold = true }
 "identifier"        = { fg = "#2e3440" }
+
+# Comment markers (TODO / FIXME / NOTE / WARN badges)
+# Label: coloured bg, dark fg, bold
+# Tail:  same colour as label bg, italic, no bg
+"comment.marker.todo"       = { fg = "#1d1d1d", bg = "#e5c07b", bold = true }
+"comment.marker.tail.todo"  = { fg = "#c08000", italic = true }
+
+"comment.marker.fixme"      = { fg = "#1d1d1d", bg = "#e06c75", bold = true }
+"comment.marker.tail.fixme" = { fg = "#c0392b", italic = true }
+
+"comment.marker.note"       = { fg = "#1d1d1d", bg = "#61afef", bold = true }
+"comment.marker.tail.note"  = { fg = "#1f6f8b", italic = true }
+
+"comment.marker.warn"       = { fg = "#1d1d1d", bg = "#d19a66", bold = true }
+"comment.marker.tail.warn"  = { fg = "#b06000", italic = true }

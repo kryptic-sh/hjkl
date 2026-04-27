@@ -18,7 +18,8 @@ use std::thread::{self, JoinHandle};
 use hjkl_buffer::Sign;
 use hjkl_engine::Query;
 use hjkl_tree_sitter::{
-    DotFallbackTheme, Highlighter, InputEdit, LanguageConfig, LanguageRegistry, Point, Theme,
+    CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, LanguageConfig, LanguageRegistry,
+    Point, Theme,
 };
 
 /// Stable identifier for an open buffer. Assigned by the App; carried
@@ -275,6 +276,7 @@ fn worker_loop(
 
     let mut buffers: HashMap<BufferId, WorkerBufferState> = HashMap::new();
     let mut theme: Arc<dyn Theme + Send + Sync> = initial_theme;
+    let marker_pass = CommentMarkerPass::new();
 
     loop {
         let msg = {
@@ -358,8 +360,11 @@ fn worker_loop(
                 let bytes = req.source.as_bytes();
 
                 let t = Instant::now();
-                let flat_spans = h.highlight_range(bytes, req.viewport_byte_range.clone());
+                let mut flat_spans = h.highlight_range(bytes, req.viewport_byte_range.clone());
                 perf.highlight_us = t.elapsed().as_micros();
+
+                // Overlay TODO/FIXME/NOTE/WARN marker spans onto comment spans.
+                marker_pass.apply(&mut flat_spans, bytes);
 
                 let t = Instant::now();
                 let by_row = build_by_row(
@@ -619,7 +624,11 @@ impl SyntaxLayer {
 
         let mut h = Highlighter::new(cfg).ok()?;
         h.parse_initial(bytes);
-        let flat_spans = h.highlight_range(bytes, 0..bytes.len());
+        let mut flat_spans = h.highlight_range(bytes, 0..bytes.len());
+
+        // Overlay TODO/FIXME/NOTE/WARN marker spans.
+        let marker_pass = CommentMarkerPass::new();
+        marker_pass.apply(&mut flat_spans, bytes);
 
         let local_by_row = build_by_row(
             &flat_spans,
