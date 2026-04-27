@@ -36,15 +36,19 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     let status_area = chunks[1];
 
     let gw = gutter_width(app.editor.buffer().line_count() as usize);
+    let text_width = buf_area.width.saturating_sub(gw);
 
-    // Tell the host the text area dimensions so scrolloff math is accurate.
-    // text_width excludes the gutter.
+    // Publish viewport dims so engine scrolloff math is accurate.
+    // `width` is the text-area width (gutter excluded) — `Viewport::ensure_visible`
+    // uses it as the horizontal cursor band, and the cursor lives in the text area.
     {
         let vp = app.editor.host_mut().viewport_mut();
-        vp.width = buf_area.width;
+        vp.width = text_width;
         vp.height = buf_area.height;
-        vp.text_width = buf_area.width.saturating_sub(gw);
+        vp.text_width = text_width;
     }
+    // Publish height to the engine's atomic so scrolloff (5-row margin) engages.
+    app.editor.set_viewport_height(buf_area.height);
 
     buffer_pane(frame, app, buf_area, gw);
     status_line(frame, app, status_area);
