@@ -35,20 +35,20 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     let buf_area = chunks[0];
     let status_area = chunks[1];
 
-    let gw = gutter_width(app.editor.buffer().line_count() as usize);
+    let gw = gutter_width(app.active().editor.buffer().line_count() as usize);
     let text_width = buf_area.width.saturating_sub(gw);
 
     // Publish viewport dims so engine scrolloff math is accurate.
     // `width` is the text-area width (gutter excluded) — `Viewport::ensure_visible`
     // uses it as the horizontal cursor band, and the cursor lives in the text area.
     {
-        let vp = app.editor.host_mut().viewport_mut();
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
         vp.width = text_width;
         vp.height = buf_area.height;
         vp.text_width = text_width;
     }
     // Publish height to the engine's atomic so scrolloff (5-row margin) engages.
-    app.editor.set_viewport_height(buf_area.height);
+    app.active_mut().editor.set_viewport_height(buf_area.height);
 
     // Refresh syntax spans against the now-current viewport. On the first
     // frame, App::new ran the initial parse with `viewport.height = 0`
@@ -78,23 +78,25 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         style: Style::default().fg(Color::DarkGray),
     };
 
-    let selection = app.editor.buffer_selection();
-    let buffer_spans = app.editor.buffer_spans();
-    let search_pattern = app.editor.search_state().pattern.as_ref();
+    let selection = app.active().editor.buffer_selection();
+    let buffer_spans = app.active().editor.buffer_spans();
+    let search_pattern = app.active().editor.search_state().pattern.as_ref();
     let in_prompt =
         app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
 
     // Merge diagnostic + git signs, filtered to the visible viewport so
     // BufferView's per-row linear scan stays cheap on large files.
-    let vp_top = app.editor.host().viewport().top_row;
+    let vp_top = app.active().editor.host().viewport().top_row;
     let vp_bot = vp_top + area.height as usize;
     let mut visible_signs: Vec<hjkl_buffer::Sign> = app
+        .active()
         .diag_signs
         .iter()
         .copied()
         .filter(|s| s.row >= vp_top && s.row < vp_bot)
         .chain(
-            app.git_signs
+            app.active()
+                .git_signs
                 .iter()
                 .copied()
                 .filter(|s| s.row >= vp_top && s.row < vp_bot),
@@ -113,14 +115,14 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     };
 
     // Bind the style table after the viewport mutation above to avoid a
-    // double-borrow on `app.editor` (host_mut() and style_table() both
+    // double-borrow on `app.active().editor` (host_mut() and style_table() both
     // require access to the editor).
-    let style_table = app.editor.style_table().to_owned();
+    let style_table = app.active().editor.style_table().to_owned();
     let resolver = move |id: u32| style_table.get(id as usize).copied().unwrap_or_default();
 
     let view = BufferView {
-        buffer: app.editor.buffer(),
-        viewport: app.editor.host().viewport(),
+        buffer: app.active().editor.buffer(),
+        viewport: app.active().editor.host().viewport(),
         selection,
         resolver: &resolver,
         cursor_line_bg: Style::default(),
@@ -143,7 +145,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
 
     // Suppress the buffer-pane cursor while the user is typing in the
     // command line or search prompt — the cursor belongs to the status row.
-    if !in_prompt && let Some((cx, cy)) = app.editor.cursor_screen_pos_in_rect(area) {
+    if !in_prompt && let Some((cx, cy)) = app.active_mut().editor.cursor_screen_pos_in_rect(area) {
         frame.set_cursor_position((cx, cy));
     }
 }
@@ -294,34 +296,39 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let dirty_style = Style::default().bg(HJ_SURFACE).fg(HJ_RED);
 
     // Tags & markers
-    let ro_tag = if app.editor.is_readonly() {
+    let ro_tag = if app.active().editor.is_readonly() {
         " [RO]"
     } else {
         ""
     };
-    let new_tag = if app.is_new_file { " [New File]" } else { "" };
-    let untracked_tag = if app.is_untracked && !app.is_new_file {
+    let new_tag = if app.active().is_new_file {
+        " [New File]"
+    } else {
+        ""
+    };
+    let untracked_tag = if app.active().is_untracked && !app.active().is_new_file {
         " [Untracked]"
     } else {
         ""
     };
 
     let raw_filename: String = app
+        .active()
         .filename
         .as_ref()
         .and_then(|p| p.to_str())
         .unwrap_or("[No Name]")
         .to_owned();
 
-    let (row, col) = app.editor.cursor();
-    let line_count = app.editor.buffer().line_count() as usize;
+    let (row, col) = app.active().editor.cursor();
+    let line_count = app.active().editor.buffer().line_count() as usize;
     let pct = ((row + 1) * 100).checked_div(line_count).unwrap_or(0);
 
     // Section text (each block has 1-space padding both sides).
     let mode_block = format!(" {mode} ");
     let pos_block = format!(" {}:{} ", row + 1, col + 1);
     let pct_block = format!(" {pct}% ");
-    let dirty_block = if app.dirty { " ● " } else { "" };
+    let dirty_block = if app.active().dirty { " ● " } else { "" };
     let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
 
     // Filename block — surface bg, with leading + trailing space.
