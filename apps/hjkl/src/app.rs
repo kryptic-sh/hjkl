@@ -628,6 +628,10 @@ impl App {
 
     /// Execute an ex command string (without the leading `:`).
     fn dispatch_ex(&mut self, cmd: &str) {
+        // Canonicalize the leading command name so interceptors below
+        // can match `:edit`/`:e`/`:edi` etc. uniformly.
+        let canon = ex::canonical_command_name(cmd);
+        let cmd: &str = canon.as_ref();
         // Intercept `:set background={dark,light}` before the engine sees it.
         // Theme awareness is a binary-local concern; the engine has no theme API.
         if let Some(rest) = cmd.strip_prefix("set background=") {
@@ -651,14 +655,15 @@ impl App {
             }
         }
 
-        // `:e [path]` / `:e!` — open or reload a file. Binary-local because
-        // file I/O isn't the engine's concern (same shape as `:w`). `%` in
-        // the path expands to the current filename (vim parity).
-        if cmd == "e" || cmd == "e!" || cmd.starts_with("e ") || cmd.starts_with("e!") {
-            let force = cmd.starts_with("e!");
-            let arg = if let Some(rest) = cmd.strip_prefix("e!") {
+        // `:edit [path]` / `:edit!` — open or reload a file. Binary-local
+        // because file I/O isn't the engine's concern (same shape as `:w`).
+        // `%` in the path expands to the current filename (vim parity).
+        // Canonicalization above turns `:e` / `:edi` / etc. into `edit`.
+        if cmd == "edit" || cmd == "edit!" || cmd.starts_with("edit ") || cmd.starts_with("edit!") {
+            let force = cmd.starts_with("edit!");
+            let arg = if let Some(rest) = cmd.strip_prefix("edit!") {
                 rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("e ") {
+            } else if let Some(rest) = cmd.strip_prefix("edit ") {
                 rest.trim()
             } else {
                 ""

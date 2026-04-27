@@ -6,7 +6,91 @@
 //! applied in-place against `Editor`; quit / save / unknown are returned
 //! to the caller so the TUI loop can run them.
 
+use std::borrow::Cow;
+
 use hjkl_engine::Editor;
+
+/// Vim-style ex command name table. Each entry is a full canonical name
+/// plus the minimum prefix length the user must type to disambiguate it.
+/// Mirrors how vim resolves `:noh` → `:nohlsearch`, `:reg` →
+/// `:registers`, etc. without enumerating every alias by hand.
+struct CommandDef {
+    full_name: &'static str,
+    min_prefix: usize,
+}
+
+#[rustfmt::skip]
+static COMMAND_NAMES: &[CommandDef] = &[
+    CommandDef { full_name: "delete",     min_prefix: 1 },
+    CommandDef { full_name: "edit",       min_prefix: 1 },
+    CommandDef { full_name: "foldindent", min_prefix: 5 },
+    CommandDef { full_name: "foldsyntax", min_prefix: 5 },
+    CommandDef { full_name: "global",     min_prefix: 1 },
+    CommandDef { full_name: "marks",      min_prefix: 5 },
+    CommandDef { full_name: "nohlsearch", min_prefix: 3 },
+    CommandDef { full_name: "quit",       min_prefix: 1 },
+    CommandDef { full_name: "read",       min_prefix: 1 },
+    CommandDef { full_name: "redo",       min_prefix: 3 },
+    CommandDef { full_name: "registers",  min_prefix: 3 },
+    CommandDef { full_name: "set",        min_prefix: 2 },
+    CommandDef { full_name: "sort",       min_prefix: 3 },
+    CommandDef { full_name: "substitute", min_prefix: 1 },
+    CommandDef { full_name: "undo",       min_prefix: 1 },
+    CommandDef { full_name: "vglobal",    min_prefix: 1 },
+    CommandDef { full_name: "write",      min_prefix: 1 },
+    CommandDef { full_name: "wq",         min_prefix: 2 },
+    CommandDef { full_name: "x",          min_prefix: 1 },
+];
+
+fn resolve_name(input: &str) -> Option<&'static str> {
+    if input.is_empty() {
+        return None;
+    }
+    if let Some(exact) = COMMAND_NAMES
+        .iter()
+        .find(|d| d.full_name == input)
+        .map(|d| d.full_name)
+    {
+        return Some(exact);
+    }
+    let candidates: Vec<&'static str> = COMMAND_NAMES
+        .iter()
+        .filter(|d| d.full_name.starts_with(input) && input.len() >= d.min_prefix)
+        .map(|d| d.full_name)
+        .collect();
+    if candidates.len() == 1 {
+        Some(candidates[0])
+    } else {
+        None
+    }
+}
+
+fn split_name(cmd: &str) -> (&str, &str) {
+    let split_at = cmd
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphabetic())
+        .map(|(i, _)| i)
+        .unwrap_or(cmd.len());
+    cmd.split_at(split_at)
+}
+
+/// Expand the leading alpha-prefix of `cmd` to its canonical command
+/// name via the prefix table. Returns the input unchanged when the
+/// name doesn't resolve — the caller's existing fall-through arms
+/// (e.g. range-only commands) still work.
+///
+/// Exposed so the umbrella binary's dispatch interceptors can match
+/// canonical names without duplicating alias lists.
+pub fn canonical_command_name(cmd: &str) -> Cow<'_, str> {
+    let (name, rest) = split_name(cmd);
+    if name.is_empty() {
+        return Cow::Borrowed(cmd);
+    }
+    match resolve_name(name) {
+        Some(canon) if canon != name => Cow::Owned(format!("{canon}{rest}")),
+        _ => Cow::Borrowed(cmd),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExEffect {
@@ -69,53 +153,56 @@ pub fn run<H: hjkl_engine::Host>(
         }
     }
 
-    // `:q`, `:q!`, `:w`, `:wq`, `:x`.
+    // Expand the leading command-name prefix to its canonical full
+    // name (`:noh` → `:nohlsearch`, `:red` → `:redo`, `:s/foo/bar/` →
+    // `:substitute/foo/bar/`). The match arms below match canonical
+    // names only; the table in `COMMAND_NAMES` is the single source of
+    // truth for prefix resolution.
+    let canon = canonical_command_name(cmd);
+    let cmd: &str = canon.as_ref();
+
+    // Bare-name terminals (`:quit`, `:write`, `:wq`, `:x`, …).
     match cmd {
-        "q" => {
+        "quit" => {
             return ExEffect::Quit {
                 force: false,
                 save: false,
             };
         }
-        "q!" => {
+        "quit!" => {
             return ExEffect::Quit {
                 force: true,
                 save: false,
             };
         }
-        "w" => return ExEffect::Save,
+        "write" => return ExEffect::Save,
         "wq" | "x" => {
             return ExEffect::Quit {
                 force: false,
                 save: true,
             };
         }
-        "noh" | "nohl" | "nohls" | "nohlsearch" => {
-            // Clearing the pattern removes the highlight.
-            // 0.0.37: route through the engine search state (the
-            // buffer-side mirror that 0.0.35 introduced was removed
-            // in this patch — `BufferView` reads the pattern from
-            // `Editor::search_state()`).
+        "nohlsearch" => {
             editor.set_search_pattern(None);
             return ExEffect::Ok;
         }
-        "reg" | "registers" => return ExEffect::Info(format_registers(editor)),
+        "registers" => return ExEffect::Info(format_registers(editor)),
         "marks" => return ExEffect::Info(format_marks(editor)),
-        "undo" | "u" => {
+        "undo" => {
             editor.undo();
             return ExEffect::Ok;
         }
-        "redo" | "red" => {
+        "redo" => {
             editor.redo();
             return ExEffect::Ok;
         }
-        "foldindent" | "foldi" => return apply_fold_indent(editor),
-        "foldsyntax" | "folds" => return apply_fold_syntax(editor),
+        "foldindent" => return apply_fold_indent(editor),
+        "foldsyntax" => return apply_fold_syntax(editor),
         _ => {}
     }
 
-    // `:w <path>` — save to a specific file. Caller updates filename.
-    if let Some(path) = cmd.strip_prefix("w ") {
+    // `:write <path>` — save to a specific file. Caller updates filename.
+    if let Some(path) = cmd.strip_prefix("write ") {
         let path = path.trim();
         if !path.is_empty() {
             return ExEffect::SaveAs(path.to_string());
@@ -124,7 +211,7 @@ pub fn run<H: hjkl_engine::Host>(
 
     // `:[range]sort[!][iun]` — defaults to the whole buffer when no
     // range is given.
-    if let Some(rest) = cmd.strip_prefix("sort").or_else(|| cmd.strip_prefix("sor")) {
+    if let Some(rest) = cmd.strip_prefix("sort") {
         return apply_sort(editor, range, rest);
     }
 
@@ -132,25 +219,22 @@ pub fn run<H: hjkl_engine::Host>(
     // ignored (vim's `:set` doesn't accept one).
     if let Some(rest) = cmd
         .strip_prefix("set ")
-        .or_else(|| cmd.strip_prefix("se "))
-        .or(if cmd == "set" || cmd == "se" {
-            Some("")
-        } else {
-            None
-        })
+        .or(if cmd == "set" { Some("") } else { None })
     {
         return apply_set(editor, rest);
     }
 
-    // `:[range]g/pat/cmd` and inverse `:v/pat/cmd`.
+    // `:[range]g/pat/cmd` and inverse `:v/pat/cmd`. parse_global_prefix
+    // handles canonical `global` / `vglobal` plus the bare `g` / `v`
+    // single-letter forms, since canonicalization preserves a leading
+    // `g`/`v` when the table can't disambiguate without a min_prefix.
     if let Some((negate, rest)) = parse_global_prefix(cmd) {
         return apply_global(editor, range, rest, negate);
     }
 
-    // `:[range]s/...` substitute. The legacy `:%s/...` form (no
-    // separate range) still works because `%` is parsed by
-    // `parse_range` above and consumed before we get here.
-    if let Some(rest) = cmd.strip_prefix('s') {
+    // `:[range]substitute/...`. The legacy `:%s/...` form (no separate
+    // range) still works because `%` is parsed by `parse_range` above.
+    if let Some(rest) = cmd.strip_prefix("substitute") {
         return match parse_substitute_body(rest) {
             Ok(sub) => match apply_substitute(editor, range, sub) {
                 Ok(count) => ExEffect::Substituted { count },
@@ -160,15 +244,15 @@ pub fn run<H: hjkl_engine::Host>(
         };
     }
 
-    // `:[range]d` — delete the range. Reuses :g/pat/d's row-drop loop.
-    if cmd == "d" {
+    // `:[range]delete` — delete the range. Reuses :g/pat/d's row-drop loop.
+    if cmd == "delete" {
         return apply_delete_range(editor, range);
     }
 
     // `:r path` / `:read path` — insert file contents below the
     // current line. Range is currently ignored; vim's `:Nr file`
     // semantics (insert below row N) can land later if needed.
-    if let Some(path) = cmd.strip_prefix("read ").or_else(|| cmd.strip_prefix("r ")) {
+    if let Some(path) = cmd.strip_prefix("read ") {
         return apply_read_file(editor, path.trim());
     }
 
@@ -622,13 +706,15 @@ fn apply_delete_range<H: hjkl_engine::Host>(
 /// Returns `(negate, body_after_prefix)` where `body_after_prefix`
 /// still has the leading separator + pattern + cmd attached.
 fn parse_global_prefix(cmd: &str) -> Option<(bool, &str)> {
-    if let Some(rest) = cmd.strip_prefix("g!") {
+    // After canonicalization, `:g/pat/d` arrives as "global/pat/d" and
+    // `:v/pat/d` as "vglobal/pat/d". `:g!` (negate) becomes "global!".
+    if let Some(rest) = cmd.strip_prefix("global!") {
         return Some((true, rest));
     }
-    if let Some(rest) = cmd.strip_prefix('v') {
+    if let Some(rest) = cmd.strip_prefix("vglobal") {
         return Some((true, rest));
     }
-    if let Some(rest) = cmd.strip_prefix('g') {
+    if let Some(rest) = cmd.strip_prefix("global") {
         return Some((false, rest));
     }
     None
@@ -1201,6 +1287,53 @@ fn expand_vim_replacement(input: &str) -> String {
 /// `mark_dirty_after_ex(editor)`.
 fn mark_dirty_after_ex<H: hjkl_engine::Host>(editor: &mut Editor<hjkl_buffer::Buffer, H>) {
     editor.mark_content_dirty();
+}
+
+#[cfg(test)]
+mod resolver_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_unique_prefix_to_canonical() {
+        assert_eq!(canonical_command_name("noh"), "nohlsearch");
+        assert_eq!(canonical_command_name("nohl"), "nohlsearch");
+        assert_eq!(canonical_command_name("nohls"), "nohlsearch");
+        assert_eq!(canonical_command_name("nohlsearch"), "nohlsearch");
+        assert_eq!(canonical_command_name("reg"), "registers");
+        assert_eq!(canonical_command_name("red"), "redo");
+        assert_eq!(canonical_command_name("u"), "undo");
+        assert_eq!(canonical_command_name("e"), "edit");
+        assert_eq!(canonical_command_name("se"), "set");
+    }
+
+    #[test]
+    fn keeps_args_intact() {
+        assert_eq!(canonical_command_name("e foo.txt"), "edit foo.txt");
+        assert_eq!(canonical_command_name("w /tmp/x"), "write /tmp/x");
+        assert_eq!(canonical_command_name("s/foo/bar/"), "substitute/foo/bar/");
+        assert_eq!(canonical_command_name("e!"), "edit!");
+        assert_eq!(canonical_command_name("q!"), "quit!");
+    }
+
+    #[test]
+    fn ambiguous_prefix_falls_through() {
+        // `f` matches foldindent + foldsyntax, both min_prefix=5, so the
+        // shorter input doesn't reach either's threshold and falls
+        // through unchanged. `fold` likewise.
+        assert_eq!(canonical_command_name("f"), "f");
+        assert_eq!(canonical_command_name("fold"), "fold");
+        // `r` is min_prefix=1 for read; `red` is exactly redo's
+        // min_prefix; `reg` is registers'.
+        assert_eq!(canonical_command_name("r"), "read");
+        assert_eq!(canonical_command_name("red"), "redo");
+        assert_eq!(canonical_command_name("reg"), "registers");
+    }
+
+    #[test]
+    fn unknown_command_passes_through_unchanged() {
+        assert_eq!(canonical_command_name("foobar"), "foobar");
+        assert_eq!(canonical_command_name(""), "");
+    }
 }
 
 #[cfg(all(test, feature = "crossterm"))]
