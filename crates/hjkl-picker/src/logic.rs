@@ -58,6 +58,14 @@ pub trait PickerLogic: Send + 'static {
         (Buffer::new(), String::new(), PreviewSpans::default())
     }
 
+    /// Initial scroll position (top row) for the preview viewport.
+    /// Sources that show a windowed preview around a specific line override
+    /// this so the gutter line numbers reflect the actual file line. Default 0.
+    fn preview_top_row(&self, idx: usize) -> usize {
+        let _ = idx;
+        0
+    }
+
     /// Translate the picked row into an action.
     fn select(&self, idx: usize) -> PickerAction;
 

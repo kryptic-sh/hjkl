@@ -303,12 +303,12 @@ impl PickerLogic for HighlightedRgSource {
     }
 
     fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
-        let (path, line) = match self
+        let path = match self
             .inner
             .items
             .lock()
             .ok()
-            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
+            .and_then(|g| g.get(idx).map(|m| m.path.clone()))
         {
             Some(v) => v,
             None => return (Buffer::new(), String::new(), PreviewSpans::default()),
@@ -323,20 +323,14 @@ impl PickerLogic for HighlightedRgSource {
             return (Buffer::from_str(&content), status, PreviewSpans::default());
         }
         let spans = self.highlight(&abs, &content);
+        // Render the full file; `preview_top_row` scrolls the viewport so
+        // the match line lands near the top, and gutter line numbers stay
+        // aligned with the real file.
+        (Buffer::from_str(&content), String::new(), spans)
+    }
 
-        // Build a window of lines around the match line. Clamp start
-        // against `all_lines.len()` because rg's match line can be
-        // stale relative to the file content we just read off disk.
-        let all_lines: Vec<&str> = content.lines().collect();
-        let match_row = (line as usize).saturating_sub(1);
-        let start = match_row.saturating_sub(2).min(all_lines.len());
-        let end = (start + hjkl_picker::PREVIEW_MAX_LINES).min(all_lines.len());
-        let window: String = all_lines[start..end].join("\n");
-
-        // Status stays empty: a non-empty status tells the renderer to bail
-        // and show an error placeholder instead of the buffer. The match
-        // line number is already in the picker label (`path:N: text`).
-        (Buffer::from_str(&window), String::new(), spans)
+    fn preview_top_row(&self, idx: usize) -> usize {
+        self.inner.preview_top_row(idx)
     }
 
     fn select(&self, idx: usize) -> PickerAction {

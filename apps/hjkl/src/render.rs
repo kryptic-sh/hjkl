@@ -672,7 +672,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
     let line_count = buf.line_count() as usize;
     let gw = gutter_width(line_count.max(1));
     let viewport = hjkl_buffer::Viewport {
-        top_row: 0,
+        top_row: picker.preview_top_row(),
         top_col: 0,
         width: inner.width.saturating_sub(gw),
         height: inner.height,

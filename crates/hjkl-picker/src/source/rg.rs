@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use hjkl_buffer::Buffer;
 
 use crate::logic::{PickerAction, PickerLogic, RequeryMode};
-use crate::preview::{PREVIEW_MAX_LINES, PreviewSpans, load_preview};
+use crate::preview::{PreviewSpans, load_preview};
 
 /// One ripgrep match result.
 pub struct RgMatch {
@@ -239,21 +239,26 @@ impl PickerLogic for RgSource {
             return (Buffer::from_str(&content), status, PreviewSpans::default());
         }
 
-        // Build a window of lines around the match line. Clamp start
-        // against `all_lines.len()` because rg's match line can be
-        // stale relative to the file content we just read off disk.
-        let all_lines: Vec<&str> = content.lines().collect();
-        let match_row = (line as usize).saturating_sub(1);
-        let start = match_row.saturating_sub(2).min(all_lines.len());
-        let end = (start + PREVIEW_MAX_LINES).min(all_lines.len());
-        let window: String = all_lines[start..end].join("\n");
-
-        let status_tag = format!("line {line}");
+        // Render the full file; the picker's `preview_top_row` puts the
+        // match line near the top of the visible window. Keeping the buffer
+        // intact preserves correct gutter line numbers.
+        let _ = line;
         (
-            Buffer::from_str(&window),
-            status_tag,
+            Buffer::from_str(&content),
+            String::new(),
             PreviewSpans::default(),
         )
+    }
+
+    fn preview_top_row(&self, idx: usize) -> usize {
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx)
+                    .map(|m| (m.line as usize).saturating_sub(1).saturating_sub(2))
+            })
+            .unwrap_or(0)
     }
 
     fn select(&self, idx: usize) -> PickerAction {

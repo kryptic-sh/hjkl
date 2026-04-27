@@ -57,6 +57,8 @@ pub struct Picker {
     preview_label: Option<String>,
     /// Per-row spans + style table for the preview buffer.
     preview_spans: PreviewSpans,
+    /// Initial top row for the preview viewport (windowed sources, e.g. grep).
+    preview_top_row: usize,
 }
 
 impl Picker {
@@ -85,6 +87,7 @@ impl Picker {
             preview_status: String::new(),
             preview_label: None,
             preview_spans: PreviewSpans::default(),
+            preview_top_row: 0,
         };
         // Block briefly for the first batch of items so the first
         // render already has a populated list and a loaded preview.
@@ -252,6 +255,7 @@ impl Picker {
             self.preview_status.clear();
             self.preview_label = None;
             self.preview_spans = PreviewSpans::default();
+            self.preview_top_row = 0;
             return;
         };
         let label = self.source.label(idx);
@@ -260,6 +264,12 @@ impl Picker {
         self.preview_status = status;
         self.preview_label = Some(label);
         self.preview_spans = spans;
+        self.preview_top_row = self.source.preview_top_row(idx);
+    }
+
+    /// Initial top row for the preview viewport.
+    pub fn preview_top_row(&self) -> usize {
+        self.preview_top_row
     }
 
     /// Per-row spans + style table for the preview pane.
