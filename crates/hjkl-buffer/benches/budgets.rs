@@ -16,9 +16,10 @@
 // `BufferView` renderer + the engine's `search_*` free functions both
 // compose this primitive). No deprecated accessors involved.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use hjkl_buffer::{Buffer, Edit, Position};
 use regex::Regex;
+use std::hint::black_box;
 
 fn make_buffer(line_count: usize, line_width: usize) -> Buffer {
     let line: String = "the quick brown fox jumps over the lazy dog "
