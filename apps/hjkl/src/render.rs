@@ -450,9 +450,15 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
 
     // Popup size is fixed regardless of preview state — the list just
     // takes the full width when the source opted out.
-    let with_preview = picker.has_preview();
     let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
+
+    // Drop the preview when there isn't enough horizontal room: each
+    // pane needs ~30 cols to be useful (border + gutter + a handful of
+    // chars). Below 80 popup-cols total, hide the preview even if the
+    // source wants it.
+    const PREVIEW_MIN_WIDTH: u16 = 80;
+    let with_preview = picker.has_preview() && area.width >= PREVIEW_MIN_WIDTH;
 
     // Split horizontally only when the preview pane is wanted; else the
     // input + list use the full popup width.
