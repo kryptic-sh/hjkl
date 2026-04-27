@@ -35,7 +35,6 @@ pub struct Form {
     pub(crate) focused: usize,
     pub(crate) submit: Option<SubmitFn>,
     pub(crate) dirty_gen: u64,
-    #[allow(dead_code)]
     pub(crate) pending_g: bool,
 }
 
@@ -103,7 +102,6 @@ impl Form {
         sum
     }
 
-    #[allow(dead_code)]
     pub(crate) fn bump_dirty(&mut self) {
         self.dirty_gen = self.dirty_gen.wrapping_add(1);
     }

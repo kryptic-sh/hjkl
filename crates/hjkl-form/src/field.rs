@@ -44,8 +44,7 @@ pub struct TextFieldEditor {
     pub rows: u16,
     /// `dirty_gen` of the buffer at the moment the user entered Insert
     /// on this field. Used to decide whether a `Changed` event fires
-    /// on Esc. Wired up in I2.
-    #[allow(dead_code)]
+    /// on Esc.
     pub(crate) enter_gen: u64,
 }
 

@@ -45,6 +45,14 @@ pub use types::{
 };
 pub use vim::SearchPrompt;
 
+/// Drive the vim FSM with one [`Input`]. Returns `true` if the engine
+/// consumed the keystroke. Hosts that don't pull in the `crossterm`
+/// feature reach the FSM through this function (the `crossterm`-gated
+/// [`Editor::handle_key`] is a thin wrapper around it).
+pub fn step<H: types::Host>(editor: &mut Editor<hjkl_buffer::Buffer, H>, input: Input) -> bool {
+    vim::step(editor, input)
+}
+
 // 0.0.32 dropped the `#[deprecated]` re-export aliases introduced at
 // 0.0.31 (`SpecBuffer`, `SpecBufferEdit`, `EditOp`, `PlannedViewport`).
 // Consumers must use the canonical names: `Buffer`, `BufferEdit`,
