@@ -528,6 +528,22 @@ impl App {
             }
         }
 
+        // `:e [path]` / `:e!` — open or reload a file. Binary-local because
+        // file I/O isn't the engine's concern (same shape as `:w`). `%` in
+        // the path expands to the current filename (vim parity).
+        if cmd == "e" || cmd == "e!" || cmd.starts_with("e ") || cmd.starts_with("e!") {
+            let force = cmd.starts_with("e!");
+            let arg = if let Some(rest) = cmd.strip_prefix("e!") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("e ") {
+                rest.trim()
+            } else {
+                ""
+            };
+            self.do_edit(arg, force);
+            return;
+        }
+
         match ex::run(&mut self.editor, cmd) {
             ExEffect::None => {}
             ExEffect::Ok => {}
@@ -637,6 +653,63 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Open or reload a file via `:e [path]` / `:e!`.
+    ///
+    /// `arg` is the post-command-name argument string (may be empty).
+    /// `%` in the path expands to the current filename. Empty `arg`
+    /// reloads the current file. `force` (`:e!`) bypasses the dirty-buffer
+    /// guard.
+    fn do_edit(&mut self, arg: &str, force: bool) {
+        let path_str = if arg.is_empty() {
+            match &self.filename {
+                Some(p) => p.to_string_lossy().into_owned(),
+                None => {
+                    self.status_message = Some("E32: No file name".into());
+                    return;
+                }
+            }
+        } else if arg.contains('%') {
+            let curr = match self.filename.as_ref().and_then(|p| p.to_str()) {
+                Some(s) => s,
+                None => {
+                    self.status_message = Some("E499: Empty file name for '%'".into());
+                    return;
+                }
+            };
+            arg.replace('%', curr)
+        } else {
+            arg.to_string()
+        };
+
+        if !force && self.dirty {
+            self.status_message =
+                Some("E37: No write since last change (add ! to override)".into());
+            return;
+        }
+
+        let path = PathBuf::from(&path_str);
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status_message = Some(format!("E484: Can't open file {path_str}: {e}"));
+                return;
+            }
+        };
+        // Mirror App::new: strip one trailing newline (vim default).
+        let trimmed = content.strip_suffix('\n').unwrap_or(&content);
+
+        let line_count = trimmed.lines().count();
+        let byte_count = content.len();
+        self.editor.set_content(trimmed);
+        self.filename = Some(path.clone());
+        self.dirty = false;
+        self.is_new_file = false;
+        self.syntax.set_language_for_path(&path);
+        self.syntax.reset();
+        self.recompute_and_install();
+        self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
     }
 
     /// Recompute syntax spans for the current viewport and install them.
@@ -916,6 +989,65 @@ mod tests {
     fn do_save_no_filename_e32() {
         let mut app = App::new(None, false, None, None).unwrap();
         app.do_save(None);
+        let msg = app.status_message.unwrap_or_default();
+        assert!(msg.contains("E32"), "expected E32, got: {msg}");
+    }
+
+    // ── :e tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn edit_percent_reloads_current_file() {
+        // Write a file, open it, modify on disk, :e % should reload.
+        let path = std::env::temp_dir().join("hjkl_edit_percent_reload.txt");
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        // External edit.
+        std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        app.dispatch_ex("e %");
+        let lines = app.editor.buffer().lines();
+        assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn edit_no_arg_reloads_current_file() {
+        let path = std::env::temp_dir().join("hjkl_edit_noarg_reload.txt");
+        std::fs::write(&path, "v1\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        std::fs::write(&path, "v2\n").unwrap();
+        app.dispatch_ex("e");
+        assert_eq!(app.editor.buffer().lines(), vec!["v2".to_string()]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn edit_blocks_dirty_buffer_without_force() {
+        let path = std::env::temp_dir().join("hjkl_edit_dirty_block.txt");
+        std::fs::write(&path, "orig\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        app.dirty = true;
+        app.dispatch_ex("e %");
+        let msg = app.status_message.unwrap_or_default();
+        assert!(msg.contains("E37"), "expected E37, got: {msg}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn edit_force_reloads_dirty_buffer() {
+        let path = std::env::temp_dir().join("hjkl_edit_force.txt");
+        std::fs::write(&path, "disk\n").unwrap();
+        let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+        app.dirty = true;
+        app.dispatch_ex("e!");
+        assert_eq!(app.editor.buffer().lines(), vec!["disk".to_string()]);
+        assert!(!app.dirty);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn edit_no_arg_no_filename_e32() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.dispatch_ex("e");
         let msg = app.status_message.unwrap_or_default();
         assert!(msg.contains("E32"), "expected E32, got: {msg}");
     }
