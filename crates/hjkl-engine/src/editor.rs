@@ -1184,6 +1184,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         matches!(self.vim.pending_register, Some('+') | Some('*'))
     }
 
+    /// Register currently being recorded into via `q{reg}`. `None` when
+    /// no recording is active. Hosts use this to surface a "recording @r"
+    /// indicator in the status line.
+    pub fn recording_register(&self) -> Option<char> {
+        self.vim.recording_macro
+    }
+
     /// Replace the unnamed register without touching any other slot.
     /// For host-driven imports (e.g. system clipboard); operator
     /// code uses [`record_yank`] / [`record_delete`].

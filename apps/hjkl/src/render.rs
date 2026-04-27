@@ -403,12 +403,17 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let pos_block = format!(" {}:{} ", row + 1, col + 1);
     let pct_block = format!(" {pct}% ");
     let dirty_block = if app.active().dirty { " ● " } else { "" };
+    let rec_block = match app.active().editor.recording_register() {
+        Some(reg) => format!(" REC @{reg} "),
+        None => String::new(),
+    };
     let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
 
     // Filename block — surface bg, with leading + trailing space.
     // Truncate with leading `…` if the line doesn't fit.
     let w = width as usize;
     let reserved = mode_block.len()
+        + rec_block.len()
         + 2 /* leading + trailing space around filename */
         + suffix.len()
         + dirty_block.len()
@@ -427,12 +432,24 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let mid_block = format!(" {filename}{suffix} ");
 
     // Spacer fills the gap between mid and the right-side blocks.
-    let used =
-        mode_block.len() + mid_block.len() + dirty_block.len() + pos_block.len() + pct_block.len();
+    let used = mode_block.len()
+        + rec_block.len()
+        + mid_block.len()
+        + dirty_block.len()
+        + pos_block.len()
+        + pct_block.len();
     let spacer: String = " ".repeat(w.saturating_sub(used));
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(6);
+    let rec_style = Style::default()
+        .bg(HJ_RED)
+        .fg(HJ_DARK)
+        .add_modifier(Modifier::BOLD);
+
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(7);
     spans.push(Span::styled(mode_block, mode_style));
+    if !rec_block.is_empty() {
+        spans.push(Span::styled(rec_block, rec_style));
+    }
     spans.push(Span::styled(mid_block, mid_style));
     if !dirty_block.is_empty() {
         spans.push(Span::styled(dirty_block.to_string(), dirty_style));
