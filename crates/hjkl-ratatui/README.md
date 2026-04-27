@@ -1,17 +1,26 @@
 # hjkl-ratatui
 
+Adapters between `hjkl-engine` SPEC types and the ratatui / crossterm
+ecosystems.
+
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/hjkl-ratatui.svg)](https://crates.io/crates/hjkl-ratatui)
+[![crates.io](https://img.shields.io/crates/v/hjkl-ratatui.svg)](https://crates.io/crates/hjkl-ratatui)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-ratatui)](https://docs.rs/hjkl-ratatui)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
-Adapters between [`hjkl-engine`](../hjkl-engine) SPEC types and the
-[ratatui](https://crates.io/crates/ratatui) /
-[crossterm](https://crates.io/crates/crossterm) ecosystems.
+Engine types are deliberately UI-agnostic so non-terminal hosts (buffr's
+wasm-flavored renderer, future GUI shells) can consume them without dragging
+ratatui in. This crate is the opt-in bridge ratatui-based hosts pull in.
 
-Website: <https://hjkl.kryptic.sh>. Source:
-<https://github.com/kryptic-sh/hjkl>.
+Free functions, not `From`/`Into` impls — orphan rules forbid the trait route
+since both sides are foreign types from this crate's view. Function syntax keeps
+the bridge explicit at callsites, which is fine for low-frequency style mapping.
+
+## Status
+
+`0.2.0` — ratatui `Style` ↔ engine `Style` adapter; `crossterm::KeyEvent` →
+engine SPEC `Input` bridge.
 
 ## What's here
 
@@ -22,13 +31,34 @@ Website: <https://hjkl.kryptic.sh>. Source:
 - `crossterm_key_event_to_input` (behind the default-on `crossterm` feature) —
   bridge `crossterm::KeyEvent` → engine SPEC `Input`.
 
-Free functions, not `From`/`Into` impls — orphan rules forbid the trait route
-since both sides are foreign types from this crate's view.
+## Usage
 
-## Status
+```toml
+hjkl-ratatui = "0.2"
+```
 
-Pre-1.0 churn. API may change in patch bumps until 0.1.0.
+```rust,no_run
+use hjkl_engine::{Attrs, Color, Style};
+use hjkl_ratatui::{engine_to_ratatui_style, ratatui_to_engine_style};
+
+let engine_style = Style {
+    fg: Some(Color(255, 165, 0)),
+    bg: None,
+    attrs: Attrs::BOLD,
+};
+
+// Convert to ratatui for rendering
+let ratatui_style = engine_to_ratatui_style(engine_style);
+
+// Bridge a crossterm key event to engine input
+#[cfg(feature = "crossterm")]
+{
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let ev = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+    let input = hjkl_ratatui::crossterm_key_event_to_input(ev);
+}
+```
 
 ## License
 
-MIT
+MIT. See [LICENSE](../../LICENSE).

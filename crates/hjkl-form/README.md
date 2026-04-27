@@ -1,6 +1,13 @@
 # hjkl-form
 
-Vim-modal forms built on top of `hjkl-engine`.
+Vim-modal forms built on top of `hjkl-engine` — full vim grammar inside every
+text field.
+
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hjkl-form.svg)](https://crates.io/crates/hjkl-form)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-form)](https://docs.rs/hjkl-form)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
+[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
 Each text field hosts its own `Editor<Buffer, FormFieldHost>`, so users get the
 full vim grammar (`hjkl`, `wb`, `ciw`, `dd`, ...) inside form inputs. The form
@@ -11,7 +18,17 @@ field's editor when the form is in Insert mode.
 Renderers live in adapter crates: `hjkl-ratatui::form::draw_form` ships the
 ratatui flavor.
 
-## Example
+## Status
+
+`0.2.0` — Phase I release. `dirty_gen` aggregates buffer mutations and
+form-level focus changes; renderers can cheap-skip frames when it hasn't
+advanced.
+
+## Usage
+
+```toml
+hjkl-form = "0.2"
+```
 
 ```rust,no_run
 use hjkl_form::{
@@ -58,7 +75,6 @@ let _ = FormEvent::Changed;
 | Form-Insert | `Enter`   | Jump to next field (single-line) |
 | Form-Insert | `Esc`     | Return to Form-Normal            |
 
-## Status
+## License
 
-Phase I — initial release. Dirty_gen aggregates buffer mutations and form-level
-focus changes; renderers can cheap-skip frames when it hasn't advanced.
+MIT. See [LICENSE](../../LICENSE).

@@ -10,6 +10,11 @@ Vim-modal terminal editor. Standalone TUI built on the hjkl engine.
 Native vim-modal editor. Single static binary, no plugins, no config files.
 Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) + rope buffer.
 
+## Status
+
+`0.2.0` — full multi-buffer editing with tree-sitter highlighting and fuzzy
+picker. See [SCOPE.md](SCOPE.md) for the full feature roadmap.
+
 ## Install
 
 ```bash
@@ -85,4 +90,4 @@ surface.
 
 ## License
 
-MIT.
+MIT. See [LICENSE](../../LICENSE).
