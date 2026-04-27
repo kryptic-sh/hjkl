@@ -90,7 +90,7 @@ pub fn run<H: hjkl_engine::Host>(
                 save: true,
             };
         }
-        "noh" | "nohlsearch" => {
+        "noh" | "nohl" | "nohls" | "nohlsearch" => {
             // Clearing the pattern removes the highlight.
             // 0.0.37: route through the engine search state (the
             // buffer-side mirror that 0.0.35 introduced was removed
