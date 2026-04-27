@@ -356,9 +356,15 @@ impl App {
             return;
         }
 
-        // Esc — Insert→Normal stays open; Normal→Normal closes.
+        // Esc:
+        //  - empty prompt (any mode) → close (no point parking in Normal
+        //    on a blank line)
+        //  - Insert + non-empty → drop to Normal so user can edit with motions
+        //  - Normal + non-empty → close, discard input
         if input.key == EngineKey::Esc {
-            if field.vim_mode() == VimMode::Insert {
+            if field.text().is_empty() {
+                self.command_field = None;
+            } else if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;
@@ -422,7 +428,16 @@ impl App {
             return;
         }
 
+        // Esc:
+        //  - empty prompt (any mode) → close immediately (skip the
+        //    Insert→Normal stop on a blank line)
+        //  - Insert + non-empty → drop to Normal for motion editing
+        //  - Normal + non-empty → cancel: restore previous committed pattern
         if input.key == EngineKey::Esc {
+            if field.text().is_empty() {
+                self.cancel_search_prompt();
+                return;
+            }
             if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
@@ -1042,6 +1057,48 @@ mod tests {
         assert_eq!(app.editor.buffer().lines(), vec!["disk".to_string()]);
         assert!(!app.dirty);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn esc_on_empty_command_prompt_dismisses() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_command_prompt();
+        assert!(app.command_field.is_some());
+        // Field is empty + Insert mode. Esc should close, not drop to Normal.
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(
+            app.command_field.is_none(),
+            "empty : prompt should close on Esc"
+        );
+    }
+
+    #[test]
+    fn esc_on_nonempty_command_drops_to_normal_then_closes() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_command_prompt();
+        app.handle_command_field_key(key(KeyCode::Char('w')));
+        // Insert + non-empty: Esc → Normal, prompt stays open.
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(app.command_field.is_some());
+        assert_eq!(
+            app.command_field.as_ref().unwrap().vim_mode(),
+            VimMode::Normal
+        );
+        // Normal + non-empty: Esc → close.
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(app.command_field.is_none());
+    }
+
+    #[test]
+    fn esc_on_empty_search_prompt_dismisses() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_search_prompt(SearchDir::Forward);
+        assert!(app.search_field.is_some());
+        app.handle_search_field_key(key(KeyCode::Esc));
+        assert!(
+            app.search_field.is_none(),
+            "empty / prompt should close on Esc"
+        );
     }
 
     #[test]
