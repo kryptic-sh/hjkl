@@ -1074,6 +1074,11 @@ impl App {
         // (set_content advances dirty_gen, but be explicit so a same-key
         // collision after reload can't skip the install).
         self.last_recompute_key = None;
+        // Wipe the previous file's spans up-front. For files with a
+        // detected language this is overwritten by `preview_render`
+        // below; for unknown extensions (no syntax layer at all) it
+        // ensures the prior file's highlights don't bleed through.
+        self.editor.install_ratatui_syntax_spans(Vec::new());
         // Synchronous viewport-only preview so the new file's first
         // frame paints with highlights instead of popping white while
         // the worker runs the cold parse — same trick App::new uses on
