@@ -205,7 +205,9 @@ impl PickerLogic for RgSource {
                     } else {
                         m.text.clone()
                     };
-                    format!("{}:{}: {}", path, m.line, text)
+                    // Two-cell prefix matches BufferSource's marker column
+                    // so labels stay vertically aligned across pickers.
+                    format!("  {}:{}: {}", path, m.line, text)
                 })
             })
             .unwrap_or_default()

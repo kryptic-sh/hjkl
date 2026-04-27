@@ -42,10 +42,12 @@ impl PickerLogic for FileSource {
     }
 
     fn label(&self, idx: usize) -> String {
+        // Two-cell prefix matches BufferSource's marker column so labels
+        // stay vertically aligned across pickers.
         self.items
             .lock()
             .ok()
-            .and_then(|g| g.get(idx).map(|p| p.to_string_lossy().into_owned()))
+            .and_then(|g| g.get(idx).map(|p| format!("  {}", p.to_string_lossy())))
             .unwrap_or_default()
     }
 
