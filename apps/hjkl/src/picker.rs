@@ -305,14 +305,32 @@ impl Picker {
             return false;
         }
 
+        let spawn_mode = self.source.requery_mode() == RequeryMode::Spawn;
         // For Spawn sources, a query change schedules a requery rather than
         // filtering in-memory.
-        if self.source.requery_mode() == RequeryMode::Spawn && q_changed {
+        if spawn_mode && q_changed {
             self.requery_at = Some(Instant::now() + Duration::from_millis(REQUERY_DEBOUNCE_MS));
         }
 
         self.last_query.clone_from(&q);
         self.last_seen_count = count;
+
+        if spawn_mode {
+            // Source already filtered server-side (rg/grep/findstr). Show
+            // every item in the order the source produced them — running
+            // the in-memory fuzzy filter here would drop stale results
+            // between query change and the first new batch arriving.
+            self.filtered = (0..count)
+                .map(|idx| FilteredEntry {
+                    idx,
+                    matches: Vec::new(),
+                })
+                .collect();
+            if self.selected >= self.filtered.len() {
+                self.selected = self.filtered.len().saturating_sub(1);
+            }
+            return true;
+        }
 
         let q_lower = q.to_lowercase();
         let mut scored: Vec<(i64, usize, String, Vec<usize>)> = Vec::new();
