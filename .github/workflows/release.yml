@@ -7,6 +7,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # mlugg/setup-zig still declares `using: node20` on its latest tag.
+  # Opt JS actions into Node 24 now so the deprecation warning goes
+  # quiet and we catch any upstream incompatibility early. Drop this
+  # once setup-zig migrates to node24 (or June 2026, when GH flips
+  # the default).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
   group: release-${{ github.ref }}
