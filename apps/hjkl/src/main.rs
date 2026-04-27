@@ -24,6 +24,8 @@ pub struct Args {
     pub pattern: Option<String>,
     /// Open file in read-only mode (`-R`).
     pub readonly: bool,
+    /// Enable the `:perf` overlay at startup (`+perf`).
+    pub perf: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -31,6 +33,7 @@ fn parse_args() -> Result<Args> {
     let mut line: Option<usize> = None;
     let mut pattern: Option<String> = None;
     let mut readonly = false;
+    let mut perf = false;
     let mut file: Option<std::path::PathBuf> = None;
     let mut i = 1usize;
     while i < raw.len() {
@@ -46,10 +49,13 @@ fn parse_args() -> Result<Args> {
         } else if let Some(rest) = arg.strip_prefix('+') {
             // `+N` — jump to line N.
             // `+/pattern` — search for pattern.
+            // `+perf` — enable the :perf overlay at startup.
             if let Some(pat) = rest.strip_prefix('/') {
                 pattern = Some(pat.to_string());
             } else if let Ok(n) = rest.parse::<usize>() {
                 line = Some(n);
+            } else if rest == "perf" {
+                perf = true;
             } else {
                 eprintln!("hjkl: ignoring unknown +cmd: {arg}");
             }
@@ -66,12 +72,13 @@ fn parse_args() -> Result<Args> {
         line,
         pattern,
         readonly,
+        perf,
     })
 }
 
 fn print_help() {
     println!(
-        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  -h, --help       Show this help\n  -V, --version    Print version",
+        "hjkl {} — vim-modal terminal editor\n\nUSAGE:\n  hjkl [OPTIONS] [FILE]\n\nOPTIONS:\n  -R, --readonly   Open file read-only\n  +N               Jump to line N on open\n  +/PATTERN        Search for PATTERN on open\n  +perf            Enable :perf overlay at startup\n  -h, --help       Show this help\n  -V, --version    Print version",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -82,6 +89,9 @@ fn main() -> Result<()> {
     // Build app state (may read file from disk) before entering alternate screen
     // so we can print errors to the normal terminal if the file is unreadable.
     let mut app = app::App::new(args.file, args.readonly, args.line, args.pattern)?;
+    if args.perf {
+        app.perf_overlay = true;
+    }
 
     terminal::enable_raw_mode()?;
     execute!(stdout(), terminal::EnterAlternateScreen)?;
