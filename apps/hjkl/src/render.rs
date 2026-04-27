@@ -448,17 +448,23 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     picker.refresh();
     picker.refresh_preview();
 
-    let area = centered_rect(80, 70, buf_area);
+    // Wider popup when the preview pane is on; narrower single-column
+    // form when the source opted out.
+    let with_preview = picker.has_preview();
+    let area = centered_rect(if with_preview { 80 } else { 60 }, 70, buf_area);
     frame.render_widget(Clear, area);
 
-    // Split horizontally: left half hosts input + list, right half is
-    // the preview pane.
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    let left_area = cols[0];
-    let right_area = cols[1];
+    // Split horizontally only when the preview pane is wanted; else the
+    // input + list use the full popup width.
+    let (left_area, preview_area) = if with_preview {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        (area, None)
+    };
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -516,7 +522,9 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     }
     frame.render_stateful_widget(list, list_area, &mut state);
 
-    picker_preview_pane(frame, picker, right_area);
+    if let Some(right) = preview_area {
+        picker_preview_pane(frame, picker, right);
+    }
 }
 
 /// Render the preview pane via `BufferView` so the gutter, line

@@ -55,10 +55,20 @@ pub trait PickerSource: Send + Sync + 'static {
     /// labelling with extra metadata (`● src/main.rs (modified)`).
     fn match_text(&self, item: &Self::Item) -> String;
 
+    /// Whether this source wants the preview pane. Sources without
+    /// useful per-item content (command palettes, simple action lists)
+    /// override to `false` and skip implementing `preview`.
+    fn has_preview(&self) -> bool {
+        true
+    }
+
     /// Build the preview-pane content. Status is empty for normal
     /// content; non-empty is a placeholder reason ("binary", "1.0MB —
-    /// too large", I/O error message).
-    fn preview(&self, item: &Self::Item) -> (Buffer, String);
+    /// too large", I/O error message). Only called when
+    /// `has_preview()` returns `true`.
+    fn preview(&self, _item: &Self::Item) -> (Buffer, String) {
+        (Buffer::new(), String::new())
+    }
 
     /// Translate the highlighted item into an action when the user
     /// presses Enter.
@@ -186,6 +196,11 @@ impl<S: PickerSource> Picker<S> {
         self.source.title()
     }
 
+    /// Whether the source wants a preview pane rendered.
+    pub fn has_preview(&self) -> bool {
+        self.source.has_preview()
+    }
+
     /// True once the source has signalled `finish()`.
     pub fn scan_done(&self) -> bool {
         self.scan_done.load(Ordering::Acquire)
@@ -245,8 +260,12 @@ impl<S: PickerSource> Picker<S> {
     }
 
     /// Refresh the preview if the selection now points at a different
-    /// item than the cached one.
+    /// item than the cached one. No-op when the source opted out of
+    /// previews via `has_preview() == false`.
     pub fn refresh_preview(&mut self) {
+        if !self.source.has_preview() {
+            return;
+        }
         let target_idx = self.filtered.get(self.selected).copied();
         if target_idx == self.preview_idx {
             return;
