@@ -833,9 +833,10 @@ fn apply_set<H: hjkl_engine::Host>(
             hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  undobreak={}  readonly={}  wrap={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  undobreak={}  readonly={}  wrap={}",
             s.shiftwidth,
             s.tabstop,
+            s.softtabstop,
             s.textwidth,
             s.undo_levels,
             s.timeout_len.as_millis(),
@@ -1870,7 +1871,7 @@ mod tests {
         let mut e = new("x");
         match run(&mut e, "set") {
             ExEffect::Info(msg) => {
-                assert!(msg.contains("shiftwidth=8"), "got: {msg}");
+                assert!(msg.contains("shiftwidth=4"), "got: {msg}");
                 assert!(msg.contains("ignorecase=off"), "got: {msg}");
                 assert!(msg.contains("wrap=off"), "got: {msg}");
             }

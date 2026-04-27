@@ -8560,8 +8560,12 @@ mod tests {
     }
 
     #[test]
-    fn tab_inserts_literal_tab_by_default() {
+    fn tab_inserts_literal_tab_when_noexpandtab() {
         let mut e = editor_with("");
+        // 0.2.0: expandtab now defaults on (modern). Opt out for the
+        // literal-tab test.
+        e.settings_mut().expandtab = false;
+        e.settings_mut().softtabstop = 0;
         run_keys(&mut e, "i");
         e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(e.buffer.line(0).unwrap(), "\t");

@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn spec_options_default() {
         let opts = spec::Options::default();
-        assert_eq!(opts.tabstop, 8);
+        assert_eq!(opts.tabstop, 4);
     }
 
     #[test]

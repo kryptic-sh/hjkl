@@ -313,10 +313,10 @@ pub enum OptionValue {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            tabstop: 8,
-            shiftwidth: 8,
-            expandtab: false,
-            softtabstop: 0,
+            tabstop: 4,
+            shiftwidth: 4,
+            expandtab: true,
+            softtabstop: 4,
             iskeyword: "@,48-57,_,192-255".to_string(),
             ignorecase: false,
             smartcase: false,
@@ -1283,10 +1283,14 @@ mod tests {
     }
 
     #[test]
-    fn options_default_matches_vim() {
+    fn options_default_modern() {
+        // 0.2.0: defaults flipped from vim's tabstop=8/expandtab=off to
+        // modern editor defaults (4-space soft tabs).
         let o = Options::default();
-        assert_eq!(o.tabstop, 8);
-        assert!(!o.expandtab);
+        assert_eq!(o.tabstop, 4);
+        assert_eq!(o.shiftwidth, 4);
+        assert_eq!(o.softtabstop, 4);
+        assert!(o.expandtab);
         assert!(o.hlsearch);
         assert!(o.wrapscan);
         assert_eq!(o.timeout_len, core::time::Duration::from_millis(1000));

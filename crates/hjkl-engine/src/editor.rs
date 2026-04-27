@@ -778,14 +778,14 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            shiftwidth: 2,
-            tabstop: 8,
-            softtabstop: 0,
+            shiftwidth: 4,
+            tabstop: 4,
+            softtabstop: 4,
             ignore_case: false,
             smartcase: false,
             wrapscan: true,
             textwidth: 79,
-            expandtab: false,
+            expandtab: true,
             wrap: hjkl_buffer::Wrap::None,
             readonly: false,
             autoindent: true,
@@ -3013,9 +3013,9 @@ mod tests {
             crate::types::Options::default(),
         );
         let opts = e.current_options();
-        // 0.1.0: SPEC-faithful Options::default — shiftwidth=8 / tabstop=8.
-        assert_eq!(opts.shiftwidth, 8);
-        assert_eq!(opts.tabstop, 8);
+        // 0.2.0: defaults flipped to modern editor norms — 4-space soft tabs.
+        assert_eq!(opts.shiftwidth, 4);
+        assert_eq!(opts.tabstop, 4);
 
         let new_opts = crate::types::Options {
             shiftwidth: 4,
