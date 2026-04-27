@@ -169,6 +169,8 @@ jobs:
             sleep 30
           }
           publish_if_new hjkl-buffer
+          publish_if_new hjkl-tree-sitter
+          publish_if_new hjkl-clipboard
           publish_if_new hjkl-engine
           publish_if_new hjkl-editor
           publish_if_new hjkl-ratatui
