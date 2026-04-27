@@ -5117,7 +5117,15 @@ fn do_paste<H: crate::types::Host>(
     let selector = ed.vim.pending_register.take();
     let (yank, linewise) = match selector.and_then(|c| ed.registers().read(c)) {
         Some(slot) => (slot.text.clone(), slot.linewise),
-        None => (ed.yank().to_string(), ed.vim.yank_linewise),
+        // Read both fields from the unnamed slot rather than mixing the
+        // slot's text with `vim.yank_linewise`. The cached vim flag is
+        // per-editor, so a register imported from another editor (e.g.
+        // cross-buffer yank/paste) carried the wrong linewise without
+        // this — pasting a linewise yank inserted at the char cursor.
+        None => {
+            let s = &ed.registers().unnamed;
+            (s.text.clone(), s.linewise)
+        }
     };
     for _ in 0..count {
         ed.sync_buffer_content_from_textarea();
