@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  # Manual re-runs for the publish step. The publish_if_new helper is
+  # idempotent (skips crates already on crates.io at the matching
+  # version), so re-dispatching after a partial failure is safe.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -174,10 +178,18 @@ jobs:
             cargo publish -p "$crate" --locked
             sleep 30
           }
+          # Topological dep order — see Cargo.toml of each crate.
+          # hjkl-form  needs buffer + engine
+          # hjkl-editor needs engine + buffer
+          # hjkl-ratatui needs engine + form
+          # hjkl-picker needs buffer + form
+          # hjkl (app) needs all of them
           publish_if_new hjkl-buffer
           publish_if_new hjkl-tree-sitter
           publish_if_new hjkl-clipboard
           publish_if_new hjkl-engine
+          publish_if_new hjkl-form
           publish_if_new hjkl-editor
           publish_if_new hjkl-ratatui
+          publish_if_new hjkl-picker
           publish_if_new hjkl
