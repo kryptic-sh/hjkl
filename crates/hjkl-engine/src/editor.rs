@@ -1198,6 +1198,33 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.recording_macro
     }
 
+    /// Pending repeat count the user has typed but not yet resolved
+    /// (e.g. pressing `5` before `d`). `None` when nothing is pending.
+    /// Hosts surface this in a "showcmd" area.
+    pub fn pending_count(&self) -> Option<u32> {
+        self.vim.pending_count_val()
+    }
+
+    /// The operator character for any in-flight operator that is waiting
+    /// for a motion (e.g. `d` after the user types `d` but before a
+    /// motion). Returns `None` when no operator is pending.
+    pub fn pending_op(&self) -> Option<char> {
+        self.vim.pending_op_char()
+    }
+
+    /// Read-only view of the jump-back list (positions pushed on "big"
+    /// motions). Newest entry is at the back — `Ctrl-o` pops from there.
+    #[allow(clippy::type_complexity)]
+    pub fn jump_list(&self) -> (&[(usize, usize)], &[(usize, usize)]) {
+        (&self.vim.jump_back, &self.vim.jump_fwd)
+    }
+
+    /// Read-only view of the change list (positions of recent edits) plus
+    /// the current walk cursor. Newest entry is at the back.
+    pub fn change_list(&self) -> (&[(usize, usize)], Option<usize>) {
+        (&self.vim.change_list, self.vim.change_list_cursor)
+    }
+
     /// Replace the unnamed register without touching any other slot.
     /// For host-driven imports (e.g. system clipboard); operator
     /// code uses [`record_yank`] / [`record_delete`].

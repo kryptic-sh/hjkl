@@ -565,6 +565,41 @@ impl VimState {
         self.visual_anchor = anchor;
         self.mode = Mode::Visual;
     }
+
+    /// The pending repeat count (typed digits before a motion/operator),
+    /// or `None` when no digits are pending. Zero is treated as absent.
+    pub(crate) fn pending_count_val(&self) -> Option<u32> {
+        if self.count == 0 {
+            None
+        } else {
+            Some(self.count as u32)
+        }
+    }
+
+    /// Return a single char representing the pending operator, if any.
+    /// Used by host apps (status line "showcmd" area) to display e.g.
+    /// `d`, `y`, `c` while waiting for a motion.
+    pub(crate) fn pending_op_char(&self) -> Option<char> {
+        let op = match &self.pending {
+            Pending::Op { op, .. }
+            | Pending::OpTextObj { op, .. }
+            | Pending::OpG { op, .. }
+            | Pending::OpFind { op, .. } => Some(*op),
+            _ => None,
+        };
+        op.map(|o| match o {
+            Operator::Delete => 'd',
+            Operator::Change => 'c',
+            Operator::Yank => 'y',
+            Operator::Uppercase => 'U',
+            Operator::Lowercase => 'u',
+            Operator::ToggleCase => '~',
+            Operator::Indent => '>',
+            Operator::Outdent => '<',
+            Operator::Fold => 'z',
+            Operator::Reflow => 'q',
+        })
+    }
 }
 
 // ─── Entry point ───────────────────────────────────────────────────────────

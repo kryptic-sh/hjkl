@@ -73,6 +73,12 @@ impl App {
 
                     self.status_message = None;
 
+                    // ── Info popup dismissal ──────────────────────────────────
+                    if self.info_popup.is_some() {
+                        self.info_popup = None;
+                        continue;
+                    }
+
                     // ── Command palette (`:` prompt) ─────────────────────────
                     if self.command_field.is_some() {
                         self.handle_command_field_key(key);

@@ -35,6 +35,8 @@ static COMMAND_NAMES: &[CommandDef] = &[
     CommandDef { full_name: "foldsyntax", min_prefix: 5 },
     CommandDef { full_name: "global",     min_prefix: 1 },
     CommandDef { full_name: "ls",         min_prefix: 2 },
+    CommandDef { full_name: "changes",    min_prefix: 7 },
+    CommandDef { full_name: "jumps",      min_prefix: 5 },
     CommandDef { full_name: "marks",      min_prefix: 5 },
     CommandDef { full_name: "nohlsearch", min_prefix: 3 },
     CommandDef { full_name: "qall",       min_prefix: 2 },
@@ -200,6 +202,8 @@ pub fn run<H: hjkl_engine::Host>(
         }
         "registers" => return ExEffect::Info(format_registers(editor)),
         "marks" => return ExEffect::Info(format_marks(editor)),
+        "jumps" => return ExEffect::Info(format_jumps(editor)),
+        "changes" => return ExEffect::Info(format_changes(editor)),
         "undo" => {
             editor.undo();
             return ExEffect::Ok;
@@ -1110,6 +1114,67 @@ fn format_marks<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -
     }
     if lines.len() == 2 {
         lines.push("(no marks set)".to_string());
+    }
+    lines.join("\n")
+}
+
+/// `:jumps` — list the jump-back and jump-forward lists.
+/// Format mirrors vim: `jump  line  col  file` columns. Newest items
+/// have the smallest `jump` number; current position is `0`.
+fn format_jumps<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -> String {
+    let (back, fwd) = editor.jump_list();
+    if back.is_empty() && fwd.is_empty() {
+        return "(no jumps recorded)".to_string();
+    }
+    let mut lines = vec![
+        "--- Jump list ---".to_string(),
+        " jump  line   col".to_string(),
+    ];
+    // jump_back: oldest at index 0, newest at the end.
+    // Display as descending jump numbers: back.len() at oldest, 1 at newest, 0 = current.
+    // Then jump_fwd (forward history) at negative-1, -2, …  vim shows >0 for fwd.
+    // We keep it simple: back list reversed with ascending index, then fwd list.
+    let back_len = back.len();
+    for (i, &(row, col)) in back.iter().rev().enumerate() {
+        let jump_num = i + 1;
+        lines.push(format!("{jump_num:>5}  {:>4}  {:>4}", row + 1, col));
+    }
+    // Mark current position (not in list — just a separator).
+    lines.push(format!("{:>5}  (current position)", 0));
+    for (i, &(row, col)) in fwd.iter().enumerate() {
+        let jump_num = -(i as isize + 1);
+        lines.push(format!("{jump_num:>5}  {:>4}  {:>4}", row + 1, col));
+    }
+    let _ = back_len; // used above
+    lines.join("\n")
+}
+
+/// `:changes` — list the change list (bounded ring of recent edit positions).
+/// Newest entries have lower index numbers, matching vim's `:changes` output.
+fn format_changes<H: hjkl_engine::Host>(editor: &Editor<hjkl_buffer::Buffer, H>) -> String {
+    let (list, cursor) = editor.change_list();
+    if list.is_empty() {
+        return "(no changes recorded)".to_string();
+    }
+    let mut lines = vec![
+        "--- Change list ---".to_string(),
+        "change  line   col".to_string(),
+    ];
+    let len = list.len();
+    // List is oldest-at-front, newest-at-back; display newest first (change 1 = most recent).
+    for (display_idx, &(row, col)) in list.iter().rev().enumerate() {
+        let change_num = display_idx + 1;
+        // Mark the current walk position, if any. `change_list_cursor` is an
+        // index into the original (oldest-first) vec; invert to display-index.
+        let marker = match cursor {
+            Some(c) if c == len - 1 - display_idx => " <",
+            _ => "",
+        };
+        lines.push(format!(
+            "{change_num:>6}  {:>4}  {:>4}{marker}",
+            row + 1,
+            col
+        ));
     }
     lines.join("\n")
 }
@@ -2169,5 +2234,57 @@ mod tests {
         let mut e = new("foo\nbar");
         let effect = run(&mut e, "g/foo/p");
         assert!(matches!(effect, ExEffect::Error(_)));
+    }
+
+    #[test]
+    fn format_jumps_empty() {
+        let e = new("hello");
+        let info = match run(&mut { e }, "jumps") {
+            ExEffect::Info(s) => s,
+            other => panic!("expected Info, got {other:?}"),
+        };
+        assert_eq!(info, "(no jumps recorded)");
+    }
+
+    #[test]
+    fn format_jumps_with_entries() {
+        let mut e = new("line1\nline2\nline3\nline4\nline5");
+        // `gg` and `G` are "big jump" motions that push the jumplist.
+        type_keys(&mut e, "gg");
+        type_keys(&mut e, "G");
+        type_keys(&mut e, "gg");
+        let info = match run(&mut e, "jumps") {
+            ExEffect::Info(s) => s,
+            other => panic!("expected Info, got {other:?}"),
+        };
+        assert!(info.contains("--- Jump list ---"), "header missing: {info}");
+        assert!(info.contains("jump"), "column header missing: {info}");
+    }
+
+    #[test]
+    fn format_changes_empty() {
+        let e = new("hello");
+        let info = match run(&mut { e }, "changes") {
+            ExEffect::Info(s) => s,
+            other => panic!("expected Info, got {other:?}"),
+        };
+        assert_eq!(info, "(no changes recorded)");
+    }
+
+    #[test]
+    fn format_changes_with_edits() {
+        let mut e = new("hello\nworld");
+        // Insert something to populate the change list.
+        type_keys(&mut e, "Afoo\x1b");
+        type_keys(&mut e, "jAbar\x1b");
+        let info = match run(&mut e, "changes") {
+            ExEffect::Info(s) => s,
+            other => panic!("expected Info, got {other:?}"),
+        };
+        assert!(
+            info.contains("--- Change list ---"),
+            "header missing: {info}"
+        );
+        assert!(info.contains("change"), "column header missing: {info}");
     }
 }

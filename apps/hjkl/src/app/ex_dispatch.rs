@@ -224,7 +224,11 @@ impl App {
                 self.status_message = Some(format!("{count} substitution(s)"));
             }
             ExEffect::Info(msg) => {
-                self.status_message = Some(msg);
+                if msg.contains('\n') {
+                    self.info_popup = Some(msg);
+                } else {
+                    self.status_message = Some(msg);
+                }
             }
             ExEffect::Error(msg) => {
                 self.status_message = Some(format!("E: {msg}"));
