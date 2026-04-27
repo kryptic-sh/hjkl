@@ -51,11 +51,6 @@ impl App {
             return;
         }
 
-        if cmd == "bpicker" {
-            self.open_buffer_picker();
-            return;
-        }
-
         // E1 — `:b [num|name]` — must be matched BEFORE the `bn`/`bp` block.
         if cmd == "b" || cmd.starts_with("b ") {
             let arg = cmd.strip_prefix("b ").map(str::trim).unwrap_or("").trim();
@@ -99,37 +94,34 @@ impl App {
             return;
         }
 
-        // Multi-buffer commands (Phase C) — `bn`/`bp`/`bd`/`ls` are not
-        // in the engine's COMMAND_NAMES table, so canonicalization
-        // leaves them as-is. Match raw spellings here.
+        // Multi-buffer commands — canonical names from COMMAND_NAMES table.
         match cmd {
-            "bn" | "bnext" => {
+            "bnext" => {
                 self.buffer_next();
                 return;
             }
-            "bp" | "bN" | "bprev" | "bprevious" | "bNext" => {
+            "bprevious" | "bNext" => {
                 self.buffer_prev();
                 return;
             }
-            "bd" | "bdelete" => {
+            "bdelete" => {
                 self.buffer_delete(false);
                 return;
             }
-            "bd!" | "bdelete!" => {
+            "bdelete!" => {
                 self.buffer_delete(true);
                 return;
             }
-            // E2 — `:bfirst` / `:blast`
-            "bfirst" | "bf" => {
+            "bfirst" => {
                 self.switch_to(0);
                 return;
             }
-            "blast" | "bl" => {
-                let last = self.slots.len() - 1;
+            "blast" => {
+                let last = self.slots.len().saturating_sub(1);
                 self.switch_to(last);
                 return;
             }
-            "ls" | "buffers" | "files" => {
+            "buffers" | "ls" | "files" => {
                 self.status_message = Some(self.list_buffers());
                 return;
             }
@@ -137,25 +129,28 @@ impl App {
                 self.buffer_alt();
                 return;
             }
-            // E3 — `:wa` / `:qa` / `:wqa`
-            "wa" | "wall" => {
+            "wall" => {
                 self.write_all();
                 return;
             }
-            "qa" | "qall" => {
+            "qall" => {
                 self.quit_all(false);
                 return;
             }
-            "qa!" | "qall!" => {
+            "qall!" => {
                 self.quit_all(true);
                 return;
             }
-            "wqa" | "wqall" => {
+            "wqall" => {
                 self.write_quit_all(false);
                 return;
             }
-            "wqa!" | "wqall!" => {
+            "wqall!" => {
                 self.write_quit_all(true);
+                return;
+            }
+            "bpicker" => {
+                self.open_buffer_picker();
                 return;
             }
             _ => {}

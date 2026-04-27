@@ -21,13 +21,23 @@ struct CommandDef {
 
 #[rustfmt::skip]
 static COMMAND_NAMES: &[CommandDef] = &[
+    CommandDef { full_name: "bNext",      min_prefix: 2 },
+    CommandDef { full_name: "bdelete",    min_prefix: 2 },
+    CommandDef { full_name: "bfirst",     min_prefix: 2 },
+    CommandDef { full_name: "blast",      min_prefix: 2 },
+    CommandDef { full_name: "bnext",      min_prefix: 2 },
+    CommandDef { full_name: "bprevious",  min_prefix: 2 },
+    CommandDef { full_name: "buffers",    min_prefix: 2 },
     CommandDef { full_name: "delete",     min_prefix: 1 },
     CommandDef { full_name: "edit",       min_prefix: 1 },
+    CommandDef { full_name: "files",      min_prefix: 2 },
     CommandDef { full_name: "foldindent", min_prefix: 5 },
     CommandDef { full_name: "foldsyntax", min_prefix: 5 },
     CommandDef { full_name: "global",     min_prefix: 1 },
+    CommandDef { full_name: "ls",         min_prefix: 2 },
     CommandDef { full_name: "marks",      min_prefix: 5 },
     CommandDef { full_name: "nohlsearch", min_prefix: 3 },
+    CommandDef { full_name: "qall",       min_prefix: 2 },
     CommandDef { full_name: "quit",       min_prefix: 1 },
     CommandDef { full_name: "read",       min_prefix: 1 },
     CommandDef { full_name: "redo",       min_prefix: 3 },
@@ -37,8 +47,10 @@ static COMMAND_NAMES: &[CommandDef] = &[
     CommandDef { full_name: "substitute", min_prefix: 1 },
     CommandDef { full_name: "undo",       min_prefix: 1 },
     CommandDef { full_name: "vglobal",    min_prefix: 1 },
+    CommandDef { full_name: "wall",       min_prefix: 2 },
     CommandDef { full_name: "write",      min_prefix: 1 },
     CommandDef { full_name: "wq",         min_prefix: 2 },
+    CommandDef { full_name: "wqall",      min_prefix: 3 },
     CommandDef { full_name: "x",          min_prefix: 1 },
 ];
 
@@ -1333,6 +1345,18 @@ mod resolver_tests {
     fn unknown_command_passes_through_unchanged() {
         assert_eq!(canonical_command_name("foobar"), "foobar");
         assert_eq!(canonical_command_name(""), "");
+    }
+
+    #[test]
+    fn resolves_multi_buffer_commands() {
+        assert_eq!(canonical_command_name("bd"), "bdelete");
+        assert_eq!(canonical_command_name("bn"), "bnext");
+        assert_eq!(canonical_command_name("ls"), "ls");
+        assert_eq!(canonical_command_name("bd!"), "bdelete!");
+        assert_eq!(canonical_command_name("bp"), "bprevious");
+        assert_eq!(canonical_command_name("wa"), "wall");
+        assert_eq!(canonical_command_name("qa"), "qall");
+        assert_eq!(canonical_command_name("wqa"), "wqall");
     }
 }
 
