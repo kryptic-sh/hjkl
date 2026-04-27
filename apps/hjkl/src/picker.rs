@@ -763,10 +763,12 @@ impl PickerLogic for RgSource {
         }
         let spans = self.highlight(&abs, &content);
 
-        // Build a window of lines around the match line.
+        // Build a window of lines around the match line. Clamp start
+        // against `all_lines.len()` because rg's match line can be
+        // stale relative to the file content we just read off disk.
         let all_lines: Vec<&str> = content.lines().collect();
         let match_row = (line as usize).saturating_sub(1);
-        let start = match_row.saturating_sub(2);
+        let start = match_row.saturating_sub(2).min(all_lines.len());
         let end = (start + PREVIEW_MAX_LINES).min(all_lines.len());
         let window: String = all_lines[start..end].join("\n");
 
