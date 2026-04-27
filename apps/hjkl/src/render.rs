@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
+use crate::app::{AnyPicker, App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = line_count.to_string().len() + 2`. The renderer must
@@ -521,37 +521,50 @@ pub fn format_write_message(path: &str, lines: usize, bytes: usize) -> String {
 /// result list. Drawn on top of the buffer pane via `Clear` so the
 /// editor content beneath is masked.
 fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
-    let picker = match app.picker.as_mut() {
-        Some(p) => p,
-        None => return,
-    };
-    picker.refresh();
-    picker.refresh_preview();
-
-    // Popup size is fixed regardless of preview state — the list just
-    // takes the full width when the source opted out.
     let area = centered_rect(80, 70, buf_area);
     frame.render_widget(Clear, area);
 
-    // Drop the preview when there isn't enough horizontal room: each
-    // pane needs ~30 cols to be useful (border + gutter + a handful of
-    // chars). Below 80 popup-cols total, hide the preview even if the
-    // source wants it.
-    const PREVIEW_MIN_WIDTH: u16 = 80;
-    let with_preview = picker.has_preview() && area.width >= PREVIEW_MIN_WIDTH;
+    match app.picker.as_mut() {
+        Some(AnyPicker::File(p)) => {
+            p.refresh();
+            p.refresh_preview();
 
-    // Split horizontally only when the preview pane is wanted; else the
-    // input + list use the full popup width.
-    let (left_area, preview_area) = if with_preview {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-        (cols[0], Some(cols[1]))
-    } else {
-        (area, None)
-    };
+            const PREVIEW_MIN_WIDTH: u16 = 80;
+            let with_preview = p.has_preview() && area.width >= PREVIEW_MIN_WIDTH;
 
+            let (left_area, preview_area) = if with_preview {
+                let cols = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .split(area);
+                (cols[0], Some(cols[1]))
+            } else {
+                (area, None)
+            };
+
+            render_picker_input_and_list(frame, p, left_area);
+
+            if let Some(right) = preview_area {
+                picker_preview_pane(frame, p, right);
+            }
+        }
+        Some(AnyPicker::Buffer(p)) => {
+            p.refresh();
+            // Buffer picker has no preview — use full popup width.
+            render_picker_input_and_list(frame, p, area);
+        }
+        None => {}
+    }
+}
+
+/// Shared input + list rendering for any `Picker<S>`.
+fn render_picker_input_and_list<S>(
+    frame: &mut Frame,
+    picker: &mut crate::picker::Picker<S>,
+    left_area: Rect,
+) where
+    S: crate::picker::PickerSource,
+{
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(1)])
@@ -607,10 +620,6 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         state.select(Some(picker.selected.min(labels.len().saturating_sub(1))));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
-
-    if let Some(right) = preview_area {
-        picker_preview_pane(frame, picker, right);
-    }
 }
 
 /// Render the preview pane via `BufferView` so the gutter, line

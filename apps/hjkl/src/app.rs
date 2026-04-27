@@ -145,16 +145,26 @@ impl BufferSlot {
     }
 }
 
+/// Wrapper that lets `App::picker` hold either a file picker or a buffer
+/// picker without boxing the trait.
+pub enum AnyPicker {
+    File(crate::picker::FilePicker),
+    Buffer(crate::picker::BufferPicker),
+}
+
 /// Top-level application state. Everything the event loop and renderer need.
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
-    slots: Vec<BufferSlot>,
+    pub slots: Vec<BufferSlot>,
     /// Index into `slots` of the currently active buffer.
-    active: usize,
+    pub active: usize,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
     /// the last slot consume the next value.
     next_buffer_id: BufferId,
+    /// The slot that was active just before the most recent `switch_to`
+    /// call. Used by `<C-^>` / `:b#` to jump to the alternate buffer.
+    pub prev_active: Option<usize>,
     /// Set to `true` when the FSM or Ctrl-C wants to quit.
     pub exit_requested: bool,
     /// Last ex-command result (Info / Error / write confirmation).
@@ -166,11 +176,15 @@ pub struct App {
     pub command_field: Option<TextFieldEditor>,
     /// Active `/` (forward) / `?` (backward) search prompt.
     pub search_field: Option<TextFieldEditor>,
-    /// Active file picker overlay.
-    pub picker: Option<crate::picker::FilePicker>,
+    /// Active file or buffer picker overlay.
+    pub picker: Option<AnyPicker>,
     /// `true` after the user pressed `<Space>` in normal mode and we're
     /// waiting for the next key to resolve the leader sequence.
     pub pending_leader: bool,
+    /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
+    /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
+    /// once the motion is resolved or forwarded to the engine.
+    pub pending_buffer_motion: Option<char>,
     /// Direction of the active `search_field`.
     pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal.
@@ -345,12 +359,14 @@ impl App {
             slots: vec![slot],
             active: 0,
             next_buffer_id: 1,
+            prev_active: None,
             exit_requested: false,
             status_message: None,
             command_field: None,
             search_field: None,
             picker: None,
             pending_leader: false,
+            pending_buffer_motion: None,
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
@@ -511,10 +527,16 @@ impl App {
                     // ── Leader resolution ────────────────────────────────────
                     if self.pending_leader && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_leader = false;
-                        if key.modifiers == KeyModifiers::NONE
-                            && (key.code == KeyCode::Char(' ') || key.code == KeyCode::Char('f'))
-                        {
-                            self.open_picker();
+                        if key.modifiers == KeyModifiers::NONE {
+                            match key.code {
+                                KeyCode::Char(' ') | KeyCode::Char('f') => {
+                                    self.open_picker();
+                                }
+                                KeyCode::Char('b') => {
+                                    self.open_buffer_picker();
+                                }
+                                _ => {}
+                            }
                         }
                         continue;
                     }
@@ -526,6 +548,51 @@ impl App {
                     {
                         self.pending_leader = true;
                         continue;
+                    }
+
+                    // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────────
+                    if self.active().editor.vim_mode() == VimMode::Normal
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                        && (key.code == KeyCode::Char('^') || key.code == KeyCode::Char('6'))
+                    {
+                        self.buffer_alt();
+                        continue;
+                    }
+
+                    // ── Buffer-motion pending state ──────────────────────────
+                    if self.active().editor.vim_mode() == VimMode::Normal
+                        && key.modifiers == KeyModifiers::NONE
+                    {
+                        if let Some(prefix) = self.pending_buffer_motion.take() {
+                            match (prefix, key.code) {
+                                ('g', KeyCode::Char('t')) => {
+                                    self.buffer_next();
+                                    continue;
+                                }
+                                ('g', KeyCode::Char('T')) => {
+                                    self.buffer_prev();
+                                    continue;
+                                }
+                                (']', KeyCode::Char('b')) => {
+                                    self.buffer_next();
+                                    continue;
+                                }
+                                ('[', KeyCode::Char('b')) => {
+                                    self.buffer_prev();
+                                    continue;
+                                }
+                                // Didn't match — forward only the current key;
+                                // drop the pending prefix (g/]/[ alone has no
+                                // other mapped meaning in our engine yet).
+                                _ => {
+                                    self.active_mut().editor.handle_key(key);
+                                    continue;
+                                }
+                            }
+                        }
+                    } else {
+                        // Any non-Normal key clears the pending motion.
+                        self.pending_buffer_motion = None;
                     }
 
                     // ── Intercept `:` in Normal mode ─────────────────────────
@@ -549,6 +616,21 @@ impl App {
                             self.open_search_prompt(SearchDir::Backward);
                             continue;
                         }
+                    }
+
+                    // ── Set pending buffer-motion prefix ─────────────────────
+                    if self.active().editor.vim_mode() == VimMode::Normal
+                        && key.modifiers == KeyModifiers::NONE
+                        && matches!(
+                            key.code,
+                            KeyCode::Char('g') | KeyCode::Char(']') | KeyCode::Char('[')
+                        )
+                        && let KeyCode::Char(c) = key.code
+                    {
+                        self.pending_buffer_motion = Some(c);
+                        // Fall through: also forward the key to the engine
+                        // so its own `g`-pending state is updated correctly
+                        // (the engine handles gj/gk/gg/G etc).
                     }
 
                     // ── Normal editor key handling ───────────────────────────
@@ -592,16 +674,34 @@ impl App {
     pub fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = crate::picker::FileSource::new(cwd);
-        self.picker = Some(crate::picker::FilePicker::new(source));
+        self.picker = Some(AnyPicker::File(crate::picker::FilePicker::new(source)));
+        self.pending_leader = false;
+    }
+
+    /// Open the buffer picker over the currently open slots.
+    pub fn open_buffer_picker(&mut self) {
+        let source = crate::picker::BufferSource::new(
+            &self.slots,
+            |s| {
+                s.filename
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("[No Name]")
+                    .to_owned()
+            },
+            |s| s.dirty,
+        );
+        self.picker = Some(AnyPicker::Buffer(crate::picker::BufferPicker::new(source)));
         self.pending_leader = false;
     }
 
     fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
-        let picker = match self.picker.as_mut() {
-            Some(p) => p,
+        let event = match self.picker.as_mut() {
+            Some(AnyPicker::File(p)) => p.handle_key(key),
+            Some(AnyPicker::Buffer(p)) => p.handle_key(key),
             None => return,
         };
-        match picker.handle_key(key) {
+        match event {
             crate::picker::PickerEvent::None => {}
             crate::picker::PickerEvent::Cancel => {
                 self.picker = None;
@@ -618,6 +718,11 @@ impl App {
             crate::picker::PickerAction::OpenPath(path) => {
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
+            }
+            crate::picker::PickerAction::SwitchBuffer(idx) => {
+                if idx < self.slots.len() {
+                    self.switch_to(idx);
+                }
             }
         }
     }
@@ -814,6 +919,11 @@ impl App {
             return;
         }
 
+        if cmd == "bpicker" {
+            self.open_buffer_picker();
+            return;
+        }
+
         // Multi-buffer commands (Phase C) — `bn`/`bp`/`bd`/`ls` are not
         // in the engine's COMMAND_NAMES table, so canonicalization
         // leaves them as-is. Match raw spellings here.
@@ -836,6 +946,10 @@ impl App {
             }
             "ls" | "buffers" | "files" => {
                 self.status_message = Some(self.list_buffers());
+                return;
+            }
+            "b#" => {
+                self.buffer_alt();
                 return;
             }
             _ => {}
@@ -1006,6 +1120,8 @@ impl App {
         // Otherwise create a new slot.
         match self.open_new_slot(path) {
             Ok(idx) => {
+                // Track alt-buffer before switching.
+                self.prev_active = Some(self.active);
                 self.active = idx;
                 let line_count = self.active().editor.buffer().line_count() as usize;
                 let path_display = self
@@ -1164,7 +1280,11 @@ impl App {
     }
 
     /// Switch active to `idx` and refresh its viewport spans.
-    fn switch_to(&mut self, idx: usize) {
+    /// Records the previous active index in `prev_active` for alt-buffer.
+    pub(crate) fn switch_to(&mut self, idx: usize) {
+        if idx != self.active {
+            self.prev_active = Some(self.active);
+        }
         self.active = idx;
         if let Ok(size) = crossterm::terminal::size() {
             let vp = self.active_mut().editor.host_mut().viewport_mut();
@@ -1207,6 +1327,22 @@ impl App {
         }
         let prev = (self.active + self.slots.len() - 1) % self.slots.len();
         self.switch_to(prev);
+    }
+
+    /// `<C-^>` / `:b#` — switch to the previously-active buffer slot.
+    fn buffer_alt(&mut self) {
+        if self.slots.len() <= 1 {
+            self.status_message = Some("only one buffer open".into());
+            return;
+        }
+        match self.prev_active {
+            Some(i) if i < self.slots.len() => {
+                self.switch_to(i);
+            }
+            _ => {
+                self.status_message = Some("no alternate buffer".into());
+            }
+        }
     }
 
     /// `:bdelete[!]` — close the active slot. With more than one slot
@@ -1257,6 +1393,9 @@ impl App {
         }
         let target = self.active;
         self.switch_to(target);
+        // Clear alt-buffer pointer after the switch: prev_active may refer
+        // to a removed or re-indexed slot. Reset unconditionally.
+        self.prev_active = None;
         let name = removed
             .filename
             .as_ref()
@@ -1864,6 +2003,130 @@ mod tests {
             lines.is_empty() || (lines.len() == 1 && lines[0].is_empty()),
             "expected empty scratch buffer, got: {lines:?}"
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Alt-buffer (D2) tests ───────────────────────────────────────────────
+
+    #[test]
+    fn buffer_alt_swaps_with_prev_active() {
+        let path_a = std::env::temp_dir().join("hjkl_d2_alt_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_d2_alt_b.txt");
+        let path_c = std::env::temp_dir().join("hjkl_d2_alt_c.txt");
+        for p in [&path_a, &path_b, &path_c] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display())); // active=1, prev=0
+        app.dispatch_ex(&format!("e {}", path_c.display())); // active=2, prev=1
+        assert_eq!(app.active, 2);
+        assert_eq!(app.prev_active, Some(1));
+
+        // First alt: go back to 1, prev becomes 2.
+        app.buffer_alt();
+        assert_eq!(app.active, 1);
+        assert_eq!(app.prev_active, Some(2));
+
+        // Second alt: go back to 2.
+        app.buffer_alt();
+        assert_eq!(app.active, 2);
+
+        for p in [&path_a, &path_b, &path_c] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn buffer_alt_with_single_slot_no_op_with_message() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert_eq!(app.slots.len(), 1);
+        app.buffer_alt();
+        assert_eq!(app.active, 0);
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(
+            msg.contains("only one buffer"),
+            "expected 'only one buffer' message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn bd_clears_prev_active() {
+        let path_a = std::env::temp_dir().join("hjkl_d2_bd_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_d2_bd_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display())); // active=1, prev=0
+        assert_eq!(app.prev_active, Some(0));
+        // Force-close the active slot (b.txt).
+        app.dispatch_ex("bd!");
+        // prev_active must be reset so the stale index is gone.
+        assert!(
+            app.prev_active.is_none(),
+            "prev_active should be None after bd!"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    // ── Buffer picker (D4) source tests ────────────────────────────────────
+
+    #[test]
+    fn buffer_source_new_produces_n_entries() {
+        let path_a = std::env::temp_dir().join("hjkl_d4_src_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_d4_src_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        assert_eq!(app.slots.len(), 2);
+
+        let source = crate::picker::BufferSource::new(
+            &app.slots,
+            |s| {
+                s.filename
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("[No Name]")
+                    .to_owned()
+            },
+            |s| s.dirty,
+        );
+        // Build a Picker from the source — it calls enumerate internally.
+        let mut picker = crate::picker::BufferPicker::new(source);
+        picker.refresh();
+        assert_eq!(picker.total(), 2, "expected 2 entries");
+        assert!(picker.scan_done(), "scan_done must be set");
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn buffer_source_select_returns_switch_buffer() {
+        use crate::picker::{BufferSource, PickerAction, PickerSource};
+        let path = std::env::temp_dir().join("hjkl_d4_sel.txt");
+        std::fs::write(&path, "x\n").unwrap();
+        let app = App::new(Some(path.clone()), false, None, None).unwrap();
+        let source = BufferSource::new(
+            &app.slots,
+            |s| {
+                s.filename
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("[No Name]")
+                    .to_owned()
+            },
+            |s| s.dirty,
+        );
+        let entry = crate::picker::BufferEntry {
+            idx: 0,
+            name: "foo".into(),
+            dirty: false,
+        };
+        match source.select(&entry) {
+            PickerAction::SwitchBuffer(i) => assert_eq!(i, 0),
+            _ => panic!("expected SwitchBuffer(0)"),
+        }
         let _ = std::fs::remove_file(&path);
     }
 

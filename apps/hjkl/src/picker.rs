@@ -34,6 +34,8 @@ const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 pub enum PickerAction {
     /// Open the path in the editor (routes through `do_edit`).
     OpenPath(PathBuf),
+    /// Switch to an already-open buffer slot by index.
+    SwitchBuffer(usize),
 }
 
 /// Per-row span table + style table for the preview pane. The
@@ -455,6 +457,84 @@ impl<S: PickerSource> Picker<S> {
 /// the only concrete source. New sources get their own alias next to
 /// `FileSource`.
 pub type FilePicker = Picker<FileSource>;
+
+/// Convenience alias for the buffer-picker.
+pub type BufferPicker = Picker<BufferSource>;
+
+/// Snapshot of one open buffer slot for use in the buffer picker.
+#[derive(Clone)]
+pub struct BufferEntry {
+    /// Index into `App::slots`.
+    pub idx: usize,
+    /// Display name (filename or `[No Name]`).
+    pub name: String,
+    /// `true` when the buffer has unsaved changes.
+    pub dirty: bool,
+}
+
+/// Source for the buffer picker. Enumerates all open slots at the
+/// moment the picker is opened — the picker is modal so this snapshot
+/// is fine.
+pub struct BufferSource {
+    entries: Vec<BufferEntry>,
+}
+
+impl BufferSource {
+    /// Build from a slice of open `BufferSlot`s.
+    pub fn new<S>(
+        slots: &[S],
+        name_of: impl Fn(&S) -> String,
+        dirty_of: impl Fn(&S) -> bool,
+    ) -> Self {
+        let entries = slots
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| BufferEntry {
+                idx,
+                name: name_of(s),
+                dirty: dirty_of(s),
+            })
+            .collect();
+        Self { entries }
+    }
+}
+
+impl PickerSource for BufferSource {
+    type Item = BufferEntry;
+
+    fn title(&self) -> &'static str {
+        "buffers"
+    }
+
+    fn label(&self, item: &BufferEntry) -> String {
+        if item.dirty {
+            format!("● {}", item.name)
+        } else {
+            format!("  {}", item.name)
+        }
+    }
+
+    fn match_text(&self, item: &BufferEntry) -> String {
+        item.name.clone()
+    }
+
+    /// Buffer picker has no per-item disk content to preview.
+    /// TODO: add a live-buffer snapshot preview in a future iteration.
+    fn has_preview(&self) -> bool {
+        false
+    }
+
+    fn select(&self, item: &BufferEntry) -> PickerAction {
+        PickerAction::SwitchBuffer(item.idx)
+    }
+
+    fn enumerate(self: Arc<Self>, sink: ItemSink<Self::Item>) -> Option<JoinHandle<()>> {
+        // All entries are in memory — push synchronously and finish.
+        sink.extend(self.entries.iter().cloned());
+        sink.finish();
+        None
+    }
+}
 
 /// File-source: gitignore-aware cwd walker. Items are paths relative
 /// to `root`, preview reads from disk capped at `PREVIEW_MAX_LINES` /
