@@ -27,6 +27,10 @@ use crate::syntax::{self, SyntaxLayer};
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// Phase A: single buffer, fixed id. Phase B replaces this with a
+/// per-slot id read from `self.active().buffer_id`.
+pub(crate) const MAIN_BUFFER_ID: crate::syntax::BufferId = 0;
+
 /// Hash + byte-length of the buffer's canonical line content (lines
 /// joined by `\n` — same shape as what `:w` writes, modulo the trailing
 /// newline). Used to detect "buffer matches the saved snapshot" so undo
@@ -230,7 +234,7 @@ impl App {
         // the opened file, then run an initial highlight pass.
         let mut syntax = syntax::default_layer();
         if let Some(ref path) = filename {
-            syntax.set_language_for_path(path);
+            syntax.set_language_for_path(MAIN_BUFFER_ID, path);
         }
         // Sync host viewport to the real terminal size before sizing the
         // preview / submitting the initial parse — otherwise the
@@ -251,11 +255,20 @@ impl App {
         // replaces the preview on the next event-loop iteration.
         let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
         let initial_dg = editor.buffer().dirty_gen();
-        if let Some(out) = syntax.preview_render(editor.buffer(), initial_vp_top, initial_vp_height)
-        {
+        if let Some(out) = syntax.preview_render(
+            MAIN_BUFFER_ID,
+            editor.buffer(),
+            initial_vp_top,
+            initial_vp_height,
+        ) {
             editor.install_ratatui_syntax_spans(out.spans);
         }
-        syntax.submit_render(editor.buffer(), initial_vp_top, initial_vp_height);
+        syntax.submit_render(
+            MAIN_BUFFER_ID,
+            editor.buffer(),
+            initial_vp_top,
+            initial_vp_height,
+        );
         let initial_key: Option<(u64, usize, usize)> =
             if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150)) {
                 let key = out.key;
@@ -565,11 +578,11 @@ impl App {
                     // recompute viewport-scoped spans every frame —
                     // the new query path is cheap.
                     if self.editor.take_content_reset() {
-                        self.syntax.reset();
+                        self.syntax.reset(MAIN_BUFFER_ID);
                     }
                     let edits = self.editor.take_content_edits();
                     if !edits.is_empty() {
-                        self.syntax.apply_edits(&edits);
+                        self.syntax.apply_edits(MAIN_BUFFER_ID, &edits);
                     }
                     self.recompute_and_install();
                 }
@@ -936,11 +949,11 @@ impl App {
                 if self.editor.take_dirty() {
                     self.refresh_dirty_against_saved();
                     if self.editor.take_content_reset() {
-                        self.syntax.reset();
+                        self.syntax.reset(MAIN_BUFFER_ID);
                     }
                     let edits = self.editor.take_content_edits();
                     if !edits.is_empty() {
-                        self.syntax.apply_edits(&edits);
+                        self.syntax.apply_edits(MAIN_BUFFER_ID, &edits);
                     }
                     self.recompute_and_install();
                 }
@@ -1068,8 +1081,8 @@ impl App {
         }
         self.filename = Some(path.clone());
         self.is_new_file = false;
-        self.syntax.set_language_for_path(&path);
-        self.syntax.reset();
+        self.syntax.set_language_for_path(MAIN_BUFFER_ID, &path);
+        self.syntax.reset(MAIN_BUFFER_ID);
         // Invalidate the recompute cache so the swap actually re-parses
         // (set_content advances dirty_gen, but be explicit so a same-key
         // collision after reload can't skip the install).
@@ -1087,9 +1100,9 @@ impl App {
             let vp = self.editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
-        if let Some(out) = self
-            .syntax
-            .preview_render(self.editor.buffer(), vp_top, vp_height)
+        if let Some(out) =
+            self.syntax
+                .preview_render(MAIN_BUFFER_ID, self.editor.buffer(), vp_top, vp_height)
         {
             self.editor.install_ratatui_syntax_spans(out.spans);
         }
@@ -1146,7 +1159,7 @@ impl App {
                 self.recompute_runs = self.recompute_runs.saturating_add(1);
                 if self
                     .syntax
-                    .submit_render(self.editor.buffer(), top, height)
+                    .submit_render(MAIN_BUFFER_ID, self.editor.buffer(), top, height)
                     .is_some()
                 {
                     submitted = true;

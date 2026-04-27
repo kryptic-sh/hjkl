@@ -10,6 +10,7 @@
 //! results via [`SyntaxLayer::take_result`] each frame and install the
 //! latest one onto the editor.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
@@ -20,6 +21,11 @@ use hjkl_tree_sitter::{
     DotFallbackTheme, Highlighter, InputEdit, LanguageConfig, LanguageRegistry, Point, Theme,
 };
 
+/// Stable identifier for an open buffer. Assigned by the App; carried
+/// through every syntax-pipeline message so the worker can multiplex
+/// per-buffer tree state (helix-style).
+pub type BufferId = u64;
+
 /// Per-frame output of [`SyntaxLayer::take_result`]: the styled span
 /// table, diagnostic signs for the gutter (one per row with a tree-sitter
 /// ERROR / MISSING node intersecting the viewport), the cache key the
@@ -27,6 +33,10 @@ use hjkl_tree_sitter::{
 /// and a [`PerfBreakdown`] describing where the worker spent its time.
 #[derive(Debug, Clone)]
 pub struct RenderOutput {
+    /// Buffer this result belongs to. The App routes spans + signs to
+    /// the matching slot.
+    #[allow(dead_code)] // Phase A: single buffer, App ignores the id.
+    pub buffer_id: BufferId,
     pub spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     pub signs: Vec<Sign>,
     /// `(dirty_gen, viewport_top, viewport_height)` — same shape the App
@@ -75,6 +85,9 @@ struct RenderCache {
 /// viewport highlight + error scan, builds the per-row span table, and
 /// sends the result back via mpsc.
 struct ParseRequest {
+    /// Buffer the request targets — selects which retained tree the
+    /// worker uses.
+    buffer_id: BufferId,
     source: Arc<String>,
     row_starts: Arc<Vec<usize>>,
     edits: Vec<InputEdit>,
@@ -89,10 +102,16 @@ struct ParseRequest {
 }
 
 /// Control + data messages the worker thread waits on.
+#[allow(dead_code)] // Reset / Forget unused until Phase B wires close handling.
 enum Msg {
-    /// Replace the active highlighter for a new language config. `None`
-    /// detaches (no highlighter → worker drops parse requests).
-    SetLanguage(Option<&'static LanguageConfig>),
+    /// Set / replace the highlighter for a buffer. `None` detaches (no
+    /// highlighter → parse requests for this buffer are dropped).
+    SetLanguage(BufferId, Option<&'static LanguageConfig>),
+    /// Drop the retained tree for a buffer so the next parse is cold.
+    Reset(BufferId),
+    /// Remove all worker state for a buffer (highlighter, retained
+    /// tree, parse-cache key). Sent on buffer close.
+    Forget(BufferId),
     /// Replace the theme. Style resolution happens on the worker.
     SetTheme(Arc<dyn Theme + Send + Sync>),
     /// A parse + render job. Coalesced — only the latest pending
@@ -163,9 +182,21 @@ impl SyntaxWorker {
         cvar.notify_one();
     }
 
-    /// Switch the worker to a new language. Drops any retained tree.
-    pub fn set_language(&self, config: Option<&'static LanguageConfig>) {
-        self.enqueue_control(Msg::SetLanguage(config));
+    /// Set / replace the highlighter for a buffer. `None` detaches.
+    pub fn set_language(&self, id: BufferId, config: Option<&'static LanguageConfig>) {
+        self.enqueue_control(Msg::SetLanguage(id, config));
+    }
+
+    /// Drop a buffer's retained tree so the next parse for it is cold.
+    #[allow(dead_code)] // Phase B will fire this on buffer-language change.
+    pub fn reset(&self, id: BufferId) {
+        self.enqueue_control(Msg::Reset(id));
+    }
+
+    /// Forget all worker state for a buffer (highlighter + tree).
+    /// Sent on buffer close.
+    pub fn forget(&self, id: BufferId) {
+        self.enqueue_control(Msg::Forget(id));
     }
 
     /// Replace the theme used for capture → style resolution.
@@ -227,6 +258,15 @@ impl Drop for SyntaxWorker {
     }
 }
 
+/// Per-buffer state retained on the worker side: the `Highlighter`
+/// (which owns its compiled `Query` + retained `Tree`) plus the
+/// `dirty_gen` for which that tree is current. Pure-viewport requests
+/// against the same `dirty_gen` skip `parse_incremental` entirely.
+struct WorkerBufferState {
+    highlighter: Highlighter,
+    last_parsed_dirty_gen: Option<u64>,
+}
+
 fn worker_loop(
     pending: Arc<(Mutex<Pending>, Condvar)>,
     tx: std::sync::mpsc::Sender<RenderOutput>,
@@ -234,13 +274,8 @@ fn worker_loop(
 ) {
     use std::time::Instant;
 
-    let mut highlighter: Option<Highlighter> = None;
+    let mut buffers: HashMap<BufferId, WorkerBufferState> = HashMap::new();
     let mut theme: Arc<dyn Theme + Send + Sync> = initial_theme;
-    // Buffer dirty_gen for which the retained tree is current. When the
-    // next Parse request has the same dirty_gen and no new edits, skip
-    // parse_incremental entirely — pure-viewport changes (gg / G / Ctrl-D
-    // etc.) hit this fast path and cost just highlight_range + diag.
-    let mut last_parsed_dirty_gen: Option<u64> = None;
 
     loop {
         let msg = {
@@ -261,32 +296,48 @@ fn worker_loop(
 
         match msg {
             Msg::Quit => return,
-            Msg::SetLanguage(None) => {
-                highlighter = None;
-                last_parsed_dirty_gen = None;
+            Msg::SetLanguage(id, None) => {
+                buffers.remove(&id);
             }
-            Msg::SetLanguage(Some(cfg)) => {
-                match Highlighter::new(cfg) {
-                    Ok(h) => highlighter = Some(h),
-                    Err(_) => highlighter = None,
+            Msg::SetLanguage(id, Some(cfg)) => match Highlighter::new(cfg) {
+                Ok(h) => {
+                    buffers.insert(
+                        id,
+                        WorkerBufferState {
+                            highlighter: h,
+                            last_parsed_dirty_gen: None,
+                        },
+                    );
                 }
-                last_parsed_dirty_gen = None;
+                Err(_) => {
+                    buffers.remove(&id);
+                }
+            },
+            Msg::Reset(id) => {
+                if let Some(s) = buffers.get_mut(&id) {
+                    s.highlighter.reset();
+                    s.last_parsed_dirty_gen = None;
+                }
+            }
+            Msg::Forget(id) => {
+                buffers.remove(&id);
             }
             Msg::SetTheme(t) => {
                 theme = t;
             }
             Msg::Parse(req) => {
-                let Some(h) = highlighter.as_mut() else {
+                let Some(state) = buffers.get_mut(&req.buffer_id) else {
                     continue;
                 };
+                let h = &mut state.highlighter;
                 let mut perf = PerfBreakdown::default();
                 if req.reset {
                     h.reset();
-                    last_parsed_dirty_gen = None;
+                    state.last_parsed_dirty_gen = None;
                 }
                 let needs_parse = !req.edits.is_empty()
                     || h.tree().is_none()
-                    || last_parsed_dirty_gen != Some(req.dirty_gen);
+                    || state.last_parsed_dirty_gen != Some(req.dirty_gen);
                 if needs_parse {
                     for e in &req.edits {
                         h.edit(e);
@@ -303,7 +354,7 @@ fn worker_loop(
                         continue;
                     }
                     perf.parse_us = t.elapsed().as_micros();
-                    last_parsed_dirty_gen = Some(req.dirty_gen);
+                    state.last_parsed_dirty_gen = Some(req.dirty_gen);
                 }
                 let bytes = req.source.as_bytes();
 
@@ -327,6 +378,7 @@ fn worker_loop(
 
                 let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
                 let _ = tx.send(RenderOutput {
+                    buffer_id: req.buffer_id,
                     spans: by_row,
                     signs,
                     key,
@@ -417,79 +469,92 @@ fn collect_diag_signs(
     signs
 }
 
-/// Per-`App` syntax highlighting layer. Caches `(source, row_starts)`
-/// on the main thread (so successive submits don't rebuild the source
-/// for unchanged buffers) and forwards work to a [`SyntaxWorker`].
+/// Per-buffer client-side state. One of these per open buffer in
+/// `SyntaxLayer.clients`. Mirrors the worker's `WorkerBufferState` but
+/// holds the source-cache + edit queue, which live on the main thread.
+#[derive(Default)]
+struct BufferClient {
+    /// `true` when a language is attached. Gates `submit_render`.
+    has_language: bool,
+    /// Active language config — used by `preview_render` to spin up a
+    /// one-shot `Highlighter`.
+    current_lang: Option<&'static LanguageConfig>,
+    /// Cached `(source, row_starts)` — rebuilt on `dirty_gen` change.
+    cache: Option<RenderCache>,
+    /// Edits queued since the last submit.
+    pending_edits: Vec<InputEdit>,
+    /// Set by `reset()` so the next submit asks the worker to drop its
+    /// retained tree for this buffer.
+    pending_reset: bool,
+    /// Last `dirty_gen` shipped to the worker for this buffer.
+    last_submitted_dirty_gen: Option<u64>,
+}
+
+/// Per-`App` syntax highlighting layer. Multiplexes per-buffer state
+/// (helix-style): each open buffer carries its own retained tree
+/// (worker-side) plus source-cache and edit queue (here). One worker
+/// thread serves all buffers.
 pub struct SyntaxLayer {
     registry: LanguageRegistry,
-    /// `Some` only when a language is attached. Used to gate
-    /// `submit_render` (no point sending a parse with no highlighter)
-    /// and to know whether to ship the next request as `reset: true`.
-    has_language: bool,
-    /// Active language config — kept on the main thread so
-    /// `preview_render` can spin up a one-shot Highlighter without
-    /// going through the worker.
-    current_lang: Option<&'static LanguageConfig>,
     /// Active theme — cloned to the worker on spawn / `set_theme`, kept
     /// on the layer so `preview_render` can resolve capture styles
     /// without crossing the worker boundary.
     theme: Arc<dyn Theme + Send + Sync>,
     worker: SyntaxWorker,
-    cache: Option<RenderCache>,
-    /// Edits queued since the last submit; flushed into the next
-    /// `ParseRequest`.
-    pending_edits: Vec<InputEdit>,
-    /// Set by `reset()` so the next submitted request asks the worker
-    /// to drop its retained tree.
-    pending_reset: bool,
-    /// Last `dirty_gen` we shipped to the worker. Skips duplicate
-    /// submits when the buffer hasn't changed and only the viewport
-    /// did — the worker's previous output is still right and the App
-    /// has its own cache for that case anyway.
-    last_submitted_dirty_gen: Option<u64>,
+    /// Per-buffer client state, keyed by `BufferId`.
+    clients: HashMap<BufferId, BufferClient>,
     /// Last perf breakdown received via `take_result`. Surfaced to the
     /// `:perf` overlay; updated on every successful drain.
     pub last_perf: PerfBreakdown,
 }
 
 impl SyntaxLayer {
-    /// Create a new layer with no language attached and the given theme.
+    /// Create a new layer with no buffers attached and the given theme.
     pub fn new(theme: Arc<dyn Theme + Send + Sync>) -> Self {
         let worker = SyntaxWorker::spawn(Arc::clone(&theme));
         Self {
             registry: LanguageRegistry::new(),
-            has_language: false,
-            current_lang: None,
             theme,
             worker,
-            cache: None,
-            pending_edits: Vec::new(),
-            pending_reset: false,
-            last_submitted_dirty_gen: None,
+            clients: HashMap::new(),
             last_perf: PerfBreakdown::default(),
         }
     }
 
+    /// Get or create the client state for `id`. Used by every per-
+    /// buffer method below.
+    fn client_mut(&mut self, id: BufferId) -> &mut BufferClient {
+        self.clients.entry(id).or_default()
+    }
+
     /// Detect the language for `path` and ship it to the worker.
     ///
-    /// Returns `true` when a language was found.
-    /// Returns `false` (and detaches the worker's highlighter) for
-    /// unknown extensions.
-    pub fn set_language_for_path(&mut self, path: &Path) -> bool {
+    /// Returns `true` when a language was found, `false` for unknown
+    /// extensions (no highlighter attached for this buffer).
+    pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> bool {
         match self.registry.detect_for_path(path) {
             Some(config) => {
-                self.worker.set_language(Some(config));
-                self.current_lang = Some(config);
-                self.has_language = true;
+                self.worker.set_language(id, Some(config));
+                let c = self.client_mut(id);
+                c.current_lang = Some(config);
+                c.has_language = true;
                 true
             }
             None => {
-                self.worker.set_language(None);
-                self.current_lang = None;
-                self.has_language = false;
+                self.worker.set_language(id, None);
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
                 false
             }
         }
+    }
+
+    /// Drop all state for a buffer. Call on close.
+    #[allow(dead_code)] // Phase B will fire this on `:bd` / picker-close.
+    pub fn forget(&mut self, id: BufferId) {
+        self.clients.remove(&id);
+        self.worker.forget(id);
     }
 
     /// Swap the active theme. Next render call will use the new theme.
@@ -522,11 +587,12 @@ impl SyntaxLayer {
     /// is empty.
     pub fn preview_render(
         &self,
+        id: BufferId,
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
     ) -> Option<RenderOutput> {
-        let cfg = self.current_lang?;
+        let cfg = self.clients.get(&id).and_then(|c| c.current_lang)?;
         let row_count = buffer.line_count() as usize;
         if row_count == 0 || viewport_height == 0 {
             return None;
@@ -569,6 +635,7 @@ impl SyntaxLayer {
         spans.extend(local_by_row);
 
         Some(RenderOutput {
+            buffer_id: id,
             spans,
             signs: Vec::new(),
             key: (buffer.dirty_gen(), viewport_top, viewport_height),
@@ -576,22 +643,23 @@ impl SyntaxLayer {
         })
     }
 
-    /// Ask the worker to drop the retained tree on the next parse so
-    /// the next submission is a cold parse.
-    pub fn reset(&mut self) {
-        self.pending_reset = true;
+    /// Ask the worker to drop this buffer's retained tree on the next
+    /// parse so the next submission is cold.
+    pub fn reset(&mut self, id: BufferId) {
+        self.client_mut(id).pending_reset = true;
     }
 
     /// Buffer a batch of engine `ContentEdit`s to be shipped to the
     /// worker on the next `submit_render`. Translates the engine's
     /// position pairs into `tree_sitter::InputEdit`s up front so the
     /// worker only does the cheap `tree.edit(...)` call.
-    pub fn apply_edits(&mut self, edits: &[hjkl_engine::ContentEdit]) {
-        if !self.has_language {
+    pub fn apply_edits(&mut self, id: BufferId, edits: &[hjkl_engine::ContentEdit]) {
+        let c = self.client_mut(id);
+        if !c.has_language {
             return;
         }
         for e in edits {
-            self.pending_edits.push(InputEdit {
+            c.pending_edits.push(InputEdit {
                 start_byte: e.start_byte,
                 old_end_byte: e.old_end_byte,
                 new_end_byte: e.new_end_byte,
@@ -621,12 +689,14 @@ impl SyntaxLayer {
     /// `0` means the cache was reused.
     pub fn submit_render(
         &mut self,
+        id: BufferId,
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
     ) -> Option<u128> {
         use std::time::Instant;
-        if !self.has_language {
+        let c = self.client_mut(id);
+        if !c.has_language {
             return None;
         }
 
@@ -638,8 +708,8 @@ impl SyntaxLayer {
         // Rebuild source + row_starts only when the buffer has changed.
         // Pure scroll frames skip the O(N) string join + newline scan
         // and reuse the previous Arc<String> directly.
-        let needs_rebuild = match &self.cache {
-            Some(c) => c.dirty_gen != dg || c.len_bytes != lb || c.line_count != lc,
+        let needs_rebuild = match &c.cache {
+            Some(rc) => rc.dirty_gen != dg || rc.len_bytes != lb || rc.line_count != lc,
             None => true,
         };
         let mut source_build_us = 0u128;
@@ -658,7 +728,7 @@ impl SyntaxLayer {
                     row_starts.push(i + 1);
                 }
             }
-            self.cache = Some(RenderCache {
+            c.cache = Some(RenderCache {
                 dirty_gen: dg,
                 len_bytes: lb,
                 line_count: lc,
@@ -667,7 +737,7 @@ impl SyntaxLayer {
             });
             source_build_us = t.elapsed().as_micros();
         }
-        let cache = self.cache.as_ref().expect("cache populated above");
+        let cache = c.cache.as_ref().expect("cache populated above");
 
         // Compute viewport byte range. byte_of_row clamps past-end to
         // len_bytes so the +1 row beyond the visible range is safe.
@@ -677,13 +747,16 @@ impl SyntaxLayer {
         let vp_end = buffer.byte_of_row(vp_end_row).min(bytes_len);
         let vp_end = vp_end.max(vp_start);
 
-        let edits = std::mem::take(&mut self.pending_edits);
-        let reset = std::mem::replace(&mut self.pending_reset, false);
-        self.last_submitted_dirty_gen = Some(dg);
+        let edits = std::mem::take(&mut c.pending_edits);
+        let reset = std::mem::replace(&mut c.pending_reset, false);
+        c.last_submitted_dirty_gen = Some(dg);
+        let source_arc = Arc::clone(&cache.source);
+        let row_starts_arc = Arc::clone(&cache.row_starts);
 
         self.worker.submit(ParseRequest {
-            source: Arc::clone(&cache.source),
-            row_starts: Arc::clone(&cache.row_starts),
+            buffer_id: id,
+            source: source_arc,
+            row_starts: row_starts_arc,
             edits,
             viewport_byte_range: vp_start..vp_end,
             viewport_top,
@@ -753,15 +826,19 @@ mod tests {
         top: usize,
         height: usize,
     ) -> Option<RenderOutput> {
-        layer.submit_render(buf, top, height)?;
+        layer.submit_render(TID, buf, top, height)?;
         layer.wait_for_result(Duration::from_secs(5))
     }
+
+    /// Test buffer id — multiplexing is exercised end-to-end by the
+    /// app, but each unit test uses a single buffer.
+    const TID: BufferId = 0;
 
     #[test]
     fn parse_and_render_small_rust_buffer() {
         let buf = Buffer::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
-        assert!(layer.set_language_for_path(Path::new("a.rs")));
+        assert!(layer.set_language_for_path(TID, Path::new("a.rs")));
         let out = submit_and_wait(&mut layer, &buf, 0, 10).expect("worker output");
         assert_eq!(out.spans.len(), buf.row_count());
         assert!(
@@ -775,8 +852,8 @@ mod tests {
         let buf = Buffer::from_str("hello world");
         let mut layer = default_layer();
         // Unknown extension — no language attached.
-        assert!(!layer.set_language_for_path(Path::new("a.unknownext")));
-        assert!(layer.submit_render(&buf, 0, 10).is_none());
+        assert!(!layer.set_language_for_path(TID, Path::new("a.unknownext")));
+        assert!(layer.submit_render(TID, &buf, 0, 10).is_none());
     }
 
     #[test]
@@ -790,8 +867,14 @@ mod tests {
             old_end_position: (0, 0),
             new_end_position: (0, 1),
         }];
-        layer.apply_edits(&edits);
-        assert!(layer.pending_edits.is_empty());
+        layer.apply_edits(TID, &edits);
+        assert!(
+            layer
+                .clients
+                .get(&TID)
+                .map(|c| c.pending_edits.is_empty())
+                .unwrap_or(true)
+        );
     }
 
     #[test]
@@ -803,7 +886,7 @@ mod tests {
         let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
 
         let mut layer = default_layer();
-        assert!(layer.set_language_for_path(Path::new("a.rs")));
+        assert!(layer.set_language_for_path(TID, Path::new("a.rs")));
         let out = submit_and_wait(&mut layer, &buf, 0, 30).unwrap();
 
         for (r, row) in out.spans.iter().take(30).enumerate() {
@@ -824,11 +907,11 @@ mod tests {
         let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
 
         let mut narrow = default_layer();
-        narrow.set_language_for_path(Path::new("a.rs"));
+        narrow.set_language_for_path(TID, Path::new("a.rs"));
         let narrow_out = submit_and_wait(&mut narrow, &buf, 0, 30).unwrap();
 
         let mut full = default_layer();
-        full.set_language_for_path(Path::new("a.rs"));
+        full.set_language_for_path(TID, Path::new("a.rs"));
         let full_out = submit_and_wait(&mut full, &buf, 0, 100).unwrap();
 
         for r in 0..30 {
@@ -843,7 +926,7 @@ mod tests {
     fn diagnostics_emit_sign_for_syntax_error() {
         let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
-        layer.set_language_for_path(Path::new("a.rs"));
+        layer.set_language_for_path(TID, Path::new("a.rs"));
         let out = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
         assert!(
             !out.signs.is_empty(),
@@ -860,7 +943,7 @@ mod tests {
     fn diagnostics_clean_source_no_signs() {
         let buf = Buffer::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
-        layer.set_language_for_path(Path::new("a.rs"));
+        layer.set_language_for_path(TID, Path::new("a.rs"));
         let out = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
         assert!(
             out.signs.is_empty(),
@@ -874,24 +957,27 @@ mod tests {
         // Pre: parse a buffer through the worker.
         let pre = Buffer::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
-        layer.set_language_for_path(Path::new("a.rs"));
+        layer.set_language_for_path(TID, Path::new("a.rs"));
         let _ = submit_and_wait(&mut layer, &pre, 0, 10).unwrap();
 
         // Apply an edit: insert "Y" at byte 3 ("fn ⎀main…").
-        layer.apply_edits(&[hjkl_engine::ContentEdit {
-            start_byte: 3,
-            old_end_byte: 3,
-            new_end_byte: 4,
-            start_position: (0, 3),
-            old_end_position: (0, 3),
-            new_end_position: (0, 4),
-        }]);
+        layer.apply_edits(
+            TID,
+            &[hjkl_engine::ContentEdit {
+                start_byte: 3,
+                old_end_byte: 3,
+                new_end_byte: 4,
+                start_position: (0, 3),
+                old_end_position: (0, 3),
+                new_end_position: (0, 4),
+            }],
+        );
         let post = Buffer::from_str("fn Ymain() { let x = 1; }");
         let inc = submit_and_wait(&mut layer, &post, 0, 10).unwrap();
 
         // Cold parse from a fresh layer.
         let mut cold_layer = default_layer();
-        cold_layer.set_language_for_path(Path::new("a.rs"));
+        cold_layer.set_language_for_path(TID, Path::new("a.rs"));
         let cold = submit_and_wait(&mut cold_layer, &post, 0, 10).unwrap();
 
         assert_eq!(inc.spans, cold.spans);
@@ -910,14 +996,25 @@ mod tests {
     fn reset_pending_request_is_consumed_once() {
         let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
-        layer.set_language_for_path(Path::new("a.rs"));
-        layer.reset();
-        assert!(layer.pending_reset);
+        layer.set_language_for_path(TID, Path::new("a.rs"));
+        layer.reset(TID);
+        assert!(layer.clients.get(&TID).unwrap().pending_reset);
         let _ = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
         assert!(
-            !layer.pending_reset,
+            !layer.clients.get(&TID).unwrap().pending_reset,
             "pending_reset should clear after submit"
         );
+    }
+
+    #[test]
+    fn forget_drops_buffer_state() {
+        let buf = Buffer::from_str("fn main() {}");
+        let mut layer = default_layer();
+        layer.set_language_for_path(TID, Path::new("a.rs"));
+        let _ = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
+        assert!(layer.clients.contains_key(&TID));
+        layer.forget(TID);
+        assert!(!layer.clients.contains_key(&TID));
     }
 }
 
@@ -941,10 +1038,11 @@ mod perf_smoke {
         let content = std::fs::read_to_string(path).unwrap();
         let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
         let mut layer = default_layer();
-        assert!(layer.set_language_for_path(path));
+        const TID: BufferId = 0;
+        assert!(layer.set_language_for_path(TID, path));
 
         let t0 = Instant::now();
-        layer.submit_render(&buf, 0, 50);
+        layer.submit_render(TID, &buf, 0, 50);
         let main_t = t0.elapsed();
         let out = layer.wait_for_result(Duration::from_secs(10));
         eprintln!(
@@ -960,7 +1058,7 @@ mod perf_smoke {
         let mut main_total = Duration::ZERO;
         for top in 0..100 {
             let s = Instant::now();
-            layer.submit_render(&buf, top * 100, 50);
+            layer.submit_render(TID, &buf, top * 100, 50);
             main_total += s.elapsed();
         }
         // Drain whatever the worker produced.
@@ -979,16 +1077,19 @@ mod perf_smoke {
         let post = Buffer::from_str(&new_lines.join("\n"));
 
         let edit_byte = (0..50_000).map(|r| lines[r].len() + 1).sum::<usize>();
-        layer.apply_edits(&[hjkl_engine::ContentEdit {
-            start_byte: edit_byte,
-            old_end_byte: edit_byte,
-            new_end_byte: edit_byte + 1,
-            start_position: (50_000, 0),
-            old_end_position: (50_000, 0),
-            new_end_position: (50_000, 1),
-        }]);
+        layer.apply_edits(
+            TID,
+            &[hjkl_engine::ContentEdit {
+                start_byte: edit_byte,
+                old_end_byte: edit_byte,
+                new_end_byte: edit_byte + 1,
+                start_position: (50_000, 0),
+                old_end_position: (50_000, 0),
+                new_end_position: (50_000, 1),
+            }],
+        );
         let t = Instant::now();
-        layer.submit_render(&post, 0, 50);
+        layer.submit_render(TID, &post, 0, 50);
         let main_us = t.elapsed();
         let out = layer.wait_for_result(Duration::from_secs(10));
         eprintln!(
