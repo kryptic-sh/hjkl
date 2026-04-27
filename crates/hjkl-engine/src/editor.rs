@@ -1734,7 +1734,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         let lnum_width = buf_row_count(&self.buffer).to_string().len() as u16 + 2;
         let dy = (pos_row - v.top_row) as u16;
-        let dx = (pos_col - v.top_col) as u16;
+        // Convert char column to visual column so cursor lands on the
+        // correct cell when the line contains tabs (which the renderer
+        // expands to TAB_WIDTH stops). Tab width must match the renderer.
+        let line = self.buffer.line(pos_row).unwrap_or("");
+        let visual_pos = visual_col_for_char(line, pos_col);
+        let visual_top = visual_col_for_char(line, v.top_col);
+        let dx = (visual_pos - visual_top) as u16;
         if dy >= area_height || dx + lnum_width >= area_width {
             return None;
         }
@@ -2733,6 +2739,31 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.emit_cursor_shape_if_changed();
         consumed
     }
+}
+
+/// Tab width used by `cursor_screen_pos` when converting char column to
+/// visual column. Must match the renderer's `TAB_WIDTH` in
+/// `hjkl-buffer::render::paint_row` so the cursor lands on the correct
+/// expanded cell.
+const TAB_WIDTH_FOR_CURSOR: usize = 4;
+
+/// Visual column of the character at `char_col` in `line`, treating `\t`
+/// as expansion to the next [`TAB_WIDTH_FOR_CURSOR`] stop and every other
+/// char as 1 cell wide. Wide-char support (CJK, emoji) is a separate
+/// concern — the cursor math elsewhere also assumes single-cell chars.
+fn visual_col_for_char(line: &str, char_col: usize) -> usize {
+    let mut visual = 0usize;
+    for (i, ch) in line.chars().enumerate() {
+        if i >= char_col {
+            break;
+        }
+        if ch == '\t' {
+            visual += TAB_WIDTH_FOR_CURSOR - (visual % TAB_WIDTH_FOR_CURSOR);
+        } else {
+            visual += 1;
+        }
+    }
+    visual
 }
 
 #[cfg(feature = "crossterm")]
