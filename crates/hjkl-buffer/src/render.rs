@@ -582,12 +582,21 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// First span containing `byte_offset` wins. Buffer guarantees
     /// non-overlapping sorted spans — vim.rs is responsible for that.
     fn resolve_span_style(&self, row_spans: &[crate::Span], byte_offset: usize) -> Option<Style> {
+        // Return the *narrowest* span containing this byte. Hosts that
+        // overlay narrower spans on top of broader ones (e.g. TODO marker
+        // inside a comment span) rely on the more specific span winning;
+        // first-match-wins would let the broader span block the overlay.
+        let mut best: Option<&crate::Span> = None;
         for span in row_spans {
             if byte_offset >= span.start_byte && byte_offset < span.end_byte {
-                return Some(self.resolver.resolve(span.style));
+                let len = span.end_byte - span.start_byte;
+                match best {
+                    Some(b) if (b.end_byte - b.start_byte) <= len => {}
+                    _ => best = Some(span),
+                }
             }
         }
-        None
+        best.map(|s| self.resolver.resolve(s.style))
     }
 }
 
