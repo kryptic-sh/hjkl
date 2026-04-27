@@ -52,33 +52,43 @@ impl Form {
         }
     }
 
+    /// Set an optional title row rendered above the fields.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
+    /// Append a field to the form. Order matters — first field is
+    /// focused by default and `j`/`k` walks the list in order.
     pub fn with_field(mut self, field: Field) -> Self {
         self.fields.push(field);
         self
     }
 
+    /// Register the submit closure. Consumed via `Option::take` on
+    /// the first successful submit.
     pub fn with_submit(mut self, submit: SubmitFn) -> Self {
         self.submit = Some(submit);
         self
     }
 
+    /// Index of the currently-focused field.
     pub fn focused(&self) -> usize {
         self.focused
     }
 
+    /// Borrow the focused field, if any.
     pub fn focused_field(&self) -> Option<&Field> {
         self.fields.get(self.focused)
     }
 
+    /// Mutably borrow the focused field, if any.
     pub fn focused_field_mut(&mut self) -> Option<&mut Field> {
         self.fields.get_mut(self.focused)
     }
 
+    /// Programmatically set the focus index. Out-of-range indices are
+    /// ignored.
     pub fn set_focus(&mut self, index: usize) {
         if index < self.fields.len() {
             self.focused = index;

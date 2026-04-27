@@ -49,4 +49,47 @@ mod smoke_tests {
         assert_eq!(form.focused(), 0);
         assert_eq!(form.mode, FormMode::Normal);
     }
+
+    #[test]
+    fn dirty_gen_advances_on_field_edit() {
+        use hjkl_engine::{Input, Key};
+        let mut form = Form::new()
+            .with_field(Field::SingleLineText(TextFieldEditor::new(
+                FieldMeta::new("Name"),
+                1,
+            )))
+            .with_field(Field::Submit(SubmitField::new(FieldMeta::new("Submit"))));
+        let before = form.dirty_gen();
+        form.handle_input(Input {
+            key: Key::Char('i'),
+            ..Input::default()
+        });
+        form.handle_input(Input {
+            key: Key::Char('x'),
+            ..Input::default()
+        });
+        let after = form.dirty_gen();
+        assert!(after != before, "dirty_gen should advance after edit");
+    }
+
+    #[test]
+    fn dirty_gen_advances_on_focus_change() {
+        use hjkl_engine::{Input, Key};
+        let mut form = Form::new()
+            .with_field(Field::SingleLineText(TextFieldEditor::new(
+                FieldMeta::new("A"),
+                1,
+            )))
+            .with_field(Field::SingleLineText(TextFieldEditor::new(
+                FieldMeta::new("B"),
+                1,
+            )));
+        let before = form.dirty_gen();
+        form.handle_input(Input {
+            key: Key::Char('j'),
+            ..Input::default()
+        });
+        let after = form.dirty_gen();
+        assert!(after != before);
+    }
 }
