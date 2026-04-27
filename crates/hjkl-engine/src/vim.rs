@@ -3653,6 +3653,7 @@ fn execute_line_op<H: crate::types::Host>(
             buf_set_cursor_rc(&mut ed.buffer, target_row, 0);
             ed.push_buffer_cursor_to_textarea();
             move_first_non_whitespace(ed);
+            ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
         }
         Operator::Change => {
@@ -3704,6 +3705,7 @@ fn execute_line_op<H: crate::types::Host>(
             } else {
                 outdent_rows(ed, row, end_row, 1);
             }
+            ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
         }
         // No doubled form — `zfzf` is two consecutive `zf` chords.
@@ -3712,6 +3714,8 @@ fn execute_line_op<H: crate::types::Host>(
             // `gqq` / `Ngqq` — reflow `count` rows starting at the cursor.
             ed.push_undo();
             reflow_rows(ed, row, end_row);
+            move_first_non_whitespace(ed);
+            ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
         }
     }
@@ -5620,6 +5624,50 @@ mod tests {
         run_keys(&mut e, "3dd");
         assert_eq!(e.buffer().lines(), &["a".to_string(), "e".to_string()]);
         assert_eq!(e.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn dd_then_j_uses_first_non_blank_not_sticky_col() {
+        // Buffer: 3 lines with predictable widths.
+        // Line 0: "    line one"   (12 chars, first-non-blank at col 4)
+        // Line 1: "    line two"   (12 chars, first-non-blank at col 4)
+        // Line 2: "  xy"           (4 chars, indices 0-3; last char at col 3)
+        //
+        // Cursor starts at col 8 on line 0.  After `dd`:
+        //   - line 0 is deleted; cursor lands on first-non-blank of new line 0
+        //     ("    line two") → col 4.
+        //   - sticky_col must be updated to 4.
+        //
+        // Then `j` moves to "  xy" (4 chars, max col = 3).
+        //   - With the fix   : sticky_col=4 → clamps to col 3 (last char).
+        //   - Without the fix: sticky_col=8 → clamps to col 3 (same clamp).
+        //
+        // To make the two cases distinguishable we choose line 2 with
+        // exactly 6 chars ("  xyz!") so max col = 5:
+        //   - fix   : sticky_col=4 → lands at col 4.
+        //   - no fix: sticky_col=8 → clamps to col 5.
+        let mut e = editor_with("    line one\n    line two\n  xyz!");
+        // Move to col 8 on line 0.
+        e.jump_cursor(0, 8);
+        assert_eq!(e.cursor(), (0, 8));
+        // `dd` deletes line 0; cursor should land on first-non-blank of
+        // the new line 0 ("    line two" → col 4).
+        run_keys(&mut e, "dd");
+        assert_eq!(
+            e.cursor(),
+            (0, 4),
+            "dd must place cursor on first-non-blank"
+        );
+        // `j` moves to "  xyz!" (6 chars, cols 0-5).
+        // Bug: stale sticky_col=8 clamps to col 5 (last char).
+        // Fixed: sticky_col=4 → lands at col 4.
+        run_keys(&mut e, "j");
+        let (row, col) = e.cursor();
+        assert_eq!(row, 1);
+        assert_eq!(
+            col, 4,
+            "after dd, j should use the column dd established (4), not pre-dd sticky_col (8)"
+        );
     }
 
     #[test]
