@@ -8,7 +8,7 @@ use crossterm::{
 };
 use hjkl_buffer::Buffer;
 use hjkl_editor::runtime::ex::{self, ExEffect};
-use hjkl_engine::{BufferEdit, Host, Input as EngineInput, Key as EngineKey};
+use hjkl_engine::{BufferEdit, Host, Input as EngineInput, Key as EngineKey, Query};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
 use hjkl_form::TextFieldEditor;
 use hjkl_tree_sitter::DotFallbackTheme;
@@ -17,6 +17,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Stdout;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::host::TuiHost;
 use crate::render;
@@ -105,6 +106,10 @@ pub struct App {
     /// `dirty_gen` of the buffer when `git_signs` was last rebuilt.
     /// `None` = stale, force recompute on next render.
     last_git_dirty_gen: Option<u64>,
+    /// Wall-clock time of the last successful git_signs refresh — used
+    /// to throttle the libgit2 diff to ~4 Hz during active typing on
+    /// large files.
+    last_git_refresh_at: Instant,
     /// `true` when the current file is in a git repo but not in HEAD —
     /// drives the `[Untracked]` status-line tag. Refreshed alongside
     /// `git_signs`.
@@ -221,6 +226,7 @@ impl App {
             diag_signs: initial_signs,
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
             is_untracked: false,
             saved_hash: 0,
             saved_len: 0,
@@ -251,8 +257,32 @@ impl App {
 
     /// Recompute git diff signs from the current buffer content (vs
     /// the HEAD blob) when `dirty_gen` has advanced since the last
-    /// rebuild. Cached on dirty_gen so unchanged frames are free.
+    /// rebuild.
+    ///
+    /// libgit2's `Patch::from_blob_and_buffer` is O(file size) per
+    /// call — there's no viewport-scoped diff API. Two cheats keep
+    /// keystroke latency reasonable on big files:
+    ///
+    /// 1. **Throttle:** at most one refresh per 250 ms. Rapid edits
+    ///    show stale-but-near signs until typing pauses; the next
+    ///    render after the throttle window catches up.
+    /// 2. **Size cap:** for buffers ≥ 50k lines we only refresh on
+    ///    save/load (force == true) and skip during in-buffer edits.
+    ///    The status-line tags ([Untracked], [New File]) still update.
+    ///
+    /// `force` bypasses both gates — used by `do_save` / `do_edit`.
     fn refresh_git_signs(&mut self) {
+        self.refresh_git_signs_inner(false);
+    }
+
+    fn refresh_git_signs_force(&mut self) {
+        self.refresh_git_signs_inner(true);
+    }
+
+    fn refresh_git_signs_inner(&mut self, force: bool) {
+        const HUGE_FILE_LINES: u32 = 50_000;
+        const REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(250);
+
         let path = match self.filename.as_deref() {
             Some(p) => p.to_path_buf(),
             None => {
@@ -262,12 +292,22 @@ impl App {
             }
         };
         let dg = self.editor.buffer().dirty_gen();
-        if self.last_git_dirty_gen == Some(dg) {
+        if !force && self.last_git_dirty_gen == Some(dg) {
             return;
         }
-        // Canonical bytes: lines joined with '\n' + trailing '\n' for
-        // non-empty buffers. Mirrors what `:w` would write to disk so
-        // the diff matches `git diff` post-save.
+        // Size cap — skip per-edit refresh on huge files. Save/load
+        // (force == true) still recomputes.
+        if !force && self.editor.buffer().line_count() >= HUGE_FILE_LINES {
+            return;
+        }
+        // Throttle — drop refreshes that would fire faster than ~4 Hz.
+        // Skipped frames don't update last_git_dirty_gen, so the next
+        // render after the window will retry.
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_git_refresh_at) < REFRESH_MIN_INTERVAL {
+            return;
+        }
+
         let lines = self.editor.buffer().lines();
         let mut bytes = lines.join("\n").into_bytes();
         if !bytes.is_empty() {
@@ -276,6 +316,7 @@ impl App {
         self.git_signs = crate::git::signs_for_bytes(&path, &bytes);
         self.is_untracked = crate::git::is_untracked(&path);
         self.last_git_dirty_gen = Some(dg);
+        self.last_git_refresh_at = now;
     }
 
     /// Main event loop. Draws every frame, routes key events through
@@ -774,7 +815,7 @@ impl App {
                         self.filename = Some(p);
                         self.is_new_file = false;
                         self.snapshot_saved();
-                        self.refresh_git_signs();
+                        self.refresh_git_signs_force();
                     }
                     Err(e) => {
                         self.status_message = Some(format!("E: {}: {e}", p.display()));
@@ -838,7 +879,7 @@ impl App {
         self.syntax.reset();
         self.recompute_and_install();
         self.snapshot_saved();
-        self.refresh_git_signs();
+        self.refresh_git_signs_force();
         self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
     }
 
