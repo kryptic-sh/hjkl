@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::host::TuiHost;
 use crate::render;
-use crate::syntax::{self, SYNTAX_WINDOW_MARGIN, SyntaxLayer};
+use crate::syntax::{self, SyntaxLayer};
 
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
@@ -176,11 +176,9 @@ pub struct App {
     /// or successful `:w`.
     pub is_new_file: bool,
     /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
-    /// and active theme. Recomputed on every buffer-mutating event.
+    /// and active theme. Recomputed on every render via the engine's
+    /// ContentEdit + viewport-scoped query path.
     syntax: SyntaxLayer,
-    /// `top_row` of the viewport at the time of the last syntax recompute.
-    /// `None` forces a recompute on the first frame regardless of dirty state.
-    last_highlight_top: Option<usize>,
 }
 
 impl App {
@@ -258,9 +256,15 @@ impl App {
         }
         let initial_vp_top = editor.host().viewport().top_row;
         let initial_vp_height = editor.host().viewport().height as usize;
-        if let Some(spans) = syntax.recompute(editor.buffer(), initial_vp_top, initial_vp_height) {
+        if let Some(spans) =
+            syntax.parse_and_render(editor.buffer(), initial_vp_top, initial_vp_height)
+        {
             editor.install_ratatui_syntax_spans(spans);
         }
+        // Drain any ContentEdit / reset state seeded during construction
+        // so the first event-loop iteration starts clean.
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
 
         Ok(Self {
             editor,
@@ -272,7 +276,6 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             is_new_file,
             syntax,
-            last_highlight_top: Some(initial_vp_top),
         })
     }
 
@@ -389,22 +392,23 @@ impl App {
                     // ── Normal editor key handling ───────────────────────────
                     self.editor.handle_key(key);
 
-                    // Recompute when content changed or when the viewport has
-                    // scrolled past half the cache margin (approaching the edge
-                    // of the previously highlighted window).
-                    let did_dirty = self.editor.take_dirty();
-                    if did_dirty {
+                    // Drain dirty for the persistent UI flag.
+                    if self.editor.take_dirty() {
                         self.dirty = true;
                         self.is_new_file = false;
                     }
-                    let vp_top = self.editor.host().viewport().top_row;
-                    let scrolled = self
-                        .last_highlight_top
-                        .is_none_or(|t| vp_top.abs_diff(t) >= SYNTAX_WINDOW_MARGIN / 2);
-                    if did_dirty || scrolled {
-                        self.recompute_and_install();
-                        self.last_highlight_top = Some(vp_top);
+                    // Fan engine ContentEdits into the syntax tree (or
+                    // reset the tree entirely on bulk replace) and
+                    // recompute viewport-scoped spans every frame —
+                    // the new query path is cheap.
+                    if self.editor.take_content_reset() {
+                        self.syntax.reset();
                     }
+                    let edits = self.editor.take_content_edits();
+                    if !edits.is_empty() {
+                        self.syntax.apply_edits(&edits);
+                    }
+                    self.recompute_and_install();
                 }
                 Event::Resize(w, h) => {
                     let vp = self.editor.host_mut().viewport_mut();
@@ -479,9 +483,18 @@ impl App {
                 }
             }
             ExEffect::Substituted { count } => {
-                // Engine applied the substitution in-place; propagate dirty.
+                // Engine applied the substitution in-place; propagate dirty
+                // and fan ContentEdits into the syntax tree before the next
+                // recompute so the retained tree stays in sync.
                 if self.editor.take_dirty() {
                     self.dirty = true;
+                    if self.editor.take_content_reset() {
+                        self.syntax.reset();
+                    }
+                    let edits = self.editor.take_content_edits();
+                    if !edits.is_empty() {
+                        self.syntax.apply_edits(&edits);
+                    }
                     self.recompute_and_install();
                 }
                 self.status_message = Some(format!("{count} substitution(s)"));
@@ -548,15 +561,19 @@ impl App {
         }
     }
 
-    /// Recompute syntax spans for the current viewport window and install them.
+    /// Recompute syntax spans for the current viewport and install them.
     ///
-    /// No-op when no language is attached (highlighter is `None`).
+    /// No-op when no language is attached (highlighter is `None`) or
+    /// when the incremental parse timed out (caller retries next frame).
     pub fn recompute_and_install(&mut self) {
         let (top, height) = {
             let vp = self.editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
-        if let Some(spans) = self.syntax.recompute(self.editor.buffer(), top, height) {
+        if let Some(spans) = self
+            .syntax
+            .parse_and_render(self.editor.buffer(), top, height)
+        {
             self.editor.install_ratatui_syntax_spans(spans);
         }
     }

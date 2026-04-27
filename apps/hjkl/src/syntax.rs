@@ -2,18 +2,15 @@
 //!
 //! Owns a `LanguageRegistry`, an optional `Highlighter`, and a `Theme`.
 //! Call [`SyntaxLayer::set_language_for_path`] after opening a file, then
-//! [`SyntaxLayer::recompute`] after every buffer mutation to get per-row
-//! styled spans ready for [`hjkl_engine::Editor::install_ratatui_syntax_spans`].
+//! [`SyntaxLayer::apply_edits`] for each frame's queued
+//! [`hjkl_engine::ContentEdit`] batch and
+//! [`SyntaxLayer::parse_and_render`] to produce per-row styled spans
+//! ready for [`hjkl_engine::Editor::install_ratatui_syntax_spans`].
 
 use std::path::Path;
 
 use hjkl_engine::Query;
-use hjkl_tree_sitter::{DotFallbackTheme, Highlighter, LanguageRegistry, Theme};
-
-/// Rows above and below the viewport that are parsed in each window.
-/// Exported so `app.rs` can use `SYNTAX_WINDOW_MARGIN / 2` as the
-/// scroll-trigger threshold.
-pub const SYNTAX_WINDOW_MARGIN: usize = 200;
+use hjkl_tree_sitter::{DotFallbackTheme, Highlighter, InputEdit, LanguageRegistry, Point, Theme};
 
 /// Per-`App` syntax highlighting layer.
 pub struct SyntaxLayer {
@@ -55,25 +52,54 @@ impl SyntaxLayer {
         }
     }
 
-    /// Swap the active theme. Next `recompute` call will use the new theme.
+    /// Swap the active theme. Next render call will use the new theme.
     pub fn set_theme(&mut self, theme: Box<dyn Theme>) {
         self.theme = theme;
     }
 
-    /// Run the highlighter over a viewport window of `buffer` and return
-    /// per-row styled spans sized to the **full** row count.
+    /// Drop the retained tree on the underlying highlighter (if any) so
+    /// the next `parse_and_render` does a cold parse.
+    pub fn reset(&mut self) {
+        if let Some(h) = self.highlighter.as_mut() {
+            h.reset();
+        }
+    }
+
+    /// Fan a batch of engine `ContentEdit`s into the retained tree via
+    /// `Highlighter::edit`. No-op when no language is attached.
+    pub fn apply_edits(&mut self, edits: &[hjkl_engine::ContentEdit]) {
+        let Some(h) = self.highlighter.as_mut() else {
+            return;
+        };
+        for e in edits {
+            let ie = InputEdit {
+                start_byte: e.start_byte,
+                old_end_byte: e.old_end_byte,
+                new_end_byte: e.new_end_byte,
+                start_position: Point {
+                    row: e.start_position.0 as usize,
+                    column: e.start_position.1 as usize,
+                },
+                old_end_position: Point {
+                    row: e.old_end_position.0 as usize,
+                    column: e.old_end_position.1 as usize,
+                },
+                new_end_position: Point {
+                    row: e.new_end_position.0 as usize,
+                    column: e.new_end_position.1 as usize,
+                },
+            };
+            h.edit(&ie);
+        }
+    }
+
+    /// Reparse the buffer (incremental when a tree is retained, cold
+    /// otherwise) and run the highlights query scoped to the viewport
+    /// byte range. Returns per-row styled spans sized to the **full**
+    /// row count so stale rows clear correctly when content shrinks.
     ///
-    /// Only rows `[window_start, window_end)` are parsed, where:
-    /// - `window_start = viewport_top.saturating_sub(SYNTAX_WINDOW_MARGIN)`
-    /// - `window_end   = (viewport_top + viewport_height + SYNTAX_WINDOW_MARGIN).min(row_count)`
-    ///
-    /// Rows outside the window get `Vec::new()`. Rows inside land at their
-    /// absolute row indices so `install_ratatui_syntax_spans` clears stale
-    /// spans everywhere.
-    ///
-    /// Returns `None` when no language is attached (caller skips install).
-    /// Span format: `(byte_start_in_row, byte_end_in_row, ratatui::style::Style)`.
-    pub fn recompute(
+    /// Returns `None` when no language is attached.
+    pub fn parse_and_render(
         &mut self,
         buffer: &impl Query,
         viewport_top: usize,
@@ -83,41 +109,49 @@ impl SyntaxLayer {
 
         let row_count = buffer.line_count() as usize;
 
-        // Compute the window we actually parse.
-        let window_start = viewport_top.saturating_sub(SYNTAX_WINDOW_MARGIN);
-        let window_end = (viewport_top + viewport_height + SYNTAX_WINDOW_MARGIN).min(row_count);
+        // Build full source: lines joined by '\n' (no trailing newline) —
+        // matches the engine's canonical byte rendering used by
+        // `Query::byte_of_row` and the engine's `ContentEdit` byte math.
+        let mut source = String::with_capacity(buffer.len_bytes());
+        for r in 0..row_count {
+            if r > 0 {
+                source.push('\n');
+            }
+            source.push_str(buffer.line(r as u32));
+        }
+        let bytes = source.as_bytes();
 
-        if window_start >= window_end {
-            // Empty buffer or degenerate window — return empty table so the
-            // engine can clear any stale spans.
-            return Some(vec![Vec::new(); row_count]);
+        // Cold parse on first frame (no retained tree) so we always
+        // succeed regardless of file size; subsequent frames go through
+        // the timed incremental path.
+        if highlighter.tree().is_none() {
+            highlighter.parse_initial(bytes);
+        } else if !highlighter.parse_incremental(bytes) {
+            // Timed-out parse: skip this frame's render. Spans table from
+            // the previous render is still installed on the editor; next
+            // frame will retry. Return None so the caller doesn't reinstall
+            // an empty / stale table.
+            return None;
         }
 
-        // Build a byte slice covering only [window_start, window_end).
-        let slice_row_count = window_end - window_start;
-        let source: Vec<u8> = {
-            let mut s = String::new();
-            for i in 0..slice_row_count {
-                if i > 0 {
-                    s.push('\n');
-                }
-                s.push_str(buffer.line((window_start + i) as u32));
-            }
-            s.push('\n');
-            s.into_bytes()
-        };
+        // Compute viewport byte range. byte_of_row clamps past-end to
+        // len_bytes so the +1 row beyond the visible range is safe.
+        let vp_start = buffer.byte_of_row(viewport_top);
+        let vp_end_row = viewport_top + viewport_height + 1;
+        let vp_end = buffer.byte_of_row(vp_end_row).min(bytes.len());
+        let vp_end = vp_end.max(vp_start);
 
-        let flat_spans = highlighter.highlight(&source);
+        let flat_spans = highlighter.highlight_range(bytes, vp_start..vp_end);
 
-        // Build a newline-offset table relative to the slice for O(1) row/col lookup.
+        // Build a newline-offset table over the full source for O(1)
+        // row/col lookup of each span's local bytes.
         let mut row_starts: Vec<usize> = vec![0];
-        for (i, &b) in source.iter().enumerate() {
+        for (i, &b) in bytes.iter().enumerate() {
             if b == b'\n' {
                 row_starts.push(i + 1);
             }
         }
 
-        // Allocate the full-buffer table; rows outside the window stay empty.
         let mut by_row: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
             vec![Vec::new(); row_count];
 
@@ -130,19 +164,17 @@ impl SyntaxLayer {
             let span_start = span.byte_range.start;
             let span_end = span.byte_range.end;
 
-            // Find the first slice-local row that contains span_start.
-            let start_slice_row = row_starts
+            let start_row = row_starts
                 .partition_point(|&rs| rs <= span_start)
                 .saturating_sub(1);
 
-            // Iterate over slice rows covered by this span.
-            let mut slice_row = start_slice_row;
-            while slice_row < slice_row_count {
-                let row_byte_start = row_starts[slice_row];
+            let mut row = start_row;
+            while row < row_count {
+                let row_byte_start = row_starts[row];
                 let row_byte_end = row_starts
-                    .get(slice_row + 1)
-                    .map(|&s| s.saturating_sub(1)) // exclude the '\n'
-                    .unwrap_or(source.len());
+                    .get(row + 1)
+                    .map(|&s| s.saturating_sub(1))
+                    .unwrap_or(bytes.len());
 
                 if row_byte_start >= span_end {
                     break;
@@ -152,12 +184,10 @@ impl SyntaxLayer {
                 let local_end = span_end.min(row_byte_end) - row_byte_start;
 
                 if local_end > local_start {
-                    // Map back to the absolute row in the full buffer.
-                    let abs_row = window_start + slice_row;
-                    by_row[abs_row].push((local_start, local_end, style));
+                    by_row[row].push((local_start, local_end, style));
                 }
 
-                slice_row += 1;
+                row += 1;
             }
         }
 
@@ -168,4 +198,112 @@ impl SyntaxLayer {
 /// Build the default dark `SyntaxLayer`.
 pub fn default_layer() -> SyntaxLayer {
     SyntaxLayer::new(Box::new(DotFallbackTheme::dark()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hjkl_buffer::Buffer;
+    use std::path::Path;
+
+    #[test]
+    fn parse_and_render_small_rust_buffer() {
+        let buf = Buffer::from_str("fn main() { let x = 1; }\n");
+        let mut layer = default_layer();
+        assert!(layer.set_language_for_path(Path::new("a.rs")));
+        let by_row = layer.parse_and_render(&buf, 0, 10).unwrap();
+        assert_eq!(by_row.len(), buf.row_count());
+        assert!(
+            by_row.iter().any(|r| !r.is_empty()),
+            "expected at least one styled span"
+        );
+    }
+
+    #[test]
+    fn parse_and_render_returns_none_without_language() {
+        let buf = Buffer::from_str("hello world");
+        let mut layer = default_layer();
+        // Unknown extension — no language attached.
+        assert!(!layer.set_language_for_path(Path::new("a.unknownext")));
+        assert!(layer.parse_and_render(&buf, 0, 10).is_none());
+    }
+
+    #[test]
+    fn apply_edits_with_no_language_is_noop() {
+        let mut layer = default_layer();
+        let edits = vec![hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (0, 1),
+        }];
+        layer.apply_edits(&edits);
+    }
+
+    #[test]
+    fn incremental_path_matches_cold_for_small_edit() {
+        // Simulate the app loop: parse, edit, parse_and_render, compare
+        // to a fresh cold parse of the post-edit buffer.
+        let pre = Buffer::from_str("fn main() { let x = 1; }");
+        let mut layer = default_layer();
+        layer.set_language_for_path(Path::new("a.rs"));
+        let _ = layer.parse_and_render(&pre, 0, 10).unwrap();
+
+        // Apply an edit: insert "Y" at byte 3 ("fn ⎀main…").
+        layer.apply_edits(&[hjkl_engine::ContentEdit {
+            start_byte: 3,
+            old_end_byte: 3,
+            new_end_byte: 4,
+            start_position: (0, 3),
+            old_end_position: (0, 3),
+            new_end_position: (0, 4),
+        }]);
+        let post = Buffer::from_str("fn Ymain() { let x = 1; }");
+        let inc = layer.parse_and_render(&post, 0, 10).unwrap();
+
+        let mut cold_layer = default_layer();
+        cold_layer.set_language_for_path(Path::new("a.rs"));
+        let cold = cold_layer.parse_and_render(&post, 0, 10).unwrap();
+
+        assert_eq!(inc, cold);
+    }
+}
+
+#[cfg(test)]
+mod perf_smoke {
+    use super::*;
+    use hjkl_buffer::Buffer;
+    use std::path::Path;
+    use std::time::Instant;
+
+    /// Smoke perf: open /tmp/big.rs (100k stub fns, ~1.3MB), parse +
+    /// scroll-render 100 times. Skipped when the file isn't present.
+    /// Not a regression gate — eyeballs only via `--nocapture`.
+    #[test]
+    fn big_rs_smoke() {
+        let path = Path::new("/tmp/big.rs");
+        if !path.exists() {
+            eprintln!("/tmp/big.rs not present; skipping perf smoke");
+            return;
+        }
+        let content = std::fs::read_to_string(path).unwrap();
+        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
+        let mut layer = default_layer();
+        assert!(layer.set_language_for_path(path));
+
+        let t0 = Instant::now();
+        let _ = layer.parse_and_render(&buf, 0, 50);
+        eprintln!("first parse_and_render: {:?}", t0.elapsed());
+
+        let t0 = Instant::now();
+        for top in 0..100 {
+            let _ = layer.parse_and_render(&buf, top * 100, 50);
+        }
+        eprintln!(
+            "100 viewport scrolls (incremental, no edits): {:?}",
+            t0.elapsed()
+        );
+    }
 }
