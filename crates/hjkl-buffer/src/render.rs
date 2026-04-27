@@ -550,18 +550,21 @@ impl<R: StyleResolver> BufferView<'_, R> {
             if let Some(span_style) = self.resolve_span_style(row_spans, byte_offset) {
                 style = style.patch(span_style);
             }
-            if let Some((lo, hi)) = sel_range
-                && col_idx >= lo
-                && col_idx <= hi
-            {
-                style = style.patch(self.selection_bg);
-            }
+            // Search bg first, then selection bg — so when a visual
+            // selection covers a search match, the selection wins
+            // (last patch overwrites the bg field).
             if self.search_bg != Style::default()
                 && search_ranges
                     .iter()
                     .any(|&(s, e)| col_idx >= s && col_idx < e)
             {
                 style = style.patch(self.search_bg);
+            }
+            if let Some((lo, hi)) = sel_range
+                && col_idx >= lo
+                && col_idx <= hi
+            {
+                style = style.patch(self.selection_bg);
             }
             if is_cursor_row && col_idx == cursor_col {
                 style = style.patch(self.cursor_style);
