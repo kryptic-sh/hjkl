@@ -193,6 +193,21 @@ impl SyntaxWorker {
         }
         latest
     }
+
+    /// Wait up to `timeout` for the next result, then drain anything
+    /// else that arrived after it and return the latest. Use this after
+    /// submitting a viewport-only request to avoid a blink between the
+    /// jump and the worker's response — the request is cheap enough
+    /// (~1 ms with the parse-skip fast path) that a few-ms block here
+    /// keeps highlights coherent across `gg` / `G` jumps without
+    /// noticeably stalling fast typing on real edits.
+    pub fn wait_for_latest(&self, timeout: std::time::Duration) -> Option<RenderOutput> {
+        let mut latest = self.rx.recv_timeout(timeout).ok();
+        while let Ok(out) = self.rx.try_recv() {
+            latest = Some(out);
+        }
+        latest
+    }
 }
 
 impl Drop for SyntaxWorker {
@@ -595,6 +610,17 @@ impl SyntaxLayer {
     /// install. Updates `last_perf` as a side effect.
     pub fn take_result(&mut self) -> Option<RenderOutput> {
         let out = self.worker.try_recv_latest()?;
+        self.last_perf = out.perf;
+        Some(out)
+    }
+
+    /// Block up to `timeout` for the worker's next result, then drain
+    /// any others that arrived after it. Useful right after submitting
+    /// a viewport-only request: the worker's parse-skip fast path
+    /// returns in ~1ms, so a few-ms wait keeps `gg` / `G` jumps from
+    /// flashing un-highlighted rows.
+    pub fn wait_result(&mut self, timeout: std::time::Duration) -> Option<RenderOutput> {
+        let out = self.worker.wait_for_latest(timeout)?;
         self.last_perf = out.perf;
         Some(out)
     }

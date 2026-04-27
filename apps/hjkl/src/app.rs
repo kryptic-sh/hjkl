@@ -17,6 +17,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Stdout;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::host::TuiHost;
@@ -110,12 +111,32 @@ pub struct App {
     /// to throttle the libgit2 diff to ~4 Hz during active typing on
     /// large files.
     last_git_refresh_at: Instant,
+    /// Wall-clock time of the last syntax recompute+install. Used to
+    /// throttle parse to ~10 Hz during active typing — tree-sitter
+    /// incremental parse on a 1.3MB Rust file still costs ~30ms per
+    /// edit, so per-keystroke reparses pile up. Edits accumulated via
+    /// `apply_edits` (tree.edit) coalesce naturally into the next
+    /// recompute.
+    last_recompute_at: Instant,
     /// `(dirty_gen, vp_top, vp_height)` snapshot of the last call to
     /// `recompute_and_install`. When the next call has identical
     /// inputs, the syntax span recompute + install is skipped — the
     /// editor's `buffer_spans` table is still the right answer.
     /// This makes pure-scroll-into-cache and idle-redraw frames free.
     last_recompute_key: Option<(u64, usize, usize)>,
+    /// Toggled by `:perf`. When true, render shows last-frame timings
+    /// for the heavy paths in the status line for diagnosis.
+    pub perf_overlay: bool,
+    pub last_recompute_us: u128,
+    pub last_install_us: u128,
+    pub last_signature_us: u128,
+    pub last_git_us: u128,
+    pub last_perf: crate::syntax::PerfBreakdown,
+    /// Counters surfaced in `:perf` so the user can verify the cache
+    /// hit/miss/throttle ratios are sane. Reset on every `:perf` toggle.
+    pub recompute_hits: u64,
+    pub recompute_throttled: u64,
+    pub recompute_runs: u64,
     /// `true` when the current file is in a git repo but not in HEAD —
     /// drives the `[Untracked]` status-line tag. Refreshed alongside
     /// `git_signs`.
@@ -205,13 +226,27 @@ impl App {
         }
         let initial_vp_top = editor.host().viewport().top_row;
         let initial_vp_height = editor.host().viewport().height as usize;
+        // Submit an initial parse on the worker. The first frame may
+        // render with no highlights for a few ms while the worker warms
+        // up — acceptable, and far better than blocking startup on a
+        // 100ms cold parse for a 1.3MB Rust file.
         let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
-        if let Some(out) =
-            syntax.parse_and_render(editor.buffer(), initial_vp_top, initial_vp_height)
-        {
-            editor.install_ratatui_syntax_spans(out.spans);
-            initial_signs = out.signs;
-        }
+        let initial_dg = editor.buffer().dirty_gen();
+        syntax.submit_render(editor.buffer(), initial_vp_top, initial_vp_height);
+        let initial_key: Option<(u64, usize, usize)> =
+            if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150)) {
+                let key = out.key;
+                editor.install_ratatui_syntax_spans(out.spans);
+                initial_signs = out.signs;
+                Some(key)
+            } else {
+                // Worker didn't finish in the budget — first frame paints
+                // without highlights, the next event-loop iteration's
+                // recompute_and_install drains the result. Snapshot the
+                // key we submitted so the cache hit logic still works on
+                // the next call with the same (dg, vp_top, vp_height).
+                Some((initial_dg, initial_vp_top, initial_vp_height))
+            };
         // Drain any ContentEdit / reset state seeded during construction
         // so the first event-loop iteration starts clean.
         let _ = editor.take_content_edits();
@@ -233,7 +268,17 @@ impl App {
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
             last_git_refresh_at: Instant::now(),
-            last_recompute_key: None,
+            last_recompute_at: Instant::now() - Duration::from_secs(1),
+            last_recompute_key: initial_key,
+            perf_overlay: false,
+            last_recompute_us: 0,
+            last_install_us: 0,
+            last_signature_us: 0,
+            last_git_us: 0,
+            last_perf: crate::syntax::PerfBreakdown::default(),
+            recompute_hits: 0,
+            recompute_throttled: 0,
+            recompute_runs: 0,
             is_untracked: false,
             saved_hash: 0,
             saved_len: 0,
@@ -249,7 +294,9 @@ impl App {
     /// after the engine reports `take_dirty()` so undo back to the
     /// saved state clears the flag.
     fn refresh_dirty_against_saved(&mut self) {
+        let t = Instant::now();
         let (h, l) = app_buffer_signature(&self.editor);
+        self.last_signature_us = t.elapsed().as_micros();
         self.dirty = h != self.saved_hash || l != self.saved_len;
     }
 
@@ -373,7 +420,13 @@ impl App {
             // Draw the current frame.
             terminal.draw(|frame| render::frame(frame, self))?;
 
-            // Process the next event (blocking).
+            // Wait for the next event with a 120 ms ceiling so the
+            // recompute throttle (100 ms) gets a wake-up redraw after
+            // typing stops — otherwise the last burst of keystrokes
+            // could leave highlights stale until the next user input.
+            if !event::poll(Duration::from_millis(120))? {
+                continue;
+            }
             match event::read()? {
                 Event::Key(key) => {
                     // Ctrl-C is the hard-exit shortcut independent of the FSM,
@@ -680,18 +733,37 @@ impl App {
         // can match `:edit`/`:e`/`:edi` etc. uniformly.
         let canon = ex::canonical_command_name(cmd);
         let cmd: &str = canon.as_ref();
+        // `:perf` — toggle the per-frame timing overlay in the status row.
+        if cmd == "perf" {
+            self.perf_overlay = !self.perf_overlay;
+            self.recompute_hits = 0;
+            self.recompute_throttled = 0;
+            self.recompute_runs = 0;
+            self.status_message = Some(if self.perf_overlay {
+                "perf overlay: on (counters reset)".into()
+            } else {
+                "perf overlay: off".into()
+            });
+            return;
+        }
         // Intercept `:set background={dark,light}` before the engine sees it.
         // Theme awareness is a binary-local concern; the engine has no theme API.
         if let Some(rest) = cmd.strip_prefix("set background=") {
             match rest.trim() {
                 "dark" => {
-                    self.syntax.set_theme(Box::new(DotFallbackTheme::dark()));
+                    self.syntax.set_theme(Arc::new(DotFallbackTheme::dark()));
+                    // Theme swap doesn't change the buffer, but the
+                    // installed spans are stale — invalidate the cache
+                    // key so the next recompute re-submits with the new
+                    // theme.
+                    self.last_recompute_key = None;
                     self.recompute_and_install();
                     self.status_message = Some("background=dark".into());
                     return;
                 }
                 "light" => {
-                    self.syntax.set_theme(Box::new(DotFallbackTheme::light()));
+                    self.syntax.set_theme(Arc::new(DotFallbackTheme::light()));
+                    self.last_recompute_key = None;
                     self.recompute_and_install();
                     self.status_message = Some("background=light".into());
                     return;
@@ -884,40 +956,108 @@ impl App {
         self.is_new_file = false;
         self.syntax.set_language_for_path(&path);
         self.syntax.reset();
+        // Invalidate the recompute cache so the swap actually re-parses
+        // (set_content advances dirty_gen, but be explicit so a same-key
+        // collision after reload can't skip the install).
+        self.last_recompute_key = None;
         self.recompute_and_install();
         self.snapshot_saved();
         self.refresh_git_signs_force();
         self.status_message = Some(format!("\"{path_str}\" {line_count}L, {byte_count}B"));
     }
 
-    /// Recompute syntax spans for the current viewport and install them.
+    /// Submit a new viewport-scoped parse on the syntax worker (when
+    /// inputs differ from the last submission and the throttle window
+    /// has passed) and install whatever the worker has produced since
+    /// the last frame.
     ///
-    /// No-op when no language is attached (highlighter is `None`) or
-    /// when the incremental parse timed out (caller retries next frame).
-    /// Frame-level skip: when `(dirty_gen, vp_top, vp_height)` matches
-    /// the last call's inputs, the heavy parse + install path is
-    /// bypassed entirely — the editor's `buffer_spans` is still right.
+    /// The submit and the install are decoupled: a frame may install a
+    /// stale-but-recent worker output even when no submit happens, and
+    /// a frame may submit without an install when the worker hasn't
+    /// finished yet. That gives keystrokes back the main thread — the
+    /// 30–100ms tree-sitter parse runs off the render path.
+    ///
+    /// No-op submit when no language is attached. Frame-level skip:
+    /// when `(dirty_gen, vp_top, vp_height)` matches the last submit
+    /// key, no new request is sent — the worker's previous output
+    /// (already installed) is still right.
     pub fn recompute_and_install(&mut self) {
+        const RECOMPUTE_THROTTLE: Duration = Duration::from_millis(100);
         let (top, height) = {
             let vp = self.editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
         let dg = self.editor.buffer().dirty_gen();
         let key = (dg, top, height);
+
+        // Snapshot the prior submit's dirty_gen so we can tell, after
+        // a submit, whether this frame's request was a viewport-only
+        // change (worker fast path → safe to briefly wait) versus an
+        // edit that needs a full reparse (don't wait, would stall
+        // keystrokes).
+        let prev_dirty_gen = self.last_recompute_key.map(|(prev_dg, _, _)| prev_dg);
+
+        let t_total = Instant::now();
+        let mut submitted = false;
         if self.last_recompute_key == Some(key) {
-            // Buffer + viewport unchanged: nothing to redo. git_signs
-            // has its own cache so we don't even need to call it.
-            return;
+            self.recompute_hits = self.recompute_hits.saturating_add(1);
+        } else {
+            let buffer_changed = self
+                .last_recompute_key
+                .map(|(prev_dg, _, _)| prev_dg != dg)
+                .unwrap_or(true);
+            let now = Instant::now();
+            if buffer_changed && now.duration_since(self.last_recompute_at) < RECOMPUTE_THROTTLE {
+                self.recompute_throttled = self.recompute_throttled.saturating_add(1);
+            } else {
+                self.recompute_runs = self.recompute_runs.saturating_add(1);
+                if self
+                    .syntax
+                    .submit_render(self.editor.buffer(), top, height)
+                    .is_some()
+                {
+                    submitted = true;
+                    self.last_recompute_at = Instant::now();
+                    self.last_recompute_key = Some(key);
+                }
+            }
         }
-        if let Some(out) = self
-            .syntax
-            .parse_and_render(self.editor.buffer(), top, height)
-        {
+
+        // After submitting, give the worker a brief window to deliver
+        // before we draw — viewport-only requests (gg / G / Ctrl-D)
+        // skip parse on the worker and complete in ~1 ms, so a 5 ms
+        // wait keeps highlights coherent across the jump. Edits go
+        // through the throttle path and don't reach this branch.
+        let t_install = Instant::now();
+        let drained = if submitted {
+            // Buffer unchanged since last submit → worker takes the
+            // parse-skip fast path (~1 ms). Wait briefly so the jump
+            // doesn't flash uncolored rows. Buffer changed (or first
+            // submit) → don't block; the result will land on a
+            // subsequent frame after worker finishes its parse.
+            let viewport_only = prev_dirty_gen == Some(dg);
+            if viewport_only {
+                self.syntax.wait_result(Duration::from_millis(5))
+            } else {
+                self.syntax.take_result()
+            }
+        } else {
+            self.syntax.take_result()
+        };
+        if let Some(out) = drained {
             self.editor.install_ratatui_syntax_spans(out.spans);
             self.diag_signs = out.signs;
-            self.last_recompute_key = Some(key);
+            self.last_install_us = t_install.elapsed().as_micros();
+        } else {
+            self.last_install_us = 0;
         }
+        self.last_perf = self.syntax.last_perf;
+
+        let t_git = Instant::now();
         self.refresh_git_signs();
+        self.last_git_us = t_git.elapsed().as_micros();
+        self.last_recompute_us = t_total.elapsed().as_micros();
+        let _ = submitted;
     }
 
     /// Mode label for the status line.
