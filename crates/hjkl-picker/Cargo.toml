@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 hjkl-buffer = { path = "../hjkl-buffer", version = "=0.3.0" }
 hjkl-form   = { path = "../hjkl-form",   version = "=0.3.0", features = ["crossterm"] }
-ratatui     = "0.29"
+ratatui     = "0.30"
 crossterm   = "0.29"
 regex       = "1"
 ignore      = "0.4"

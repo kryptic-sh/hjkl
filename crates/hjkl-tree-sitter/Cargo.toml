@@ -22,7 +22,7 @@ tree-sitter-sequel = "0.3"
 toml = "1.1"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"
-ratatui = "0.29"
+ratatui = "0.30"
 
 [package.metadata.docs.rs]
 all-features = true
