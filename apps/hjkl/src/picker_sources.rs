@@ -303,17 +303,16 @@ impl PickerLogic for HighlightedRgSource {
     }
 
     fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
-        let path = match self
+        let (path, line) = match self
             .inner
             .items
             .lock()
             .ok()
-            .and_then(|g| g.get(idx).map(|m| m.path.clone()))
+            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
         {
             Some(v) => v,
             None => return (Buffer::new(), String::new(), PreviewSpans::default()),
         };
-        // Sentinel: no path means rg wasn't found.
         if path.as_os_str().is_empty() {
             return (Buffer::new(), String::new(), PreviewSpans::default());
         }
@@ -323,14 +322,21 @@ impl PickerLogic for HighlightedRgSource {
             return (Buffer::from_str(&content), status, PreviewSpans::default());
         }
         let spans = self.highlight(&abs, &content);
-        // Render the full file; `preview_top_row` scrolls the viewport so
-        // the match line lands near the top, and gutter line numbers stay
-        // aligned with the real file.
-        (Buffer::from_str(&content), String::new(), spans)
+        let mut buf = Buffer::from_str(&content);
+        let match_row = (line as usize).saturating_sub(1);
+        buf.set_cursor(hjkl_buffer::Position {
+            row: match_row,
+            col: 0,
+        });
+        (buf, String::new(), spans)
     }
 
     fn preview_top_row(&self, idx: usize) -> usize {
         self.inner.preview_top_row(idx)
+    }
+
+    fn preview_match_row(&self, idx: usize) -> Option<usize> {
+        self.inner.preview_match_row(idx)
     }
 
     fn select(&self, idx: usize) -> PickerAction {

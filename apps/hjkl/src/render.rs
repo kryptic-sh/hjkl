@@ -627,14 +627,11 @@ fn render_picker_input_and_list(
     let list_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray));
-    let list = List::new(items)
-        .block(list_block)
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(60, 70, 100))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+    let list = List::new(items).block(list_block).highlight_style(
+        Style::default()
+            .bg(Color::Rgb(60, 70, 100))
+            .add_modifier(Modifier::BOLD),
+    );
     let mut state = ListState::default();
     if label_count > 0 {
         state.select(Some(picker.selected.min(label_count.saturating_sub(1))));
@@ -687,12 +684,17 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
             .copied()
             .unwrap_or_default()
     };
+    let cursor_line_bg = if picker.preview_match_row().is_some() {
+        Style::default().bg(Color::Rgb(60, 70, 100))
+    } else {
+        Style::default()
+    };
     let view = BufferView {
         buffer: buf,
         viewport: &viewport,
         selection: None,
         resolver: &resolver,
-        cursor_line_bg: Style::default(),
+        cursor_line_bg,
         cursor_column_bg: Style::default(),
         selection_bg: Style::default(),
         cursor_style: Style::default(),

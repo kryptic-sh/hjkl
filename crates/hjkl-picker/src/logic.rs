@@ -66,6 +66,14 @@ pub trait PickerLogic: Send + 'static {
         0
     }
 
+    /// 0-based row to visually mark in the preview (e.g. grep match line).
+    /// Default `None` → no highlight. Returning `Some(row)` tells the
+    /// renderer to paint a `cursor_line_bg` across that row.
+    fn preview_match_row(&self, idx: usize) -> Option<usize> {
+        let _ = idx;
+        None
+    }
+
     /// Translate the picked row into an action.
     fn select(&self, idx: usize) -> PickerAction;
 

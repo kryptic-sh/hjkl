@@ -242,12 +242,16 @@ impl PickerLogic for RgSource {
         // Render the full file; the picker's `preview_top_row` puts the
         // match line near the top of the visible window. Keeping the buffer
         // intact preserves correct gutter line numbers.
-        let _ = line;
-        (
-            Buffer::from_str(&content),
-            String::new(),
-            PreviewSpans::default(),
-        )
+        let mut buf = Buffer::from_str(&content);
+        let match_row = (line as usize).saturating_sub(1);
+        // Place the buffer cursor on the match row so the renderer's
+        // `cursor_line_bg` lands there. Column 0 is fine — the picker
+        // suppresses the cursor cell itself.
+        buf.set_cursor(hjkl_buffer::Position {
+            row: match_row,
+            col: 0,
+        });
+        (buf, String::new(), PreviewSpans::default())
     }
 
     fn preview_top_row(&self, idx: usize) -> usize {
@@ -259,6 +263,13 @@ impl PickerLogic for RgSource {
                     .map(|m| (m.line as usize).saturating_sub(1).saturating_sub(2))
             })
             .unwrap_or(0)
+    }
+
+    fn preview_match_row(&self, idx: usize) -> Option<usize> {
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|m| (m.line as usize).saturating_sub(1)))
     }
 
     fn select(&self, idx: usize) -> PickerAction {
