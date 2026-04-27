@@ -232,6 +232,292 @@ fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
     }
 }
 
+/// Sum of bytes from the start of the buffer to the start of `row`.
+/// Walks lines + their separating `\n` bytes — matches the canonical
+/// `lines().join("\n")` byte rendering used by syntax tooling.
+#[inline]
+fn buffer_byte_of_row(buf: &hjkl_buffer::Buffer, row: usize) -> usize {
+    let n = buf.row_count();
+    let row = row.min(n);
+    let mut acc = 0usize;
+    for r in 0..row {
+        acc += buf.line(r).map(str::len).unwrap_or(0);
+        if r + 1 < n {
+            acc += 1; // separator '\n'
+        }
+    }
+    acc
+}
+
+/// Convert an `hjkl_buffer::Position` (char-indexed col) into byte
+/// coordinates `(byte_within_buffer, (row, col_byte))` against the
+/// **pre-edit** buffer.
+fn position_to_byte_coords(
+    buf: &hjkl_buffer::Buffer,
+    pos: hjkl_buffer::Position,
+) -> (usize, (u32, u32)) {
+    let row = pos.row.min(buf.row_count().saturating_sub(1));
+    let line = buf.line(row).unwrap_or("");
+    let col_byte = pos.byte_offset(line);
+    let byte = buffer_byte_of_row(buf, row) + col_byte;
+    (byte, (row as u32, col_byte as u32))
+}
+
+/// Compute the byte position after inserting `text` starting at
+/// `start_byte` / `start_pos`. Returns `(end_byte, end_position)`.
+fn advance_by_text(text: &str, start_byte: usize, start_pos: (u32, u32)) -> (usize, (u32, u32)) {
+    let new_end_byte = start_byte + text.len();
+    let newlines = text.bytes().filter(|&b| b == b'\n').count();
+    let end_pos = if newlines == 0 {
+        (start_pos.0, start_pos.1 + text.len() as u32)
+    } else {
+        // Bytes after the last newline determine the trailing column.
+        let last_nl = text.rfind('\n').unwrap();
+        let tail_bytes = (text.len() - last_nl - 1) as u32;
+        (start_pos.0 + newlines as u32, tail_bytes)
+    };
+    (new_end_byte, end_pos)
+}
+
+/// Translate a single `hjkl_buffer::Edit` into one or more
+/// [`crate::types::ContentEdit`] records using the **pre-edit** buffer
+/// state for byte/position lookups. Block ops fan out to one entry per
+/// touched row (matches `edit_to_editops`).
+fn content_edits_from_buffer_edit(
+    buf: &hjkl_buffer::Buffer,
+    edit: &hjkl_buffer::Edit,
+) -> Vec<crate::types::ContentEdit> {
+    use hjkl_buffer::Edit as B;
+    use hjkl_buffer::Position;
+
+    let mut out: Vec<crate::types::ContentEdit> = Vec::new();
+
+    match edit {
+        B::InsertChar { at, ch } => {
+            let (start_byte, start_pos) = position_to_byte_coords(buf, *at);
+            let new_end_byte = start_byte + ch.len_utf8();
+            let new_end_pos = (start_pos.0, start_pos.1 + ch.len_utf8() as u32);
+            out.push(crate::types::ContentEdit {
+                start_byte,
+                old_end_byte: start_byte,
+                new_end_byte,
+                start_position: start_pos,
+                old_end_position: start_pos,
+                new_end_position: new_end_pos,
+            });
+        }
+        B::InsertStr { at, text } => {
+            let (start_byte, start_pos) = position_to_byte_coords(buf, *at);
+            let (new_end_byte, new_end_pos) = advance_by_text(text, start_byte, start_pos);
+            out.push(crate::types::ContentEdit {
+                start_byte,
+                old_end_byte: start_byte,
+                new_end_byte,
+                start_position: start_pos,
+                old_end_position: start_pos,
+                new_end_position: new_end_pos,
+            });
+        }
+        B::DeleteRange { start, end, kind } => {
+            let (start, end) = if start <= end {
+                (*start, *end)
+            } else {
+                (*end, *start)
+            };
+            match kind {
+                hjkl_buffer::MotionKind::Char => {
+                    let (start_byte, start_pos) = position_to_byte_coords(buf, start);
+                    let (old_end_byte, old_end_pos) = position_to_byte_coords(buf, end);
+                    out.push(crate::types::ContentEdit {
+                        start_byte,
+                        old_end_byte,
+                        new_end_byte: start_byte,
+                        start_position: start_pos,
+                        old_end_position: old_end_pos,
+                        new_end_position: start_pos,
+                    });
+                }
+                hjkl_buffer::MotionKind::Line => {
+                    // Linewise delete drops rows [start.row..=end.row]. Map
+                    // to a span from start of `start.row` through start of
+                    // (end.row + 1). The buffer's own `do_delete_range`
+                    // collapses to row `start.row` after dropping.
+                    let lo = start.row;
+                    let hi = end.row.min(buf.row_count().saturating_sub(1));
+                    let start_byte = buffer_byte_of_row(buf, lo);
+                    let next_row_byte = if hi + 1 < buf.row_count() {
+                        buffer_byte_of_row(buf, hi + 1)
+                    } else {
+                        // No row after; clamp to end-of-buffer byte.
+                        buffer_byte_of_row(buf, buf.row_count())
+                            + buf
+                                .line(buf.row_count().saturating_sub(1))
+                                .map(str::len)
+                                .unwrap_or(0)
+                    };
+                    out.push(crate::types::ContentEdit {
+                        start_byte,
+                        old_end_byte: next_row_byte,
+                        new_end_byte: start_byte,
+                        start_position: (lo as u32, 0),
+                        old_end_position: ((hi + 1) as u32, 0),
+                        new_end_position: (lo as u32, 0),
+                    });
+                }
+                hjkl_buffer::MotionKind::Block => {
+                    // Block delete removes a rectangle of chars per row.
+                    // Fan out to one ContentEdit per row.
+                    let (left_col, right_col) = (start.col.min(end.col), start.col.max(end.col));
+                    for row in start.row..=end.row {
+                        let row_start_pos = Position::new(row, left_col);
+                        let row_end_pos = Position::new(row, right_col + 1);
+                        let (sb, sp) = position_to_byte_coords(buf, row_start_pos);
+                        let (eb, ep) = position_to_byte_coords(buf, row_end_pos);
+                        if eb <= sb {
+                            continue;
+                        }
+                        out.push(crate::types::ContentEdit {
+                            start_byte: sb,
+                            old_end_byte: eb,
+                            new_end_byte: sb,
+                            start_position: sp,
+                            old_end_position: ep,
+                            new_end_position: sp,
+                        });
+                    }
+                }
+            }
+        }
+        B::Replace { start, end, with } => {
+            let (start, end) = if start <= end {
+                (*start, *end)
+            } else {
+                (*end, *start)
+            };
+            let (start_byte, start_pos) = position_to_byte_coords(buf, start);
+            let (old_end_byte, old_end_pos) = position_to_byte_coords(buf, end);
+            let (new_end_byte, new_end_pos) = advance_by_text(with, start_byte, start_pos);
+            out.push(crate::types::ContentEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position: start_pos,
+                old_end_position: old_end_pos,
+                new_end_position: new_end_pos,
+            });
+        }
+        B::JoinLines {
+            row,
+            count,
+            with_space,
+        } => {
+            // Joining `count` rows after `row` collapses the bytes
+            // between EOL of `row` and EOL of `row + count` into either
+            // an empty string (gJ) or a single space per join (J — but
+            // only when both sides are non-empty; we approximate with
+            // a single space for simplicity).
+            let row = (*row).min(buf.row_count().saturating_sub(1));
+            let last_join_row = (row + count).min(buf.row_count().saturating_sub(1));
+            let line = buf.line(row).unwrap_or("");
+            let row_eol_byte = buffer_byte_of_row(buf, row) + line.len();
+            let row_eol_col = line.len() as u32;
+            let next_row_after = last_join_row + 1;
+            let old_end_byte = if next_row_after < buf.row_count() {
+                buffer_byte_of_row(buf, next_row_after).saturating_sub(1)
+            } else {
+                buffer_byte_of_row(buf, buf.row_count())
+                    + buf
+                        .line(buf.row_count().saturating_sub(1))
+                        .map(str::len)
+                        .unwrap_or(0)
+            };
+            let last_line = buf.line(last_join_row).unwrap_or("");
+            let old_end_pos = (last_join_row as u32, last_line.len() as u32);
+            let replacement_len = if *with_space { 1 } else { 0 };
+            let new_end_byte = row_eol_byte + replacement_len;
+            let new_end_pos = (row as u32, row_eol_col + replacement_len as u32);
+            out.push(crate::types::ContentEdit {
+                start_byte: row_eol_byte,
+                old_end_byte,
+                new_end_byte,
+                start_position: (row as u32, row_eol_col),
+                old_end_position: old_end_pos,
+                new_end_position: new_end_pos,
+            });
+        }
+        B::SplitLines {
+            row,
+            cols,
+            inserted_space,
+        } => {
+            // Splits insert "\n" (or "\n " inverse) at each col on `row`.
+            // The buffer applies all splits left-to-right via the
+            // do_split_lines path; we emit one ContentEdit per col,
+            // each treated as an insert at that col on `row`. Note: the
+            // buffer state during emission is *pre-edit*, so all cols
+            // index into the same pre-edit row.
+            let row = (*row).min(buf.row_count().saturating_sub(1));
+            let line = buf.line(row).unwrap_or("");
+            let row_byte = buffer_byte_of_row(buf, row);
+            let insert = if *inserted_space { "\n " } else { "\n" };
+            for &c in cols {
+                let pos = Position::new(row, c);
+                let col_byte = pos.byte_offset(line);
+                let start_byte = row_byte + col_byte;
+                let start_pos = (row as u32, col_byte as u32);
+                let (new_end_byte, new_end_pos) = advance_by_text(insert, start_byte, start_pos);
+                out.push(crate::types::ContentEdit {
+                    start_byte,
+                    old_end_byte: start_byte,
+                    new_end_byte,
+                    start_position: start_pos,
+                    old_end_position: start_pos,
+                    new_end_position: new_end_pos,
+                });
+            }
+        }
+        B::InsertBlock { at, chunks } => {
+            // One ContentEdit per chunk; each lands at `(at.row + i,
+            // at.col)` in the pre-edit buffer.
+            for (i, chunk) in chunks.iter().enumerate() {
+                let pos = Position::new(at.row + i, at.col);
+                let (start_byte, start_pos) = position_to_byte_coords(buf, pos);
+                let (new_end_byte, new_end_pos) = advance_by_text(chunk, start_byte, start_pos);
+                out.push(crate::types::ContentEdit {
+                    start_byte,
+                    old_end_byte: start_byte,
+                    new_end_byte,
+                    start_position: start_pos,
+                    old_end_position: start_pos,
+                    new_end_position: new_end_pos,
+                });
+            }
+        }
+        B::DeleteBlockChunks { at, widths } => {
+            for (i, w) in widths.iter().enumerate() {
+                let row = at.row + i;
+                let start_pos = Position::new(row, at.col);
+                let end_pos = Position::new(row, at.col + *w);
+                let (sb, sp) = position_to_byte_coords(buf, start_pos);
+                let (eb, ep) = position_to_byte_coords(buf, end_pos);
+                if eb <= sb {
+                    continue;
+                }
+                out.push(crate::types::ContentEdit {
+                    start_byte: sb,
+                    old_end_byte: eb,
+                    new_end_byte: sb,
+                    start_position: sp,
+                    old_end_position: ep,
+                    new_end_position: sp,
+                });
+            }
+        }
+    }
+
+    out
+}
+
 /// Where the cursor should land in the viewport after a `z`-family
 /// scroll (`zz` / `zt` / `zb`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -409,6 +695,16 @@ pub struct Editor<
     /// `DESIGN_33_METHOD_CLASSIFICATION.md`. The buffer-side cache +
     /// `Buffer::set_spans` / `Buffer::spans` accessors are gone.
     pub(crate) buffer_spans: Vec<Vec<hjkl_buffer::Span>>,
+    /// Pending `ContentEdit` records emitted by `mutate_edit`. Drained by
+    /// hosts via [`Editor::take_content_edits`] for fan-in to a syntax
+    /// tree (or any other content-change observer that needs byte-level
+    /// position deltas). Edges are byte-indexed and `(row, col_byte)`.
+    pub(crate) pending_content_edits: Vec<crate::types::ContentEdit>,
+    /// Pending "reset" flag set when the entire buffer is replaced
+    /// (e.g. `set_content` / `restore`). Supersedes any queued
+    /// `pending_content_edits` on the same frame: hosts call
+    /// [`Editor::take_content_reset`] before draining edits.
+    pub(crate) pending_content_reset: bool,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -574,6 +870,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             last_emitted_mode: crate::VimMode::Normal,
             search_state: crate::search::SearchState::new(),
             buffer_spans: Vec::new(),
+            pending_content_edits: Vec::new(),
+            pending_content_reset: false,
         }
     }
 }
@@ -1194,6 +1492,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
         self.change_log.extend(edit_to_editops(&edit));
+        // Compute ContentEdit fan-out from the pre-edit buffer state.
+        // Done before `apply_buffer_edit` consumes `edit` so we can
+        // inspect the operation's fields and the buffer's pre-edit row
+        // bytes (needed for byte_of_row / col_byte conversion). Edits
+        // are pushed onto `pending_content_edits` for host drain.
+        let content_edits = content_edits_from_buffer_edit(&self.buffer, &edit);
+        self.pending_content_edits.extend(content_edits);
         // 0.0.42 (Patch C-δ.7): the `apply_edit` reach is centralized
         // in [`crate::buf_helpers::apply_buffer_edit`] (option (c) of
         // the 0.0.42 plan — see that fn's doc comment). The free fn
@@ -1311,6 +1616,28 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let dirty = self.content_dirty;
         self.content_dirty = false;
         dirty
+    }
+
+    /// Drain the queue of [`crate::types::ContentEdit`]s emitted since
+    /// the last call. Each entry corresponds to a single buffer
+    /// mutation funnelled through [`Editor::mutate_edit`]; block edits
+    /// fan out to one entry per row touched.
+    ///
+    /// Hosts call this each frame (after [`Editor::take_content_reset`])
+    /// to fan edits into a tree-sitter parser via `Tree::edit`.
+    pub fn take_content_edits(&mut self) -> Vec<crate::types::ContentEdit> {
+        std::mem::take(&mut self.pending_content_edits)
+    }
+
+    /// Returns `true` if a bulk buffer replacement happened since the
+    /// last call (e.g. `set_content` / `restore` / undo restore), then
+    /// clears the flag. When this returns `true`, hosts should drop
+    /// any retained syntax tree before consuming
+    /// [`Editor::take_content_edits`].
+    pub fn take_content_reset(&mut self) -> bool {
+        let r = self.pending_content_reset;
+        self.pending_content_reset = false;
+        r
     }
 
     /// Pull-model coarse change observation. If content changed since
@@ -1520,6 +1847,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         self.undo_stack.clear();
         self.redo_stack.clear();
+        // Whole-buffer replace supersedes any queued ContentEdits.
+        self.pending_content_edits.clear();
+        self.pending_content_reset = true;
         self.mark_content_dirty();
     }
 
@@ -2320,6 +2650,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let text = lines.join("\n");
         crate::types::BufferEdit::replace_all(&mut self.buffer, &text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
+        // Bulk replace — supersedes any queued ContentEdits.
+        self.pending_content_edits.clear();
+        self.pending_content_reset = true;
         self.mark_content_dirty();
     }
 
@@ -3683,5 +4016,120 @@ mod tests {
             2,
             "Host::now() must drive `:set timeoutlen` deterministically"
         );
+    }
+
+    // ── ContentEdit emission ─────────────────────────────────────────
+
+    fn fresh_editor(initial: &str) -> Editor {
+        let buffer = hjkl_buffer::Buffer::from_str(initial);
+        Editor::new(
+            buffer,
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        )
+    }
+
+    #[test]
+    fn content_edit_insert_char_at_origin() {
+        let mut e = fresh_editor("");
+        let _ = e.mutate_edit(hjkl_buffer::Edit::InsertChar {
+            at: hjkl_buffer::Position::new(0, 0),
+            ch: 'a',
+        });
+        let edits = e.take_content_edits();
+        assert_eq!(edits.len(), 1);
+        let ce = &edits[0];
+        assert_eq!(ce.start_byte, 0);
+        assert_eq!(ce.old_end_byte, 0);
+        assert_eq!(ce.new_end_byte, 1);
+        assert_eq!(ce.start_position, (0, 0));
+        assert_eq!(ce.old_end_position, (0, 0));
+        assert_eq!(ce.new_end_position, (0, 1));
+    }
+
+    #[test]
+    fn content_edit_insert_str_multiline() {
+        // Buffer "x\ny" — insert "ab\ncd" at end of row 0.
+        let mut e = fresh_editor("x\ny");
+        let _ = e.mutate_edit(hjkl_buffer::Edit::InsertStr {
+            at: hjkl_buffer::Position::new(0, 1),
+            text: "ab\ncd".into(),
+        });
+        let edits = e.take_content_edits();
+        assert_eq!(edits.len(), 1);
+        let ce = &edits[0];
+        assert_eq!(ce.start_byte, 1);
+        assert_eq!(ce.old_end_byte, 1);
+        assert_eq!(ce.new_end_byte, 1 + 5);
+        assert_eq!(ce.start_position, (0, 1));
+        // Insertion contains one '\n', so row+1, col = bytes after last '\n' = 2.
+        assert_eq!(ce.new_end_position, (1, 2));
+    }
+
+    #[test]
+    fn content_edit_delete_range_charwise() {
+        // "abcdef" — delete chars 1..4 ("bcd").
+        let mut e = fresh_editor("abcdef");
+        let _ = e.mutate_edit(hjkl_buffer::Edit::DeleteRange {
+            start: hjkl_buffer::Position::new(0, 1),
+            end: hjkl_buffer::Position::new(0, 4),
+            kind: hjkl_buffer::MotionKind::Char,
+        });
+        let edits = e.take_content_edits();
+        assert_eq!(edits.len(), 1);
+        let ce = &edits[0];
+        assert_eq!(ce.start_byte, 1);
+        assert_eq!(ce.old_end_byte, 4);
+        assert_eq!(ce.new_end_byte, 1);
+        assert!(ce.old_end_byte > ce.new_end_byte);
+    }
+
+    #[test]
+    fn content_edit_set_content_resets() {
+        let mut e = fresh_editor("foo");
+        let _ = e.mutate_edit(hjkl_buffer::Edit::InsertChar {
+            at: hjkl_buffer::Position::new(0, 0),
+            ch: 'X',
+        });
+        // set_content should clear queued edits and raise the reset
+        // flag on the next take_content_reset.
+        e.set_content("brand new");
+        assert!(e.take_content_reset());
+        // Subsequent call clears the flag.
+        assert!(!e.take_content_reset());
+        // Edits cleared on reset.
+        assert!(e.take_content_edits().is_empty());
+    }
+
+    #[test]
+    fn content_edit_multiple_replaces_in_order() {
+        // Three Replace edits applied left-to-right (mimics the
+        // substitute path's per-match Replace fan-out). Verify each
+        // mutation queues exactly one ContentEdit and they're drained
+        // in source-order with structurally valid byte spans.
+        let mut e = fresh_editor("xax xbx xcx");
+        let _ = e.take_content_edits();
+        let _ = e.take_content_reset();
+        // Replace each "x" with "yy", left to right. After each replace,
+        // the next match's char-col shifts by +1 (since "yy" is 1 char
+        // longer than "x" but they're both ASCII so byte = char here).
+        let positions = [(0usize, 0usize), (0, 4), (0, 8)];
+        for (row, col) in positions {
+            let _ = e.mutate_edit(hjkl_buffer::Edit::Replace {
+                start: hjkl_buffer::Position::new(row, col),
+                end: hjkl_buffer::Position::new(row, col + 1),
+                with: "yy".into(),
+            });
+        }
+        let edits = e.take_content_edits();
+        assert_eq!(edits.len(), 3);
+        for ce in &edits {
+            assert!(ce.start_byte <= ce.old_end_byte);
+            assert!(ce.start_byte <= ce.new_end_byte);
+        }
+        // Document order.
+        for w in edits.windows(2) {
+            assert!(w[0].start_byte <= w[1].start_byte);
+        }
     }
 }

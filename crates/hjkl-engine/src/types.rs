@@ -120,6 +120,27 @@ pub struct Edit {
     pub replacement: String,
 }
 
+/// Engine-native representation of a single buffer mutation in the
+/// shape tree-sitter's `InputEdit` consumes. Emitted by
+/// [`crate::Editor::mutate_edit`] and drained by hosts via
+/// [`crate::Editor::take_content_edits`] so the syntax layer can fan
+/// edits into a retained tree without the engine taking a tree-sitter
+/// dependency.
+///
+/// Positions are `(row, col_byte)` — byte offsets within the row, not
+/// char counts. Multi-row inserts/deletes set `new_end_position.0` /
+/// `old_end_position.0` to the relevant row delta. Conversion to
+/// `tree_sitter::InputEdit` is mechanical (see `apps/hjkl/src/syntax.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentEdit {
+    pub start_byte: usize,
+    pub old_end_byte: usize,
+    pub new_end_byte: usize,
+    pub start_position: (u32, u32),
+    pub old_end_position: (u32, u32),
+    pub new_end_position: (u32, u32),
+}
+
 impl Edit {
     pub fn insert(at: Pos, text: impl Into<String>) -> Self {
         Edit {
@@ -934,6 +955,33 @@ pub trait Query: Send {
     /// content **may** have changed."
     fn dirty_gen(&self) -> u64 {
         0
+    }
+
+    /// Byte offset of the first byte of `row` within the buffer's
+    /// canonical `lines().join("\n")` rendering. Out-of-range rows
+    /// clamp to `len_bytes()`.
+    ///
+    /// Default implementation walks every prior row's byte length and
+    /// adds a separator byte per row gap. Backends with a faster path
+    /// (rope position-of-line) should override.
+    ///
+    /// Pre-0.1.0 default-impl addition — does not extend the sealed
+    /// surface for downstream impls.
+    fn byte_of_row(&self, row: usize) -> usize {
+        let n = self.line_count() as usize;
+        let row = row.min(n);
+        let mut acc = 0usize;
+        for r in 0..row {
+            acc += self.line(r as u32).len();
+            // Separator newline between rows. The canonical engine
+            // join uses `\n` between every pair of lines (no trailing
+            // newline), so add one separator per row strictly before
+            // the last buffer row.
+            if r + 1 < n {
+                acc += 1;
+            }
+        }
+        acc
     }
 }
 
