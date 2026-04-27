@@ -91,6 +91,17 @@ pub trait PickerLogic: Send + 'static {
         RequeryMode::FilterInMemory
     }
 
+    /// Override the highlight positions for the row at `idx`.
+    ///
+    /// Default (`None`) means the picker uses fuzzy-scorer match positions.
+    /// Sources whose query has its own match semantics (regex grep, exact
+    /// match) implement this to return positions in the LABEL string
+    /// (char indices, same convention as fuzzy positions).
+    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
+        let _ = (idx, query, label);
+        None
+    }
+
     /// Re-enumerate items.
     ///
     /// - `FilterInMemory` sources: called once at open with `query = None`.
@@ -274,8 +285,9 @@ impl Picker {
         let q = self.query.text();
         let handle = self.source.enumerate(Some(&q), new_cancel);
         self._scan = handle;
-        // Reset filter state so refresh re-scores against new items.
-        self.filtered.clear();
+        // Invalidate cache markers so the next refresh() re-scores against
+        // new items. Do NOT clear `filtered` here — keep showing the previous
+        // results until the first new batch lands (prevents flash).
         self.selected = 0;
         self.last_query.clear();
         self.last_seen_count = 0;
@@ -376,12 +388,24 @@ impl Picker {
         self.preview_label.as_deref()
     }
 
-    /// Labels and fuzzy-match char positions for the first `n` filtered items.
+    /// Labels and highlight char positions for the first `n` filtered items.
+    ///
+    /// For sources that implement `label_match_positions` (e.g. `RgSource`),
+    /// the override positions replace the fuzzy-scorer positions so that
+    /// highlighted chars stay within the content portion of the label.
     pub fn visible_entries(&self, n: usize) -> Vec<(String, Vec<usize>)> {
+        let query = &self.last_query;
         self.filtered
             .iter()
             .take(n)
-            .map(|e| (self.source.label(e.idx), e.matches.clone()))
+            .map(|e| {
+                let label = self.source.label(e.idx);
+                let positions = self
+                    .source
+                    .label_match_positions(e.idx, query, &label)
+                    .unwrap_or_else(|| e.matches.clone());
+                (label, positions)
+            })
             .collect()
     }
 
@@ -790,20 +814,76 @@ impl PickerLogic for RgSource {
         }
     }
 
+    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
+        if query.is_empty() {
+            return Some(Vec::new());
+        }
+        // Retrieve the text portion of the match so we can compute the prefix
+        // length and restrict highlighting to content only.
+        let text = self.items.lock().ok().and_then(|g| {
+            g.get(idx).map(|m| {
+                // Mirror the truncation applied in `label()`.
+                if m.text.chars().count() > 80 {
+                    let cut: String = m.text.chars().take(79).collect();
+                    format!("{cut}\u{2026}") // U+2026 HORIZONTAL ELLIPSIS
+                } else {
+                    m.text.clone()
+                }
+            })
+        })?;
+
+        // The label is "path:line: text". Prefix char count = label char
+        // count minus text char count.
+        let label_chars = label.chars().count();
+        let text_chars = text.chars().count();
+        let prefix_len = label_chars.saturating_sub(text_chars);
+
+        // Build regex from query: try literal compile first, fall back to
+        // regex::escape for literal matching.
+        let re = regex::Regex::new(query)
+            .or_else(|_| regex::Regex::new(&regex::escape(query)))
+            .ok()?;
+
+        // Collect byte-offset → char-index mapping for `text` so we can
+        // convert regex byte ranges to char indices.
+        let char_byte_offsets: Vec<usize> =
+            text.char_indices().map(|(byte_off, _)| byte_off).collect();
+
+        let mut positions: Vec<usize> = Vec::new();
+        for m in re.find_iter(&text) {
+            let byte_start = m.start();
+            let byte_end = m.end();
+            // Find which char indices in `text` fall within [byte_start, byte_end).
+            for (char_i, &byte_off) in char_byte_offsets.iter().enumerate() {
+                if byte_off >= byte_start && byte_off < byte_end {
+                    // Offset by prefix_len to get the char index in the label.
+                    positions.push(prefix_len + char_i);
+                }
+            }
+        }
+        positions.sort_unstable();
+        positions.dedup();
+        Some(positions)
+    }
+
     fn enumerate(
         &mut self,
         query: Option<&str>,
         cancel: Arc<AtomicBool>,
     ) -> Option<JoinHandle<()>> {
-        // Reset items for the new query.
-        if let Ok(mut g) = self.items.lock() {
-            g.clear();
-        }
-
+        // NOTE: Do NOT clear items here. The clear is deferred into the spawn
+        // closure so that the previous results stay visible until the first
+        // new batch arrives, preventing a flash-on-each-keystroke.
+        // If the query is empty, clear synchronously (nothing to show).
         let q = match query {
             Some(q) if !q.trim().is_empty() => q.to_owned(),
-            // Empty query → show nothing.
-            _ => return None,
+            // Empty query → clear and show nothing.
+            _ => {
+                if let Ok(mut g) = self.items.lock() {
+                    g.clear();
+                }
+                return None;
+            }
         };
 
         let items = Arc::clone(&self.items);
@@ -835,16 +915,30 @@ impl PickerLogic for RgSource {
 
                         let mut child = match child {
                             Ok(c) => c,
-                            Err(_) => return,
+                            Err(_) => {
+                                // Spawn failed — clear stale results.
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let stdout = match child.stdout.take() {
                             Some(s) => s,
-                            None => return,
+                            None => {
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let reader = BufReader::new(stdout);
                         let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+                        // Cleared atomically on first push so old results
+                        // remain visible during rg startup latency.
+                        let mut first_push_done = false;
 
                         for line_result in reader.lines() {
                             if cancel.load(Ordering::Acquire) {
@@ -860,6 +954,10 @@ impl PickerLogic for RgSource {
                                 if batch.len() >= 32
                                     && let Ok(mut g) = items.lock()
                                 {
+                                    if !first_push_done {
+                                        g.clear();
+                                        first_push_done = true;
+                                    }
                                     g.extend(batch.drain(..));
                                 }
                             }
@@ -872,7 +970,17 @@ impl PickerLogic for RgSource {
                         if !batch.is_empty()
                             && let Ok(mut g) = items.lock()
                         {
+                            if !first_push_done {
+                                g.clear();
+                                first_push_done = true;
+                            }
                             g.extend(batch.drain(..));
+                        }
+                        // If rg exited with zero matches, clear stale results.
+                        if !first_push_done
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.clear();
                         }
                         let _ = child.wait();
                     }
@@ -892,17 +1000,28 @@ impl PickerLogic for RgSource {
 
                         let mut child = match child {
                             Ok(c) => c,
-                            Err(_) => return,
+                            Err(_) => {
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let stdout = match child.stdout.take() {
                             Some(s) => s,
-                            None => return,
+                            None => {
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let reader = BufReader::new(stdout);
                         let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
                         let mut total = 0usize;
+                        let mut first_push_done = false;
                         const GREP_CAP: usize = 1000;
 
                         for line_result in reader.lines() {
@@ -928,6 +1047,10 @@ impl PickerLogic for RgSource {
                                 if batch.len() >= 32
                                     && let Ok(mut g) = items.lock()
                                 {
+                                    if !first_push_done {
+                                        g.clear();
+                                        first_push_done = true;
+                                    }
                                     g.extend(batch.drain(..));
                                 }
                                 if total >= GREP_CAP {
@@ -944,7 +1067,16 @@ impl PickerLogic for RgSource {
                         if !batch.is_empty()
                             && let Ok(mut g) = items.lock()
                         {
+                            if !first_push_done {
+                                g.clear();
+                                first_push_done = true;
+                            }
                             g.extend(batch.drain(..));
+                        }
+                        if !first_push_done
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.clear();
                         }
                         let _ = child.wait();
                     }
@@ -967,17 +1099,28 @@ impl PickerLogic for RgSource {
 
                         let mut child = match child {
                             Ok(c) => c,
-                            Err(_) => return,
+                            Err(_) => {
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let stdout = match child.stdout.take() {
                             Some(s) => s,
-                            None => return,
+                            None => {
+                                if let Ok(mut g) = items.lock() {
+                                    g.clear();
+                                }
+                                return;
+                            }
                         };
 
                         let reader = BufReader::new(stdout);
                         let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
                         let mut total = 0usize;
+                        let mut first_push_done = false;
                         const FINDSTR_CAP: usize = 1000;
 
                         for line_result in reader.lines() {
@@ -998,6 +1141,10 @@ impl PickerLogic for RgSource {
                                 if batch.len() >= 32
                                     && let Ok(mut g) = items.lock()
                                 {
+                                    if !first_push_done {
+                                        g.clear();
+                                        first_push_done = true;
+                                    }
                                     g.extend(batch.drain(..));
                                 }
                                 if total >= FINDSTR_CAP {
@@ -1014,14 +1161,25 @@ impl PickerLogic for RgSource {
                         if !batch.is_empty()
                             && let Ok(mut g) = items.lock()
                         {
+                            if !first_push_done {
+                                g.clear();
+                                first_push_done = true;
+                            }
                             g.extend(batch.drain(..));
+                        }
+                        if !first_push_done
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.clear();
                         }
                         let _ = child.wait();
                     }
 
                     GrepBackend::Neither => {
                         // No search tool found — push sentinel item.
+                        // Clear first so the sentinel replaces stale results.
                         if let Ok(mut g) = items.lock() {
+                            g.clear();
                             g.push(RgMatch {
                                 path: PathBuf::new(),
                                 line: 0,
