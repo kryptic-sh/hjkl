@@ -596,6 +596,7 @@ dependencies = [
  "hjkl-clipboard",
  "hjkl-editor",
  "hjkl-engine",
+ "hjkl-form",
  "hjkl-ratatui",
  "hjkl-tree-sitter",
  "ratatui",

@@ -28,3 +28,10 @@ crossterm = "0.28"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 regex = "1"
+
+[dev-dependencies]
+hjkl-form = { path = "../../crates/hjkl-form", version = "=0.2.0" }
+
+[[example]]
+name = "form_demo"
+path = "examples/form_demo.rs"
