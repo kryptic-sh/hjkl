@@ -23,6 +23,13 @@ fn gutter_width(line_count: usize) -> u16 {
     line_count.to_string().len() as u16 + 2
 }
 
+/// Bg painted across the cursor row in both the editor pane and the
+/// picker preview pane. Subtle blue-grey — visible enough to track the
+/// cursor at a glance without competing with the syntax foreground.
+fn cursor_line_bg() -> Style {
+    Style::default().bg(Color::Rgb(60, 70, 100))
+}
+
 /// Render one complete frame into `frame`.
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -199,7 +206,11 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         viewport: app.active().editor.host().viewport(),
         selection,
         resolver: &resolver,
-        cursor_line_bg: Style::default(),
+        cursor_line_bg: if in_prompt {
+            Style::default()
+        } else {
+            cursor_line_bg()
+        },
         cursor_column_bg: Style::default(),
         selection_bg: Style::default().bg(Color::Blue),
         cursor_style: if in_prompt {
@@ -703,7 +714,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
             .unwrap_or_default()
     };
     let cursor_line_bg = if picker.preview_match_row().is_some() {
-        Style::default().bg(Color::Rgb(60, 70, 100))
+        cursor_line_bg()
     } else {
         Style::default()
     };
