@@ -11,6 +11,10 @@ impl App {
     pub(crate) fn switch_to(&mut self, idx: usize) {
         if idx != self.active {
             self.prev_active = Some(self.active);
+            // Carry the register bank across slots so vim's yank/paste
+            // works cross-buffer (`yy` in slot 0, `p` in slot 1).
+            let regs = self.slots[self.active].editor.registers().clone();
+            *self.slots[idx].editor.registers_mut() = regs;
         }
         self.active = idx;
         if let Ok(size) = crossterm::terminal::size() {

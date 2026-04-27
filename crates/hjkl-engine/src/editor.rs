@@ -1169,6 +1169,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         &self.registers
     }
 
+    /// Mutably borrow the full register bank. Hosts that share registers
+    /// across multiple editors (e.g. multi-buffer `yy` / `p`) overwrite
+    /// the slots here on buffer switch.
+    pub fn registers_mut(&mut self) -> &mut crate::registers::Registers {
+        &mut self.registers
+    }
+
     /// Host hook: load the OS clipboard's contents into the `"+` / `"*`
     /// register slot. the host calls this before letting vim consume a
     /// paste so `"*p` / `"+p` reflect the live clipboard rather than a
