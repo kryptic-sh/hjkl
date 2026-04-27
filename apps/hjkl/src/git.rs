@@ -35,14 +35,18 @@ pub fn signs_for_bytes(path: &Path, current: &[u8]) -> Vec<Sign> {
 }
 
 fn try_signs_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Sign>, git2::Error> {
-    let parent = path.parent().unwrap_or(Path::new("."));
+    // Canonicalize first so relative single-component paths (e.g.
+    // `.gitignore`) don't yield an empty parent — Path::new("foo").parent()
+    // returns Some("") not None, which Repository::discover rejects.
+    let canon_path = path
+        .canonicalize()
+        .map_err(|e| git2::Error::from_str(&e.to_string()))?;
+    let parent = canon_path.parent().unwrap_or(Path::new("."));
     let repo = Repository::discover(parent)?;
     let workdir = repo
         .workdir()
         .ok_or_else(|| git2::Error::from_str("bare repo has no workdir"))?;
-    let rel = path
-        .canonicalize()
-        .map_err(|e| git2::Error::from_str(&e.to_string()))?
+    let rel = canon_path
         .strip_prefix(
             workdir
                 .canonicalize()
@@ -202,6 +206,26 @@ mod tests {
         let bytes = std::fs::read(&f).unwrap();
         let signs = signs_for_bytes(&f, &bytes);
         assert!(signs.iter().any(|s| s.row == 2 && s.ch == '+'));
+    }
+
+    #[test]
+    fn modified_buffer_against_unchanged_disk_emits_signs() {
+        // The bug we're chasing: tracked file unchanged on disk, but the
+        // editor's in-memory buffer has unsaved edits. signs_for_bytes
+        // must compare HEAD blob against the *provided bytes*, not disk.
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("app.rs");
+        std::fs::write(&f, "alpha\nbravo\ncharlie\n").unwrap();
+        git(tmp.path(), &["add", "app.rs"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+        // Disk content unchanged; pretend the editor has an unsaved edit.
+        let in_memory = b"alpha\nBRAVO\ncharlie\n";
+        let signs = signs_for_bytes(&f, in_memory);
+        assert!(
+            signs.iter().any(|s| s.row == 1 && s.ch == '~'),
+            "expected '~' on row 1 from in-memory diff; got {signs:?}"
+        );
     }
 
     #[test]
