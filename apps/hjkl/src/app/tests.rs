@@ -575,6 +575,9 @@ fn buffer_source_new_produces_n_entries() {
                 .to_owned()
         },
         |s| s.dirty,
+        |s| s.editor.buffer().as_string(),
+        |s| s.filename.clone(),
+        |s| s.editor.buffer().cursor().row,
     ));
     // Build a Picker from the source — it calls enumerate internally.
     let mut picker = crate::picker::Picker::new(source);
@@ -601,6 +604,9 @@ fn buffer_source_select_returns_switch_buffer() {
                 .to_owned()
         },
         |s| s.dirty,
+        |s| s.editor.buffer().as_string(),
+        |s| s.filename.clone(),
+        |s| s.editor.buffer().cursor().row,
     );
     // Index 0 corresponds to the first entry (the only slot).
     match source.select(0) {

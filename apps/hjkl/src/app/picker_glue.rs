@@ -15,7 +15,7 @@ impl App {
 
     /// Open the buffer picker over the currently open slots.
     pub(crate) fn open_buffer_picker(&mut self) {
-        let source = Box::new(crate::picker::BufferSource::new(
+        let inner = crate::picker::BufferSource::new(
             &self.slots,
             |s| {
                 s.filename
@@ -25,7 +25,11 @@ impl App {
                     .to_owned()
             },
             |s| s.dirty,
-        ));
+            |s| s.editor.buffer().as_string(),
+            |s| s.filename.clone(),
+            |s| s.editor.buffer().cursor().row,
+        );
+        let source = Box::new(crate::picker::HighlightedBufferSource::new(inner));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
