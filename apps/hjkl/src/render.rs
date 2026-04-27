@@ -142,19 +142,19 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// `[I]` (Insert) or `[N]` (Normal) mode tag for users on terminals that
 /// don't render cursor-shape changes (or who want a discoverable visual cue).
 fn prompt_line(content: &str, mode: hjkl_form::VimMode, width: u16) -> Line<'static> {
-    let (tag, tag_style) = match mode {
-        hjkl_form::VimMode::Insert => (
-            " [I]",
-            Style::default().bg(Color::DarkGray).fg(Color::Yellow),
-        ),
-        _ => (" [N]", Style::default().bg(Color::DarkGray).fg(Color::Gray)),
+    // Insert: warm dark gray (active typing). Normal: cooler blue-tinted
+    // dark (navigating). Subtle ambient cue layered on top of cursor shape
+    // + the [I]/[N] tag.
+    let (bg, tag, tag_fg) = match mode {
+        hjkl_form::VimMode::Insert => (Color::DarkGray, " [I]", Color::Yellow),
+        _ => (Color::Rgb(35, 40, 60), " [N]", Color::Gray),
     };
     let body_width = (width as usize).saturating_sub(tag.len());
     let visible: String = content.chars().take(body_width).collect();
     let body = format!("{visible:<body_width$}");
     Line::from(vec![
-        Span::styled(body, Style::default().bg(Color::DarkGray).fg(Color::White)),
-        Span::styled(tag, tag_style),
+        Span::styled(body, Style::default().bg(bg).fg(Color::White)),
+        Span::styled(tag, Style::default().bg(bg).fg(tag_fg)),
     ])
 }
 
