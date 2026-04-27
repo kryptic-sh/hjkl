@@ -1,0 +1,52 @@
+//! # hjkl-form
+//!
+//! Vim-modal forms for hjkl-based apps.
+//!
+//! Each text field hosts its own [`hjkl_engine::Editor`], so users get
+//! the full vim grammar inside form inputs. The form itself runs a
+//! small FSM over `Form-Normal` / `Form-Insert` modes for focus
+//! navigation and validation, delegating keystrokes to the focused
+//! field's editor when in insert mode.
+//!
+//! Renderers live in adapter crates: `hjkl-ratatui::form::draw_form`
+//! ships the ratatui flavor.
+#![forbid(unsafe_code)]
+
+pub mod field;
+pub mod form;
+pub mod fsm;
+pub mod host;
+pub mod submit;
+pub mod validate;
+
+pub use field::{CheckboxField, Field, FieldMeta, SelectField, SubmitField, TextFieldEditor};
+pub use form::{Form, FormEvent, FormMode};
+pub use host::FormFieldHost;
+pub use submit::{SubmitFn, SubmitOutcome};
+pub use validate::{Validator, validate_field};
+
+#[cfg(test)]
+mod smoke_tests {
+    use super::*;
+
+    #[test]
+    fn empty_form_constructs() {
+        let form = Form::new();
+        assert_eq!(form.focused(), 0);
+        assert_eq!(form.mode, FormMode::Normal);
+    }
+
+    #[test]
+    fn two_field_form_focuses_first() {
+        let form = Form::new()
+            .with_title("Test")
+            .with_field(Field::SingleLineText(TextFieldEditor::new(
+                FieldMeta::new("Name"),
+                1,
+            )))
+            .with_field(Field::Submit(SubmitField::new(FieldMeta::new("Submit"))));
+        assert_eq!(form.fields.len(), 2);
+        assert_eq!(form.focused(), 0);
+        assert_eq!(form.mode, FormMode::Normal);
+    }
+}

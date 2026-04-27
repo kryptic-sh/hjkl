@@ -647,6 +647,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-form"
+version = "0.2.0"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine",
+]
+
+[[package]]
 name = "hjkl-ratatui"
 version = "0.2.0"
 dependencies = [
