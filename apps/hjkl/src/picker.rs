@@ -812,74 +812,156 @@ impl PickerLogic for RgSource {
         thread::Builder::new()
             .name("hjkl-rg-scan".into())
             .spawn(move || {
-                let child = std::process::Command::new("rg")
-                    .args([
-                        "--json",
-                        "--no-config",
-                        "--smart-case",
-                        "--max-count",
-                        "200",
-                        &q,
-                        root.to_str().unwrap_or("."),
-                    ])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .spawn();
+                use std::io::{BufRead, BufReader};
+                use std::process::Stdio;
 
-                let mut child = match child {
-                    Ok(c) => c,
-                    Err(_) => {
-                        // ripgrep not found — push a sentinel error item.
+                let backend = detect_grep_backend();
+
+                match backend {
+                    GrepBackend::Rg => {
+                        let child = std::process::Command::new("rg")
+                            .args([
+                                "--json",
+                                "--no-config",
+                                "--smart-case",
+                                "--max-count",
+                                "200",
+                                &q,
+                                root.to_str().unwrap_or("."),
+                            ])
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null())
+                            .spawn();
+
+                        let mut child = match child {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+
+                        let stdout = match child.stdout.take() {
+                            Some(s) => s,
+                            None => return,
+                        };
+
+                        let reader = BufReader::new(stdout);
+                        let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+
+                        for line_result in reader.lines() {
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                            let line = match line_result {
+                                Ok(l) => l,
+                                Err(_) => continue,
+                            };
+                            if let Some(rg_match) = parse_rg_json_line(&line, &root) {
+                                batch.push(rg_match);
+                                if batch.len() >= 32
+                                    && let Ok(mut g) = items.lock()
+                                {
+                                    g.extend(batch.drain(..));
+                                }
+                            }
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                        }
+                        // Flush remaining batch.
+                        if !batch.is_empty()
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.extend(batch.drain(..));
+                        }
+                        let _ = child.wait();
+                    }
+
+                    GrepBackend::Grep => {
+                        let child = std::process::Command::new("grep")
+                            .args([
+                                "-rn",
+                                "-E",
+                                "--color=never",
+                                &q,
+                                root.to_str().unwrap_or("."),
+                            ])
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::null())
+                            .spawn();
+
+                        let mut child = match child {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+
+                        let stdout = match child.stdout.take() {
+                            Some(s) => s,
+                            None => return,
+                        };
+
+                        let reader = BufReader::new(stdout);
+                        let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
+                        let mut total = 0usize;
+                        const GREP_CAP: usize = 1000;
+
+                        for line_result in reader.lines() {
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                            let raw = match line_result {
+                                Ok(l) => l,
+                                Err(_) => continue,
+                            };
+                            if raw.is_empty() {
+                                continue;
+                            }
+                            // Format: path:line_number:text
+                            // Split on ':' from the left, first two segments
+                            // are path and line number; rest is text (may
+                            // contain ':'). Skip lines that don't conform
+                            // (binary file warnings, etc.).
+                            if let Some(m) = parse_grep_line(&raw, &root) {
+                                batch.push(m);
+                                total += 1;
+                                if batch.len() >= 32
+                                    && let Ok(mut g) = items.lock()
+                                {
+                                    g.extend(batch.drain(..));
+                                }
+                                if total >= GREP_CAP {
+                                    let _ = child.kill();
+                                    break;
+                                }
+                            }
+                            if cancel.load(Ordering::Acquire) {
+                                let _ = child.kill();
+                                return;
+                            }
+                        }
+                        // Flush remaining batch.
+                        if !batch.is_empty()
+                            && let Ok(mut g) = items.lock()
+                        {
+                            g.extend(batch.drain(..));
+                        }
+                        let _ = child.wait();
+                    }
+
+                    GrepBackend::Neither => {
+                        // Neither rg nor grep available — push sentinel item.
                         if let Ok(mut g) = items.lock() {
                             g.push(RgMatch {
                                 path: PathBuf::new(),
                                 line: 0,
                                 _col: 0,
-                                text: "ripgrep not found — install ripgrep to use :rg".into(),
+                                text: "ripgrep not found — install ripgrep or grep to use :rg"
+                                    .into(),
                             });
                         }
-                        return;
-                    }
-                };
-
-                let stdout = match child.stdout.take() {
-                    Some(s) => s,
-                    None => return,
-                };
-
-                use std::io::{BufRead, BufReader};
-                let reader = BufReader::new(stdout);
-                let mut batch: Vec<RgMatch> = Vec::with_capacity(32);
-
-                for line_result in reader.lines() {
-                    if cancel.load(Ordering::Acquire) {
-                        let _ = child.kill();
-                        return;
-                    }
-                    let line = match line_result {
-                        Ok(l) => l,
-                        Err(_) => continue,
-                    };
-                    if let Some(rg_match) = parse_rg_json_line(&line, &root) {
-                        batch.push(rg_match);
-                        if batch.len() >= 32
-                            && let Ok(mut g) = items.lock()
-                        {
-                            g.extend(batch.drain(..));
-                        }
-                    }
-                    if cancel.load(Ordering::Acquire) {
-                        let _ = child.kill();
-                        return;
                     }
                 }
-                // Flush remaining batch.
-                if !batch.is_empty()
-                    && let Ok(mut g) = items.lock()
-                {
-                    g.extend(batch.drain(..));
-                }
-                let _ = child.wait();
             })
             .ok()
     }
@@ -950,6 +1032,72 @@ fn extract_json_u32(json: &str, key: &str) -> Option<u32> {
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(rest.len());
     rest[..end].parse().ok()
+}
+
+// ── Grep backend detection ────────────────────────────────────────────────────
+
+/// Which search backend is available on this system.
+enum GrepBackend {
+    /// ripgrep (`rg`) — preferred; produces rich JSON output.
+    Rg,
+    /// POSIX `grep` — fallback when ripgrep is not installed.
+    Grep,
+    /// Neither tool found on PATH.
+    Neither,
+}
+
+/// Probe PATH once per requery to decide which backend to use.
+/// The probes are cheap (`--version` exits immediately).
+fn detect_grep_backend() -> GrepBackend {
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return GrepBackend::Rg;
+    }
+    if std::process::Command::new("grep")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return GrepBackend::Grep;
+    }
+    GrepBackend::Neither
+}
+
+/// Parse one line of `grep -rn` output (`path:line:text`).
+///
+/// Splits on `:` from the left: first segment is path, second is the 1-based
+/// line number, everything after is the matched text (which may itself contain
+/// `:`). Returns `None` for lines that don't conform (binary-file warnings,
+/// etc.).
+fn parse_grep_line(raw: &str, root: &Path) -> Option<RgMatch> {
+    let mut parts = raw.splitn(3, ':');
+    let path_str = parts.next()?;
+    let line_str = parts.next()?;
+    let text = parts.next().unwrap_or("").trim_end_matches('\n').to_owned();
+
+    let line: u32 = line_str.parse().ok()?;
+
+    let abs_path = PathBuf::from(path_str);
+    let rel_path = abs_path
+        .strip_prefix(root)
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|_| abs_path);
+
+    Some(RgMatch {
+        path: rel_path,
+        line,
+        _col: 1,
+        text,
+    })
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
