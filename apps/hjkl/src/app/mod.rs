@@ -212,6 +212,88 @@ fn prompt_cursor_shape(field: &hjkl_form::TextFieldEditor) -> CursorShape {
     }
 }
 
+/// Build a [`BufferSlot`] from disk content.
+///
+/// - `path = None` → empty unnamed scratch buffer (used by `:bd` on the
+///   last slot; today `open_new_slot`/`App::new` always pass `Some(path)`,
+///   but accepting `None` lets future call sites converge here too).
+/// - `path = Some(p)` and file missing → `is_new_file = true`,
+///   buffer empty, filename retained.
+/// - `path = Some(p)` and file unreadable → `Err`.
+///
+/// Both original call sites used `wait_for_initial_result(150ms)`; that
+/// method is kept here as the single canonical timeout.
+pub(super) fn build_slot(
+    syntax: &mut SyntaxLayer,
+    buffer_id: BufferId,
+    path: Option<PathBuf>,
+) -> Result<BufferSlot, String> {
+    let mut buffer = Buffer::new();
+    let mut is_new_file = false;
+    if let Some(ref p) = path {
+        match std::fs::read_to_string(p) {
+            Ok(content) => {
+                let content = content.strip_suffix('\n').unwrap_or(&content);
+                BufferEdit::replace_all(&mut buffer, content);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                is_new_file = true;
+            }
+            Err(e) => return Err(format!("E484: Can't open file {}: {e}", p.display())),
+        }
+    }
+
+    let host = TuiHost::new();
+    let mut editor = Editor::new(buffer, host, Options::default());
+    if let Ok(size) = crossterm::terminal::size() {
+        let vp = editor.host_mut().viewport_mut();
+        vp.width = size.0;
+        vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+    }
+    if let Some(ref p) = path {
+        syntax.set_language_for_path(buffer_id, p);
+    }
+
+    let (vp_top, vp_height) = {
+        let vp = editor.host().viewport();
+        (vp.top_row, vp.height as usize)
+    };
+    if let Some(out) = syntax.preview_render(buffer_id, editor.buffer(), vp_top, vp_height) {
+        editor.install_ratatui_syntax_spans(out.spans);
+    }
+    syntax.submit_render(buffer_id, editor.buffer(), vp_top, vp_height);
+    let initial_dg = editor.buffer().dirty_gen();
+    let (key, signs) = if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150))
+    {
+        let k = out.key;
+        editor.install_ratatui_syntax_spans(out.spans);
+        (Some(k), out.signs)
+    } else {
+        (Some((initial_dg, vp_top, vp_height)), Vec::new())
+    };
+    let _ = editor.take_content_edits();
+    let _ = editor.take_content_reset();
+
+    let mut slot = BufferSlot {
+        buffer_id,
+        editor,
+        filename: path,
+        dirty: false,
+        is_new_file,
+        is_untracked: false,
+        diag_signs: signs,
+        git_signs: Vec::new(),
+        last_git_dirty_gen: None,
+        last_git_refresh_at: Instant::now(),
+        last_recompute_at: Instant::now() - Duration::from_secs(1),
+        last_recompute_key: key,
+        saved_hash: 0,
+        saved_len: 0,
+    };
+    slot.snapshot_saved();
+    Ok(slot)
+}
+
 impl App {
     /// Return a shared reference to the active buffer slot.
     pub fn active(&self) -> &BufferSlot {
@@ -249,118 +331,38 @@ impl App {
         goto_line: Option<usize>,
         search_pattern: Option<String>,
     ) -> Result<Self> {
-        let mut buffer = Buffer::new();
-        let mut is_new_file = false;
-        if let Some(ref path) = filename {
-            match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    // Strip one trailing newline (vim default): a file
-                    // ending in `\n` is the EOL of its last line, not
-                    // a separator before an empty trailing line. Save
-                    // re-appends one.
-                    let content = content.strip_suffix('\n').unwrap_or(&content);
-                    BufferEdit::replace_all(&mut buffer, content);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    // New file — buffer stays empty, filename retained.
-                    is_new_file = true;
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("{}: {}", path.display(), e));
-                }
-            }
-        }
+        // Build syntax layer (dark theme default) then load the first slot.
+        let mut syntax = syntax::default_layer();
+        let buffer_id: BufferId = 0;
+        let mut slot =
+            build_slot(&mut syntax, buffer_id, filename).map_err(|s| anyhow::anyhow!(s))?;
 
-        let host = TuiHost::new();
-        let options = Options {
-            readonly,
-            ..Options::default()
-        };
-        let mut editor = Editor::new(buffer, host, options);
+        // Apply readonly after the slot is built — build_slot always uses
+        // Options::default(); override here when requested.
+        if readonly {
+            slot.editor.apply_options(&Options {
+                readonly: true,
+                ..Options::default()
+            });
+        }
 
         // +N line jump — 1-based, clamp to buffer.
         if let Some(n) = goto_line {
-            editor.goto_line(n);
+            slot.editor.goto_line(n);
         }
 
         // +/pattern initial search — compile the pattern and set it.
         if let Some(pat) = search_pattern {
             match regex::Regex::new(&pat) {
                 Ok(re) => {
-                    editor.set_search_pattern(Some(re));
-                    editor.search_advance_forward(false);
+                    slot.editor.set_search_pattern(Some(re));
+                    slot.editor.search_advance_forward(false);
                 }
                 Err(e) => {
                     eprintln!("hjkl: bad search pattern: {e}");
                 }
             }
         }
-
-        // Build syntax layer (dark theme default) and detect language for
-        // the opened file, then run an initial highlight pass.
-        let mut syntax = syntax::default_layer();
-        let buffer_id: BufferId = 0;
-        if let Some(ref path) = filename {
-            syntax.set_language_for_path(buffer_id, path);
-        }
-        // Sync host viewport to the real terminal size before sizing the
-        // preview / submitting the initial parse.
-        if let Ok(size) = crossterm::terminal::size() {
-            let vp = editor.host_mut().viewport_mut();
-            vp.width = size.0;
-            vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
-        }
-        let initial_vp_top = editor.host().viewport().top_row;
-        let initial_vp_height = editor.host().viewport().height as usize;
-        // Synchronous viewport-only preview so the first frame has
-        // highlights regardless of file size or viewport position.
-        let mut initial_signs: Vec<hjkl_buffer::Sign> = Vec::new();
-        let initial_dg = editor.buffer().dirty_gen();
-        if let Some(out) = syntax.preview_render(
-            buffer_id,
-            editor.buffer(),
-            initial_vp_top,
-            initial_vp_height,
-        ) {
-            editor.install_ratatui_syntax_spans(out.spans);
-        }
-        syntax.submit_render(
-            buffer_id,
-            editor.buffer(),
-            initial_vp_top,
-            initial_vp_height,
-        );
-        let initial_key: Option<(u64, usize, usize)> =
-            if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150)) {
-                let key = out.key;
-                editor.install_ratatui_syntax_spans(out.spans);
-                initial_signs = out.signs;
-                Some(key)
-            } else {
-                Some((initial_dg, initial_vp_top, initial_vp_height))
-            };
-        // Drain any ContentEdit / reset state seeded during construction.
-        let _ = editor.take_content_edits();
-        let _ = editor.take_content_reset();
-
-        let mut slot = BufferSlot {
-            buffer_id,
-            editor,
-            filename,
-            dirty: false,
-            is_new_file,
-            is_untracked: false,
-            diag_signs: initial_signs,
-            git_signs: Vec::new(),
-            last_git_dirty_gen: None,
-            last_git_refresh_at: Instant::now(),
-            last_recompute_at: Instant::now() - Duration::from_secs(1),
-            last_recompute_key: initial_key,
-            saved_hash: 0,
-            saved_len: 0,
-        };
-        // Snapshot the loaded content so undo-to-saved clears dirty.
-        slot.snapshot_saved();
 
         Ok(Self {
             slots: vec![slot],
