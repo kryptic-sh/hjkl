@@ -1046,6 +1046,15 @@ impl App {
         let line_count = trimmed.lines().count();
         let byte_count = content.len();
         self.editor.set_content(trimmed);
+        // Vim `:e` lands on row 0, col 0 with the viewport at the top
+        // — without this the previous file's scroll offset bleeds into
+        // the new buffer.
+        self.editor.goto_line(1);
+        {
+            let vp = self.editor.host_mut().viewport_mut();
+            vp.top_row = 0;
+            vp.top_col = 0;
+        }
         self.filename = Some(path.clone());
         self.is_new_file = false;
         self.syntax.set_language_for_path(&path);
