@@ -398,16 +398,29 @@ fn find_comment_delimiter(line_bytes: &[u8]) -> Option<usize> {
     None
 }
 
-/// Return `true` when `bytes[prev_end..next_start]` contains only whitespace
-/// (spaces, tabs, newlines) — i.e. the two comment spans are on adjacent
-/// lines with nothing but blank lines (or nothing) between them.
+/// Return `true` when the two comment spans are on directly adjacent lines:
+/// the gap contains only space / tab / `\r` and exactly one `\n`. A blank
+/// line (two or more newlines) breaks the run, so an unrelated comment that
+/// follows a blank line does not inherit the previous comment's marker color.
 fn is_consecutive(bytes: &[u8], prev_end: usize, next_start: usize) -> bool {
     if prev_end > next_start || next_start > bytes.len() {
         return false;
     }
-    bytes[prev_end..next_start]
-        .iter()
-        .all(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+    let gap = &bytes[prev_end..next_start];
+    let mut newlines = 0usize;
+    for &b in gap {
+        match b {
+            b'\n' => {
+                newlines += 1;
+                if newlines > 1 {
+                    return false;
+                }
+            }
+            b' ' | b'\t' | b'\r' => {}
+            _ => return false,
+        }
+    }
+    newlines == 1
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +500,20 @@ mod tests {
             has_inherited_tail,
             "expected inherited tail on second line; got {ms:#?}"
         );
+    }
+
+    #[test]
+    fn inheritance_breaks_on_blank_line() {
+        // "// TODO foo\n\n// unrelated" — blank line between comments must
+        // reset the active marker color; second comment gets no tail.
+        let src = b"// TODO foo\n\n// unrelated";
+        let ms = marker_spans(src);
+        // Second comment starts at byte 13. Anything at or past 13 is inherited
+        // tail leaking across the blank line.
+        let leaked = ms
+            .iter()
+            .any(|s| s.capture() == "comment.marker.tail.todo" && s.byte_range.start >= 13);
+        assert!(!leaked, "blank line should break inheritance; got {ms:#?}");
     }
 
     #[test]
