@@ -751,6 +751,11 @@ pub struct Settings {
     /// whitespace of the current line onto the new line. Matches vim's
     /// `:set autoindent`. Default `true` (vim parity).
     pub autoindent: bool,
+    /// When `true`, bumps indent by one `shiftwidth` after a line ending
+    /// in `{` / `(` / `[`, and strips one indent unit when the user types
+    /// `}` / `)` / `]` on a whitespace-only line. See `compute_enter_indent`
+    /// in `vim.rs` for the tree-sitter plug-in seam. Default `true`.
+    pub smartindent: bool,
     /// Cap on undo-stack length. Older entries are pruned past this
     /// bound. `0` means unlimited. Matches vim's `:set undolevels`.
     /// Default `1000`.
@@ -789,6 +794,7 @@ impl Default for Settings {
             wrap: hjkl_buffer::Wrap::None,
             readonly: false,
             autoindent: true,
+            smartindent: true,
             undo_levels: 1000,
             undo_break_on_motion: true,
             iskeyword: "@,48-57,_,192-255".to_string(),
@@ -821,6 +827,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         },
         readonly: o.readonly,
         autoindent: o.autoindent,
+        smartindent: o.smartindent,
         undo_levels: o.undo_levels,
         undo_break_on_motion: o.undo_break_on_motion,
         iskeyword: o.iskeyword.clone(),
@@ -2051,6 +2058,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             },
             readonly: self.settings.readonly,
             autoindent: self.settings.autoindent,
+            smartindent: self.settings.smartindent,
             undo_levels: self.settings.undo_levels,
             undo_break_on_motion: self.settings.undo_break_on_motion,
             iskeyword: self.settings.iskeyword.clone(),
@@ -2079,6 +2087,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         };
         self.settings.readonly = opts.readonly;
         self.settings.autoindent = opts.autoindent;
+        self.settings.smartindent = opts.smartindent;
         self.settings.undo_levels = opts.undo_levels;
         self.settings.undo_break_on_motion = opts.undo_break_on_motion;
         self.set_iskeyword(opts.iskeyword.clone());

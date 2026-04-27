@@ -833,7 +833,7 @@ fn apply_set<H: hjkl_engine::Host>(
             hjkl_buffer::Wrap::Word => "word",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  undobreak={}  readonly={}  wrap={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -846,6 +846,7 @@ fn apply_set<H: hjkl_engine::Host>(
             if s.smartcase { "on" } else { "off" },
             if s.wrapscan { "on" } else { "off" },
             if s.autoindent { "on" } else { "off" },
+            if s.smartindent { "on" } else { "off" },
             if s.undo_break_on_motion { "on" } else { "off" },
             if s.readonly { "on" } else { "off" },
             wrap,
@@ -915,6 +916,7 @@ fn apply_set_token<H: hjkl_engine::Host>(
         "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
         "expandtab" | "et" => editor.settings_mut().expandtab = value,
         "autoindent" | "ai" => editor.settings_mut().autoindent = value,
+        "smartindent" | "si" => editor.settings_mut().smartindent = value,
         "undobreak" => editor.settings_mut().undo_break_on_motion = value,
         "readonly" | "ro" => editor.settings_mut().readonly = value,
         "wrap" => {

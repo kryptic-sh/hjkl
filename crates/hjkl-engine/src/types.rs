@@ -263,6 +263,13 @@ pub struct Options {
     pub wrapscan: bool,
     /// Copy previous line's leading whitespace on Enter in insert mode.
     pub autoindent: bool,
+    /// When `true`, bump indent by one `shiftwidth` after a line ending in
+    /// `{` / `(` / `[`, and strip one indent unit when the user types the
+    /// matching `}` / `)` / `]` on an otherwise-whitespace-only line.
+    /// Supersedes autoindent's plain copy when on.  Future: a
+    /// tree-sitter `indents.scm` provider will replace the heuristic; see
+    /// `compute_enter_indent` in `vim.rs` for the plug-in point.
+    pub smartindent: bool,
     /// Multi-key sequence timeout (e.g., `<C-w>v`). Vim's `timeoutlen`.
     pub timeout_len: core::time::Duration,
     /// Maximum undo-tree depth. Older entries pruned.
@@ -324,6 +331,7 @@ impl Default for Options {
             incsearch: true,
             wrapscan: true,
             autoindent: true,
+            smartindent: true,
             timeout_len: core::time::Duration::from_millis(1000),
             undo_levels: 1000,
             undo_break_on_motion: true,
@@ -400,6 +408,7 @@ impl Options {
             "incsearch" | "is" => set_bool!(incsearch),
             "wrapscan" | "ws" => set_bool!(wrapscan),
             "autoindent" | "ai" => set_bool!(autoindent),
+            "smartindent" | "si" => set_bool!(smartindent),
             "timeoutlen" | "tm" => {
                 self.timeout_len = match val {
                     OptionValue::Int(n) if n >= 0 => core::time::Duration::from_millis(n as u64),
@@ -467,6 +476,7 @@ impl Options {
             "incsearch" | "is" => OptionValue::Bool(self.incsearch),
             "wrapscan" | "ws" => OptionValue::Bool(self.wrapscan),
             "autoindent" | "ai" => OptionValue::Bool(self.autoindent),
+            "smartindent" | "si" => OptionValue::Bool(self.smartindent),
             "timeoutlen" | "tm" => OptionValue::Int(self.timeout_len.as_millis() as i64),
             "undolevels" | "ul" => OptionValue::Int(self.undo_levels as i64),
             "undobreak" => OptionValue::Bool(self.undo_break_on_motion),
@@ -1293,6 +1303,7 @@ mod tests {
         assert!(o.expandtab);
         assert!(o.hlsearch);
         assert!(o.wrapscan);
+        assert!(o.smartindent);
         assert_eq!(o.timeout_len, core::time::Duration::from_millis(1000));
     }
 

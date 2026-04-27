@@ -2,4 +2,4 @@
 source: crates/hjkl-editor/tests/golden_ex.rs
 expression: info
 ---
-shiftwidth=4  tabstop=4  softtabstop=4  textwidth=79  undolevels=1000  timeoutlen=1000  iskeyword="@,48-57,_,192-255"  expandtab=on  ignorecase=off  smartcase=off  wrapscan=on  autoindent=on  undobreak=on  readonly=off  wrap=off
+shiftwidth=4  tabstop=4  softtabstop=4  textwidth=79  undolevels=1000  timeoutlen=1000  iskeyword="@,48-57,_,192-255"  expandtab=on  ignorecase=off  smartcase=off  wrapscan=on  autoindent=on  smartindent=on  undobreak=on  readonly=off  wrap=off

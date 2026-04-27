@@ -1159,6 +1159,140 @@ fn insert_register_text<H: crate::types::Host>(
     }
 }
 
+/// Compute the indent string to insert at the start of a new line
+/// after Enter is pressed at `cursor`. Walks the smartindent rules:
+///
+/// - autoindent off → empty string
+/// - autoindent on  → copy prev line's leading whitespace
+/// - smartindent on → bump one `shiftwidth` if prev line's last
+///   non-whitespace char is `{` / `(` / `[`
+///
+/// Indent unit (used for the smartindent bump):
+///
+/// - `expandtab && softtabstop > 0` → `softtabstop` spaces
+/// - `expandtab` → `shiftwidth` spaces
+/// - `!expandtab` → one literal `\t`
+///
+/// This is the placeholder for a future tree-sitter indent provider:
+/// when a language has an `indents.scm` query, the engine will route
+/// the same call through that provider and only fall back to this
+/// heuristic when no query matches.
+pub(super) fn compute_enter_indent(settings: &crate::editor::Settings, prev_line: &str) -> String {
+    if !settings.autoindent {
+        return String::new();
+    }
+    // Copy the prev line's leading whitespace (autoindent base).
+    let base: String = prev_line
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .collect();
+
+    if settings.smartindent {
+        // If the last non-whitespace character is an open bracket, bump
+        // indent by one unit. This is the heuristic seam: a tree-sitter
+        // `indents.scm` provider would replace this branch.
+        let last_non_ws = prev_line.chars().rev().find(|c| !c.is_whitespace());
+        if matches!(last_non_ws, Some('{' | '(' | '[')) {
+            let unit = if settings.expandtab {
+                if settings.softtabstop > 0 {
+                    " ".repeat(settings.softtabstop)
+                } else {
+                    " ".repeat(settings.shiftwidth)
+                }
+            } else {
+                "\t".to_string()
+            };
+            return format!("{base}{unit}");
+        }
+    }
+
+    base
+}
+
+/// Strip one indent unit from the beginning of `line` and insert `ch`
+/// instead. Returns `true` when it consumed the keystroke (dedent +
+/// insert), `false` when the caller should insert normally.
+///
+/// Dedent fires when:
+///   - `smartindent` is on
+///   - `ch` is `}` / `)` / `]`
+///   - all bytes BEFORE the cursor on the current line are whitespace
+///   - there is at least one full indent unit of leading whitespace
+fn try_dedent_close_bracket<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    cursor: hjkl_buffer::Position,
+    ch: char,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+
+    if !ed.settings.smartindent {
+        return false;
+    }
+    if !matches!(ch, '}' | ')' | ']') {
+        return false;
+    }
+
+    let line = match buf_line(&ed.buffer, cursor.row) {
+        Some(l) => l.to_string(),
+        None => return false,
+    };
+
+    // All chars before cursor must be whitespace.
+    let before: String = line.chars().take(cursor.col).collect();
+    if !before.chars().all(|c| c == ' ' || c == '\t') {
+        return false;
+    }
+    if before.is_empty() {
+        // Nothing to strip — just insert normally (cursor at col 0).
+        return false;
+    }
+
+    // Compute indent unit.
+    let unit_len: usize = if ed.settings.expandtab {
+        if ed.settings.softtabstop > 0 {
+            ed.settings.softtabstop
+        } else {
+            ed.settings.shiftwidth
+        }
+    } else {
+        // Tab: one literal tab character.
+        1
+    };
+
+    // Check there's at least one full unit to strip.
+    let strip_len = if ed.settings.expandtab {
+        // Count leading spaces; need at least `unit_len`.
+        let spaces = before.chars().filter(|c| *c == ' ').count();
+        if spaces < unit_len {
+            return false;
+        }
+        unit_len
+    } else {
+        // noexpandtab: strip one leading tab.
+        if !before.starts_with('\t') {
+            return false;
+        }
+        1
+    };
+
+    // Delete the leading `strip_len` chars of the current line.
+    ed.mutate_edit(Edit::DeleteRange {
+        start: Position::new(cursor.row, 0),
+        end: Position::new(cursor.row, strip_len),
+        kind: MotionKind::Char,
+    });
+    // Insert the close bracket at column 0 (after the delete the cursor
+    // is still positioned at the end of the remaining whitespace; the
+    // delete moved the text so the cursor is now at col = before.len() -
+    // strip_len).
+    let new_col = cursor.col.saturating_sub(strip_len);
+    ed.mutate_edit(Edit::InsertChar {
+        at: Position::new(cursor.row, new_col),
+        ch,
+    });
+    true
+}
+
 /// Insert-mode key dispatcher backed by the migration buffer. Replaces
 /// the historical `textarea.input(input)` call so the textarea field
 /// can be ripped at the end of Phase 7f. PageUp / PageDown still flow
@@ -1191,17 +1325,16 @@ fn handle_insert_key<H: crate::types::Host>(
             true
         }
         Key::Char(c) => {
-            ed.mutate_edit(Edit::InsertChar { at: cursor, ch: c });
+            if !try_dedent_close_bracket(ed, cursor, c) {
+                ed.mutate_edit(Edit::InsertChar { at: cursor, ch: c });
+            }
             true
         }
         Key::Enter => {
-            let indent: String = if ed.settings.autoindent {
-                buf_line(&ed.buffer, cursor.row)
-                    .map(|l| l.chars().take_while(|c| *c == ' ' || *c == '\t').collect())
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
+            let prev_line = buf_line(&ed.buffer, cursor.row)
+                .unwrap_or_default()
+                .to_string();
+            let indent = compute_enter_indent(&ed.settings, &prev_line);
             let text = format!("\n{indent}");
             ed.mutate_edit(Edit::InsertStr { at: cursor, text });
             true
@@ -9289,5 +9422,127 @@ mod tests {
         let row_before_dot = e.cursor().0;
         run_keys(&mut e, ".");
         assert!(e.buffer().lines()[row_before_dot].starts_with('X'));
+    }
+
+    // ── smartindent tests ────────────────────────────────────────────────
+
+    /// Build an editor with 4-space settings (expandtab, shiftwidth=4,
+    /// softtabstop=4) for smartindent tests. Does NOT inherit the
+    /// shiftwidth=2 override from `editor_with`.
+    fn si_editor(content: &str) -> Editor {
+        let opts = crate::types::Options {
+            shiftwidth: 4,
+            softtabstop: 4,
+            expandtab: true,
+            smartindent: true,
+            autoindent: true,
+            ..crate::types::Options::default()
+        };
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            opts,
+        );
+        e.set_content(content);
+        e
+    }
+
+    #[test]
+    fn smartindent_bumps_indent_after_open_brace() {
+        // "fn foo() {" + Enter → new line has 4 spaces of indent
+        let mut e = si_editor("fn foo() {");
+        e.jump_cursor(0, 10); // after the `{`
+        run_keys(&mut e, "i<CR>");
+        assert_eq!(
+            e.buffer().lines()[1],
+            "    ",
+            "smartindent should bump one shiftwidth after {{"
+        );
+    }
+
+    #[test]
+    fn smartindent_no_bump_when_off() {
+        // Same input but smartindent=false → just copies prev leading ws
+        // (which is empty on "fn foo() {"), so new line is empty.
+        let mut e = si_editor("fn foo() {");
+        e.settings_mut().smartindent = false;
+        e.jump_cursor(0, 10);
+        run_keys(&mut e, "i<CR>");
+        assert_eq!(
+            e.buffer().lines()[1],
+            "",
+            "without smartindent, no bump: new line copies empty leading ws"
+        );
+    }
+
+    #[test]
+    fn smartindent_uses_tab_when_noexpandtab() {
+        // noexpandtab + prev line ends in `{` → new line starts with `\t`
+        let opts = crate::types::Options {
+            shiftwidth: 4,
+            softtabstop: 0,
+            expandtab: false,
+            smartindent: true,
+            autoindent: true,
+            ..crate::types::Options::default()
+        };
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            opts,
+        );
+        e.set_content("fn foo() {");
+        e.jump_cursor(0, 10);
+        run_keys(&mut e, "i<CR>");
+        assert_eq!(
+            e.buffer().lines()[1],
+            "\t",
+            "noexpandtab: smartindent bump inserts a literal tab"
+        );
+    }
+
+    #[test]
+    fn smartindent_dedent_on_close_brace() {
+        // Line is "    " (4 spaces), cursor at col 4, type `}` →
+        // leading spaces stripped, `}` at col 0.
+        let mut e = si_editor("fn foo() {");
+        // Add a second line with only indentation.
+        e.set_content("fn foo() {\n    ");
+        e.jump_cursor(1, 4); // end of "    "
+        run_keys(&mut e, "i}");
+        assert_eq!(
+            e.buffer().lines()[1],
+            "}",
+            "close brace on whitespace-only line should dedent"
+        );
+        assert_eq!(e.cursor(), (1, 1), "cursor should be after the `}}`");
+    }
+
+    #[test]
+    fn smartindent_no_dedent_when_off() {
+        // Same setup but smartindent=false → `}` appended normally.
+        let mut e = si_editor("fn foo() {\n    ");
+        e.settings_mut().smartindent = false;
+        e.jump_cursor(1, 4);
+        run_keys(&mut e, "i}");
+        assert_eq!(
+            e.buffer().lines()[1],
+            "    }",
+            "without smartindent, `}}` just appends at cursor"
+        );
+    }
+
+    #[test]
+    fn smartindent_no_dedent_mid_line() {
+        // Line has "    let x = 1", cursor after `1`; type `}` → no
+        // dedent because chars before cursor aren't all whitespace.
+        let mut e = si_editor("    let x = 1");
+        e.jump_cursor(0, 13); // after `1`
+        run_keys(&mut e, "i}");
+        assert_eq!(
+            e.buffer().lines()[0],
+            "    let x = 1}",
+            "mid-line `}}` should not dedent"
+        );
     }
 }

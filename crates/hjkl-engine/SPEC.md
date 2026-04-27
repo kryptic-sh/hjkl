@@ -27,7 +27,7 @@ Source: phase 0 audit (`../../AUDIT.md`) + `MIGRATION.md` Spec Lock + the 0.0.33
 - The `EditorSnapshot` wire format — `EditorSnapshot::VERSION` (`4`) is locked
   for the entire 0.1.x line.
 - The `Options` `:set` surface — modern defaults from 0.2.0 (shiftwidth=4 /
-  tabstop=4 / softtabstop=4 / expandtab=on /
+  tabstop=4 / softtabstop=4 / expandtab=on / smartindent=on /
   `iskeyword="@,48-57,_,192-255"` / etc.). Vim-faithful tabs are one
   `:set noexpandtab tabstop=8 shiftwidth=8 softtabstop=0` away.
 - `FoldOp` / `FoldProvider` (the engine-canonical fold-mutation channel
