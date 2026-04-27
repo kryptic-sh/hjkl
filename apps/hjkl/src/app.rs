@@ -942,6 +942,49 @@ impl App {
             return;
         }
 
+        // E1 — `:b [num|name]` — must be matched BEFORE the `bn`/`bp` block.
+        if cmd == "b" || cmd.starts_with("b ") {
+            let arg = cmd.strip_prefix("b ").map(str::trim).unwrap_or("").trim();
+            if arg.is_empty() {
+                self.status_message = Some("E94: No matching buffer".into());
+            } else if arg.chars().all(|c| c.is_ascii_digit()) {
+                let n: usize = arg.parse().unwrap_or(0);
+                if n == 0 || n > self.slots.len() {
+                    self.status_message = Some(format!("E86: Buffer {n} does not exist"));
+                } else {
+                    self.switch_to(n - 1);
+                }
+            } else {
+                let arg_lower = arg.to_lowercase();
+                let matches: Vec<usize> = self
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| {
+                        s.filename
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.to_lowercase().contains(&arg_lower))
+                            .unwrap_or(false)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                match matches.len() {
+                    0 => {
+                        self.status_message = Some(format!("E94: No matching buffer for {arg}"));
+                    }
+                    1 => {
+                        self.switch_to(matches[0]);
+                    }
+                    _ => {
+                        self.status_message = Some(format!("E93: More than one match for {arg}"));
+                    }
+                }
+            }
+            return;
+        }
+
         // Multi-buffer commands (Phase C) — `bn`/`bp`/`bd`/`ls` are not
         // in the engine's COMMAND_NAMES table, so canonicalization
         // leaves them as-is. Match raw spellings here.
@@ -962,12 +1005,43 @@ impl App {
                 self.buffer_delete(true);
                 return;
             }
+            // E2 — `:bfirst` / `:blast`
+            "bfirst" | "bf" => {
+                self.switch_to(0);
+                return;
+            }
+            "blast" | "bl" => {
+                let last = self.slots.len() - 1;
+                self.switch_to(last);
+                return;
+            }
             "ls" | "buffers" | "files" => {
                 self.status_message = Some(self.list_buffers());
                 return;
             }
             "b#" => {
                 self.buffer_alt();
+                return;
+            }
+            // E3 — `:wa` / `:qa` / `:wqa`
+            "wa" | "wall" => {
+                self.write_all();
+                return;
+            }
+            "qa" | "qall" => {
+                self.quit_all(false);
+                return;
+            }
+            "qa!" | "qall!" => {
+                self.quit_all(true);
+                return;
+            }
+            "wqa" | "wqall" => {
+                self.write_quit_all(false);
+                return;
+            }
+            "wqa!" | "wqall!" => {
+                self.write_quit_all(true);
                 return;
             }
             _ => {}
@@ -998,16 +1072,21 @@ impl App {
             ExEffect::Quit { force, save } => {
                 if save {
                     self.do_save(None);
+                    // Fall through to close-or-quit.
+                }
+                // E4: multi-slot — close active slot, stay in app.
+                if self.slots.len() > 1 {
+                    self.buffer_delete(force);
+                    return;
+                }
+                // Last slot: original quit semantics.
+                if force || save {
                     self.exit_requested = true;
-                } else if force {
-                    self.exit_requested = true;
+                } else if self.active().dirty {
+                    self.status_message =
+                        Some("E37: No write since last change (add ! to override)".into());
                 } else {
-                    if self.active().dirty {
-                        self.status_message =
-                            Some("E37: No write since last change (add ! to override)".into());
-                    } else {
-                        self.exit_requested = true;
-                    }
+                    self.exit_requested = true;
                 }
             }
             ExEffect::Substituted { count } => {
@@ -1042,17 +1121,25 @@ impl App {
 
     /// Write buffer content to `path` (or `self.active().filename` if `path` is `None`).
     fn do_save(&mut self, path: Option<PathBuf>) {
-        if self.active().editor.is_readonly() {
+        let idx = self.active;
+        self.save_slot(idx, path);
+    }
+
+    /// Write slot `idx`'s buffer to `path` (or the slot's own filename if
+    /// `path` is `None`). Updates `status_message` on success or failure.
+    /// Does NOT change `self.active`.
+    fn save_slot(&mut self, idx: usize, path: Option<PathBuf>) {
+        if self.slots[idx].editor.is_readonly() {
             self.status_message = Some("E45: 'readonly' option is set (add ! to override)".into());
             return;
         }
-        let target = path.or_else(|| self.active().filename.clone());
+        let target = path.or_else(|| self.slots[idx].filename.clone());
         match target {
             None => {
                 self.status_message = Some("E32: No file name".into());
             }
             Some(p) => {
-                let lines = self.active().editor.buffer().lines();
+                let lines = self.slots[idx].editor.buffer().lines();
                 let content = if lines.is_empty() {
                     String::new()
                 } else {
@@ -1070,10 +1157,12 @@ impl App {
                             line_count,
                             byte_count,
                         ));
-                        self.active_mut().filename = Some(p);
-                        self.active_mut().is_new_file = false;
-                        self.active_mut().snapshot_saved();
-                        self.refresh_git_signs_force();
+                        self.slots[idx].filename = Some(p);
+                        self.slots[idx].is_new_file = false;
+                        self.slots[idx].snapshot_saved();
+                        if idx == self.active {
+                            self.refresh_git_signs_force();
+                        }
                     }
                     Err(e) => {
                         self.status_message = Some(format!("E: {}: {e}", p.display()));
@@ -1081,6 +1170,46 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `:wa` / `:wall` — write all named dirty slots.
+    fn write_all(&mut self) {
+        let mut written = 0usize;
+        let mut skipped = 0usize;
+        for i in 0..self.slots.len() {
+            if self.slots[i].filename.is_none() {
+                skipped += 1;
+                continue;
+            }
+            if !self.slots[i].dirty {
+                continue;
+            }
+            self.save_slot(i, None);
+            written += 1;
+        }
+        self.status_message = Some(format!("{written} buffer(s) written, {skipped} skipped"));
+    }
+
+    /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
+    fn quit_all(&mut self, force: bool) {
+        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty) {
+            let name = self.slots[idx]
+                .filename
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "[No Name]".into());
+            self.status_message = Some(format!(
+                "E37: No write since last change for buffer \"{name}\" (add ! to override)"
+            ));
+            return;
+        }
+        self.exit_requested = true;
+    }
+
+    /// `:wqa[!]` — write all named dirty slots then quit.
+    fn write_quit_all(&mut self, force: bool) {
+        self.write_all();
+        self.quit_all(force);
     }
 
     /// Open or reload a file via `:e [path]` / `:e!`.
@@ -2189,5 +2318,187 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path_a);
         let _ = std::fs::remove_file(&path_b);
+    }
+
+    // ── Phase E: multi-buffer ex-command parity tests ──────────────────────
+
+    #[test]
+    fn b_num_switches_by_index() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_bnum_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_bnum_b.txt");
+        let path_c = std::env::temp_dir().join("hjkl_phe_bnum_c.txt");
+        for p in [&path_a, &path_b, &path_c] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.dispatch_ex(&format!("e {}", path_c.display()));
+        assert_eq!(app.slots.len(), 3);
+        app.dispatch_ex("b 2");
+        assert_eq!(app.active, 1, "`:b 2` should switch to index 1");
+        for p in [&path_a, &path_b, &path_c] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn b_num_out_of_range_errors() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert_eq!(app.slots.len(), 1);
+        app.dispatch_ex("b 5");
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(msg.contains("E86"), "expected E86, got: {msg}");
+    }
+
+    #[test]
+    fn b_name_substring_switches() {
+        let path_foo = std::env::temp_dir().join("hjkl_phe_bname_foo.txt");
+        let path_bar = std::env::temp_dir().join("hjkl_phe_bname_bar.txt");
+        std::fs::write(&path_foo, "foo\n").unwrap();
+        std::fs::write(&path_bar, "bar\n").unwrap();
+        let mut app = App::new(Some(path_foo.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_bar.display()));
+        assert_eq!(app.active, 1);
+        // Switch to the foo slot by substring
+        app.dispatch_ex("b foo");
+        assert_eq!(app.active, 0, "`:b foo` should switch to foo's slot");
+        let _ = std::fs::remove_file(&path_foo);
+        let _ = std::fs::remove_file(&path_bar);
+    }
+
+    #[test]
+    fn b_name_ambiguous_errors() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_bamb_foo_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_bamb_foo_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        // Both filenames contain "foo" — ambiguous
+        app.dispatch_ex("b foo");
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(
+            msg.contains("E93"),
+            "expected E93 ambiguous error, got: {msg}"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn bfirst_blast_jump_to_ends() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_bfl_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_bfl_b.txt");
+        let path_c = std::env::temp_dir().join("hjkl_phe_bfl_c.txt");
+        for p in [&path_a, &path_b, &path_c] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.dispatch_ex(&format!("e {}", path_c.display()));
+        assert_eq!(app.slots.len(), 3);
+        // Start in middle
+        app.dispatch_ex("b 2");
+        assert_eq!(app.active, 1);
+        app.dispatch_ex("bfirst");
+        assert_eq!(app.active, 0, "`:bfirst` should go to slot 0");
+        app.dispatch_ex("blast");
+        assert_eq!(app.active, 2, "`:blast` should go to last slot");
+        for p in [&path_a, &path_b, &path_c] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn wa_writes_dirty_named_slots() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_wa_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_wa_b.txt");
+        std::fs::write(&path_a, "original a\n").unwrap();
+        std::fs::write(&path_b, "original b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        // Mark both slots dirty with new content
+        app.slots[0].dirty = true;
+        BufferEdit::replace_all(app.slots[0].editor.buffer_mut(), "edited a");
+        app.slots[1].dirty = true;
+        BufferEdit::replace_all(app.slots[1].editor.buffer_mut(), "edited b");
+        app.dispatch_ex("wa");
+        assert!(!app.slots[0].dirty, "slot 0 should be clean after :wa");
+        assert!(!app.slots[1].dirty, "slot 1 should be clean after :wa");
+        let contents_a = std::fs::read_to_string(&path_a).unwrap_or_default();
+        let contents_b = std::fs::read_to_string(&path_b).unwrap_or_default();
+        assert!(
+            contents_a.contains("edited a"),
+            "file a should contain edited content, got: {contents_a}"
+        );
+        assert!(
+            contents_b.contains("edited b"),
+            "file b should contain edited content, got: {contents_b}"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn qa_blocks_when_any_slot_dirty() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_qa_dirty_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_qa_dirty_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.slots[0].dirty = true;
+        app.dispatch_ex("qa");
+        assert!(
+            !app.exit_requested,
+            ":qa should not exit when dirty slot exists"
+        );
+        let msg = app.status_message.clone().unwrap_or_default();
+        assert!(msg.contains("E37"), "expected E37, got: {msg}");
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn qa_force_exits_with_dirty() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_qa_force_a.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.slots[0].dirty = true;
+        app.dispatch_ex("qa!");
+        assert!(app.exit_requested, ":qa! should exit even when dirty");
+        let _ = std::fs::remove_file(&path_a);
+    }
+
+    #[test]
+    fn q_on_multi_slot_closes_slot_not_app() {
+        let path_a = std::env::temp_dir().join("hjkl_phe_q_multi_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_phe_q_multi_b.txt");
+        std::fs::write(&path_a, "a\n").unwrap();
+        std::fs::write(&path_b, "b\n").unwrap();
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        assert_eq!(app.slots.len(), 2);
+        app.dispatch_ex("q!");
+        assert_eq!(
+            app.slots.len(),
+            1,
+            "`:q!` with 2 slots should close active slot"
+        );
+        assert!(
+            !app.exit_requested,
+            "app should remain open after closing one slot"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn q_on_last_slot_quits_app() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert_eq!(app.slots.len(), 1);
+        assert!(!app.active().dirty);
+        app.dispatch_ex("q");
+        assert!(app.exit_requested, "`:q` on clean last slot should exit");
     }
 }
