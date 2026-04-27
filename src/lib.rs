@@ -29,3 +29,4 @@ pub mod theme;
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use registry::{LanguageConfig, LanguageRegistry, detect_language_for_path};
 pub use theme::{DotFallbackTheme, Style, Theme};
+pub use tree_sitter::{InputEdit, Point};
