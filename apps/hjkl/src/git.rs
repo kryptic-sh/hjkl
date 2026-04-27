@@ -23,15 +23,18 @@ use ratatui::style::{Color, Style};
 
 const PRIORITY: u8 = 50;
 
-/// Compute git diff signs for `path` against its HEAD blob.
+/// Compute git diff signs for `path` against its HEAD blob, comparing
+/// against `current` (the editor's in-memory buffer bytes — pass
+/// `lines.join("\n")` + trailing `\n` for non-empty content to match
+/// what `:w` would write).
 ///
-/// Errors are swallowed — out-of-repo, untracked, or any git2 failure
-/// returns an empty Vec or untracked-style "every row added".
-pub fn signs_for(path: &Path) -> Vec<Sign> {
-    try_signs(path).unwrap_or_default()
+/// Errors are swallowed — out-of-repo, no HEAD blob, or any git2
+/// failure returns an empty Vec or untracked-style "every row added".
+pub fn signs_for_bytes(path: &Path, current: &[u8]) -> Vec<Sign> {
+    try_signs_with_bytes(path, current).unwrap_or_default()
 }
 
-fn try_signs(path: &Path) -> Result<Vec<Sign>, git2::Error> {
+fn try_signs_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<Sign>, git2::Error> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let repo = Repository::discover(parent)?;
     let workdir = repo
@@ -55,7 +58,7 @@ fn try_signs(path: &Path) -> Result<Vec<Sign>, git2::Error> {
     let head = match repo.head() {
         Ok(h) => h,
         Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
-            return Ok(untracked_signs(path, style_add));
+            return Ok(untracked_bytes_signs(current, style_add));
         }
         Err(e) => return Err(e),
     };
@@ -63,17 +66,15 @@ fn try_signs(path: &Path) -> Result<Vec<Sign>, git2::Error> {
     let entry = match tree.get_path(&rel) {
         Ok(e) => e,
         Err(e) if e.code() == ErrorCode::NotFound => {
-            return Ok(untracked_signs(path, style_add));
+            return Ok(untracked_bytes_signs(current, style_add));
         }
         Err(e) => return Err(e),
     };
     let blob = repo.find_blob(entry.id())?;
 
-    let buf = std::fs::read(path).map_err(|e| git2::Error::from_str(&e.to_string()))?;
-
     let mut opts = DiffOptions::new();
     opts.context_lines(0);
-    let patch = Patch::from_blob_and_buffer(&blob, None, &buf, None, Some(&mut opts))?;
+    let patch = Patch::from_blob_and_buffer(&blob, None, current, None, Some(&mut opts))?;
 
     let mut signs = Vec::new();
     for h in 0..patch.num_hunks() {
@@ -115,11 +116,11 @@ fn try_signs(path: &Path) -> Result<Vec<Sign>, git2::Error> {
     Ok(signs)
 }
 
-fn untracked_signs(path: &Path, style: Style) -> Vec<Sign> {
-    let Ok(content) = std::fs::read_to_string(path) else {
+fn untracked_bytes_signs(current: &[u8], style: Style) -> Vec<Sign> {
+    let Ok(s) = std::str::from_utf8(current) else {
         return Vec::new();
     };
-    let n = content.lines().count();
+    let n = s.lines().count();
     (0..n)
         .map(|row| Sign {
             row,
@@ -158,7 +159,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let f = tmp.path().join("a.txt");
         std::fs::write(&f, "hello\n").unwrap();
-        assert!(signs_for(&f).is_empty());
+        assert!(signs_for_bytes(&f, b"hello\n").is_empty());
     }
 
     #[test]
@@ -167,7 +168,8 @@ mod tests {
         git(tmp.path(), &["init", "-q", "-b", "main"]);
         let f = tmp.path().join("u.txt");
         std::fs::write(&f, "a\nb\nc\n").unwrap();
-        let signs = signs_for(&f);
+        let bytes = std::fs::read(&f).unwrap();
+        let signs = signs_for_bytes(&f, &bytes);
         // 3 rows, all '+'.
         assert_eq!(signs.len(), 3);
         assert!(signs.iter().all(|s| s.ch == '+'));
@@ -183,7 +185,8 @@ mod tests {
         git(tmp.path(), &["commit", "-q", "-m", "init"]);
         // Modify row 1.
         std::fs::write(&f, "alpha\nBRAVO\ncharlie\n").unwrap();
-        let signs = signs_for(&f);
+        let bytes = std::fs::read(&f).unwrap();
+        let signs = signs_for_bytes(&f, &bytes);
         assert!(signs.iter().any(|s| s.row == 1 && s.ch == '~'));
     }
 
@@ -196,7 +199,8 @@ mod tests {
         git(tmp.path(), &["add", "a.txt"]);
         git(tmp.path(), &["commit", "-q", "-m", "init"]);
         std::fs::write(&f, "alpha\nbravo\nNEW\n").unwrap();
-        let signs = signs_for(&f);
+        let bytes = std::fs::read(&f).unwrap();
+        let signs = signs_for_bytes(&f, &bytes);
         assert!(signs.iter().any(|s| s.row == 2 && s.ch == '+'));
     }
 
@@ -210,7 +214,8 @@ mod tests {
         git(tmp.path(), &["commit", "-q", "-m", "init"]);
         // Delete row 1 ("bravo").
         std::fs::write(&f, "alpha\ncharlie\n").unwrap();
-        let signs = signs_for(&f);
+        let bytes = std::fs::read(&f).unwrap();
+        let signs = signs_for_bytes(&f, &bytes);
         assert!(signs.iter().any(|s| s.ch == '_'));
     }
 }

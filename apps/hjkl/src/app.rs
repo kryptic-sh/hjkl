@@ -76,10 +76,14 @@ pub struct App {
     /// current viewport. Refreshed by `recompute_and_install`; read by
     /// `render::buffer_pane`.
     pub diag_signs: Vec<hjkl_buffer::Sign>,
-    /// Git diff signs (`+` / `~` / `_`) against HEAD. Computed once per
-    /// file change (open / `:w` / `:e`) and filtered to the viewport
-    /// per-frame in the renderer.
+    /// Git diff signs (`+` / `~` / `_`) against HEAD. Recomputed
+    /// whenever the buffer's `dirty_gen` advances so unsaved edits
+    /// show in the gutter live. Filtered to the viewport per-frame
+    /// in the renderer.
     pub git_signs: Vec<hjkl_buffer::Sign>,
+    /// `dirty_gen` of the buffer when `git_signs` was last rebuilt.
+    /// `None` = stale, force recompute on next render.
+    last_git_dirty_gen: Option<u64>,
 }
 
 impl App {
@@ -169,11 +173,6 @@ impl App {
         let _ = editor.take_content_edits();
         let _ = editor.take_content_reset();
 
-        let initial_git = filename
-            .as_deref()
-            .map(crate::git::signs_for)
-            .unwrap_or_default();
-
         Ok(Self {
             editor,
             filename,
@@ -187,19 +186,37 @@ impl App {
             is_new_file,
             syntax,
             diag_signs: initial_signs,
-            git_signs: initial_git,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
         })
     }
 
-    /// Refresh git diff signs for the current file. Called after `:w`
-    /// and `:e` since both can change the on-disk content's relationship
-    /// to HEAD.
+    /// Recompute git diff signs from the current buffer content (vs
+    /// the HEAD blob) when `dirty_gen` has advanced since the last
+    /// rebuild. Cached on dirty_gen so unchanged frames are free.
     fn refresh_git_signs(&mut self) {
-        self.git_signs = self
-            .filename
-            .as_deref()
-            .map(crate::git::signs_for)
-            .unwrap_or_default();
+        let path = match self.filename.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                self.git_signs.clear();
+                self.last_git_dirty_gen = None;
+                return;
+            }
+        };
+        let dg = self.editor.buffer().dirty_gen();
+        if self.last_git_dirty_gen == Some(dg) {
+            return;
+        }
+        // Canonical bytes: lines joined with '\n' + trailing '\n' for
+        // non-empty buffers. Mirrors what `:w` would write to disk so
+        // the diff matches `git diff` post-save.
+        let lines = self.editor.buffer().lines();
+        let mut bytes = lines.join("\n").into_bytes();
+        if !bytes.is_empty() {
+            bytes.push(b'\n');
+        }
+        self.git_signs = crate::git::signs_for_bytes(&path, &bytes);
+        self.last_git_dirty_gen = Some(dg);
     }
 
     /// Main event loop. Draws every frame, routes key events through
@@ -773,6 +790,7 @@ impl App {
             self.editor.install_ratatui_syntax_spans(out.spans);
             self.diag_signs = out.signs;
         }
+        self.refresh_git_signs();
     }
 
     /// Mode label for the status line.
