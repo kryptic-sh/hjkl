@@ -14,9 +14,7 @@ pub mod source;
 // Flat re-exports for ergonomic use by consumers.
 pub use logic::{PickerAction, PickerEvent, PickerLogic, RequeryMode};
 pub use picker::Picker;
-pub use preview::{
-    PREVIEW_MAX_BYTES, PREVIEW_MAX_LINES, PreviewSpans, build_preview_spans, load_preview,
-};
+pub use preview::{PREVIEW_MAX_BYTES, PreviewSpans, build_preview_spans, load_preview};
 pub use score::score;
 pub use source::{
     FileSource, GrepBackend, RgMatch, RgSource, detect_grep_backend, extract_json_string,

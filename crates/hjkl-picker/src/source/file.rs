@@ -10,8 +10,8 @@ use crate::logic::{PickerAction, PickerLogic, RequeryMode};
 use crate::preview::{PreviewSpans, load_preview};
 
 /// File-source: gitignore-aware cwd walker. Items are paths relative to
-/// `root`, preview reads from disk capped at `PREVIEW_MAX_LINES` /
-/// `PREVIEW_MAX_BYTES` with a binary-byte heuristic.
+/// `root`, preview reads from disk capped at `PREVIEW_MAX_BYTES` with a
+/// binary-byte heuristic.
 ///
 /// This base source does not perform syntax highlighting — the preview
 /// returns `PreviewSpans::default()`. Wrap in `HighlightedFileSource`

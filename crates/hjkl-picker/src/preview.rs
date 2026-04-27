@@ -3,11 +3,9 @@ use std::path::Path;
 use hjkl_buffer::Span as BufferSpan;
 use ratatui::style::Style as RatStyle;
 
-/// Cap preview reads at this many lines so giant files don't stall the
-/// render path.
-pub const PREVIEW_MAX_LINES: usize = 200;
 /// Skip preview entirely past this byte count — likely a binary or
-/// large generated artefact that wouldn't render usefully anyway.
+/// large generated artefact that wouldn't render usefully anyway. Also
+/// bounds in-memory cost since the loader keeps every line.
 pub const PREVIEW_MAX_BYTES: u64 = 1_000_000;
 
 /// Per-row span table + style table for the preview pane. The
@@ -164,10 +162,8 @@ pub fn load_preview(abs: &Path) -> (String, String) {
         Ok(s) => s,
         Err(_) => return (String::new(), "non-utf8".into()),
     };
-    let truncated: String = text
-        .lines()
-        .take(PREVIEW_MAX_LINES)
-        .collect::<Vec<_>>()
-        .join("\n");
-    (truncated, String::new())
+    // No line truncation here — the byte cap above already bounds the load,
+    // and the viewport only renders what fits on screen. Truncating by line
+    // count would silently drop grep matches that fall past the cap.
+    (text.to_owned(), String::new())
 }
