@@ -25,6 +25,11 @@ pub use host::FormFieldHost;
 pub use submit::{SubmitFn, SubmitOutcome};
 pub use validate::{Validator, validate_field};
 
+// Convenience re-exports — consumers using `TextFieldEditor` standalone
+// shouldn't need to depend on `hjkl-engine` directly just to talk about
+// inputs and modes.
+pub use hjkl_engine::{Input, Key, VimMode};
+
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
@@ -40,7 +45,7 @@ mod smoke_tests {
     fn two_field_form_focuses_first() {
         let form = Form::new()
             .with_title("Test")
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("Name"),
                 1,
             )))
@@ -54,7 +59,7 @@ mod smoke_tests {
     fn dirty_gen_advances_on_field_edit() {
         use hjkl_engine::{Input, Key};
         let mut form = Form::new()
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("Name"),
                 1,
             )))
@@ -76,11 +81,11 @@ mod smoke_tests {
     fn dirty_gen_advances_on_focus_change() {
         use hjkl_engine::{Input, Key};
         let mut form = Form::new()
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("A"),
                 1,
             )))
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("B"),
                 1,
             )));

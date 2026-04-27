@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn renders_required_label_with_star() {
-        let mut form = Form::new().with_field(Field::SingleLineText(TextFieldEditor::new(
+        let mut form = Form::new().with_field(Field::SingleLineText(TextFieldEditor::with_meta(
             FieldMeta::new("Name").required(true),
             1,
         )));
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn focused_text_field_returns_cursor_in_body() {
-        let mut form = Form::new().with_field(Field::SingleLineText(TextFieldEditor::new(
+        let mut form = Form::new().with_field(Field::SingleLineText(TextFieldEditor::with_meta(
             FieldMeta::new("Name"),
             1,
         )));
@@ -377,7 +377,7 @@ mod tests {
     fn unfocused_text_field_shows_placeholder() {
         let mut form = Form::new()
             .with_field(Field::Submit(SubmitField::new(FieldMeta::new("S"))))
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("Email").placeholder("you@example.com"),
                 1,
             )));

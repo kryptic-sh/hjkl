@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn build_form(should_quit: Arc<AtomicBool>) -> Form {
-    let mut name = TextFieldEditor::new(
+    let mut name = TextFieldEditor::with_meta(
         FieldMeta::new("Name")
             .required(true)
             .placeholder("Your name"),
@@ -32,7 +32,8 @@ fn build_form(should_quit: Arc<AtomicBool>) -> Form {
         }
     }));
 
-    let mut email = TextFieldEditor::new(FieldMeta::new("Email").placeholder("you@example.com"), 1);
+    let mut email =
+        TextFieldEditor::with_meta(FieldMeta::new("Email").placeholder("you@example.com"), 1);
     email.validator = Some(Box::new(|s: &str| {
         if s.contains('@') || s.is_empty() {
             Ok(())
@@ -42,7 +43,7 @@ fn build_form(should_quit: Arc<AtomicBool>) -> Form {
     }));
 
     let description =
-        TextFieldEditor::new(FieldMeta::new("Description").placeholder("(multi-line)"), 3);
+        TextFieldEditor::with_meta(FieldMeta::new("Description").placeholder("(multi-line)"), 3);
 
     let save = CheckboxField::new(FieldMeta::new("Save"));
     let format = SelectField::new(

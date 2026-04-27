@@ -18,7 +18,7 @@ use hjkl_form::{
     Field, FieldMeta, Form, FormEvent, SubmitField, SubmitOutcome, TextFieldEditor,
 };
 
-let mut name = TextFieldEditor::new(FieldMeta::new("Name").required(true), 1);
+let mut name = TextFieldEditor::with_meta(FieldMeta::new("Name").required(true), 1);
 name.validator = Some(Box::new(|s: &str| {
     if s.is_empty() {
         Err("name is required".into())

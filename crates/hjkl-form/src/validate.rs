@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn empty_validator_blocks_and_populates_error() {
-        let mut name = TextFieldEditor::new(FieldMeta::new("Name").required(true), 1);
+        let mut name = TextFieldEditor::with_meta(FieldMeta::new("Name").required(true), 1);
         name.validator = Some(Box::new(|s: &str| {
             if s.is_empty() {
                 Err("required".into())
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn blur_validate_runs_on_focus_change() {
-        let mut name = TextFieldEditor::new(FieldMeta::new("Name").required(true), 1);
+        let mut name = TextFieldEditor::with_meta(FieldMeta::new("Name").required(true), 1);
         name.validator = Some(Box::new(|s: &str| {
             if s.is_empty() {
                 Err("required".into())

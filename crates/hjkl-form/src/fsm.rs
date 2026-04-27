@@ -258,11 +258,11 @@ mod tests {
 
     fn make_form() -> Form {
         Form::new()
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("Name"),
                 1,
             )))
-            .with_field(Field::SingleLineText(TextFieldEditor::new(
+            .with_field(Field::SingleLineText(TextFieldEditor::with_meta(
                 FieldMeta::new("Email"),
                 1,
             )))
@@ -362,7 +362,7 @@ mod tests {
     fn submit_with_failing_validator_does_not_fire() {
         let fired = Arc::new(AtomicBool::new(false));
         let f2 = fired.clone();
-        let mut name = TextFieldEditor::new(FieldMeta::new("Name").required(true), 1);
+        let mut name = TextFieldEditor::with_meta(FieldMeta::new("Name").required(true), 1);
         name.validator = Some(Box::new(|s: &str| {
             if s.is_empty() {
                 Err("required".into())

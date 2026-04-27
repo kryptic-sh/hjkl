@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod form;
+pub mod prompt;
 
 use hjkl_engine::{Attrs, Color, Style};
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
