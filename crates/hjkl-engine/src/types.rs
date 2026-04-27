@@ -241,6 +241,11 @@ pub struct Options {
     pub shiftwidth: u32,
     /// Insert spaces (`true`) or literal `\t` (`false`) for the Tab key.
     pub expandtab: bool,
+    /// Soft tab stop in spaces. When `> 0`, the Tab key (with `expandtab`)
+    /// inserts spaces to the next softtabstop boundary, and Backspace at
+    /// the end of a softtabstop-aligned space run deletes the whole run.
+    /// `0` disables softtabstop semantics. Matches vim's `:set softtabstop`.
+    pub softtabstop: u32,
     /// Characters considered part of a "word" for `w`/`b`/`*`/`#`.
     /// Default `"@,48-57,_,192-255"` (ASCII letters, digits, `_`, plus
     /// extended Latin); host may override per language.
@@ -311,6 +316,7 @@ impl Default for Options {
             tabstop: 8,
             shiftwidth: 8,
             expandtab: false,
+            softtabstop: 0,
             iskeyword: "@,48-57,_,192-255".to_string(),
             ignorecase: false,
             smartcase: false,
@@ -384,6 +390,7 @@ impl Options {
         match name {
             "tabstop" | "ts" => set_u32!(tabstop),
             "shiftwidth" | "sw" => set_u32!(shiftwidth),
+            "softtabstop" | "sts" => set_u32!(softtabstop),
             "textwidth" | "tw" => set_u32!(textwidth),
             "expandtab" | "et" => set_bool!(expandtab),
             "iskeyword" | "isk" => set_string!(iskeyword),
@@ -450,6 +457,7 @@ impl Options {
         Some(match name {
             "tabstop" | "ts" => OptionValue::Int(self.tabstop as i64),
             "shiftwidth" | "sw" => OptionValue::Int(self.shiftwidth as i64),
+            "softtabstop" | "sts" => OptionValue::Int(self.softtabstop as i64),
             "textwidth" | "tw" => OptionValue::Int(self.textwidth as i64),
             "expandtab" | "et" => OptionValue::Bool(self.expandtab),
             "iskeyword" | "isk" => OptionValue::String(self.iskeyword.clone()),

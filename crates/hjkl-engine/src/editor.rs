@@ -732,6 +732,11 @@ pub struct Settings {
     /// instead of a literal `\t`. Matches vim's `:set expandtab`.
     /// Default `false`.
     pub expandtab: bool,
+    /// Soft tab stop in spaces. When `> 0`, Tab inserts spaces to the
+    /// next softtabstop boundary (when `expandtab`), and Backspace at the
+    /// end of a softtabstop-aligned space run deletes the entire run as
+    /// if it were one tab. `0` disables. Matches vim's `:set softtabstop`.
+    pub softtabstop: usize,
     /// Soft-wrap mode the renderer + scroll math + `gj` / `gk` use.
     /// Default is [`hjkl_buffer::Wrap::None`] — long lines extend
     /// past the right edge and `top_col` clips the left side.
@@ -775,6 +780,7 @@ impl Default for Settings {
         Self {
             shiftwidth: 2,
             tabstop: 8,
+            softtabstop: 0,
             ignore_case: false,
             smartcase: false,
             wrapscan: true,
@@ -802,6 +808,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
     Settings {
         shiftwidth: o.shiftwidth as usize,
         tabstop: o.tabstop as usize,
+        softtabstop: o.softtabstop as usize,
         ignore_case: o.ignorecase,
         smartcase: o.smartcase,
         wrapscan: o.wrapscan,
@@ -2031,6 +2038,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         crate::types::Options {
             shiftwidth: self.settings.shiftwidth as u32,
             tabstop: self.settings.tabstop as u32,
+            softtabstop: self.settings.softtabstop as u32,
             textwidth: self.settings.textwidth as u32,
             expandtab: self.settings.expandtab,
             ignorecase: self.settings.ignore_case,
@@ -2058,6 +2066,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn apply_options(&mut self, opts: &crate::types::Options) {
         self.settings.shiftwidth = opts.shiftwidth as usize;
         self.settings.tabstop = opts.tabstop as usize;
+        self.settings.softtabstop = opts.softtabstop as usize;
         self.settings.textwidth = opts.textwidth as usize;
         self.settings.expandtab = opts.expandtab;
         self.settings.ignore_case = opts.ignorecase;

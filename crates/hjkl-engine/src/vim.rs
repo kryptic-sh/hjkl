@@ -1208,7 +1208,14 @@ fn handle_insert_key<H: crate::types::Host>(
         }
         Key::Tab => {
             if ed.settings.expandtab {
-                let n = ed.settings.tabstop.max(1);
+                // With softtabstop > 0, fill to the next sts boundary.
+                // Otherwise insert a full tabstop run.
+                let sts = ed.settings.softtabstop;
+                let n = if sts > 0 {
+                    sts - (cursor.col % sts)
+                } else {
+                    ed.settings.tabstop.max(1)
+                };
                 ed.mutate_edit(Edit::InsertStr {
                     at: cursor,
                     text: " ".repeat(n),
@@ -1222,6 +1229,23 @@ fn handle_insert_key<H: crate::types::Host>(
             true
         }
         Key::Backspace => {
+            // Softtabstop: if the N chars before the cursor are all spaces
+            // and the cursor sits on an sts-aligned column, delete the run
+            // as a single unit (vim's "backspace deletes a soft tab" feel).
+            let sts = ed.settings.softtabstop;
+            if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
+                let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+                let chars: Vec<char> = line.chars().collect();
+                let run_start = cursor.col - sts;
+                if (run_start..cursor.col).all(|i| chars.get(i).copied() == Some(' ')) {
+                    ed.mutate_edit(Edit::DeleteRange {
+                        start: Position::new(cursor.row, run_start),
+                        end: cursor,
+                        kind: MotionKind::Char,
+                    });
+                    return true;
+                }
+            }
             if cursor.col > 0 {
                 ed.mutate_edit(Edit::DeleteRange {
                     start: Position::new(cursor.row, cursor.col - 1),
@@ -8551,6 +8575,41 @@ mod tests {
         run_keys(&mut e, "i");
         e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(e.buffer.line(0).unwrap(), "    ");
+    }
+
+    #[test]
+    fn tab_with_softtabstop_fills_to_next_boundary() {
+        // sts=4, cursor at col 2 → Tab inserts 2 spaces (to col 4).
+        let mut e = editor_with("ab");
+        e.settings_mut().expandtab = true;
+        e.settings_mut().tabstop = 8;
+        e.settings_mut().softtabstop = 4;
+        run_keys(&mut e, "A"); // append at end (col 2)
+        e.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(e.buffer.line(0).unwrap(), "ab  ");
+    }
+
+    #[test]
+    fn backspace_deletes_softtab_run() {
+        // sts=4, line "    x" with cursor at col 4 → Backspace deletes
+        // the whole 4-space run instead of one char.
+        let mut e = editor_with("    x");
+        e.settings_mut().softtabstop = 4;
+        // Move to col 4 (start of 'x'), then enter insert.
+        run_keys(&mut e, "fxi");
+        e.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.buffer.line(0).unwrap(), "x");
+    }
+
+    #[test]
+    fn backspace_falls_back_to_single_char_when_run_not_aligned() {
+        // sts=4, but cursor at col 5 (one space past the boundary) →
+        // Backspace deletes only the one trailing space.
+        let mut e = editor_with("     x");
+        e.settings_mut().softtabstop = 4;
+        run_keys(&mut e, "fxi");
+        e.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert_eq!(e.buffer.line(0).unwrap(), "    x");
     }
 
     #[test]
