@@ -1054,6 +1054,20 @@ impl App {
         // (set_content advances dirty_gen, but be explicit so a same-key
         // collision after reload can't skip the install).
         self.last_recompute_key = None;
+        // Synchronous viewport-only preview so the new file's first
+        // frame paints with highlights instead of popping white while
+        // the worker runs the cold parse — same trick App::new uses on
+        // initial open.
+        let (vp_top, vp_height) = {
+            let vp = self.editor.host().viewport();
+            (vp.top_row, vp.height as usize)
+        };
+        if let Some(out) = self
+            .syntax
+            .preview_render(self.editor.buffer(), vp_top, vp_height)
+        {
+            self.editor.install_ratatui_syntax_spans(out.spans);
+        }
         self.recompute_and_install();
         self.snapshot_saved();
         self.refresh_git_signs_force();
