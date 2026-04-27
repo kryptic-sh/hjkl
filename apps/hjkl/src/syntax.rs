@@ -634,17 +634,7 @@ impl SyntaxLayer {
         &mut self,
         timeout: std::time::Duration,
     ) -> Option<RenderOutput> {
-        use std::time::Instant;
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(out) = self.take_result() {
-                return Some(out);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
+        self.wait_result(timeout)
     }
 
     /// Test-only alias for [`Self::wait_for_initial_result`].
