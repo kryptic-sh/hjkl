@@ -333,8 +333,10 @@ impl PickerLogic for HighlightedRgSource {
         let end = (start + hjkl_picker::PREVIEW_MAX_LINES).min(all_lines.len());
         let window: String = all_lines[start..end].join("\n");
 
-        let status_tag = format!("line {line}");
-        (Buffer::from_str(&window), status_tag, spans)
+        // Status stays empty: a non-empty status tells the renderer to bail
+        // and show an error placeholder instead of the buffer. The match
+        // line number is already in the picker label (`path:N: text`).
+        (Buffer::from_str(&window), String::new(), spans)
     }
 
     fn select(&self, idx: usize) -> PickerAction {
