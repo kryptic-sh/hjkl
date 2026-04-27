@@ -56,6 +56,8 @@ patch bumps.
   snapshots to display original document line numbers in the gutter.
 - **`Viewport::tab_width`** field — carries the active `tabstop` value through
   the render pipeline.
+- **`:set softtabstop=N`** (`sts`) — Backspace deletes a soft tab as a unit; Tab
+  fills to the next softtabstop boundary.
 
 ### Changed
 
@@ -74,16 +76,14 @@ patch bumps.
 
 ### Fixed
 
-- **`:set softtabstop=N`** (`sts`) — Backspace now deletes a soft tab as a unit;
-  Tab fills to the next softtabstop boundary.
 - **Tab rendering** — tab characters expand to spaces aligned to tab stops;
   `cursor_screen_pos` accounts for tab visual width.
 - **`dd` resets `sticky_col`** so subsequent `j` / `k` lands on the first
   non-blank column rather than the deleted line's column.
 - **Paste linewise** reads from the unnamed register slot rather than a
   per-editor cache, fixing cross-buffer linewise paste.
-- **Multi-line ex-command dispatch** (`:bn` / `:bp` / etc.) no longer drops
-  events when commands span more than one output line.
+- **Grep picker preview** is no longer empty (status-tag misuse) and now scrolls
+  to the match line with correct file line numbers in the gutter.
 
 ## [0.1.1] - 2026-04-27
 
