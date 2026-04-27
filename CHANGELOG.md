@@ -21,11 +21,69 @@ patch bumps.
   `hjkl +picker`) with syntax-highlighted preview pane.
 - **Buffer picker** (`<Space>b` / `:bpicker`) — switch open buffers via the same
   fuzzy UI.
+- **Grep picker** (`<Space>/` / `:rg <pattern>`) — ripgrep-backed content search
+  with grep and findstr fallbacks for platforms without ripgrep; preview pane
+  scrolls to and highlights the match line.
 - **Multi-file CLI** — `hjkl a.rs b.rs c.rs` opens all files as named slots.
 - **Tab line** at the top of the screen listing all open buffers; rendered only
   when more than one buffer is open.
 - **Tree-sitter syntax highlighting** in the buffer pane and picker preview
   (Rust, Markdown, JSON, TOML, SQL bundled via `hjkl-tree-sitter`).
+- **Comment marker overlay** (`hjkl-tree-sitter::CommentMarkerPass`) — annotates
+  `TODO` / `FIXME` / `FIX` / `NOTE` / `INFO` / `WARN` markers with distinct
+  highlight styles; consecutive single-line comments inherit the marker across
+  continuation lines.
+- **Smart indent** — Enter, `o`, and `O` bump indent one level after `{`, `(`,
+  or `[`; a leading close brace on the new line auto-dedents.
+- **`.editorconfig` support** — `indent_style`, `indent_size`, `tab_width`, and
+  `max_line_length` are applied automatically on file open.
+- **`hjkl-picker` crate** (`crates/hjkl-picker`) — the entire picker subsystem
+  is extracted into a standalone reusable crate with no direct dependency on
+  `hjkl-engine`. Provides `Picker`, `PickerLogic` trait, `FileSource`,
+  `RgSource`, `PreviewSpans`, and the fuzzy `score` function.
+- **Shared braille spinner** (`hjkl-ratatui::spinner::frame`) — 10-frame braille
+  animation at ~8 Hz via a monotonic epoch; used in picker loading indicators.
+- **Shared register bank** across buffer slots — yank in one slot, paste in
+  another; `dd` and other linewise ops write to the unnamed register so
+  cross-buffer paste works correctly.
+- **Info popup overlay** for `:reg`, `:marks`, `:jumps`, `:changes` — multi-line
+  ex-command output renders as a centered floating popup.
+- **Status line additions**: `REC@r` badge while recording a macro; pending
+  count and pending operator block; search count `[n/m]`.
+- **Cursor-line background** in the editor pane (subtle blue-grey); suppressed
+  during `:` and `/` prompts.
+- **`Gutter::line_offset`** field in `hjkl-buffer` — enables windowed preview
+  snapshots to display original document line numbers in the gutter.
+- **`Viewport::tab_width`** field — carries the active `tabstop` value through
+  the render pipeline.
+
+### Changed
+
+- **Default tab settings** flipped to modern four-space soft tabs:
+  `tabstop=4 shiftwidth=4 softtabstop=4 expandtab=on smartindent=on`. To revert
+  to traditional vi defaults:
+  `:set noexpandtab tabstop=8 shiftwidth=8 softtabstop=0`.
+- **`:set tabstop=N`** is now threaded through `Viewport.tab_width` to the
+  renderer and cursor position math end-to-end.
+- **Picker prompt symbol** changed from `>` to `/` to match search semantics.
+- **`PickerLogic` trait** gains `preview_top_row`, `preview_match_row`, and
+  `preview_line_offset` so windowed sources can position, highlight, and
+  label-offset the preview pane correctly.
+- **Label spacing** across all pickers is uniform (2-cell prefix pad, no leader
+  arrow).
+
+### Fixed
+
+- **`:set softtabstop=N`** (`sts`) — Backspace now deletes a soft tab as a unit;
+  Tab fills to the next softtabstop boundary.
+- **Tab rendering** — tab characters expand to spaces aligned to tab stops;
+  `cursor_screen_pos` accounts for tab visual width.
+- **`dd` resets `sticky_col`** so subsequent `j` / `k` lands on the first
+  non-blank column rather than the deleted line's column.
+- **Paste linewise** reads from the unnamed register slot rather than a
+  per-editor cache, fixing cross-buffer linewise paste.
+- **Multi-line ex-command dispatch** (`:bn` / `:bp` / etc.) no longer drops
+  events when commands span more than one output line.
 
 ## [0.1.1] - 2026-04-27
 
@@ -58,8 +116,7 @@ Buffer/Cursor/Query/BufferEdit/Search trait split, viewport relocation onto
 reach lifts, the `Editor` generic flip, removal of the pre-0.1.0 dyn-host shim,
 and the SPEC freeze.
 
-`crates/hjkl-engine/PUBLIC_API.md` is the canonical baseline from this release
-onward; CI gates against it.
+docs.rs surfaces the canonical API per upload.
 
 #### Pre-1.0 trait-extraction arc (folded into 0.1.0)
 

@@ -43,12 +43,15 @@ hjkl +picker          # open fuzzy file picker immediately
 
 - Normal / Insert / Visual / Command modes with full mode-indicator cursor shape
 - All standard motions, operators, and text objects (free from the engine FSM)
-- Status line: filename, mode, cursor position, dirty marker
+- Status line: filename, mode, cursor position, dirty marker; `REC@r` badge
+  while recording a macro; pending count + operator; search count `[n/m]`
+- Cursor-line background (subtle blue-grey; suppressed during `:` / `/` prompts)
 - `:w` save, `:q` quit, `:wq` / `:x` write-quit, `:e` open file
 - `:set` options, `:%s` search-and-replace with confirmation prompt
 - `:!cmd` shell exec, `:r !cmd` / `:r file` read-into-buffer
+- `:reg`, `:marks`, `:jumps`, `:changes` — output shown as a centered info popup
 - `/` / `?` incremental search with match highlighting
-- Undo / redo, marks, registers
+- Undo / redo, marks, registers (shared across buffer slots)
 - Terminal resize handled mid-frame
 - Read-only guard (`-R` flag + engine-level mutation block)
 - Jump to line (`+N`) and search-on-open (`+/pattern`)
@@ -61,7 +64,19 @@ hjkl +picker          # open fuzzy file picker immediately
 - **Fuzzy file picker** (`<Space><Space>` / `<Space>f` / `:picker` /
   `hjkl +picker`) with syntax-highlighted preview
 - **Buffer picker** (`<Space>b` / `:bpicker`)
+- **Grep picker** (`<Space>/` / `:rg <pattern>`) — ripgrep-backed content search
+  with grep / findstr fallback; preview jumps to and highlights the match line
 - **Tree-sitter syntax highlighting** (Rust, Markdown, JSON, TOML, SQL bundled)
+- **Comment marker overlay** — `TODO` / `FIXME` / `FIX` / `NOTE` / `INFO` /
+  `WARN` markers highlighted; consecutive single-line comments inherit the
+  marker
+- **Smart indent** — Enter / `o` / `O` auto-indent after `{` / `(` / `[`; close
+  brace on a new line auto-dedents
+- **`.editorconfig` support** — `indent_style`, `indent_size`, `tab_width`, and
+  `max_line_length` applied on file open
+- **Tab settings**: `tabstop`, `softtabstop`, `expandtab` (defaults: 4-space
+  soft tabs); tabs render as visually aligned spaces; Backspace deletes a soft
+  tab as a unit; `:set tabstop=N` updates rendering end-to-end
 - **Per-buffer git diff signs** (`+` / `~` / `_` in the gutter) and tree-sitter
   diagnostic signs
 

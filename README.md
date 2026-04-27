@@ -32,6 +32,7 @@ contract.
 | `hjkl-clipboard`   | Unified clipboard sink (arboard + OSC 52 SSH fallback).            |
 | `hjkl-form`        | Vim-modal forms with full vim grammar inside every text field.     |
 | `hjkl-tree-sitter` | Tree-sitter syntax highlighting (Rust, Markdown, JSON, TOML, SQL). |
+| `hjkl-picker`      | Fuzzy picker subsystem: file walk, grep search, custom sources.    |
 
 Published on crates.io. Add to `Cargo.toml`:
 

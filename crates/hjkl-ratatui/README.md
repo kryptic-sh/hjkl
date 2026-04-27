@@ -20,7 +20,8 @@ the bridge explicit at callsites, which is fine for low-frequency style mapping.
 ## Status
 
 `0.2.0` — ratatui `Style` ↔ engine `Style` adapter; `crossterm::KeyEvent` →
-engine SPEC `Input` bridge.
+engine SPEC `Input` bridge. The `spinner` module ships with `0.2.0`, providing a
+shared braille loading indicator for use across TUI widgets.
 
 ## What's here
 
@@ -30,6 +31,8 @@ engine SPEC `Input` bridge.
 - `engine_to_ratatui_attrs` / `ratatui_to_engine_attrs`
 - `crossterm_key_event_to_input` (behind the default-on `crossterm` feature) —
   bridge `crossterm::KeyEvent` → engine SPEC `Input`.
+- `spinner::frame() -> &'static str` — shared braille spinner for loading
+  indicators, ~8 Hz monotonic epoch.
 
 ## Usage
 
