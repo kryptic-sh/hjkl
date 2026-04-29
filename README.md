@@ -2,7 +2,7 @@
 
 Generic tree-sitter syntax highlighting for the hjkl editor stack.
 
-[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl-tree-sitter/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-tree-sitter/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-tree-sitter.svg)](https://crates.io/crates/hjkl-tree-sitter)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-tree-sitter)](https://docs.rs/hjkl-tree-sitter)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -15,13 +15,13 @@ flat list of `(byte_range, capture_name)` spans for renderers to style.
 
 ## Status
 
-`0.2.0` — 5 bundled grammars, `DotFallbackTheme` for dark/light theming,
+`0.3.0` — 5 bundled grammars, `DotFallbackTheme` for dark/light theming,
 incremental re-parse via `tree-sitter::InputEdit`.
 
 ## Usage
 
 ```toml
-hjkl-tree-sitter = "0.2"
+hjkl-tree-sitter = "0.3"
 ```
 
 ```rust
