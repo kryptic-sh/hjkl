@@ -1,7 +1,0 @@
----
-source: crates/hjkl-editor/tests/golden_ex.rs
-expression: info
----
---- Registers ---
-""  L hello world\n
-"0  L hello world\n

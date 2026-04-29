@@ -17,14 +17,14 @@ name = "hjkl"
 path = "src/main.rs"
 
 [dependencies]
-hjkl-buffer = { path = "../../crates/hjkl-buffer", version = "=0.3.0" }
-hjkl-engine = { path = "../../crates/hjkl-engine", version = "=0.3.0" }
-hjkl-editor = { path = "../../crates/hjkl-editor", version = "=0.3.0" }
-hjkl-ratatui = { path = "../../crates/hjkl-ratatui", version = "=0.3.0" }
-hjkl-tree-sitter = { path = "../../crates/hjkl-tree-sitter", version = "=0.3.0" }
-hjkl-clipboard = { path = "../../crates/hjkl-clipboard", version = "=0.3.0" }
-hjkl-form = { path = "../../crates/hjkl-form", version = "=0.3.0" }
-hjkl-picker = { path = "../../crates/hjkl-picker", version = "=0.3.0" }
+hjkl-buffer = "0.3"
+hjkl-engine = "0.3"
+hjkl-editor = "0.3"
+hjkl-ratatui = "0.3"
+hjkl-tree-sitter = "0.3"
+hjkl-clipboard = "0.3"
+hjkl-form = "0.3"
+hjkl-picker = "0.3"
 ratatui = "0.30"
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }

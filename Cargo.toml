@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "apps/*"]
-exclude = ["crates/hjkl-engine/fuzz"]
+members = ["apps/*"]
 
 [workspace.package]
 version = "0.3.0"
