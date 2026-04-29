@@ -5,7 +5,7 @@ Unified clipboard sink for the hjkl editor stack (arboard + OSC 52 fallback).
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-clipboard.svg)](https://crates.io/crates/hjkl-clipboard)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-clipboard)](https://docs.rs/hjkl-clipboard)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
 Tries `arboard` first (native X11/Wayland/macOS/Windows). Falls back to OSC 52
@@ -44,4 +44,4 @@ if let Some(text) = cb.get_text() {
 
 ## License
 
-MIT. See [LICENSE](../../LICENSE).
+MIT. See [LICENSE](LICENSE).
