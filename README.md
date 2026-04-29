@@ -5,7 +5,7 @@ Generic tree-sitter syntax highlighting for the hjkl editor stack.
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-tree-sitter.svg)](https://crates.io/crates/hjkl-tree-sitter)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-tree-sitter)](https://docs.rs/hjkl-tree-sitter)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
 Bundles 5 grammars (Rust, Markdown, JSON, TOML, SQL) and exposes a
@@ -43,4 +43,4 @@ for span in &spans {
 
 ## License
 
-MIT. See [LICENSE](../../LICENSE).
+MIT. See [LICENSE](LICENSE).
