@@ -1,6 +1,6 @@
-!Cargo.lock
 **/*.rs.bk
 *.swp
 .DS_Store
 /target
 /temp.*
+Cargo.lock
