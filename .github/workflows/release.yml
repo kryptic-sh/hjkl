@@ -59,6 +59,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Verify tag matches Cargo.toml version
         shell: bash
@@ -154,6 +156,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

@@ -1,24 +1,24 @@
 [submodule "crates/hjkl-buffer"]
 	path = crates/hjkl-buffer
-	url = git@github.com:kryptic-sh/hjkl-buffer.git
+	url = https://github.com/kryptic-sh/hjkl-buffer.git
 [submodule "crates/hjkl-clipboard"]
 	path = crates/hjkl-clipboard
-	url = git@github.com:kryptic-sh/hjkl-clipboard.git
+	url = https://github.com/kryptic-sh/hjkl-clipboard.git
 [submodule "crates/hjkl-editor"]
 	path = crates/hjkl-editor
-	url = git@github.com:kryptic-sh/hjkl-editor.git
+	url = https://github.com/kryptic-sh/hjkl-editor.git
 [submodule "crates/hjkl-engine"]
 	path = crates/hjkl-engine
-	url = git@github.com:kryptic-sh/hjkl-engine.git
+	url = https://github.com/kryptic-sh/hjkl-engine.git
 [submodule "crates/hjkl-form"]
 	path = crates/hjkl-form
-	url = git@github.com:kryptic-sh/hjkl-form.git
+	url = https://github.com/kryptic-sh/hjkl-form.git
 [submodule "crates/hjkl-picker"]
 	path = crates/hjkl-picker
-	url = git@github.com:kryptic-sh/hjkl-picker.git
+	url = https://github.com/kryptic-sh/hjkl-picker.git
 [submodule "crates/hjkl-ratatui"]
 	path = crates/hjkl-ratatui
-	url = git@github.com:kryptic-sh/hjkl-ratatui.git
+	url = https://github.com/kryptic-sh/hjkl-ratatui.git
 [submodule "crates/hjkl-tree-sitter"]
 	path = crates/hjkl-tree-sitter
-	url = git@github.com:kryptic-sh/hjkl-tree-sitter.git
+	url = https://github.com/kryptic-sh/hjkl-tree-sitter.git
