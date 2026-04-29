@@ -1,3 +1,20 @@
+[workspace]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl-clipboard"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [package]
 name = "hjkl-clipboard"
 description = "Unified clipboard sink for the hjkl editor stack (arboard + OSC 52 fallback)"
