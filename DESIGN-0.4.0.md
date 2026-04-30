@@ -733,17 +733,65 @@ Notes from execution:
 - Tests use `eprintln!("SKIP: ...")` patterns when xvfb/xclip absent — CI runner
   decides whether SKIPs are acceptable; CI provides both.
 
-#### Phase 5c — read path + INCR receive + available (TODO, ~250 LOC)
+#### Phase 5c — read path + INCR receive + available (DONE — `5b2cc54`)
 
-- [ ] `Op::Get { sel, mime }`: `xcb_convert_selection` to private property →
-      wait for `SELECTION_NOTIFY` → read property → return bytes.
-- [ ] INCR receive: if property type is `INCR`, subscribe to `PROPERTY_NOTIFY`
-      events on the requestor window, delete property to ack, accumulate chunks
-      until zero-length property arrives.
-- [ ] `Op::Available { sel }`: convert `TARGETS`, parse atom array, map atoms
-      back to `MimeType` (drop unknown).
-- [ ] Tests: read text written by another xvfb client; read large payload via
-      INCR.
+- [x] `X11Op::Get { sel_atom, mime_atom }` + `X11Op::Available { sel_atom }`
+      added; reply types `Get(Result<Vec<u8>, _>)` +
+      `Available(Result<Vec<u32>,     _>)` (raw atoms; lib.rs maps to MimeType).
+- [x] 15th atom `HJKL_CLIPBOARD_GET` interned at startup as our private
+      get-property. Cached in `Atoms` struct.
+- [x] `do_get`: `xcb_delete_property(window, our_property)` to clear stale data
+      → `xcb_convert_selection(window, sel, mime, our_property, CURRENT_TIME)` →
+      `xcb_flush` → wait for SELECTION_NOTIFY (5s timeout, 10ms poll) →
+      `read_property(delete=1)` → if type != INCR return bytes; else INCR loop.
+- [x] INCR receive sub-protocol: initial property contains size hint
+      (informational). Delete property to signal readiness, then loop reading
+      `PROPERTY_NOTIFY (state=NewValue=0)` events on our window/property,
+      accumulating chunks until zero-length signals end. 10s per-chunk + 30s
+      total timeouts.
+- [x] Window event-mask wired at create time (option a):
+      `XCB_CW_EVENT_MASK |     XCB_EVENT_MASK_PROPERTY_CHANGE` passed to
+      `xcb_create_window` at startup. One-time setup, no per-get overhead.
+- [x] Re-entrant event loop via `drain_events(state, DrainGoal)` enum
+      (`AnyEvent` | `SelectionNotify { our_property }` |
+      `PropertyNotify {     our_property, our_window }`). Returns `DrainResult`
+      enum with the matched event payload. SELECTION_REQUEST/CLEAR events are
+      dispatched normally while waiting — keeps thread responsive to remote
+      clients during self-reads (`set` then `get` round-trip works).
+- [x] `do_available` recurses into `do_get` with `target = atoms.targets`,
+      parses reply as `&[u32]` atom array. Returns `Ok(vec![])` on
+      `UnsupportedMime` (no owner = "nothing's there", not an error).
+- [x] `atom_to_mime` helper: `utf8_string` | `text_plain_utf8` | `string` →
+      `Text`; `text_html` → `Html`; `text_rtf` → `Rtf`; `text_uri_list` →
+      `UriList`; `image_png` → `Png`; else → None (drop unknown).
+- [x] `lib.rs::Clipboard::get` + `available` wired to X11 backend.
+      `get_uri_list` now works end-to-end (encode → set; get → decode).
+- [x] 6 new tests: `get_clipboard_text`, `get_primary_text`,
+      `get_after_self_set`, `available_lists_text`,
+      `get_unowned_returns_unsupported`, `available_no_owner_returns_empty`.
+- [x] All cross-targets clippy `-D warnings` clean. 100 → 106 tests.
+
+Notes from execution:
+
+- **INCR test deferred**: xclip's INCR threshold isn't reliably below xvfb's
+  `max_request_length` (~16 MB). INCR receive code is implemented but exercised
+  only by manual testing. 5d should add a test by triggering INCR ourselves (set
+  a payload >256KB then get it back).
+- `xcb_get_property(delete=1)` atomically reads-and-deletes, so the explicit
+  `xcb_delete_property` after `read_property` of the initial INCR property is
+  redundant but harmless. Left in to make the INCR-readiness signal explicit in
+  the source.
+- `read_property` is shared between normal and INCR paths — single source of
+  truth for the malloc/free dance + value extraction.
+- Self-loop `set` then `get`: the bg thread receives SELECTION_REQUEST from
+  itself (via X server). The re-entrant `drain_events` dispatches it normally
+  (calls `handle_selection_request` from within `do_get`'s wait loop). Confirmed
+  by `get_after_self_set` test passing.
+- Read timeouts (5s SELECTION_NOTIFY, 10s/chunk INCR, 30s total) are hardcoded.
+  Phase 7 may expose as configuration if real-world workloads need it.
+- `drain_events` mask `0x7f` strips the synthetic-event bit (high bit) before
+  matching response_type — important so synthetic SelectionNotify events from
+  external clients are still recognized.
 
 #### Phase 5d — INCR send + SAVE_TARGETS + mock manager + ship (TODO, ~250 LOC)
 
