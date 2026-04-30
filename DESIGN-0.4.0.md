@@ -793,18 +793,72 @@ Notes from execution:
   matching response_type — important so synthetic SelectionNotify events from
   external clients are still recognized.
 
-#### Phase 5d — INCR send + SAVE_TARGETS + mock manager + ship (TODO, ~250 LOC)
+#### Phase 5d — INCR send + SAVE_TARGETS + mock manager + ship (DONE — `b9e5a03`)
 
-- [ ] INCR send: when reply exceeds `max_request_length`, write `INCR` atom +
-      total size to property, then chunk via `PROPERTY_NOTIFY` ack loop.
-- [ ] Auto-`SAVE_TARGETS` after every successful `set()`. Check
-      `xcb_get_selection_owner(CLIPBOARD_MANAGER)` first; skip if no owner
-      (otherwise we hang on a `SELECTION_NOTIFY` that never comes).
-- [ ] Mock `CLIPBOARD_MANAGER` (~50 LOC test harness): owns the manager
-      selection, accepts `SAVE_TARGETS` requests, asserts received targets.
-- [ ] Tests: small + large INCR round-trip, persistence with mock manager,
-      persistence absence (no manager → graceful no-op).
-- [ ] CI green on `test-linux-x11`.
+- [x] **INCR send via state machine** (approach b-lite, deviation from spec's
+      a). When `handle_selection_request` is asked for a payload that exceeds
+      `max_payload`, register an
+      `IncrSend { requestor, property,     target_atom, bytes, offset, chunk_size, deadline, done }`
+      in `state.incr_sends: Vec<IncrSend>`. Write the `INCR` size-hint property,
+      subscribe to `PROPERTY_CHANGE` on the requestor's window via
+      `xcb_change_window_attributes`, send SELECTION_NOTIFY. On every subsequent
+      `PROPERTY_DELETE` event seen by `drain_events`, `advance_incr_sends`
+      writes the next chunk for any matching transfer. Zero-length chunk
+      terminates the transfer.
+- [x] **Approach (a) rejected** — deadlocks self-loop case (set then get on same
+      backend). Approach b-lite uses the existing event loop instead of a nested
+      blocking loop, handles concurrent INCR transfers, and resolves the
+      deadlock cleanly.
+- [x] `xcb_change_window_attributes` symbol added to `XcbFns` (1 new symbol;
+      total now 25).
+- [x] `do_set` no longer returns `PayloadTooLarge`; oversized payloads stored
+      and served via INCR. `PayloadTooLarge` variant kept in `ClipboardError`
+      for OSC 52 backend.
+- [x] **Auto-SAVE_TARGETS** after every successful `do_set` for
+      `Selection::Clipboard` only (PRIMARY isn't traditionally persisted).
+      `do_save_targets` checks for `CLIPBOARD_MANAGER` owner first, skips
+      silently if absent. Writes our owned mime atoms list to a property,
+      `xcb_convert_selection(manager, SAVE_TARGETS, our_property)`, waits 5s for
+      handshake `SELECTION_NOTIFY`. Manager copies in background.
+- [x] **MockManager test harness** (~150 LOC): owns its own X11Connection +
+      window, claims `CLIPBOARD_MANAGER` selection, services `SAVE_TARGETS`
+      requests by reading the requestor's TARGETS list then issuing per-target
+      `xcb_convert_selection` to fetch the actual data into its own property.
+      Stores received payloads in `Arc<Mutex<HashMap<u32, Vec<u8>>>>`.
+- [x] **BigRequests fix** (`x11.rs` +12): xvfb returns
+      `maximum_request_length = 0` (BigRequests extension active). Without this
+      fix, `max_payload = 0` and every write triggered INCR with zero-size
+      chunks. Fallback to 256 KiB when setup reports 0. This also fixes
+      pre-existing `xvfb_connection_and_atoms` flakiness.
+- [x] 4 new tests: `large_payload_set_then_get` (1 MiB self-loop, 5 chunks +
+      terminator), `large_payload_self_loop` (variant),
+      `save_targets_invokes_manager` (mock manager round-trip),
+      `save_targets_no_manager` (completes < 2s, no hang).
+- [x] Removed obsolete `payload_too_large_errors` test (no longer reachable).
+- [x] 106 → 108 tests. All cross-targets clippy `-D warnings` clean.
+
+Notes from execution:
+
+- **5c follow-up fix**: removed redundant `xcb_delete_property` after
+  `read_property(delete=1)` in INCR receive path — caused premature
+  `advance_incr_sends` call that overwrote chunk 1 in the self-loop. Single
+  delete via `read_property` is correct ICCCM signal.
+- **Stale event drain before INCR receive**: added `drain_events(AnyEvent)`
+  before the INCR receive loop to clear the `PROPERTY_NEW_VALUE` event generated
+  by our own size-hint write in `start_incr_send`, which would otherwise be
+  misinterpreted as a data chunk.
+- **Known minor leak**: `IncrSend` deadline is only checked when a
+  `PROPERTY_DELETE` event arrives. If the requestor dies mid-transfer, no events
+  ever arrive and the entry sits in `incr_sends: Vec` forever. Slow
+  process-lifetime memory growth per dead requestor. **Phase 7 fix**: prune
+  expired entries periodically in the main `run_loop` tick.
+- `DrainGoal::PropertyDelete` enum variant became dead code after switching to
+  the event-driven `advance_incr_sends` approach. Cleanup deferred to Phase 7.
+- Hardcoded timeouts: 30s INCR send total, 5s SAVE_TARGETS handshake. Phase 7
+  may expose as config.
+- Save-targets test uses 500ms sleep waiting for manager copy completion.
+  Condvar/channel cleaner but adds complexity to the mock; deferred.
+- [ ] CI green on `test-linux-x11` — deferred to Phase 7 CI matrix.
 
 ##### Notes / risk
 
