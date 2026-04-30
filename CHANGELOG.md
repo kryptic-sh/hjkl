@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-30
+
+### Added
+
+- Release matrix expanded from 4 → 7 targets. New artifacts:
+  `aarch64-unknown-linux-gnu` (Graviton, Pi, ARM laptops),
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (statically
+  linked, distro-agnostic, Alpine, Docker scratch images).
+- `.deb` packages on both linux-gnu targets via `cargo-deb` —
+  `hjkl_0.3.2-1_amd64.deb` and `hjkl_0.3.2-1_arm64.deb` are now attached to each
+  GitHub Release alongside `.sha256` checksums.
+- `[package.metadata.binstall]` so `cargo binstall hjkl` Just Works.
+- Homebrew tap at
+  [`kryptic-sh/homebrew-tap`](https://github.com/kryptic-sh/homebrew-tap):
+  `brew install kryptic-sh/tap/hjkl` (manual bump per release).
+
 ## [0.3.1] - 2026-04-30
 
 ### Changed
