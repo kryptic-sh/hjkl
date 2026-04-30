@@ -658,22 +658,80 @@ Notes from execution:
 - Symbols for 5b/5c/5d included in `XcbFns` upfront — unused fn pointers do no
   harm, simpler than amending the struct each phase.
 
-#### Phase 5b — bg thread + ownership + small-payload write/TARGETS (TODO, ~400 LOC)
+#### Phase 5b — bg thread + ownership + small-payload write/TARGETS (DONE — `b8d471f`)
 
-- [ ] Singleton bg thread (extend `bg_thread.rs` or sibling `x11_thread.rs` —
-      decide during impl) holds connection + invisible override-redirect window.
-- [ ] `Op::Set { sel, mime, bytes }`: store in
-      `HashMap<(Selection, MimeAtom), Vec<u8>>`, call `xcb_set_selection_owner`.
-- [ ] `Op::Clear { sel }`: drop entries, set owner = NONE.
-- [ ] Event loop:
-  - `SELECTION_REQUEST` for `TARGETS` → reply with atom list of owned mimes.
-  - `SELECTION_REQUEST` for specific target → write payload to requestor's
-    property, send `SELECTION_NOTIFY`.
-  - `SELECTION_CLEAR` → drop owned data for that selection.
-- [ ] No INCR yet — payloads exceeding `max_request_length` return
-      `PayloadTooLarge` (5d will lift this).
-- [ ] CLIPBOARD + PRIMARY selections wired.
-- [ ] Test: round-trip text via xvfb on both selections.
+- [x] **Forked** new `src/backend/x11_thread.rs` rather than extending
+      `bg_thread.rs` (Phase 1 echo skeleton). Reasons: X11 state (conn +
+      window + selection table) incompatible with monomorphic echo skeleton;
+      reply types differ per op; mirrors macOS/Windows pattern. `bg_thread.rs`
+      left untouched.
+- [x] Singleton `OnceLock<Result<X11Thread, String>>` lazily spawns thread.
+      Thread owns `X11Connection` + 1×1 INPUT_OUTPUT window (never mapped =
+      invisible). Window XID generated via `xcb_generate_id`.
+- [x] Event loop: `recv_timeout(50 ms)` on mpsc inbox + `xcb_poll_for_event`
+      drain each iteration. 50 ms is acceptable clipboard latency; avoids
+      self-pipe-trick / poll(2) complexity. Disconnect on inbox closure exits
+      the loop (not currently triggered — singleton lives until process exit).
+- [x] `X11Op::Set { sel_atom, mime_atom, bytes }`: claim ownership via
+      `xcb_set_selection_owner(window, sel, CURRENT_TIME)`, flush, verify via
+      `xcb_get_selection_owner` round-trip. Store in
+      `HashMap<sel_atom, OwnedData>` where `OwnedData` has
+      `payloads:     HashMap<mime_atom, Vec<u8>>` + ordered `targets: Vec<u32>`.
+      Insertion order preserved for TARGETS reply.
+- [x] `X11Op::Clear { sel_atom }`: relinquish via
+      `xcb_set_selection_owner(NONE, sel, CURRENT_TIME)` + drop owned data.
+- [x] `SELECTION_REQUEST` handler:
+  - target == TARGETS → reply with `[TARGETS, MULTIPLE, ...owned_mime_atoms]`
+    (TARGETS + MULTIPLE always advertised even though MULTIPLE not handled —
+    keeps compliant clients happy).
+  - target == owned mime → write payload to requestor's property (format=8).
+  - unknown target / unowned selection → reply with property = `XCB_NONE`.
+  - ICCCM compatibility: if requestor's `property == XCB_NONE`, fall back to
+    `target` atom as the reply property.
+- [x] `SELECTION_CLEAR` handler: drop our owned data for that selection.
+- [x] `SELECTION_NOTIFY` send: hand-built 32-byte event buffer,
+      `xcb_send_event(propagate=0, mask=0, requestor)` + flush.
+- [x] PayloadTooLarge guard: `bytes.len() > max_request_len_bytes - 24` → error.
+      5d will lift via INCR.
+- [x] CLIPBOARD + PRIMARY selections both wired.
+- [x] `Atoms` gained `Copy` derive + accessor methods on `X11Connection`
+      (`fns()`, `raw()`, `screen()`, `atoms()`). `ScreenInfo` gained
+      `root_depth: u8` field (needed for `xcb_create_window`).
+- [x] `lib.rs` minimal Backend selector:
+      `enum ClipboardBackend { X11,     Unimplemented }`. `Clipboard::new()`
+      probes `x11_thread()` on linux, falls through on
+      `LibNotFound`/`NoDisplay`. `set` + `clear` wired; `get` + `available`
+      return `UnsupportedMime` (5c). `set_uri_list` works via encode → set.
+- [x] 5 round-trip tests via xvfb + xclip (`set_clear_clipboard_text`,
+      `set_primary_text`, `set_html_payload`, `payload_too_large_errors`,
+      `set_replaces_previous`). Per-test serialization via
+      `static TEST_LOCK: Mutex<()>`. One `XVFB_SESSION: OnceLock` for the whole
+      test process — eagerly inits `x11_thread` inside the OnceLock callback to
+      eliminate DISPLAY race. Display `:98` (5a uses `:99`).
+- [x] 95 → 100 tests. All cross-targets clippy `-D warnings` clean.
+
+Notes from execution:
+
+- **Known issue for Phase 7**: `OnceLock<Result<X11Thread, String>>` serializes
+  the `ClipboardError` to a `String` because `ClipboardError` isn't `Clone`. All
+  errors from `x11_thread()` after the first attempt collapse to `Io(string)` —
+  losing the `LibNotFound` / `NoDisplay` type tag. Acceptable for 5b (only X11
+  wired; no fallthrough). **Must fix before Phase 7 probe-and-pick** so
+  X11→Wayland→OSC52 fallthrough works. Likely fix: `ClipboardError::clone()`
+  impl or store `OnceLock<Option<X11Thread>>` + a separate
+  `OnceLock<Option<ErrorKindTag>>`.
+- **Custom mime not yet supported**: requires live `xcb_intern_atom` from the bg
+  thread (atom name not in pre-interned set). Returns `UnsupportedMime`. 5c will
+  add this when the read path needs it (extend `Set` / `Get` to carry the string
+  name and intern lazily).
+- Race window: between `xcb_set_selection_owner` and our verify
+  `xcb_get_selection_owner`, queued `SELECTION_REQUEST` events aren't drained.
+  Tests show no observable issue (xclip waits patiently for our notify), but if
+  compositors race tighter, a `drain_events` call before verify would tighten
+  the loop. Defer until observed.
+- Thread leak intentional (matches arboard / Helix). OS reaps on process exit.
+- Tests use `eprintln!("SKIP: ...")` patterns when xvfb/xclip absent — CI runner
+  decides whether SKIPs are acceptable; CI provides both.
 
 #### Phase 5c — read path + INCR receive + available (TODO, ~250 LOC)
 
