@@ -57,6 +57,8 @@ pub(crate) struct Atoms {
     pub clipboard_manager: u32,
     pub save_targets: u32,
     pub multiple: u32,
+    /// Private property atom used as the reply target for our own get requests.
+    pub hjkl_clipboard_get: u32,
 }
 
 // Atom names in the same order as the fields above.
@@ -75,6 +77,7 @@ const ATOM_NAMES: &[&str] = &[
     "CLIPBOARD_MANAGER",
     "SAVE_TARGETS",
     "MULTIPLE",
+    "HJKL_CLIPBOARD_GET",
 ];
 
 // ---------------------------------------------------------------------------
@@ -264,7 +267,7 @@ impl X11Connection {
 fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms, ClipboardError> {
     use super::dlopen::XcbInternAtomCookie;
 
-    let mut cookies: [XcbInternAtomCookie; 14] = [XcbInternAtomCookie { sequence: 0 }; 14];
+    let mut cookies: [XcbInternAtomCookie; 15] = [XcbInternAtomCookie { sequence: 0 }; 15];
 
     for (i, name) in ATOM_NAMES.iter().enumerate() {
         let len = name.len() as u16;
@@ -274,7 +277,7 @@ fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms,
         cookies[i] = unsafe { (fns.xcb_intern_atom)(conn, 0, len, name.as_ptr().cast::<c_char>()) };
     }
 
-    let mut values = [0u32; 14];
+    let mut values = [0u32; 15];
     for (i, cookie) in cookies.into_iter().enumerate() {
         // SAFETY: cookie was returned by xcb_intern_atom for conn. Passing
         // null for the error pointer: any error causes a null reply, which
@@ -311,6 +314,7 @@ fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms,
         clipboard_manager: values[11],
         save_targets: values[12],
         multiple: values[13],
+        hjkl_clipboard_get: values[14],
     })
 }
 
@@ -477,7 +481,7 @@ mod tests {
             "max_request_len_bytes must be > 0"
         );
 
-        // All 14 atoms must be non-zero XCB atoms.
+        // All 15 atoms must be non-zero XCB atoms.
         let a = &conn.atoms;
         for (val, name) in [
             (a.clipboard, "CLIPBOARD"),
@@ -494,6 +498,7 @@ mod tests {
             (a.clipboard_manager, "CLIPBOARD_MANAGER"),
             (a.save_targets, "SAVE_TARGETS"),
             (a.multiple, "MULTIPLE"),
+            (a.hjkl_clipboard_get, "HJKL_CLIPBOARD_GET"),
         ] {
             assert_ne!(val, 0, "atom {name} must be non-zero");
         }

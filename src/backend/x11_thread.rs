@@ -1,18 +1,25 @@
-//! X11 clipboard bg thread — selection ownership, set, and clear.
+//! X11 clipboard bg thread — selection ownership, set, clear, get, available.
 //!
-//! Phase 5b: Set + Clear only. Get / Available / INCR land in 5c/5d.
+//! Phase 5c: adds Get + Available on top of 5b's Set + Clear.
 //!
 //! One invisible INPUT_OUTPUT window is created per process. The thread
 //! services two kinds of work:
-//!   1. Inbox messages  (Set / Clear) via mpsc.
-//!   2. X server events (SELECTION_REQUEST / SELECTION_CLEAR) via xcb_poll.
+//!   1. Inbox messages  (Set / Clear / Get / Available) via mpsc.
+//!   2. X server events (SELECTION_REQUEST / SELECTION_CLEAR / PROPERTY_NOTIFY)
+//!      via xcb_poll.
 //!
 //! The event loop uses `recv_timeout(50 ms)` + `xcb_poll_for_event` — no
 //! self-pipe needed. 50 ms is acceptable latency for clipboard semantics.
+//!
+//! For Get operations the handler drives an inner poll loop (bounded by
+//! timeout) that dispatches SELECTION_REQUEST events while waiting for
+//! SELECTION_NOTIFY, avoiding deadlock when we own the selection we are
+//! reading.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
+use std::time::{Duration, Instant};
 
 use crate::{ClipboardError, MimeType, Selection};
 
@@ -27,10 +34,18 @@ const XCB_PROP_MODE_REPLACE: u8 = 0;
 const XCB_SELECTION_CLEAR: u8 = 29;
 const XCB_SELECTION_REQUEST: u8 = 30;
 const XCB_SELECTION_NOTIFY: u8 = 31;
+const XCB_PROPERTY_NOTIFY: u8 = 28;
+const XCB_PROPERTY_NEW_VALUE: u8 = 0;
 const XCB_NONE: u32 = 0;
 const XCB_CURRENT_TIME: u32 = 0;
 /// Predefined atom ATOM (type for a list of atoms) = 4.
 const XCB_ATOM_ATOM: u32 = 4;
+/// CW_EVENT_MASK attribute bit for xcb_create_window value_mask.
+const XCB_CW_EVENT_MASK: u32 = 0x800;
+/// Subscribe to PropertyChange events on our window so INCR receive works.
+const XCB_EVENT_MASK_PROPERTY_CHANGE: u32 = 0x0040_0000;
+/// AnyPropertyType — pass as `type` to xcb_get_property to accept any type.
+const XCB_GET_PROPERTY_TYPE_ANY: u32 = 0;
 
 // ---------------------------------------------------------------------------
 // Wire layouts for events we parse
@@ -64,6 +79,34 @@ struct SelectionClearEvent {
     selection: u32,
 }
 
+/// xcb_selection_notify_event_t (32 bytes, host byte order).
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct SelectionNotifyEvent {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    time: u32,
+    requestor: u32,
+    selection: u32,
+    target: u32,
+    property: u32,
+}
+
+/// xcb_property_notify_event_t (32 bytes, host byte order).
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct PropertyNotifyEvent {
+    response_type: u8,
+    pad0: u8,
+    sequence: u16,
+    window: u32,
+    atom: u32,
+    time: u32,
+    state: u8,
+    pad1: [u8; 3],
+}
+
 // ---------------------------------------------------------------------------
 // Per-selection ownership data
 // ---------------------------------------------------------------------------
@@ -91,7 +134,7 @@ struct X11State {
 // Op / Request types
 // ---------------------------------------------------------------------------
 
-/// Operations the X11 thread can handle (phase 5b: Set + Clear).
+/// Operations the X11 thread can handle.
 pub(crate) enum X11Op {
     Set {
         sel_atom: u32,
@@ -101,12 +144,22 @@ pub(crate) enum X11Op {
     Clear {
         sel_atom: u32,
     },
+    Get {
+        sel_atom: u32,
+        mime_atom: u32,
+    },
+    Available {
+        sel_atom: u32,
+    },
 }
 
 /// Per-op reply payload.
 pub(crate) enum X11OpResult {
     Set(Result<(), ClipboardError>),
     Clear(Result<(), ClipboardError>),
+    Get(Result<Vec<u8>, ClipboardError>),
+    /// Raw atoms; lib.rs maps to MimeType via atom_to_mime.
+    Available(Result<Vec<u32>, ClipboardError>),
 }
 
 /// Envelope sent to the X11 thread inbox.
@@ -205,9 +258,14 @@ fn create_selection_window(conn: &X11Connection) -> Result<u32, ClipboardError> 
     let wid = unsafe { (fns.xcb_generate_id)(raw) };
 
     // Create a 1x1 INPUT_OUTPUT window (never mapped — invisible by default).
-    // We need INPUT_OUTPUT (not INPUT_ONLY) because XCB requires a matching
-    // visual + depth for INPUT_OUTPUT. value_mask=0: no extra attributes needed.
+    // We set XCB_CW_EVENT_MASK with XCB_EVENT_MASK_PROPERTY_CHANGE so that
+    // PROPERTY_NOTIFY events are delivered to us during INCR receives.
+    // SELECTION_REQUEST/CLEAR events arrive regardless of event mask.
+    let value_mask: u32 = XCB_CW_EVENT_MASK;
+    let value_list: [u32; 1] = [XCB_EVENT_MASK_PROPERTY_CHANGE];
+
     // SAFETY: all parameters are valid; conn is live on this thread.
+    // value_list is a packed u32 array indexed by set bits in value_mask.
     unsafe {
         (fns.xcb_create_window)(
             raw,
@@ -221,8 +279,8 @@ fn create_selection_window(conn: &X11Connection) -> Result<u32, ClipboardError> 
             0, // border_width
             XCB_WINDOW_CLASS_INPUT_OUTPUT,
             screen.root_visual,
-            0,                          // value_mask (no extra attributes)
-            std::ptr::null::<c_void>(), // value_list
+            value_mask,
+            value_list.as_ptr().cast::<c_void>(),
         )
     };
 
@@ -240,9 +298,9 @@ fn create_selection_window(conn: &X11Connection) -> Result<u32, ClipboardError> 
 fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
     loop {
         // Drain any pending X events before blocking on the inbox.
-        drain_events(state);
+        drain_events(state, DrainGoal::AnyEvent);
 
-        match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+        match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(req) => handle_op(state, req),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -254,7 +312,29 @@ fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
 // X event handling
 // ---------------------------------------------------------------------------
 
-fn drain_events(state: &mut X11State) {
+/// What drain_events is looking for in the event stream.
+enum DrainGoal {
+    /// Just drain all pending events (normal run_loop pass).
+    AnyEvent,
+    /// Looking for SELECTION_NOTIFY on our private get-property.
+    SelectionNotify { our_property: u32 },
+    /// Looking for PROPERTY_NOTIFY (new value) on our private get-property.
+    PropertyNotify { our_property: u32, our_window: u32 },
+}
+
+/// Result from drain_events when a goal is set.
+enum DrainResult {
+    /// Did not see the target event; caller should retry.
+    NotFound,
+    /// Saw SELECTION_NOTIFY; property field indicates owner's reply.
+    SelectionNotifySeen { property: u32 },
+    /// Saw PROPERTY_NOTIFY (new value); caller should read the property.
+    PropertyNotifySeen,
+}
+
+/// Drain all pending X events, dispatching SELECTION_REQUEST/CLEAR as they
+/// arrive.  When a goal is set, returns as soon as the target event is seen.
+fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
     let fns = state.conn.fns();
     let raw = state.conn.raw();
 
@@ -262,32 +342,83 @@ fn drain_events(state: &mut X11State) {
         // SAFETY: xcb_poll_for_event returns null when the event queue is empty.
         let ev = unsafe { (fns.xcb_poll_for_event)(raw) };
         if ev.is_null() {
-            break;
+            return DrainResult::NotFound;
         }
 
         // High bit is set on synthetic events; mask it to get the real type.
         // SAFETY: ev is non-null; first byte is response_type.
         let response_type = unsafe { *(ev as *const u8) } & 0x7f;
 
-        match response_type {
+        let result = match response_type {
             XCB_SELECTION_REQUEST => {
                 // SAFETY: ev is a valid SelectionRequest event (32 bytes).
                 let req = unsafe { *(ev as *const SelectionRequestEvent) };
                 handle_selection_request(state, &req);
+                DrainResult::NotFound
             }
             XCB_SELECTION_CLEAR => {
                 // SAFETY: ev is a valid SelectionClear event (32 bytes).
                 let clr = unsafe { *(ev as *const SelectionClearEvent) };
                 // Another client has taken the selection — drop our data.
                 state.owned.remove(&clr.selection);
+                DrainResult::NotFound
+            }
+            XCB_SELECTION_NOTIFY => {
+                // SAFETY: ev is a valid SelectionNotify event (32 bytes).
+                let notify = unsafe { *(ev as *const SelectionNotifyEvent) };
+                match &goal {
+                    DrainGoal::SelectionNotify { our_property }
+                        if notify.requestor == state.window && notify.property == *our_property =>
+                    {
+                        // SAFETY: ev was heap-allocated by xcb (via malloc); free it.
+                        unsafe { libc::free(ev.cast()) };
+                        return DrainResult::SelectionNotifySeen {
+                            property: notify.property,
+                        };
+                    }
+                    DrainGoal::SelectionNotify { .. } if notify.requestor == state.window => {
+                        // Refusal: owner set property = XCB_NONE.
+                        // SAFETY: ev was heap-allocated by xcb.
+                        unsafe { libc::free(ev.cast()) };
+                        return DrainResult::SelectionNotifySeen { property: XCB_NONE };
+                    }
+                    _ => {
+                        // Not our notify or not looking for one; ignore.
+                        DrainResult::NotFound
+                    }
+                }
+            }
+            XCB_PROPERTY_NOTIFY => {
+                // SAFETY: ev is a valid PropertyNotify event (32 bytes).
+                let pn = unsafe { *(ev as *const PropertyNotifyEvent) };
+                match &goal {
+                    DrainGoal::PropertyNotify {
+                        our_property,
+                        our_window,
+                    } if pn.window == *our_window
+                        && pn.atom == *our_property
+                        && pn.state == XCB_PROPERTY_NEW_VALUE =>
+                    {
+                        // SAFETY: ev was heap-allocated by xcb.
+                        unsafe { libc::free(ev.cast()) };
+                        return DrainResult::PropertyNotifySeen;
+                    }
+                    _ => DrainResult::NotFound,
+                }
             }
             _ => {
                 // Ignore events we don't handle.
+                DrainResult::NotFound
             }
-        }
+        };
 
         // SAFETY: ev was heap-allocated by xcb (via malloc); free it.
         unsafe { libc::free(ev.cast()) };
+
+        // Only return early for found-goal; otherwise keep draining.
+        if !matches!(result, DrainResult::NotFound) {
+            return result;
+        }
     }
 }
 
@@ -415,6 +546,11 @@ fn handle_op(state: &mut X11State, req: X11Request) {
             bytes,
         } => X11OpResult::Set(do_set(state, sel_atom, mime_atom, bytes)),
         X11Op::Clear { sel_atom } => X11OpResult::Clear(do_clear(state, sel_atom)),
+        X11Op::Get {
+            sel_atom,
+            mime_atom,
+        } => X11OpResult::Get(do_get(state, sel_atom, mime_atom)),
+        X11Op::Available { sel_atom } => X11OpResult::Available(do_available(state, sel_atom)),
     };
     req.reply.resolve(result);
 }
@@ -495,6 +631,220 @@ fn do_clear(state: &mut X11State, sel_atom: u32) -> Result<(), ClipboardError> {
 }
 
 // ---------------------------------------------------------------------------
+// Read helpers: xcb_get_property round-trip
+// ---------------------------------------------------------------------------
+
+/// Read our private property from our window. Returns (type_atom, bytes).
+/// delete=1 so the server frees the property after we read it.
+fn read_property(state: &X11State) -> Result<(u32, Vec<u8>), ClipboardError> {
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+    let window = state.window;
+    let our_property = state.conn.atoms().hjkl_clipboard_get;
+
+    // long_length: max u32/4 to request the full property in one shot.
+    // For very large data the X server caps at max_request_length; values that
+    // exceed it will be delivered via INCR instead, so we don't need to chunk.
+    let cookie = unsafe {
+        (fns.xcb_get_property)(
+            raw,
+            1, // delete=1: server frees property after this read
+            window,
+            our_property,
+            XCB_GET_PROPERTY_TYPE_ANY,
+            0,            // long_offset
+            u32::MAX / 4, // long_length
+        )
+    };
+
+    // SAFETY: cookie from xcb_get_property; null error pointer (null reply ->
+    // error).
+    let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
+    if reply.is_null() {
+        return Err(ClipboardError::Io(std::io::Error::other(
+            "xcb_get_property_reply returned null",
+        )));
+    }
+
+    // SAFETY: reply is non-null xcb_get_property_reply_t.
+    let type_atom = unsafe { (*reply).r#type };
+    // SAFETY: reply non-null; xcb_get_property_value returns pointer into
+    // reply's trailing data buffer.
+    let value_ptr = unsafe { (fns.xcb_get_property_value)(reply) };
+    // SAFETY: same.
+    let value_len = unsafe { (fns.xcb_get_property_value_length)(reply) } as usize;
+
+    let bytes = if value_len == 0 || value_ptr.is_null() {
+        Vec::new()
+    } else {
+        // SAFETY: value_ptr is valid for value_len bytes inside the reply
+        // allocation. We copy immediately before freeing reply.
+        unsafe { std::slice::from_raw_parts(value_ptr as *const u8, value_len).to_vec() }
+    };
+
+    // SAFETY: reply was malloc'd by xcb.
+    unsafe { libc::free(reply.cast()) };
+
+    Ok((type_atom, bytes))
+}
+
+// ---------------------------------------------------------------------------
+// do_get
+// ---------------------------------------------------------------------------
+
+fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>, ClipboardError> {
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+    let window = state.window;
+    let our_property = state.conn.atoms().hjkl_clipboard_get;
+    let incr_atom = state.conn.atoms().incr;
+
+    // Delete any stale data on our private property before issuing the request.
+    // SAFETY: standard xcb call; conn live on this thread.
+    unsafe { (fns.xcb_delete_property)(raw, window, our_property) };
+
+    // Ask the selection owner to write the desired mime type into our property.
+    // SAFETY: all parameters valid; conn live.
+    unsafe {
+        (fns.xcb_convert_selection)(
+            raw,
+            window,
+            sel_atom,
+            mime_atom,
+            our_property,
+            XCB_CURRENT_TIME,
+        );
+    }
+    // SAFETY: conn live.
+    unsafe { (fns.xcb_flush)(raw) };
+
+    // Wait for SELECTION_NOTIFY, dispatching any SELECTION_REQUEST events that
+    // arrive while we wait (needed for self-reads where we own the selection).
+    // Timeout: 5 seconds.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let replied_property = loop {
+        if let DrainResult::SelectionNotifySeen { property } =
+            drain_events(state, DrainGoal::SelectionNotify { our_property })
+        {
+            break property;
+        }
+        if Instant::now() >= deadline {
+            return Err(ClipboardError::Io(std::io::Error::other(
+                "xcb_convert_selection timed out waiting for SELECTION_NOTIFY",
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    if replied_property == XCB_NONE {
+        // Owner refused (no owner, or unknown target).
+        return Err(ClipboardError::UnsupportedMime);
+    }
+
+    // Read the property the owner wrote into.
+    let (type_atom, bytes) = read_property(state)?;
+
+    if type_atom != incr_atom {
+        // Normal (non-INCR) case: all data arrived in one property.
+        return Ok(bytes);
+    }
+
+    // ---------------------------------------------------------------------------
+    // INCR receive sub-protocol
+    // ---------------------------------------------------------------------------
+    //
+    // The initial property contains a u32 total-size hint (informational).
+    // We signal readiness by deleting our property, then loop reading chunks
+    // as PROPERTY_NOTIFY (new value) events arrive.  A zero-length chunk
+    // signals end of transfer.
+
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+
+    // Delete initial INCR property to signal we are ready to receive chunks.
+    // SAFETY: conn live.
+    unsafe { (fns.xcb_delete_property)(raw, window, our_property) };
+    // SAFETY: conn live.
+    unsafe { (fns.xcb_flush)(raw) };
+
+    let mut accumulator: Vec<u8> = Vec::new();
+    let total_deadline = Instant::now() + Duration::from_secs(30);
+
+    loop {
+        // Wait for PROPERTY_NOTIFY (new value) on our window/property.
+        let chunk_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let DrainResult::PropertyNotifySeen = drain_events(
+                state,
+                DrainGoal::PropertyNotify {
+                    our_property,
+                    our_window: window,
+                },
+            ) {
+                break;
+            }
+            if Instant::now() >= chunk_deadline || Instant::now() >= total_deadline {
+                return Err(ClipboardError::Io(std::io::Error::other(
+                    "INCR receive timed out waiting for PROPERTY_NOTIFY",
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Read the chunk (delete=1 to ack it to the sender).
+        let (_type_atom, chunk) = read_property(state)?;
+
+        if chunk.is_empty() {
+            // Zero-length chunk = end of INCR transfer.
+            break;
+        }
+
+        accumulator.extend_from_slice(&chunk);
+
+        if Instant::now() >= total_deadline {
+            return Err(ClipboardError::Io(std::io::Error::other(
+                "INCR receive exceeded total timeout",
+            )));
+        }
+    }
+
+    Ok(accumulator)
+}
+
+// ---------------------------------------------------------------------------
+// do_available
+// ---------------------------------------------------------------------------
+
+fn do_available(state: &mut X11State, sel_atom: u32) -> Result<Vec<u32>, ClipboardError> {
+    let targets_atom = state.conn.atoms().targets;
+
+    // Use the same read path as do_get, but request TARGETS.
+    let data = do_get(state, sel_atom, targets_atom);
+
+    match data {
+        Err(ClipboardError::UnsupportedMime) => {
+            // No owner or owner refused — return empty list, not an error.
+            Ok(vec![])
+        }
+        Err(e) => Err(e),
+        Ok(bytes) => {
+            // TARGETS reply is a list of u32 atoms (format=32).
+            // Each atom is 4 bytes in native byte order.
+            if bytes.len() % 4 != 0 {
+                return Err(ClipboardError::Io(std::io::Error::other(
+                    "TARGETS reply has non-multiple-of-4 byte length",
+                )));
+            }
+            let atoms: Vec<u32> = bytes
+                .chunks_exact(4)
+                .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            Ok(atoms)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MimeType -> atom mapping
 // ---------------------------------------------------------------------------
 
@@ -515,14 +865,31 @@ pub(crate) fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32>
     }
 }
 
+/// Map a raw atom back to a MimeType, returning None for unknown atoms.
+pub(crate) fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
+    if atom == atoms.utf8_string || atom == atoms.text_plain_utf8 || atom == atoms.string {
+        Some(MimeType::Text)
+    } else if atom == atoms.text_html {
+        Some(MimeType::Html)
+    } else if atom == atoms.text_rtf {
+        Some(MimeType::Rtf)
+    } else if atom == atoms.text_uri_list {
+        Some(MimeType::UriList)
+    } else if atom == atoms.image_png {
+        Some(MimeType::Png)
+    } else {
+        None
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public helpers for lib.rs wiring
 // ---------------------------------------------------------------------------
 
 /// Set a clipboard payload via the X11 thread.
 ///
-/// `Custom` mime types are not supported in 5b (no live intern path); they
-/// return `UnsupportedMime` and will be wired in 5c.
+/// `Custom` mime types are not supported (no live intern path); they return
+/// `UnsupportedMime`.
 pub(crate) fn set_clipboard(
     thread: &X11Thread,
     sel: Selection,
@@ -555,6 +922,49 @@ pub(crate) fn clear_clipboard(thread: &X11Thread, sel: Selection) -> Result<(), 
     }
 }
 
+/// Get clipboard bytes via the X11 thread.
+pub(crate) fn get_clipboard(
+    thread: &X11Thread,
+    sel: Selection,
+    mime: &MimeType,
+) -> Result<Vec<u8>, ClipboardError> {
+    let mime_atom =
+        mime_to_atom_static(&thread.atoms, mime).ok_or(ClipboardError::UnsupportedMime)?;
+    let sel_atom = sel_to_atom(&thread.atoms, sel);
+    let result = thread.send_sync(X11Op::Get {
+        sel_atom,
+        mime_atom,
+    })?;
+    match result {
+        X11OpResult::Get(r) => r,
+        _ => unreachable!(),
+    }
+}
+
+/// Return the available MIME types in a selection via the X11 thread.
+pub(crate) fn available_clipboard(
+    thread: &X11Thread,
+    sel: Selection,
+) -> Result<Vec<MimeType>, ClipboardError> {
+    let sel_atom = sel_to_atom(&thread.atoms, sel);
+    let result = thread.send_sync(X11Op::Available { sel_atom })?;
+    match result {
+        X11OpResult::Available(r) => {
+            let raw_atoms = r?;
+            // Map raw atoms to MimeType, deduplicating (multiple atoms may map
+            // to the same MimeType, e.g. UTF8_STRING and STRING both -> Text).
+            let mut mimes: Vec<MimeType> = Vec::new();
+            for atom in raw_atoms {
+                if let Some(mime) = atom_to_mime(&thread.atoms, atom) && !mimes.contains(&mime) {
+                    mimes.push(mime);
+                }
+            }
+            Ok(mimes)
+        }
+        _ => unreachable!(),
+    }
+}
+
 fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
     match sel {
         Selection::Clipboard => atoms.clipboard,
@@ -569,7 +979,7 @@ fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
+    use std::io::{self, Write};
     use std::os::unix::net::UnixStream;
     use std::path::Path;
     use std::process::{Child, Command, Stdio};
@@ -670,6 +1080,27 @@ mod tests {
         xclip(&["-selection", sel, "-t", mime, "-o"])
     }
 
+    /// Write data into xclip's clipboard (xclip owns it; stays alive until we
+    /// read it).  Returns a Child that must be waited on after reading.
+    fn xclip_write(sel: &str, data: &[u8]) -> Option<Child> {
+        if !Path::new("/usr/bin/xclip").exists() {
+            return None;
+        }
+        let session = ensure_xvfb()?;
+        let mut child = Command::new("/usr/bin/xclip")
+            .args(["-selection", sel, "-i"])
+            .env("DISPLAY", &session.display)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(data).ok()?;
+        }
+        Some(child)
+    }
+
     /// Initialize Xvfb + get the singleton X11Thread for tests.
     fn get_thread() -> Option<&'static X11Thread> {
         ensure_xvfb()?;
@@ -682,6 +1113,8 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // 5b tests (set/clear)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -812,4 +1245,156 @@ mod tests {
         };
         assert_eq!(out, b"world", "expected 'world' after replace");
     }
+
+    // -----------------------------------------------------------------------
+    // 5c tests (get/available)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_clipboard_text() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let data = b"hello-get-5c\n";
+
+        // Write via xclip; it stays alive as a selection owner.
+        let mut child = match xclip_write("clipboard", data) {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP get_clipboard_text: xclip not available");
+                return;
+            }
+        };
+
+        // Give xclip time to claim ownership.
+        std::thread::sleep(Duration::from_millis(150));
+
+        let result = get_clipboard(thread, Selection::Clipboard, &MimeType::Text);
+        // Let xclip exit before asserting (avoid zombie).
+        let _ = child.wait();
+
+        let bytes = result.expect("get_clipboard failed");
+        assert_eq!(bytes, data, "get_clipboard text mismatch");
+    }
+
+    #[test]
+    fn get_primary_text() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let data = b"primary-get-5c\n";
+
+        let mut child = match xclip_write("primary", data) {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP get_primary_text: xclip not available");
+                return;
+            }
+        };
+
+        std::thread::sleep(Duration::from_millis(150));
+
+        let result = get_clipboard(thread, Selection::Primary, &MimeType::Text);
+        let _ = child.wait();
+
+        let bytes = result.expect("get_clipboard (primary) failed");
+        assert_eq!(bytes, data, "get_clipboard primary text mismatch");
+    }
+
+    #[test]
+    fn get_after_self_set() {
+        // We own the selection and then try to read it back from ourselves.
+        // The X server sends our own window a SELECTION_REQUEST which our event
+        // loop dispatches inside do_get's wait loop, so this must not deadlock.
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"loop").expect("set failed");
+        std::thread::sleep(Duration::from_millis(50));
+
+        let bytes =
+            get_clipboard(thread, Selection::Clipboard, &MimeType::Text).expect("self-read failed");
+        assert_eq!(bytes, b"loop", "self-read mismatch");
+    }
+
+    #[test]
+    fn available_lists_text() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let mut child = match xclip_write("clipboard", b"available-test\n") {
+            Some(c) => c,
+            None => {
+                eprintln!("SKIP available_lists_text: xclip not available");
+                return;
+            }
+        };
+
+        std::thread::sleep(Duration::from_millis(150));
+
+        let result = available_clipboard(thread, Selection::Clipboard);
+        let _ = child.wait();
+
+        let mimes = result.expect("available_clipboard failed");
+        assert!(
+            mimes.contains(&MimeType::Text),
+            "expected Text in available mimes, got: {mimes:?}"
+        );
+    }
+
+    #[test]
+    fn get_unowned_returns_unsupported() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Clear so there is no owner.
+        clear_clipboard(thread, Selection::Clipboard).expect("clear failed");
+        std::thread::sleep(Duration::from_millis(100));
+
+        let err = get_clipboard(thread, Selection::Clipboard, &MimeType::Text)
+            .expect_err("expected error for unowned selection");
+        assert!(
+            matches!(err, ClipboardError::UnsupportedMime),
+            "expected UnsupportedMime, got: {err}"
+        );
+    }
+
+    #[test]
+    fn available_no_owner_returns_empty() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        clear_clipboard(thread, Selection::Clipboard).expect("clear failed");
+        std::thread::sleep(Duration::from_millis(100));
+
+        let mimes = available_clipboard(thread, Selection::Clipboard)
+            .expect("available_clipboard should return Ok");
+        assert!(
+            mimes.is_empty(),
+            "expected empty available list, got: {mimes:?}"
+        );
+    }
+
+    // get_incr_payload: xclip uses INCR for payloads it considers "large" but
+    // the threshold varies by version and is not reliably below our
+    // max_request_length in xvfb.  We exercise the normal read path above.
+    // TODO(5d): test INCR send + receive once we can control chunk size.
 }

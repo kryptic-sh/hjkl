@@ -97,9 +97,16 @@ impl Clipboard {
     }
 
     /// Read the current contents of `sel` as `mime`.
-    pub fn get(&self, _sel: Selection, _mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
-        // get path lands in phase 5c.
-        Err(ClipboardError::UnsupportedMime)
+    #[allow(unused_variables)]
+    pub fn get(&self, sel: Selection, mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                backend::x11_thread::get_clipboard(thread, sel, &mime)
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
+        }
     }
 
     /// Clear `sel`.
@@ -116,9 +123,16 @@ impl Clipboard {
     }
 
     /// Return the MIME types currently available in `sel`.
-    pub fn available(&self, _sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        // available() lands in phase 5c.
-        Err(ClipboardError::UnsupportedMime)
+    #[allow(unused_variables)]
+    pub fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                backend::x11_thread::available_clipboard(thread, sel)
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
+        }
     }
 
     // -------------------------------------------------------------------------
