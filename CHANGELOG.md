@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-04-30
+
+### Added
+
+- `.rpm` packages for Fedora, RHEL, openSUSE, and other RPM-based distributions
+  on x86_64 and aarch64. Built via `cargo-generate-rpm` on the same linux-gnu
+  pipeline as the existing `.deb` packages. Install with
+  `dnf install ./hjkl-0.3.4-1.x86_64.rpm` (or `aarch64`).
+
 ## [0.3.3] - 2026-04-30
 
 ### Fixed

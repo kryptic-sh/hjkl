@@ -63,3 +63,12 @@ assets = [
     ["README.md", "/usr/share/doc/hjkl/README.md", "644"],
     ["../../LICENSE", "/usr/share/doc/hjkl/copyright", "644"],
 ]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/hjkl", dest = "/usr/bin/hjkl", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/hjkl/README.md", mode = "644", doc = true },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/hjkl/LICENSE", mode = "644" },
+]
+# Group is largely ignored by modern dnf but keeps rpmlint quiet.
+group = "Applications/Editors"
