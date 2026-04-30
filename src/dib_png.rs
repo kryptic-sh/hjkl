@@ -93,10 +93,7 @@ fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
 /// Parse the next PNG chunk from `data` starting at `pos`.
 ///
 /// Returns `(chunk_type, chunk_data_slice, new_pos)` or an error.
-fn read_chunk(
-    data: &[u8],
-    pos: usize,
-) -> Result<([u8; 4], &[u8], usize), ClipboardError> {
+fn read_chunk(data: &[u8], pos: usize) -> Result<([u8; 4], &[u8], usize), ClipboardError> {
     let bad = |msg: &'static str| ClipboardError::Io(io::Error::other(msg));
 
     if pos + 8 > data.len() {

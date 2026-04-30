@@ -5,7 +5,7 @@
 /// This enum is `#[non_exhaustive]`: new variants may be added in future minor
 /// versions without a breaking change. Use [`MimeType::Custom`] as an escape
 /// hatch for types not yet listed here.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum MimeType {
     /// Plain UTF-8 text (`text/plain;charset=utf-8`).
