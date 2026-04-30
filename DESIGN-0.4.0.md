@@ -415,14 +415,43 @@ Notes from execution:
 - 37 tests still passing on Linux (no test changes — Windows tests deferred to
   Phase 7 CI).
 
-#### Phase 3b — CF_HTML + CF_RTF (TODO)
+#### Phase 3b — CF_HTML + CF_RTF (DONE — `21b663e`)
 
-- [ ] `cf_html.rs` header wrap/unwrap (the awkward MS format with byte offset
-      header: `Version:0.9\r\nStartHTML:00000097\r\n...`).
-- [ ] CF_RTF passthrough (registered format `"Rich Text Format"`).
-- [ ] Round-trip tests for CF_HTML + CF_RTF (pure-rust, fully testable on Linux
-      native).
-- [ ] `WindowsBackend::set/get/available` wires Html + Rtf paths.
+- [x] `cf_html.rs` moved from `src/backend/` to `src/` (non-cfg-gated) so the
+      pure-rust wrap/unwrap is testable on Linux native CI. `cf_hdrop.rs` and
+      `dib_png.rs` also pre-emptively moved for the same reason; 3c/3d will fill
+      them in.
+- [x] `cf_html::wrap` builds the MS envelope with a fixed-length 128-byte header
+      (zero-padded `{:010}` decimal offsets) + `BODY_OPEN` / `BODY_CLOSE`
+      wrappers. `debug_assert_eq!` guards against template drift.
+- [x] `cf_html::unwrap` parses header until first `<` byte, validates
+      `StartFragment` / `EndFragment` (presence + numeric + bounds + ordering +
+      UTF-8). Malformations →
+      `ClipboardError::Io(other("malformed CF_HTML     header"))`.
+- [x] `RegisterClipboardFormatW` added to user32 FFI.
+- [x] `cf_html_format()` / `cf_rtf_format()` cache registered IDs via
+      `OnceLock<UINT>`. 0-return propagated as `ClipboardError::Io` at call
+      sites — no panic, no `Option` ceremony.
+- [x] `set_bytes` / `get_bytes` generic byte-exact helpers over registered
+      formats. Reuse `LockedHandle` from 3a. Text path keeps its own
+      UTF-16-converting helpers — clean separation.
+- [x] `WindowsBackend::set/get/available` wires Html + Rtf paths. UriList / Png
+      / Custom remain `UnsupportedMime` (filled in by 3c/3d).
+- [x] `cargo check` / `clippy` clean on both linux + windows-gnu.
+- [x] 50 tests passing (37 prior + 13 new cf_html round-trip + edge cases).
+
+Notes from execution:
+
+- "Swapped-offsets" test only asserts the bounds check fires; the inner content
+  under swapped offsets is still valid UTF-8, so the
+  `StartFragment > EndFragment` branch is what catches it. Indirect but the
+  intended check fires.
+- `unwrap` falls back to scanning the entire payload if no `<` byte is found.
+  Edge case but reasonable.
+- Header length integrity in release builds depends on `debug_assert_eq!`
+  catching typos at test time. `{:010}` always produces exactly 10 chars, so the
+  assertion only fires on template-string typos — real risk is low given how
+  localized the constants are.
 
 #### Phase 3c — CF_HDROP (TODO)
 
