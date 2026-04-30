@@ -8,7 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.3.2] - 2026-04-30
+## [0.3.3] - 2026-04-30
+
+### Fixed
+
+- Release CI publish-crates job: only publishes the umbrella `hjkl` app crate.
+  Previous logic looped over the eight `hjkl-*` library crates at the workspace
+  version, but those ship from their own `kryptic-sh/hjkl-*` repos at
+  independent versions, so the loop failed for any version mismatch. The v0.3.2
+  GitHub Release was cut with artifacts but never reached crates.io because of
+  this; v0.3.3 ships the fix and the matching crates.io upload.
+
+## [0.3.2] - 2026-04-30 [YANKED]
+
+GitHub Release exists with the new artifacts listed below, but
+`cargo install hjkl` was never bumped past 0.3.1 — the publish-crates job in
+release.yml had a stale loop over now-independent submodule crates and failed
+before reaching the umbrella `hjkl` crate. v0.3.3 ships the fix and the matching
+crates.io upload.
 
 ### Added
 
@@ -17,8 +34,8 @@ patch bumps.
   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` (statically
   linked, distro-agnostic, Alpine, Docker scratch images).
 - `.deb` packages on both linux-gnu targets via `cargo-deb` —
-  `hjkl_0.3.2-1_amd64.deb` and `hjkl_0.3.2-1_arm64.deb` are now attached to each
-  GitHub Release alongside `.sha256` checksums.
+  `hjkl_0.3.3-1_amd64.deb` and `hjkl_0.3.3-1_arm64.deb` attached to each GitHub
+  Release alongside `.sha256` checksums.
 - `[package.metadata.binstall]` so `cargo binstall hjkl` Just Works.
 - Homebrew tap at
   [`kryptic-sh/homebrew-tap`](https://github.com/kryptic-sh/homebrew-tap):
