@@ -34,6 +34,19 @@ pub use mime::MimeType;
 pub use selection::Selection;
 pub use uri::Uri;
 
+// ---------------------------------------------------------------------------
+// Backend selector — grows as phases land.
+// ---------------------------------------------------------------------------
+
+/// Which backend is active for this Clipboard handle.
+enum ClipboardBackend {
+    /// X11 via XCB (Linux, phase 5b+).
+    #[cfg(target_os = "linux")]
+    X11,
+    /// Scaffold placeholder for platforms/phases not yet wired.
+    Unimplemented,
+}
+
 /// A handle to the system clipboard.
 ///
 /// Internally selects the best available backend (Wayland data-control, X11
@@ -43,14 +56,27 @@ pub use uri::Uri;
 /// All methods take `&self` — the handle is cheaply clonable and shareable
 /// across threads.
 pub struct Clipboard {
-    // Phase 1 will fill this in.
-    _private: (),
+    backend: ClipboardBackend,
 }
 
 impl Clipboard {
     /// Construct a new clipboard handle, probing for the best available backend.
     pub fn new() -> Result<Self, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+        #[cfg(target_os = "linux")]
+        {
+            // Try X11; fall through on LibNotFound / NoDisplay.
+            match backend::x11_thread::x11_thread() {
+                Ok(_) => {
+                    return Ok(Self {
+                        backend: ClipboardBackend::X11,
+                    });
+                }
+                Err(ClipboardError::LibNotFound) | Err(ClipboardError::NoDisplay) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        // Other backends (macOS, Windows, Wayland, OSC 52) land in later phases.
+        Err(ClipboardError::NoDisplay)
     }
 
     // -------------------------------------------------------------------------
@@ -58,28 +84,41 @@ impl Clipboard {
     // -------------------------------------------------------------------------
 
     /// Write `bytes` to `sel` as `mime`.
-    pub fn set(
-        &self,
-        _sel: Selection,
-        _mime: MimeType,
-        _bytes: &[u8],
-    ) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    #[allow(unused_variables)]
+    pub fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                backend::x11_thread::set_clipboard(thread, sel, &mime, bytes)
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
+        }
     }
 
     /// Read the current contents of `sel` as `mime`.
     pub fn get(&self, _sel: Selection, _mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+        // get path lands in phase 5c.
+        Err(ClipboardError::UnsupportedMime)
     }
 
     /// Clear `sel`.
-    pub fn clear(&self, _sel: Selection) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    #[allow(unused_variables)]
+    pub fn clear(&self, sel: Selection) -> Result<(), ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                backend::x11_thread::clear_clipboard(thread, sel)
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
+        }
     }
 
     /// Return the MIME types currently available in `sel`.
     pub fn available(&self, _sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+        // available() lands in phase 5c.
+        Err(ClipboardError::UnsupportedMime)
     }
 
     // -------------------------------------------------------------------------

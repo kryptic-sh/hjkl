@@ -16,6 +16,8 @@ pub(crate) mod wayland;
 pub(crate) mod windows;
 #[cfg(target_os = "linux")]
 pub(crate) mod x11;
+#[cfg(target_os = "linux")]
+pub(crate) mod x11_thread;
 
 use crate::{ClipboardError, MimeType, Selection};
 

@@ -25,6 +25,8 @@ pub(crate) struct ScreenInfo {
     pub root: u32,
     /// Visual ID of the root window (needed for `xcb_create_window`).
     pub root_visual: u32,
+    /// Root window color depth in bits per pixel.
+    pub root_depth: u8,
     /// Screen width in pixels.
     pub width: u16,
     /// Screen height in pixels.
@@ -39,6 +41,7 @@ pub(crate) struct ScreenInfo {
 // ---------------------------------------------------------------------------
 
 /// XCB atom IDs interned at connection time.
+#[derive(Clone, Copy)]
 pub(crate) struct Atoms {
     pub clipboard: u32,
     pub primary: u32,
@@ -178,6 +181,9 @@ impl X11Connection {
         let width = u16::from_ne_bytes(unsafe { *screen_ptr.add(20).cast::<[u8; 2]>() });
         let height = u16::from_ne_bytes(unsafe { *screen_ptr.add(22).cast::<[u8; 2]>() });
         let root_visual = u32::from_ne_bytes(unsafe { *screen_ptr.add(32).cast::<[u8; 4]>() });
+        // root_depth is at offset 38 in xcb_screen_t.
+        // SAFETY: screen_ptr is valid; offset 38 is the root_depth u8 field.
+        let root_depth = unsafe { *screen_ptr.add(38) };
 
         // maximum_request_length is in xcb_setup_t, not xcb_screen_t.
         // xcb_setup_t layout (relevant fields):
@@ -195,6 +201,7 @@ impl X11Connection {
         let screen = ScreenInfo {
             root,
             root_visual,
+            root_depth,
             width,
             height,
             max_request_len_bytes,
@@ -220,6 +227,32 @@ impl Drop for X11Connection {
         // SAFETY: conn was returned by xcb_connect and is still valid. We
         // only call xcb_disconnect once (here, in Drop).
         unsafe { (self.fns.xcb_disconnect)(self.conn) };
+    }
+}
+
+impl X11Connection {
+    /// The XCB function-pointer table.
+    pub(crate) fn fns(&self) -> &'static XcbFns {
+        self.fns
+    }
+
+    /// The raw XCB connection pointer.
+    ///
+    /// # Safety
+    ///
+    /// Callers must ensure they are on the thread that owns this connection.
+    pub(crate) fn raw(&self) -> *mut super::dlopen::XcbConnection {
+        self.conn
+    }
+
+    /// Screen info extracted at connection time.
+    pub(crate) fn screen(&self) -> &ScreenInfo {
+        &self.screen
+    }
+
+    /// Interned atom table.
+    pub(crate) fn atoms(&self) -> &Atoms {
+        &self.atoms
     }
 }
 
