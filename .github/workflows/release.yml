@@ -228,35 +228,20 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Publish crates (dep order, idempotent)
+      - name: Publish hjkl app to crates.io (idempotent)
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
+          # The 8 hjkl-* library crates live as submodules and ship
+          # from their own kryptic-sh/hjkl-* repos on their own cadence.
+          # This workflow only publishes the umbrella `hjkl` app crate
+          # at the workspace version.
           VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          publish_if_new() {
-            local crate=$1
-            local url="https://crates.io/api/v1/crates/${crate}/${VERSION}"
-            if curl -fsS -A "hjkl-release-ci" -o /dev/null "$url"; then
-              echo "::notice::${crate}@${VERSION} already on crates.io, skipping"
-              return 0
-            fi
-            cargo publish -p "$crate" --locked
-            sleep 30
-          }
-          # Topological dep order — see Cargo.toml of each crate.
-          # hjkl-form  needs buffer + engine
-          # hjkl-editor needs engine + buffer
-          # hjkl-ratatui needs engine + form
-          # hjkl-picker needs buffer + form
-          # hjkl (app) needs all of them
-          publish_if_new hjkl-buffer
-          publish_if_new hjkl-tree-sitter
-          publish_if_new hjkl-clipboard
-          publish_if_new hjkl-engine
-          publish_if_new hjkl-form
-          publish_if_new hjkl-editor
-          publish_if_new hjkl-ratatui
-          publish_if_new hjkl-picker
-          publish_if_new hjkl
+          URL="https://crates.io/api/v1/crates/hjkl/${VERSION}"
+          if curl -fsS -A "hjkl-release-ci" -o /dev/null "$URL"; then
+            echo "::notice::hjkl@${VERSION} already on crates.io, skipping"
+            exit 0
+          fi
+          cargo publish -p hjkl --locked
