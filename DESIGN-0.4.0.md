@@ -595,32 +595,68 @@ Total est. ~1250 LOC across four interrelated wire-protocol layers. We have a
 real Linux runner (xvfb) so each piece can land + test individually. Split is
 for review-ability, not confidence.
 
-#### Phase 5a — dlopen + connection + auth + atoms (TODO, ~350 LOC)
+#### Phase 5a — dlopen + connection + auth + atoms (DONE — `78219f4`)
 
-- [ ] `src/backend/dlopen.rs` real impl: load `libxcb.so.1` via `libc::dlopen` /
-      `dlsym`, store ~18 fn pointers in `OnceLock<XcbFns>`. `LibNotFound` on
-      missing.
-- [ ] Symbol set (finalizes during impl): `xcb_connect_to_fd`, `xcb_disconnect`,
-      `xcb_intern_atom{,_reply}`, `xcb_get_setup`, `xcb_create_window`,
-      `xcb_set_selection_owner`, `xcb_get_selection_owner{,_reply}`,
-      `xcb_convert_selection`, `xcb_get_property{,_reply}`,
-      `xcb_change_property`, `xcb_send_event`, `xcb_flush`,
-      `xcb_wait_for_event`, `xcb_poll_for_event`, `xcb_generate_id`,
-      `xcb_request_check`.
-- [ ] Connection: parse `$DISPLAY` (`host:N.M`), open socket (Unix
-      `/tmp/.X11-unix/X{N}` preferred, TCP fallback).
-- [ ] Xauthority: parse `~/.Xauthority` binary format, find MIT-MAGIC-COOKIE-1
-      entry matching display.
-- [ ] Connection handshake: build/send setup request bytes, parse server
-      response (root window, max-request-length, screen dimensions).
-- [ ] Atom interning: `xcb_intern_atom` per atom, cache per-atom in
-      `OnceLock<u32>`. ~14 atoms (CLIPBOARD, PRIMARY, TARGETS, UTF8_STRING,
-      STRING, `text/plain;charset=utf-8`, text/html, text/rtf, text/uri-list,
-      image/png, INCR, CLIPBOARD_MANAGER, SAVE_TARGETS, MULTIPLE).
-- [ ] Pure-Rust xauth parser + handshake byte-builder unit-testable on Linux
-      without an X server.
-- [ ] No clipboard ops yet — probe-only. Test: connect to xvfb, intern atoms,
-      read screen info.
+- [x] `src/backend/dlopen.rs` real impl: load `libxcb.so.1` via `libc::dlopen` /
+      `dlsym`, store all 5a-5d fn pointers in one `XcbFns` struct cached in
+      `OnceLock<Option<XcbFns>>`. `LibNotFound` on missing.
+- [x] Symbol set (finalized): `xcb_connect`, `xcb_disconnect`,
+      `xcb_connection_has_error`, `xcb_get_setup`, `xcb_setup_roots_iterator`,
+      `xcb_intern_atom{,_reply}`, `xcb_flush`, `xcb_generate_id` (5a) +
+      `xcb_create_window`, `xcb_set_selection_owner`,
+      `xcb_get_selection_owner{,_reply}`, `xcb_change_property`,
+      `xcb_send_event`, `xcb_wait_for_event`, `xcb_poll_for_event`,
+      `xcb_request_check` (5b) + `xcb_convert_selection`,
+      `xcb_get_property{,_reply,_value,_value_length}`, `xcb_delete_property`
+      (5c). 24 symbols total — single load on first use.
+- [x] Connection: `xcb_connect(NULL, NULL)` — XCB itself parses `$DISPLAY` and
+      reads `~/.Xauthority` (MIT-MAGIC-COOKIE-1 included). **No hand-rolled
+      xauth parser needed.** This simplifies 5a substantially vs the original
+      plan.
+- [x] Connection handshake: handled internally by `xcb_connect`. We read screen
+      info from `xcb_get_setup` + `xcb_setup_roots_iterator` (16-byte struct
+      returned by value — fits in two registers on x86_64/aarch64 ABI).
+- [x] Manual offset reads of `xcb_screen_t` fields (root@0, width@20, height@22,
+      root_visual@32) and `xcb_setup_t::maximum_request_length` at offset 26 —
+      XCB ABI is stable; layout matches libxcb generated bindings.
+      `max_request_length` is in 4-byte units in the wire protocol; we multiply
+      by 4 for byte length.
+- [x] Atom interning: 14 atoms batched (all `xcb_intern_atom` requests sent
+      first, then all replies collected — XCB pipelines this). Each reply
+      `libc::free`d after extracting the atom value.
+- [x] `X11Connection` struct holds `fns + conn + screen + atoms`. Manual
+      `unsafe impl Send` (must hand off to bg thread once); deliberately not
+      `Sync`. `Drop` calls `xcb_disconnect`.
+- [x] `X11Backend` Backend impl stays `unimplemented!()` — wired in 5b/5c/5d.
+- [x] `Cargo.toml`: `libc = "0.2"` added under
+      `[target.'cfg(target_os = "linux")'.dependencies]`.
+- [x] Tests: `dlopen_smoke` (libxcb resolves all symbols),
+      `xvfb_connection_and_atoms` (spawn `Xvfb :99 -screen 0 800x600x24 -ac`,
+      poll Unix socket connectability for 5s, set `DISPLAY=:99`,
+      `X11Connection::open()`, assert screen dims = 800x600 + all 14 atoms
+      non-zero, restore `DISPLAY`, drop guard kills Xvfb). 92 → 95 tests.
+- [x] All cross-targets clean (linux + windows-gnu + arm64-darwin + clippy
+      `-D warnings` on each).
+
+Notes from execution:
+
+- **Major simplification**: `xcb_connect(NULL, NULL)` handles `$DISPLAY` parse
+  - `~/.Xauthority` lookup + MIT-MAGIC-COOKIE-1 internally. Saves ~150 LOC of
+    hand-rolled auth/handshake code. Real-desktop xauth confirmation deferred to
+    Phase 7 manual matrix (xvfb test uses `-ac` to skip auth).
+- Xvfb test uses `-ac` (disable host access control) instead of generating an
+  Xauthority cookie. Dev box has no `~/.Xauthority`; `-ac` is simpler.
+- Readiness probe uses `UnixStream::connect("/tmp/.X11-unix/X99")`, not just
+  file-existence check — the socket file appears before Xvfb is ready to accept
+  connections, and connect-probe eliminates the race under parallel
+  `cargo test`.
+- `std::env::set_var` is `unsafe` in Edition 2024 (env mutation is process-
+  global). Test mutates `DISPLAY` briefly; only test that touches `DISPLAY` so
+  no real concurrent-access UB. SAFETY comments document the assumption.
+- `dlopen` handle is intentionally leaked (lives until process exit). Matches
+  pattern of macOS framework linking — singleton lib, no unload.
+- Symbols for 5b/5c/5d included in `XcbFns` upfront — unused fn pointers do no
+  harm, simpler than amending the struct each phase.
 
 #### Phase 5b — bg thread + ownership + small-payload write/TARGETS (TODO, ~400 LOC)
 
