@@ -453,13 +453,45 @@ Notes from execution:
   assertion only fires on template-string typos — real risk is low given how
   localized the constants are.
 
-#### Phase 3c — CF_HDROP (TODO)
+#### Phase 3c — CF_HDROP + uri-list helpers (DONE — `74bc83d`)
 
-- [ ] `cf_hdrop.rs` DROPFILES struct build/parse + UTF-16 paths + UNC handling
-      (`\\server\share\foo` ↔ `file://server/share/foo`).
-- [ ] `set_uri_list` / `get_uri_list` typed helpers on `Clipboard`.
-- [ ] Round-trip tests (pure-rust, includes UNC + spaces + non-ASCII paths).
-- [ ] `WindowsBackend::set/get/available` wires UriList path.
+- [x] `cf_hdrop::build` / `cf_hdrop::parse` for DROPFILES (20-byte header:
+      pFiles=20, pt.x/y, fNC=0, fWide=1, all i32/u32 LE) + UTF-16 LE paths +
+      double-null terminator. Pure rust, Linux-testable.
+- [x] `uri::encode_uri_list` / `decode_uri_list` (RFC 2483) + `path_to_file_uri`
+      / `file_uri_to_path` with `cfg!(windows)` branching for drive-letter
+      (`file:///C:/...`) and UNC (`file://server/share/...`) mappings.
+- [x] Inline percent-encode/decode (RFC 3986 unreserved set, plus `/` and `:`
+      kept bare for path/scheme readability). No new dep.
+- [x] `Clipboard::set_uri_list` / `get_uri_list` typed helpers wired — encode
+      validates relative paths up-front (`InvalidUri`).
+- [x] Windows backend: text/uri-list ↔ CF_HDROP round-trip in `set_uri_list` /
+      `get_uri_list` helpers. `WindowsBackend::set/get/available` wires the
+      UriList path. `CF_HDROP = 15` standard constant.
+- [x] 31 new tests (14 cf_hdrop + 22 uri, scoped via `cfg(windows)` /
+      `cfg(not(windows))` so Linux runs Unix cases and Windows runs Win cases).
+- [x] `cargo check` / `clippy` clean on linux + windows-gnu.
+- [x] 81 tests passing on Linux native (50 prior + 31 new).
+
+Notes from execution:
+
+- Layering: internal canonical wire format is **text/uri-list bytes**. Backend
+  stays bytes-only. Windows pays a small encode/decode round-trip cost
+  (text/uri-list → paths → CF_HDROP and reverse). Negligible at clipboard scale;
+  v2 can specialize via Backend trait additions if perf matters.
+- `Uri` gained `PartialEq + Eq` derives — needed for round-trip
+  `assert_eq!(uris, decoded)` tests. Harmless.
+- `is_unreserved` includes `/` and `:` beyond the strict RFC 3986 unreserved
+  set. Standard for file URIs (path separators stay readable; drive-letter
+  colons stay bare).
+- `cf_hdrop::build` does not validate Windows path shape (drive letter / UNC).
+  The Windows backend calls it; shape validity is enforced upstream via
+  `path_to_file_uri`. Build only validates: non-empty + no interior nulls.
+- MAX_PATH (260) not enforced — Windows 10+ apps can opt into long paths via
+  `LongPathsEnabled`. Truncating or erroring would be wrong silently.
+- Path-string round-trip on Linux uses `PathBuf::from(string)` which works fine
+  for testing the wire format but doesn't exercise real Windows path semantics.
+  Phase 7 Windows CI catches that.
 
 #### Phase 3d — DIB ↔ PNG (TODO)
 
