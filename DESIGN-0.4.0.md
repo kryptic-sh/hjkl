@@ -493,15 +493,45 @@ Notes from execution:
   for testing the wire format but doesn't exercise real Windows path semantics.
   Phase 7 Windows CI catches that.
 
-#### Phase 3d — DIB ↔ PNG (TODO)
+#### Phase 3d — DIB ↔ PNG (DONE — `554d33e`)
 
-- [ ] `dib_png.rs` PNG chunk framing (IHDR/IDAT/IEND) + deflate/inflate via
-      `miniz_oxide` + DIBV5 header build/parse.
-- [ ] Registered "PNG" format passthrough for modern apps + `CF_DIBV5` fallback
-      for legacy.
-- [ ] Round-trip tests (pure-rust, full PNG↔DIB↔PNG round trip).
-- [ ] `WindowsBackend::set/get/available` wires Png path.
-- [ ] CI green on `test-windows`.
+- [x] `dib_png.rs` PNG chunk framing (IHDR/IDAT/IEND) + deflate/inflate via
+      `miniz_oxide` + DIBV5 header build/parse. Pure-rust IEEE 802.3 CRC32 with
+      `OnceLock` table cache. All 5 PNG filters implemented for unfilter; emits
+      filter type 0 (None) when building.
+- [x] Registered `"PNG"` format passthrough for modern apps + `CF_DIBV5`
+      (`UINT = 17`) fallback for legacy. `cf_png_format()` helper mirrors
+      `cf_html_format()` / `cf_rtf_format()` shape.
+- [x] DIBV5 header: 124 bytes; 32 bpp uses `BI_BITFIELDS` with explicit ARGB
+      masks so apps interpret alpha; 24 bpp uses `BI_RGB`. Bottom-up emit
+      (positive height); both bottom-up and top-down accepted on parse. Row
+      stride padded to 4-byte boundary. Channel order BGR(A) on the wire,
+      converted from PNG RGB(A).
+- [x] `set_png` opens clipboard once, `EmptyClipboard`, then sets both `"PNG"`
+      and `CF_DIBV5` in one open. `png_to_dib` runs before opening clipboard so
+      conversion failure errors immediately without touching clipboard state.
+- [x] `get_png` prefers `"PNG"` passthrough, falls back to `CF_DIBV5` →
+      `dib_to_png` conversion. Returns `UnsupportedMime` if neither present.
+- [x] `available` reports `MimeType::Png` exactly once whether `"PNG"`,
+      `CF_DIBV5`, or both formats are enumerated (dedup via `png_seen` flag).
+- [x] 11 round-trip + edge tests (RGBA/RGB 2x2, single row, 3x2 RGB stride
+      padding, top-down DIB parse, bad signature, header size mismatch, palette
+      PNG, 16-bit PNG, 124-byte header verification, CRC32 known vector).
+- [x] `cargo check` / `clippy` clean on both linux + windows-gnu.
+- [x] 92 tests passing on Linux native (81 prior + 11 new).
+- [ ] CI green on `test-windows` — deferred to Phase 7.
+
+Notes from execution:
+
+- `set_png` partial-failure: if the first `SetClipboardData("PNG")` succeeds but
+  the second `SetClipboardData(CF_DIBV5)` fails, the clipboard ends up with only
+  the PNG format (no DIB). Acceptable — modern apps still find PNG. Strict
+  all-or-nothing would require staging both handles before any
+  `SetClipboardData` call.
+- Channel masks for 24 bpp BI_RGB are zero-filled (masks meaningless without
+  BI_BITFIELDS). Header is still 124 bytes regardless.
+- PNG palette / 16-bit unsupported tests rely on the format match running before
+  inflate — confirmed by reading order in `png_to_dib`.
 
 ### Phase 4 — macOS backend
 
