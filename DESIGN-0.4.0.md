@@ -304,15 +304,40 @@ Notes from execution:
 - `#![allow(dead_code)]` at the crate root suppresses scaffold-phase noise.
   Remove once Phase 7 wires everything up.
 
-### Phase 1 — Async primitive + bg thread skeleton
+### Phase 1 — Async primitive + bg thread skeleton (DONE — `4e9507f`)
 
-- [ ] `Oneshot<T>` impl + tests.
-- [ ] `Reply<T>` enum.
-- [ ] `bg_thread.rs` skeleton: spawn-on-demand, accepts `Request { op, reply }`,
-      no backend wiring yet.
-- [ ] `block_on` integration: sync wraps async via condvar, async wraps Future
-      via Oneshot.
-- [ ] Tests: enqueue → dummy reply → both sync/async paths return.
+- [x] `Oneshot<T>` impl + tests (6 tests: resolve-before-poll,
+      poll-before-resolve, multi-poll, panic-on-take, concurrent cross-thread
+      with UnparkWaker, drop).
+- [x] `Reply<T>` enum + 3 tests (Sync condvar delivery, Async oneshot
+      forwarding, Send-safety).
+- [x] `bg_thread.rs` skeleton: lazy `OnceLock<BgThread>` singleton, mpsc inbox,
+      `Op::Echo` test op, `dispatch()` function.
+- [x] Sync + async send paths: `send_sync` blocks on condvar; `send_async`
+      returns `OneshotFuture` (named type, `pub(crate)`).
+- [x] Tests: 4 bg_thread roundtrip tests (sync, async via park-loop block_on,
+      sequential, 10-thread concurrent burst).
+
+Notes from execution:
+
+- `Request` payload is monomorphic (`Reply<Result<String, ClipboardError>>`) for
+  Phase 1. Generic-over-ops will come when Phase 5/6 introduce
+  `Set`/`Get`/`Clear`/`Available` with different reply types — likely via per-op
+  channels or a payload enum.
+- Public `Clipboard::*` methods deliberately untouched — Phase 1 is pure
+  plumbing. Phase 2+ wires the backends in.
+- `block_on` test helper is a tiny park-loop with `UnparkWaker`; the bg thread's
+  `waker.wake()` triggers `thread::unpark` so the loop re-polls immediately.
+  Zero dep cost.
+
+Minor test weaknesses (acceptable, won't block downstream phases):
+
+- `drop_without_resolve` test only covers `new; drop`. Doesn't exercise
+  drop-after-resolve-unread or drop-after-poll-pending. Std
+  `Mutex<SlotState<T>>` handles these correctly; just under-tested.
+- `multiple_polls_before_resolve` doesn't assert the OLD waker is not fired when
+  a NEW waker overwrites it. Behavior is correct (latest-wins); test
+  under-verifies.
 
 ### Phase 2 — OSC 52 backend (port from current lib.rs)
 
