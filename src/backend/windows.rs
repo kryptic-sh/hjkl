@@ -44,6 +44,9 @@ const CF_UNICODETEXT: UINT = 13;
 /// Clipboard format: DROPFILES structure (file drag/drop — uri-list).
 const CF_HDROP: UINT = 15;
 
+/// Clipboard format: `CF_DIBV5` — device-independent bitmap V5 (legacy PNG fallback).
+const CF_DIBV5: UINT = 17;
+
 /// `GlobalAlloc` flag: allocate moveable (required for clipboard data).
 const GMEM_MOVEABLE: UINT = 0x0002;
 
@@ -137,6 +140,16 @@ fn cf_html_format() -> UINT {
         // SAFETY: `name` is a valid null-terminated UTF-16 string with a `\0`
         // code unit at the end. `RegisterClipboardFormatW` reads only up to
         // the null terminator and is safe to call from any thread.
+        unsafe { RegisterClipboardFormatW(name.as_ptr()) }
+    })
+}
+
+/// Returns the registered format ID for `"PNG"` (modern PNG passthrough).
+fn cf_png_format() -> UINT {
+    static ID: OnceLock<UINT> = OnceLock::new();
+    *ID.get_or_init(|| {
+        let name: Vec<u16> = "PNG\0".encode_utf16().collect();
+        // SAFETY: same as `cf_html_format` above.
         unsafe { RegisterClipboardFormatW(name.as_ptr()) }
     })
 }
@@ -545,6 +558,134 @@ fn get_uri_list() -> Result<Vec<u8>, ClipboardError> {
 }
 
 // ---------------------------------------------------------------------------
+// PNG helpers.
+// ---------------------------------------------------------------------------
+//
+// Modern apps on Windows register a `"PNG"` clipboard format and store raw PNG
+// bytes. Legacy apps (e.g. older Office, some image editors) only consume
+// `CF_DIBV5`. We always set both so any app can paste the image.
+//
+// On get, we prefer the `"PNG"` format (round-trip lossless) and fall back to
+// `CF_DIBV5` when only legacy data is present.
+
+/// Write PNG bytes to the clipboard as both `"PNG"` and `CF_DIBV5`.
+///
+/// Both formats are set (or neither — if conversion fails the error is
+/// returned immediately rather than partially landing one format).
+fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
+    let png_id = cf_png_format();
+    if png_id == 0 {
+        return Err(ClipboardError::Io(std::io::Error::other(
+            "RegisterClipboardFormatW failed for PNG",
+        )));
+    }
+    let dib = crate::dib_png::png_to_dib(bytes)?;
+
+    // Open clipboard once for both writes.
+    let _guard = ClipboardOpen::new()?;
+
+    // SAFETY: clipboard is open (`_guard`).
+    let ok = unsafe { EmptyClipboard() };
+    if ok == 0 {
+        return Err(ClipboardError::Io(std::io::Error::other(
+            "EmptyClipboard failed",
+        )));
+    }
+
+    // Helper: allocate + copy + SetClipboardData, no re-open.
+    let set_raw = |format: UINT, data: &[u8]| -> Result<(), ClipboardError> {
+        let len = data.len();
+        // SAFETY: GMEM_MOVEABLE allocation for clipboard.
+        let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, len) };
+        if handle.is_null() {
+            return Err(ClipboardError::Io(std::io::Error::other(
+                "GlobalAlloc failed",
+            )));
+        }
+        let locked = match LockedHandle::new(handle) {
+            Ok(l) => l,
+            Err(e) => {
+                // SAFETY: still our allocation.
+                unsafe { GlobalFree(handle) };
+                return Err(e);
+            }
+        };
+        // SAFETY: locked.ptr() is valid for `len` writable bytes; no overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), locked.ptr().cast::<u8>(), len);
+        }
+        drop(locked);
+        // SAFETY: clipboard is open, EmptyClipboard was called, handle is valid.
+        let result = unsafe { SetClipboardData(format, handle) };
+        if result.is_null() {
+            // SAFETY: SetClipboardData failed; ownership did not transfer.
+            unsafe { GlobalFree(handle) };
+            return Err(ClipboardError::Io(std::io::Error::other(
+                "SetClipboardData failed",
+            )));
+        }
+        Ok(())
+    };
+
+    set_raw(png_id, bytes)?;
+    set_raw(CF_DIBV5, &dib)?;
+
+    Ok(())
+}
+
+/// Read PNG bytes from the clipboard.
+///
+/// Prefers the `"PNG"` registered format (raw passthrough). Falls back to
+/// `CF_DIBV5` with DIB→PNG conversion. Returns `UnsupportedMime` if neither
+/// format is present.
+fn get_png() -> Result<Vec<u8>, ClipboardError> {
+    let png_id = cf_png_format();
+
+    let _guard = ClipboardOpen::new()?;
+
+    // Try "PNG" registered format first.
+    if png_id != 0 {
+        // SAFETY: clipboard is open; IsClipboardFormatAvailable does not alter state.
+        let avail = unsafe { IsClipboardFormatAvailable(png_id) };
+        if avail != 0 {
+            // SAFETY: clipboard is open and format is available; handle is clipboard-owned.
+            let handle = unsafe { GetClipboardData(png_id) };
+            if !handle.is_null() {
+                let locked = LockedHandle::new(handle)?;
+                // SAFETY: handle is a valid locked HGLOBAL.
+                let byte_size = unsafe { GlobalSize(handle) };
+                // SAFETY: locked.ptr() is valid for `byte_size` readable bytes.
+                let slice =
+                    unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), byte_size) };
+                return Ok(slice.to_vec());
+            }
+        }
+    }
+
+    // Fallback: CF_DIBV5 -> DIB-to-PNG conversion.
+    // SAFETY: clipboard is open; IsClipboardFormatAvailable does not alter state.
+    let avail = unsafe { IsClipboardFormatAvailable(CF_DIBV5) };
+    if avail == 0 {
+        return Err(ClipboardError::UnsupportedMime);
+    }
+    // SAFETY: clipboard is open and CF_DIBV5 is available; handle is clipboard-owned.
+    let handle = unsafe { GetClipboardData(CF_DIBV5) };
+    if handle.is_null() {
+        return Err(ClipboardError::Io(std::io::Error::other(
+            "GetClipboardData(CF_DIBV5) failed",
+        )));
+    }
+    let locked = LockedHandle::new(handle)?;
+    // SAFETY: handle is a valid locked HGLOBAL.
+    let byte_size = unsafe { GlobalSize(handle) };
+    // SAFETY: locked.ptr() is valid for `byte_size` readable bytes.
+    let slice = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), byte_size) };
+    let dib = slice.to_vec();
+    drop(locked);
+    crate::dib_png::dib_to_png(&dib)
+}
+
+// ---------------------------------------------------------------------------
 // Backend impl.
 // ---------------------------------------------------------------------------
 
@@ -572,8 +713,7 @@ impl Backend for WindowsBackend {
             }
             MimeType::Rtf => set_rtf(bytes),
             MimeType::UriList => set_uri_list(bytes),
-            // Phase 3d will add DIB↔PNG.
-            MimeType::Png => Err(ClipboardError::UnsupportedMime),
+            MimeType::Png => set_png(bytes),
             MimeType::Custom(_) => Err(ClipboardError::UnsupportedMime),
         }
     }
@@ -588,7 +728,7 @@ impl Backend for WindowsBackend {
             MimeType::Html => get_html(),
             MimeType::Rtf => get_rtf(),
             MimeType::UriList => get_uri_list(),
-            // Phase 3d will add DIB↔PNG.
+            MimeType::Png => get_png(),
             _ => Err(ClipboardError::UnsupportedMime),
         }
     }
@@ -621,6 +761,8 @@ impl Backend for WindowsBackend {
         let mut out = Vec::new();
         let html_id = cf_html_format();
         let rtf_id = cf_rtf_format();
+        let png_id = cf_png_format();
+        let mut png_seen = false;
         let mut fmt: UINT = 0;
         loop {
             // SAFETY: passing 0 (or the previous format) to `EnumClipboardFormats`
@@ -639,8 +781,14 @@ impl Backend for WindowsBackend {
                 out.push(MimeType::Html);
             } else if rtf_id != 0 && fmt == rtf_id {
                 out.push(MimeType::Rtf);
+            } else if (png_id != 0 && fmt == png_id) || fmt == CF_DIBV5 {
+                // Report MimeType::Png at most once regardless of which format
+                // (or both) the clipboard contains.
+                if !png_seen {
+                    out.push(MimeType::Png);
+                    png_seen = true;
+                }
             }
-            // Phase 3d will add DIB↔PNG here.
         }
         Ok(out)
     }
