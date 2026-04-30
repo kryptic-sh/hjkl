@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-30
+
+### Changed
+
+- Extracted each `crates/hjkl-*` library into its own `kryptic-sh/hjkl-*`
+  repository with full git history preserved. Each library now publishes
+  independently to crates.io and is consumed via caret version requirements
+  (`hjkl-buffer = "0.3"`, etc.) instead of workspace path deps.
+- The `kryptic-sh/hjkl` repo now mounts those crates back under `crates/*` as
+  git submodules pinned to `v0.3.1` tags, so a single workspace build still
+  touches every layer for development.
+- Bumped sibling deps to their `0.3.1` releases: `crossterm` 0.29, `ratatui`
+  0.30, `criterion` 0.8, `toml` 1.1.
+
 ## [0.3.0] - 2026-04-28
 
 ### Added
