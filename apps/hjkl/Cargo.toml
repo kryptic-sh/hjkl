@@ -40,3 +40,26 @@ tempfile = "3"
 [[example]]
 name = "form_demo"
 path = "examples/form_demo.rs"
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.deb]
+maintainer = "mxaddict <mxaddict@kryptic.sh>"
+copyright = "2026, mxaddict <mxaddict@kryptic.sh>"
+license-file = ["../../LICENSE", "0"]
+extended-description = """\
+hjkl is a vim-modal terminal text editor built on the hjkl engine — \
+a rope-backed buffer, vim FSM, motion grammar, ex commands, fuzzy \
+picker, and tree-sitter highlighting, all running in your terminal."""
+section = "editors"
+priority = "optional"
+assets = [
+    ["target/release/hjkl", "/usr/bin/hjkl", "755"],
+    ["README.md", "/usr/share/doc/hjkl/README.md", "644"],
+    ["../../LICENSE", "/usr/share/doc/hjkl/copyright", "644"],
+]

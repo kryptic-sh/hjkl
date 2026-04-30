@@ -34,28 +34,60 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            glibc: "2.28"
+            zigbuild_target: x86_64-unknown-linux-gnu.2.28
+            zig: "true"
             macos_min: ""
             suffix: ""
             archive: tar.gz
+            deb: "true"
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            zigbuild_target: aarch64-unknown-linux-gnu.2.28
+            zig: "true"
+            macos_min: ""
+            suffix: ""
+            archive: tar.gz
+            deb: "true"
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            zigbuild_target: x86_64-unknown-linux-musl
+            zig: "true"
+            macos_min: ""
+            suffix: ""
+            archive: tar.gz
+            deb: "false"
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            zigbuild_target: aarch64-unknown-linux-musl
+            zig: "true"
+            macos_min: ""
+            suffix: ""
+            archive: tar.gz
+            deb: "false"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            glibc: ""
+            zigbuild_target: ""
+            zig: "false"
             macos_min: ""
             suffix: ".exe"
             archive: zip
+            deb: "false"
           - os: macos-latest
             target: aarch64-apple-darwin
-            glibc: ""
+            zigbuild_target: ""
+            zig: "false"
             macos_min: "11.0"
             suffix: ""
             archive: tar.gz
+            deb: "false"
           - os: macos-latest
             target: x86_64-apple-darwin
-            glibc: ""
+            zigbuild_target: ""
+            zig: "false"
             macos_min: "10.15"
             suffix: ""
             archive: tar.gz
+            deb: "false"
 
     steps:
       - uses: actions/checkout@v6
@@ -83,27 +115,31 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Setup zig
-        if: matrix.glibc != ''
+        if: matrix.zig == 'true'
         uses: mlugg/setup-zig@v2
 
       - name: Install cargo-zigbuild
-        if: matrix.glibc != ''
+        if: matrix.zig == 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Install cargo-deb
+        if: matrix.deb == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+      # fmt + clippy run in ci.yml on every PR/push; tagged releases
+      # follow merged commits so re-running them here is redundant
+      # (and clippy --target X needs cross C linkers we don't ship).
 
       - name: Build binary (zigbuild)
-        if: matrix.glibc != ''
-        run: cargo zigbuild --release --locked --target ${{ matrix.target }}.${{ matrix.glibc }} --bin hjkl
+        if: matrix.zig == 'true'
+        run: cargo zigbuild --release --locked --target ${{ matrix.zigbuild_target }} --bin hjkl
 
-      - name: Build binary
-        if: matrix.glibc == ''
+      - name: Build binary (native)
+        if: matrix.zig == 'false'
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_min }}
         run: cargo build --release --locked --target ${{ matrix.target }} --bin hjkl
@@ -138,7 +174,22 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 $ARCHIVE).Hash.ToLower()
           "$hash  $ARCHIVE" | Out-File -Encoding ASCII "$ARCHIVE.sha256"
 
-      - name: Upload to GitHub Release
+      - name: Build .deb
+        if: matrix.deb == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # cargo-deb resolves `target/release/...` asset paths to
+          # `target/<target>/release/...` when --target is passed.
+          # --no-build: reuse the zigbuild output above.
+          # --no-strip: host strip can't process cross-compiled binaries.
+          cargo deb -p hjkl --target ${{ matrix.target }} --no-build --no-strip
+          DEB_FILE=$(ls target/${{ matrix.target }}/debian/hjkl_*.deb | head -1)
+          cp "$DEB_FILE" .
+          DEB_NAME=$(basename "$DEB_FILE")
+          sha256sum "$DEB_NAME" > "$DEB_NAME.sha256"
+
+      - name: Upload archives + sha256
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -149,6 +200,106 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .deb + sha256
+        if: matrix.deb == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            hjkl_*.deb
+            hjkl_*.deb.sha256
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew-bump:
+    name: Bump homebrew tap
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip prerelease tags (e.g. v0.3.2-rc1) — only bump on stable releases.
+    if: ${{ !contains(github.ref_name, '-') }}
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v6
+        with:
+          repository: kryptic-sh/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Render formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=${GITHUB_REF_NAME#v}
+          BASE="https://github.com/kryptic-sh/hjkl/releases/download/${GITHUB_REF_NAME}"
+          fetch_sha() {
+            local tgt=$1
+            local url="${BASE}/hjkl-${GITHUB_REF_NAME}-${tgt}.tar.gz"
+            for i in 1 2 3 4 5; do
+              if curl -fsSL -o "${tgt}.tar.gz" "$url"; then break; fi
+              echo "::warning::fetch ${url} attempt ${i} failed, retrying"
+              sleep 10
+            done
+            sha256sum "${tgt}.tar.gz" | cut -d' ' -f1
+          }
+          SHA_AARCH64_APPLE_DARWIN=$(fetch_sha aarch64-apple-darwin)
+          SHA_X86_64_APPLE_DARWIN=$(fetch_sha x86_64-apple-darwin)
+          SHA_X86_64_UNKNOWN_LINUX_GNU=$(fetch_sha x86_64-unknown-linux-gnu)
+          SHA_AARCH64_UNKNOWN_LINUX_GNU=$(fetch_sha aarch64-unknown-linux-gnu)
+          mkdir -p tap/Formula
+          cat > tap/Formula/hjkl.rb <<EOF
+          class Hjkl < Formula
+            desc "Vim-modal terminal editor: standalone TUI built on the hjkl engine"
+            homepage "https://hjkl.kryptic.sh"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/kryptic-sh/hjkl/releases/download/v#{version}/hjkl-v#{version}-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_AARCH64_APPLE_DARWIN}"
+              else
+                url "https://github.com/kryptic-sh/hjkl/releases/download/v#{version}/hjkl-v#{version}-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_X86_64_APPLE_DARWIN}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "https://github.com/kryptic-sh/hjkl/releases/download/v#{version}/hjkl-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_X86_64_UNKNOWN_LINUX_GNU}"
+              end
+              on_arm do
+                url "https://github.com/kryptic-sh/hjkl/releases/download/v#{version}/hjkl-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_AARCH64_UNKNOWN_LINUX_GNU}"
+              end
+            end
+
+            def install
+              bin.install "hjkl"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/hjkl --version")
+            end
+          end
+          EOF
+
+      - name: Commit + push formula
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tap
+          git config user.name "kryptic-bot"
+          git config user.email "bot@kryptic.sh"
+          if git diff --quiet Formula/hjkl.rb; then
+            echo "::notice::no changes to formula"
+            exit 0
+          fi
+          git add Formula/hjkl.rb
+          git commit -m "hjkl ${GITHUB_REF_NAME#v}"
+          git push
 
   publish-crates:
     name: Publish to crates.io
