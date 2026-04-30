@@ -122,13 +122,19 @@ impl Clipboard {
     /// Write a list of URIs to `sel`.
     ///
     /// Relative paths in `File` variants return
-    /// [`ClipboardError::InvalidUri`].
-    pub fn set_uri_list(&self, _sel: Selection, _uris: &[Uri]) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    /// [`ClipboardError::InvalidUri`]. Encoding validation happens before
+    /// the backend is called, so encoding errors are visible even in tests
+    /// that don't wire up a real backend.
+    pub fn set_uri_list(&self, sel: Selection, uris: &[Uri]) -> Result<(), ClipboardError> {
+        // Encoding validates URIs (relative paths → InvalidUri) before
+        // touching the backend, so encoding errors surface immediately.
+        let bytes = crate::uri::encode_uri_list(uris)?;
+        self.set(sel, MimeType::UriList, &bytes)
     }
 
     /// Read a uri-list from `sel` and parse it into typed [`Uri`] values.
-    pub fn get_uri_list(&self, _sel: Selection) -> Result<Vec<Uri>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    pub fn get_uri_list(&self, sel: Selection) -> Result<Vec<Uri>, ClipboardError> {
+        let bytes = self.get(sel, MimeType::UriList)?;
+        crate::uri::decode_uri_list(&bytes)
     }
 }

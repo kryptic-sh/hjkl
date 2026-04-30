@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-use crate::{ClipboardError, MimeType, Selection};
+use crate::{ClipboardError, MimeType, Selection, Uri};
 
 use super::Backend;
 
@@ -40,6 +40,9 @@ use win32_types::{BOOL, DWORD, HANDLE, HGLOBAL, HWND, SIZE_T, UINT};
 
 /// Clipboard format: Unicode text (UTF-16 LE, null-terminated).
 const CF_UNICODETEXT: UINT = 13;
+
+/// Clipboard format: DROPFILES structure (file drag/drop — uri-list).
+const CF_HDROP: UINT = 15;
 
 /// `GlobalAlloc` flag: allocate moveable (required for clipboard data).
 const GMEM_MOVEABLE: UINT = 0x0002;
@@ -508,6 +511,40 @@ fn get_rtf() -> Result<Vec<u8>, ClipboardError> {
 }
 
 // ---------------------------------------------------------------------------
+// CF_HDROP helpers.
+// ---------------------------------------------------------------------------
+
+/// Write a `text/uri-list` byte payload to the clipboard as CF_HDROP.
+///
+/// The incoming bytes are decoded as `text/uri-list` (RFC 2483). Only
+/// `file://` URIs can be represented in CF_HDROP; a non-file URI returns
+/// `ClipboardError::InvalidUri`.
+fn set_uri_list(bytes: &[u8]) -> Result<(), ClipboardError> {
+    let uris = crate::uri::decode_uri_list(bytes)?;
+    let mut paths: Vec<std::path::PathBuf> = Vec::with_capacity(uris.len());
+    for u in &uris {
+        match u {
+            Uri::File(p) => paths.push(p.clone()),
+            Uri::Other(_) => {
+                // CF_HDROP is files-only; non-file URIs cannot be represented.
+                return Err(ClipboardError::InvalidUri);
+            }
+        }
+    }
+    let path_refs: Vec<&std::path::Path> = paths.iter().map(|p| p.as_path()).collect();
+    let hdrop_bytes = crate::cf_hdrop::build(&path_refs)?;
+    set_bytes(CF_HDROP, &hdrop_bytes)
+}
+
+/// Read CF_HDROP from the clipboard and return it as `text/uri-list` bytes.
+fn get_uri_list() -> Result<Vec<u8>, ClipboardError> {
+    let hdrop_bytes = get_bytes(CF_HDROP)?;
+    let paths = crate::cf_hdrop::parse(&hdrop_bytes)?;
+    let uris: Vec<Uri> = paths.into_iter().map(Uri::File).collect();
+    crate::uri::encode_uri_list(&uris)
+}
+
+// ---------------------------------------------------------------------------
 // Backend impl.
 // ---------------------------------------------------------------------------
 
@@ -534,8 +571,9 @@ impl Backend for WindowsBackend {
                 set_html(html)
             }
             MimeType::Rtf => set_rtf(bytes),
-            // Phases 3c/3d will add CF_HDROP and DIB↔PNG.
-            MimeType::UriList | MimeType::Png => Err(ClipboardError::UnsupportedMime),
+            MimeType::UriList => set_uri_list(bytes),
+            // Phase 3d will add DIB↔PNG.
+            MimeType::Png => Err(ClipboardError::UnsupportedMime),
             MimeType::Custom(_) => Err(ClipboardError::UnsupportedMime),
         }
     }
@@ -549,7 +587,8 @@ impl Backend for WindowsBackend {
             MimeType::Text => get_text(),
             MimeType::Html => get_html(),
             MimeType::Rtf => get_rtf(),
-            // Phases 3c/3d will add CF_HDROP and DIB↔PNG.
+            MimeType::UriList => get_uri_list(),
+            // Phase 3d will add DIB↔PNG.
             _ => Err(ClipboardError::UnsupportedMime),
         }
     }
@@ -594,12 +633,14 @@ impl Backend for WindowsBackend {
             }
             if fmt == CF_UNICODETEXT {
                 out.push(MimeType::Text);
+            } else if fmt == CF_HDROP {
+                out.push(MimeType::UriList);
             } else if html_id != 0 && fmt == html_id {
                 out.push(MimeType::Html);
             } else if rtf_id != 0 && fmt == rtf_id {
                 out.push(MimeType::Rtf);
             }
-            // Phases 3c/3d will add CF_HDROP and DIB↔PNG here.
+            // Phase 3d will add DIB↔PNG here.
         }
         Ok(out)
     }
