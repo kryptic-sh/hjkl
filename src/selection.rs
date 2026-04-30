@@ -5,7 +5,8 @@
 pub enum Selection {
     /// The system clipboard (Ctrl+C / Ctrl+V on most platforms).
     Clipboard,
-    /// The X11 primary selection (middle-click paste). No-op on non-X11
-    /// platforms.
+    /// The primary selection (middle-click paste). Available on X11 and on
+    /// Wayland compositors that expose `zwp_primary_selection_v1`. No-op on
+    /// macOS / Windows.
     Primary,
 }
