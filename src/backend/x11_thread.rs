@@ -36,6 +36,7 @@ const XCB_SELECTION_REQUEST: u8 = 30;
 const XCB_SELECTION_NOTIFY: u8 = 31;
 const XCB_PROPERTY_NOTIFY: u8 = 28;
 const XCB_PROPERTY_NEW_VALUE: u8 = 0;
+const XCB_PROPERTY_DELETE: u8 = 1;
 const XCB_NONE: u32 = 0;
 const XCB_CURRENT_TIME: u32 = 0;
 /// Predefined atom ATOM (type for a list of atoms) = 4.
@@ -46,6 +47,12 @@ const XCB_CW_EVENT_MASK: u32 = 0x800;
 const XCB_EVENT_MASK_PROPERTY_CHANGE: u32 = 0x0040_0000;
 /// AnyPropertyType — pass as `type` to xcb_get_property to accept any type.
 const XCB_GET_PROPERTY_TYPE_ANY: u32 = 0;
+/// INCR send chunk size: leave 24 bytes for the XCB request header overhead.
+/// This is computed per-connection from max_request_len_bytes; the constant
+/// here is only used as the chunk cap — actual value comes from state.conn.
+const XCB_REQUEST_HEADER_OVERHEAD: usize = 24;
+/// Per-INCR-transfer timeout (send side): 30 seconds total.
+const INCR_SEND_TOTAL_TIMEOUT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // Wire layouts for events we parse
@@ -119,6 +126,30 @@ struct OwnedData {
 }
 
 // ---------------------------------------------------------------------------
+// INCR send state (approach b-lite: state machine in drain_events)
+// ---------------------------------------------------------------------------
+
+/// State for an in-flight INCR send to a single requestor.
+///
+/// When a payload exceeds max_request_len_bytes, we store it here and advance
+/// the transfer each time a PROPERTY_DELETE event arrives from the requestor.
+/// This avoids blocking the thread in a nested loop, which would deadlock the
+/// self-loop (set-then-get on the same backend).
+struct IncrSend {
+    requestor: u32,
+    property: u32,
+    target_atom: u32,
+    /// Full payload being chunked out.
+    bytes: Vec<u8>,
+    /// How many bytes have been sent so far.
+    offset: usize,
+    chunk_size: usize,
+    deadline: Instant,
+    /// True after we have written the zero-length terminator.
+    done: bool,
+}
+
+// ---------------------------------------------------------------------------
 // Thread-internal state
 // ---------------------------------------------------------------------------
 
@@ -128,6 +159,8 @@ struct X11State {
     window: u32,
     /// per-selection data: key = selection atom (CLIPBOARD or PRIMARY).
     owned: HashMap<u32, OwnedData>,
+    /// In-flight INCR send transfers (one per active requestor).
+    incr_sends: Vec<IncrSend>,
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +236,7 @@ impl X11Thread {
                     conn,
                     window,
                     owned: HashMap::new(),
+                    incr_sends: Vec::new(),
                 };
                 run_loop(&mut state, rx);
             })
@@ -320,6 +354,9 @@ enum DrainGoal {
     SelectionNotify { our_property: u32 },
     /// Looking for PROPERTY_NOTIFY (new value) on our private get-property.
     PropertyNotify { our_property: u32, our_window: u32 },
+    /// Looking for PROPERTY_NOTIFY (delete) on a requestor's window/property.
+    /// Used by INCR send to know when the requestor has consumed a chunk.
+    PropertyDelete { window: u32, property: u32 },
 }
 
 /// Result from drain_events when a goal is set.
@@ -330,6 +367,8 @@ enum DrainResult {
     SelectionNotifySeen { property: u32 },
     /// Saw PROPERTY_NOTIFY (new value); caller should read the property.
     PropertyNotifySeen,
+    /// Saw PROPERTY_NOTIFY (delete) on the requestor; send next chunk.
+    PropertyDeleteSeen,
 }
 
 /// Drain all pending X events, dispatching SELECTION_REQUEST/CLEAR as they
@@ -391,6 +430,13 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
             XCB_PROPERTY_NOTIFY => {
                 // SAFETY: ev is a valid PropertyNotify event (32 bytes).
                 let pn = unsafe { *(ev as *const PropertyNotifyEvent) };
+
+                // Always try to advance any in-flight INCR sends when we see
+                // a property-delete on a requestor window, regardless of goal.
+                if pn.state == XCB_PROPERTY_DELETE {
+                    advance_incr_sends(state, pn.window, pn.atom);
+                }
+
                 match &goal {
                     DrainGoal::PropertyNotify {
                         our_property,
@@ -402,6 +448,17 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
                         // SAFETY: ev was heap-allocated by xcb.
                         unsafe { libc::free(ev.cast()) };
                         return DrainResult::PropertyNotifySeen;
+                    }
+                    DrainGoal::PropertyDelete { window, property }
+                        if pn.window == *window
+                            && pn.atom == *property
+                            && pn.state == XCB_PROPERTY_DELETE =>
+                    {
+                        // Requestor deleted our property — it has consumed the
+                        // previous chunk and is ready for the next one.
+                        // SAFETY: ev was heap-allocated by xcb.
+                        unsafe { libc::free(ev.cast()) };
+                        return DrainResult::PropertyDeleteSeen;
                     }
                     _ => DrainResult::NotFound,
                 }
@@ -426,6 +483,11 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
     let fns = state.conn.fns();
     let raw = state.conn.raw();
     let atoms = state.conn.atoms();
+    let max_payload = state
+        .conn
+        .screen()
+        .max_request_len_bytes
+        .saturating_sub(XCB_REQUEST_HEADER_OVERHEAD as u32) as usize;
 
     // If requestor didn't name a property, fall back to the target atom (old
     // ICCCM compatibility).
@@ -467,21 +529,43 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
         }
     } else if let Some(data) = owned {
         if let Some(payload) = data.payloads.get(&ev.target) {
-            // SAFETY: payload.as_ptr() is valid for payload.len() bytes.
-            // format=8 means raw bytes.
-            unsafe {
-                (fns.xcb_change_property)(
-                    raw,
-                    XCB_PROP_MODE_REPLACE,
+            if payload.len() <= max_payload {
+                // Small payload — write it directly.
+                // SAFETY: payload.as_ptr() is valid for payload.len() bytes.
+                // format=8 means raw bytes.
+                unsafe {
+                    (fns.xcb_change_property)(
+                        raw,
+                        XCB_PROP_MODE_REPLACE,
+                        ev.requestor,
+                        property,
+                        ev.target,
+                        8,
+                        payload.len() as u32,
+                        payload.as_ptr().cast::<c_void>(),
+                    );
+                }
+                property
+            } else {
+                // Oversized payload — use INCR sub-protocol.
+                // Clone the bytes so we can release the borrow on `state.owned`
+                // before registering the non-blocking INCR transfer.
+                let bytes = payload.clone();
+                let target_atom = ev.target;
+                // Send SELECTION_NOTIFY first (with property != NONE) so the
+                // requestor knows the INCR handshake has started.
+                send_selection_notify(state, ev, property);
+                start_incr_send(
+                    state,
                     ev.requestor,
                     property,
-                    ev.target,
-                    8,
-                    payload.len() as u32,
-                    payload.as_ptr().cast::<c_void>(),
+                    target_atom,
+                    bytes,
+                    max_payload,
                 );
+                // start_incr_send registered the state; SELECTION_NOTIFY sent.
+                return;
             }
-            property
         } else {
             // We own the selection but not this specific target.
             XCB_NONE
@@ -492,6 +576,148 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
     };
 
     send_selection_notify(state, ev, reply_property);
+}
+
+/// Start an INCR send transfer (approach b-lite: non-blocking state machine).
+///
+/// We write the INCR size-hint property, subscribe to PROPERTY_DELETE events
+/// on the requestor, flush, and return immediately. The caller has already
+/// sent SELECTION_NOTIFY (with `property != NONE`). Subsequent chunks are
+/// written by `advance_incr_sends` each time a matching PROPERTY_DELETE event
+/// arrives in `drain_events`.
+///
+/// Trade-off: multiple simultaneous INCR sends are handled correctly (each
+/// advances independently as events arrive). The self-loop case (set then
+/// immediate get on the same backend) also works because `drain_events` calls
+/// `advance_incr_sends` on every PROPERTY_DELETE regardless of the current
+/// goal — so INCR send advances even while `do_get` waits for SELECTION_NOTIFY.
+fn start_incr_send(
+    state: &mut X11State,
+    requestor: u32,
+    property: u32,
+    target_atom: u32,
+    bytes: Vec<u8>,
+    chunk_size: usize,
+) {
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+    let atoms = state.conn.atoms();
+
+    // Write INCR property: type=INCR, format=32, one u32 total size hint.
+    let size_hint: u32 = bytes.len().min(u32::MAX as usize) as u32;
+    // SAFETY: size_hint is a valid u32; INCR type + format=32.
+    unsafe {
+        (fns.xcb_change_property)(
+            raw,
+            XCB_PROP_MODE_REPLACE,
+            requestor,
+            property,
+            atoms.incr,
+            32,
+            1,
+            std::ptr::addr_of!(size_hint).cast::<c_void>(),
+        );
+    }
+
+    // Subscribe to PROPERTY_NOTIFY on the requestor's window so PROPERTY_DELETE
+    // events are delivered to us when the requestor consumes each chunk.
+    let event_mask_val: u32 = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    // SAFETY: requestor is a valid X window; value_list is a single u32
+    // indexed by the single set bit in XCB_CW_EVENT_MASK.
+    unsafe {
+        (fns.xcb_change_window_attributes)(
+            raw,
+            requestor,
+            XCB_CW_EVENT_MASK,
+            std::ptr::addr_of!(event_mask_val).cast::<c_void>(),
+        );
+    }
+    // SAFETY: conn live.
+    unsafe { (fns.xcb_flush)(raw) };
+
+    // SELECTION_NOTIFY was already sent by the caller before calling us.
+    // Register the transfer so drain_events can advance it via advance_incr_sends.
+    state.incr_sends.push(IncrSend {
+        requestor,
+        property,
+        target_atom,
+        bytes,
+        offset: 0,
+        chunk_size,
+        deadline: Instant::now() + Duration::from_secs(INCR_SEND_TOTAL_TIMEOUT_SECS),
+        done: false,
+    });
+}
+
+/// Advance any in-flight INCR send whose requestor deleted the given property.
+///
+/// Called from `drain_events` on every PROPERTY_DELETE event, regardless of
+/// the current `DrainGoal`. This drives all registered transfers without
+/// requiring a dedicated blocking loop, and resolves the self-loop deadlock.
+fn advance_incr_sends(state: &mut X11State, window: u32, atom: u32) {
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+
+    let now = Instant::now();
+
+    for xfer in &mut state.incr_sends {
+        if xfer.done || xfer.requestor != window || xfer.property != atom {
+            continue;
+        }
+
+        // Check for timeout — send zero-length terminator and mark done.
+        if now >= xfer.deadline {
+            // SAFETY: sending zero bytes is always valid.
+            unsafe {
+                (fns.xcb_change_property)(
+                    raw,
+                    XCB_PROP_MODE_REPLACE,
+                    xfer.requestor,
+                    xfer.property,
+                    xfer.target_atom,
+                    8,
+                    0,
+                    std::ptr::null(),
+                );
+                (fns.xcb_flush)(raw);
+            }
+            xfer.done = true;
+            continue;
+        }
+
+        let end = (xfer.offset + xfer.chunk_size).min(xfer.bytes.len());
+        let chunk = &xfer.bytes[xfer.offset..end];
+
+        // SAFETY: chunk is valid for chunk.len() bytes; null data ptr on
+        // zero-length write is safe (XCB does not dereference it).
+        unsafe {
+            (fns.xcb_change_property)(
+                raw,
+                XCB_PROP_MODE_REPLACE,
+                xfer.requestor,
+                xfer.property,
+                xfer.target_atom,
+                8,
+                chunk.len() as u32,
+                if chunk.is_empty() {
+                    std::ptr::null()
+                } else {
+                    chunk.as_ptr().cast::<c_void>()
+                },
+            );
+            (fns.xcb_flush)(raw);
+        }
+
+        if chunk.is_empty() {
+            // Zero-length chunk signals end of INCR to the receiver.
+            xfer.done = true;
+        } else {
+            xfer.offset = end;
+        }
+    }
+
+    // Prune completed transfers to keep the Vec small.
+    state.incr_sends.retain(|x| !x.done);
 }
 
 /// Send XCB_SELECTION_NOTIFY to the requestor.
@@ -561,11 +787,9 @@ fn do_set(
     mime_atom: u32,
     bytes: Vec<u8>,
 ) -> Result<(), ClipboardError> {
-    let max = state.conn.screen().max_request_len_bytes.saturating_sub(24); // XCB request-header overhead (24 bytes)
-
-    if bytes.len() > max as usize {
-        return Err(ClipboardError::PayloadTooLarge);
-    }
+    // No payload size cap here — oversized payloads are served via INCR send
+    // in handle_selection_request. The PayloadTooLarge error is still used by
+    // the OSC 52 backend (and kept in ClipboardError for that purpose).
 
     let fns = state.conn.fns();
     let raw = state.conn.raw();
@@ -611,7 +835,104 @@ fn do_set(
     }
     data.payloads.insert(mime_atom, bytes);
 
+    // Auto-SAVE_TARGETS: notify any clipboard manager so our data persists
+    // after we exit. Only for CLIPBOARD (not PRIMARY — managers don't persist
+    // primary selections by convention).
+    let atoms = state.conn.atoms();
+    if sel_atom == atoms.clipboard {
+        do_save_targets(state);
+    }
+
     Ok(())
+}
+
+/// Request the clipboard manager (if any) to save our clipboard data.
+///
+/// Fires CONVERT_SELECTION(CLIPBOARD_MANAGER, SAVE_TARGETS) and waits up to
+/// 5 s for the initial acceptance SELECTION_NOTIFY. The manager then fetches
+/// our data in the background; we do not block on that secondary transfer.
+///
+/// Silently skips if no manager owns the CLIPBOARD_MANAGER selection.
+fn do_save_targets(state: &mut X11State) {
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+    let window = state.window;
+    let atoms = state.conn.atoms();
+
+    // Check if there is a clipboard manager.
+    let cookie = unsafe { (fns.xcb_get_selection_owner)(raw, atoms.clipboard_manager) };
+    // SAFETY: reply must be freed with libc::free.
+    let reply = unsafe { (fns.xcb_get_selection_owner_reply)(raw, cookie, std::ptr::null_mut()) };
+    if reply.is_null() {
+        return; // X server error; skip silently.
+    }
+    // SAFETY: reply is non-null; owner at offset 8.
+    let mgr = unsafe { (*reply).owner };
+    // SAFETY: reply was malloc'd by xcb.
+    unsafe { libc::free(reply.cast()) };
+
+    if mgr == XCB_NONE {
+        // No manager present — graceful no-op.
+        return;
+    }
+
+    // Write a list of our CLIPBOARD mime atoms into our private property so
+    // the manager can read which targets to save.
+    let owned_atoms: Vec<u32> = state
+        .owned
+        .get(&atoms.clipboard)
+        .map(|d| d.targets.clone())
+        .unwrap_or_default();
+
+    let our_property = atoms.hjkl_clipboard_get;
+
+    // SAFETY: owned_atoms is valid for owned_atoms.len() u32 values;
+    // format=32 (atom list).
+    unsafe {
+        (fns.xcb_change_property)(
+            raw,
+            XCB_PROP_MODE_REPLACE,
+            window,
+            our_property,
+            XCB_ATOM_ATOM,
+            32,
+            owned_atoms.len() as u32,
+            owned_atoms.as_ptr().cast::<c_void>(),
+        );
+    }
+
+    // Ask the manager to save our current data.
+    // SAFETY: standard xcb call; all args valid.
+    unsafe {
+        (fns.xcb_convert_selection)(
+            raw,
+            window,
+            atoms.clipboard_manager,
+            atoms.save_targets,
+            our_property,
+            XCB_CURRENT_TIME,
+        );
+    }
+    // SAFETY: conn live.
+    unsafe { (fns.xcb_flush)(raw) };
+
+    // Wait for SELECTION_NOTIFY accepting or refusing the SAVE_TARGETS.
+    // We wait a short time (5 s) for the initial handshake only — the manager
+    // does the actual data copy in the background after that.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let DrainResult::SelectionNotifySeen { .. } =
+            drain_events(state, DrainGoal::SelectionNotify { our_property })
+        {
+            // Manager accepted (or refused with NONE) — either way we are done.
+            break;
+        }
+        if Instant::now() >= deadline {
+            // Manager did not reply in time; skip silently.
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn do_clear(state: &mut X11State, sel_atom: u32) -> Result<(), ClipboardError> {
@@ -754,18 +1075,17 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
     // ---------------------------------------------------------------------------
     //
     // The initial property contains a u32 total-size hint (informational).
-    // We signal readiness by deleting our property, then loop reading chunks
-    // as PROPERTY_NOTIFY (new value) events arrive.  A zero-length chunk
-    // signals end of transfer.
-
-    let fns = state.conn.fns();
-    let raw = state.conn.raw();
-
-    // Delete initial INCR property to signal we are ready to receive chunks.
-    // SAFETY: conn live.
-    unsafe { (fns.xcb_delete_property)(raw, window, our_property) };
-    // SAFETY: conn live.
-    unsafe { (fns.xcb_flush)(raw) };
+    // read_property(delete=1) above already deleted the INCR property, which
+    // signals readiness to the sender.
+    //
+    // In the self-loop case (we own the selection we are reading), the INCR
+    // size-hint write by start_incr_send generated a stale PROPERTY_NEW_VALUE
+    // event that is still queued.  Drain all pending events now so that:
+    //   1. The stale NEW_VALUE is discarded.
+    //   2. The PROPERTY_DELETE from read_property triggers advance_incr_sends
+    //      to write chunk 1, whose NEW_VALUE then drives the receive loop below.
+    // For non-self-loop transfers this drain is a no-op (no pending events).
+    drain_events(state, DrainGoal::AnyEvent);
 
     let mut accumulator: Vec<u8> = Vec::new();
     let total_deadline = Instant::now() + Duration::from_secs(30);
@@ -955,7 +1275,9 @@ pub(crate) fn available_clipboard(
             // to the same MimeType, e.g. UTF8_STRING and STRING both -> Text).
             let mut mimes: Vec<MimeType> = Vec::new();
             for atom in raw_atoms {
-                if let Some(mime) = atom_to_mime(&thread.atoms, atom) && !mimes.contains(&mime) {
+                if let Some(mime) = atom_to_mime(&thread.atoms, atom)
+                    && !mimes.contains(&mime)
+                {
                     mimes.push(mime);
                 }
             }
@@ -1202,23 +1524,9 @@ mod tests {
         assert_eq!(out, html, "xclip html read mismatch");
     }
 
-    #[test]
-    fn payload_too_large_errors() {
-        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let thread = match get_thread() {
-            Some(t) => t,
-            None => return,
-        };
-
-        // 17 MiB far exceeds XCB's default ~256 KB max_request_length.
-        let big = vec![0u8; 17 * 1024 * 1024];
-        let err = set_clipboard(thread, Selection::Clipboard, &MimeType::Text, &big)
-            .expect_err("expected PayloadTooLarge");
-        assert!(
-            matches!(err, ClipboardError::PayloadTooLarge),
-            "unexpected error: {err}"
-        );
-    }
+    // payload_too_large_errors: removed in 5d — do_set no longer rejects large
+    // payloads; handle_selection_request uses INCR send instead. The
+    // large_payload_self_loop test below exercises this new path.
 
     #[test]
     fn set_replaces_previous() {
@@ -1393,8 +1701,532 @@ mod tests {
         );
     }
 
-    // get_incr_payload: xclip uses INCR for payloads it considers "large" but
-    // the threshold varies by version and is not reliably below our
-    // max_request_length in xvfb.  We exercise the normal read path above.
-    // TODO(5d): test INCR send + receive once we can control chunk size.
+    // -----------------------------------------------------------------------
+    // 5d tests (INCR send + auto-SAVE_TARGETS)
+    // -----------------------------------------------------------------------
+
+    /// 1 MiB payload well over xvfb's default ~256 KB max_request_length.
+    /// We set it (which stores it; INCR send fires when a reader asks for it)
+    /// and then get it back via our own do_get, which uses our INCR receive
+    /// (5c).  This exercises both INCR send and INCR receive end-to-end via
+    /// a self-loop through the X server.
+    #[test]
+    fn large_payload_self_loop() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // 1 MiB of a repeating pattern so any data corruption is obvious.
+        let size = 1024 * 1024;
+        let payload: Vec<u8> = (0u8..=255).cycle().take(size).collect();
+
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, &payload)
+            .expect("set large payload failed");
+
+        // do_get → SELECTION_REQUEST → INCR send → INCR receive.
+        let received = get_clipboard(thread, Selection::Clipboard, &MimeType::Text)
+            .expect("get large payload failed");
+
+        assert_eq!(
+            received.len(),
+            size,
+            "large payload length mismatch: got {} expected {size}",
+            received.len()
+        );
+        assert_eq!(received, payload, "large payload content mismatch");
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock CLIPBOARD_MANAGER
+    // -----------------------------------------------------------------------
+    //
+    // The mock thread owns the CLIPBOARD_MANAGER selection on the same Xvfb
+    // display as the singleton X11Thread.  It accepts SAVE_TARGETS requests
+    // and fetches all advertised targets, storing them in received_payloads.
+    //
+    // Architecture notes:
+    //   - The mock opens its OWN X11 connection (separate from the singleton).
+    //   - It uses xcb_wait_for_event (blocking) on its own connection.
+    //   - Shutdown via an AtomicBool polled from a second thread that calls
+    //     xcb_send_event to unblock the wait — but since xcb_wait_for_event
+    //     blocks indefinitely, we instead use a short-lived test that relies
+    //     on the mock thread stopping when the connection is dropped.
+    //   - Simpler approach used here: the mock thread loops with
+    //     xcb_poll_for_event + 10 ms sleep until a stop flag is set.
+
+    use std::collections::HashMap as TestHashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct MockManager {
+        handle: std::thread::JoinHandle<()>,
+        saw_save_targets: Arc<AtomicBool>,
+        received_payloads: Arc<Mutex<TestHashMap<u32, Vec<u8>>>>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl MockManager {
+        /// Spawn the mock clipboard manager on the given display.
+        fn spawn(display: &str) -> Option<Self> {
+            let saw_save_targets = Arc::new(AtomicBool::new(false));
+            let received_payloads = Arc::new(Mutex::new(TestHashMap::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+
+            let saw2 = Arc::clone(&saw_save_targets);
+            let payloads2 = Arc::clone(&received_payloads);
+            let stop2 = Arc::clone(&stop);
+            let display_str = display.to_string();
+
+            // Open a test connection using the same X11Connection::open path,
+            // but we need our own connection — so set DISPLAY temporarily.
+            // We capture the current DISPLAY, set ours, open, restore.
+            // This is safe here because the mock thread is spawned while the
+            // TEST_LOCK is held and DISPLAY is already set to our display.
+
+            // Build the connection *before* spawning the thread so we can
+            // return None if the connection fails.
+            // SAFETY: DISPLAY is already set to our test display (ensured by
+            // the TEST_LOCK + ensure_xvfb() call chain). This is purely
+            // test-only env access.
+            let _ = display_str; // consumed into the closure below
+
+            let handle = std::thread::Builder::new()
+                .name("mock-clipboard-manager".into())
+                .spawn(move || {
+                    // Open our own connection (uses DISPLAY env which is set
+                    // to our xvfb display for the duration of this test).
+                    let conn = match super::super::x11::X11Connection::open() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("MockManager: connection failed: {e}");
+                            return;
+                        }
+                    };
+                    mock_manager_run(conn, saw2, payloads2, stop2);
+                })
+                .ok()?;
+
+            Some(MockManager {
+                handle,
+                saw_save_targets,
+                received_payloads,
+                stop,
+            })
+        }
+
+        fn stop_and_join(self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = self.handle.join();
+        }
+    }
+
+    /// Core loop for the mock manager thread.
+    fn mock_manager_run(
+        conn: super::super::x11::X11Connection,
+        saw_save_targets: Arc<AtomicBool>,
+        received_payloads: Arc<Mutex<TestHashMap<u32, Vec<u8>>>>,
+        stop: Arc<AtomicBool>,
+    ) {
+        use std::ffi::c_void;
+
+        let fns = conn.fns();
+        let raw = conn.raw();
+        let atoms = conn.atoms();
+
+        // Create an invisible window to hold CLIPBOARD_MANAGER ownership.
+        // SAFETY: xcb_generate_id returns a fresh XID.
+        let wid = unsafe { (fns.xcb_generate_id)(raw) };
+        let screen = conn.screen();
+        // SAFETY: all parameters valid; conn live on this thread.
+        let event_mask_mock: u32 = XCB_EVENT_MASK_PROPERTY_CHANGE;
+        unsafe {
+            (fns.xcb_create_window)(
+                raw,
+                screen.root_depth,
+                wid,
+                screen.root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                XCB_WINDOW_CLASS_INPUT_OUTPUT,
+                screen.root_visual,
+                XCB_CW_EVENT_MASK,
+                std::ptr::addr_of!(event_mask_mock).cast::<c_void>(),
+            );
+        }
+
+        // A property atom for our own get requests (we use HJKL_CLIPBOARD_GET
+        // from our atoms — but this is a *different* connection so we intern
+        // our own copy).
+        let mgr_property = atoms.hjkl_clipboard_get; // same atom ID, different connection
+
+        // Claim CLIPBOARD_MANAGER ownership.
+        // SAFETY: conn live; wid and clipboard_manager atom valid.
+        unsafe {
+            (fns.xcb_set_selection_owner)(raw, wid, atoms.clipboard_manager, XCB_CURRENT_TIME);
+            (fns.xcb_flush)(raw);
+        }
+
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            // SAFETY: xcb_poll_for_event returns null when queue is empty.
+            let ev = unsafe { (fns.xcb_poll_for_event)(raw) };
+            if ev.is_null() {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            // SAFETY: first byte is response_type.
+            let response_type = unsafe { *(ev as *const u8) } & 0x7f;
+
+            match response_type {
+                XCB_SELECTION_REQUEST => {
+                    // SAFETY: ev is a valid 32-byte SelectionRequestEvent.
+                    let req = unsafe { *(ev as *const SelectionRequestEvent) };
+                    if req.target == atoms.save_targets {
+                        saw_save_targets.store(true, Ordering::SeqCst);
+
+                        // Read the TARGETS list from the requestor's property.
+                        let prop = if req.property == XCB_NONE {
+                            req.target
+                        } else {
+                            req.property
+                        };
+                        let targets = mock_read_property(fns, raw, req.requestor, prop);
+                        // targets is a list of u32 atoms (format=32).
+                        let atom_list: Vec<u32> = targets
+                            .chunks_exact(4)
+                            .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+
+                        // Fetch each target from the requestor.
+                        for target in atom_list {
+                            if target == atoms.targets || target == atoms.multiple {
+                                continue; // skip protocol atoms
+                            }
+                            // Ask requestor to write target into our property.
+                            // SAFETY: valid xcb call.
+                            unsafe {
+                                (fns.xcb_delete_property)(raw, wid, mgr_property);
+                                (fns.xcb_convert_selection)(
+                                    raw,
+                                    wid,
+                                    atoms.clipboard,
+                                    target,
+                                    mgr_property,
+                                    XCB_CURRENT_TIME,
+                                );
+                                (fns.xcb_flush)(raw);
+                            }
+
+                            // Wait for SELECTION_NOTIFY for this target (up to 5 s).
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            'wait: loop {
+                                let ev2 = unsafe { (fns.xcb_poll_for_event)(raw) };
+                                if !ev2.is_null() {
+                                    let rt2 = unsafe { *(ev2 as *const u8) } & 0x7f;
+                                    if rt2 == XCB_SELECTION_NOTIFY {
+                                        // SAFETY: ev2 is valid SelectionNotifyEvent.
+                                        let sn = unsafe { *(ev2 as *const SelectionNotifyEvent) };
+                                        if sn.requestor == wid {
+                                            // Read the property (may be INCR).
+                                            if sn.property != XCB_NONE {
+                                                let data = mock_read_full(
+                                                    fns,
+                                                    raw,
+                                                    wid,
+                                                    mgr_property,
+                                                    atoms.incr,
+                                                );
+                                                received_payloads
+                                                    .lock()
+                                                    .unwrap()
+                                                    .insert(target, data);
+                                            }
+                                            unsafe { libc::free(ev2.cast()) };
+                                            break 'wait;
+                                        }
+                                    }
+                                    unsafe { libc::free(ev2.cast()) };
+                                }
+                                if Instant::now() >= deadline {
+                                    break 'wait;
+                                }
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                        }
+
+                        // Send SELECTION_NOTIFY back to the requestor to signal
+                        // we accepted SAVE_TARGETS.
+                        let mut buf = [0u8; 32];
+                        buf[0] = XCB_SELECTION_NOTIFY;
+                        buf[4..8].copy_from_slice(&req.time.to_ne_bytes());
+                        buf[8..12].copy_from_slice(&req.requestor.to_ne_bytes());
+                        buf[12..16].copy_from_slice(&req.selection.to_ne_bytes());
+                        buf[16..20].copy_from_slice(&req.target.to_ne_bytes());
+                        let reply_prop = if req.property == XCB_NONE {
+                            XCB_NONE
+                        } else {
+                            req.property
+                        };
+                        buf[20..24].copy_from_slice(&reply_prop.to_ne_bytes());
+                        // SAFETY: valid 32-byte event buffer; destination = requestor.
+                        unsafe {
+                            (fns.xcb_send_event)(raw, 0, req.requestor, 0, buf.as_ptr().cast());
+                            (fns.xcb_flush)(raw);
+                        }
+                    }
+                }
+                XCB_SELECTION_CLEAR => {
+                    // We lost CLIPBOARD_MANAGER — another manager claimed it.
+                    break;
+                }
+                _ => {}
+            }
+
+            // SAFETY: ev was heap-allocated by xcb.
+            unsafe { libc::free(ev.cast()) };
+        }
+    }
+
+    /// Read a plain property from window `w`, property atom `prop`.
+    /// Returns raw bytes (no delete).
+    fn mock_read_property(
+        fns: &super::super::dlopen::XcbFns,
+        raw: *mut super::super::dlopen::XcbConnection,
+        w: u32,
+        prop: u32,
+    ) -> Vec<u8> {
+        let cookie = unsafe {
+            (fns.xcb_get_property)(raw, 0, w, prop, XCB_GET_PROPERTY_TYPE_ANY, 0, u32::MAX / 4)
+        };
+        let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
+        if reply.is_null() {
+            return Vec::new();
+        }
+        let vptr = unsafe { (fns.xcb_get_property_value)(reply) };
+        let vlen = unsafe { (fns.xcb_get_property_value_length)(reply) } as usize;
+        let bytes = if vlen > 0 && !vptr.is_null() {
+            // SAFETY: vptr is valid for vlen bytes inside reply allocation.
+            unsafe { std::slice::from_raw_parts(vptr as *const u8, vlen).to_vec() }
+        } else {
+            Vec::new()
+        };
+        // SAFETY: reply was malloc'd by xcb.
+        unsafe { libc::free(reply.cast()) };
+        bytes
+    }
+
+    /// Read a property from our own window, handling INCR if needed.
+    /// Reads then deletes (delete=1).
+    fn mock_read_full(
+        fns: &super::super::dlopen::XcbFns,
+        raw: *mut super::super::dlopen::XcbConnection,
+        wid: u32,
+        prop: u32,
+        incr_atom: u32,
+    ) -> Vec<u8> {
+        let cookie = unsafe {
+            (fns.xcb_get_property)(
+                raw,
+                1,
+                wid,
+                prop,
+                XCB_GET_PROPERTY_TYPE_ANY,
+                0,
+                u32::MAX / 4,
+            )
+        };
+        let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
+        if reply.is_null() {
+            return Vec::new();
+        }
+        let type_atom = unsafe { (*reply).r#type };
+        let vptr = unsafe { (fns.xcb_get_property_value)(reply) };
+        let vlen = unsafe { (fns.xcb_get_property_value_length)(reply) } as usize;
+        let initial = if vlen > 0 && !vptr.is_null() {
+            unsafe { std::slice::from_raw_parts(vptr as *const u8, vlen).to_vec() }
+        } else {
+            Vec::new()
+        };
+        unsafe { libc::free(reply.cast()) };
+
+        if type_atom != incr_atom {
+            return initial;
+        }
+
+        // INCR receive: delete property to signal readiness, then loop.
+        unsafe {
+            (fns.xcb_delete_property)(raw, wid, prop);
+            (fns.xcb_flush)(raw);
+        }
+
+        let mut acc = Vec::new();
+        let total_deadline = Instant::now() + Duration::from_secs(30);
+
+        loop {
+            // Wait for PROPERTY_NOTIFY (new value) — poll loop.
+            let chunk_deadline = Instant::now() + Duration::from_secs(10);
+            let got_notify = 'notify: loop {
+                let ev = unsafe { (fns.xcb_poll_for_event)(raw) };
+                if !ev.is_null() {
+                    let rt = unsafe { *(ev as *const u8) } & 0x7f;
+                    if rt == XCB_PROPERTY_NOTIFY {
+                        let pn = unsafe { *(ev as *const PropertyNotifyEvent) };
+                        if pn.window == wid && pn.atom == prop && pn.state == XCB_PROPERTY_NEW_VALUE
+                        {
+                            unsafe { libc::free(ev.cast()) };
+                            break 'notify true;
+                        }
+                    }
+                    unsafe { libc::free(ev.cast()) };
+                }
+                if Instant::now() >= chunk_deadline || Instant::now() >= total_deadline {
+                    break 'notify false;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            if !got_notify {
+                break;
+            }
+
+            // Read + delete chunk.
+            let cookie2 = unsafe {
+                (fns.xcb_get_property)(
+                    raw,
+                    1,
+                    wid,
+                    prop,
+                    XCB_GET_PROPERTY_TYPE_ANY,
+                    0,
+                    u32::MAX / 4,
+                )
+            };
+            let r2 = unsafe { (fns.xcb_get_property_reply)(raw, cookie2, std::ptr::null_mut()) };
+            if r2.is_null() {
+                break;
+            }
+            let vp2 = unsafe { (fns.xcb_get_property_value)(r2) };
+            let vl2 = unsafe { (fns.xcb_get_property_value_length)(r2) } as usize;
+            let chunk = if vl2 > 0 && !vp2.is_null() {
+                unsafe { std::slice::from_raw_parts(vp2 as *const u8, vl2).to_vec() }
+            } else {
+                Vec::new()
+            };
+            unsafe { libc::free(r2.cast()) };
+
+            if chunk.is_empty() {
+                break; // zero-length = end of INCR
+            }
+            acc.extend_from_slice(&chunk);
+
+            if Instant::now() >= total_deadline {
+                break;
+            }
+        }
+
+        acc
+    }
+
+    /// SAVE_TARGETS round-trip: spawn a MockManager, set clipboard text, verify
+    /// the manager received a SAVE_TARGETS request and copied the payload.
+    #[test]
+    fn save_targets_invokes_manager() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+        let session = match ensure_xvfb() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mgr = match MockManager::spawn(&session.display) {
+            Some(m) => m,
+            None => {
+                eprintln!("SKIP save_targets_invokes_manager: MockManager spawn failed");
+                return;
+            }
+        };
+
+        // Give the manager time to claim ownership.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let text = b"save-targets-test-payload";
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, text).expect("set failed");
+
+        // Wait up to 3 s for the manager to process the SAVE_TARGETS request.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if mgr.saw_save_targets.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        assert!(
+            mgr.saw_save_targets.load(Ordering::SeqCst),
+            "MockManager never saw SAVE_TARGETS request"
+        );
+
+        // Wait briefly for the manager to finish copying the payload.
+        std::thread::sleep(Duration::from_millis(500));
+
+        let payloads = mgr.received_payloads.lock().unwrap();
+        let utf8_atom = thread.atoms.utf8_string;
+        assert!(
+            payloads.contains_key(&utf8_atom),
+            "MockManager did not receive UTF8_STRING payload; keys: {:?}",
+            payloads.keys().collect::<Vec<_>>()
+        );
+        let received = payloads.get(&utf8_atom).unwrap();
+        assert_eq!(received, text, "MockManager received wrong payload bytes");
+        drop(payloads);
+
+        mgr.stop_and_join();
+    }
+
+    /// When no clipboard manager owns CLIPBOARD_MANAGER, auto-SAVE_TARGETS
+    /// should be a silent no-op (no hang, no error).
+    #[test]
+    fn save_targets_no_manager() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Ensure no manager is present (the singleton X11Thread doesn't own
+        // CLIPBOARD_MANAGER; unless a previous test left a MockManager alive,
+        // there is no owner).  We cannot forcibly remove an owner here, but
+        // the test suite serializes via TEST_LOCK and MockManager::stop_and_join
+        // drops its connection, so no owner should be present at this point.
+
+        // This should complete quickly (the owner check returns XCB_NONE and
+        // skips immediately) rather than hanging on a SELECTION_NOTIFY.
+        let before = Instant::now();
+        set_clipboard(
+            thread,
+            Selection::Clipboard,
+            &MimeType::Text,
+            b"no-manager-test",
+        )
+        .expect("set should succeed even with no manager");
+        let elapsed = before.elapsed();
+
+        // If we hung waiting for a phantom manager, elapsed would be ~5 s.
+        // In the no-manager case the SAVE_TARGETS skip path is instant (<100 ms).
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "set took too long ({elapsed:?}); possible hang in SAVE_TARGETS"
+        );
+    }
 }

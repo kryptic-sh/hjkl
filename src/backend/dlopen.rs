@@ -211,6 +211,14 @@ pub struct XcbFns {
     pub xcb_get_property_value_length: unsafe extern "C" fn(r: *const XcbGetPropertyReply) -> c_int,
     pub xcb_delete_property:
         unsafe extern "C" fn(c: *mut XcbConnection, window: u32, property: u32) -> XcbVoidCookie,
+
+    // Phase 5d — INCR send
+    pub xcb_change_window_attributes: unsafe extern "C" fn(
+        c: *mut XcbConnection,
+        window: u32,
+        value_mask: u32,
+        value_list: *const c_void,
+    ) -> XcbVoidCookie,
 }
 
 // SAFETY: All members are function pointers loaded from a shared library.
@@ -298,6 +306,7 @@ fn try_load_xcb() -> Option<XcbFns> {
         xcb_get_property_value: sym!(handle, "xcb_get_property_value"),
         xcb_get_property_value_length: sym!(handle, "xcb_get_property_value_length"),
         xcb_delete_property: sym!(handle, "xcb_delete_property"),
+        xcb_change_window_attributes: sym!(handle, "xcb_change_window_attributes"),
     })
 }
 

@@ -199,7 +199,17 @@ impl X11Connection {
         //   vendor_len(2) at 24; maximum_request_length(2) at 26.
         let setup_ptr = setup as *const u8;
         let max_req_units = u16::from_ne_bytes(unsafe { *setup_ptr.add(26).cast::<[u8; 2]>() });
-        let max_request_len_bytes = u32::from(max_req_units) * 4;
+        // Per X11 protocol: if maximum_request_length == 0 the server supports
+        // the BigRequests extension and the real limit must be queried via
+        // xcb_get_maximum_request_length. We treat 0 as "no practical limit" and
+        // cap at 256 KiB so callers get reasonable INCR thresholds on modern
+        // servers. Actual BigRequests limits are in the gigabytes — 256 KiB is
+        // a safe conservative chunk size that works across all server variants.
+        let max_request_len_bytes = if max_req_units == 0 {
+            256 * 1024 // conservative 256 KiB when BigRequests active
+        } else {
+            u32::from(max_req_units) * 4
+        };
 
         let screen = ScreenInfo {
             root,
