@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use crate::{ClipboardError, MimeType, Selection};
 
 use super::Backend;
-use crate::osc52::{emit_osc52, is_in_tmux, write_osc52};
+use crate::osc52::{is_in_tmux, write_osc52};
 
 /// OSC 52 backend. Unit struct — no state, everything is stateless I/O.
 pub(crate) struct Osc52Backend;
@@ -65,21 +65,7 @@ impl Osc52Backend {
 
 impl Backend for Osc52Backend {
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
-        if sel != Selection::Clipboard {
-            return Err(ClipboardError::UnsupportedMime);
-        }
-        match mime {
-            MimeType::Text => {}
-            _ => return Err(ClipboardError::UnsupportedMime),
-        }
-        let text = std::str::from_utf8(bytes).map_err(|_| ClipboardError::UnsupportedMime)?;
-        emit_osc52(text, is_in_tmux()).map_err(|e| {
-            if e.kind() == io::ErrorKind::Other {
-                ClipboardError::PayloadTooLarge
-            } else {
-                ClipboardError::Io(e)
-            }
-        })
+        self.set_inner(sel, mime, bytes, &mut io::stdout().lock())
     }
 
     /// OSC 52 is write-only. Reading is not possible.
@@ -88,10 +74,7 @@ impl Backend for Osc52Backend {
     }
 
     fn clear(&self, sel: Selection) -> Result<(), ClipboardError> {
-        if sel != Selection::Clipboard {
-            return Err(ClipboardError::UnsupportedMime);
-        }
-        emit_osc52("", is_in_tmux()).map_err(ClipboardError::Io)
+        self.clear_inner(sel, &mut io::stdout().lock())
     }
 
     /// Cannot query what's in the terminal clipboard. Returns empty list.

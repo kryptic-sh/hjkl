@@ -339,12 +339,36 @@ Minor test weaknesses (acceptable, won't block downstream phases):
   a NEW waker overwrites it. Behavior is correct (latest-wins); test
   under-verifies.
 
-### Phase 2 — OSC 52 backend (port from current lib.rs)
+### Phase 2 — OSC 52 backend (DONE — `f3f6910`, dedup follow-up)
 
-- [ ] Move base64 to `base64.rs`, add tests (already present).
-- [ ] `osc52.rs`: SSH detect + tmux DCS wrap.
-- [ ] `backend/osc52.rs`: implements Backend trait, write-only, text-only.
-- [ ] Tests: PTY harness captures stdout, asserts wire format with/without tmux.
+- [x] Move base64 to `base64.rs` (done in Phase 0).
+- [x] `osc52.rs`: SSH detect + tmux DCS wrap (done in Phase 0). Phase 2 split
+      into testable `write_osc52(&mut impl Write, ...)` + stdout convenience
+      wrapper `emit_osc52`.
+- [x] `backend/osc52.rs`: implements `Backend`. Text-only, write-only,
+      `Selection::Clipboard`-only. Other mimes / Primary / non-UTF-8 →
+      `UnsupportedMime`. Oversize via `OSC52_MAX` → `PayloadTooLarge`. `clear`
+      emits empty OSC 52. `available` returns `Ok(vec![])` (cannot read terminal
+      clipboard).
+- [x] Wire-format tests in `osc52::tests` (8 tests with inline `base64_decode`
+      helper, no dep). Trait dispatch tests in `backend/osc52::tests` (14
+      tests).
+- [x] Trait impls delegate to `set_inner`/`clear_inner` with
+      `io::stdout().lock()` — single source of truth, no duplicated validation
+      logic.
+
+Notes from execution:
+
+- Test count: 15 → 37 (+22).
+- `Backend::available` returns `Ok(vec![])` for both Clipboard and Primary
+  (deviation from prompt suggestion that Primary should error). Justification:
+  `available` semantics are "what's there to read"; an empty list communicates
+  "nothing readable" without making the caller handle a special error case for
+  an unsupported selection.
+- `emit_osc52` (the stdout convenience) is currently dead code — trait impls
+  call `set_inner` directly with `io::stdout().lock()`. Kept for now under
+  crate-wide `#![allow(dead_code)]`. Phase 7 dead code audit will decide whether
+  to keep or drop.
 
 ### Phase 3 — Windows backend
 
