@@ -533,13 +533,61 @@ Notes from execution:
 - PNG palette / 16-bit unsupported tests rely on the format match running before
   inflate — confirmed by reading order in `png_to_dib`.
 
-### Phase 4 — macOS backend
+### Phase 4 — macOS backend (DONE — `b3cdb3f`)
 
-- [ ] dlopen + selector cache for objc.
-- [ ] x86_64 + ARM64 `objc_msgSend` cast helpers.
-- [ ] Backend impl: NSPasteboard for all mimes incl uri-list (both
-      `text/uri-list` and `NSFilenamesPboardType`).
-- [ ] CI green on both `test-macos-x64` and `test-macos-arm`.
+- [x] `#[link]` AppKit + Foundation frameworks (no dlopen — mac libs always
+      present per architecture decision). `#[link(name = "objc")]` for
+      `sel_registerName` / `objc_getClass` / `objc_msgSend`.
+- [x] Selector + class cache via `OnceLock<usize>` (raw pointers aren't `Send`;
+      cast back at use site). `sel_cached!` and `class_cached!` macros for
+      ergonomics. 12 selectors + 3 classes cached.
+- [x] `objc_msgSend` declared as zero-sig stub; `msg0`/`msg1`/`msg2` helpers
+      transmute it per call-site to the exact `(Id, Sel, args...) -> R`
+      signature. Same machine code on both x86_64 and ARM64 because all our
+      arguments are pointer/usize-sized (no float/SIMD/large-struct returns).
+- [x] `nsstring_from_str` / `nsstring_to_string` / `nsdata_from_bytes` /
+      `nsdata_to_vec` helpers — copy bytes into Rust ownership immediately to
+      avoid autorelease-pool drain hazards.
+- [x] `mime_to_uti` / `uti_to_mime` mapping: `public.utf8-plain-text` (+ legacy
+      `NSStringPboardType` accepted), `public.html`, `public.rtf`,
+      `text/uri-list`, `public.png`. `Custom(s)` passes through verbatim on
+      `set`/`get`; unknown UTIs filtered from `available()` to avoid noise.
+- [x] `MimeType` got `PartialEq` derive — needed for `out.contains(&mime)` dedup
+      in `available`. Already harmless across the rest of the crate.
+- [x] `Selection::Primary`: `set/get/clear` return `UnsupportedMime`,
+      `available` returns `Ok(vec![])` — consistent with Windows backend
+      convention.
+- [x] All `unsafe` blocks have SAFETY comments. `general_pasteboard()` nil-check
+      defensive (returns `Io` error rather than crashing).
+- [x] Cross-compile clean on `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+      `x86_64-pc-windows-gnu`, linux native. Clippy `-D warnings` clean on all
+      four.
+- [x] 92 tests still passing on Linux native (no new tests — backend requires
+      live NSPasteboard at runtime; covered by Phase 7 CI).
+- [ ] CI green on `test-macos-x64` and `test-macos-arm` — deferred to Phase 7.
+
+Notes from execution:
+
+- **Deviation from spec**: `NSFilenamesPboardType` (deprecated since macOS
+  10.14, requires `NSArray<NSString*>` — extra ABI surface) is **not** written
+  on `set_uri_list`. Only `text/uri-list` raw bytes go on the pasteboard. Modern
+  Mac apps that consume cross-platform clipboards expect `text/uri-list`;
+  legacy-only consumers will not see file URIs from this lib. Acceptable
+  trade-off for declining benefit.
+- `setData:forType:` returns Apple `BOOL` (signed char). Agent typed it as Rust
+  `bool` via transmute. Apple guarantees `YES=1`/`NO=0`, so byte values are
+  always valid `bool` patterns — correct in practice. Strictly canonical pattern
+  is `let ok: i8 = msg2(...); if ok == 0 { ... }`. Defer fix unless a future
+  Apple SDK change ever returns non-`{0,1}` BOOL (extremely unlikely).
+- `clearContents` correctly typed as `isize` (NSInteger change count, signed).
+- Edition 2024 `if let ... && ...` chain used in `available` for dedup — clippy
+  required collapse from nested `if`.
+- No autorelease pool management: NSPasteboard objects are autoreleased into the
+  caller's pool. We copy bytes out via `nsdata_to_vec` and `nsstring_to_string`
+  before any drain can happen. For a long-running TUI process the system
+  autorelease pool is fine; if a user calls our API from a thread without a
+  pool, autoreleased objects will leak until thread exit. Phase 7 CI on real
+  macOS will confirm.
 
 ### Phase 5 — Linux X11 backend
 
