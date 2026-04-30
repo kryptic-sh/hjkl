@@ -210,7 +210,7 @@ jobs:
           # cargo-generate-rpm reads the binary from
           # target/<target>/release/ when --target is passed.
           # --payload-compress none avoids a host/cross zstd mismatch.
-          cargo generate-rpm -p hjkl --target ${{ matrix.target }} --payload-compress none
+          cargo generate-rpm -p apps/hjkl --target ${{ matrix.target }} --payload-compress none
           RPM_FILE=$(ls target/${{ matrix.target }}/generate-rpm/hjkl-*.rpm | head -1)
           cp "$RPM_FILE" .
           RPM_NAME=$(basename "$RPM_FILE")
