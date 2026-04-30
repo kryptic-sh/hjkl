@@ -22,6 +22,9 @@ pub mod uri;
 
 pub(crate) mod backend;
 pub(crate) mod base64;
+pub(crate) mod cf_hdrop;
+pub(crate) mod cf_html;
+pub(crate) mod dib_png;
 pub(crate) mod oneshot;
 pub(crate) mod osc52;
 pub(crate) mod reply;

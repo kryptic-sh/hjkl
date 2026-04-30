@@ -5,12 +5,6 @@
 
 #[cfg(target_os = "linux")]
 pub(crate) mod bg_thread;
-#[cfg(target_os = "windows")]
-pub(crate) mod cf_hdrop;
-#[cfg(target_os = "windows")]
-pub(crate) mod cf_html;
-#[cfg(target_os = "windows")]
-pub(crate) mod dib_png;
 #[cfg(target_os = "linux")]
 pub(crate) mod dlopen;
 #[cfg(target_os = "macos")]

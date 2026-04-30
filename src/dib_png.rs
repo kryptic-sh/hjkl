@@ -2,3 +2,5 @@
 //!
 //! Modern apps use the `"PNG"` registered format directly; legacy apps use
 //! `CF_DIBV5`. This module converts between the two so both directions work.
+//!
+//! **Phase 3d stub** — implementation pending.
