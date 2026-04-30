@@ -370,13 +370,76 @@ Notes from execution:
   crate-wide `#![allow(dead_code)]`. Phase 7 dead code audit will decide whether
   to keep or drop.
 
-### Phase 3 — Windows backend
+### Phase 3 — Windows backend (split into sub-phases)
 
-- [ ] `extern "system"` blocks for user32/kernel32 — compile-checked.
-- [ ] `cf_html.rs` header wrap/unwrap + tests (round-trip).
-- [ ] `cf_hdrop.rs` DROPFILES build/parse + tests (round-trip + UNC).
-- [ ] `dib_png.rs` DIB↔PNG via `miniz_oxide` + tests.
-- [ ] Backend impl: open/empty/set/get/clear/available for all mimes.
+Split because Phase 3 is ~900 LOC across four interrelated wire formats, with no
+Windows runner locally — only `cargo check --target x86_64-pc-windows-gnu`
+verifies type-correctness. Smaller chunks per audit = more confidence per
+landing.
+
+#### Phase 3a — Win32 FFI + text + clear (DONE — `9abfc56`, LockedHandle follow-up)
+
+- [x] `unsafe extern "system"` blocks for user32 (OpenClipboard, CloseClipboard,
+      EmptyClipboard, GetClipboardData, SetClipboardData,
+      IsClipboardFormatAvailable, EnumClipboardFormats) and kernel32
+      (GlobalAlloc, GlobalLock, GlobalUnlock, GlobalFree, GlobalSize,
+      GetLastError) — no winapi/windows-sys dep.
+- [x] Type aliases (BOOL/DWORD/UINT/SIZE_T/HWND/HANDLE/HGLOBAL) in a
+      `mod win32_types` with narrow
+      `#[allow(clippy::upper_case_acronyms,     non_camel_case_types)]`.
+- [x] `ClipboardOpen` RAII guard pairs OpenClipboard/CloseClipboard.
+- [x] `LockedHandle` RAII guard pairs GlobalLock/GlobalUnlock — landed in
+      follow-up to fix lock-leak on UTF-16 decode error in `get_text`. Same
+      primitive will be reused by 3b/3c/3d.
+- [x] `set_text` / `get_text` for `CF_UNICODETEXT` (UTF-8 ↔ UTF-16 LE + null
+      terminator).
+- [x] `WindowsBackend` implements `Backend`. Text routes to helpers; other mimes
+      return `UnsupportedMime` (filled in by 3b/3c/3d). `clear` calls
+      `EmptyClipboard`. `available` enumerates via `EnumClipboardFormats`, maps
+      `CF_UNICODETEXT` → `MimeType::Text`.
+- [x] `Selection::Primary` returns `UnsupportedMime` for set/get/clear,
+      `Ok(vec![])` for available — Windows has no primary selection; consistent
+      with OSC 52 backend convention.
+- [x] `cargo check --target x86_64-pc-windows-gnu` passes clean.
+- [x] `cargo clippy --target x86_64-pc-windows-gnu` clean.
+- [x] All `unsafe` blocks have SAFETY comments.
+
+Notes from execution:
+
+- Edition 2024 mandates `unsafe extern "system"` for raw FFI blocks.
+- `bg_thread` and `dlopen` modules also gated `cfg(target_os = "linux")` —
+  agent's reasonable extension since they're Linux-only by design.
+- `cf_hdrop`/`cf_html`/`dib_png` modules gated `cfg(target_os = "windows")`
+  since they're Windows-internal helpers.
+- Linux native build has zero Win32 code compiled — clean separation.
+- 37 tests still passing on Linux (no test changes — Windows tests deferred to
+  Phase 7 CI).
+
+#### Phase 3b — CF_HTML + CF_RTF (TODO)
+
+- [ ] `cf_html.rs` header wrap/unwrap (the awkward MS format with byte offset
+      header: `Version:0.9\r\nStartHTML:00000097\r\n...`).
+- [ ] CF_RTF passthrough (registered format `"Rich Text Format"`).
+- [ ] Round-trip tests for CF_HTML + CF_RTF (pure-rust, fully testable on Linux
+      native).
+- [ ] `WindowsBackend::set/get/available` wires Html + Rtf paths.
+
+#### Phase 3c — CF_HDROP (TODO)
+
+- [ ] `cf_hdrop.rs` DROPFILES struct build/parse + UTF-16 paths + UNC handling
+      (`\\server\share\foo` ↔ `file://server/share/foo`).
+- [ ] `set_uri_list` / `get_uri_list` typed helpers on `Clipboard`.
+- [ ] Round-trip tests (pure-rust, includes UNC + spaces + non-ASCII paths).
+- [ ] `WindowsBackend::set/get/available` wires UriList path.
+
+#### Phase 3d — DIB ↔ PNG (TODO)
+
+- [ ] `dib_png.rs` PNG chunk framing (IHDR/IDAT/IEND) + deflate/inflate via
+      `miniz_oxide` + DIBV5 header build/parse.
+- [ ] Registered "PNG" format passthrough for modern apps + `CF_DIBV5` fallback
+      for legacy.
+- [ ] Round-trip tests (pure-rust, full PNG↔DIB↔PNG round trip).
+- [ ] `WindowsBackend::set/get/available` wires Png path.
 - [ ] CI green on `test-windows`.
 
 ### Phase 4 — macOS backend

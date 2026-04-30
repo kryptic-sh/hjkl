@@ -147,6 +147,43 @@ impl Drop for ClipboardOpen {
     }
 }
 
+/// Holds a `GlobalLock` for the lifetime of this guard.
+///
+/// `GlobalLock` is called on construction; `GlobalUnlock` is called on drop.
+/// This guarantees the lock count is decremented even on early return / panic.
+struct LockedHandle {
+    handle: HGLOBAL,
+    ptr: *mut c_void,
+}
+
+impl LockedHandle {
+    fn new(handle: HGLOBAL) -> Result<Self, ClipboardError> {
+        // SAFETY: `handle` is a caller-supplied HGLOBAL. `GlobalLock` is safe
+        // to call on any valid HGLOBAL; failure is indicated by a NULL return.
+        let ptr = unsafe { GlobalLock(handle) };
+        if ptr.is_null() {
+            return Err(ClipboardError::Io(std::io::Error::other(
+                "GlobalLock failed",
+            )));
+        }
+        Ok(Self { handle, ptr })
+    }
+
+    fn ptr(&self) -> *mut c_void {
+        self.ptr
+    }
+}
+
+impl Drop for LockedHandle {
+    fn drop(&mut self) {
+        // SAFETY: this Drop is only reached when `new()` returned `Ok`, which
+        // means `GlobalLock` succeeded. The lock count must be decremented.
+        unsafe {
+            GlobalUnlock(self.handle);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CF_UNICODETEXT helpers.
 // ---------------------------------------------------------------------------
@@ -183,31 +220,29 @@ fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
         )));
     }
 
-    // SAFETY: `handle` is a valid HGLOBAL returned by `GlobalAlloc` above.
-    // `GlobalLock` returns a pointer to the first byte of the allocation.
-    let ptr = unsafe { GlobalLock(handle) };
-    if ptr.is_null() {
-        // SAFETY: `handle` is still our allocation; GlobalFree releases it.
-        unsafe { GlobalFree(handle) };
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GlobalLock failed",
-        )));
+    // Lock the handle (RAII releases on drop).
+    let locked = match LockedHandle::new(handle) {
+        Ok(l) => l,
+        Err(e) => {
+            // SAFETY: `handle` is still our allocation; GlobalFree releases it.
+            unsafe { GlobalFree(handle) };
+            return Err(e);
+        }
+    };
+
+    // SAFETY: `locked.ptr()` is a valid, writable allocation of `byte_len`
+    // bytes obtained from `GlobalLock`. `utf16.as_ptr()` points to
+    // `utf16.len()` valid `u16` values. The regions do not overlap.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            utf16.as_ptr(),
+            locked.ptr().cast::<u16>(),
+            utf16.len(),
+        );
     }
 
-    // SAFETY: `ptr` is a valid, writable allocation of `byte_len` bytes
-    // obtained from `GlobalLock`. `utf16.as_ptr()` points to `utf16.len()`
-    // valid `u16` values. The regions do not overlap (one is on the system
-    // heap, the other is our stack-allocated Vec).
-    unsafe {
-        std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr.cast::<u16>(), utf16.len());
-    }
-
-    // SAFETY: `handle` is locked. `GlobalUnlock` decrements the lock count.
-    // The return value indicates remaining locks; we ignore it here because the
-    // handle is about to be transferred to the clipboard.
-    unsafe {
-        GlobalUnlock(handle);
-    }
+    // Drop the lock guard before transferring ownership to the clipboard.
+    drop(locked);
 
     // SAFETY: the clipboard is open (`_guard`), `EmptyClipboard` was called,
     // and `handle` holds a valid GMEM_MOVEABLE allocation with CF_UNICODETEXT
@@ -247,29 +282,21 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
         )));
     }
 
-    // SAFETY: `handle` is a valid clipboard-owned HGLOBAL. `GlobalLock` gives
-    // us a temporary pointer; we must call `GlobalUnlock` before the clipboard
-    // is closed.
-    let ptr = unsafe { GlobalLock(handle) };
-    if ptr.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GlobalLock failed",
-        )));
-    }
+    // Lock the handle (RAII releases on drop, even on early-return errors).
+    let locked = LockedHandle::new(handle)?;
 
     // Determine the length in UTF-16 code units. `GlobalSize` returns bytes;
-    // each UTF-16 unit is 2 bytes. We cap at `size / 2` and then scan for the
-    // null terminator to exclude it from the string.
+    // each UTF-16 unit is 2 bytes.
     //
     // SAFETY: `handle` is a valid, locked HGLOBAL. `GlobalSize` is safe to
     // call on any HGLOBAL returned by `GlobalAlloc` or the clipboard.
     let byte_size = unsafe { GlobalSize(handle) };
     let max_units = byte_size / 2;
 
-    // SAFETY: `ptr` is a valid pointer to `byte_size` bytes (≥ `max_units`
-    // UTF-16 code units). We only read up to `max_units` units and stop at the
-    // first null terminator, so we never read past the allocation.
-    let slice = unsafe { std::slice::from_raw_parts(ptr.cast::<u16>(), max_units) };
+    // SAFETY: `locked.ptr()` is a valid pointer to `byte_size` bytes
+    // (≥ `max_units` UTF-16 code units). We only read up to `max_units`
+    // units and stop at the first null terminator.
+    let slice = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u16>(), max_units) };
 
     // Find the null terminator; exclude it from the string.
     let len_without_nul = slice.iter().position(|&c| c == 0).unwrap_or(max_units);
@@ -279,13 +306,7 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
         ClipboardError::Io(std::io::Error::other("clipboard data is not valid UTF-16"))
     })?;
 
-    // SAFETY: `handle` is still locked. `GlobalUnlock` decrements the lock
-    // count. We are done reading so unlocking is correct here.
-    unsafe {
-        GlobalUnlock(handle);
-    }
-
-    // `_guard` drops here → `CloseClipboard()` called.
+    // `locked` drops here → GlobalUnlock. `_guard` drops next → CloseClipboard.
     Ok(text.into_bytes())
 }
 
