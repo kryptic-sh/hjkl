@@ -398,7 +398,9 @@ impl Backend for MacosBackend {
                 let Some(name) = nsstring_to_string(s) else {
                     continue;
                 };
-                if let Some(mime) = uti_to_mime(&name) && !out.contains(&mime) {
+                if let Some(mime) = uti_to_mime(&name)
+                    && !out.contains(&mime)
+                {
                     out.push(mime);
                 }
             }
