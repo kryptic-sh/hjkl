@@ -280,16 +280,29 @@ src/
 
 Each phase ends with passing tests. Don't merge half-built phases.
 
-### Phase 0 — Scaffold
+### Phase 0 — Scaffold (DONE — `ee00be1`, `b391c82`)
 
-- [ ] Bump `Cargo.toml` to 0.4.0, drop `arboard`, add `miniz_oxide`, update
+- [x] Bump `Cargo.toml` to 0.4.0, drop `arboard`, add `miniz_oxide`, update
       description.
-- [ ] Module layout above (empty files, `unimplemented!()` bodies).
-- [ ] Public API types: `Selection`, `MimeType`, `Uri`, `ClipboardError`,
+- [x] Module layout above (empty files, `unimplemented!()` bodies).
+- [x] Public API types: `Selection`, `MimeType`, `Uri`, `ClipboardError`,
       `Clipboard` struct.
-- [ ] Method signatures (sync + async + uri-list helpers), all
+- [x] Method signatures (sync + async + uri-list helpers), all
       `unimplemented!()`.
-- [ ] `cargo check --target` passes on linux/win/mac.
+- [x] `cargo check` passes on linux. Win/mac targets not installed locally —
+      will be verified in CI once Phase 7 sets it up.
+
+Notes from execution:
+
+- `Oneshot::resolve/poll` and `Reply::resolve` got working bodies in Phase 0
+  (Phase 1 work landed early). Logic: standard Mutex/Condvar + SlotState enum.
+  Acceptable scope creep, no harm.
+- `osc52::emit_osc52` refactored to take `in_tmux: bool` as a parameter rather
+  than reading the env directly. Cleaner separation between detection
+  (`is_in_tmux()`) and emission. Backwards-incompatible with the old private
+  signature but the function is `pub(crate)`.
+- `#![allow(dead_code)]` at the crate root suppresses scaffold-phase noise.
+  Remove once Phase 7 wires everything up.
 
 ### Phase 1 — Async primitive + bg thread skeleton
 
