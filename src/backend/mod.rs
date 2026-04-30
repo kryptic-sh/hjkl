@@ -3,15 +3,24 @@
 //! Each platform module implements `Backend`. `probe()` selects the best
 //! available backend at runtime.
 
+#[cfg(target_os = "linux")]
 pub(crate) mod bg_thread;
+#[cfg(target_os = "windows")]
 pub(crate) mod cf_hdrop;
+#[cfg(target_os = "windows")]
 pub(crate) mod cf_html;
+#[cfg(target_os = "windows")]
 pub(crate) mod dib_png;
+#[cfg(target_os = "linux")]
 pub(crate) mod dlopen;
+#[cfg(target_os = "macos")]
 pub(crate) mod macos;
 pub(crate) mod osc52;
+#[cfg(target_os = "linux")]
 pub(crate) mod wayland;
+#[cfg(target_os = "windows")]
 pub(crate) mod windows;
+#[cfg(target_os = "linux")]
 pub(crate) mod x11;
 
 use crate::{ClipboardError, MimeType, Selection};
