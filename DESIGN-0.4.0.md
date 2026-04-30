@@ -589,19 +589,90 @@ Notes from execution:
   pool, autoreleased objects will leak until thread exit. Phase 7 CI on real
   macOS will confirm.
 
-### Phase 5 — Linux X11 backend
+### Phase 5 — Linux X11 backend (split into sub-phases)
 
-- [ ] `dlopen.rs` libxcb loader.
-- [ ] XCB connection setup + `~/.Xauthority` parse + MIT-MAGIC-COOKIE-1.
-- [ ] Atom interning + cache.
-- [ ] Bg thread: invisible window, selection ownership, `SelectionRequest`
-      handler with target negotiation.
-- [ ] INCR transfer: outgoing chunking + incoming reassembly.
-- [ ] Auto-`SAVE_TARGETS` after every successful set.
-- [ ] CLIPBOARD + PRIMARY selections.
-- [ ] Mock CLIPBOARD_MANAGER for tests (~50 LOC, owns the manager selection,
-      responds to SAVE_TARGETS).
+Total est. ~1250 LOC across four interrelated wire-protocol layers. We have a
+real Linux runner (xvfb) so each piece can land + test individually. Split is
+for review-ability, not confidence.
+
+#### Phase 5a — dlopen + connection + auth + atoms (TODO, ~350 LOC)
+
+- [ ] `src/backend/dlopen.rs` real impl: load `libxcb.so.1` via `libc::dlopen` /
+      `dlsym`, store ~18 fn pointers in `OnceLock<XcbFns>`. `LibNotFound` on
+      missing.
+- [ ] Symbol set (finalizes during impl): `xcb_connect_to_fd`, `xcb_disconnect`,
+      `xcb_intern_atom{,_reply}`, `xcb_get_setup`, `xcb_create_window`,
+      `xcb_set_selection_owner`, `xcb_get_selection_owner{,_reply}`,
+      `xcb_convert_selection`, `xcb_get_property{,_reply}`,
+      `xcb_change_property`, `xcb_send_event`, `xcb_flush`,
+      `xcb_wait_for_event`, `xcb_poll_for_event`, `xcb_generate_id`,
+      `xcb_request_check`.
+- [ ] Connection: parse `$DISPLAY` (`host:N.M`), open socket (Unix
+      `/tmp/.X11-unix/X{N}` preferred, TCP fallback).
+- [ ] Xauthority: parse `~/.Xauthority` binary format, find MIT-MAGIC-COOKIE-1
+      entry matching display.
+- [ ] Connection handshake: build/send setup request bytes, parse server
+      response (root window, max-request-length, screen dimensions).
+- [ ] Atom interning: `xcb_intern_atom` per atom, cache per-atom in
+      `OnceLock<u32>`. ~14 atoms (CLIPBOARD, PRIMARY, TARGETS, UTF8_STRING,
+      STRING, `text/plain;charset=utf-8`, text/html, text/rtf, text/uri-list,
+      image/png, INCR, CLIPBOARD_MANAGER, SAVE_TARGETS, MULTIPLE).
+- [ ] Pure-Rust xauth parser + handshake byte-builder unit-testable on Linux
+      without an X server.
+- [ ] No clipboard ops yet — probe-only. Test: connect to xvfb, intern atoms,
+      read screen info.
+
+#### Phase 5b — bg thread + ownership + small-payload write/TARGETS (TODO, ~400 LOC)
+
+- [ ] Singleton bg thread (extend `bg_thread.rs` or sibling `x11_thread.rs` —
+      decide during impl) holds connection + invisible override-redirect window.
+- [ ] `Op::Set { sel, mime, bytes }`: store in
+      `HashMap<(Selection, MimeAtom), Vec<u8>>`, call `xcb_set_selection_owner`.
+- [ ] `Op::Clear { sel }`: drop entries, set owner = NONE.
+- [ ] Event loop:
+  - `SELECTION_REQUEST` for `TARGETS` → reply with atom list of owned mimes.
+  - `SELECTION_REQUEST` for specific target → write payload to requestor's
+    property, send `SELECTION_NOTIFY`.
+  - `SELECTION_CLEAR` → drop owned data for that selection.
+- [ ] No INCR yet — payloads exceeding `max_request_length` return
+      `PayloadTooLarge` (5d will lift this).
+- [ ] CLIPBOARD + PRIMARY selections wired.
+- [ ] Test: round-trip text via xvfb on both selections.
+
+#### Phase 5c — read path + INCR receive + available (TODO, ~250 LOC)
+
+- [ ] `Op::Get { sel, mime }`: `xcb_convert_selection` to private property →
+      wait for `SELECTION_NOTIFY` → read property → return bytes.
+- [ ] INCR receive: if property type is `INCR`, subscribe to `PROPERTY_NOTIFY`
+      events on the requestor window, delete property to ack, accumulate chunks
+      until zero-length property arrives.
+- [ ] `Op::Available { sel }`: convert `TARGETS`, parse atom array, map atoms
+      back to `MimeType` (drop unknown).
+- [ ] Tests: read text written by another xvfb client; read large payload via
+      INCR.
+
+#### Phase 5d — INCR send + SAVE_TARGETS + mock manager + ship (TODO, ~250 LOC)
+
+- [ ] INCR send: when reply exceeds `max_request_length`, write `INCR` atom +
+      total size to property, then chunk via `PROPERTY_NOTIFY` ack loop.
+- [ ] Auto-`SAVE_TARGETS` after every successful `set()`. Check
+      `xcb_get_selection_owner(CLIPBOARD_MANAGER)` first; skip if no owner
+      (otherwise we hang on a `SELECTION_NOTIFY` that never comes).
+- [ ] Mock `CLIPBOARD_MANAGER` (~50 LOC test harness): owns the manager
+      selection, accepts `SAVE_TARGETS` requests, asserts received targets.
+- [ ] Tests: small + large INCR round-trip, persistence with mock manager,
+      persistence absence (no manager → graceful no-op).
 - [ ] CI green on `test-linux-x11`.
+
+##### Notes / risk
+
+- Worst risk is bg-thread + event-loop architecture in 5b. Once that shape's
+  right, 5c/5d are mechanical extensions.
+- Auto-`SAVE_TARGETS` in 5d depends on a manager existing —
+  `xcb_get_selection_owner` check before firing, otherwise the
+  `SELECTION_NOTIFY` wait hangs.
+- Test infra: `xvfb-run` (Arch: `xorg-server-xvfb`). Per-test or session-scoped
+  decided during 5b.
 
 ### Phase 6 — Linux Wayland backend
 
