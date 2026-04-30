@@ -1,9 +1,9 @@
 [package]
 name = "hjkl-clipboard"
-description = "Unified clipboard sink for the hjkl editor stack (arboard + OSC 52 fallback)"
+description = "Cross-platform clipboard library with rich types, async support, and OSC 52 fallback for SSH"
 keywords = ["clipboard", "osc52", "ssh", "editor", "tui"]
 categories = ["text-editors", "command-line-utilities"]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-clipboard"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-arboard = "3"
+miniz_oxide = "0.8"
 
 [package.metadata.docs.rs]
 all-features = true
