@@ -88,7 +88,12 @@ jobs:
       - name: Install deps
         run: |
           set -euo pipefail
-          pacman -Sy --noconfirm --needed rust cargo sway git
+          pacman -Sy --noconfirm --needed rust cargo sway git libcap
+          # Arch's /usr/bin/sway ships with file capabilities that the GHA
+          # runner can't grant inside the container, so it refuses to exec
+          # with "Operation not permitted". Strip them — headless mode
+          # doesn't need any of them.
+          setcap -r /usr/bin/sway || true
           sway --version
           rustc --version
       - uses: actions/checkout@v6
