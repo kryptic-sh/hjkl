@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-03
+
+### Fixed
+
+- **macOS/Windows backends now selected by `Clipboard::new()`** — 0.4.0
+  regressed to OSC 52 on every non-Linux platform. `Clipboard::new()` now
+  returns the `MacosBackend` on macOS and `WindowsBackend` on Windows.
+- **Autorelease pool on macOS** — all `MacosBackend` methods now wrap their body
+  in `objc_autoreleasePoolPush` / `objc_autoreleasePoolPop` via a `Drop`-based
+  guard. Without an explicit pool on non-main threads, autoreleased
+  `NSData`/`NSString`/`NSArray` objects would accumulate indefinitely.
+- **macOS/Windows async no longer panics** — `set_async`, `get_async`,
+  `clear_async`, `available_async` on macOS and Windows are now wired to the
+  native backends (sync-wrapped in `std::future::ready`). The 0.4.0 arms
+  previously called `unimplemented!()`.
+- **`Clipboard: Clone`** — the 0.4.0 changelog advertised `Clipboard` as
+  clonable but `#[derive(Clone)]` was missing. Added.
+- **README accuracy** — removed the incorrect claim that macOS/Windows async
+  panics with `unimplemented!()`.
+
+### Removed
+
+- **`ClipboardBackend::Unimplemented`** dead scaffold variant (and its eight
+  `unimplemented!(...)` match arms) — no longer needed now that all supported
+  platforms have wired backends.
+
 ## [0.4.0] - 2026-05-03
 
 ### Breaking
@@ -28,8 +54,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `e: Arc<io::Error>`; dereference with `&*e` to get `&io::Error`.
 - **Async API changed signature** — `set_async` / `get_async` / `clear_async` /
   `available_async` are now `pub async fn` returning `impl Future` directly.
-  macOS and Windows async variants currently `unimplemented!()` — use the sync
-  API on those platforms.
+  macOS and Windows async variants were `unimplemented!()` in 0.4.0 — fixed in
+  0.4.1 to use the native backends (sync-wrapped).
 
 ### Added
 
@@ -63,8 +89,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `Clipboard` is now `Send + Sync`. Handles can be cloned and shared across
-  threads.
+- `Clipboard` is now `Send + Sync`. (The advertised `Clone` impl was missing in
+  0.4.0 — fixed in 0.4.1.)
 - Backend probe order on Linux: Wayland → X11 → OSC 52. First successful probe
   wins; fallthrough is transparent to the caller.
 - `MimeType` and `Selection` are `#[non_exhaustive]` on `MimeType` — adding

@@ -172,9 +172,11 @@ limit). Larger payloads return `ClipboardError::PayloadTooLarge`.
 ### macOS / Windows async
 
 `set_async` / `get_async` / `clear_async` / `available_async` on macOS and
-Windows currently panic with `unimplemented!()`. The sync API works fully on
-both platforms. Async wrappers via a spawn-and-block approach are planned for
-v0.5.
+Windows use the native backend (NSPasteboard / Win32). Because both backends are
+synchronous, the async methods wrap the call in `std::future::ready` — they
+complete without spawning a thread and return immediately without yielding to
+the executor. This is correct and efficient for the call frequency typical of
+clipboard use.
 
 ## Build prerequisites
 
