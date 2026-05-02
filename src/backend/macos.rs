@@ -417,10 +417,11 @@ impl Backend for MacosBackend {
 
     fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
         let _pool = pool();
-        // Primary selection does not exist on macOS; return empty consistent
-        // with the Windows backend convention.
+        // macOS has no primary selection concept — match set/get/clear and
+        // surface `UnsupportedMime` so callers get a clear signal rather than
+        // an empty list that misleadingly implies "primary works but is empty".
         if sel != Selection::Clipboard {
-            return Ok(vec![]);
+            return Err(ClipboardError::UnsupportedMime);
         }
         // SAFETY: `types` returns an autoreleased NSArray<NSString*> (or nil).
         // We iterate via `count` + `objectAtIndex:`, converting each element

@@ -724,10 +724,12 @@ impl Backend for WindowsBackend {
     }
 
     fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        // Windows has no concept of a primary selection — return empty rather
-        // than an error, consistent with the OSC 52 backend convention.
+        // Windows has no concept of a primary selection — match set/get/clear
+        // and surface `UnsupportedMime` so callers get a clear signal rather
+        // than an empty list that misleadingly implies "primary works but is
+        // empty".
         if sel != Selection::Clipboard {
-            return Ok(vec![]);
+            return Err(ClipboardError::UnsupportedMime);
         }
         let _guard = ClipboardOpen::new()?;
         let mut out = Vec::new();
