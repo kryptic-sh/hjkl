@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-03
+
+### Added
+
+- **`Clipboard::backend_name()`** — returns a stable `&'static str` identifier
+  for the active backend (`"wayland"`, `"x11"`, `"macos"`, `"windows"`,
+  `"osc52"`). Useful for diagnostics and detecting silent OSC 52 fallback when
+  no display server is reachable.
+
+### Changed
+
+- **`ClipboardError` is now `#[non_exhaustive]`** — downstream code that matches
+  exhaustively on `ClipboardError` will need a wildcard (`_ => …`) arm. This is
+  pre-1.0 stability hardening so future variants can be added without a breaking
+  change.
+
+### Fixed
+
+- **OSC 52 size-cap detection no longer relies on `io::ErrorKind::Other`
+  heuristic** — `Osc52Backend::set_inner` now checks the base64-encoded length
+  against `OSC52_MAX` before calling `write_osc52`, returning
+  `ClipboardError::PayloadTooLarge` directly. `write_osc52` itself no longer
+  performs the check and will only fail with genuine I/O errors.
+
 ## [0.4.1] - 2026-05-03
 
 ### Fixed
