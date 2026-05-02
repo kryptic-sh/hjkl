@@ -11,13 +11,6 @@ use crate::base64::base64_encode;
 /// accepted safe cap and matches most terminal implementations.
 pub(crate) const OSC52_MAX: usize = 74_000;
 
-/// Returns `true` when the process is running inside an SSH session.
-/// Used by `Clipboard::new()` for future OSC 52 auto-detect (v0.5).
-#[allow(dead_code)]
-pub(crate) fn is_over_ssh() -> bool {
-    std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
-}
-
 /// Returns `true` when the process is running inside tmux.
 pub(crate) fn is_in_tmux() -> bool {
     std::env::var_os("TMUX").is_some()
