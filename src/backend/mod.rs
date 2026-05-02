@@ -3,11 +3,6 @@
 //! Each platform module implements `Backend`. `probe()` selects the best
 //! available backend at runtime.
 
-// bg_thread.rs is the Phase 1 echo skeleton used only in its own unit tests.
-// Production code uses x11_thread / wayland_thread directly.
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
-pub(crate) mod bg_thread;
 #[cfg(target_os = "linux")]
 pub(crate) mod dlopen;
 #[cfg(target_os = "macos")]
