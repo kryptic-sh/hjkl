@@ -50,7 +50,12 @@ impl<T> Oneshot<T> {
                 };
                 std::task::Poll::Ready(value)
             }
-            SlotState::Taken => panic!("oneshot polled after completion"),
+            SlotState::Taken => {
+                if cfg!(debug_assertions) {
+                    panic!("oneshot polled after completion");
+                }
+                std::task::Poll::Pending
+            }
             _ => {
                 *guard = SlotState::Waiting(cx.waker().clone());
                 std::task::Poll::Pending
