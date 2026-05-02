@@ -241,8 +241,15 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-    // msg_controllen is size_t (usize) on Linux, not socklen_t.
-    msg.msg_controllen = cmsg_space;
+    // msg_controllen is size_t (usize) on glibc but socklen_t (u32) on musl.
+    // try_into() infers the correct type per target; suppress the useless-
+    // conversion lint that fires on glibc where both sides are usize.
+    #[allow(clippy::useless_conversion)]
+    {
+        msg.msg_controllen = cmsg_space
+            .try_into()
+            .expect("cmsg_space fits in msg_controllen");
+    }
 
     // Fill in the cmsghdr.
     // SAFETY: msg_control points to a buffer of size msg_controllen;
@@ -309,8 +316,15 @@ fn recv_into(
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
-    // msg_controllen is size_t (usize) on Linux, not socklen_t.
-    msg.msg_controllen = cmsg_space;
+    // msg_controllen is size_t (usize) on glibc but socklen_t (u32) on musl.
+    // try_into() infers the correct type per target; suppress the useless-
+    // conversion lint that fires on glibc where both sides are usize.
+    #[allow(clippy::useless_conversion)]
+    {
+        msg.msg_controllen = cmsg_space
+            .try_into()
+            .expect("cmsg_space fits in msg_controllen");
+    }
 
     let flags = if blocking { 0 } else { libc::MSG_DONTWAIT };
 
