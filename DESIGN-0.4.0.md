@@ -870,20 +870,95 @@ Notes from execution:
 - Test infra: `xvfb-run` (Arch: `xorg-server-xvfb`). Per-test or session-scoped
   decided during 5b.
 
-### Phase 6 — Linux Wayland backend
+### Phase 6 — Linux Wayland backend (split into sub-phases)
 
-- [ ] `dlopen.rs` libwayland-client loader.
-- [ ] Wire-protocol message marshalling (8 messages: `wl_registry_bind`,
-      `wl_seat_get_pointer` no, `data_control_manager.create_data_source`,
-      `data_control_manager.get_data_device`, `data_control_source.offer`,
-      `data_control_source.send` event, `data_control_device.set_selection`,
-      `data_control_offer.receive`, etc.) — finalize during impl.
-- [ ] Bind-priority probe: `ext_data_control_v1` → `wlr_data_control_v1` → none
-      (mark `FocusRequired`).
-- [ ] CLIPBOARD + PRIMARY selections (`zwp_primary_selection_v1` + data-control
-      variant).
-- [ ] Bg thread: connection alive, fd passing for send events.
-- [ ] CI green on `test-linux-wl` (sway-headless).
+Total est. ~1300 LOC across 3 sub-phases. **Architecture decision**: hand-roll
+the wire protocol over a raw Unix socket — NO libwayland-client dlopen. We only
+use ~10 message types; libwayland's proxy machinery is more indirection than the
+saving justifies.
+
+#### Phase 6a — Wire protocol + connection + registry probe (DONE — `99feb3c`)
+
+- [x] `src/backend/wayland_wire.rs`: pure-Rust wire primitives (encode_u32,
+      encode_string with len-with-NUL + 4-byte pad, encode_message header,
+      parse_message_header, parse_string with pad consumption, parse_u32). Pad
+      rule: `len.div_ceil(4) * 4`.
+- [x] `src/backend/wayland_socket.rs`: `WaylandSocket` over libc `sendmsg`/
+      `recvmsg` with SCM_RIGHTS fd-passing via `CMSG_SPACE` / `CMSG_FIRSTHDR` /
+      `CMSG_DATA` / `CMSG_LEN` / `CMSG_NXTHDR`. Internal
+      `rx_buf: VecDeque<u8>` + `rx_fds: VecDeque<c_int>`. Drop closes the fd.
+      `raw_fd()` exposed for `poll(2)` integration in 6b. `SOCK_CLOEXEC` set on
+      creation.
+- [x] `src/backend/wayland.rs`: `WaylandConnection::open()` resolves
+      `$WAYLAND_DISPLAY` (absolute path or relative-to-`$XDG_RUNTIME_DIR`,
+      defaulting to `wayland-0`), connects, sends `wl_display.get_registry`
+      (opcode=1) + `wl_display.sync` (opcode=0), drains `wl_registry.global`
+      events until `wl_callback.done` arrives. Returns
+      `Vec<Global { name, interface, version }>`. `find_global(interface)`
+      lookup helper.
+- [x] Connection failure → `ClipboardError::NoDisplay` (semantically "no
+      compositor available"), socket I/O failures → `Io(_)`.
+- [x] Pure-Rust wire tests: 7 wire-encoding round-trip + byte-by-byte layout +
+      padding tests. Live probe test (`probe_globals_if_compositor_available`)
+      skips gracefully when `$WAYLAND_DISPLAY` is unset.
+- [x] 108 → 116 tests. All cross-targets clippy `-D warnings` clean. Module
+      organization: flat (`wayland.rs` + `wayland_wire.rs` +
+      `wayland_socket.rs`), matching X11 layout.
+
+Notes from execution:
+
+- **Major simplification vs spec**: no libwayland-client dlopen. Saves ~30
+  symbols + proxy-object indirection. Wire format is genuinely simple.
+- `msg_controllen` is `size_t` (`usize`) on Linux glibc, NOT `socklen_t` (`u32`)
+  — gotcha discovered during impl.
+- Size + opcode packed as `(size << 16) | opcode` u32 LE. Test 3 verifies
+  byte-by-byte to lock the bit-shift direction.
+- `WaylandConnection::open()` currently uses `recv(blocking=true)` per loop
+  iteration. 6b should switch to `poll(2)` on `raw_fd()` + the mpsc inbox so the
+  bg thread can interleave clipboard ops with compositor events.
+- `send_with_fds` assumes one-shot send (no retry loop). Fine for small bind
+  messages; 6c's `data_control_source.send` may need writev-style retry if
+  oversized.
+- `WaylandConnection` is not yet `Send`. 6b adds `unsafe impl Send` before
+  handing to bg thread.
+- **fd lifecycle**: `next_fd()` returns received fds; caller is responsible for
+  closing them (via `libc::close`). 6b/6c must be careful not to leak —
+  data_source.send and offer.receive both hand us write/read fds we own.
+
+#### Phase 6b — bg thread + data-control bind + set/clear (CLIPBOARD only) (TODO, ~400 LOC)
+
+- [ ] Singleton bg thread mirroring `x11_thread.rs` shape. Event loop: `poll(2)`
+      on socket fd + `recv_timeout(50ms)` on inbox.
+- [ ] Bind `data_control_manager` via `wl_registry.bind` (priority: ext > wlr).
+- [ ] `manager.get_data_device(seat)` → `data_control_device`.
+- [ ] **Set**: `create_data_source` → `source.offer(mime)` per mime type →
+      `device.set_selection(source)`.
+- [ ] **Clear**: `device.set_selection(null)`.
+- [ ] Service `data_source.send(mime, fd)` events: lookup payload by mime, write
+      to fd, close fd.
+- [ ] Service `data_source.cancelled` events: drop source.
+- [ ] Install `sway` (Arch) for headless tests (`WLR_BACKENDS=headless`). Spawn
+      one sway per test session, leak for process lifetime (mirror xvfb
+      pattern).
+- [ ] `wl-clipboard` install (Arch: `wl-clipboard` — already present) for
+      external `wl-copy`/`wl-paste` round-trip tests.
+
+#### Phase 6c — read path + available + PRIMARY + GNOME fallback (TODO, ~500 LOC)
+
+- [ ] Track `data_control_device.selection(offer)` events (offer = new_id of
+      incoming `data_control_offer`).
+- [ ] Track `data_control_offer.offer(mime)` events to accumulate available mime
+      list per offer.
+- [ ] **Get**: `pipe2(O_CLOEXEC)` → `offer.receive(mime, write_fd)` → read from
+      read_fd until EOF → close.
+- [ ] **Available**: return cached mime list from current offer.
+- [ ] **PRIMARY**: parallel impl on `zwp_primary_selection_device_manager_v1`
+      (smaller protocol, same shape).
+- [ ] **GNOME fallback**: if neither ext nor wlr data-control bound, mark
+      backend as `WaylandFocusRequired`. `set` falls through to OSC 52 (when
+      wired in Phase 7); `get` returns `FocusRequired` error.
+- [ ] Tests: round-trip via `wl-copy` (CLIPBOARD + PRIMARY), available
+      enumeration, FocusRequired path under no-data-control sway config.
 
 ### Phase 7 — Integration + ship
 
