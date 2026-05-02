@@ -153,10 +153,16 @@ mod tests {
         assert_eq!(os.poll(&mut cx3), Poll::Ready(7u32));
     }
 
-    /// Panic on poll-after-completion.
+    /// Panic on poll-after-completion (debug builds only).
+    ///
+    /// `Oneshot::poll` panics on the `Taken` state when `debug_assertions` is
+    /// enabled and silently returns `Pending` in release builds. Each variant
+    /// is gated to the matching build profile so `cargo test` and
+    /// `cargo test --release` both pass.
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "oneshot polled after completion")]
-    fn panic_on_poll_after_taken() {
+    fn poll_after_taken_panics_in_debug() {
         let os = Oneshot::new();
         os.resolve(1u32);
 
@@ -168,6 +174,24 @@ mod tests {
 
         // Poll again — must panic.
         let _ = os.poll(&mut cx);
+    }
+
+    /// In release builds the same double-poll must return `Pending` instead of
+    /// panicking. The state transition is identical; only the assertion changes.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn poll_after_taken_returns_pending_in_release() {
+        let os = Oneshot::new();
+        os.resolve(1u32);
+
+        let (_, waker) = noop_cx();
+        let mut cx = Context::from_waker(&waker);
+
+        // Consume the value — drives state to `Taken`.
+        assert_eq!(os.poll(&mut cx), Poll::Ready(1u32));
+
+        // Second poll on `Taken` must yield `Pending`, not panic.
+        assert_eq!(os.poll(&mut cx), Poll::Pending);
     }
 
     /// Concurrent resolve from another thread + poll on main thread.
