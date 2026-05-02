@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-03
+
+### CI
+
+- **musl coverage upgraded from compile-check to native test execution** on both
+  `x86_64-unknown-linux-musl` (`ubuntu-latest` + `musl-tools`) and
+  `aarch64-unknown-linux-musl` (`ubuntu-24.04-arm` + `musl-tools`). The full
+  test suite (130 tests) now runs on musl, catching runtime-only regressions in
+  addition to type/cfg divergence.
+
 ## [0.4.5] - 2026-05-03
 
 ### Fixed
