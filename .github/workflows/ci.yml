@@ -54,7 +54,6 @@ jobs:
   musl-test:
     name: test ${{ matrix.target }}
     runs-on: ${{ matrix.runs-on }}
-    container: rust:stable-alpine
     strategy:
       fail-fast: false
       matrix:
@@ -65,10 +64,13 @@ jobs:
             runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
-      - run: apk add --no-cache bash tar musl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
-      - run: cargo test --doc --all-features
+      - run: cargo test --target ${{ matrix.target }} --all-features
+      - run: cargo test --doc --target ${{ matrix.target }} --all-features
 
   deny:
     name: cargo-deny
