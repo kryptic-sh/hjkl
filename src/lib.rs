@@ -134,9 +134,11 @@ impl Clipboard {
     #[allow(unused_variables)]
     pub fn get(&self, sel: Selection, mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
         match &self.backend {
-            // Wayland read path comes in 6c.
             #[cfg(target_os = "linux")]
-            ClipboardBackend::Wayland => Err(ClipboardError::UnsupportedMime),
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                backend::wayland_thread::get_clipboard(thread, sel, &mime)
+            }
             #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;
@@ -168,9 +170,11 @@ impl Clipboard {
     #[allow(unused_variables)]
     pub fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
         match &self.backend {
-            // Wayland available path comes in 6c.
             #[cfg(target_os = "linux")]
-            ClipboardBackend::Wayland => Ok(vec![]),
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                backend::wayland_thread::available_clipboard(thread, sel)
+            }
             #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;
