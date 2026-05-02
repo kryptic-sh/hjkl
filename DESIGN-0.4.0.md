@@ -1053,20 +1053,80 @@ Notes from execution:
   state issue: had to take care to drop any prior current_offer between tests.
   `mock.reset()` extended to clear offer state too.
 
-### Phase 7 — Integration + ship
+### Phase 7 — Integration + ship (split into sub-phases)
 
-- [ ] `cargo deny check` clean.
-- [ ] `cargo clippy -- -D warnings` clean.
-- [ ] `cargo fmt --check` clean.
-- [ ] Manual matrix run: sway, hyprland, KDE 6.2+, GNOME, Xorg+klipper,
-      Xorg+nothing, macOS, Win 10, Win 11.
-- [ ] CHANGELOG entry for 0.4.0 (breaking: removed `set_text`/`get_text`, added
-      everything else).
-- [ ] README rewrite — new API examples, platform support matrix, GNOME caveat,
-      manual SSH paste limitation.
-- [ ] BCTP cut: bump 0.3.1 → 0.4.0 in own repo, tag, push.
-- [ ] hjkl umbrella update: bump `hjkl-clipboard = "0.4"` in
-      `apps/hjkl/Cargo.toml`, update host adapter.
+#### Phase 7a — Backend selector + OSC 52 wiring + Custom mime (DONE — `21e3436`)
+
+- [x] **Error-type fix**: `ClipboardError: Clone` via `Io(Arc<io::Error>)`.
+      Added `io()` and `io_other(&str)` convenience constructors. ~60 call sites
+      updated.
+- [x] Both Linux singletons retyped to
+      `OnceLock<Result<Thread,     ClipboardError>>` — typed errors preserved
+      across all calls (not just the first).
+      `LibNotFound`/`NoDisplay`/`FocusRequired` now correctly trigger
+      fallthrough in `Clipboard::new()`.
+- [x] `ClipboardBackend::Osc52` variant added. Probe order: Wayland → X11 →
+      OSC52 (always succeeds — OSC 52 needs only stdout).
+- [x] `Clipboard::set/clear` route to `Osc52Backend::set/clear` for the OSC52
+      variant. `get`/`available` return `UnsupportedMime`/`Ok(vec![])` (OSC 52
+      is write-only).
+- [x] **Custom mime for X11**: `X11Op::Set/Get` extended with
+      `(mime_atom: u32, mime_name: Option<String>)`. `mime_atom=0` signals lazy
+      intern of `mime_name` via `xcb_intern_atom` on the bg thread, cached in
+      `state.custom_atoms: HashMap<String, u32>`. Wayland already worked (string
+      mime types).
+- [x] Tests: `clone_clipboard_error_smoke`, `io_arc_clone_shares_message`,
+      `x11_custom_mime_round_trip`, `x11_custom_mime_get_round_trip`, plus Osc52
+      fallthrough verification.
+- [x] 126 → 132 tests. All cross-targets clippy `-D warnings` clean.
+
+Notes from execution:
+
+- **Public API change**: matching on `ClipboardError::Io(e)` now binds
+  `e: Arc<io::Error>`. Callers needing `&io::Error` use `&*e`. Documented in
+  doc-comment on the variant; CHANGELOG entry in 7c.
+- `available()` still drops unknown atoms (Custom atoms set by us aren't
+  reverse-mapped). Phase 8 / v0.5 can add `xcb_get_atom_name` lookup.
+- Wayland `Custom(s)` payload is stored but the offer's mime list includes it
+  directly (string-typed protocol). No reverse-mapping issue there.
+- Fallthrough no-data-control test still deferred (singleton lock-in prevents
+  per-test mock swaps); Phase 7c manual matrix covers it.
+
+#### Phase 7b — Async API + dead-code cleanup + leak fixes (TODO, ~200 LOC)
+
+- [ ] Implement `set_async`/`get_async`/`clear_async`/`available_async`:
+  - X11: route via existing `X11Thread::send_async` (Phase 1 oneshot infra).
+  - Wayland: add `WaylandThread::send_async` mirror.
+  - macOS/Windows: spawn-thread-and-block via Oneshot (no native async clipboard
+    APIs).
+  - OSC52: `std::future::ready(set(...))` (stdout write is fast).
+- [ ] Strip crate-root `#![allow(dead_code)]`, fix any genuine dead code (unused
+      enum variants like `DrainGoal::PropertyDelete`, dead helpers).
+- [ ] Add `IncrSend` periodic prune in x11_thread `run_loop` to fix the slow
+      memory leak from 5d (expired transfers from dead requestors).
+- [ ] Promote hardcoded timeouts (5s SELECTION_NOTIFY, 10s INCR chunk, 30s INCR
+      total, 5s SAVE_TARGETS handshake) to named `const`s at the top of
+      `x11_thread.rs`. Don't expose as config — defer to v0.5.
+
+#### Phase 7c — README + CHANGELOG + manual matrix doc + BCTP (TODO, doc-only)
+
+- [ ] README rewrite: new API examples, platform support matrix, GNOME OSC 52
+      caveat, manual SSH paste limitation, MSRV (1.95), feature flags (none),
+      build prereqs (libxcb on Linux).
+- [ ] `CHANGELOG.md` `[0.4.0]` entry. Breaking: removed direct text helpers,
+      added `Selection`, `MimeType`, `Uri`, async API, OSC 52 fallback,
+      `Io(Arc<io::Error>)` change. Migration notes from 0.3.x.
+- [ ] Manual matrix checklist in `CONTRIBUTING.md` (defer the actual run;
+      document what to test on each compositor).
+- [ ] `cargo deny check` clean (CI runs it green; verify locally).
+- [ ] Final sweep: `cargo fmt`, `cargo clippy --all-targets -- -D warnings` on
+      all 4 targets, `cargo test`, doc-tests.
+- [ ] BCTP cut: bump `Cargo.toml` to 0.4.0 (already there if no patch bump
+      happened). Regenerate `Cargo.lock`. Commit `chore: bump version`. Tag
+      `v0.4.0`. Push commit + tag.
+- [ ] After publish: update hjkl umbrella `apps/hjkl/Cargo.toml` to
+      `hjkl-clipboard = "0.4"`. **Separate repo / commit — not in this
+      submodule.**
 
 ## Open items
 
