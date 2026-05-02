@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-03
+
+### Fixed
+
+- **Cross-target compile failure on musl targets.** `msg.msg_controllen` in
+  `wayland_socket.rs` has type `size_t` (`usize`) on glibc but `socklen_t`
+  (`u32`) on musl. Both send paths now assign via `try_into()` which infers the
+  correct field type per target, eliminating `E0308` on
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`.
+
+### CI
+
+- Added `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` compile
+  checks (separate `musl` job, `cargo check --all-targets`) so cross-target type
+  divergence fails at PR time rather than in the umbrella release matrix.
+
 ## [0.4.4] - 2026-05-03
 
 ### Fixed
