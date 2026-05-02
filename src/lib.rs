@@ -563,26 +563,55 @@ mod tests {
         }
     }
 
-    /// Construct a Clipboard with OSC 52 by bypassing the display probe,
-    /// then verify set/clear succeed and get returns UnsupportedMime.
+    /// Verify the exact OSC 52 escape sequence for a known payload.
+    ///
+    /// Uses `Osc52Backend::set_inner` with a `Vec<u8>` sink — hermetic,
+    /// no stdout, no TTY dependency.
+    ///
+    /// Wire format (non-tmux): `\x1b]52;c;<base64>\x07`
+    /// Wire format (tmux DCS): `\x1bPtmux;\x1b\x1b]52;c;<base64>\x07\x1b\`
+    /// "hello" always encodes to base64 body `aGVsbG8=`.
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn osc52_backend_set_and_get() {
-        // Force OSC 52 backend directly — bypass Wayland/X11 probe.
+        use backend::osc52::Osc52Backend;
+        use osc52::is_in_tmux;
+
+        let b = Osc52Backend::new();
+        let mut buf = Vec::new();
+
+        b.set_inner(Selection::Clipboard, MimeType::Text, b"hello", &mut buf)
+            .expect("set_inner failed");
+
+        let seq = std::str::from_utf8(&buf).expect("output not UTF-8");
+
+        // Adapt expected framing to the runtime environment.
+        let body = if is_in_tmux() {
+            assert!(
+                seq.starts_with("\x1bPtmux;\x1b\x1b]52;c;"),
+                "wrong DCS prefix: {seq:?}"
+            );
+            assert!(seq.ends_with("\x07\x1b\\"), "wrong DCS suffix: {seq:?}");
+            seq.strip_prefix("\x1bPtmux;\x1b\x1b]52;c;")
+                .unwrap()
+                .strip_suffix("\x07\x1b\\")
+                .unwrap()
+        } else {
+            assert!(seq.starts_with("\x1b]52;c;"), "wrong OSC prefix: {seq:?}");
+            assert!(seq.ends_with('\x07'), "wrong BEL suffix: {seq:?}");
+            seq.strip_prefix("\x1b]52;c;")
+                .unwrap()
+                .strip_suffix('\x07')
+                .unwrap()
+        };
+
+        assert_eq!(body, "aGVsbG8=", "base64 mismatch for 'hello'");
+
+        // get is always UnsupportedMime for OSC 52.
         let cb = Clipboard {
             backend: ClipboardBackend::Osc52,
         };
         assert!(cb.is_osc52(), "expected Osc52 backend");
-
-        // set text should succeed (writes to stdout — captured nowhere in test
-        // but must not panic or error).
-        // We can't easily capture stdout here, so just assert Ok.
-        // This matches the osc52 backend tests which use set_inner with a buf.
-        let result = cb.set(Selection::Clipboard, MimeType::Text, b"hi");
-        // May succeed or error depending on tty availability; just no panic.
-        let _ = result;
-
-        // get is always UnsupportedMime for OSC 52.
         let err = cb.get(Selection::Clipboard, MimeType::Text).unwrap_err();
         assert!(
             matches!(err, ClipboardError::UnsupportedMime),
