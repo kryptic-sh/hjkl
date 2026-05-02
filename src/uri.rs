@@ -10,7 +10,7 @@ use crate::ClipboardError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Uri {
     /// A local file path. Must be absolute — relative paths are rejected with
-    /// [`ClipboardError::InvalidUri`][crate::ClipboardError::InvalidUri].
+    /// [`ClipboardError::InvalidUri`].
     File(PathBuf),
     /// Any non-file URI (e.g. `https://example.com`). Passed through verbatim.
     Other(String),
