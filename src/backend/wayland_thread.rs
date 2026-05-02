@@ -416,20 +416,13 @@ fn init_bind(
     *next_id += 1;
     let device_id = *next_id;
     *next_id += 1;
-    let sync_id = *next_id;
-    *next_id += 1;
 
-    // Bind wl_seat.
-    send_registry_bind(
-        socket,
-        registry_id,
-        seat_name,
-        WL_SEAT,
-        seat_version.min(7),
-        seat_id,
-    )?;
+    // Step 1: bind wl_seat, sync, drain — isolates seat-bind failures.
+    let seat_ver = seat_version.min(7);
+    send_registry_bind(socket, registry_id, seat_name, WL_SEAT, seat_ver, seat_id)?;
+    sync_or_die(socket, next_id, "after wl_seat bind")?;
 
-    // Bind ext_data_control_manager_v1.
+    // Step 2: bind ext_data_control_manager_v1, sync, drain.
     send_registry_bind(
         socket,
         registry_id,
@@ -438,8 +431,9 @@ fn init_bind(
         1,
         manager_id,
     )?;
+    sync_or_die(socket, next_id, "after ext_data_control_manager_v1 bind")?;
 
-    // manager.get_data_device(new_id, seat)
+    // Step 3: manager.get_data_device(new_id, seat), sync, drain.
     {
         let mut args = Vec::new();
         encode_u32(&mut args, device_id);
@@ -447,19 +441,52 @@ fn init_bind(
         let msg = encode_message(manager_id, EXT_MANAGER_GET_DATA_DEVICE, &args);
         socket.send(&msg, &[])?;
     }
-
-    // wl_display.sync to confirm the above requests were processed.
-    {
-        let mut args = Vec::new();
-        encode_u32(&mut args, sync_id);
-        let msg = encode_message(WL_DISPLAY_ID, WL_DISPLAY_SYNC, &args);
-        socket.send(&msg, &[])?;
-    }
-
-    // Drain until we see the sync callback.done.
-    drain_until_sync(socket, sync_id)?;
+    let sync_id = sync_or_die(socket, next_id, "after manager.get_data_device")?;
 
     Ok((seat_id, manager_id, device_id, sync_id))
+}
+
+/// Allocate a fresh sync id, send `wl_display.sync(sync_id)`, drain until the
+/// callback fires. Returns the sync id (last one used). `phase` is appended to
+/// any wl_display.error message so the caller can identify which step failed.
+fn sync_or_die(
+    socket: &mut WaylandSocket,
+    next_id: &mut u32,
+    phase: &str,
+) -> Result<u32, ClipboardError> {
+    let sync_id = *next_id;
+    *next_id += 1;
+    let mut args = Vec::new();
+    encode_u32(&mut args, sync_id);
+    let msg = encode_message(WL_DISPLAY_ID, WL_DISPLAY_SYNC, &args);
+    socket.send(&msg, &[])?;
+    drain_until_sync_phased(socket, sync_id, phase)?;
+    Ok(sync_id)
+}
+
+/// Like `drain_until_sync` but appends `phase` to any wl_display.error message.
+fn drain_until_sync_phased(
+    socket: &mut WaylandSocket,
+    sync_id: u32,
+    phase: &str,
+) -> Result<(), ClipboardError> {
+    for _ in 0..4096 {
+        socket.recv(true)?;
+        while let Some((hdr, args)) = socket.next_message() {
+            if hdr.object_id == sync_id && hdr.opcode == WL_CALLBACK_DONE {
+                return Ok(());
+            }
+            if hdr.object_id == WL_DISPLAY_ID && hdr.opcode == WL_DISPLAY_ERROR {
+                let msg = parse_display_error(&args);
+                return Err(ClipboardError::io_other(&format!(
+                    "wl_display.error {phase}: {msg}"
+                )));
+            }
+        }
+    }
+    Err(ClipboardError::io_other(&format!(
+        "timed out waiting for bind sync callback ({phase})"
+    )))
 }
 
 /// Send wl_registry.bind for a global (typeless new_id form).
@@ -481,27 +508,6 @@ fn send_registry_bind(
     encode_u32(&mut args, new_id);
     let msg = encode_message(registry_id, WL_REGISTRY_BIND, &args);
     socket.send(&msg, &[])
-}
-
-/// Block-recv until we see wl_callback.done on `sync_id`.
-fn drain_until_sync(socket: &mut WaylandSocket, sync_id: u32) -> Result<(), ClipboardError> {
-    for _ in 0..4096 {
-        socket.recv(true)?;
-        while let Some((hdr, args)) = socket.next_message() {
-            if hdr.object_id == sync_id && hdr.opcode == WL_CALLBACK_DONE {
-                return Ok(());
-            }
-            if hdr.object_id == WL_DISPLAY_ID && hdr.opcode == WL_DISPLAY_ERROR {
-                let msg = parse_display_error(&args);
-                return Err(ClipboardError::io_other(&format!(
-                    "wl_display.error during bind sync: {msg}"
-                )));
-            }
-        }
-    }
-    Err(ClipboardError::io_other(
-        "timed out waiting for bind sync callback",
-    ))
 }
 
 /// Extract a human-readable description from `wl_display.error` args.
