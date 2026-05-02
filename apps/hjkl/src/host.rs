@@ -6,8 +6,9 @@
 //! - Owns the runtime [`Viewport`] (engine reads/writes scroll offsets,
 //!   the renderer publishes width/height per frame).
 //! - Tracks last-emitted [`CursorShape`] so the renderer can repaint.
-//! - Real clipboard via [`hjkl_clipboard::Clipboard`] (arboard + OSC 52
-//!   fallback; SSH-aware).
+//! - Real clipboard via [`hjkl_clipboard::Clipboard`] (native per-platform
+//!   backends + OSC 52 fallback; SSH-aware). Clipboard construction is
+//!   fallible — if probe fails, ops silently no-op.
 //! - Unit `Intent` type — the standalone binary doesn't fan out LSP /
 //!   fold / buffer-list requests yet. Phase 4+ swaps this for a real
 //!   enum once intents start firing.
@@ -15,7 +16,7 @@
 //! Mirrors the shape of `sqeel-tui::SqeelHost` so the eventual switch
 //! to `Editor<B, H>` is a single-callsite swap.
 
-use hjkl_clipboard::Clipboard;
+use hjkl_clipboard::{Clipboard, MimeType, Selection};
 use hjkl_engine::{CursorShape, Host, Viewport};
 use std::time::Instant;
 
@@ -24,7 +25,7 @@ pub struct TuiHost {
     last_cursor_shape: CursorShape,
     started: Instant,
     cancel: bool,
-    clipboard: Clipboard,
+    clipboard: Option<Clipboard>,
     viewport: Viewport,
 }
 
@@ -38,7 +39,7 @@ impl TuiHost {
             last_cursor_shape: CursorShape::Block,
             started: Instant::now(),
             cancel: false,
-            clipboard: Clipboard::new(),
+            clipboard: Clipboard::new().ok(),
             viewport: Viewport {
                 top_row: 0,
                 top_col: 0,
@@ -73,11 +74,15 @@ impl Host for TuiHost {
     type Intent = ();
 
     fn write_clipboard(&mut self, text: String) {
-        self.clipboard.set_text(&text);
+        if let Some(cb) = &self.clipboard {
+            let _ = cb.set(Selection::Clipboard, MimeType::Text, text.as_bytes());
+        }
     }
 
     fn read_clipboard(&mut self) -> Option<String> {
-        self.clipboard.get_text()
+        let cb = self.clipboard.as_ref()?;
+        let bytes = cb.get(Selection::Clipboard, MimeType::Text).ok()?;
+        String::from_utf8(bytes).ok()
     }
 
     fn now(&self) -> std::time::Duration {
