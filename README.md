@@ -1,7 +1,7 @@
 # hjkl-clipboard
 
-Native per-platform clipboard library with rich MIME types, async support, and
-OSC 52 fallback for SSH sessions.
+In-house cross-platform clipboard library for the hjkl ecosystem — rich MIME
+types, async support, and OSC 52 fallback for SSH sessions.
 
 [![CI](https://github.com/kryptic-sh/hjkl-clipboard/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-clipboard/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-clipboard.svg)](https://crates.io/crates/hjkl-clipboard)
