@@ -815,7 +815,7 @@ dependencies = [
  "ec4rs",
  "git2",
  "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-clipboard 0.4.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-clipboard 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-editor 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.4.4"
+version = "0.4.6"
 dependencies = [
  "libc",
  "miniz_oxide",
@@ -861,9 +861,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.4.4"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a459f1dd01c521c62633ad09875073972aa24c5c26c68eafaa27813c6c938585"
+checksum = "f8da99bc58ec132909854c9d7010f4479916b0d436361193f68521da667f076b"
 dependencies = [
  "libc",
  "miniz_oxide",
