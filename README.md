@@ -71,6 +71,9 @@ fn main() -> Result<(), ClipboardError> {
 
 ### Async API (runtime-agnostic)
 
+See [`examples/async_basic.rs`](examples/async_basic.rs) for a runnable version
+using `pollster` as a zero-dep executor.
+
 ```rust
 use hjkl_clipboard::{Clipboard, ClipboardError, MimeType, Selection};
 
@@ -90,41 +93,65 @@ async fn clipboard_demo() -> Result<(), ClipboardError> {
 }
 ```
 
-### Custom MIME types
+### Custom MIME types and URI list helpers
+
+See [`examples/custom_mime.rs`](examples/custom_mime.rs) for a runnable version.
 
 ```rust
-use hjkl_clipboard::{Clipboard, MimeType, Selection};
-
-let cb = Clipboard::new()?;
-
-// Raw passthrough — no translation applied
-cb.set(
-    Selection::Clipboard,
-    MimeType::Custom("application/x-my-format".into()),
-    b"\x00\x01\x02",
-)?;
-
-let data = cb.get(
-    Selection::Clipboard,
-    MimeType::Custom("application/x-my-format".into()),
-)?;
-```
-
-### URI list helpers
-
-```rust
-use hjkl_clipboard::{Clipboard, Selection, Uri};
+use hjkl_clipboard::{Clipboard, ClipboardError, MimeType, Selection, Uri};
 use std::path::PathBuf;
 
-let cb = Clipboard::new()?;
+fn main() -> Result<(), ClipboardError> {
+    let cb = Clipboard::new()?;
 
-let uris = vec![
-    Uri::File(PathBuf::from("/home/user/document.pdf")),
-    Uri::Other("https://example.com".into()),
-];
-cb.set_uri_list(Selection::Clipboard, &uris)?;
+    // Raw passthrough — no translation applied.
+    cb.set(
+        Selection::Clipboard,
+        MimeType::Custom("application/x-my-format".into()),
+        b"\x00\x01\x02",
+    )?;
 
-let back = cb.get_uri_list(Selection::Clipboard)?;
+    let data = cb.get(
+        Selection::Clipboard,
+        MimeType::Custom("application/x-my-format".into()),
+    )?;
+    println!("custom: {} bytes", data.len());
+
+    // URI list.
+    let uris = vec![
+        Uri::File(PathBuf::from("/home/user/document.pdf")),
+        Uri::Other("https://example.com".into()),
+    ];
+    cb.set_uri_list(Selection::Clipboard, &uris)?;
+
+    let back = cb.get_uri_list(Selection::Clipboard)?;
+    println!("uris: {back:?}");
+
+    Ok(())
+}
+```
+
+### Backend detection (diagnostics)
+
+See [`examples/backend_detect.rs`](examples/backend_detect.rs) for a runnable
+version.
+
+```rust
+use hjkl_clipboard::{Clipboard, ClipboardError};
+
+fn main() -> Result<(), ClipboardError> {
+    match Clipboard::new() {
+        Ok(cb) => {
+            let name = cb.backend_name();
+            println!("backend: {name}");
+            if name == "osc52" {
+                println!("note: OSC 52 is write-only");
+            }
+        }
+        Err(e) => println!("clipboard unavailable: {e}"),
+    }
+    Ok(())
+}
 ```
 
 ### PRIMARY selection (Linux only)
@@ -133,7 +160,13 @@ On Linux both `Selection::Clipboard` and `Selection::Primary` are supported.
 Other platforms return `UnsupportedMime` for PRIMARY ops.
 
 ```rust
-cb.set(Selection::Primary, MimeType::Text, b"selected text")?;
+use hjkl_clipboard::{Clipboard, ClipboardError, MimeType, Selection};
+
+fn main() -> Result<(), ClipboardError> {
+    let cb = Clipboard::new()?;
+    cb.set(Selection::Primary, MimeType::Text, b"selected text")?;
+    Ok(())
+}
 ```
 
 ## Caveats

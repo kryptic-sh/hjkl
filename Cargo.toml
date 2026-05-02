@@ -18,6 +18,9 @@ miniz_oxide = "0.8"
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+pollster = "0.3"
+
 [package.metadata.docs.rs]
 all-features = true
 targets = ["x86_64-unknown-linux-gnu"]
