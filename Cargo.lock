@@ -807,21 +807,21 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hjkl"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
  "crossterm",
  "ec4rs",
  "git2",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-clipboard 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-clipboard 0.4.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-editor 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-picker 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-ratatui 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-tree-sitter 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-form 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-picker 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-ratatui 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-tree-sitter 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ignore",
  "ratatui",
  "regex",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "criterion",
  "proptest",
@@ -841,9 +841,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24e7b2bb025074dd1d99f6b48286d14cfef2fd6185d1d98122e4fe31dad3c497"
+checksum = "1075c3b4c7e243e4b9f3d1176b84ece98186861b252440deaa7c691a756b3605"
 dependencies = [
  "ratatui",
  "regex",
@@ -852,7 +852,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "libc",
  "miniz_oxide",
@@ -861,9 +861,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8da99bc58ec132909854c9d7010f4479916b0d436361193f68521da667f076b"
+checksum = "0663a6921fd85d997936e03dfd9934b4b412cb21221c3d327f944e1833313720"
 dependencies = [
  "libc",
  "miniz_oxide",
@@ -874,8 +874,8 @@ name = "hjkl-editor"
 version = "0.3.2"
 dependencies = [
  "crossterm",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "insta",
  "regex",
 ]
@@ -886,18 +886,18 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cb5654dab3aca0c5799b89196390f513504d5653f2c3aaf8074c07434cf94c5"
 dependencies = [
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
 ]
 
 [[package]]
 name = "hjkl-engine"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest",
  "ratatui",
  "regex",
@@ -908,13 +908,13 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13015f93ef47331e8d06b62f47b75d526ec190d967b0c774dbcb18898bb66807"
+checksum = "ce37f6a04fabdbc19665db83f6879f87d40dc1e51e0b779ecace216b21a2b0dc"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "ratatui",
  "regex",
  "serde",
@@ -923,29 +923,29 @@ dependencies = [
 
 [[package]]
 name = "hjkl-form"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "hjkl-form"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cc36eb2670cec4a34d91648a905efe0f15970b273a299fbdf5b16bad698a959"
+checksum = "05640cecfd86b4baeb16d2423d3d23ea4f8ed30bd74a3a9e29e65e2d285ca621"
 dependencies = [
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "hjkl-picker"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "crossterm",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-form 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ignore",
  "ratatui",
  "regex",
@@ -954,13 +954,13 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d575f1c295ab12e8f843784cfb163e29cd4ece4f2aab9dbb78e1ec0cdb837447"
+checksum = "27d1f6fcb06622c85a697bc1c5d6b63965c651242c83c0bf163499f64c6d6c32"
 dependencies = [
  "crossterm",
- "hjkl-buffer 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-buffer 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-form 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ignore",
  "ratatui",
  "regex",
@@ -968,29 +968,29 @@ dependencies = [
 
 [[package]]
 name = "hjkl-ratatui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "crossterm",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-form 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ratatui",
 ]
 
 [[package]]
 name = "hjkl-ratatui"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b437de6943eafb48a7422e2e8f261f8ecb1b6a8f6a5341dcfc376232abfc3593"
+checksum = "e68aec168ae29d9b8cf3ff9d13057e9d608223d7ce190b24b864f24b43d2e14f"
 dependencies = [
  "crossterm",
- "hjkl-engine 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hjkl-form 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-form 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ratatui",
 ]
 
 [[package]]
 name = "hjkl-tree-sitter"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "ratatui",
@@ -1006,9 +1006,9 @@ dependencies = [
 
 [[package]]
 name = "hjkl-tree-sitter"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aff8875543be46e2685fc0639522748363348c1e2d01fbcb05ea04d481473a68"
+checksum = "48a39a54710b9bd547aee1d31275f9e5f0e7fc5977d28b0c8508d26ba4a006ad"
 dependencies = [
  "anyhow",
  "ratatui",
