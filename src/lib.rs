@@ -40,6 +40,9 @@ pub use uri::Uri;
 
 /// Which backend is active for this Clipboard handle.
 enum ClipboardBackend {
+    /// Wayland data-control (Linux, phase 6b+).
+    #[cfg(target_os = "linux")]
+    Wayland,
     /// X11 via XCB (Linux, phase 5b+).
     #[cfg(target_os = "linux")]
     X11,
@@ -61,9 +64,35 @@ pub struct Clipboard {
 
 impl Clipboard {
     /// Construct a new clipboard handle, probing for the best available backend.
+    ///
+    /// Probe order (Linux): Wayland → X11 → error.
+    ///
+    /// # Known limitation (Phase 7 fix required)
+    ///
+    /// Both `wayland_thread()` and `x11_thread()` use OnceLock to memoize the
+    /// first connection attempt. If `Clipboard::new()` is called multiple times
+    /// and the first Wayland attempt produced an Io error (instead of
+    /// LibNotFound/NoDisplay/FocusRequired), subsequent calls will not retry
+    /// X11 — they will see the same Io error from the OnceLock. For typical
+    /// usage (one `Clipboard::new()` per process) this is not observable.
+    /// Phase 7 must fix by making ClipboardError Clone or storing kind tags.
     pub fn new() -> Result<Self, ClipboardError> {
         #[cfg(target_os = "linux")]
         {
+            // Prefer Wayland if available.
+            match backend::wayland_thread::wayland_thread() {
+                Ok(_) => {
+                    return Ok(Self {
+                        backend: ClipboardBackend::Wayland,
+                    });
+                }
+                // Fall through to X11 when Wayland is absent or has no data-control.
+                Err(ClipboardError::LibNotFound)
+                | Err(ClipboardError::NoDisplay)
+                | Err(ClipboardError::FocusRequired) => {}
+                Err(e) => return Err(e),
+            }
+
             // Try X11; fall through on LibNotFound / NoDisplay.
             match backend::x11_thread::x11_thread() {
                 Ok(_) => {
@@ -75,7 +104,7 @@ impl Clipboard {
                 Err(e) => return Err(e),
             }
         }
-        // Other backends (macOS, Windows, Wayland, OSC 52) land in later phases.
+        // Other backends (macOS, Windows, OSC 52) land in later phases.
         Err(ClipboardError::NoDisplay)
     }
 
@@ -87,6 +116,11 @@ impl Clipboard {
     #[allow(unused_variables)]
     pub fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
         match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                backend::wayland_thread::set_clipboard(thread, sel, &mime, bytes)
+            }
             #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;
@@ -100,6 +134,9 @@ impl Clipboard {
     #[allow(unused_variables)]
     pub fn get(&self, sel: Selection, mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
         match &self.backend {
+            // Wayland read path comes in 6c.
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => Err(ClipboardError::UnsupportedMime),
             #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;
@@ -114,6 +151,11 @@ impl Clipboard {
     pub fn clear(&self, sel: Selection) -> Result<(), ClipboardError> {
         match &self.backend {
             #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                backend::wayland_thread::clear_clipboard(thread, sel)
+            }
+            #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::clear_clipboard(thread, sel)
@@ -126,6 +168,9 @@ impl Clipboard {
     #[allow(unused_variables)]
     pub fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
         match &self.backend {
+            // Wayland available path comes in 6c.
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => Ok(vec![]),
             #[cfg(target_os = "linux")]
             ClipboardBackend::X11 => {
                 let thread = backend::x11_thread::x11_thread()?;

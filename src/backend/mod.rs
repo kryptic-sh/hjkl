@@ -15,6 +15,8 @@ pub(crate) mod wayland;
 #[cfg(target_os = "linux")]
 pub(crate) mod wayland_socket;
 #[cfg(target_os = "linux")]
+pub(crate) mod wayland_thread;
+#[cfg(target_os = "linux")]
 pub(crate) mod wayland_wire;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;

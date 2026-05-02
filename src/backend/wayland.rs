@@ -171,7 +171,6 @@ impl WaylandConnection {
     }
 
     /// Allocate a fresh Wayland new_id.
-    #[allow(dead_code)] // used by 6b/6c
     pub(crate) fn alloc_id(&mut self) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
@@ -179,9 +178,16 @@ impl WaylandConnection {
     }
 
     /// Borrow the underlying socket (needed by 6b/6c for bind + event loop).
-    #[allow(dead_code)] // used by 6b/6c
     pub(crate) fn socket_mut(&mut self) -> &mut WaylandSocket {
         &mut self.socket
+    }
+
+    /// Consume the connection and return (socket, next_id) for the bg thread.
+    ///
+    /// After this call the caller owns the socket and the id allocator state.
+    /// The registry probe globals are discarded (they were already read).
+    pub(crate) fn into_parts(self) -> (WaylandSocket, u32) {
+        (self.socket, self.next_id)
     }
 }
 

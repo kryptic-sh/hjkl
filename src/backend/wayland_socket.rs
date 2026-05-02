@@ -92,6 +92,22 @@ impl WaylandSocket {
     pub(crate) fn raw_fd(&self) -> c_int {
         self.fd
     }
+
+    /// Construct a `WaylandSocket` from a raw file descriptor.
+    ///
+    /// # Safety
+    ///
+    /// The caller must transfer ownership of `fd` — it must be a valid open
+    /// socket fd that will not be closed by any other code path. The
+    /// `WaylandSocket` `Drop` impl will close it.
+    #[cfg(test)]
+    pub(crate) unsafe fn from_raw_fd(fd: c_int) -> Self {
+        WaylandSocket {
+            fd,
+            rx_buf: std::collections::VecDeque::new(),
+            rx_fds: std::collections::VecDeque::new(),
+        }
+    }
 }
 
 impl Drop for WaylandSocket {
@@ -244,8 +260,7 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
     unsafe {
         (*cmsg).cmsg_level = libc::SOL_SOCKET;
         (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-        (*cmsg).cmsg_len =
-            libc::CMSG_LEN(std::mem::size_of_val(fds) as libc::c_uint) as _;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of_val(fds) as libc::c_uint) as _;
 
         // Copy fd integers into the CMSG data region.
         // SAFETY: CMSG_DATA returns a pointer into cmsg's data region which is
