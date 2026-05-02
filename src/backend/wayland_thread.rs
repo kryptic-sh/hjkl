@@ -487,20 +487,38 @@ fn send_registry_bind(
 fn drain_until_sync(socket: &mut WaylandSocket, sync_id: u32) -> Result<(), ClipboardError> {
     for _ in 0..4096 {
         socket.recv(true)?;
-        while let Some((hdr, _args)) = socket.next_message() {
+        while let Some((hdr, args)) = socket.next_message() {
             if hdr.object_id == sync_id && hdr.opcode == WL_CALLBACK_DONE {
                 return Ok(());
             }
             if hdr.object_id == WL_DISPLAY_ID && hdr.opcode == WL_DISPLAY_ERROR {
-                return Err(ClipboardError::io_other(
-                    "wl_display.error during bind sync",
-                ));
+                let msg = parse_display_error(&args);
+                return Err(ClipboardError::io_other(&format!(
+                    "wl_display.error during bind sync: {msg}"
+                )));
             }
         }
     }
     Err(ClipboardError::io_other(
         "timed out waiting for bind sync callback",
     ))
+}
+
+/// Extract a human-readable description from `wl_display.error` args.
+/// Args layout: object_id(u32) + code(u32) + message(string).
+fn parse_display_error(args: &[u8]) -> String {
+    let Some((obj_id, rest)) = parse_u32(args) else {
+        return "(malformed error event)".to_owned();
+    };
+    let Some((code, rest)) = parse_u32(rest) else {
+        return format!("object={obj_id} (malformed code)");
+    };
+    let msg = if let Some((s, _)) = parse_string(rest) {
+        s.to_owned()
+    } else {
+        "(no message)".to_owned()
+    };
+    format!("object={obj_id} code={code} msg={msg:?}")
 }
 
 impl WaylandState {
