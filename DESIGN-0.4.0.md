@@ -994,22 +994,64 @@ Notes from execution:
   installed but unused for 6b (mock replaces it). Phase 7 may add a real
   compositor target in CI for fidelity coverage.
 
-#### Phase 6c — read path + available + PRIMARY + GNOME fallback (TODO, ~500 LOC)
+#### Phase 6c — read path + available + PRIMARY (DONE — `7d8c04c`)
 
-- [ ] Track `data_control_device.selection(offer)` events (offer = new_id of
-      incoming `data_control_offer`).
-- [ ] Track `data_control_offer.offer(mime)` events to accumulate available mime
-      list per offer.
-- [ ] **Get**: `pipe2(O_CLOEXEC)` → `offer.receive(mime, write_fd)` → read from
-      read_fd until EOF → close.
-- [ ] **Available**: return cached mime list from current offer.
-- [ ] **PRIMARY**: parallel impl on `zwp_primary_selection_device_manager_v1`
-      (smaller protocol, same shape).
-- [ ] **GNOME fallback**: if neither ext nor wlr data-control bound, mark
-      backend as `WaylandFocusRequired`. `set` falls through to OSC 52 (when
-      wired in Phase 7); `get` returns `FocusRequired` error.
-- [ ] Tests: round-trip via `wl-copy` (CLIPBOARD + PRIMARY), available
-      enumeration, FocusRequired path under no-data-control sway config.
+- [x] `WaylandState` extended with `pending_offers: HashMap<u32, OfferData>` +
+      `current_clipboard_offer: Option<OfferData>` +
+      `current_primary_offer: Option<OfferData>`.
+- [x] Event handlers added: `device.data_offer(new_id)` inserts pending offer
+      placeholder; `offer.offer(mime)` appends mime; `device.selection(offer)`
+      moves pending → current and destroys previous; `device.primary_selection`
+      same for primary; `offer_id == 0` clears current.
+- [x] **Get**: `pipe2(O_CLOEXEC)` → `offer.receive(mime, write_fd)` (write_fd
+      via SCM_RIGHTS) → close write_fd → read from read_fd until EOF → return
+      bytes.
+- [x] **Available**: enumerate current offer's mime strings, map via reverse
+      atom-to-MimeType lookup (`text/plain;charset=utf-8` | `UTF8_STRING` |
+      `text/plain` → Text; `text/html` → Html; `text/rtf` | `application/rtf` →
+      Rtf; `text/uri-list` → UriList; `image/png` → Png; drop unknown).
+- [x] **PRIMARY**: parallel impl over
+      `zwp_primary_selection_device_manager_v1` +
+      `zwp_primary_selection_device_v1` + `zwp_primary_selection_source_v1` +
+      `zwp_primary_selection_offer_v1`. Bound optionally — absence does NOT fail
+      clipboard init; PRIMARY ops return `UnsupportedMime` if global missing.
+      `set_selection` passes serial=0 (compositors that require keyboard serials
+      reject — matches FocusRequired semantics).
+- [x] Mock compositor extended (~480 LOC of mock additions): new object types
+      (`DataControlOffer`, `PrimaryManager`, `PrimaryDevice`, `PrimarySource`,
+      `PrimaryOffer`). New API: `advertise_clipboard_offer(mimes, payloads)` and
+      `advertise_primary_offer(...)` enqueue server-side offers; mock thread
+      sends `device.data_offer + offer.offer*N + device.selection` sequence to
+      client. `dispatch_pending_receives` writes pre-programmed payloads when
+      client sends `offer.receive`.
+- [x] `lib.rs::Clipboard::get` and `available` now route to Wayland backend via
+      `wayland_thread::get_clipboard` / `available_clipboard`.
+- [x] 6 new tests: `mock_get_clipboard_text`, `mock_get_clipboard_html`,
+      `mock_available_lists_mimes`, `mock_primary_advertise_then_get`,
+      `mock_get_unowned_returns_unsupported`,
+      `mock_available_no_offer_returns_empty`.
+- [x] 120 → 126 tests. All cross-targets clippy `-D warnings` clean.
+
+Notes from execution:
+
+- **GNOME fallback wiring deferred to Phase 7**. The `FocusRequired` error path
+  exists from 6b (when `ext_data_control_manager_v1` is missing) but
+  `Clipboard::new()`'s pattern match can't see it as `FocusRequired` due to the
+  OnceLock<Result<\_, String>> error collapse. Phase 7 must fix the error type
+  AND wire OSC 52 into the `ClipboardBackend` enum.
+- **Self-loop test skipped** for Wayland — the data-control protocol doesn't
+  naturally produce self-selection events (the compositor handles dedup; the
+  device that sets selection doesn't receive its own offer events back). 6b's
+  set tests + 6c's get tests cover both paths independently. Documented inline.
+- **Read blocks the bg thread** during `receive_from_offer` EOF wait. For large
+  payloads this holds up other ops. Acceptable for v0.4.0; a separate read
+  thread or non-blocking read with timeout would be cleaner. Phase 7+.
+- **Mock primary serial=0**: mock accepts; real compositors that require
+  keyboard serials would refuse. The semantic matches FocusRequired
+  intentionally — TUIs rarely have keyboard focus.
+- Test setup test (`mock_get_unowned_returns_unsupported`) had a pre-existing
+  state issue: had to take care to drop any prior current_offer between tests.
+  `mock.reset()` extended to clear offer state too.
 
 ### Phase 7 — Integration + ship
 
