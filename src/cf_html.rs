@@ -8,8 +8,6 @@
 //! Reference:
 //! <https://learn.microsoft.com/en-us/windows/win32/dataxchg/html-clipboard-format>
 
-use std::io;
-
 use crate::ClipboardError;
 
 // ---------------------------------------------------------------------------
@@ -132,7 +130,7 @@ pub(crate) fn wrap(html: &str) -> Vec<u8> {
 /// - `StartFragment > EndFragment`.
 /// - The sliced fragment is not valid UTF-8.
 pub(crate) fn unwrap(payload: &[u8]) -> Result<String, ClipboardError> {
-    let bad = || ClipboardError::Io(io::Error::other("malformed CF_HTML header"));
+    let bad = || ClipboardError::io_other("malformed CF_HTML header");
 
     // Parse the header: scan lines until we find all required fields or hit
     // the first `<` character (start of the HTML document).

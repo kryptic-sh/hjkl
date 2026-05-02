@@ -161,6 +161,10 @@ struct X11State {
     owned: HashMap<u32, OwnedData>,
     /// In-flight INCR send transfers (one per active requestor).
     incr_sends: Vec<IncrSend>,
+    /// Cache of lazily interned atoms for Custom mime type names.
+    /// The bg thread interns them on first use so the X11 connection is
+    /// always accessed from the same thread that owns it.
+    custom_atoms: HashMap<String, u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +175,11 @@ struct X11State {
 pub(crate) enum X11Op {
     Set {
         sel_atom: u32,
+        /// Pre-interned atom for known mime types; 0 when mime_name is used.
         mime_atom: u32,
+        /// Atom name for Custom mimes that need lazy interning on the bg thread.
+        /// None when mime_atom is already resolved.
+        mime_name: Option<String>,
         bytes: Vec<u8>,
     },
     Clear {
@@ -179,7 +187,10 @@ pub(crate) enum X11Op {
     },
     Get {
         sel_atom: u32,
+        /// Pre-interned atom for known mime types; 0 when mime_name is used.
         mime_atom: u32,
+        /// Atom name for Custom mimes that need lazy interning on the bg thread.
+        mime_name: Option<String>,
     },
     Available {
         sel_atom: u32,
@@ -237,6 +248,7 @@ impl X11Thread {
                     window,
                     owned: HashMap::new(),
                     incr_sends: Vec::new(),
+                    custom_atoms: HashMap::new(),
                 };
                 run_loop(&mut state, rx);
             })
@@ -252,7 +264,7 @@ impl X11Thread {
 
         self.tx
             .send(X11Request { op, reply })
-            .map_err(|_| ClipboardError::Io(std::io::Error::other("x11 thread inbox closed")))?;
+            .map_err(|_| ClipboardError::io_other("x11 thread inbox closed"))?;
 
         let (lock, cvar) = &*pair;
         let mut guard = lock.lock().unwrap();
@@ -267,16 +279,17 @@ impl X11Thread {
 // Singleton accessor
 // ---------------------------------------------------------------------------
 
-// The OnceLock stores Result<X11Thread, String> so the value is Sync.
-// ClipboardError is not Clone, so we serialize it as a String error message.
-static X11_THREAD: OnceLock<Result<X11Thread, String>> = OnceLock::new();
+// ClipboardError is Clone so we can store the typed error directly.
+// Preserves LibNotFound/NoDisplay across calls so Clipboard::new()
+// fallthrough logic sees the correct variant on every call.
+static X11_THREAD: OnceLock<Result<X11Thread, ClipboardError>> = OnceLock::new();
 
 /// Return the process-global X11 thread, or an error if X11 is unavailable.
 pub(crate) fn x11_thread() -> Result<&'static X11Thread, ClipboardError> {
     X11_THREAD
-        .get_or_init(|| X11Thread::new().map_err(|e| e.to_string()))
+        .get_or_init(X11Thread::new)
         .as_ref()
-        .map_err(|s| ClipboardError::Io(std::io::Error::other(s.as_str())))
+        .map_err(ClipboardError::clone)
 }
 
 // ---------------------------------------------------------------------------
@@ -764,18 +777,77 @@ fn send_selection_notify(state: &mut X11State, req: &SelectionRequestEvent, prop
 // Op handlers
 // ---------------------------------------------------------------------------
 
+/// Intern an atom by name on the bg thread, caching in state.custom_atoms.
+///
+/// Uses `only_if_exists=0` so the atom is created if it doesn't exist yet,
+/// matching how xcb_intern_atom is used for our pre-interned set at startup.
+fn intern_atom(state: &mut X11State, name: &str) -> Result<u32, ClipboardError> {
+    if let Some(&atom) = state.custom_atoms.get(name) {
+        return Ok(atom);
+    }
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+    // SAFETY: name is a valid UTF-8 string; name_len fits in u16 (checked).
+    let name_len = name.len().min(u16::MAX as usize) as u16;
+    let cookie = unsafe {
+        (fns.xcb_intern_atom)(
+            raw,
+            0, // only_if_exists=0: create if absent
+            name_len,
+            name.as_ptr() as *const std::ffi::c_char,
+        )
+    };
+    // SAFETY: cookie is valid; null error pointer → null reply on error.
+    let reply = unsafe { (fns.xcb_intern_atom_reply)(raw, cookie, std::ptr::null_mut()) };
+    if reply.is_null() {
+        return Err(ClipboardError::io_other(
+            "xcb_intern_atom_reply returned null",
+        ));
+    }
+    // SAFETY: reply is non-null xcb_intern_atom_reply_t; atom field at offset 8.
+    let atom = unsafe { (*reply).atom };
+    // SAFETY: reply was malloc'd by xcb.
+    unsafe { libc::free(reply.cast()) };
+    state.custom_atoms.insert(name.to_owned(), atom);
+    Ok(atom)
+}
+
+/// Resolve a mime descriptor to an atom: use mime_atom if non-zero, otherwise
+/// intern mime_name on the bg thread.
+fn resolve_mime_atom(
+    state: &mut X11State,
+    mime_atom: u32,
+    mime_name: Option<String>,
+) -> Result<u32, ClipboardError> {
+    if mime_atom != 0 {
+        return Ok(mime_atom);
+    }
+    match mime_name {
+        Some(name) => intern_atom(state, &name),
+        None => Err(ClipboardError::UnsupportedMime),
+    }
+}
+
 fn handle_op(state: &mut X11State, req: X11Request) {
     let result = match req.op {
         X11Op::Set {
             sel_atom,
             mime_atom,
+            mime_name,
             bytes,
-        } => X11OpResult::Set(do_set(state, sel_atom, mime_atom, bytes)),
+        } => {
+            let atom = resolve_mime_atom(state, mime_atom, mime_name);
+            X11OpResult::Set(atom.and_then(|a| do_set(state, sel_atom, a, bytes)))
+        }
         X11Op::Clear { sel_atom } => X11OpResult::Clear(do_clear(state, sel_atom)),
         X11Op::Get {
             sel_atom,
             mime_atom,
-        } => X11OpResult::Get(do_get(state, sel_atom, mime_atom)),
+            mime_name,
+        } => {
+            let atom = resolve_mime_atom(state, mime_atom, mime_name);
+            X11OpResult::Get(atom.and_then(|a| do_get(state, sel_atom, a)))
+        }
         X11Op::Available { sel_atom } => X11OpResult::Available(do_available(state, sel_atom)),
     };
     req.reply.resolve(result);
@@ -810,9 +882,9 @@ fn do_set(
     // SAFETY: reply must be freed with libc::free.
     let reply = unsafe { (fns.xcb_get_selection_owner_reply)(raw, cookie, std::ptr::null_mut()) };
     if reply.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "xcb_get_selection_owner_reply returned null",
-        )));
+        ));
     }
     // SAFETY: reply is non-null; `owner` is at offset 8.
     let owner = unsafe { (*reply).owner };
@@ -820,9 +892,9 @@ fn do_set(
     unsafe { libc::free(reply.cast()) };
 
     if owner != window {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "another client holds the selection",
-        )));
+        ));
     }
 
     // Store the payload in our in-memory table.
@@ -982,9 +1054,9 @@ fn read_property(state: &X11State) -> Result<(u32, Vec<u8>), ClipboardError> {
     // error).
     let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
     if reply.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "xcb_get_property_reply returned null",
-        )));
+        ));
     }
 
     // SAFETY: reply is non-null xcb_get_property_reply_t.
@@ -1050,9 +1122,9 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
             break property;
         }
         if Instant::now() >= deadline {
-            return Err(ClipboardError::Io(std::io::Error::other(
+            return Err(ClipboardError::io_other(
                 "xcb_convert_selection timed out waiting for SELECTION_NOTIFY",
-            )));
+            ));
         }
         std::thread::sleep(Duration::from_millis(10));
     };
@@ -1104,9 +1176,9 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
                 break;
             }
             if Instant::now() >= chunk_deadline || Instant::now() >= total_deadline {
-                return Err(ClipboardError::Io(std::io::Error::other(
+                return Err(ClipboardError::io_other(
                     "INCR receive timed out waiting for PROPERTY_NOTIFY",
-                )));
+                ));
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -1122,9 +1194,9 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
         accumulator.extend_from_slice(&chunk);
 
         if Instant::now() >= total_deadline {
-            return Err(ClipboardError::Io(std::io::Error::other(
+            return Err(ClipboardError::io_other(
                 "INCR receive exceeded total timeout",
-            )));
+            ));
         }
     }
 
@@ -1151,9 +1223,9 @@ fn do_available(state: &mut X11State, sel_atom: u32) -> Result<Vec<u32>, Clipboa
             // TARGETS reply is a list of u32 atoms (format=32).
             // Each atom is 4 bytes in native byte order.
             if bytes.len() % 4 != 0 {
-                return Err(ClipboardError::Io(std::io::Error::other(
+                return Err(ClipboardError::io_other(
                     "TARGETS reply has non-multiple-of-4 byte length",
-                )));
+                ));
             }
             let atoms: Vec<u32> = bytes
                 .chunks_exact(4)
@@ -1185,7 +1257,28 @@ pub(crate) fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32>
     }
 }
 
+/// Map a MimeType to (mime_atom, mime_name):
+///   - Known types return (atom, None).
+///   - Custom(s) returns (0, Some(s)) so the bg thread can intern lazily.
+fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Option<String>) {
+    match mime_to_atom_static(atoms, mime) {
+        Some(atom) => (atom, None),
+        None => {
+            let name = match mime {
+                MimeType::Custom(s) => Some(s.clone()),
+                _ => None,
+            };
+            (0, name)
+        }
+    }
+}
+
 /// Map a raw atom back to a MimeType, returning None for unknown atoms.
+///
+/// Custom atoms set by us are not included here — available() only reports
+/// the known pre-interned types. Unknown atoms are silently dropped from
+/// available() results (Phase 8 / v0.5 can add reverse xcb_get_atom_name
+/// lookup for full fidelity).
 pub(crate) fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
     if atom == atoms.utf8_string || atom == atoms.text_plain_utf8 || atom == atoms.string {
         Some(MimeType::Text)
@@ -1208,22 +1301,22 @@ pub(crate) fn atom_to_mime(atoms: &Atoms, atom: u32) -> Option<MimeType> {
 
 /// Set a clipboard payload via the X11 thread.
 ///
-/// `Custom` mime types are not supported (no live intern path); they return
-/// `UnsupportedMime`.
+/// `Custom(s)` mime types are interned lazily on the bg thread using
+/// `xcb_intern_atom` and cached for re-use. All other mime types use
+/// pre-interned atoms from the `Atoms` struct.
 pub(crate) fn set_clipboard(
     thread: &X11Thread,
     sel: Selection,
     mime: &MimeType,
     bytes: &[u8],
 ) -> Result<(), ClipboardError> {
-    let mime_atom =
-        mime_to_atom_static(&thread.atoms, mime).ok_or(ClipboardError::UnsupportedMime)?;
-
+    let (mime_atom, mime_name) = mime_to_atom_or_name(&thread.atoms, mime);
     let sel_atom = sel_to_atom(&thread.atoms, sel);
 
     let result = thread.send_sync(X11Op::Set {
         sel_atom,
         mime_atom,
+        mime_name,
         bytes: bytes.to_vec(),
     })?;
     match result {
@@ -1243,17 +1336,20 @@ pub(crate) fn clear_clipboard(thread: &X11Thread, sel: Selection) -> Result<(), 
 }
 
 /// Get clipboard bytes via the X11 thread.
+///
+/// `Custom(s)` mime types are interned lazily on the bg thread; all others
+/// use pre-interned atoms.
 pub(crate) fn get_clipboard(
     thread: &X11Thread,
     sel: Selection,
     mime: &MimeType,
 ) -> Result<Vec<u8>, ClipboardError> {
-    let mime_atom =
-        mime_to_atom_static(&thread.atoms, mime).ok_or(ClipboardError::UnsupportedMime)?;
+    let (mime_atom, mime_name) = mime_to_atom_or_name(&thread.atoms, mime);
     let sel_atom = sel_to_atom(&thread.atoms, sel);
     let result = thread.send_sync(X11Op::Get {
         sel_atom,
         mime_atom,
+        mime_name,
     })?;
     match result {
         X11OpResult::Get(r) => r,
@@ -2283,5 +2379,85 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "set took too long ({elapsed:?}); possible hang in SAVE_TARGETS"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // 7a tests — Custom mime round-trips
+    // -----------------------------------------------------------------------
+
+    /// Set with a Custom mime, paste with xclip using the same type.
+    #[test]
+    fn x11_custom_mime_set_round_trip() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        let mime = MimeType::Custom("application/x-hjkl-test".into());
+        let data = b"custom-mime-payload-7a";
+        set_clipboard(thread, Selection::Clipboard, &mime, data).expect("set custom mime failed");
+
+        std::thread::sleep(Duration::from_millis(150));
+
+        // xclip can read back with an explicit type flag.
+        let out = match xclip_typed("clipboard", "application/x-hjkl-test") {
+            Some(o) => o,
+            None => {
+                eprintln!("SKIP x11_custom_mime_set_round_trip: xclip not available");
+                return;
+            }
+        };
+        assert_eq!(out, data, "custom mime xclip read mismatch");
+    }
+
+    /// Write via xclip with a custom type, read back via our get path.
+    #[test]
+    fn x11_custom_mime_get_round_trip() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let thread = match get_thread() {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Use the self-loop path: set custom, then get custom.
+        let mime = MimeType::Custom("application/x-hjkl-get-test".into());
+        let data = b"get-custom-payload-7a";
+        set_clipboard(thread, Selection::Clipboard, &mime, data).expect("set custom mime failed");
+
+        std::thread::sleep(Duration::from_millis(50));
+
+        let received =
+            get_clipboard(thread, Selection::Clipboard, &mime).expect("get custom mime failed");
+        assert_eq!(received, data, "custom mime self-loop mismatch");
+    }
+
+    // -----------------------------------------------------------------------
+    // 7a tests — error type preserved across calls
+    // -----------------------------------------------------------------------
+
+    /// Verify that the typed error variant (LibNotFound or NoDisplay) is
+    /// preserved across repeated calls to x11_thread() when no display is
+    /// available.  We can only test this indirectly: call x11_thread() twice
+    /// and assert both results are the same variant.
+    #[test]
+    fn error_type_preserved_across_calls() {
+        // This test deliberately does NOT acquire TEST_LOCK or require xvfb
+        // — we are reading from X11_THREAD which is already initialised by
+        // get_thread() above, or uninitialised (LibNotFound/NoDisplay).
+        // Either way both calls must return the same error variant.
+        let r1 = x11_thread();
+        let r2 = x11_thread();
+        match (r1, r2) {
+            (Ok(_), Ok(_)) => {}
+            (Err(ClipboardError::LibNotFound), Err(ClipboardError::LibNotFound)) => {}
+            (Err(ClipboardError::NoDisplay), Err(ClipboardError::NoDisplay)) => {}
+            (Err(ClipboardError::Io(_)), Err(ClipboardError::Io(_))) => {}
+            (a, b) => panic!(
+                "error variant changed between calls: first={a:?} second={b:?}",
+                a = a.err().map(|e| e.to_string()),
+                b = b.err().map(|e| e.to_string()),
+            ),
+        }
     }
 }

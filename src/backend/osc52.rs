@@ -44,7 +44,7 @@ impl Osc52Backend {
             if e.kind() == io::ErrorKind::Other {
                 ClipboardError::PayloadTooLarge
             } else {
-                ClipboardError::Io(e)
+                ClipboardError::io(e)
             }
         })
     }
@@ -59,7 +59,7 @@ impl Osc52Backend {
             return Err(ClipboardError::UnsupportedMime);
         }
         // Empty base64 payload tells the terminal to clear its clipboard.
-        write_osc52(out, "", is_in_tmux()).map_err(ClipboardError::Io)
+        write_osc52(out, "", is_in_tmux()).map_err(ClipboardError::io)
     }
 }
 

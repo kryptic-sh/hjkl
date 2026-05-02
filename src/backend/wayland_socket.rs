@@ -146,15 +146,13 @@ fn wayland_socket_path() -> Result<String, ClipboardError> {
 fn connect_to_path(path: &str) -> Result<WaylandSocket, ClipboardError> {
     if path.len() >= 108 {
         // UNIX_PATH_MAX is 108 bytes including NUL on Linux.
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "Wayland socket path too long",
-        )));
+        return Err(ClipboardError::io_other("Wayland socket path too long"));
     }
 
     // SAFETY: socket(2) is always safe with valid constant arguments.
     let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
-        return Err(ClipboardError::Io(std::io::Error::last_os_error()));
+        return Err(ClipboardError::io(std::io::Error::last_os_error()));
     }
 
     // Build sockaddr_un.
@@ -215,7 +213,7 @@ fn send_plain(fd: c_int, bytes: &[u8]) -> Result<(), ClipboardError> {
             )
         };
         if n < 0 {
-            return Err(ClipboardError::Io(std::io::Error::last_os_error()));
+            return Err(ClipboardError::io(std::io::Error::last_os_error()));
         }
         sent += n as usize;
     }
@@ -251,9 +249,7 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
     // CMSG_FIRSTHDR returns a pointer into that buffer.
     let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
     if cmsg.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "CMSG_FIRSTHDR returned null",
-        )));
+        return Err(ClipboardError::io_other("CMSG_FIRSTHDR returned null"));
     }
 
     // SAFETY: cmsg is non-null and points inside cmsg_buf.
@@ -272,7 +268,7 @@ fn send_with_fds(fd: c_int, bytes: &[u8], fds: &[c_int]) -> Result<(), Clipboard
     // SAFETY: fd valid; msg is fully initialised.
     let n = unsafe { libc::sendmsg(fd, &msg, libc::MSG_NOSIGNAL) };
     if n < 0 {
-        return Err(ClipboardError::Io(std::io::Error::last_os_error()));
+        return Err(ClipboardError::io(std::io::Error::last_os_error()));
     }
 
     // For simplicity, we assume the entire buffer was sent in one shot.
@@ -330,13 +326,11 @@ fn recv_into(
             // No data yet; non-blocking, not an error.
             return Ok(());
         }
-        return Err(ClipboardError::Io(err));
+        return Err(ClipboardError::io(err));
     }
 
     if n == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "Wayland socket closed",
-        )));
+        return Err(ClipboardError::io_other("Wayland socket closed"));
     }
 
     // Append received bytes.

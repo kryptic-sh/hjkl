@@ -2,7 +2,6 @@
 //!
 //! Handles percent-encoding/decoding and Windows UNC path mapping.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ClipboardError;
@@ -231,7 +230,7 @@ pub(crate) fn encode_uri_list(uris: &[Uri]) -> Result<Vec<u8>, ClipboardError> {
 /// Returns [`ClipboardError::InvalidUri`] on a malformed percent-escape.
 pub(crate) fn decode_uri_list(bytes: &[u8]) -> Result<Vec<Uri>, ClipboardError> {
     let text = std::str::from_utf8(bytes)
-        .map_err(|_| ClipboardError::Io(io::Error::other("uri-list is not valid UTF-8")))?;
+        .map_err(|_| ClipboardError::io_other("uri-list is not valid UTF-8"))?;
 
     let mut out = Vec::new();
     for line in text.lines() {

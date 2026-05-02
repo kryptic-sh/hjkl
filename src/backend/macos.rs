@@ -308,9 +308,7 @@ impl Backend for MacosBackend {
         unsafe {
             let pb = general_pasteboard();
             if pb.is_null() {
-                return Err(ClipboardError::Io(std::io::Error::other(
-                    "generalPasteboard returned nil",
-                )));
+                return Err(ClipboardError::io_other("generalPasteboard returned nil"));
             }
             // `clearContents` must be called before any setData:forType: per
             // Apple docs. Returns NSInteger (change count); we discard it.
@@ -319,9 +317,7 @@ impl Backend for MacosBackend {
             let ty = nsstring_from_str(&uti);
             let ok: bool = msg2(pb, sel_set_data_for_type(), data, ty);
             if !ok {
-                return Err(ClipboardError::Io(std::io::Error::other(
-                    "setData:forType: returned NO",
-                )));
+                return Err(ClipboardError::io_other("setData:forType: returned NO"));
             }
         }
         Ok(())
@@ -340,9 +336,7 @@ impl Backend for MacosBackend {
         unsafe {
             let pb = general_pasteboard();
             if pb.is_null() {
-                return Err(ClipboardError::Io(std::io::Error::other(
-                    "generalPasteboard returned nil",
-                )));
+                return Err(ClipboardError::io_other("generalPasteboard returned nil"));
             }
             let ty = nsstring_from_str(&uti);
             let data: Id = msg1(pb, sel_data_for_type(), ty);
@@ -363,9 +357,7 @@ impl Backend for MacosBackend {
         unsafe {
             let pb = general_pasteboard();
             if pb.is_null() {
-                return Err(ClipboardError::Io(std::io::Error::other(
-                    "generalPasteboard returned nil",
-                )));
+                return Err(ClipboardError::io_other("generalPasteboard returned nil"));
             }
             let _change: isize = msg0(pb, sel_clear_contents());
         }

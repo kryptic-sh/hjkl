@@ -20,7 +20,6 @@
 //!
 //! Total header: 20 bytes (5 × 4-byte fields).
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ClipboardError;
@@ -109,7 +108,7 @@ pub(crate) fn build(paths: &[&Path]) -> Result<Vec<u8>, ClipboardError> {
 /// - `fWide == 0` (ANSI CF_HDROP — modern Windows always uses wide).
 /// - The UTF-16 sequence is invalid or the terminating double-null is missing.
 pub(crate) fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, ClipboardError> {
-    let bad = || ClipboardError::Io(io::Error::other("malformed CF_HDROP"));
+    let bad = || ClipboardError::io_other("malformed CF_HDROP");
 
     if bytes.len() < HEADER_LEN {
         return Err(bad());

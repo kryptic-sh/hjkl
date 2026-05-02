@@ -122,9 +122,7 @@ impl X11Connection {
         // connection, detected by xcb_connection_has_error).
         let conn = unsafe { (fns.xcb_connect)(std::ptr::null(), std::ptr::null_mut()) };
         if conn.is_null() {
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "xcb_connect returned null",
-            )));
+            return Err(ClipboardError::io_other("xcb_connect returned null"));
         }
 
         // SAFETY: conn is a non-null pointer returned by xcb_connect.
@@ -132,7 +130,7 @@ impl X11Connection {
         if err != 0 {
             // SAFETY: conn is owned by us; disconnect on error path.
             unsafe { (fns.xcb_disconnect)(conn) };
-            return Err(ClipboardError::Io(std::io::Error::other(format!(
+            return Err(ClipboardError::io(std::io::Error::other(format!(
                 "xcb_connection_has_error: {err}"
             ))));
         }
@@ -146,9 +144,7 @@ impl X11Connection {
         if setup.is_null() {
             // SAFETY: conn is still owned by us.
             unsafe { (fns.xcb_disconnect)(conn) };
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "xcb_get_setup returned null",
-            )));
+            return Err(ClipboardError::io_other("xcb_get_setup returned null"));
         }
 
         // SAFETY: setup is non-null and valid. The iterator's `data` field
@@ -156,9 +152,7 @@ impl X11Connection {
         let iter = unsafe { (fns.xcb_setup_roots_iterator)(setup) };
         if iter.data.is_null() {
             unsafe { (fns.xcb_disconnect)(conn) };
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "no screens in XCB setup",
-            )));
+            return Err(ClipboardError::io_other("no screens in XCB setup"));
         }
 
         // SAFETY: iter.data is non-null; xcb_screen_t layout is:
@@ -294,7 +288,7 @@ fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms,
         // we detect below.
         let reply = unsafe { (fns.xcb_intern_atom_reply)(conn, cookie, std::ptr::null_mut()) };
         if reply.is_null() {
-            return Err(ClipboardError::Io(std::io::Error::other(format!(
+            return Err(ClipboardError::io(std::io::Error::other(format!(
                 "xcb_intern_atom_reply null for atom {i} ({})",
                 ATOM_NAMES[i]
             ))));

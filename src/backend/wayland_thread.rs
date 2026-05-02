@@ -245,9 +245,9 @@ impl WaylandThread {
         let pair = Arc::new((Mutex::new(None::<WaylandOpResult>), Condvar::new()));
         let reply = crate::reply::Reply::Sync(Arc::clone(&pair));
 
-        self.tx.send(WaylandRequest { op, reply }).map_err(|_| {
-            ClipboardError::Io(std::io::Error::other("wayland thread inbox closed"))
-        })?;
+        self.tx
+            .send(WaylandRequest { op, reply })
+            .map_err(|_| ClipboardError::io_other("wayland thread inbox closed"))?;
 
         let (lock, cvar) = &*pair;
         let mut guard = lock.lock().unwrap();
@@ -262,21 +262,17 @@ impl WaylandThread {
 // Singleton accessor
 // ---------------------------------------------------------------------------
 
-static WAYLAND_THREAD: OnceLock<Result<WaylandThread, String>> = OnceLock::new();
+// ClipboardError is Clone so we can store the typed error directly.
+// Preserves FocusRequired/LibNotFound/NoDisplay across calls so
+// Clipboard::new() fallthrough logic sees the correct variant every time.
+static WAYLAND_THREAD: OnceLock<Result<WaylandThread, ClipboardError>> = OnceLock::new();
 
 /// Return the process-global Wayland thread, or an error if unavailable.
-///
-/// # Known limitation (Phase 7 fix required)
-///
-/// OnceLock memoises the first result. If the first `Clipboard::new()` call
-/// gets an Io error, subsequent calls see the same Io error even after the
-/// environment changes. Phase 7 must fix this (e.g. by storing error kind
-/// separately or making ClipboardError Clone).
 pub(crate) fn wayland_thread() -> Result<&'static WaylandThread, ClipboardError> {
     WAYLAND_THREAD
-        .get_or_init(|| WaylandThread::new().map_err(|e| e.to_string()))
+        .get_or_init(WaylandThread::new)
         .as_ref()
-        .map_err(|s| ClipboardError::Io(std::io::Error::other(s.as_str())))
+        .map_err(ClipboardError::clone)
 }
 
 // ---------------------------------------------------------------------------
@@ -452,15 +448,15 @@ fn drain_until_sync(socket: &mut WaylandSocket, sync_id: u32) -> Result<(), Clip
                 return Ok(());
             }
             if hdr.object_id == WL_DISPLAY_ID && hdr.opcode == WL_DISPLAY_ERROR {
-                return Err(ClipboardError::Io(std::io::Error::other(
+                return Err(ClipboardError::io_other(
                     "wl_display.error during bind sync",
-                )));
+                ));
             }
         }
     }
-    Err(ClipboardError::Io(std::io::Error::other(
+    Err(ClipboardError::io_other(
         "timed out waiting for bind sync callback",
-    )))
+    ))
 }
 
 impl WaylandState {
@@ -1220,7 +1216,7 @@ fn receive_from_offer(
     // SAFETY: pipe2 is safe to call with a valid [i32;2] and valid flags.
     let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
     if rc != 0 {
-        return Err(ClipboardError::Io(std::io::Error::last_os_error()));
+        return Err(ClipboardError::io(std::io::Error::last_os_error()));
     }
     let read_fd = fds[0];
     let write_fd = fds[1];
@@ -1263,7 +1259,7 @@ fn read_fd_to_end(fd: c_int) -> Result<Vec<u8>, ClipboardError> {
             if err.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return Err(ClipboardError::Io(err));
+            return Err(ClipboardError::io(err));
         }
         if n == 0 {
             break; // EOF

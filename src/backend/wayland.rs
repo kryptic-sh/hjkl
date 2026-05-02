@@ -127,7 +127,7 @@ impl WaylandConnection {
                     // wl_display.error: object_id(u32) + code(u32) + message(string)
                     (WL_DISPLAY_ID, WL_DISPLAY_ERROR) => {
                         let msg = parse_display_error(&args);
-                        return Err(ClipboardError::Io(std::io::Error::other(format!(
+                        return Err(ClipboardError::io(std::io::Error::other(format!(
                             "wl_display error: {msg}"
                         ))));
                     }
@@ -147,9 +147,9 @@ impl WaylandConnection {
         }
 
         if !done {
-            return Err(ClipboardError::Io(std::io::Error::other(
+            return Err(ClipboardError::io_other(
                 "timed out waiting for wl_callback.done",
-            )));
+            ));
         }
 
         // Next allocatable id: wl_display=1, registry=2, callback=3 → start at 4.

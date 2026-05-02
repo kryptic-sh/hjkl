@@ -2,9 +2,17 @@
 
 use std::fmt;
 use std::io;
+use std::sync::Arc;
 
 /// Errors that can be returned by clipboard operations.
-#[derive(Debug)]
+///
+/// # Cloneability note
+///
+/// `io::Error` does not implement `Clone`. To make `ClipboardError` cloneable
+/// (required so singletons can store `OnceLock<Result<T, ClipboardError>>`
+/// and return typed errors on every call), the `Io` variant wraps `io::Error`
+/// in `Arc`. Callers matching on `Io` can deref to `&io::Error` via `&**arc`.
+#[derive(Debug, Clone)]
 pub enum ClipboardError {
     /// A required native library (libxcb, libwayland-client) was not found.
     LibNotFound,
@@ -20,7 +28,19 @@ pub enum ClipboardError {
     /// A URI was relative or otherwise malformed (RFC 3986 requires absolute).
     InvalidUri,
     /// An underlying I/O error.
-    Io(io::Error),
+    Io(Arc<io::Error>),
+}
+
+impl ClipboardError {
+    /// Convenience constructor — wraps an `io::Error` in `Arc`.
+    pub(crate) fn io(e: io::Error) -> Self {
+        Self::Io(Arc::new(e))
+    }
+
+    /// Convenience constructor for string-described I/O errors.
+    pub(crate) fn io_other(msg: &str) -> Self {
+        Self::io(io::Error::other(msg))
+    }
 }
 
 impl fmt::Display for ClipboardError {
@@ -42,7 +62,7 @@ impl fmt::Display for ClipboardError {
 impl std::error::Error for ClipboardError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(e) => Some(e),
+            Self::Io(e) => Some(&**e),
             _ => None,
         }
     }
@@ -50,6 +70,40 @@ impl std::error::Error for ClipboardError {
 
 impl From<io::Error> for ClipboardError {
     fn from(e: io::Error) -> Self {
-        Self::Io(e)
+        Self::io(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_clipboard_error_smoke() {
+        let variants: Vec<ClipboardError> = vec![
+            ClipboardError::LibNotFound,
+            ClipboardError::NoDisplay,
+            ClipboardError::PayloadTooLarge,
+            ClipboardError::FocusRequired,
+            ClipboardError::UnsupportedMime,
+            ClipboardError::InvalidUri,
+            ClipboardError::io_other("test io error"),
+        ];
+        for v in &variants {
+            let cloned = v.clone();
+            // Display impls must agree between original and clone.
+            assert_eq!(
+                v.to_string(),
+                cloned.to_string(),
+                "clone Display mismatch for {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn io_arc_clone_shares_message() {
+        let e = ClipboardError::io_other("shared arc message");
+        let e2 = e.clone();
+        assert_eq!(e.to_string(), e2.to_string());
     }
 }

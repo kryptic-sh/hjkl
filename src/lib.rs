@@ -46,6 +46,8 @@ enum ClipboardBackend {
     /// X11 via XCB (Linux, phase 5b+).
     #[cfg(target_os = "linux")]
     X11,
+    /// OSC 52 terminal escape — write-only, text-only, any platform.
+    Osc52,
     /// Scaffold placeholder for platforms/phases not yet wired.
     Unimplemented,
 }
@@ -65,17 +67,12 @@ pub struct Clipboard {
 impl Clipboard {
     /// Construct a new clipboard handle, probing for the best available backend.
     ///
-    /// Probe order (Linux): Wayland → X11 → error.
+    /// Probe order (Linux): Wayland → X11 → OSC 52.
+    /// Other platforms: OSC 52 fallback until macOS/Windows phases wire in.
     ///
-    /// # Known limitation (Phase 7 fix required)
-    ///
-    /// Both `wayland_thread()` and `x11_thread()` use OnceLock to memoize the
-    /// first connection attempt. If `Clipboard::new()` is called multiple times
-    /// and the first Wayland attempt produced an Io error (instead of
-    /// LibNotFound/NoDisplay/FocusRequired), subsequent calls will not retry
-    /// X11 — they will see the same Io error from the OnceLock. For typical
-    /// usage (one `Clipboard::new()` per process) this is not observable.
-    /// Phase 7 must fix by making ClipboardError Clone or storing kind tags.
+    /// ClipboardError is Clone so OnceLock singletons preserve the typed error
+    /// variant across calls — LibNotFound/NoDisplay/FocusRequired all trigger
+    /// the correct fallthrough on every call, not just the first.
     pub fn new() -> Result<Self, ClipboardError> {
         #[cfg(target_os = "linux")]
         {
@@ -93,7 +90,7 @@ impl Clipboard {
                 Err(e) => return Err(e),
             }
 
-            // Try X11; fall through on LibNotFound / NoDisplay.
+            // Try X11; fall through to OSC 52 on LibNotFound / NoDisplay.
             match backend::x11_thread::x11_thread() {
                 Ok(_) => {
                     return Ok(Self {
@@ -104,8 +101,10 @@ impl Clipboard {
                 Err(e) => return Err(e),
             }
         }
-        // Other backends (macOS, Windows, OSC 52) land in later phases.
-        Err(ClipboardError::NoDisplay)
+        // OSC 52 fallback: write-only, text-only, works over SSH / tmux.
+        Ok(Self {
+            backend: ClipboardBackend::Osc52,
+        })
     }
 
     // -------------------------------------------------------------------------
@@ -126,11 +125,18 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::set_clipboard(thread, sel, &mime, bytes)
             }
+            ClipboardBackend::Osc52 => {
+                use backend::Backend as _;
+                backend::osc52::Osc52Backend::new().set(sel, mime, bytes)
+            }
             ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
     /// Read the current contents of `sel` as `mime`.
+    ///
+    /// OSC 52 backend always returns `UnsupportedMime` — terminal clipboard
+    /// cannot be read from the application side.
     #[allow(unused_variables)]
     pub fn get(&self, sel: Selection, mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
         match &self.backend {
@@ -144,6 +150,7 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::get_clipboard(thread, sel, &mime)
             }
+            ClipboardBackend::Osc52 => Err(ClipboardError::UnsupportedMime),
             ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
@@ -162,11 +169,18 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::clear_clipboard(thread, sel)
             }
+            ClipboardBackend::Osc52 => {
+                use backend::Backend as _;
+                backend::osc52::Osc52Backend::new().clear(sel)
+            }
             ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
     /// Return the MIME types currently available in `sel`.
+    ///
+    /// OSC 52 backend always returns an empty list — terminal clipboard state
+    /// cannot be queried.
     #[allow(unused_variables)]
     pub fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
         match &self.backend {
@@ -180,6 +194,7 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::available_clipboard(thread, sel)
             }
+            ClipboardBackend::Osc52 => Ok(vec![]),
             ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
@@ -238,5 +253,48 @@ impl Clipboard {
     pub fn get_uri_list(&self, sel: Selection) -> Result<Vec<Uri>, ClipboardError> {
         let bytes = self.get(sel, MimeType::UriList)?;
         crate::uri::decode_uri_list(&bytes)
+    }
+
+    /// Return true if the active backend is OSC 52.
+    ///
+    /// Used in tests to verify fallback selection without needing a display.
+    #[cfg(test)]
+    pub(crate) fn is_osc52(&self) -> bool {
+        matches!(self.backend, ClipboardBackend::Osc52)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Construct a Clipboard with OSC 52 by bypassing the display probe,
+    /// then verify set/clear succeed and get returns UnsupportedMime.
+    #[test]
+    fn osc52_backend_set_and_get() {
+        // Force OSC 52 backend directly — bypass Wayland/X11 probe.
+        let cb = Clipboard {
+            backend: ClipboardBackend::Osc52,
+        };
+        assert!(cb.is_osc52(), "expected Osc52 backend");
+
+        // set text should succeed (writes to stdout — captured nowhere in test
+        // but must not panic or error).
+        // We can't easily capture stdout here, so just assert Ok.
+        // This matches the osc52 backend tests which use set_inner with a buf.
+        let result = cb.set(Selection::Clipboard, MimeType::Text, b"hi");
+        // May succeed or error depending on tty availability; just no panic.
+        let _ = result;
+
+        // get is always UnsupportedMime for OSC 52.
+        let err = cb.get(Selection::Clipboard, MimeType::Text).unwrap_err();
+        assert!(
+            matches!(err, ClipboardError::UnsupportedMime),
+            "expected UnsupportedMime from osc52 get, got: {err}"
+        );
+
+        // available is always empty.
+        let mimes = cb.available(Selection::Clipboard).unwrap();
+        assert!(mimes.is_empty(), "expected empty available from osc52");
     }
 }

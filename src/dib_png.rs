@@ -12,8 +12,6 @@
 //! This module is **not** cfg-gated so that the pure-Rust conversion functions
 //! can be unit-tested on any host platform (including Linux CI).
 
-use std::io;
-
 use crate::ClipboardError;
 
 // ---------------------------------------------------------------------------
@@ -94,7 +92,7 @@ fn write_chunk(out: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
 ///
 /// Returns `(chunk_type, chunk_data_slice, new_pos)` or an error.
 fn read_chunk(data: &[u8], pos: usize) -> Result<([u8; 4], &[u8], usize), ClipboardError> {
-    let bad = |msg: &'static str| ClipboardError::Io(io::Error::other(msg));
+    let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
     if pos + 8 > data.len() {
         return Err(bad("truncated PNG chunk header"));
@@ -135,7 +133,7 @@ fn read_chunk(data: &[u8], pos: usize) -> Result<([u8; 4], &[u8], usize), Clipbo
 /// `prev` is the reconstructed pixels of the row above (all zeros for the
 /// first row). `bpp` is the number of bytes per pixel (3 for RGB, 4 for RGBA).
 fn unfilter_row(filter: u8, row: &mut [u8], prev: &[u8], bpp: usize) -> Result<(), ClipboardError> {
-    let bad = || ClipboardError::Io(io::Error::other("unknown PNG filter type"));
+    let bad = || ClipboardError::io_other("unknown PNG filter type");
     match filter {
         // None: no transformation.
         0 => {}
@@ -275,7 +273,7 @@ fn row_stride(width: u32, bpp: u16) -> u32 {
 /// `BITMAPFILEHEADER`). Only colour types 2 (RGB) and 6 (RGBA) at bit depth 8
 /// are supported.
 pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
-    let bad = |msg: &'static str| ClipboardError::Io(io::Error::other(msg));
+    let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
     // --- Verify PNG signature ---
     if png.len() < 8 || png[..8] != PNG_SIGNATURE {
@@ -404,7 +402,7 @@ pub(crate) fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 /// `BITMAPFILEHEADER`. Both bottom-up (positive height) and top-down (negative
 /// height) DIBs are accepted. Only 24 bpp and 32 bpp are supported.
 pub(crate) fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
-    let bad = |msg: &'static str| ClipboardError::Io(io::Error::other(msg));
+    let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
     if dib.len() < DIB_HEADER_SIZE as usize {
         return Err(bad("DIB too short for BITMAPV5HEADER"));

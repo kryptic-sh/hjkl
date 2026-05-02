@@ -183,9 +183,7 @@ impl ClipboardOpen {
         // return value.
         let ok = unsafe { OpenClipboard(std::ptr::null_mut()) };
         if ok == 0 {
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "OpenClipboard failed",
-            )));
+            return Err(ClipboardError::io_other("OpenClipboard failed"));
         }
         Ok(Self)
     }
@@ -217,9 +215,7 @@ impl LockedHandle {
         // to call on any valid HGLOBAL; failure is indicated by a NULL return.
         let ptr = unsafe { GlobalLock(handle) };
         if ptr.is_null() {
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "GlobalLock failed",
-            )));
+            return Err(ClipboardError::io_other("GlobalLock failed"));
         }
         Ok(Self { handle, ptr })
     }
@@ -245,9 +241,8 @@ impl Drop for LockedHandle {
 
 /// Write UTF-8 `bytes` to the clipboard as `CF_UNICODETEXT`.
 fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
-    let text = std::str::from_utf8(bytes).map_err(|_| {
-        ClipboardError::Io(std::io::Error::other("clipboard text is not valid UTF-8"))
-    })?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| ClipboardError::io_other("clipboard text is not valid UTF-8"))?;
 
     // Encode as UTF-16 LE with an explicit null terminator.
     let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
@@ -259,9 +254,7 @@ fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
     // `_guard` above). It frees all existing data and clears the owner field.
     let ok = unsafe { EmptyClipboard() };
     if ok == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "EmptyClipboard failed",
-        )));
+        return Err(ClipboardError::io_other("EmptyClipboard failed"));
     }
 
     // SAFETY: GlobalAlloc with GMEM_MOVEABLE is the required allocation
@@ -270,9 +263,7 @@ fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
     // any string that fits in memory.
     let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) };
     if handle.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GlobalAlloc failed",
-        )));
+        return Err(ClipboardError::io_other("GlobalAlloc failed"));
     }
 
     // Lock the handle (RAII releases on drop).
@@ -304,9 +295,7 @@ fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
         // SAFETY: `SetClipboardData` failed, so ownership did not transfer.
         // We free the allocation to avoid a leak.
         unsafe { GlobalFree(handle) };
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "SetClipboardData failed",
-        )));
+        return Err(ClipboardError::io_other("SetClipboardData failed"));
     }
 
     // `_guard` drops here → `CloseClipboard()` called.
@@ -328,9 +317,7 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
     // returned handle is owned by the clipboard — we must NOT free it.
     let handle = unsafe { GetClipboardData(CF_UNICODETEXT) };
     if handle.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GetClipboardData failed",
-        )));
+        return Err(ClipboardError::io_other("GetClipboardData failed"));
     }
 
     // Lock the handle (RAII releases on drop, even on early-return errors).
@@ -353,9 +340,8 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
     let len_without_nul = slice.iter().position(|&c| c == 0).unwrap_or(max_units);
     let text_slice = &slice[..len_without_nul];
 
-    let text = String::from_utf16(text_slice).map_err(|_| {
-        ClipboardError::Io(std::io::Error::other("clipboard data is not valid UTF-16"))
-    })?;
+    let text = String::from_utf16(text_slice)
+        .map_err(|_| ClipboardError::io_other("clipboard data is not valid UTF-16"))?;
 
     // `locked` drops here → GlobalUnlock. `_guard` drops next → CloseClipboard.
     Ok(text.into_bytes())
@@ -383,9 +369,7 @@ fn set_bytes(format: UINT, bytes: &[u8]) -> Result<(), ClipboardError> {
     // this). It frees all existing data and clears the clipboard owner.
     let ok = unsafe { EmptyClipboard() };
     if ok == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "EmptyClipboard failed",
-        )));
+        return Err(ClipboardError::io_other("EmptyClipboard failed"));
     }
 
     let len = bytes.len();
@@ -394,9 +378,7 @@ fn set_bytes(format: UINT, bytes: &[u8]) -> Result<(), ClipboardError> {
     // overflow possible for data that fits in memory.
     let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, len) };
     if handle.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GlobalAlloc failed",
-        )));
+        return Err(ClipboardError::io_other("GlobalAlloc failed"));
     }
 
     let locked = match LockedHandle::new(handle) {
@@ -424,9 +406,7 @@ fn set_bytes(format: UINT, bytes: &[u8]) -> Result<(), ClipboardError> {
     if result.is_null() {
         // SAFETY: SetClipboardData failed; ownership did not transfer.
         unsafe { GlobalFree(handle) };
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "SetClipboardData failed",
-        )));
+        return Err(ClipboardError::io_other("SetClipboardData failed"));
     }
 
     Ok(())
@@ -449,9 +429,7 @@ fn get_bytes(format: UINT) -> Result<Vec<u8>, ClipboardError> {
     // handle is owned by the clipboard — we must NOT free it.
     let handle = unsafe { GetClipboardData(format) };
     if handle.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "GetClipboardData failed",
-        )));
+        return Err(ClipboardError::io_other("GetClipboardData failed"));
     }
 
     let locked = LockedHandle::new(handle)?;
@@ -476,9 +454,9 @@ fn get_bytes(format: UINT) -> Result<Vec<u8>, ClipboardError> {
 fn set_html(html: &str) -> Result<(), ClipboardError> {
     let id = cf_html_format();
     if id == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "RegisterClipboardFormatW failed for CF_HTML",
-        )));
+        ));
     }
     let envelope = crate::cf_html::wrap(html);
     set_bytes(id, &envelope)
@@ -488,9 +466,9 @@ fn set_html(html: &str) -> Result<(), ClipboardError> {
 fn get_html() -> Result<Vec<u8>, ClipboardError> {
     let id = cf_html_format();
     if id == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "RegisterClipboardFormatW failed for CF_HTML",
-        )));
+        ));
     }
     let envelope = get_bytes(id)?;
     let fragment = crate::cf_html::unwrap(&envelope)?;
@@ -505,9 +483,9 @@ fn get_html() -> Result<Vec<u8>, ClipboardError> {
 fn set_rtf(bytes: &[u8]) -> Result<(), ClipboardError> {
     let id = cf_rtf_format();
     if id == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "RegisterClipboardFormatW failed for CF_RTF",
-        )));
+        ));
     }
     set_bytes(id, bytes)
 }
@@ -516,9 +494,9 @@ fn set_rtf(bytes: &[u8]) -> Result<(), ClipboardError> {
 fn get_rtf() -> Result<Vec<u8>, ClipboardError> {
     let id = cf_rtf_format();
     if id == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "RegisterClipboardFormatW failed for CF_RTF",
-        )));
+        ));
     }
     get_bytes(id)
 }
@@ -575,9 +553,9 @@ fn get_uri_list() -> Result<Vec<u8>, ClipboardError> {
 fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
     let png_id = cf_png_format();
     if png_id == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "RegisterClipboardFormatW failed for PNG",
-        )));
+        ));
     }
     let dib = crate::dib_png::png_to_dib(bytes)?;
 
@@ -587,9 +565,7 @@ fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
     // SAFETY: clipboard is open (`_guard`).
     let ok = unsafe { EmptyClipboard() };
     if ok == 0 {
-        return Err(ClipboardError::Io(std::io::Error::other(
-            "EmptyClipboard failed",
-        )));
+        return Err(ClipboardError::io_other("EmptyClipboard failed"));
     }
 
     // Helper: allocate + copy + SetClipboardData, no re-open.
@@ -598,9 +574,7 @@ fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
         // SAFETY: GMEM_MOVEABLE allocation for clipboard.
         let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, len) };
         if handle.is_null() {
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "GlobalAlloc failed",
-            )));
+            return Err(ClipboardError::io_other("GlobalAlloc failed"));
         }
         let locked = match LockedHandle::new(handle) {
             Ok(l) => l,
@@ -620,9 +594,7 @@ fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
         if result.is_null() {
             // SAFETY: SetClipboardData failed; ownership did not transfer.
             unsafe { GlobalFree(handle) };
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "SetClipboardData failed",
-            )));
+            return Err(ClipboardError::io_other("SetClipboardData failed"));
         }
         Ok(())
     };
@@ -671,9 +643,9 @@ fn get_png() -> Result<Vec<u8>, ClipboardError> {
     // SAFETY: clipboard is open and CF_DIBV5 is available; handle is clipboard-owned.
     let handle = unsafe { GetClipboardData(CF_DIBV5) };
     if handle.is_null() {
-        return Err(ClipboardError::Io(std::io::Error::other(
+        return Err(ClipboardError::io_other(
             "GetClipboardData(CF_DIBV5) failed",
-        )));
+        ));
     }
     let locked = LockedHandle::new(handle)?;
     // SAFETY: handle is a valid locked HGLOBAL.
@@ -706,9 +678,8 @@ impl Backend for WindowsBackend {
         match mime {
             MimeType::Text => set_text(bytes),
             MimeType::Html => {
-                let html = std::str::from_utf8(bytes).map_err(|_| {
-                    ClipboardError::Io(std::io::Error::other("HTML payload is not valid UTF-8"))
-                })?;
+                let html = std::str::from_utf8(bytes)
+                    .map_err(|_| ClipboardError::io_other("HTML payload is not valid UTF-8"))?;
                 set_html(html)
             }
             MimeType::Rtf => set_rtf(bytes),
@@ -744,9 +715,7 @@ impl Backend for WindowsBackend {
         // documented way to clear the clipboard.
         let ok = unsafe { EmptyClipboard() };
         if ok == 0 {
-            return Err(ClipboardError::Io(std::io::Error::other(
-                "EmptyClipboard failed",
-            )));
+            return Err(ClipboardError::io_other("EmptyClipboard failed"));
         }
         Ok(())
     }
