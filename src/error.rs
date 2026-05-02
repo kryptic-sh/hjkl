@@ -12,6 +12,7 @@ use std::sync::Arc;
 /// (required so singletons can store `OnceLock<Result<T, ClipboardError>>`
 /// and return typed errors on every call), the `Io` variant wraps `io::Error`
 /// in `Arc`. Callers matching on `Io` can deref to `&io::Error` via `&**arc`.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum ClipboardError {
     /// A required native library (libxcb, libwayland-client) was not found.
