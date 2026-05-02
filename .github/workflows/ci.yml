@@ -51,22 +51,24 @@ jobs:
       - run: cargo test --all-features
       - run: cargo test --doc --all-features
 
-  musl:
-    name: check ${{ matrix.target }}
-    runs-on: ubuntu-latest
+  musl-test:
+    name: test ${{ matrix.target }}
+    runs-on: ${{ matrix.runs-on }}
+    container: rust:stable-alpine
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-musl
+        include:
+          - target: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - run: apk add --no-cache bash tar musl-dev
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --target ${{ matrix.target }} --all-targets
+      - run: cargo test --all-features
+      - run: cargo test --doc --all-features
 
   deny:
     name: cargo-deny
