@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-03
+
+### Fixed
+
+- `aur-bin` release job: include `pkg/aur/PKGBUILD-bin.in` in the repo. The AUR
+  `.gitignore` allowlist matched only the literal name `PKGBUILD`, silently
+  filtering the template file out of the v0.4.3 tag. Job failed at the sed
+  render step.
+
 ## [0.4.3] - 2026-05-03
 
 ### Added
