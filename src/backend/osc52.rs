@@ -12,8 +12,18 @@ use std::io::{self, Write};
 use crate::{ClipboardError, MimeType, Selection};
 
 use super::Backend;
-use crate::base64::base64_encode;
 use crate::osc52::{OSC52_MAX, is_in_tmux, write_osc52};
+
+/// Length of the standard padded base64 encoding of `n` raw bytes.
+///
+/// Standard base64 emits `((n + 2) / 3) * 4` characters (every 3-byte input
+/// chunk produces 4 output characters; partial trailing chunks are padded with
+/// `=` to a 4-character boundary). Computed without allocating so the OSC 52
+/// size cap can be enforced on huge payloads cheaply.
+#[inline]
+fn base64_encoded_len(n: usize) -> usize {
+    n.div_ceil(3) * 4
+}
 
 /// OSC 52 backend. Unit struct — no state, everything is stateless I/O.
 pub(crate) struct Osc52Backend;
@@ -43,7 +53,9 @@ impl Osc52Backend {
         }
         let text = std::str::from_utf8(bytes).map_err(|_| ClipboardError::UnsupportedMime)?;
         // Check size cap before writing — avoids relying on error-kind heuristics.
-        if base64_encode(text.as_bytes()).len() > OSC52_MAX {
+        // Compute the encoded length arithmetically rather than allocating a
+        // base64 string just to measure it; the formula matches the encoder.
+        if base64_encoded_len(text.len()) > OSC52_MAX {
             return Err(ClipboardError::PayloadTooLarge);
         }
         write_osc52(out, text, is_in_tmux()).map_err(ClipboardError::io)
@@ -86,9 +98,48 @@ impl Backend for Osc52Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::base64::base64_encode;
 
     fn backend() -> Osc52Backend {
         Osc52Backend::new()
+    }
+
+    // -------------------------------------------------------------------------
+    // base64_encoded_len — must match `base64_encode(...).len()` exactly.
+    // -------------------------------------------------------------------------
+
+    /// The arithmetic length must match what the encoder actually produces for
+    /// boundary inputs (0/1/2/3-byte remainders) and at the OSC 52 cap edge.
+    #[test]
+    fn base64_encoded_len_matches_encoder() {
+        // 0/1/2/3 cover every chunks_exact remainder branch (0, 1, 2, none).
+        for n in [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+            let bytes = vec![b'x'; n];
+            assert_eq!(
+                base64_encoded_len(n),
+                base64_encode(&bytes).len(),
+                "mismatch at n = {n}"
+            );
+        }
+
+        // OSC52_MAX boundary inputs — sizes that bracket the cap on either
+        // side (just under, exactly at, just over the encoded-length limit).
+        // These exercise the same arithmetic the cap-check uses.
+        let max_raw = OSC52_MAX / 4 * 3; // largest multiple-of-3 raw input that fits
+        for &n in &[
+            max_raw.saturating_sub(2),
+            max_raw.saturating_sub(1),
+            max_raw,
+            max_raw + 1,
+            max_raw + 2,
+        ] {
+            let bytes = vec![b'x'; n];
+            assert_eq!(
+                base64_encoded_len(n),
+                base64_encode(&bytes).len(),
+                "mismatch at n = {n}"
+            );
+        }
     }
 
     // -------------------------------------------------------------------------
