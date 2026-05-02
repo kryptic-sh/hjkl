@@ -34,9 +34,12 @@ const WL_DISPLAY_ID: u32 = 1;
 // const WL_REGISTRY_ID: u32 = 2;  // used during open()
 // const WL_CALLBACK_ID: u32 = 3;  // used during open()
 
-// Client allocations start at 100 for clarity (avoids confusion with
-// compositor-allocated IDs which are typically low numbered).
-const FIRST_CLIENT_ID: u32 = 100;
+// Client allocations start at 4: 1 (display), 2 (registry), 3 (callback)
+// are consumed during open(). Some compositors (sway/wlroots) reject bind
+// requests with new_ids far above the contiguous client range with
+// "invalid arguments" — libwayland-client itself allocates from 4
+// monotonically, so we match that.
+const FIRST_CLIENT_ID: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // ext_data_control_v1 interface names
@@ -410,11 +413,9 @@ fn init_bind(
     // but we need NEW ids for seat/manager/device which are post-open.
     let registry_id: u32 = 2; // same as open()
 
+    // Allocate IDs one at a time, sequentially, in send order — so the
+    // sequence on the wire is monotonically increasing without gaps.
     let seat_id = *next_id;
-    *next_id += 1;
-    let manager_id = *next_id;
-    *next_id += 1;
-    let device_id = *next_id;
     *next_id += 1;
 
     // Step 1: bind wl_seat, sync, drain — isolates seat-bind failures.
@@ -423,6 +424,8 @@ fn init_bind(
     sync_or_die(socket, next_id, "after wl_seat bind")?;
 
     // Step 2: bind ext_data_control_manager_v1, sync, drain.
+    let manager_id = *next_id;
+    *next_id += 1;
     send_registry_bind(
         socket,
         registry_id,
@@ -434,6 +437,8 @@ fn init_bind(
     sync_or_die(socket, next_id, "after ext_data_control_manager_v1 bind")?;
 
     // Step 3: manager.get_data_device(new_id, seat), sync, drain.
+    let device_id = *next_id;
+    *next_id += 1;
     {
         let mut args = Vec::new();
         encode_u32(&mut args, device_id);
