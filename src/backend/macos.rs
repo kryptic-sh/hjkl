@@ -288,6 +288,7 @@ fn uti_to_mime(name: &str) -> Option<MimeType> {
 pub(crate) struct MacosBackend;
 
 impl MacosBackend {
+    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
         Self
     }

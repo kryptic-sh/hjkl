@@ -19,7 +19,7 @@ use super::Backend;
 // Win32 conventional names are all-caps; suppress the clippy lint that wants
 // camel-case acronyms. The names are intentionally mirroring the C API so
 // that diffs against MSDN documentation are easy to read.
-#[allow(clippy::upper_case_acronyms, non_camel_case_types)]
+#[allow(clippy::upper_case_acronyms, non_camel_case_types, dead_code)]
 mod win32_types {
     use std::ffi::c_void;
 
@@ -118,6 +118,8 @@ unsafe extern "system" {
     fn GlobalSize(hMem: HGLOBAL) -> SIZE_T;
 
     /// Retrieves the calling thread's last-error code value.
+    // Loaded for completeness; not yet called in this version.
+    #[allow(dead_code)]
     fn GetLastError() -> DWORD;
 }
 
@@ -664,6 +666,7 @@ fn get_png() -> Result<Vec<u8>, ClipboardError> {
 pub(crate) struct WindowsBackend;
 
 impl WindowsBackend {
+    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
         Self
     }

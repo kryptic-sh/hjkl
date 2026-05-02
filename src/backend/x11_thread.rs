@@ -51,6 +51,23 @@ const XCB_GET_PROPERTY_TYPE_ANY: u32 = 0;
 /// This is computed per-connection from max_request_len_bytes; the constant
 /// here is only used as the chunk cap — actual value comes from state.conn.
 const XCB_REQUEST_HEADER_OVERHEAD: usize = 24;
+
+// ---------------------------------------------------------------------------
+// Timeout constants (all internal — not exposed as config)
+// ---------------------------------------------------------------------------
+
+/// Event loop tick interval in milliseconds. Drives INCR periodic prune.
+const EVENT_LOOP_TICK_MS: u64 = 50;
+/// SELECTION_NOTIFY wait for do_get: how long to wait for the owner to reply.
+const SELECTION_NOTIFY_TIMEOUT_SECS: u64 = 5;
+/// INCR receive: per-chunk timeout. Sender must write the next chunk within
+/// this window or the receive is aborted.
+const INCR_RECV_CHUNK_TIMEOUT_SECS: u64 = 10;
+/// INCR receive: total timeout across all chunks.
+const INCR_RECV_TOTAL_TIMEOUT_SECS: u64 = 30;
+/// SAVE_TARGETS handshake: how long to wait for the manager's initial
+/// SELECTION_NOTIFY before giving up silently.
+const SAVE_TARGETS_TIMEOUT_SECS: u64 = 5;
 /// Per-INCR-transfer timeout (send side): 30 seconds total.
 const INCR_SEND_TOTAL_TIMEOUT_SECS: u64 = 30;
 
@@ -213,6 +230,26 @@ pub(crate) struct X11Request {
 }
 
 // ---------------------------------------------------------------------------
+// X11Future — wraps Oneshot<X11OpResult> as a Future
+// ---------------------------------------------------------------------------
+
+/// Future returned by [`X11Thread::send_async`].
+pub(crate) struct X11Future {
+    oneshot: Arc<crate::oneshot::Oneshot<X11OpResult>>,
+}
+
+impl std::future::Future for X11Future {
+    type Output = X11OpResult;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.oneshot.poll(cx)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // X11Thread public handle
 // ---------------------------------------------------------------------------
 
@@ -255,6 +292,18 @@ impl X11Thread {
             .expect("failed to spawn X11 bg thread");
 
         Ok(Self { tx, atoms })
+    }
+
+    /// Enqueue an op and return a `Future` that resolves when the bg thread replies.
+    pub(crate) fn send_async(&self, op: X11Op) -> X11Future {
+        let oneshot = crate::oneshot::Oneshot::new();
+        let reply = crate::reply::Reply::Async(Arc::clone(&oneshot));
+
+        self.tx
+            .send(X11Request { op, reply })
+            .expect("x11 thread inbox closed");
+
+        X11Future { oneshot }
     }
 
     /// Send an op and block until the bg thread replies.
@@ -344,10 +393,16 @@ fn create_selection_window(conn: &X11Connection) -> Result<u32, ClipboardError> 
 
 fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
     loop {
+        // Prune expired INCR sends at the top of every tick. If a requestor
+        // dies mid-transfer, PROPERTY_DELETE events never arrive and the entry
+        // would otherwise live forever in state.incr_sends. Pruning here caps
+        // the growth to at most one 50 ms tick beyond the 30 s deadline.
+        prune_expired_incr_sends(state);
+
         // Drain any pending X events before blocking on the inbox.
         drain_events(state, DrainGoal::AnyEvent);
 
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        match rx.recv_timeout(Duration::from_millis(EVENT_LOOP_TICK_MS)) {
             Ok(req) => handle_op(state, req),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -367,9 +422,6 @@ enum DrainGoal {
     SelectionNotify { our_property: u32 },
     /// Looking for PROPERTY_NOTIFY (new value) on our private get-property.
     PropertyNotify { our_property: u32, our_window: u32 },
-    /// Looking for PROPERTY_NOTIFY (delete) on a requestor's window/property.
-    /// Used by INCR send to know when the requestor has consumed a chunk.
-    PropertyDelete { window: u32, property: u32 },
 }
 
 /// Result from drain_events when a goal is set.
@@ -380,8 +432,6 @@ enum DrainResult {
     SelectionNotifySeen { property: u32 },
     /// Saw PROPERTY_NOTIFY (new value); caller should read the property.
     PropertyNotifySeen,
-    /// Saw PROPERTY_NOTIFY (delete) on the requestor; send next chunk.
-    PropertyDeleteSeen,
 }
 
 /// Drain all pending X events, dispatching SELECTION_REQUEST/CLEAR as they
@@ -461,17 +511,6 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
                         // SAFETY: ev was heap-allocated by xcb.
                         unsafe { libc::free(ev.cast()) };
                         return DrainResult::PropertyNotifySeen;
-                    }
-                    DrainGoal::PropertyDelete { window, property }
-                        if pn.window == *window
-                            && pn.atom == *property
-                            && pn.state == XCB_PROPERTY_DELETE =>
-                    {
-                        // Requestor deleted our property — it has consumed the
-                        // previous chunk and is ready for the next one.
-                        // SAFETY: ev was heap-allocated by xcb.
-                        unsafe { libc::free(ev.cast()) };
-                        return DrainResult::PropertyDeleteSeen;
                     }
                     _ => DrainResult::NotFound,
                 }
@@ -660,6 +699,42 @@ fn start_incr_send(
         deadline: Instant::now() + Duration::from_secs(INCR_SEND_TOTAL_TIMEOUT_SECS),
         done: false,
     });
+}
+
+/// Drop INCR send entries that have exceeded their deadline without completing.
+///
+/// Called at the top of every run_loop tick so entries are reclaimed even
+/// when the requestor dies and no PROPERTY_DELETE events ever arrive.
+/// A zero-length terminator is sent best-effort before dropping so the X
+/// server does not leave the requestor's property in an inconsistent state.
+fn prune_expired_incr_sends(state: &mut X11State) {
+    let now = Instant::now();
+    let fns = state.conn.fns();
+    let raw = state.conn.raw();
+
+    for xfer in &mut state.incr_sends {
+        if xfer.done || now < xfer.deadline {
+            continue;
+        }
+        // Best-effort zero-length terminator before dropping.
+        // SAFETY: sending zero bytes is always valid.
+        unsafe {
+            (fns.xcb_change_property)(
+                raw,
+                XCB_PROP_MODE_REPLACE,
+                xfer.requestor,
+                xfer.property,
+                xfer.target_atom,
+                8,
+                0,
+                std::ptr::null(),
+            );
+            (fns.xcb_flush)(raw);
+        }
+        xfer.done = true;
+    }
+
+    state.incr_sends.retain(|x| !x.done);
 }
 
 /// Advance any in-flight INCR send whose requestor deleted the given property.
@@ -989,9 +1064,9 @@ fn do_save_targets(state: &mut X11State) {
     unsafe { (fns.xcb_flush)(raw) };
 
     // Wait for SELECTION_NOTIFY accepting or refusing the SAVE_TARGETS.
-    // We wait a short time (5 s) for the initial handshake only — the manager
+    // We wait a short time for the initial handshake only — the manager
     // does the actual data copy in the background after that.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(SAVE_TARGETS_TIMEOUT_SECS);
     loop {
         if let DrainResult::SelectionNotifySeen { .. } =
             drain_events(state, DrainGoal::SelectionNotify { our_property })
@@ -1113,8 +1188,7 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
 
     // Wait for SELECTION_NOTIFY, dispatching any SELECTION_REQUEST events that
     // arrive while we wait (needed for self-reads where we own the selection).
-    // Timeout: 5 seconds.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(SELECTION_NOTIFY_TIMEOUT_SECS);
     let replied_property = loop {
         if let DrainResult::SelectionNotifySeen { property } =
             drain_events(state, DrainGoal::SelectionNotify { our_property })
@@ -1160,11 +1234,11 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
     drain_events(state, DrainGoal::AnyEvent);
 
     let mut accumulator: Vec<u8> = Vec::new();
-    let total_deadline = Instant::now() + Duration::from_secs(30);
+    let total_deadline = Instant::now() + Duration::from_secs(INCR_RECV_TOTAL_TIMEOUT_SECS);
 
     loop {
         // Wait for PROPERTY_NOTIFY (new value) on our window/property.
-        let chunk_deadline = Instant::now() + Duration::from_secs(10);
+        let chunk_deadline = Instant::now() + Duration::from_secs(INCR_RECV_CHUNK_TIMEOUT_SECS);
         loop {
             if let DrainResult::PropertyNotifySeen = drain_events(
                 state,
@@ -1260,7 +1334,7 @@ pub(crate) fn mime_to_atom_static(atoms: &Atoms, mime: &MimeType) -> Option<u32>
 /// Map a MimeType to (mime_atom, mime_name):
 ///   - Known types return (atom, None).
 ///   - Custom(s) returns (0, Some(s)) so the bg thread can intern lazily.
-fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Option<String>) {
+pub(crate) fn mime_to_atom_or_name(atoms: &Atoms, mime: &MimeType) -> (u32, Option<String>) {
     match mime_to_atom_static(atoms, mime) {
         Some(atom) => (atom, None),
         None => {
@@ -1383,7 +1457,7 @@ pub(crate) fn available_clipboard(
     }
 }
 
-fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
+pub(crate) fn sel_to_atom(atoms: &Atoms, sel: Selection) -> u32 {
     match sel {
         Selection::Clipboard => atoms.clipboard,
         Selection::Primary => atoms.primary,

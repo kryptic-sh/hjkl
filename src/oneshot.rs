@@ -3,6 +3,10 @@
 //! `Oneshot<T>` allows a background thread to resolve a `Future` that lives on
 //! the async executor side. No tokio / async-std required.
 
+// Used by X11/Wayland backends on Linux; macOS/Windows backend dispatch is
+// direct so Oneshot is dead on those targets at the module level.
+#![allow(dead_code)]
+
 use std::sync::{Arc, Mutex};
 use std::task::Waker;
 

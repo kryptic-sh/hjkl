@@ -1,5 +1,8 @@
 //! [`Reply<T>`] — unified sync/async reply target for background thread ops.
 
+// Used by X11/Wayland backends on Linux; macOS/Windows dispatch is direct.
+#![allow(dead_code)]
+
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::oneshot::Oneshot;

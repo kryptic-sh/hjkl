@@ -1,3 +1,6 @@
+// Not cfg-gated so pure-Rust tests run on Linux CI; dead_code on non-Windows.
+#![allow(dead_code)]
+
 //! Windows DIB <-> PNG conversion via `miniz_oxide`.
 //!
 //! Modern apps use the `"PNG"` registered format directly; legacy apps use

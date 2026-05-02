@@ -1,3 +1,6 @@
+// Not cfg-gated so pure-Rust tests run on Linux CI; dead_code on non-Windows.
+#![allow(dead_code)]
+
 //! Windows `CF_HDROP` / `DROPFILES` structure builder and parser.
 //!
 //! Used for `text/uri-list` on Windows. Handles UNC path mapping:

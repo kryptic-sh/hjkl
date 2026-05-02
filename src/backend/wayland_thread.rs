@@ -54,6 +54,8 @@ const ZWP_PRIMARY_SEL_MANAGER: &str = "zwp_primary_selection_device_manager_v1";
 
 // wl_display
 const WL_DISPLAY_SYNC: u16 = 0;
+// WL_DISPLAY_GET_REGISTRY sent during connection open (wayland.rs), not re-sent here.
+#[allow(dead_code)]
 const WL_DISPLAY_GET_REGISTRY: u16 = 1;
 
 // wl_registry
@@ -65,6 +67,8 @@ const EXT_MANAGER_GET_DATA_DEVICE: u16 = 1;
 
 // ext_data_control_device_v1 requests
 const EXT_DEVICE_SET_SELECTION: u16 = 0;
+// PRIMARY selection via ext_data_control uses the zwp protocol path instead.
+#[allow(dead_code)]
 const EXT_DEVICE_SET_PRIMARY_SELECTION: u16 = 2;
 
 // ext_data_control_source_v1 requests
@@ -122,6 +126,8 @@ const ZWP_PRIMARY_SOURCE_SEND: u16 = 0;
 const ZWP_PRIMARY_SOURCE_CANCELLED: u16 = 1;
 
 // zwp_primary_selection_offer_v1 events
+// offer.offer events from zwp offers routed via EXT_OFFER_OFFER opcode (same value).
+#[allow(dead_code)]
 const ZWP_PRIMARY_OFFER_OFFER: u16 = 0;
 
 // zwp_primary_selection_device_v1 events
@@ -198,6 +204,26 @@ pub(crate) struct WaylandRequest {
 }
 
 // ---------------------------------------------------------------------------
+// WaylandFuture — wraps Oneshot<WaylandOpResult> as a Future
+// ---------------------------------------------------------------------------
+
+/// Future returned by [`WaylandThread::send_async`].
+pub(crate) struct WaylandFuture {
+    oneshot: Arc<crate::oneshot::Oneshot<WaylandOpResult>>,
+}
+
+impl std::future::Future for WaylandFuture {
+    type Output = WaylandOpResult;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        self.oneshot.poll(cx)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WaylandThread public handle
 // ---------------------------------------------------------------------------
 
@@ -238,6 +264,18 @@ impl WaylandThread {
             .expect("failed to spawn Wayland bg thread");
 
         Ok(Self { tx })
+    }
+
+    /// Enqueue an op and return a `Future` that resolves when the bg thread replies.
+    pub(crate) fn send_async(&self, op: WaylandOp) -> WaylandFuture {
+        let oneshot = crate::oneshot::Oneshot::new();
+        let reply = crate::reply::Reply::Async(Arc::clone(&oneshot));
+
+        self.tx
+            .send(WaylandRequest { op, reply })
+            .expect("wayland thread inbox closed");
+
+        WaylandFuture { oneshot }
     }
 
     /// Send an op and block until the bg thread replies.
@@ -284,7 +322,9 @@ struct OwnedSource {
     id: u32,
     /// Payloads keyed by MIME type string.
     payloads: HashMap<String, Vec<u8>>,
-    /// All advertised MIME type strings (including aliases).
+    /// All advertised MIME type strings (including aliases). Recorded for
+    /// future diagnostics; not read in v0.4.0 production paths.
+    #[allow(dead_code)]
     offered_mimes: Vec<String>,
 }
 
@@ -309,17 +349,21 @@ struct WaylandState {
     /// Monotonically increasing id allocator (starts at FIRST_CLIENT_ID after
     /// startup objects were allocated).
     next_id: u32,
-    /// Server-side global id (name) for the seat.
+    /// Server-side global id (name) for the seat. Retained for reconnect in v0.5.
+    #[allow(dead_code)]
     seat_name: u32,
-    /// Our bound seat object id.
+    /// Our bound seat object id. Retained for reconnect in v0.5.
+    #[allow(dead_code)]
     seat_id: u32,
-    /// Server-side global id (name) for the data-control manager.
+    /// Server-side global id (name) for the data-control manager. Retained for reconnect.
+    #[allow(dead_code)]
     manager_name: u32,
     /// Our bound manager object id.
     manager_id: u32,
     /// Our data-control device object id.
     device_id: u32,
-    /// Sync callback object id used during bind round-trip.
+    /// Sync callback object id — used during init; retained for protocol bookkeeping.
+    #[allow(dead_code)]
     sync_id: u32,
     /// Currently owned clipboard source, if any.
     clipboard_source: Option<OwnedSource>,
@@ -1407,6 +1451,7 @@ mod tests {
         /// Paste results: mime -> bytes the client wrote when we sent send events.
         pub paste_results: HashMap<String, Vec<u8>>,
         /// Object id counter for server-side allocations.
+        #[allow(dead_code)]
         next_server_id: u32,
         /// Pipe write ends we use to trigger send events, keyed by source id.
         /// The mock server thread reads these to send events to the client.
@@ -1427,11 +1472,13 @@ mod tests {
     struct PendingOffer {
         mimes: Vec<String>,
         payloads: HashMap<String, Vec<u8>>,
+        #[allow(dead_code)]
         is_primary: bool,
     }
 
     struct PendingSend {
         mime: String,
+        #[allow(dead_code)]
         read_fd: c_int,
         write_fd: c_int,
         source_id: u32,
@@ -1457,6 +1504,7 @@ mod tests {
     }
 
     impl MockState {
+        #[allow(dead_code)]
         fn alloc_server_id(&mut self) -> u32 {
             let id = self.next_server_id;
             self.next_server_id += 1;
@@ -1481,6 +1529,7 @@ mod tests {
     pub(crate) struct MockCompositor {
         pub socket_path: PathBuf,
         pub state: Arc<Mutex<MockState>>,
+        #[allow(dead_code)]
         shutdown: Arc<AtomicBool>,
     }
 
@@ -1597,8 +1646,8 @@ mod tests {
             });
         }
 
-        /// Wait until the client's bg thread has processed the current offer
-        /// (i.e., current_clipboard_offer is populated).
+        /// Wait until the client's bg thread has processed the current offer.
+        #[allow(dead_code)]
         pub(crate) fn wait_for_clipboard_offer(&self, timeout_ms: u64) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
             loop {
@@ -1609,6 +1658,7 @@ mod tests {
             }
         }
 
+        #[allow(dead_code)]
         pub(crate) fn shutdown(self) {
             self.shutdown.store(true, Ordering::Relaxed);
         }
@@ -1688,7 +1738,9 @@ mod tests {
         objects: HashMap<u32, MockObjectType>,
         next_id: u32,
         state: Arc<Mutex<MockState>>,
+        #[allow(dead_code)]
         advertise_data_control: bool,
+        #[allow(dead_code)]
         advertise_primary: bool,
         /// Globals we advertise: (name, interface, version).
         globals: Vec<(u32, &'static str, u32)>,
@@ -1699,6 +1751,7 @@ mod tests {
     }
 
     impl MockServer {
+        #[allow(dead_code)]
         fn alloc_id(&mut self) -> u32 {
             let id = self.next_id;
             self.next_id += 1;
@@ -1710,6 +1763,7 @@ mod tests {
             let _ = self.socket.send(&msg, &[]);
         }
 
+        #[allow(dead_code)]
         fn send_with_fd(&self, object_id: u32, opcode: u16, args: &[u8], fd: c_int) {
             let msg = encode_message(object_id, opcode, args);
             let _ = self.socket.send(&msg, &[fd]);

@@ -161,6 +161,7 @@ impl WaylandConnection {
     }
 
     /// All globals advertised by the compositor.
+    #[allow(dead_code)]
     pub(crate) fn globals(&self) -> &[Global] {
         &self.globals
     }
@@ -171,13 +172,15 @@ impl WaylandConnection {
     }
 
     /// Allocate a fresh Wayland new_id.
+    #[allow(dead_code)]
     pub(crate) fn alloc_id(&mut self) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
         id
     }
 
-    /// Borrow the underlying socket (needed by 6b/6c for bind + event loop).
+    /// Borrow the underlying socket.
+    #[allow(dead_code)]
     pub(crate) fn socket_mut(&mut self) -> &mut WaylandSocket {
         &mut self.socket
     }
@@ -224,9 +227,10 @@ fn parse_display_error(args: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Backend stub (clipboard ops land in 6b/6c)
+// Backend stub (superseded by WaylandThread — kept for cross-platform compile)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub(crate) struct WaylandBackend;
 
 impl Backend for WaylandBackend {

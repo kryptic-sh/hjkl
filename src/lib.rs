@@ -12,9 +12,6 @@
 //! assert_eq!(data, b"hello");
 //! ```
 
-// Phase 0 scaffold: most items are wired up but not yet called.
-#![allow(dead_code)]
-
 pub mod error;
 pub mod mime;
 pub mod selection;
@@ -48,7 +45,8 @@ enum ClipboardBackend {
     X11,
     /// OSC 52 terminal escape — write-only, text-only, any platform.
     Osc52,
-    /// Scaffold placeholder for platforms/phases not yet wired.
+    /// Scaffold placeholder for macOS/Windows phases not yet wired.
+    #[allow(dead_code)]
     Unimplemented,
 }
 
@@ -204,32 +202,171 @@ impl Clipboard {
     // -------------------------------------------------------------------------
 
     /// Async version of [`set`][Self::set].
+    ///
+    /// Bytes are cloned inside the method so the future is `'static` and the
+    /// caller's slice does not need to outlive the returned future.
+    ///
+    /// X11/Wayland: routes through the bg thread Oneshot future.
+    /// OSC 52: wraps the synchronous write in `std::future::ready`.
+    #[allow(unused_variables)]
     pub async fn set_async(
         &self,
-        _sel: Selection,
-        _mime: MimeType,
-        _bytes: &[u8],
+        sel: Selection,
+        mime: MimeType,
+        bytes: &[u8],
     ) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+        let bytes = bytes.to_vec();
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                let fut =
+                    thread.send_async(backend::wayland_thread::WaylandOp::Set { sel, mime, bytes });
+                match fut.await {
+                    backend::wayland_thread::WaylandOpResult::Set(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                let (mime_atom, mime_name) =
+                    backend::x11_thread::mime_to_atom_or_name(&thread.atoms, &mime);
+                let sel_atom = backend::x11_thread::sel_to_atom(&thread.atoms, sel);
+                let fut = thread.send_async(backend::x11_thread::X11Op::Set {
+                    sel_atom,
+                    mime_atom,
+                    mime_name,
+                    bytes,
+                });
+                match fut.await {
+                    backend::x11_thread::X11OpResult::Set(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            ClipboardBackend::Osc52 => {
+                use backend::Backend as _;
+                std::future::ready(backend::osc52::Osc52Backend::new().set(sel, mime, &bytes)).await
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
+        }
     }
 
     /// Async version of [`get`][Self::get].
+    ///
+    /// X11/Wayland: routes through the bg thread Oneshot future.
+    /// OSC 52: always returns `UnsupportedMime` (terminal clipboard is write-only).
+    #[allow(unused_variables)]
     pub async fn get_async(
         &self,
-        _sel: Selection,
-        _mime: MimeType,
+        sel: Selection,
+        mime: MimeType,
     ) -> Result<Vec<u8>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                let fut = thread.send_async(backend::wayland_thread::WaylandOp::Get { sel, mime });
+                match fut.await {
+                    backend::wayland_thread::WaylandOpResult::Get(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                let (mime_atom, mime_name) =
+                    backend::x11_thread::mime_to_atom_or_name(&thread.atoms, &mime);
+                let sel_atom = backend::x11_thread::sel_to_atom(&thread.atoms, sel);
+                let fut = thread.send_async(backend::x11_thread::X11Op::Get {
+                    sel_atom,
+                    mime_atom,
+                    mime_name,
+                });
+                match fut.await {
+                    backend::x11_thread::X11OpResult::Get(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            ClipboardBackend::Osc52 => {
+                std::future::ready(Err(ClipboardError::UnsupportedMime)).await
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
+        }
     }
 
     /// Async version of [`clear`][Self::clear].
-    pub async fn clear_async(&self, _sel: Selection) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    #[allow(unused_variables)]
+    pub async fn clear_async(&self, sel: Selection) -> Result<(), ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                let fut = thread.send_async(backend::wayland_thread::WaylandOp::Clear { sel });
+                match fut.await {
+                    backend::wayland_thread::WaylandOpResult::Clear(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                let sel_atom = backend::x11_thread::sel_to_atom(&thread.atoms, sel);
+                let fut = thread.send_async(backend::x11_thread::X11Op::Clear { sel_atom });
+                match fut.await {
+                    backend::x11_thread::X11OpResult::Clear(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            ClipboardBackend::Osc52 => {
+                use backend::Backend as _;
+                std::future::ready(backend::osc52::Osc52Backend::new().clear(sel)).await
+            }
+            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
+        }
     }
 
     /// Async version of [`available`][Self::available].
-    pub async fn available_async(&self, _sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
+    ///
+    /// OSC 52: always returns an empty list (terminal clipboard state cannot
+    /// be queried).
+    #[allow(unused_variables)]
+    pub async fn available_async(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => {
+                let thread = backend::wayland_thread::wayland_thread()?;
+                let fut = thread.send_async(backend::wayland_thread::WaylandOp::Available { sel });
+                match fut.await {
+                    backend::wayland_thread::WaylandOpResult::Available(r) => r,
+                    _ => unreachable!(),
+                }
+            }
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => {
+                let thread = backend::x11_thread::x11_thread()?;
+                let sel_atom = backend::x11_thread::sel_to_atom(&thread.atoms, sel);
+                let fut = thread.send_async(backend::x11_thread::X11Op::Available { sel_atom });
+                match fut.await {
+                    backend::x11_thread::X11OpResult::Available(r) => {
+                        let raw_atoms = r?;
+                        let mut mimes: Vec<MimeType> = Vec::new();
+                        for atom in raw_atoms {
+                            if let Some(mime) =
+                                backend::x11_thread::atom_to_mime(&thread.atoms, atom)
+                                && !mimes.contains(&mime)
+                            {
+                                mimes.push(mime);
+                            }
+                        }
+                        Ok(mimes)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            ClipboardBackend::Osc52 => std::future::ready(Ok(vec![])).await,
+            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
+        }
     }
 
     // -------------------------------------------------------------------------

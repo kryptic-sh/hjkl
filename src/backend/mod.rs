@@ -3,7 +3,10 @@
 //! Each platform module implements `Backend`. `probe()` selects the best
 //! available backend at runtime.
 
+// bg_thread.rs is the Phase 1 echo skeleton used only in its own unit tests.
+// Production code uses x11_thread / wayland_thread directly.
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 pub(crate) mod bg_thread;
 #[cfg(target_os = "linux")]
 pub(crate) mod dlopen;
@@ -28,6 +31,11 @@ pub(crate) mod x11_thread;
 use crate::{ClipboardError, MimeType, Selection};
 
 /// The internal trait implemented by every clipboard backend.
+///
+/// `get` and `available` are unused on Linux (X11/Wayland threads handle them
+/// directly). They exist for the Windows/macOS backends (Phase 3/4) where the
+/// Backend trait is the dispatch mechanism.
+#[allow(dead_code)]
 pub(crate) trait Backend: Send + Sync + 'static {
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError>;
 

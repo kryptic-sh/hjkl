@@ -27,9 +27,11 @@ pub(crate) struct ScreenInfo {
     pub root_visual: u32,
     /// Root window color depth in bits per pixel.
     pub root_depth: u8,
-    /// Screen width in pixels.
+    /// Screen width in pixels. Used in xvfb tests; not needed for clipboard ops.
+    #[allow(dead_code)]
     pub width: u16,
-    /// Screen height in pixels.
+    /// Screen height in pixels. Used in xvfb tests; not needed for clipboard ops.
+    #[allow(dead_code)]
     pub height: u16,
     /// Maximum request length in bytes (from setup; value in setup is in
     /// 4-byte units so we multiply by 4 here).
@@ -323,9 +325,10 @@ fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms,
 }
 
 // ---------------------------------------------------------------------------
-// Backend stub (clipboard ops wired in 5b/5c/5d)
+// Backend stub (superseded by X11Thread — kept for cross-platform compile)
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub(crate) struct X11Backend;
 
 impl Backend for X11Backend {

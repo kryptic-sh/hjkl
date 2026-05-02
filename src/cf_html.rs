@@ -1,3 +1,6 @@
+// Not cfg-gated so pure-Rust tests run on Linux CI; dead_code on non-Windows.
+#![allow(dead_code)]
+
 //! Microsoft CF_HTML clipboard format: header wrap and unwrap.
 //!
 //! CF_HTML is a plain UTF-8 payload with a fixed-shape ASCII header that

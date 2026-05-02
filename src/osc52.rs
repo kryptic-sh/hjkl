@@ -12,6 +12,8 @@ use crate::base64::base64_encode;
 pub(crate) const OSC52_MAX: usize = 74_000;
 
 /// Returns `true` when the process is running inside an SSH session.
+/// Used by `Clipboard::new()` for future OSC 52 auto-detect (v0.5).
+#[allow(dead_code)]
 pub(crate) fn is_over_ssh() -> bool {
     std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
 }
@@ -38,15 +40,6 @@ pub(crate) fn write_osc52(out: &mut impl Write, text: &str, in_tmux: bool) -> io
         write!(out, "\x1b]52;c;{encoded}\x07")?;
     }
     out.flush()
-}
-
-/// Emit an OSC 52 sequence for `text` to stdout.
-///
-/// Convenience wrapper around [`write_osc52`] that targets `io::stdout()`.
-/// Wraps in a DCS passthrough when inside tmux. Returns an error when the
-/// encoded payload exceeds [`OSC52_MAX`].
-pub(crate) fn emit_osc52(text: &str, in_tmux: bool) -> io::Result<()> {
-    write_osc52(&mut io::stdout().lock(), text, in_tmux)
 }
 
 #[cfg(test)]

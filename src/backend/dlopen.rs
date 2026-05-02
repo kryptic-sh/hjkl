@@ -179,8 +179,12 @@ pub struct XcbFns {
         event_mask: u32,
         event: *const c_char,
     ) -> XcbVoidCookie,
+    // xcb_wait_for_event loaded for completeness; tests prefer xcb_poll_for_event.
+    #[allow(dead_code)]
     pub xcb_wait_for_event: unsafe extern "C" fn(c: *mut XcbConnection) -> *mut XcbGenericEvent,
     pub xcb_poll_for_event: unsafe extern "C" fn(c: *mut XcbConnection) -> *mut XcbGenericEvent,
+    // xcb_request_check loaded for completeness; not yet called in this version.
+    #[allow(dead_code)]
     pub xcb_request_check:
         unsafe extern "C" fn(c: *mut XcbConnection, cookie: XcbVoidCookie) -> *mut XcbGenericError,
 
