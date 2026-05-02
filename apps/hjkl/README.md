@@ -12,10 +12,11 @@ Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) + rope buffer.
 
 ## Status
 
-`0.3.0` — multi-buffer editing, fuzzy file/buffer/grep pickers with
+`0.4.0` — multi-buffer editing, fuzzy file/buffer/grep pickers with
 syntax-highlighted preview, tree-sitter highlighting + comment-marker overlay,
-smart indent, `.editorconfig`, and `softtabstop`. See [SCOPE.md](SCOPE.md) for
-the full feature roadmap.
+smart indent, `.editorconfig`, `softtabstop`, and clipboard via our in-house
+[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) (sync + async, OSC
+52 SSH fallback). See [SCOPE.md](SCOPE.md) for the full feature roadmap.
 
 ## Install
 
@@ -105,8 +106,8 @@ hjkl +picker          # open fuzzy file picker immediately
 - [`hjkl-ratatui`](https://crates.io/crates/hjkl-ratatui) — ratatui rendering
   adapters + shared spinner
 
-See [SPEC.md](../../crates/hjkl-engine/SPEC.md) for the frozen 0.1.0 trait
-surface.
+See [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the engine trait
+reference.
 
 ## Links
 

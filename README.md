@@ -15,11 +15,11 @@ sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
 
 ## Status
 
-`0.2.0` — SPEC frozen, Buffer trait sealed (14 methods across
-Cursor/Query/BufferEdit/Search), `Editor<B, H>` generic over backend + host. See
-[CHANGELOG.md](CHANGELOG.md) for the trait-extraction arc and
-[crates/hjkl-engine/SPEC.md](crates/hjkl-engine/SPEC.md) for the frozen
-contract.
+`0.4.0` — Buffer trait split across Cursor/Query/BufferEdit/Search,
+`Editor<B, H>` generic over backend + host, clipboard via our in-house
+[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
+[CHANGELOG.md](CHANGELOG.md) for the release arc and
+[docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the trait reference.
 
 ## Crates
 
@@ -29,7 +29,7 @@ contract.
 | `hjkl-buffer`      | Rope-backed text buffer with cursor + edits + folds + search.      |
 | `hjkl-editor`      | Front-door facade: re-exports engine + buffer + spec types.        |
 | `hjkl-ratatui`     | Ratatui `Style` adapters and `crossterm::KeyEvent` bridge.         |
-| `hjkl-clipboard`   | Unified clipboard sink (arboard + OSC 52 SSH fallback).            |
+| `hjkl-clipboard`   | In-house clipboard for the ecosystem (sync + async, OSC 52 SSH).   |
 | `hjkl-form`        | Vim-modal forms with full vim grammar inside every text field.     |
 | `hjkl-tree-sitter` | Tree-sitter syntax highlighting (Rust, Markdown, JSON, TOML, SQL). |
 | `hjkl-picker`      | Fuzzy picker subsystem: file walk, grep search, custom sources.    |
@@ -37,7 +37,7 @@ contract.
 Published on crates.io. Add to `Cargo.toml`:
 
 ```toml
-hjkl-editor = "0.2"
+hjkl-editor = "0.3"
 ```
 
 ## License

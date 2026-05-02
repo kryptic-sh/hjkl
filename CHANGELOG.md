@@ -8,6 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-03
+
+### Changed
+
+- **Bumped `hjkl-clipboard` 0.3 → 0.4.** Our in-house clipboard crate replaced
+  its `arboard` dependency with a hand-rolled implementation built for the
+  kryptic-sh ecosystem. Wayland paste now works on KDE / wlroots / Hyprland
+  sessions where the previous backend silently lost the selection. See the
+  [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) changelog for the
+  full breakdown.
+- **`TuiHost` clipboard adapter migrated to the 0.4 API.** `Clipboard::new()` is
+  now fallible — wrapped in `Option<Clipboard>` so probe failure degrades to a
+  no-op rather than aborting startup. `set_text` / `get_text` replaced with
+  typed `set` / `get` over `Selection::Clipboard` + `MimeType::Text`.
+
+### Removed
+
+- **`SPEC.md`** removed from the `hjkl-engine` repo. The trait surface is
+  documented inline via rustdoc and published to docs.rs; the parallel
+  hand-maintained spec was a churn liability. Umbrella + per-crate READMEs point
+  at [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) instead.
+
+### Internal
+
+- Lockfile shrunk ~371 lines as the `arboard` transitive tree (`wayland-client`,
+  `x11rb`, `image`, etc.) was dropped. Smaller `cargo install hjkl` build.
+- Bumped `hjkl-engine`, `hjkl-buffer`, `hjkl-editor` 0.3.1 → 0.3.2 (doc-only:
+  SPEC.md drop + reference cleanup; no API changes).
+
 ## [0.3.4] - 2026-04-30
 
 ### Added
