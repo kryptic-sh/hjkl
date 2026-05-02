@@ -15,8 +15,9 @@ flat list of `(byte_range, capture_name)` spans for renderers to style.
 
 ## Status
 
-`0.3.0` — 5 bundled grammars, `DotFallbackTheme` for dark/light theming,
-incremental re-parse via `tree-sitter::InputEdit`.
+5 bundled grammars (Rust, Markdown, JSON, TOML, SQL), `DotFallbackTheme` for
+dark/light theming, incremental re-parse via `tree-sitter::InputEdit`. More
+languages on the roadmap.
 
 ## Usage
 
