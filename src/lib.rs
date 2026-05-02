@@ -516,6 +516,25 @@ impl Clipboard {
         crate::uri::decode_uri_list(&bytes)
     }
 
+    /// Returns a stable identifier for the active backend.
+    ///
+    /// Useful for diagnostics and detecting silent OSC 52 fallback (e.g. when
+    /// no display server is reachable).
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::Wayland => "wayland",
+            #[cfg(target_os = "linux")]
+            ClipboardBackend::X11 => "x11",
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => "macos",
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => "windows",
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            ClipboardBackend::Osc52 => "osc52",
+        }
+    }
+
     /// Return true if the active backend is OSC 52.
     ///
     /// Used in tests to verify fallback selection without needing a display.
@@ -529,6 +548,20 @@ impl Clipboard {
 mod tests {
     #[allow(unused_imports)]
     use super::*;
+
+    #[test]
+    fn backend_name_returns_valid_string() {
+        let valid = ["wayland", "x11", "macos", "windows", "osc52"];
+        // Clipboard::new() may fail in CI without a display — that's fine;
+        // we only check the return value when construction succeeds.
+        if let Ok(cb) = Clipboard::new() {
+            assert!(
+                valid.contains(&cb.backend_name()),
+                "unexpected backend_name: {}",
+                cb.backend_name()
+            );
+        }
+    }
 
     /// Construct a Clipboard with OSC 52 by bypassing the display probe,
     /// then verify set/clear succeed and get returns UnsupportedMime.
