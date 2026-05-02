@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-03
+
+### Added
+
+- 8 new tree-sitter languages bundled via `hjkl-tree-sitter` 0.4.0: Python,
+  TypeScript, TSX, Go, YAML, Bash, C, HTML, CSS. Auto-detected by file
+  extension; highlighting works out of the box for all 14 supported languages.
+
+### Changed
+
+- Bumped `hjkl-tree-sitter` 0.3 → 0.4. Binary size grows ~8–12 MB
+  release-stripped from the additional grammar `.so` artifacts.
+
 ## [0.4.1] - 2026-05-03
 
 ### Changed
