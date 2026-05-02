@@ -1092,21 +1092,56 @@ Notes from execution:
 - Fallthrough no-data-control test still deferred (singleton lock-in prevents
   per-test mock swaps); Phase 7c manual matrix covers it.
 
-#### Phase 7b — Async API + dead-code cleanup + leak fixes (TODO, ~200 LOC)
+#### Phase 7b — Async API + dead-code cleanup + leak fixes (DONE — `e6e944d` + `f0d8d1f`)
 
-- [ ] Implement `set_async`/`get_async`/`clear_async`/`available_async`:
-  - X11: route via existing `X11Thread::send_async` (Phase 1 oneshot infra).
-  - Wayland: add `WaylandThread::send_async` mirror.
-  - macOS/Windows: spawn-thread-and-block via Oneshot (no native async clipboard
-    APIs).
-  - OSC52: `std::future::ready(set(...))` (stdout write is fast).
-- [ ] Strip crate-root `#![allow(dead_code)]`, fix any genuine dead code (unused
-      enum variants like `DrainGoal::PropertyDelete`, dead helpers).
-- [ ] Add `IncrSend` periodic prune in x11_thread `run_loop` to fix the slow
-      memory leak from 5d (expired transfers from dead requestors).
-- [ ] Promote hardcoded timeouts (5s SELECTION_NOTIFY, 10s INCR chunk, 30s INCR
-      total, 5s SAVE_TARGETS handshake) to named `const`s at the top of
-      `x11_thread.rs`. Don't expose as config — defer to v0.5.
+- [x] **Async API**: `set_async`/`get_async`/`clear_async`/`available_async` all
+      wired as `pub async fn`. X11 + Wayland route via new
+      `X11Future`/`WaylandFuture` named structs over `Oneshot<*OpResult>`. OSC
+      52 via `std::future::ready(sync_call())`. macOS/Windows stay
+      `unimplemented!()` (no native async clipboard APIs; Phase 8/v0.5 can add
+      spawn-thread-and-block).
+- [x] **Bytes lifetime**: cloned inside async method body (option b from spec).
+      Sync + async call sites share the same `&[u8]` shape.
+- [x] **Dead code removed**:
+  - `DrainGoal::PropertyDelete` + `DrainResult::PropertyDeleteSeen` (became dead
+    in 5d's state-machine approach).
+  - `osc52::emit_osc52` (dead since Phase 2; `write_osc52` is sole call site).
+  - `src/backend/bg_thread.rs` entirely (Phase 1 echo skeleton fully replaced by
+    `x11_thread`/`wayland_thread`; Reply<T>/Oneshot<T> already covered by own
+    tests in `reply.rs`/`oneshot.rs`).
+- [x] **Dead code annotated** (kept for cross-platform/API surface):
+      `ClipboardBackend::Unimplemented`, `Backend::get/available` (mac/win),
+      `oneshot`/`reply` modules on non-Linux targets,
+      `X11Backend`/`WaylandBackend`/`WindowsBackend`/`MacosBackend::new`,
+      `cf_hdrop`/`cf_html`/`dib_png` (Windows-only, tested on Linux),
+      `osc52::is_over_ssh`, misc state fields.
+- [x] **Crate-root `#![allow(dead_code)]` removed**. Clippy `-D warnings` stays
+      clean on all 4 targets.
+- [x] **IncrSend periodic prune**: `prune_expired_incr_sends()` runs at top of
+      every `run_loop` tick. Sends best-effort zero-length terminator before
+      dropping expired entry. Caps memory growth to one tick (50 ms) beyond the
+      30 s deadline.
+- [x] **Constants hoisted** in `x11_thread.rs`: `EVENT_LOOP_TICK_MS` (50),
+      `SELECTION_NOTIFY_TIMEOUT_SECS` (5), `INCR_RECV_CHUNK_TIMEOUT_SECS` (10),
+      `INCR_RECV_TOTAL_TIMEOUT_SECS` (30), `SAVE_TARGETS_TIMEOUT_SECS` (5).
+      `INCR_SEND_TOTAL_TIMEOUT_SECS` (30) already existed.
+- [x] 132 → 128 tests (delete of bg_thread removed 4 echo tests; dispatch
+      coverage preserved by reply.rs + oneshot.rs + x11_thread/wayland_thread
+      tests).
+
+Notes from execution:
+
+- **No new async tests added** — agent used spec's "if test plumbing gets
+  awkward, document and skip" guidance. Async paths are exercised by proxy
+  through sync tests (same `Reply::resolve` dispatch). Trade-off: production
+  async paths haven't been end-to-end exercised; if a regression slips in the
+  X11Future/WaylandFuture transform, sync tests won't catch it. Phase 7c manual
+  matrix should include an async smoke check.
+- bg_thread deletion (-237 LOC) was a follow-up commit after the agent's initial
+  pass kept it under `#[allow(dead_code)]`. Replaced by direct delete: pure
+  duplication of dispatch coverage already in real backends.
+- macOS/Windows `_async` methods stay `unimplemented!()` and panic if called.
+  Documented in CHANGELOG (7c). v0.5 can wire spawn-thread-and-block.
 
 #### Phase 7c — README + CHANGELOG + manual matrix doc + BCTP (TODO, doc-only)
 
