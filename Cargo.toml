@@ -12,6 +12,16 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
+[patch.crates-io]
+hjkl-buffer = { path = "crates/hjkl-buffer" }
+hjkl-clipboard = { path = "crates/hjkl-clipboard" }
+hjkl-editor = { path = "crates/hjkl-editor" }
+hjkl-engine = { path = "crates/hjkl-engine" }
+hjkl-form = { path = "crates/hjkl-form" }
+hjkl-picker = { path = "crates/hjkl-picker" }
+hjkl-ratatui = { path = "crates/hjkl-ratatui" }
+hjkl-tree-sitter = { path = "crates/hjkl-tree-sitter" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
