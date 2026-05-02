@@ -51,6 +51,23 @@ jobs:
       - run: cargo test --all-features
       - run: cargo test --doc --all-features
 
+  musl:
+    name: check ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --target ${{ matrix.target }} --all-targets
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
