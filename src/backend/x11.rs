@@ -359,161 +359,21 @@ impl Backend for X11Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io;
-    use std::os::unix::net::UnixStream;
-    use std::path::Path;
-    use std::process::{Child, Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    // -----------------------------------------------------------------------
-    // Xvfb guard — ensures the server is torn down after each test.
-    // -----------------------------------------------------------------------
-
-    struct XvfbGuard {
-        child: Child,
-        display: String,
-    }
-
-    impl Drop for XvfbGuard {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
-        }
-    }
-
-    /// Spawn Xvfb on `:99` and wait up to 5 s for the socket to appear.
-    ///
-    /// Returns `None` if Xvfb is not installed or fails to start.
-    fn spawn_xvfb() -> Option<XvfbGuard> {
-        // Check Xvfb is available before trying to spawn.
-        let xvfb_path = Path::new("/usr/bin/Xvfb");
-        if !xvfb_path.exists() {
-            eprintln!("SKIP: Xvfb not found at {}", xvfb_path.display());
-            return None;
-        }
-
-        let child = match Command::new(xvfb_path)
-            // -ac disables host-based access control for the test server so
-            // xcb_connect succeeds without ~/.Xauthority on the test machine.
-            .args([":99", "-screen", "0", "800x600x24", "-ac"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                eprintln!("SKIP: Xvfb not found: {e}");
-                return None;
-            }
-            Err(e) => {
-                eprintln!("SKIP: failed to spawn Xvfb: {e}");
-                return None;
-            }
-        };
-
-        // Poll until we can actually connect to the Unix socket — the socket
-        // file appears slightly before Xvfb is ready to accept connections.
-        let socket_path = "/tmp/.X11-unix/X99";
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if UnixStream::connect(socket_path).is_ok() {
-                return Some(XvfbGuard {
-                    child,
-                    display: ":99".into(),
-                });
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        eprintln!("SKIP: Xvfb socket did not become connectable within 5 s");
-        None
-    }
-
-    // -----------------------------------------------------------------------
-    // Tests
-    // -----------------------------------------------------------------------
 
     /// Verify that libxcb loads and all symbols resolve.
+    ///
+    /// Connection + atom-interning + screen-info coverage lives in
+    /// `x11_thread::tests::xvfb_connection_and_atoms` so it can share the
+    /// process-wide `XVFB_SESSION` and avoid env-mutation races with parallel
+    /// tests.
     #[test]
     fn dlopen_smoke() {
         match xcb_fns() {
-            Ok(_) => {} // all symbols resolved
+            Ok(_) => {}
             Err(ClipboardError::LibNotFound) => {
                 eprintln!("SKIP dlopen_smoke: libxcb.so.1 not found");
             }
             Err(e) => panic!("unexpected error: {e}"),
         }
-    }
-
-    /// Spin up Xvfb, connect, intern atoms, check screen dimensions.
-    #[test]
-    fn xvfb_connection_and_atoms() {
-        let guard = match spawn_xvfb() {
-            Some(g) => g,
-            None => return,
-        };
-
-        // Point DISPLAY at our Xvfb instance for the duration of this test.
-        // SAFETY: we are the only thread that touches DISPLAY in these tests.
-        // Cargo test parallelism is within-process but each test has its own
-        // stack; mutating env vars is UB only under true concurrent access.
-        // Using display :99 (reserved for test use) prevents collisions with
-        // any real compositor.
-        let prev_display = std::env::var("DISPLAY").ok();
-        // SAFETY: see comment above.
-        unsafe { std::env::set_var("DISPLAY", &guard.display) };
-
-        let result = X11Connection::open();
-
-        // Restore DISPLAY before asserting so teardown is clean on failure.
-        // SAFETY: see comment above.
-        match &prev_display {
-            Some(d) => unsafe { std::env::set_var("DISPLAY", d) },
-            None => unsafe { std::env::remove_var("DISPLAY") },
-        }
-
-        let conn = match result {
-            Ok(c) => c,
-            Err(ClipboardError::LibNotFound) => {
-                eprintln!("SKIP xvfb_connection_and_atoms: libxcb.so.1 not found");
-                return;
-            }
-            Err(e) => panic!("X11Connection::open failed: {e}"),
-        };
-
-        // Screen dimensions must match what we passed to Xvfb.
-        assert_eq!(conn.screen.width, 800, "screen width mismatch");
-        assert_eq!(conn.screen.height, 600, "screen height mismatch");
-        assert_ne!(conn.screen.root, 0, "root window must be non-zero");
-        assert_ne!(conn.screen.root_visual, 0, "root visual must be non-zero");
-        assert!(
-            conn.screen.max_request_len_bytes > 0,
-            "max_request_len_bytes must be > 0"
-        );
-
-        // All 15 atoms must be non-zero XCB atoms.
-        let a = &conn.atoms;
-        for (val, name) in [
-            (a.clipboard, "CLIPBOARD"),
-            (a.primary, "PRIMARY"),
-            (a.targets, "TARGETS"),
-            (a.utf8_string, "UTF8_STRING"),
-            (a.string, "STRING"),
-            (a.text_plain_utf8, "text/plain;charset=utf-8"),
-            (a.text_html, "text/html"),
-            (a.text_rtf, "text/rtf"),
-            (a.text_uri_list, "text/uri-list"),
-            (a.image_png, "image/png"),
-            (a.incr, "INCR"),
-            (a.clipboard_manager, "CLIPBOARD_MANAGER"),
-            (a.save_targets, "SAVE_TARGETS"),
-            (a.multiple, "MULTIPLE"),
-            (a.hjkl_clipboard_get, "HJKL_CLIPBOARD_GET"),
-        ] {
-            assert_ne!(val, 0, "atom {name} must be non-zero");
-        }
-
-        // XvfbGuard::drop kills Xvfb.
-        drop(guard);
     }
 }

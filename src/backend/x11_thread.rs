@@ -1436,6 +1436,61 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Connection-plumbing test (moved from x11.rs to share XVFB_SESSION and
+    // avoid env-mutation races with parallel tests).
+    // -----------------------------------------------------------------------
+
+    /// Open a fresh X11Connection against the shared xvfb session and verify
+    /// screen info + atom interning produced sane values.
+    #[test]
+    fn xvfb_connection_and_atoms() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if ensure_xvfb().is_none() {
+            return;
+        }
+
+        let conn = match super::super::x11::X11Connection::open() {
+            Ok(c) => c,
+            Err(ClipboardError::LibNotFound) => {
+                eprintln!("SKIP xvfb_connection_and_atoms: libxcb.so.1 not found");
+                return;
+            }
+            Err(e) => panic!("X11Connection::open failed: {e}"),
+        };
+
+        let screen = conn.screen();
+        assert_eq!(screen.width, 800, "screen width mismatch");
+        assert_eq!(screen.height, 600, "screen height mismatch");
+        assert_ne!(screen.root, 0, "root window must be non-zero");
+        assert_ne!(screen.root_visual, 0, "root visual must be non-zero");
+        assert!(
+            screen.max_request_len_bytes > 0,
+            "max_request_len_bytes must be > 0"
+        );
+
+        let a = conn.atoms();
+        for (val, name) in [
+            (a.clipboard, "CLIPBOARD"),
+            (a.primary, "PRIMARY"),
+            (a.targets, "TARGETS"),
+            (a.utf8_string, "UTF8_STRING"),
+            (a.string, "STRING"),
+            (a.text_plain_utf8, "text/plain;charset=utf-8"),
+            (a.text_html, "text/html"),
+            (a.text_rtf, "text/rtf"),
+            (a.text_uri_list, "text/uri-list"),
+            (a.image_png, "image/png"),
+            (a.incr, "INCR"),
+            (a.clipboard_manager, "CLIPBOARD_MANAGER"),
+            (a.save_targets, "SAVE_TARGETS"),
+            (a.multiple, "MULTIPLE"),
+            (a.hjkl_clipboard_get, "HJKL_CLIPBOARD_GET"),
+        ] {
+            assert_ne!(val, 0, "atom {name} must be non-zero");
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // 5b tests (set/clear)
     // -----------------------------------------------------------------------
 
