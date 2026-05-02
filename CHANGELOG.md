@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-03
+
+### Changed
+
+- Doc cleanup pass across all submodule READMEs: dropped "spec frozen", "Buffer
+  trait sealed", "engine SPEC types" and other stale rhetoric inherited from the
+  pre-0.1.0 era.
+- `apps/hjkl/src/host.rs` doc comment now describes the clipboard as in-house
+  cross-platform rather than "native per-platform".
+- `CONTRIBUTING.md` Releases section rewritten — `release-plz` and lockstep
+  workspace versioning have been gone for a while; documents the current manual
+  BCTP-per-submodule flow.
+- Submodule pointer + lockfile bumps: `hjkl-buffer` 0.3.3, `hjkl-engine` 0.3.3,
+  `hjkl-clipboard` 0.4.7, `hjkl-tree-sitter` 0.3.2, `hjkl-form` 0.3.2,
+  `hjkl-ratatui` 0.3.2, `hjkl-picker` 0.3.2 (all README-only patch releases).
+
 ## [0.4.0] - 2026-05-03
 
 ### Changed

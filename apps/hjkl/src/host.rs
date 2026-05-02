@@ -6,9 +6,9 @@
 //! - Owns the runtime [`Viewport`] (engine reads/writes scroll offsets,
 //!   the renderer publishes width/height per frame).
 //! - Tracks last-emitted [`CursorShape`] so the renderer can repaint.
-//! - Real clipboard via [`hjkl_clipboard::Clipboard`] (native per-platform
-//!   backends + OSC 52 fallback; SSH-aware). Clipboard construction is
-//!   fallible — if probe fails, ops silently no-op.
+//! - Real clipboard via [`hjkl_clipboard::Clipboard`] — our in-house
+//!   cross-platform clipboard with OSC 52 fallback (SSH-aware). Clipboard
+//!   construction is fallible; if probe fails, ops silently no-op.
 //! - Unit `Intent` type — the standalone binary doesn't fan out LSP /
 //!   fold / buffer-list requests yet. Phase 4+ swaps this for a real
 //!   enum once intents start firing.

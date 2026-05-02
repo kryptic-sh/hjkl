@@ -71,8 +71,13 @@ Commit the updated `*.snap` files alongside the change.
 
 ## Releases
 
-`release-plz` automates lockstep version bumps + changelog + crates.io publish.
-Manual approval gate on the release PR.
+Each `hjkl-*` crate lives in its own submodule and ships independently. Cutting
+a release is the **BCTP** flow: bump the patch in `Cargo.toml`, regenerate
+`Cargo.lock`, commit `chore: bump version`, tag `vX.Y.Z`, push commit + tag. The
+tag triggers `release.yml` which publishes to crates.io.
+
+Patch for bug fixes / docs; minor for additive public API; major for breaking
+changes.
 
 To **yank** a broken release:
 
@@ -82,15 +87,6 @@ cargo yank --version X.Y.Z -p <crate>
 
 Yank ≠ delete: consumers pinned to `=X.Y.Z` still resolve. Document the reason
 in `CHANGELOG.md` under a `### Yanked` heading for that version.
-
-## Pre-1.0 stability
-
-The 0.0.x series is a churn phase — breaking changes may land on patch bumps.
-Lockstep workspace versions; all four crates publish together. Consumers should
-pin with `=0.0.X`.
-
-`cargo public-api` baseline is taken at the 0.1.0 release; from then on,
-breaking changes require a minor bump and `cargo semver-checks` gates PRs.
 
 ## Reporting bugs / requesting features
 
