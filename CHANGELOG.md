@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-03
+
+### Added
+
+- **Compile-tested examples in `examples/`** — `basic.rs`, `async_basic.rs`,
+  `custom_mime.rs`, `backend_detect.rs`. Async example uses `pollster` as a
+  zero-runtime dev-dep. README snippets all wrap in `fn main() -> Result<…>` so
+  they compile under `cargo build --examples`.
+
+### Changed
+
+- **`Oneshot` double-poll panic now only fires in debug builds.** Release builds
+  return `Poll::Pending` forever instead of panicking — matches the `Future`
+  contract for stray re-polls from a buggy executor and avoids taking down the
+  process.
+- **`osc52_backend_set_and_get` test now asserts the exact OSC 52 wire bytes**
+  (`\x1b]52;c;<base64>\x07`, with tmux DCS framing detected at runtime) instead
+  of "may succeed or error depending on tty".
+
+### Removed
+
+- **`osc52::is_over_ssh`** — unused dead-code helper. Re-add in five lines if a
+  future need arises.
+
 ## [0.4.2] - 2026-05-03
 
 ### Added
