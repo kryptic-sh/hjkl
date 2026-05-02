@@ -12,7 +12,8 @@ use std::io::{self, Write};
 use crate::{ClipboardError, MimeType, Selection};
 
 use super::Backend;
-use crate::osc52::{is_in_tmux, write_osc52};
+use crate::base64::base64_encode;
+use crate::osc52::{OSC52_MAX, is_in_tmux, write_osc52};
 
 /// OSC 52 backend. Unit struct — no state, everything is stateless I/O.
 pub(crate) struct Osc52Backend;
@@ -41,13 +42,11 @@ impl Osc52Backend {
             _ => return Err(ClipboardError::UnsupportedMime),
         }
         let text = std::str::from_utf8(bytes).map_err(|_| ClipboardError::UnsupportedMime)?;
-        write_osc52(out, text, is_in_tmux()).map_err(|e| {
-            if e.kind() == io::ErrorKind::Other {
-                ClipboardError::PayloadTooLarge
-            } else {
-                ClipboardError::io(e)
-            }
-        })
+        // Check size cap before writing — avoids relying on error-kind heuristics.
+        if base64_encode(text.as_bytes()).len() > OSC52_MAX {
+            return Err(ClipboardError::PayloadTooLarge);
+        }
+        write_osc52(out, text, is_in_tmux()).map_err(ClipboardError::io)
     }
 
     /// Inner clear implementation that writes to an arbitrary `Write` sink.
@@ -236,6 +235,34 @@ mod tests {
         let mut buf = Vec::new();
         let err = b.clear_inner(Selection::Primary, &mut buf).unwrap_err();
         assert!(matches!(err, ClipboardError::UnsupportedMime));
+    }
+
+    // -------------------------------------------------------------------------
+    // set_inner — PayloadTooLarge for oversized payload.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn set_text_over_cap_returns_payload_too_large() {
+        // ~55 501 bytes encodes to ~74 002 base64 chars — just over OSC52_MAX.
+        let big = "x".repeat(55_501);
+        let b = backend();
+        let mut buf = Vec::new();
+        let err = b
+            .set_inner(
+                Selection::Clipboard,
+                MimeType::Text,
+                big.as_bytes(),
+                &mut buf,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, ClipboardError::PayloadTooLarge),
+            "expected PayloadTooLarge, got: {err:?}"
+        );
+        assert!(
+            buf.is_empty(),
+            "nothing should be written for oversized payload"
+        );
     }
 
     // -------------------------------------------------------------------------

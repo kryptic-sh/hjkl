@@ -25,13 +25,12 @@ pub(crate) fn is_in_tmux() -> bool {
 
 /// Write an OSC 52 sequence for `text` to any [`Write`] sink.
 ///
-/// Wraps in a DCS passthrough when `in_tmux` is true. Returns an error when
-/// the encoded payload exceeds [`OSC52_MAX`].
+/// Wraps in a DCS passthrough when `in_tmux` is true. The caller is
+/// responsible for enforcing the [`OSC52_MAX`] cap before calling this
+/// function — `write_osc52` does **not** check size and will only fail with
+/// genuine I/O errors.
 pub(crate) fn write_osc52(out: &mut impl Write, text: &str, in_tmux: bool) -> io::Result<()> {
     let encoded = base64_encode(text.as_bytes());
-    if encoded.len() > OSC52_MAX {
-        return Err(io::Error::other("payload exceeds OSC 52 size cap"));
-    }
     if in_tmux {
         // DCS passthrough: tmux strips the leading ESC from the inner
         // sequence, so we double it. ST (`\e\\`) terminates the DCS.
@@ -157,16 +156,15 @@ mod tests {
     }
 
     #[test]
-    fn oversize_payload_returns_error() {
-        // ~55 501 bytes encodes to ~74 002 base64 chars — just over OSC52_MAX.
+    fn write_osc52_oversize_does_not_check() {
+        // write_osc52 no longer enforces the cap — it trusts the caller.
+        // A large payload should succeed at the write_osc52 level (to a Vec sink).
+        // The cap is enforced by Osc52Backend::set_inner before calling write_osc52.
         let big = "x".repeat(55_501);
         let mut buf = Vec::new();
-        let err = write_osc52(&mut buf, &big, false).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Other);
-        assert!(
-            buf.is_empty(),
-            "nothing should be written on oversize error"
-        );
+        // Should succeed (no size check in write_osc52 itself).
+        write_osc52(&mut buf, &big, false).unwrap();
+        assert!(!buf.is_empty(), "bytes should be written");
     }
 
     #[test]
