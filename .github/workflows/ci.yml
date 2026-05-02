@@ -76,19 +76,22 @@ jobs:
   # bind handshake against ext_data_control_manager_v1 actually completes.
   # Mock unit tests can't catch wire-protocol bugs like the FIRST_CLIENT_ID
   # mismatch that broke Hyprland users in 0.4.7.
+  #
+  # Runs in archlinux:latest because Ubuntu 24.04 ships sway 1.9 /
+  # wlroots 0.17 which predates ext_data_control_manager_v1; arch has
+  # sway 1.11 / wlroots 0.18+ that exposes the protocol our backend uses.
   sway-integration:
     name: sway headless integration
     runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install sway
+      - name: Install deps
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends sway
+          pacman -Sy --noconfirm --needed rust cargo sway git
           sway --version
+          rustc --version
+      - uses: actions/checkout@v6
       - name: Run wayland_sway integration test
         run: cargo test --test wayland_sway -- --nocapture
 
