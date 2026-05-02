@@ -18,6 +18,7 @@ use crate::osc52::{is_in_tmux, write_osc52};
 pub(crate) struct Osc52Backend;
 
 impl Osc52Backend {
+    #[cfg_attr(any(target_os = "macos", target_os = "windows"), allow(dead_code))]
     pub(crate) fn new() -> Self {
         Self
     }

@@ -1,10 +1,10 @@
-//! Linux X11 clipboard backend via libxcb (`dlopen`).
+//! Linux X11 connection helpers used by `x11_thread.rs`.
 //!
-//! Runs a singleton background thread that owns an invisible window, handles
-//! `SelectionRequest` events, and auto-`SAVE_TARGETS` after every set.
-//!
-//! Phase 5a: connection + atom interning only. Clipboard ops are
-//! `unimplemented!()` until 5b/5c/5d.
+//! Opens a libxcb connection via `dlopen`, interns the atom table, and reads
+//! screen info from the XCB setup reply. The resulting `X11Connection` is
+//! consumed by the bg thread in `x11_thread.rs`, which owns an invisible
+//! window, handles `SelectionRequest` events, and performs all clipboard ops
+//! (`set`/`get`/`clear`/`available`) including INCR and auto-`SAVE_TARGETS`.
 
 use std::ffi::c_char;
 

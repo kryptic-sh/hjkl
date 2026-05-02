@@ -1,12 +1,11 @@
-//! Linux Wayland clipboard backend.
+//! Linux Wayland connection helpers used by `wayland_thread.rs`.
 //!
-//! Phase 6a: open the compositor socket, send `wl_display.get_registry` +
-//! `wl_display.sync`, collect `wl_registry.global` events until the sync
-//! callback fires. Returns the advertised globals so later phases can bind
-//! `ext_data_control_v1` / `wlr_data_control_v1` / `zwp_primary_selection_v1`.
-//!
-//! Clipboard ops (`set`/`get`/`clear`/`available`) remain `unimplemented!()`;
-//! they are wired in phases 6b/6c.
+//! Opens the compositor socket, sends `wl_display.get_registry` +
+//! `wl_display.sync`, and collects `wl_registry.global` events until the sync
+//! callback fires. The resulting `WaylandConnection` (with globals list and id
+//! allocator) is consumed by the bg thread in `wayland_thread.rs`, which
+//! handles all clipboard ops (`set`/`get`/`clear`/`available`) via the
+//! `ext_data_control_v1` / `zwp_primary_selection_v1` protocols.
 
 use crate::{ClipboardError, MimeType, Selection};
 
@@ -60,8 +59,9 @@ pub(crate) struct Global {
 /// A live Wayland connection with the compositor globals probed.
 ///
 /// After `open()` returns, `globals()` lists every interface the compositor
-/// advertised during the registry probe.  Clipboard operations will be added in
-/// phase 6b/6c; the `Backend` impl stubs remain `unimplemented!()`.
+/// advertised during the registry probe. `into_parts()` hands the socket and
+/// id allocator to the bg thread in `wayland_thread.rs`, which drives all
+/// clipboard operations from that point forward.
 pub(crate) struct WaylandConnection {
     socket: WaylandSocket,
     globals: Vec<Global>,

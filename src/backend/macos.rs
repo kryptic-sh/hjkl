@@ -10,6 +10,49 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::sync::OnceLock;
 
+// ---------------------------------------------------------------------------
+// Autorelease pool guard.
+// ---------------------------------------------------------------------------
+//
+// NSPasteboard ops allocate autoreleased objects (NSData, NSString, NSArray).
+// On non-main threads there is no implicit pool, so objects accumulate without
+// a pool in scope. Wrapping each public method body in a pool ensures objects
+// are released promptly regardless of the calling thread.
+
+unsafe extern "C" {
+    fn objc_autoreleasePoolPush() -> *mut c_void;
+    fn objc_autoreleasePoolPop(pool: *mut c_void);
+}
+
+/// RAII autorelease pool. `Drop` calls `objc_autoreleasePoolPop` so the pool
+/// is drained even if the body panics.
+struct AutoreleasePool {
+    token: *mut c_void,
+}
+
+// SAFETY: the token is an opaque thread-local stack frame pointer pushed by
+// the ObjC runtime. It is only read back on the same thread by `Drop`, which
+// is guaranteed by Rust's ownership rules.
+unsafe impl Send for AutoreleasePool {}
+
+impl Drop for AutoreleasePool {
+    fn drop(&mut self) {
+        // SAFETY: `token` was returned by `objc_autoreleasePoolPush` on this
+        // thread. Calling `pop` with the matching token drains the pool and is
+        // the documented way to balance a push.
+        unsafe { objc_autoreleasePoolPop(self.token) }
+    }
+}
+
+/// Push a new autorelease pool and return a guard that pops it on drop.
+fn pool() -> AutoreleasePool {
+    AutoreleasePool {
+        // SAFETY: `objc_autoreleasePoolPush` is safe to call on any thread at
+        // any time and always returns a valid (possibly opaque) token.
+        token: unsafe { objc_autoreleasePoolPush() },
+    }
+}
+
 use crate::{ClipboardError, MimeType, Selection};
 
 use super::Backend;
@@ -296,6 +339,7 @@ impl MacosBackend {
 
 impl Backend for MacosBackend {
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
+        let _pool = pool();
         // macOS has no primary selection concept.
         if sel != Selection::Clipboard {
             return Err(ClipboardError::UnsupportedMime);
@@ -306,6 +350,10 @@ impl Backend for MacosBackend {
         // wide singleton; `clearContents` + `setData:forType:` are the
         // documented write path per Apple developer documentation. The `ok`
         // return from `setData:forType:` is BOOL (mapped to bool here).
+        //
+        // `_pool` guarantees the autorelease pool is in scope for the duration
+        // of this method, so autoreleased objects (NSData, NSString) are
+        // drained on return/panic rather than accumulating on the calling thread.
         unsafe {
             let pb = general_pasteboard();
             if pb.is_null() {
@@ -325,6 +373,7 @@ impl Backend for MacosBackend {
     }
 
     fn get(&self, sel: Selection, mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
+        let _pool = pool();
         // macOS has no primary selection concept.
         if sel != Selection::Clipboard {
             return Err(ClipboardError::UnsupportedMime);
@@ -349,6 +398,7 @@ impl Backend for MacosBackend {
     }
 
     fn clear(&self, sel: Selection) -> Result<(), ClipboardError> {
+        let _pool = pool();
         // macOS has no primary selection concept.
         if sel != Selection::Clipboard {
             return Err(ClipboardError::UnsupportedMime);
@@ -366,6 +416,7 @@ impl Backend for MacosBackend {
     }
 
     fn available(&self, sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
+        let _pool = pool();
         // Primary selection does not exist on macOS; return empty consistent
         // with the Windows backend convention.
         if sel != Selection::Clipboard {

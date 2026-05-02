@@ -36,6 +36,7 @@ pub use uri::Uri;
 // ---------------------------------------------------------------------------
 
 /// Which backend is active for this Clipboard handle.
+#[derive(Clone)]
 enum ClipboardBackend {
     /// Wayland data-control (Linux, phase 6b+).
     #[cfg(target_os = "linux")]
@@ -43,11 +44,16 @@ enum ClipboardBackend {
     /// X11 via XCB (Linux, phase 5b+).
     #[cfg(target_os = "linux")]
     X11,
-    /// OSC 52 terminal escape — write-only, text-only, any platform.
+    /// macOS NSPasteboard (native).
+    #[cfg(target_os = "macos")]
+    Macos,
+    /// Win32 clipboard (native).
+    #[cfg(target_os = "windows")]
+    Windows,
+    /// OSC 52 terminal escape — write-only, text-only.
+    /// Not used on macOS/Windows which always have their native backends.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Osc52,
-    /// Scaffold placeholder for macOS/Windows phases not yet wired.
-    #[allow(dead_code)]
-    Unimplemented,
 }
 
 /// A handle to the system clipboard.
@@ -56,8 +62,9 @@ enum ClipboardBackend {
 /// XCB, macOS NSPasteboard, Win32, or OSC 52 terminal fallback). The backend
 /// is chosen once at construction time.
 ///
-/// All methods take `&self` — the handle is cheaply clonable and shareable
-/// across threads.
+/// All methods take `&self`. The handle is `Clone` and `Send + Sync` — wrap in
+/// `Arc` or clone freely to share across threads.
+#[derive(Clone)]
 pub struct Clipboard {
     backend: ClipboardBackend,
 }
@@ -65,41 +72,71 @@ pub struct Clipboard {
 impl Clipboard {
     /// Construct a new clipboard handle, probing for the best available backend.
     ///
-    /// Probe order (Linux): Wayland → X11 → OSC 52.
-    /// Other platforms: OSC 52 fallback until macOS/Windows phases wire in.
+    /// Probe order:
+    /// - Linux: Wayland → X11 → OSC 52.
+    /// - macOS: NSPasteboard (always available; no fallback needed).
+    /// - Windows: Win32 (always available; no fallback needed).
+    /// - Other: OSC 52.
     ///
-    /// ClipboardError is Clone so OnceLock singletons preserve the typed error
-    /// variant across calls — LibNotFound/NoDisplay/FocusRequired all trigger
-    /// the correct fallthrough on every call, not just the first.
+    /// `ClipboardError` is `Clone` so `OnceLock` singletons preserve the typed
+    /// error variant across calls — `LibNotFound`/`NoDisplay`/`FocusRequired`
+    /// all trigger the correct fallthrough on every call, not just the first.
     pub fn new() -> Result<Self, ClipboardError> {
-        #[cfg(target_os = "linux")]
-        {
-            // Prefer Wayland if available.
-            match backend::wayland_thread::wayland_thread() {
-                Ok(_) => {
-                    return Ok(Self {
-                        backend: ClipboardBackend::Wayland,
-                    });
-                }
-                // Fall through to X11 when Wayland is absent or has no data-control.
-                Err(ClipboardError::LibNotFound)
-                | Err(ClipboardError::NoDisplay)
-                | Err(ClipboardError::FocusRequired) => {}
-                Err(e) => return Err(e),
-            }
+        Self::new_impl()
+    }
 
-            // Try X11; fall through to OSC 52 on LibNotFound / NoDisplay.
-            match backend::x11_thread::x11_thread() {
-                Ok(_) => {
-                    return Ok(Self {
-                        backend: ClipboardBackend::X11,
-                    });
-                }
-                Err(ClipboardError::LibNotFound) | Err(ClipboardError::NoDisplay) => {}
-                Err(e) => return Err(e),
+    #[cfg(target_os = "linux")]
+    fn new_impl() -> Result<Self, ClipboardError> {
+        // Prefer Wayland if available.
+        match backend::wayland_thread::wayland_thread() {
+            Ok(_) => {
+                return Ok(Self {
+                    backend: ClipboardBackend::Wayland,
+                });
             }
+            // Fall through to X11 when Wayland is absent or has no data-control.
+            Err(ClipboardError::LibNotFound)
+            | Err(ClipboardError::NoDisplay)
+            | Err(ClipboardError::FocusRequired) => {}
+            Err(e) => return Err(e),
         }
+
+        // Try X11; fall through to OSC 52 on LibNotFound / NoDisplay.
+        match backend::x11_thread::x11_thread() {
+            Ok(_) => {
+                return Ok(Self {
+                    backend: ClipboardBackend::X11,
+                });
+            }
+            Err(ClipboardError::LibNotFound) | Err(ClipboardError::NoDisplay) => {}
+            Err(e) => return Err(e),
+        }
+
         // OSC 52 fallback: write-only, text-only, works over SSH / tmux.
+        Ok(Self {
+            backend: ClipboardBackend::Osc52,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn new_impl() -> Result<Self, ClipboardError> {
+        // NSPasteboard is always present on macOS.
+        Ok(Self {
+            backend: ClipboardBackend::Macos,
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    fn new_impl() -> Result<Self, ClipboardError> {
+        // Win32 clipboard is always present on Windows.
+        Ok(Self {
+            backend: ClipboardBackend::Windows,
+        })
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    fn new_impl() -> Result<Self, ClipboardError> {
+        // OSC 52 fallback for other platforms.
         Ok(Self {
             backend: ClipboardBackend::Osc52,
         })
@@ -123,11 +160,21 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::set_clipboard(thread, sel, &mime, bytes)
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                backend::macos::MacosBackend::new().set(sel, mime, bytes)
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                backend::windows::WindowsBackend::new().set(sel, mime, bytes)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => {
                 use backend::Backend as _;
                 backend::osc52::Osc52Backend::new().set(sel, mime, bytes)
             }
-            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
@@ -148,8 +195,18 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::get_clipboard(thread, sel, &mime)
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                backend::macos::MacosBackend::new().get(sel, mime)
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                backend::windows::WindowsBackend::new().get(sel, mime)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => Err(ClipboardError::UnsupportedMime),
-            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
@@ -167,11 +224,21 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::clear_clipboard(thread, sel)
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                backend::macos::MacosBackend::new().clear(sel)
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                backend::windows::WindowsBackend::new().clear(sel)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => {
                 use backend::Backend as _;
                 backend::osc52::Osc52Backend::new().clear(sel)
             }
-            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
@@ -192,8 +259,18 @@ impl Clipboard {
                 let thread = backend::x11_thread::x11_thread()?;
                 backend::x11_thread::available_clipboard(thread, sel)
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                backend::macos::MacosBackend::new().available(sel)
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                backend::windows::WindowsBackend::new().available(sel)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => Ok(vec![]),
-            ClipboardBackend::Unimplemented => unimplemented!("phase 0 scaffold"),
         }
     }
 
@@ -207,6 +284,8 @@ impl Clipboard {
     /// caller's slice does not need to outlive the returned future.
     ///
     /// X11/Wayland: routes through the bg thread Oneshot future.
+    /// macOS/Windows: the native backends are synchronous; async = sync wrapped
+    ///   in `std::future::ready` (no blocking thread spawn).
     /// OSC 52: wraps the synchronous write in `std::future::ready`.
     #[allow(unused_variables)]
     pub async fn set_async(
@@ -244,17 +323,29 @@ impl Clipboard {
                     _ => unreachable!(),
                 }
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                std::future::ready(backend::macos::MacosBackend::new().set(sel, mime, &bytes)).await
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                std::future::ready(backend::windows::WindowsBackend::new().set(sel, mime, &bytes))
+                    .await
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => {
                 use backend::Backend as _;
                 std::future::ready(backend::osc52::Osc52Backend::new().set(sel, mime, &bytes)).await
             }
-            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
         }
     }
 
     /// Async version of [`get`][Self::get].
     ///
     /// X11/Wayland: routes through the bg thread Oneshot future.
+    /// macOS/Windows: sync-wrapped in `std::future::ready`.
     /// OSC 52: always returns `UnsupportedMime` (terminal clipboard is write-only).
     #[allow(unused_variables)]
     pub async fn get_async(
@@ -288,14 +379,26 @@ impl Clipboard {
                     _ => unreachable!(),
                 }
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                std::future::ready(backend::macos::MacosBackend::new().get(sel, mime)).await
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                std::future::ready(backend::windows::WindowsBackend::new().get(sel, mime)).await
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => {
                 std::future::ready(Err(ClipboardError::UnsupportedMime)).await
             }
-            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
         }
     }
 
     /// Async version of [`clear`][Self::clear].
+    ///
+    /// macOS/Windows: sync-wrapped in `std::future::ready`.
     #[allow(unused_variables)]
     pub async fn clear_async(&self, sel: Selection) -> Result<(), ClipboardError> {
         match &self.backend {
@@ -318,16 +421,27 @@ impl Clipboard {
                     _ => unreachable!(),
                 }
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                std::future::ready(backend::macos::MacosBackend::new().clear(sel)).await
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                std::future::ready(backend::windows::WindowsBackend::new().clear(sel)).await
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => {
                 use backend::Backend as _;
                 std::future::ready(backend::osc52::Osc52Backend::new().clear(sel)).await
             }
-            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
         }
     }
 
     /// Async version of [`available`][Self::available].
     ///
+    /// macOS/Windows: sync-wrapped in `std::future::ready`.
     /// OSC 52: always returns an empty list (terminal clipboard state cannot
     /// be queried).
     #[allow(unused_variables)]
@@ -364,8 +478,18 @@ impl Clipboard {
                     _ => unreachable!(),
                 }
             }
+            #[cfg(target_os = "macos")]
+            ClipboardBackend::Macos => {
+                use backend::Backend as _;
+                std::future::ready(backend::macos::MacosBackend::new().available(sel)).await
+            }
+            #[cfg(target_os = "windows")]
+            ClipboardBackend::Windows => {
+                use backend::Backend as _;
+                std::future::ready(backend::windows::WindowsBackend::new().available(sel)).await
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             ClipboardBackend::Osc52 => std::future::ready(Ok(vec![])).await,
-            ClipboardBackend::Unimplemented => unimplemented!("platform not yet wired"),
         }
     }
 
@@ -395,7 +519,7 @@ impl Clipboard {
     /// Return true if the active backend is OSC 52.
     ///
     /// Used in tests to verify fallback selection without needing a display.
-    #[cfg(test)]
+    #[cfg(all(test, not(any(target_os = "macos", target_os = "windows"))))]
     pub(crate) fn is_osc52(&self) -> bool {
         matches!(self.backend, ClipboardBackend::Osc52)
     }
@@ -403,10 +527,12 @@ impl Clipboard {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     /// Construct a Clipboard with OSC 52 by bypassing the display probe,
     /// then verify set/clear succeed and get returns UnsupportedMime.
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
     fn osc52_backend_set_and_get() {
         // Force OSC 52 backend directly — bypass Wayland/X11 probe.
