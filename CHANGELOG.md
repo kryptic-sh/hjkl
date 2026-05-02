@@ -6,6 +6,40 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-03
+
+### Fixed
+
+- **`Oneshot` double-poll test now passes under `cargo test --release`.** The
+  v0.4.3 panic-softening (release builds return `Poll::Pending` instead of
+  panicking) left the existing `#[should_panic]` test asserting panic
+  unconditionally. Split into `poll_after_taken_panics_in_debug` and
+  `poll_after_taken_returns_pending_in_release`, gated by
+  `#[cfg(debug_assertions)]`.
+
+### Changed
+
+- **`Clipboard::available(Selection::Primary)` on macOS and Windows now returns
+  `Err(ClipboardError::UnsupportedMime)`** instead of `Ok(vec![])`. Aligns with
+  `set` / `get` / `clear` on the same backends — callers get a clear "primary is
+  not supported on this platform" signal rather than an empty list that
+  misleadingly implies "primary works but is empty". OSC 52 backend keeps
+  `Ok(vec![])` per its documented contract (terminal clipboard cannot be
+  queried).
+
+### Performance
+
+- **OSC 52 size-cap check no longer allocates.** `Osc52Backend::set_inner`
+  computes the encoded length via `n.div_ceil(3) * 4` instead of allocating a
+  full base64 string just to measure it. New cross-check test verifies the
+  formula matches the encoder at every chunk-remainder branch and at the
+  `OSC52_MAX` boundary.
+
+### Internal
+
+- `MacosBackend::new()` `#[allow(dead_code)]` scoped to non-macOS targets,
+  mirroring the existing pattern in `osc52.rs`.
+
 ## [0.4.3] - 2026-05-03
 
 ### Added
