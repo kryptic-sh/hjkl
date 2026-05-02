@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-03
+
+### Added
+
+- Auto-publish `hjkl-bin` to AUR on every release. Mirrors buffr's pattern:
+  archlinux container fetches sha256 sidecars from the GitHub release tarballs,
+  renders `pkg/aur/PKGBUILD-bin.in`, generates `.SRCINFO`, and pushes to
+  `aur.archlinux.org/hjkl-bin.git` via the org-level `AUR_SSH_KEY` secret.
+  Targets gnu x86_64 + aarch64.
+
 ## [0.4.2] - 2026-05-03
 
 ### Added
