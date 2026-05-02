@@ -925,23 +925,74 @@ Notes from execution:
   closing them (via `libc::close`). 6b/6c must be careful not to leak —
   data_source.send and offer.receive both hand us write/read fds we own.
 
-#### Phase 6b — bg thread + data-control bind + set/clear (CLIPBOARD only) (TODO, ~400 LOC)
+#### Phase 6b — bg thread + data-control bind + set/clear (CLIPBOARD only) (DONE — `ec8ab00`)
 
-- [ ] Singleton bg thread mirroring `x11_thread.rs` shape. Event loop: `poll(2)`
-      on socket fd + `recv_timeout(50ms)` on inbox.
-- [ ] Bind `data_control_manager` via `wl_registry.bind` (priority: ext > wlr).
-- [ ] `manager.get_data_device(seat)` → `data_control_device`.
-- [ ] **Set**: `create_data_source` → `source.offer(mime)` per mime type →
-      `device.set_selection(source)`.
-- [ ] **Clear**: `device.set_selection(null)`.
-- [ ] Service `data_source.send(mime, fd)` events: lookup payload by mime, write
-      to fd, close fd.
-- [ ] Service `data_source.cancelled` events: drop source.
-- [ ] Install `sway` (Arch) for headless tests (`WLR_BACKENDS=headless`). Spawn
-      one sway per test session, leak for process lifetime (mirror xvfb
-      pattern).
-- [ ] `wl-clipboard` install (Arch: `wl-clipboard` — already present) for
-      external `wl-copy`/`wl-paste` round-trip tests.
+- [x] `src/backend/wayland_thread.rs` — new file, ~1500 LOC total (~500
+      production + ~700 mock + ~200 tests).
+- [x] **Mock compositor inline** instead of weston/sway dep. Reuses
+      `wayland_wire.rs` for encode/decode. Implements server side of:
+      `wl_display` (sync + get_registry), `wl_registry` (bind with typeless
+      new_id form), `ext_data_control_manager_v1`, `ext_data_control_device_v1`
+      (set_selection + set_primary_selection stub), `ext_data_control_source_v1`
+      (offer record + send/cancelled dispatch via
+      `trigger_paste`/`trigger_cancelled`). `wl_seat` advertised but no events.
+- [x] Singleton `WaylandThread` via `OnceLock<Result<_, String>>` (same
+      error-collapse caveat as 5b — Phase 7 must fix).
+- [x] Connection: open via `WaylandConnection`, find `wl_seat` +
+      `ext_data_control_manager_v1` globals, bind both, call
+      `manager.get_data_device(seat)`. If `ext_data_control_manager_v1` missing
+      → `ClipboardError::FocusRequired` (GNOME case; OSC 52 fallback wired in
+      lib.rs once 6c lands).
+- [x] Object IDs: client allocates monotonically from 100; reserved 1 (display),
+      2 (registry), 3 (sync callback).
+- [x] Event loop: `recv(blocking=false)` + drain pending messages + handle inbox
+      via `recv_timeout(50ms)`. Mirrors X11 thread cadence.
+- [x] **Set**: destroy any old source, `manager.create_data_source(new_id)`,
+      `source.offer(mime)`, `device.set_selection(source)`. Track payloads in
+      `state.clipboard_source.payloads: HashMap<String, Vec<u8>>`.
+- [x] **Clear**: `device.set_selection(0)` (null), drop source state.
+- [x] **Primary**: returns `UnsupportedMime` (deferred to 6c).
+- [x] **`data_source.send(mime, fd)` event**: `parse_string(mime)`,
+      `write_to_fd(fd, payload)`, `libc::close(fd)`. Partial-write loop in
+      `write_to_fd`. Unknown mime → empty payload (graceful).
+- [x] **`data_source.cancelled` event**: send `source.destroy`, drop state.
+      Close any unclaimed fd.
+- [x] `lib.rs::Clipboard::new()` probes Wayland first, falls through to X11 on
+      `LibNotFound` / `NoDisplay` / `FocusRequired`. `set/clear` dispatch on
+      `ClipboardBackend::Wayland` arm. `get/available` return empty/error for
+      Wayland (6c wires).
+- [x] `WaylandConnection::into_parts()` accessor +
+      `WaylandSocket::from_raw_fd()` (cfg(test)) for mock server inline
+      composition.
+- [x] 4 tests: `mock_compositor_set_then_paste_text`,
+      `mock_compositor_clear_unsets_selection`, `mock_compositor_offer_html`,
+      `mock_compositor_replace_selection`. All use shared mock + `TEST_LOCK`
+      Mutex, mock `reset()` between tests.
+- [x] 116 → 120 tests. All cross-targets clippy `-D warnings` clean. X11 tests
+      insulated (they call `x11_thread()` directly, bypass `Clipboard::new()`).
+
+Notes from execution:
+
+- **Mock compositor** chosen over weston/sway dep — hermetic tests, no system
+  dep, ~400 LOC of test infrastructure but cleaner CI story.
+- **OnceLock isolation**: shared mock + `TEST_LOCK` Mutex + per-test
+  `mock.reset()` (mirrors x11_thread's XVFB_SESSION pattern). The test
+  `mock_compositor_no_data_control_returns_focus_required` was DROPPED — once
+  the singleton initialises against a working mock, you can't subsequently test
+  against a no-data-control mock without a process restart. Defer to Phase 7's
+  process-scoped CI tests.
+- **Readiness probe bug** caught in impl: original used `UnixStream::connect`
+  which consumed the mock's single accept slot before the real client connected.
+  Fixed by `Path::exists()` + brief sleep.
+- **Known issue (same as 5b)**: `OnceLock<Result<_, String>>` collapses errors.
+  Phase 7 must replace with proper enum so `Clipboard::new()` fallthrough works
+  for all callers.
+- **Long-lived singleton ordering**: if Wayland init fails for one reason in a
+  long-running process and Wayland later becomes available, the OnceLock caches
+  the original failure. Acceptable for v0.4.0; documented for Phase 7.
+- Test infra deviation from spec: NO sway/weston install. wl-clipboard is
+  installed but unused for 6b (mock replaces it). Phase 7 may add a real
+  compositor target in CI for fidelity coverage.
 
 #### Phase 6c — read path + available + PRIMARY + GNOME fallback (TODO, ~500 LOC)
 
