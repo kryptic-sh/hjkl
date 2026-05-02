@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-03
+
+### Added
+
+- 8 new bundled grammars: Python, TypeScript, TSX, Go, YAML, Bash, C, HTML, CSS
+  (9 configs total — TypeScript and TSX share the `tree-sitter-typescript`
+  crate). All highlight queries pulled directly from upstream grammar crate
+  constants; no vendored `.scm` files.
+- Umbrella test asserts every registered language compiles its
+  `HIGHLIGHTS_QUERY` against its `LANGUAGE` — guards against upstream version
+  drift between grammar and queries.
+
+### Changed
+
+- Bundled grammar count grew from 5 to 14. Binary size impact: ~8–12 MB
+  release-stripped across the 8 new grammar `.so` artifacts. All grammars remain
+  unconditionally compiled in (no feature gates).
+
 ## [0.3.1] - 2026-04-30
 
 ### Changed

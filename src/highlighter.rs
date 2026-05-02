@@ -403,6 +403,33 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_language_has_compilable_query() {
+        let reg = LanguageRegistry::new();
+        for name in [
+            "rust",
+            "markdown",
+            "json",
+            "toml",
+            "sql",
+            "python",
+            "typescript",
+            "tsx",
+            "go",
+            "yaml",
+            "bash",
+            "c",
+            "html",
+            "css",
+        ] {
+            let config = reg
+                .by_name(name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            Highlighter::new(config)
+                .unwrap_or_else(|e| panic!("Highlighter::new failed for {name}: {e}"));
+        }
+    }
+
+    #[test]
     fn highlight_empty_input() {
         let reg = LanguageRegistry::new();
         let config = reg.by_name("rust").unwrap();

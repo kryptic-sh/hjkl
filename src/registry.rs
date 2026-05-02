@@ -28,6 +28,15 @@ impl LanguageRegistry {
                 &languages::json::CONFIG,
                 &languages::toml::CONFIG,
                 &languages::sql::CONFIG,
+                &languages::python::CONFIG,
+                &languages::typescript::CONFIG,
+                &languages::tsx::CONFIG,
+                &languages::go::CONFIG,
+                &languages::yaml::CONFIG,
+                &languages::bash::CONFIG,
+                &languages::c::CONFIG,
+                &languages::html::CONFIG,
+                &languages::css::CONFIG,
             ],
         }
     }
@@ -118,5 +127,122 @@ mod tests {
     fn detect_language_for_path_free_fn() {
         let cfg = detect_language_for_path(Path::new("main.rs")).unwrap();
         assert_eq!(cfg.name, "rust");
+    }
+
+    #[test]
+    fn registry_detects_python_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("main.py")).unwrap();
+        assert_eq!(cfg.name, "python");
+    }
+
+    #[test]
+    fn registry_by_name_python() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("python").is_some());
+    }
+
+    #[test]
+    fn registry_detects_typescript_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("app.ts")).unwrap();
+        assert_eq!(cfg.name, "typescript");
+    }
+
+    #[test]
+    fn registry_by_name_typescript() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("typescript").is_some());
+    }
+
+    #[test]
+    fn registry_detects_tsx_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("App.tsx")).unwrap();
+        assert_eq!(cfg.name, "tsx");
+    }
+
+    #[test]
+    fn registry_by_name_tsx() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("tsx").is_some());
+    }
+
+    #[test]
+    fn registry_detects_go_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("main.go")).unwrap();
+        assert_eq!(cfg.name, "go");
+    }
+
+    #[test]
+    fn registry_by_name_go() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("go").is_some());
+    }
+
+    #[test]
+    fn registry_detects_yaml_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("config.yml")).unwrap();
+        assert_eq!(cfg.name, "yaml");
+    }
+
+    #[test]
+    fn registry_by_name_yaml() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("yaml").is_some());
+    }
+
+    #[test]
+    fn registry_detects_bash_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("deploy.sh")).unwrap();
+        assert_eq!(cfg.name, "bash");
+    }
+
+    #[test]
+    fn registry_by_name_bash() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("bash").is_some());
+    }
+
+    #[test]
+    fn registry_detects_c_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("main.c")).unwrap();
+        assert_eq!(cfg.name, "c");
+    }
+
+    #[test]
+    fn registry_by_name_c() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("c").is_some());
+    }
+
+    #[test]
+    fn registry_detects_html_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("index.html")).unwrap();
+        assert_eq!(cfg.name, "html");
+    }
+
+    #[test]
+    fn registry_by_name_html() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("html").is_some());
+    }
+
+    #[test]
+    fn registry_detects_css_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("style.css")).unwrap();
+        assert_eq!(cfg.name, "css");
+    }
+
+    #[test]
+    fn registry_by_name_css() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("css").is_some());
     }
 }
