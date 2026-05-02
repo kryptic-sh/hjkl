@@ -72,6 +72,26 @@ jobs:
       - run: cargo test --target ${{ matrix.target }} --all-features
       - run: cargo test --doc --target ${{ matrix.target }} --all-features
 
+  # Real-compositor test: spawn sway in headless wlroots mode and verify our
+  # bind handshake against ext_data_control_manager_v1 actually completes.
+  # Mock unit tests can't catch wire-protocol bugs like the FIRST_CLIENT_ID
+  # mismatch that broke Hyprland users in 0.4.7.
+  sway-integration:
+    name: sway headless integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install sway
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends sway
+          sway --version
+      - name: Run wayland_sway integration test
+        run: cargo test --test wayland_sway -- --nocapture
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
