@@ -1,6 +1,6 @@
 **/*.rs.bk
 *.swp
 .DS_Store
-/target
+target/
 /temp.*
 Cargo.lock

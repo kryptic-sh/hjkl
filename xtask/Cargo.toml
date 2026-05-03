@@ -1,0 +1,25 @@
+# Standalone bin crate — intentionally not a workspace member of either
+# bonsai or the umbrella, so its deps don't pollute the consumer build
+# graph. The empty `[workspace]` table tells cargo "this crate is its
+# own workspace root."
+[workspace]
+
+[package]
+name = "xtask"
+description = "Build automation tasks for hjkl-bonsai (cargo xtask ...)."
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+ureq = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+toml = "1.1"

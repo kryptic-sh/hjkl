@@ -1,0 +1,6 @@
+[alias]
+# `cargo xtask <subcmd>` invokes our build automation tool.
+# xtask is a standalone crate at xtask/ — it intentionally has no
+# `[workspace]` link to the bonsai library so its deps don't pollute
+# the consumer build graph.
+xtask = "run --manifest-path xtask/Cargo.toml --release --"
