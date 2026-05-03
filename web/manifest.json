@@ -1,0 +1,15 @@
+{
+  "name": "hjkl",
+  "short_name": "hjkl",
+  "description": "A vim-style modal editor in Rust. Built on a reusable engine, rope buffer, and editor primitives.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0d10",
+  "theme_color": "#bb9af7",
+  "icons": [
+    { "src": "favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any" }
+  ]
+}
