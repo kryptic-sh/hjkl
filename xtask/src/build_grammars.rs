@@ -93,29 +93,17 @@ fn build_one(
     name: &str,
     spec: &LangSpec,
     loader: &GrammarLoader,
-    out_dir: &Path,
+    _out_dir: &Path,
 ) -> Result<BuildKind> {
-    let already_installed = out_dir
-        .join(format!("{name}{}", shared_lib_ext()))
-        .is_file();
+    let was_fresh = loader.lookup_fresh(name, spec).is_some();
     loader
         .load(name, spec)
         .with_context(|| format!("install {name}"))?;
-    Ok(if already_installed {
+    Ok(if was_fresh {
         BuildKind::Cached
     } else {
         BuildKind::Built
     })
-}
-
-fn shared_lib_ext() -> &'static str {
-    if cfg!(target_os = "macos") {
-        ".dylib"
-    } else if cfg!(target_os = "windows") {
-        ".dll"
-    } else {
-        ".so"
-    }
 }
 
 #[derive(Debug, Default)]
