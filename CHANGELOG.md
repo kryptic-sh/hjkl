@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-03
+
+### Fixed
+
+- v0.4.5 release failed (all 7 builds): the submodule pointer for
+  `hjkl-clipboard` was stale (commit `6170ad0`, pre-0.4.8) but the lockfile
+  recorded `hjkl-clipboard 0.4.8`, so `cargo build --locked` in CI rejected the
+  mismatch. Pointer advanced to the v0.4.8 tag.
+
 ## [0.4.5] - 2026-05-03
 
 ### Fixed
