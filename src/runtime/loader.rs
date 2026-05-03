@@ -50,17 +50,20 @@ impl GrammarLoader {
 
     /// Default loader for end-user installs:
     /// - system: `/usr/share/hjkl/runtime/grammars/`,
-    ///   `/usr/local/share/hjkl/runtime/grammars/`
-    /// - user:   `$XDG_DATA_HOME/hjkl/runtime/grammars/` (falls back to
-    ///   `$HOME/.local/share/...`)
+    ///   `/usr/local/share/hjkl/runtime/grammars/` (Unix only)
+    /// - user:   platform user-data dir + `hjkl/runtime/grammars/`
     /// - sources / compile: [`SourceCache::user_default`] +
     ///   [`GrammarCompiler::user_default`]
     pub fn user_default() -> Result<Self> {
-        let system_dirs = vec![
-            PathBuf::from("/usr/share/hjkl/runtime/grammars"),
-            PathBuf::from("/usr/local/share/hjkl/runtime/grammars"),
-        ];
-        let mut user = data_home()?;
+        let system_dirs = if cfg!(target_family = "unix") {
+            vec![
+                PathBuf::from("/usr/share/hjkl/runtime/grammars"),
+                PathBuf::from("/usr/local/share/hjkl/runtime/grammars"),
+            ]
+        } else {
+            Vec::new()
+        };
+        let mut user = dirs::data_dir().context("could not resolve user data directory")?;
         user.push("hjkl/runtime/grammars");
         Ok(Self::new(
             system_dirs,
@@ -130,16 +133,6 @@ fn shared_lib_ext() -> &'static str {
     } else {
         ".so"
     }
-}
-
-fn data_home() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("XDG_DATA_HOME")
-        && !p.is_empty()
-    {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var_os("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join(".local/share"))
 }
 
 #[cfg(test)]

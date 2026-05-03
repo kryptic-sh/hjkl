@@ -29,10 +29,13 @@ impl GrammarCompiler {
         Self { out_dir }
     }
 
-    /// Default cache rooted at `$XDG_CACHE_HOME/hjkl/grammars/` (falls back
-    /// to `$HOME/.cache/hjkl/grammars/`).
+    /// Default cache rooted at the platform's user-cache directory:
+    /// - Unix: `$XDG_CACHE_HOME/hjkl/grammars/` (falls back to
+    ///   `$HOME/.cache/hjkl/grammars/`)
+    /// - macOS: `$HOME/Library/Caches/hjkl/grammars/`
+    /// - Windows: `%LOCALAPPDATA%\hjkl\grammars\`
     pub fn user_default() -> Result<Self> {
-        let mut p = cache_home()?;
+        let mut p = dirs::cache_dir().context("could not resolve user cache directory")?;
         p.push("hjkl/grammars");
         Ok(Self::new(p))
     }
@@ -171,17 +174,6 @@ fn shared_lib_ext() -> &'static str {
     } else {
         ".so"
     }
-}
-
-fn cache_home() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {
-        let p = PathBuf::from(p);
-        if !p.as_os_str().is_empty() {
-            return Ok(p);
-        }
-    }
-    let home = std::env::var_os("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join(".cache"))
 }
 
 #[cfg(test)]

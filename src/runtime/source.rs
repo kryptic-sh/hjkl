@@ -28,11 +28,13 @@ impl SourceCache {
         Self { base }
     }
 
-    /// User-default cache rooted at
-    /// `$XDG_DATA_HOME/hjkl/grammars/sources/` (falls back to
-    /// `$HOME/.local/share/hjkl/grammars/sources/`).
+    /// User-default cache rooted at the platform's user-data directory:
+    /// - Unix: `$XDG_DATA_HOME/hjkl/grammars/sources/` (falls back to
+    ///   `$HOME/.local/share/hjkl/grammars/sources/`)
+    /// - macOS: `$HOME/Library/Application Support/hjkl/grammars/sources/`
+    /// - Windows: `%APPDATA%\hjkl\grammars\sources\`
     pub fn user_default() -> Result<Self> {
-        let mut p = data_home()?;
+        let mut p = dirs::data_dir().context("could not resolve user data directory")?;
         p.push("hjkl/grammars/sources");
         Ok(Self::new(p))
     }
@@ -148,17 +150,6 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn data_home() -> Result<PathBuf> {
-    if let Some(p) = std::env::var_os("XDG_DATA_HOME") {
-        let p = PathBuf::from(p);
-        if !p.as_os_str().is_empty() {
-            return Ok(p);
-        }
-    }
-    let home = std::env::var_os("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join(".local/share"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,24 +194,6 @@ mod tests {
         let clone = PathBuf::from("/tmp/cache/rust-deadbeef0000");
         let spec = dummy_spec("deadbeef00000000", None);
         assert_eq!(grammar_root(&clone, &spec), clone);
-    }
-
-    #[test]
-    fn data_home_prefers_xdg_when_set() {
-        // Save + restore so we don't leak state into other tests.
-        let prev_xdg = std::env::var_os("XDG_DATA_HOME");
-        // Safety: tests run single-threaded by default and we restore below.
-        unsafe {
-            std::env::set_var("XDG_DATA_HOME", "/somewhere/data");
-        }
-        let got = data_home().unwrap();
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-                None => std::env::remove_var("XDG_DATA_HOME"),
-            }
-        }
-        assert_eq!(got, PathBuf::from("/somewhere/data"));
     }
 
     /// Real network test against a tiny well-known repo. Kept `#[ignore]`d
