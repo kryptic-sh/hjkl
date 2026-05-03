@@ -411,6 +411,73 @@
         font-family: var(--mono);
         font-variant-ligatures: none;
       }
+      .term-body {
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        background: var(--panel);
+      }
+      .term-col {
+        border-right: 1px solid var(--border);
+      }
+      .term-col:last-child {
+        border-right: 0;
+      }
+      .pane-hdr {
+        padding: 6px 14px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-muted);
+        background: #0d1016;
+        border-bottom: 1px solid var(--border);
+      }
+      .pane-hdr .tab {
+        display: inline-block;
+        padding: 2px 10px;
+        margin: -2px 4px -2px -4px;
+        background: var(--bg-alt);
+        color: var(--accent);
+        border-radius: 3px 3px 0 0;
+      }
+      .gutter {
+        color: var(--fg-muted);
+        opacity: 0.55;
+        user-select: none;
+      }
+      .cursor-block {
+        background: var(--accent);
+        color: var(--bg);
+        padding: 0 1px;
+      }
+      .status-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 12px;
+        background: #0d1016;
+        border-top: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--fg-dim);
+      }
+      .status-bar .mode-badge {
+        background: var(--accent);
+        color: var(--bg);
+        font-weight: 700;
+        padding: 4px 14px;
+        letter-spacing: 0.08em;
+      }
+      .status-bar .right {
+        margin-left: auto;
+      }
+      @media (max-width: 680px) {
+        .term-body {
+          grid-template-columns: 1fr;
+        }
+        .term-col {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+      }
       .kw {
         color: var(--keyword);
         font-weight: 500;
@@ -683,25 +750,44 @@
           <div class="bar">
             <span class="dot r"></span><span class="dot y"></span
             ><span class="dot g"></span>
-            <span class="title">hjkl — engine demo</span>
+            <span class="title">hjkl — ~/code/buffr</span>
           </div>
-          <pre><span class="cm">// drive a vim FSM. no I/O, no terminal, no allocator beyond `alloc`.</span>
-<span class="kw">use</span> hjkl_engine::{<span class="ty">Engine</span>, <span class="ty">Mode</span>, <span class="ty">Key</span>};
-<span class="kw">use</span> hjkl_buffer::<span class="ty">Rope</span>;
+          <div class="term-body">
+            <div class="term-col">
+              <div class="pane-hdr">buffers — (4)</div>
+              <pre><span class="ok">●</span> main.rs            <span class="dim">42L</span>
+  cargo.toml         <span class="dim">31L</span>
+  README.md          <span class="dim">88L</span>
+  <span class="dim">.gitignore         12L</span>
 
-<span class="kw">let mut</span> rope = <span class="ty">Rope</span>::<span class="fn">from_str</span>(<span class="str">"hello, world"</span>);
-<span class="kw">let mut</span> eng  = <span class="ty">Engine</span>::<span class="fn">new</span>();
-
-<span class="fn">eng</span>.<span class="fn">feed</span>(<span class="ty">Key</span>::<span class="ty">Char</span>(<span class="str">'d'</span>));      <span class="cm">// pending: delete</span>
-<span class="fn">eng</span>.<span class="fn">feed</span>(<span class="ty">Key</span>::<span class="ty">Char</span>(<span class="str">'w'</span>));      <span class="cm">// motion:  word</span>
-
-<span class="kw">match</span> <span class="fn">eng</span>.<span class="fn">commit</span>() {
-    <span class="ty">Action</span>::<span class="ty">Delete</span>(range) =&gt; <span class="fn">rope</span>.<span class="fn">remove</span>(range),
-    _                     =&gt; {}
-}
-
-<span class="kw">assert_eq!</span>(<span class="fn">rope</span>.<span class="fn">to_string</span>(), <span class="str">"world"</span>);
-<span class="kw">assert_eq!</span>(<span class="fn">eng</span>.<span class="fn">mode</span>(), <span class="ty">Mode</span>::<span class="ty">Normal</span>);</pre>
+<span class="dim">&lt;leader&gt;&lt;leader&gt; → files</span>
+<span class="dim">&lt;leader&gt;b       → buffers</span>
+<span class="dim">&lt;leader&gt;g       → grep</span></pre>
+            </div>
+            <div class="term-col">
+              <div class="pane-hdr">
+                <span class="tab">main.rs</span>
+              </div>
+              <pre><span class="gutter">  1 </span><span class="cm">// vim FSM driving a rope buffer.</span>
+<span class="gutter">  2 </span><span class="kw">use</span> hjkl_engine::{<span class="ty">Editor</span>, <span class="ty">Host</span>};
+<span class="gutter">  3 </span><span class="kw">use</span> hjkl_buffer::<span class="ty">Rope</span>;
+<span class="gutter">  4 </span>
+<span class="gutter">  5 </span><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">io</span>::<span class="ty">Result</span>&lt;()&gt; {
+<span class="gutter">  6 </span>    <span class="kw">let mut</span> ed = <span class="ty">Editor</span>::&lt;<span class="ty">Rope</span>, _&gt;::<span class="fn">new</span>(<span class="ty">TuiHost</span>);
+<span class="gutter">  7 </span>    ed.<span class="fn">open</span>(<span class="str">"src/main.rs"</span>)?;
+<span class="gutter">  8 </span>
+<span class="gutter">  9 </span>    <span class="kw">while</span> <span class="kw">let</span> <span class="ty">Some</span>(key) = ed.<span class="fn">poll</span>()? {
+<span class="gutter"> 10 </span>        ed.<span class="fn">feed</span>(key)<span class="cursor-block">;</span>
+<span class="gutter"> 11 </span>    }
+<span class="gutter"> 12 </span>    <span class="ty">Ok</span>(())
+<span class="gutter"> 13 </span>}</pre>
+            </div>
+          </div>
+          <div class="status-bar">
+            <span class="mode-badge">NORMAL</span>
+            <span>main.rs</span>
+            <span class="right">10:21</span>
+          </div>
         </div>
       </header>
 
