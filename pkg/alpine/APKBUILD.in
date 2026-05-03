@@ -1,0 +1,26 @@
+# Maintainer: kryptic.sh <hello at kryptic dot sh>
+#
+# Auto-generated. Source: https://github.com/kryptic-sh/hjkl
+# Edits made directly to a built .apk are not tracked. To change this
+# APKBUILD, edit `pkg/alpine/APKBUILD.in` in the upstream repo and let
+# `.github/workflows/release.yml` rebuild on the next tag.
+pkgname=hjkl
+pkgver={VERSION}
+pkgrel=0
+pkgdesc="Vim-modal terminal editor: standalone TUI built on the hjkl engine."
+url="https://hjkl.kryptic.sh/"
+arch="x86_64"
+license="MIT"
+# !check  — no test suite shipped in the binary tarball.
+# !strip  — binary is already stripped by the upstream release build,
+#           and abuild's strip step rejects cross-built artifacts.
+options="!check !strip"
+source="hjkl-v$pkgver-x86_64-unknown-linux-musl.tar.gz::https://github.com/kryptic-sh/hjkl/releases/download/v$pkgver/hjkl-v$pkgver-x86_64-unknown-linux-musl.tar.gz"
+
+package() {
+    install -Dm755 "$srcdir/hjkl" "$pkgdir/usr/bin/hjkl"
+    install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "$srcdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
+
+sha512sums="{SHA512_X86_64}  hjkl-v$pkgver-x86_64-unknown-linux-musl.tar.gz"

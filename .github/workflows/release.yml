@@ -361,6 +361,118 @@ jobs:
           git commit -m "hjkl-bin ${{ steps.tag.outputs.version }}-1"
           git push origin master
 
+  # Alpine .apk for `hjkl`. Pulls the just-uploaded musl tarball off the
+  # release, renders pkg/alpine/APKBUILD.in with version + sha512, builds
+  # an unsigned package via abuild inside an alpine:latest container, and
+  # uploads the .apk back to the same release. Lives in release.yml so it
+  # runs in the same `needs: [build]` cascade as aur-bin.
+  alpine:
+    name: Build .apk for Alpine (x86_64)
+    needs: [build]
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install build deps
+        run: |
+          set -euo pipefail
+          # alpine-sdk pulls in abuild + fakeroot + build-base. curl/bash
+          # for the asset fetch + workflow scripting. coreutils for a
+          # GNU-flavored sha512sum that accepts the same `awk '{print $1}'`
+          # split we use elsewhere in this file.
+          apk add --no-cache alpine-sdk bash curl coreutils
+
+      - uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release tag: $TAG (pkgver=$VERSION)"
+
+      - name: Fetch musl tarball + compute sha512
+        id: sha
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.tag.outputs.version }}"
+          BASE="https://github.com/kryptic-sh/hjkl/releases/download/v${V}"
+          # Sidecars on the release are sha256; abuild wants sha512, so
+          # re-hash the tarball locally rather than depending on a second
+          # sidecar format.
+          TARBALL="hjkl-v${V}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSL "$BASE/$TARBALL" -o "$TARBALL"
+          SHA512=$(sha512sum "$TARBALL" | awk '{print $1}')
+          echo "sha512=$SHA512" >> "$GITHUB_OUTPUT"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Render APKBUILD
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          sed \
+            -e "s|{VERSION}|${{ steps.tag.outputs.version }}|g" \
+            -e "s|{SHA512_X86_64}|${{ steps.sha.outputs.sha512 }}|g" \
+            pkg/alpine/APKBUILD.in > out/APKBUILD
+          # abuild reads the source from $SRCDEST when present; drop the
+          # already-downloaded tarball there so we don't refetch.
+          mkdir -p out/src
+          cp "${{ steps.sha.outputs.tarball }}" out/src/
+          echo "--- rendered APKBUILD ---"
+          cat out/APKBUILD
+
+      - name: Build .apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          # abuild refuses to run as root. Provision a build user with
+          # sudo rights so it can install build-time deps if any get
+          # added later.
+          adduser -D builder
+          addgroup builder abuild
+          # /var/cache/distfiles is abuild's default SRCDEST; let the
+          # builder user write there.
+          mkdir -p /var/cache/distfiles
+          chown builder:abuild /var/cache/distfiles
+          chmod 775 /var/cache/distfiles
+          chown -R builder:builder out
+          # Generate a throwaway signing key. The .apk is published
+          # unsigned-from-the-user's-POV (they `apk add --allow-untrusted`
+          # the file), but abuild still wants a key to sign the index it
+          # writes alongside.
+          su builder -c 'abuild-keygen -a -n'
+          # -F: force build even though we're not in an aports tree.
+          # -r: install missing build deps automatically.
+          su builder -c 'cd out && SRCDEST=/var/cache/distfiles cp src/*.tar.gz /var/cache/distfiles/ && abuild -F -r'
+          # Default PKGDEST is ~builder/packages/<pkgrepo>/<arch>/
+          APK=$(find /home/builder/packages -name 'hjkl-*.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::no .apk produced"
+            find /home/builder/packages -type f
+            exit 1
+          fi
+          cp "$APK" .
+          APK_NAME=$(basename "$APK")
+          sha256sum "$APK_NAME" > "$APK_NAME.sha256"
+          echo "built: $APK_NAME"
+
+      - name: Upload .apk + sha256
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            hjkl-*.apk
+            hjkl-*.apk.sha256
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   publish-crates:
     name: Publish to crates.io
     needs: build

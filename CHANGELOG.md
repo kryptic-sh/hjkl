@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Alpine `.apk` package** in `pkg/alpine/APKBUILD.in`, built in
+  `.github/workflows/release.yml` inside an `alpine:latest` container off the
+  `x86_64-unknown-linux-musl` release tarball and uploaded to the GitHub release
+  alongside the `.deb` / `.rpm` / `.tar.gz` artifacts. Install with
+  `apk add --allow-untrusted ./hjkl-*.apk`. Tracks
+  [#18](https://github.com/kryptic-sh/hjkl/issues/18).
+
 ## [0.8.0] - 2026-05-03
 
 ### Added
