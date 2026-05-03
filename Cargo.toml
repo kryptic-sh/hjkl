@@ -1,12 +1,12 @@
 [package]
-name = "hjkl-tree-sitter"
-description = "Generic tree-sitter syntax highlighting for the hjkl editor stack"
+name = "hjkl-bonsai"
+description = "Tree-sitter grammar registry + highlighter for the hjkl editor stack"
 keywords = ["tree-sitter", "syntax-highlighting", "editor", "vim", "tui"]
 categories = ["text-editors", "parsing"]
-version = "0.5.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/kryptic-sh/hjkl-tree-sitter"
+repository = "https://github.com/kryptic-sh/hjkl-bonsai"
 authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"

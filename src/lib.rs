@@ -1,10 +1,10 @@
-//! `hjkl-tree-sitter` — generic tree-sitter syntax highlighting for the hjkl editor stack.
+//! `hjkl-bonsai` — generic tree-sitter syntax highlighting for the hjkl editor stack.
 //!
 //! # Quick start
 //!
 //! ```rust
 //! use std::path::Path;
-//! use hjkl_tree_sitter::{LanguageRegistry, Highlighter, DotFallbackTheme, Theme};
+//! use hjkl_bonsai::{LanguageRegistry, Highlighter, DotFallbackTheme, Theme};
 //!
 //! let registry = LanguageRegistry::new();
 //! let config = registry.by_name("rust").unwrap();

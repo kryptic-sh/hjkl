@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-03
+
+### Changed
+
+- **Renamed from `hjkl-tree-sitter`.** The github repo `kryptic-sh/hjkl-tree-sitter`
+  was renamed to `kryptic-sh/hjkl-bonsai` (GitHub auto-redirects the old URL,
+  so prior issues/PRs/stars are preserved). The `hjkl-tree-sitter` crate on
+  crates.io stays as a deprecated artifact at `0.5.0` — this crate continues
+  the same code lineage under the new name, restarting at `0.1.0`.
+- Public API is unchanged: `DotFallbackTheme`, `Highlighter`, `LanguageRegistry`,
+  `Theme`, `CommentMarkerPass`, `HighlightSpan`, `ParseError`, `Syntax` all
+  remain in the root namespace. Migration is `s/hjkl_tree_sitter/hjkl_bonsai/g`
+  in import paths.
+
+## Pre-rename history
+
+Releases below were published as `hjkl-tree-sitter` on crates.io. The full
+history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter`
+on 2026-05-03).
+
 ## [0.5.0] - 2026-05-03
 
 ### Added
