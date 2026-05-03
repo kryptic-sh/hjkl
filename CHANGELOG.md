@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-05-03
+
+### Fixed
+
+- Bumped `hjkl-clipboard` 0.4 → 0.4.8 to pull in the Wayland bind fix. Clipboard
+  now works on sway/wlroots and Hyprland (`FIRST_CLIENT_ID = 4` matches
+  libwayland-client; older value of 100 was rejected by those compositors with a
+  cryptic `"invalid arguments for wl_registry#2.bind"`).
+
 ## [0.4.4] - 2026-05-03
 
 ### Fixed
