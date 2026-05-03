@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-05-03
+
+### Fixed
+
+- `Cargo.lock` regenerated cleanly from `cargo build` instead of partial
+  `cargo generate-lockfile`. 0.9.0 release CI failed on
+  `cargo zigbuild --locked` because the lockfile was out of sync with the bonsai
+  0.3 + apps/hjkl pin bump. No source changes vs 0.9.0.
+
 ## [0.9.0] - 2026-05-03
 
 ### Changed
@@ -944,7 +953,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.1
 [0.9.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.0
 [0.8.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.1
 [0.8.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.0
