@@ -13,6 +13,7 @@ mod loader;
 mod manifest;
 mod registry;
 mod source;
+mod xdg;
 
 pub use compile::GrammarCompiler;
 pub use grammar::Grammar;

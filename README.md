@@ -15,9 +15,9 @@ loading, no baked-in languages.
 `bonsai` ships a manifest of **421 languages** (sourced from helix +
 nvim-treesitter) and resolves grammars at runtime through a chain of:
 
-1. **System** — distro-shipped `.so` under `/usr/share/hjkl/grammars/` (or
-   `/usr/local/share/hjkl/grammars/`).
-2. **User** — `.so` previously installed under `<user_data>/hjkl/grammars/`.
+1. **System** — distro-shipped `.so` under `/usr/share/bonsai/grammars/` (or
+   `/usr/local/share/bonsai/grammars/`).
+2. **User** — `.so` previously installed under `<user_data>/bonsai/grammars/`.
 3. **On-demand** — clone the upstream repo, compile with `cc`/`c++`, and install
    the result into the user dir for next time.
 
@@ -31,7 +31,7 @@ is a `dlopen`.
 ## Usage
 
 ```toml
-hjkl-bonsai = "0.2"
+hjkl-bonsai = "0.3"
 ```
 
 ```rust
@@ -39,7 +39,7 @@ use std::sync::Arc;
 use hjkl_bonsai::{DotFallbackTheme, Highlighter, Theme};
 use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry};
 
-// 1. Load the embedded manifest + standard XDG-defaulted loader.
+// 1. Load the embedded manifest + standard XDG-everywhere loader.
 let registry = GrammarRegistry::embedded()?;
 let loader = GrammarLoader::user_default()?;
 
@@ -65,8 +65,8 @@ for span in &spans {
 The runtime layout `bonsai` looks for is:
 
 ```text
-<prefix>/hjkl/grammars/<name>.so
-<prefix>/hjkl/grammars/<name>.scm
+<prefix>/bonsai/grammars/<name>.so
+<prefix>/bonsai/grammars/<name>.scm
 ```
 
 To pre-build the full set against the current manifest:
@@ -74,9 +74,9 @@ To pre-build the full set against the current manifest:
 ```sh
 cargo xtask build-grammars --out /tmp/grammars
 install -Dm644 /tmp/grammars/*.so -t \
-    "$pkgdir/usr/share/hjkl/grammars/"
+    "$pkgdir/usr/share/bonsai/grammars/"
 install -Dm644 /tmp/grammars/*.scm -t \
-    "$pkgdir/usr/share/hjkl/grammars/"
+    "$pkgdir/usr/share/bonsai/grammars/"
 ```
 
 System-shipped grammars are not rev-checked at runtime — the packager owns that
@@ -85,26 +85,30 @@ lifecycle.
 ## On-disk layout
 
 ```text
-/usr/share/hjkl/grammars/         # 1st lookup (system)
-/usr/local/share/hjkl/grammars/   # 2nd lookup (system)
-<user_data>/hjkl/grammars/        # 3rd lookup + install target
+/usr/share/bonsai/grammars/         # 1st lookup (system)
+/usr/local/share/bonsai/grammars/   # 2nd lookup (system)
+<user_data>/bonsai/grammars/        # 3rd lookup + install target
   rust.so   rust.scm   rust.rev
   python.so python.scm python.rev
-<user_cache>/hjkl/grammars/       # source clones, transient
+<user_cache>/bonsai/grammars/       # source clones, transient
   rust-e86119bdb496/
   python-710796b8b877/
 ```
 
-Platform user dirs are resolved via the [`dirs`] crate:
+`<user_data>` and `<user_cache>` follow XDG-everywhere — same paths on every
+platform:
 
-| OS      | `<user_data>`                        | `<user_cache>`                  |
-| ------- | ------------------------------------ | ------------------------------- |
-| Linux   | `$XDG_DATA_HOME` or `~/.local/share` | `$XDG_CACHE_HOME` or `~/.cache` |
-| macOS   | `~/Library/Application Support`      | `~/Library/Caches`              |
-| Windows | `%APPDATA%`                          | `%LOCALAPPDATA%`                |
+| Variable          | Default          |
+| ----------------- | ---------------- |
+| `$XDG_DATA_HOME`  | `~/.local/share` |
+| `$XDG_CACHE_HOME` | `~/.cache`       |
+
+macOS and Windows do **not** get their platform-native dirs
+(`~/Library/Application Support`, `%APPDATA%`). bonsai stores its grammar cache
+uniformly across platforms so a `~/.local/share/bonsai/` checkout looks
+identical everywhere. The resolver is self-contained — no `hjkl-config` or other
+umbrella deps.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-
-[`dirs`]: https://crates.io/crates/dirs

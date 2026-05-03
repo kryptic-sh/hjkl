@@ -33,6 +33,7 @@ use super::compile::{GrammarCompiler, shared_lib_ext};
 use super::grammar::HIGHLIGHTS_FILE;
 use super::manifest::LangSpec;
 use super::source::SourceCache;
+use super::xdg;
 
 /// Configurable grammar resolver. Construct once, reuse across lookups.
 #[derive(Debug, Clone)]
@@ -62,22 +63,22 @@ impl GrammarLoader {
     }
 
     /// Default loader for end-user installs:
-    /// - system: `/usr/share/hjkl/grammars/`,
-    ///   `/usr/local/share/hjkl/grammars/` (Unix only)
-    /// - user:   platform user-data dir + `hjkl/grammars/`
+    /// - system: `/usr/share/bonsai/grammars/`,
+    ///   `/usr/local/share/bonsai/grammars/` (Unix only)
+    /// - user:   `$XDG_DATA_HOME/bonsai/grammars/` (XDG-everywhere; falls back
+    ///   to `~/.local/share/bonsai/grammars/` on every platform)
     /// - sources / compile: [`SourceCache::user_default`] +
     ///   [`GrammarCompiler::new`]
     pub fn user_default() -> Result<Self> {
         let system_dirs = if cfg!(target_family = "unix") {
             vec![
-                PathBuf::from("/usr/share/hjkl/grammars"),
-                PathBuf::from("/usr/local/share/hjkl/grammars"),
+                PathBuf::from("/usr/share/bonsai/grammars"),
+                PathBuf::from("/usr/local/share/bonsai/grammars"),
             ]
         } else {
             Vec::new()
         };
-        let mut user = dirs::data_dir().context("could not resolve user data directory")?;
-        user.push("hjkl/grammars");
+        let user = xdg::data_home()?.join("bonsai/grammars");
         Ok(Self::new(
             system_dirs,
             user,

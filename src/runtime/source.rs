@@ -14,6 +14,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::manifest::LangSpec;
+use super::xdg;
 
 /// Cache of cloned grammar source trees.
 #[derive(Debug, Clone)]
@@ -28,19 +29,17 @@ impl SourceCache {
         Self { base }
     }
 
-    /// User-default cache rooted at the platform's user-cache directory:
-    /// - Unix: `$XDG_CACHE_HOME/hjkl/grammars/` (falls back to
-    ///   `$HOME/.cache/hjkl/grammars/`)
-    /// - macOS: `$HOME/Library/Caches/hjkl/grammars/`
-    /// - Windows: `%LOCALAPPDATA%\hjkl\grammars\`
+    /// User-default cache rooted at `$XDG_CACHE_HOME/bonsai/grammars/`,
+    /// falling back to `~/.cache/bonsai/grammars/` on every platform.
+    /// macOS / Windows do *not* use their platform-native cache dirs —
+    /// bonsai stores grammar source caches uniformly across platforms.
     ///
     /// Each cloned grammar lives under `<base>/<name>-<short-rev>/`. The
     /// compiled `<name>.{so|dylib|dll}` is built **in-place** inside the
     /// same dir (see [`GrammarCompiler`]) and then installed to the
     /// durable user-data layer (see [`GrammarLoader`]).
     pub fn user_default() -> Result<Self> {
-        let mut p = dirs::cache_dir().context("could not resolve user cache directory")?;
-        p.push("hjkl/grammars");
+        let p = xdg::cache_home()?.join("bonsai/grammars");
         Ok(Self::new(p))
     }
 

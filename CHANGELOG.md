@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-03
+
+### Breaking
+
+- **Grammar storage subdir renamed `hjkl/` → `bonsai/`.** System dirs are now
+  `/usr/share/bonsai/grammars/` + `/usr/local/share/bonsai/grammars/`; user data
+  dir is `<user_data>/bonsai/grammars/`; user cache dir is
+  `<user_cache>/bonsai/grammars/`. Existing grammars under `hjkl/grammars/` are
+  not migrated — they will be re-fetched and re-compiled into the new
+  `bonsai/grammars/` location on first use. Distro packagers must update their
+  PKGBUILD / spec / control files to install grammars under
+  `usr/share/bonsai/grammars/`.
+- **`<user_data>` / `<user_cache>` now follow XDG-everywhere.** Resolution
+  honors `$XDG_DATA_HOME` / `$XDG_CACHE_HOME` first (with `~/.local/share` /
+  `~/.cache` fallback) on every platform. macOS users move from
+  `~/Library/Application Support/hjkl/grammars/` +
+  `~/Library/Caches/hjkl/grammars/` to `~/.local/share/bonsai/grammars/` +
+  `~/.cache/bonsai/grammars/`. Windows users move from
+  `%APPDATA%\hjkl\grammars\` + `%LOCALAPPDATA%\hjkl\grammars\` to the same XDG
+  paths. Linux users move from `hjkl/` to `bonsai/` subdirs but stay on XDG. The
+  resolver is a private 30-line module — bonsai doesn't pull `hjkl-config` so it
+  stays usable without the rest of the hjkl umbrella.
+
 ## [0.2.1] - 2026-05-03
 
 ### Changed
@@ -167,7 +190,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.3.0
 [0.2.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.1.0
