@@ -26,8 +26,15 @@ pub enum ClipboardError {
     /// The requested MIME type is not supported by the active backend (e.g.
     /// non-text over OSC 52).
     UnsupportedMime,
+    /// The active backend does not implement async for this operation. Check
+    /// [`Capabilities`][crate::Capabilities] for `ASYNC_*` flags before calling
+    /// async methods.
+    UnsupportedAsync,
     /// A URI was relative or otherwise malformed (RFC 3986 requires absolute).
     InvalidUri,
+    /// The active backend was not available at runtime (transient — display
+    /// server died, library load failed mid-session, etc).
+    BackendUnavailable,
     /// An underlying I/O error.
     Io(Arc<io::Error>),
 }
@@ -54,7 +61,13 @@ impl fmt::Display for ClipboardError {
                 write!(f, "compositor requires focus (no data-control protocol)")
             }
             Self::UnsupportedMime => write!(f, "MIME type not supported by active backend"),
+            Self::UnsupportedAsync => {
+                write!(f, "async not supported by active backend")
+            }
             Self::InvalidUri => write!(f, "URI must be absolute (RFC 3986)"),
+            Self::BackendUnavailable => {
+                write!(f, "backend was not available at runtime")
+            }
             Self::Io(e) => write!(f, "I/O error: {e}"),
         }
     }
@@ -87,7 +100,9 @@ mod tests {
             ClipboardError::PayloadTooLarge,
             ClipboardError::FocusRequired,
             ClipboardError::UnsupportedMime,
+            ClipboardError::UnsupportedAsync,
             ClipboardError::InvalidUri,
+            ClipboardError::BackendUnavailable,
             ClipboardError::io_other("test io error"),
         ];
         for v in &variants {

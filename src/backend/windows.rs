@@ -673,6 +673,22 @@ impl WindowsBackend {
 }
 
 impl Backend for WindowsBackend {
+    fn kind(&self) -> crate::BackendKind {
+        crate::BackendKind::Windows
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        // Win32 clipboard supports full sync matrix. No PRIMARY (Win concept
+        // absent). Async stays default (UnsupportedAsync) — no native async API.
+        crate::Capabilities::WRITE
+            | crate::Capabilities::READ
+            | crate::Capabilities::CLEAR
+            | crate::Capabilities::AVAILABLE
+            | crate::Capabilities::IMAGE
+            | crate::Capabilities::RICH_TEXT
+            | crate::Capabilities::URI_LIST
+    }
+
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
         // Windows has no concept of a primary selection.
         if sel != Selection::Clipboard {

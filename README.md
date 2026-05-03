@@ -137,21 +137,67 @@ See [`examples/backend_detect.rs`](examples/backend_detect.rs) for a runnable
 version.
 
 ```rust
-use hjkl_clipboard::{Clipboard, ClipboardError};
+use hjkl_clipboard::{BackendKind, Capabilities, Clipboard, ClipboardError};
 
 fn main() -> Result<(), ClipboardError> {
-    match Clipboard::new() {
-        Ok(cb) => {
-            let name = cb.backend_name();
-            println!("backend: {name}");
-            if name == "osc52" {
-                println!("note: OSC 52 is write-only");
-            }
-        }
-        Err(e) => println!("clipboard unavailable: {e}"),
+    let cb = Clipboard::new()?;
+    println!("backend: {}", cb.kind());
+    let caps = cb.capabilities();
+    if !caps.contains(Capabilities::READ) {
+        println!("note: this backend is write-only");
+    }
+    if caps.contains(Capabilities::ASYNC_WRITE) {
+        println!("note: native async writes available");
+    }
+    if cb.kind() == BackendKind::Osc52 {
+        println!("note: OSC 52 fell back — likely SSH / no display");
     }
     Ok(())
 }
+```
+
+### Capability-gated calls
+
+`Capabilities` is cheap to query and lets callers skip ops that would just
+return `UnsupportedMime` or `UnsupportedAsync` from the backend (Wayland / X11
+calls go through a thread hop):
+
+```rust
+use hjkl_clipboard::{Capabilities, Clipboard, ClipboardError, MimeType, Selection};
+
+fn maybe_read(cb: &Clipboard) -> Option<Vec<u8>> {
+    if !cb.capabilities().contains(Capabilities::READ) {
+        return None;
+    }
+    cb.get(Selection::Clipboard, MimeType::Text).ok()
+}
+```
+
+### Custom backends
+
+`Backend` is a public trait. Implement it directly, or use one of the bundled
+extension types:
+
+- `backend::mock::MockBackend` — in-memory test backend with configurable
+  `kind` + `capabilities`. Records `set` / `clear`, programmable `get` /
+  `available` responses. Both sync and async paths.
+- `backend::ssh_aware::SshAwareBackend` — decorator that wraps any
+  `Box<dyn Backend>` and falls back to OSC 52 on write failures
+  (`BackendUnavailable` / `UnsupportedMime` / `NoDisplay` / `FocusRequired`).
+  Capabilities are the union of inner + OSC 52.
+
+```rust
+use hjkl_clipboard::{BackendKind, Capabilities, Clipboard, MimeType, Selection};
+use hjkl_clipboard::backend::mock::MockBackend;
+
+let mock = MockBackend::new(BackendKind::Mock, Capabilities::all());
+mock.preset_get(Selection::Clipboard, MimeType::Text, Ok(b"hi".to_vec()));
+
+let handle = mock.handle();
+let cb = Clipboard::with_backend(Box::new(mock));
+cb.set(Selection::Clipboard, MimeType::Text, b"world").unwrap();
+assert_eq!(cb.get(Selection::Clipboard, MimeType::Text).unwrap(), b"hi");
+assert_eq!(handle.set_calls().len(), 1);
 ```
 
 ### PRIMARY selection (Linux only)

@@ -13,6 +13,8 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
+async-trait = "0.1"
+bitflags = "2"
 miniz_oxide = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]

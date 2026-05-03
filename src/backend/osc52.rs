@@ -76,6 +76,15 @@ impl Osc52Backend {
 }
 
 impl Backend for Osc52Backend {
+    fn kind(&self) -> crate::BackendKind {
+        crate::BackendKind::Osc52
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        // Write-only, text-only. clear() is supported via empty-payload OSC 52.
+        crate::Capabilities::WRITE | crate::Capabilities::CLEAR
+    }
+
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
         self.set_inner(sel, mime, bytes, &mut io::stdout().lock())
     }

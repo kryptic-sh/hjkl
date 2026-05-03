@@ -6,6 +6,51 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Public `Backend` trait.** Promoted from `pub(crate)` to `pub`, with new
+  `kind()` and `capabilities()` methods plus async variants (`set_async` /
+  `get_async` / `clear_async` / `available_async`) defaulted to
+  `ClipboardError::UnsupportedAsync`. Downstream crates can now implement custom
+  backends, decorators, or mocks.
+- `BackendKind` enum for stable backend identification (`Wayland`, `X11`,
+  `MacOs`, `Windows`, `Osc52`, `Mock`, `SshAware`).
+- `Capabilities` bitflags (`bitflags = "2"`): `WRITE`, `READ`, `CLEAR`,
+  `AVAILABLE`, `PRIMARY`, `IMAGE`, `RICH_TEXT`, `URI_LIST`, `ASYNC_WRITE`,
+  `ASYNC_READ`, `ASYNC_CLEAR`, `ASYNC_AVAILABLE`. Cheap introspection so callers
+  can avoid expensive thread round-trips that would just return
+  `UnsupportedMime`.
+- `ClipboardError::UnsupportedAsync` and `ClipboardError::BackendUnavailable`
+  variants (additive — `error` enum is `#[non_exhaustive]`).
+- `Clipboard::with_backend(Box<dyn Backend>)` constructor for injecting custom
+  backends, mocks, or decorators.
+- `Clipboard::kind()` and `Clipboard::capabilities()` passthroughs.
+- `backend::wayland_backend::WaylandBackend` — public `Backend` impl wrapping
+  the existing `&'static WaylandThread` singleton (sync + native async).
+- `backend::x11_backend::X11Backend` — same shape for X11.
+- `backend::mock::MockBackend` — always-public in-memory backend with
+  configurable `kind` + `capabilities`, recording `set` / `clear` calls and
+  programmable `get` / `available` responses. Both sync + async paths.
+- `backend::ssh_aware::SshAwareBackend` — decorator wrapping any
+  `Box<dyn Backend>` with OSC 52 fallback for write paths (`BackendUnavailable`
+  / `UnsupportedMime` / `NoDisplay` / `FocusRequired`). Capabilities are the
+  union of inner + OSC 52.
+- New deps: `async-trait = "0.1"` (required for `Box<dyn Backend>` + `async fn`
+  in trait — AFIT is not dyn-compatible), `bitflags = "2"`.
+
+### Removed
+
+- Stub `WaylandBackend` / `X11Backend` structs in `backend/wayland.rs` and
+  `backend/x11.rs` that contained four `unimplemented!("phase 0 scaffold")`
+  arms. The real impls live in `backend/wayland_backend.rs` and
+  `backend/x11_backend.rs`.
+
+### Changed
+
+- `Clipboard` struct now holds `Box<dyn Backend>` instead of a private
+  `ClipboardBackend` enum. The huge `cfg!`/`match` ladders in `lib.rs` for
+  set/get/clear/available + async variants collapse into trait dispatch.
+
 ## [0.4.8] - 2026-05-03
 
 ### Fixed

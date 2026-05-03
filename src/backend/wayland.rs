@@ -7,9 +7,8 @@
 //! handles all clipboard ops (`set`/`get`/`clear`/`available`) via the
 //! `ext_data_control_v1` / `zwp_primary_selection_v1` protocols.
 
-use crate::{ClipboardError, MimeType, Selection};
+use crate::ClipboardError;
 
-use super::Backend;
 use super::wayland_socket::WaylandSocket;
 use super::wayland_wire::{encode_message, encode_u32, parse_string, parse_u32};
 
@@ -224,31 +223,6 @@ fn parse_display_error(args: &[u8]) -> String {
         "(no message)".to_owned()
     };
     format!("object={obj_id} code={code} msg={msg:?}")
-}
-
-// ---------------------------------------------------------------------------
-// Backend stub (superseded by WaylandThread — kept for cross-platform compile)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) struct WaylandBackend;
-
-impl Backend for WaylandBackend {
-    fn set(&self, _sel: Selection, _mime: MimeType, _bytes: &[u8]) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn get(&self, _sel: Selection, _mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn clear(&self, _sel: Selection) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn available(&self, _sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
 }
 
 // ---------------------------------------------------------------------------

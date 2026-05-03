@@ -338,6 +338,22 @@ impl MacosBackend {
 }
 
 impl Backend for MacosBackend {
+    fn kind(&self) -> crate::BackendKind {
+        crate::BackendKind::MacOs
+    }
+
+    fn capabilities(&self) -> crate::Capabilities {
+        // NSPasteboard supports full sync matrix. No PRIMARY (mac concept absent).
+        // Async stays default (UnsupportedAsync) — no native async pasteboard API.
+        crate::Capabilities::WRITE
+            | crate::Capabilities::READ
+            | crate::Capabilities::CLEAR
+            | crate::Capabilities::AVAILABLE
+            | crate::Capabilities::IMAGE
+            | crate::Capabilities::RICH_TEXT
+            | crate::Capabilities::URI_LIST
+    }
+
     fn set(&self, sel: Selection, mime: MimeType, bytes: &[u8]) -> Result<(), ClipboardError> {
         let _pool = pool();
         // macOS has no primary selection concept.

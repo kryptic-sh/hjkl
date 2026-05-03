@@ -8,12 +8,9 @@
 
 use std::ffi::c_char;
 
-use crate::{ClipboardError, MimeType, Selection};
+use crate::ClipboardError;
 
-use super::{
-    Backend,
-    dlopen::{XcbConnection, XcbFns, xcb_fns},
-};
+use super::dlopen::{XcbConnection, XcbFns, xcb_fns};
 
 // ---------------------------------------------------------------------------
 // Screen info
@@ -322,31 +319,6 @@ fn intern_atoms(fns: &'static XcbFns, conn: *mut XcbConnection) -> Result<Atoms,
         multiple: values[13],
         hjkl_clipboard_get: values[14],
     })
-}
-
-// ---------------------------------------------------------------------------
-// Backend stub (superseded by X11Thread — kept for cross-platform compile)
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) struct X11Backend;
-
-impl Backend for X11Backend {
-    fn set(&self, _sel: Selection, _mime: MimeType, _bytes: &[u8]) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn get(&self, _sel: Selection, _mime: MimeType) -> Result<Vec<u8>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn clear(&self, _sel: Selection) -> Result<(), ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
-
-    fn available(&self, _sel: Selection) -> Result<Vec<MimeType>, ClipboardError> {
-        unimplemented!("phase 0 scaffold")
-    }
 }
 
 // ---------------------------------------------------------------------------
