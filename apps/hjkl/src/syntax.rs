@@ -15,12 +15,12 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use hjkl_buffer::Sign;
-use hjkl_engine::Query;
-use hjkl_tree_sitter::{
+use hjkl_bonsai::{
     CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, LanguageConfig, LanguageRegistry,
     Point, Theme,
 };
+use hjkl_buffer::Sign;
+use hjkl_engine::Query;
 
 /// Stable identifier for an open buffer. Assigned by the App; carried
 /// through every syntax-pipeline message so the worker can multiplex
@@ -396,7 +396,7 @@ fn worker_loop(
 /// Resolve flat highlight spans into a per-row span table sized to
 /// `row_count`. Pulled out so the worker can call it in isolation.
 fn build_by_row(
-    flat_spans: &[hjkl_tree_sitter::HighlightSpan],
+    flat_spans: &[hjkl_bonsai::HighlightSpan],
     bytes: &[u8],
     row_starts: &[usize],
     row_count: usize,
@@ -820,7 +820,7 @@ pub fn layer_with_theme(theme: Arc<DotFallbackTheme>) -> SyntaxLayer {
     SyntaxLayer::new(theme)
 }
 
-/// Build a `SyntaxLayer` with hjkl-tree-sitter's bundled dark theme.
+/// Build a `SyntaxLayer` with hjkl-bonsai's bundled dark theme.
 /// Used by tests; the production app constructs via [`layer_with_theme`]
 /// with the [`crate::theme::AppTheme`] override.
 #[cfg(test)]

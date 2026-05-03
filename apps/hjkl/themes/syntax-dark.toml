@@ -1,5 +1,5 @@
 # hjkl syntax theme — dark.
-# Override for hjkl-tree-sitter's bundled DotFallbackTheme. Same TOML
+# Override for hjkl-bonsai's bundled DotFallbackTheme. Same TOML
 # shape: capture-name → { fg, bg, bold, italic, underline }, dot-fallback
 # applies. Loaded via include_str! in apps/hjkl/src/theme.rs and passed
 # to DotFallbackTheme::from_toml().

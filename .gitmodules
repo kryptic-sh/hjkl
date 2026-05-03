@@ -19,6 +19,6 @@
 [submodule "crates/hjkl-ratatui"]
 	path = crates/hjkl-ratatui
 	url = https://github.com/kryptic-sh/hjkl-ratatui.git
-[submodule "crates/hjkl-tree-sitter"]
-	path = crates/hjkl-tree-sitter
-	url = https://github.com/kryptic-sh/hjkl-tree-sitter.git
+[submodule "crates/hjkl-bonsai"]
+	path = crates/hjkl-bonsai
+	url = https://github.com/kryptic-sh/hjkl-bonsai.git

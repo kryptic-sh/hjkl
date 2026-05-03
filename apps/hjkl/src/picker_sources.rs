@@ -11,9 +11,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+use hjkl_bonsai::{CommentMarkerPass, Highlighter, LanguageRegistry, Theme};
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
-use hjkl_tree_sitter::{CommentMarkerPass, Highlighter, LanguageRegistry, Theme};
 
 // ── BufferSource ─────────────────────────────────────────────────────────────
 

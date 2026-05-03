@@ -1,6 +1,6 @@
+use hjkl_bonsai::DotFallbackTheme;
 use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{Host, Query};
-use hjkl_tree_sitter::DotFallbackTheme;
 use std::path::PathBuf;
 use std::sync::Arc;
 

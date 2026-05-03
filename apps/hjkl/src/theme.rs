@@ -1,8 +1,8 @@
 //! App-wide theme: UI chrome colors + the syntax-highlighting theme that
-//! overrides `hjkl-tree-sitter`'s bundled default.
+//! overrides `hjkl-bonsai`'s bundled default.
 //!
 //! Both halves are TOML files baked into the binary via `include_str!`.
-//! `hjkl-tree-sitter` keeps its own `DotFallbackTheme::dark()` /
+//! `hjkl-bonsai` keeps its own `DotFallbackTheme::dark()` /
 //! `light()` for other consumers; we layer our website-palette override
 //! on top by parsing `themes/syntax-dark.toml` through the public
 //! `DotFallbackTheme::from_toml()` entrypoint.
@@ -18,12 +18,12 @@
 //!
 //! `themes/syntax-dark.toml` follows `DotFallbackTheme`'s existing flat
 //! `<capture> = { fg, bg, bold, italic, underline }` layout — see
-//! `hjkl-tree-sitter/themes/default-dark.toml` for the canonical shape.
+//! `hjkl-bonsai/themes/default-dark.toml` for the canonical shape.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use hjkl_tree_sitter::DotFallbackTheme;
+use hjkl_bonsai::DotFallbackTheme;
 use ratatui::style::Color;
 use serde::Deserialize;
 
@@ -211,7 +211,7 @@ fn parse_hex(s: &str) -> Result<Color> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_tree_sitter::Theme;
+    use hjkl_bonsai::Theme;
 
     #[test]
     fn bundled_dark_theme_loads() {

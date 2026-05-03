@@ -95,7 +95,7 @@ hjkl +picker          # open fuzzy file picker immediately
 - [`hjkl-engine`](https://crates.io/crates/hjkl-engine) — modal-editing FSM
 - [`hjkl-editor`](https://crates.io/crates/hjkl-editor) — ex commands, search,
   shell exec
-- [`hjkl-tree-sitter`](https://crates.io/crates/hjkl-tree-sitter) — bundled
+- [`hjkl-bonsai`](https://crates.io/crates/hjkl-bonsai) — bundled
   tree-sitter grammars + Neovim-flavoured highlight themes
 - [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) — system clipboard
   adapter

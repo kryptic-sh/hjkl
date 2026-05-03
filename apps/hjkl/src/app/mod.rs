@@ -337,7 +337,7 @@ impl App {
     ) -> Result<Self> {
         // Load the app theme up front and build the syntax layer with the
         // override theme — so apps/hjkl renders with the website palette
-        // (hjkl-tree-sitter's bundled DotFallbackTheme is left untouched
+        // (hjkl-bonsai's bundled DotFallbackTheme is left untouched
         // for other consumers).
         let theme = crate::theme::AppTheme::default_dark();
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone());

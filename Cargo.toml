@@ -20,7 +20,7 @@ hjkl-engine = { path = "crates/hjkl-engine" }
 hjkl-form = { path = "crates/hjkl-form" }
 hjkl-picker = { path = "crates/hjkl-picker" }
 hjkl-ratatui = { path = "crates/hjkl-ratatui" }
-hjkl-tree-sitter = { path = "crates/hjkl-tree-sitter" }
+hjkl-bonsai = { path = "crates/hjkl-bonsai" }
 
 [profile.release]
 lto = "thin"
