@@ -107,11 +107,17 @@ impl App {
                     }
 
                     // ── Leader resolution ────────────────────────────────────
+                    let leader = self.config.editor.leader;
                     if self.pending_leader && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_leader = false;
                         if key.modifiers == KeyModifiers::NONE {
                             match key.code {
-                                KeyCode::Char(' ') | KeyCode::Char('f') => {
+                                // The leader key itself + 'f' both open the file picker
+                                // (matches buffr-style "press leader twice or leader+f").
+                                KeyCode::Char(c) if c == leader => {
+                                    self.open_picker();
+                                }
+                                KeyCode::Char('f') => {
                                     self.open_picker();
                                 }
                                 KeyCode::Char('b') => {
@@ -127,7 +133,7 @@ impl App {
                     }
 
                     // ── Leader prefix ────────────────────────────────────────
-                    if key.code == KeyCode::Char(' ')
+                    if key.code == KeyCode::Char(leader)
                         && key.modifiers == KeyModifiers::NONE
                         && self.active().editor.vim_mode() == VimMode::Normal
                     {

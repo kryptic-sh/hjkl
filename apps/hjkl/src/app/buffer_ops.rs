@@ -164,7 +164,7 @@ impl App {
     pub(crate) fn open_new_slot(&mut self, path: PathBuf) -> Result<usize, String> {
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let slot = super::build_slot(&mut self.syntax, buffer_id, Some(path))?;
+        let slot = super::build_slot(&mut self.syntax, buffer_id, Some(path), &self.config)?;
         self.slots.push(slot);
         Ok(self.slots.len() - 1)
     }

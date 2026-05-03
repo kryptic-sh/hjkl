@@ -205,6 +205,11 @@ pub struct App {
     pub recompute_hits: u64,
     pub recompute_throttled: u64,
     pub recompute_runs: u64,
+    /// User config (bundled defaults + optional XDG overrides). Tests
+    /// receive `Config::default()` (the bundled values); main wires the
+    /// XDG-merged value via [`Self::with_config`] before entering the
+    /// event loop.
+    pub config: crate::config::Config,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -231,6 +236,7 @@ pub(super) fn build_slot(
     syntax: &mut SyntaxLayer,
     buffer_id: BufferId,
     path: Option<PathBuf>,
+    config: &crate::config::Config,
 ) -> Result<BufferSlot, String> {
     let mut buffer = Buffer::new();
     let mut is_new_file = false;
@@ -248,7 +254,15 @@ pub(super) fn build_slot(
     }
 
     let host = TuiHost::new();
-    let mut ec_opts = Options::default();
+    // Seed Options from user config — editorconfig overlay (if any) takes
+    // precedence over the user-config fallback values.
+    let mut ec_opts = Options {
+        expandtab: config.editor.expandtab,
+        tabstop: config.editor.tab_width as u32,
+        shiftwidth: config.editor.tab_width as u32,
+        softtabstop: config.editor.tab_width as u32,
+        ..Options::default()
+    };
     if let Some(ref p) = path {
         crate::editorconfig::overlay_for_path(&mut ec_opts, p);
     }
@@ -347,8 +361,14 @@ impl App {
         let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new()?);
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
         let buffer_id: BufferId = 0;
-        let mut slot =
-            build_slot(&mut syntax, buffer_id, filename).map_err(|s| anyhow::anyhow!(s))?;
+        // App::new uses bundled config defaults; main wires the XDG-merged
+        // value via `with_config` after construction. For build_slot's
+        // initial Options seed, the bundled defaults are correct because
+        // tests never customize config and main re-applies overrides via
+        // `apply_options` after `with_config`.
+        let bootstrap_config = crate::config::Config::default();
+        let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
+            .map_err(|s| anyhow::anyhow!(s))?;
 
         // Apply readonly after the slot is built — build_slot always uses
         // Options::default(); override here when requested.
@@ -404,7 +424,40 @@ impl App {
             recompute_hits: 0,
             recompute_throttled: 0,
             recompute_runs: 0,
+            config: crate::config::Config::default(),
         })
+    }
+
+    /// Replace the user config (typically loaded by `main` from the XDG
+    /// path or `--config <PATH>`) and re-apply config-derived
+    /// [`Options`] to every already-open slot.
+    ///
+    /// `App::new` constructs slot 0 with bootstrap defaults before any
+    /// user config is wired, so without this re-application a user
+    /// override of `editor.tab_width` / `editor.expandtab` would only
+    /// affect *subsequent* slots (`:e`, `open_extra`). The re-applied
+    /// `Options` seed is overlaid by `.editorconfig` per-path so project
+    /// rules still take precedence over user-config fallbacks.
+    ///
+    /// Readonly state on each slot is preserved.
+    pub fn with_config(mut self, config: crate::config::Config) -> Self {
+        self.config = config;
+        for slot in &mut self.slots {
+            let was_readonly = slot.editor.is_readonly();
+            let mut opts = Options {
+                expandtab: self.config.editor.expandtab,
+                tabstop: self.config.editor.tab_width as u32,
+                shiftwidth: self.config.editor.tab_width as u32,
+                softtabstop: self.config.editor.tab_width as u32,
+                readonly: was_readonly,
+                ..Options::default()
+            };
+            if let Some(p) = slot.filename.as_ref() {
+                crate::editorconfig::overlay_for_path(&mut opts, p);
+            }
+            slot.editor.apply_options(&opts);
+        }
+        self
     }
 
     /// Mode label for the status line.

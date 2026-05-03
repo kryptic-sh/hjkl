@@ -1,6 +1,7 @@
 //! `hjkl` — standalone vim-modal terminal editor.
 
 mod app;
+mod config;
 mod editorconfig;
 mod git;
 mod host;
@@ -46,6 +47,11 @@ struct Cli {
     #[arg(short = 'R', long)]
     readonly: bool,
 
+    /// Override the user config path (default: $XDG_CONFIG_HOME/hjkl/config.toml).
+    /// Bundled defaults are still applied; the file is layered on top.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -59,6 +65,7 @@ pub struct Args {
     pub readonly: bool,
     pub perf: bool,
     pub picker: bool,
+    pub config: Option<PathBuf>,
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -128,6 +135,7 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         readonly: cli.readonly,
         perf: false,
         picker: false,
+        config: cli.config,
     };
     let warnings = apply_vim_tokens(&mut args, &vim_tokens);
     Ok((args, warnings))
@@ -145,6 +153,40 @@ fn parse_args() -> Result<Args> {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
+    // Load user config. `--config <PATH>` reads an explicit file; otherwise
+    // we use the XDG path. In both cases the bundled `src/config.toml`
+    // defaults are applied first and the user file is deep-merged on top.
+    let cfg = match args.config.as_deref() {
+        Some(path) => config::load_from(path)
+            .map(|c| (c, hjkl_config::ConfigSource::File(path.to_path_buf()))),
+        None => config::load(),
+    };
+    let cfg = match cfg {
+        Ok((c, _src)) => c,
+        Err(e) => {
+            eprintln!("hjkl: config error: {e}");
+            std::process::exit(2);
+        }
+    };
+    // Bounds-check the parsed config (tab_width range, huge_file_threshold > 0).
+    // Schema-level validation already ran during parse; this catches semantic
+    // values that parsed cleanly but would break the editor.
+    {
+        use hjkl_config::Validate;
+        if let Err(e) = cfg.validate() {
+            eprintln!("hjkl: config validation: {e}");
+            std::process::exit(2);
+        }
+    }
+    // Theme validation: only "dark" is bundled today. Warn (don't fail) on
+    // unknown names so the editor still starts with the dark palette.
+    if cfg.theme.name != "dark" {
+        eprintln!(
+            "hjkl: warning: theme.name = {:?} is not bundled; falling back to \"dark\"",
+            cfg.theme.name
+        );
+    }
+
     // Build app state (may read file from disk) before entering alternate screen
     // so we can print errors to the normal terminal if the file is unreadable.
     let mut app = app::App::new(
@@ -152,7 +194,8 @@ fn main() -> Result<()> {
         args.readonly,
         args.line,
         args.pattern,
-    )?;
+    )?
+    .with_config(cfg);
     // Load any additional files into extra slots (argv order). Errors are
     // printed to stderr but do not abort — the editor opens with whatever
     // could be loaded.
@@ -214,6 +257,16 @@ mod cli_tests {
         assert!(
             help.contains(env!("CARGO_PKG_VERSION")),
             "long_help missing CARGO_PKG_VERSION; got:\n{help}"
+        );
+    }
+
+    #[test]
+    fn long_help_advertises_config_flag() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_long_help().to_string();
+        assert!(
+            help.contains("--config"),
+            "long_help should advertise --config; got:\n{help}"
         );
     }
 
@@ -352,6 +405,7 @@ mod cli_tests {
             readonly: false,
             perf: false,
             picker: false,
+            config: None,
         }
     }
 }

@@ -865,3 +865,99 @@ fn q_on_last_slot_quits_app() {
     app.dispatch_ex("q");
     assert!(app.exit_requested, "`:q` on clean last slot should exit");
 }
+
+// ── Config layering tests ──────────────────────────────────────────────
+
+#[test]
+fn with_config_updates_leader_and_reapplies_to_existing_slot() {
+    // Smoke test for the slot-0 boot-order fix: App::new builds slot 0
+    // before any user config is wired, so with_config must propagate the
+    // new config and re-apply Options to existing slots. This test pins
+    // the public observable: app.config reflects the override, and the
+    // re-application path does not panic with a single-slot app.
+    let app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.config.editor.leader, ' ');
+
+    let mut cfg = crate::config::Config::default();
+    cfg.editor.leader = '\\';
+    cfg.editor.tab_width = 2;
+    let app = app.with_config(cfg);
+
+    assert_eq!(app.config.editor.leader, '\\');
+    assert_eq!(app.config.editor.tab_width, 2);
+    assert_eq!(
+        app.slots.len(),
+        1,
+        "with_config should not add or drop slots"
+    );
+}
+
+#[test]
+fn with_config_preserves_readonly_on_existing_slot() {
+    // Slots opened with readonly = true must stay readonly after a
+    // user-config swap (the re-applied Options must not silently flip
+    // the bit back to false).
+    let app = App::new(None, true, None, None).unwrap();
+    assert!(app.active().editor.is_readonly());
+
+    let app = app.with_config(crate::config::Config::default());
+    assert!(
+        app.active().editor.is_readonly(),
+        "readonly state must survive with_config re-application"
+    );
+}
+
+#[test]
+fn config_load_from_disk_then_with_config_propagates_overrides() {
+    // End-to-end pipeline: write a user config to a tempfile, parse it
+    // through the on-disk loader (deep-merged over bundled defaults),
+    // hand the result to App::with_config, and verify the override
+    // landed on the App. Pins the `--config <PATH>` path that main
+    // uses without spinning up the terminal.
+    use std::io::Write as _;
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    writeln!(
+        tmp,
+        r#"
+[editor]
+leader = "\\"
+tab_width = 2
+
+[theme]
+name = "dark"
+"#
+    )
+    .unwrap();
+
+    let cfg = crate::config::load_from(tmp.path()).expect("load_from must succeed");
+    // Bundled defaults survived for fields the user file omitted:
+    assert_eq!(cfg.editor.huge_file_threshold, 50_000);
+    assert!(cfg.editor.expandtab);
+    // User overrides won where present:
+    assert_eq!(cfg.editor.leader, '\\');
+    assert_eq!(cfg.editor.tab_width, 2);
+
+    use hjkl_config::Validate;
+    cfg.validate()
+        .expect("merged user+default config must validate");
+
+    let app = App::new(None, false, None, None).unwrap().with_config(cfg);
+    assert_eq!(app.config.editor.leader, '\\');
+    assert_eq!(app.config.editor.tab_width, 2);
+}
+
+#[test]
+fn config_load_from_disk_validation_failure_surfaces() {
+    // Out-of-range values parse cleanly but the Validate impl rejects
+    // them. The pipeline must surface the field name so users can
+    // identify the offending key.
+    use std::io::Write as _;
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    writeln!(tmp, "[editor]\nhuge_file_threshold = 0").unwrap();
+
+    let cfg = crate::config::load_from(tmp.path()).expect("parse must succeed");
+
+    use hjkl_config::Validate;
+    let err = cfg.validate().unwrap_err();
+    assert_eq!(err.field, "editor.huge_file_threshold");
+}

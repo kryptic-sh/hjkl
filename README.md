@@ -33,12 +33,34 @@ sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
 | `hjkl-form`        | Vim-modal forms with full vim grammar inside every text field.     |
 | `hjkl-tree-sitter` | Tree-sitter syntax highlighting (Rust, Markdown, JSON, TOML, SQL). |
 | `hjkl-picker`      | Fuzzy picker subsystem: file walk, grep search, custom sources.    |
+| `hjkl-config`      | Shared TOML config loader: XDG paths, span errors, layered merge.  |
 
 Published on crates.io. Add to `Cargo.toml`:
 
 ```toml
 hjkl-editor = "0.3"
 ```
+
+## Configuring `hjkl`
+
+The standalone editor reads `$XDG_CONFIG_HOME/hjkl/config.toml` (Linux/macOS) or
+`%APPDATA%\kryptic\hjkl\config\config.toml` (Windows). Defaults are bundled into
+the binary from [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) — that
+file is the single source of truth for default values. The user file is
+**deep-merged** on top: only the fields you want to override need to appear
+there. Unknown keys are an error.
+
+A custom path can be passed with `--config <PATH>`.
+
+```toml
+# ~/.config/hjkl/config.toml — minimal override example
+[editor]
+leader = "\\"
+tab_width = 2
+```
+
+See [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) for the full schema
+with comments.
 
 ## License
 

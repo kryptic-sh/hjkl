@@ -15,8 +15,8 @@ impl App {
     }
 
     pub(crate) fn refresh_git_signs_inner(&mut self, force: bool) {
-        const HUGE_FILE_LINES: u32 = 50_000;
         const REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(250);
+        let huge_file_lines = self.config.editor.huge_file_threshold;
 
         let path = match self.active().filename.as_deref() {
             Some(p) => p.to_path_buf(),
@@ -31,7 +31,7 @@ impl App {
         if !force && self.active().last_git_dirty_gen == Some(dg) {
             return;
         }
-        if !force && self.active().editor.buffer().line_count() >= HUGE_FILE_LINES {
+        if !force && self.active().editor.buffer().line_count() >= huge_file_lines {
             return;
         }
         let now = Instant::now();

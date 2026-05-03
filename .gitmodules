@@ -22,3 +22,6 @@
 [submodule "crates/hjkl-bonsai"]
 	path = crates/hjkl-bonsai
 	url = https://github.com/kryptic-sh/hjkl-bonsai.git
+[submodule "crates/hjkl-config"]
+	path = crates/hjkl-config
+	url = https://github.com/kryptic-sh/hjkl-config.git

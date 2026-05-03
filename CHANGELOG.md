@@ -8,6 +8,38 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **New `hjkl-config` crate** in the workspace (also published as a standalone
+  submodule at
+  [kryptic-sh/hjkl-config](https://github.com/kryptic-sh/hjkl-config)): shared
+  TOML config loader for hjkl-based apps. XDG path resolution, span-aware parse
+  errors (line/col/snippet), opt-in `Validate` hook, plus
+  `load_layered`/`load_layered_from` for bundled-defaults + user-overrides
+  deep-merge. Reusable bounds-check helpers (`ensure_range`, `ensure_non_zero`,
+  `ensure_one_of`, `ensure_non_empty_str`) returning `ValidationError` with
+  field names baked in.
+- **User config support in the `hjkl` editor.** Reads
+  `$XDG_CONFIG_HOME/hjkl/config.toml` (or `--config <PATH>` to override).
+  Defaults bundled into the binary via `include_str!()` from
+  [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) — the source-tree
+  file is the single source of truth for defaults; no default values live in
+  Rust code. User file is deep-merged on top: only overridden fields need to
+  appear there. Unknown keys are an error.
+  - Wired settings: `editor.leader` (replaces hardcoded `Space`),
+    `editor.tab_width` / `editor.expandtab` (fallback when no `.editorconfig`
+    matches), `editor.huge_file_threshold` (replaces `HUGE_FILE_LINES = 50_000`
+    const in syntax_glue), `theme.name` (currently only `"dark"` bundled;
+    unknown names warn and fall back).
+  - `Config::validate()` bounds-checks `tab_width ∈ 1..=16` and
+    `huge_file_threshold > 0`. Surfaced via `hjkl: config validation: …` on
+    startup; exits with code 2 on failure.
+  - Slot 0 gets the user-config Options reapplied via `App::with_config` so
+    overrides take effect on the first opened buffer (not just `:e`-opened new
+    slots). Readonly state on existing slots is preserved across the swap.
+  - 5 new validation tests, 2 new `--config` end-to-end pipeline tests, 2 new
+    `with_config` smoke tests covering slot-0 and readonly-preservation.
+
 ### Changed
 
 - **`hjkl` CLI migrated from hand-rolled parser to clap derive.** Behavior
