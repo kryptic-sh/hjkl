@@ -8,11 +8,13 @@
 //! the crate via [`GrammarRegistry::embedded`].
 
 mod compile;
+mod loader;
 mod manifest;
 mod registry;
 mod source;
 
 pub use compile::GrammarCompiler;
+pub use loader::GrammarLoader;
 pub use manifest::{LangSpec, Manifest};
 pub use registry::GrammarRegistry;
 pub use source::SourceCache;
