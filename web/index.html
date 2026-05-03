@@ -691,8 +691,8 @@
         <span class="prompt">$</span> hjkl<span class="cursor"></span>
       </div>
       <div class="links">
-        <a href="#crates">crates</a>
         <a href="#why">why</a>
+        <a href="#crates">crates</a>
         <a
           href="https://github.com/kryptic-sh/hjkl/blob/main/CHANGELOG.md"
           target="_blank"
@@ -767,6 +767,63 @@
           </div>
         </div>
       </header>
+
+      <section id="why">
+        <h2>why</h2>
+        <h3>One vim, many surfaces.</h3>
+        <div class="grid">
+          <div class="feat">
+            <div class="icon">01 — REUSE</div>
+            <h4>One FSM, many surfaces</h4>
+            <p>
+              Same FSM that drives
+              <a href="https://sqeel.kryptic.sh/">sqeel</a>,
+              <a href="https://buffr.kryptic.sh/">buffr</a>, and
+              <a href="https://inbx.kryptic.sh/">inbx</a> drives the standalone
+              hjkl editor.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">02 — PURE</div>
+            <h4>No I/O in the core</h4>
+            <p>
+              Bring your own renderer, your own clipboard, your own filesystem.
+              The engine just transitions states.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">03 — PORTABLE</div>
+            <h4><code>no_std + alloc</code></h4>
+            <p>
+              Runs anywhere Rust does. Embedded, WASM, kernel modules, your
+              weird side project — all fair game.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">04 — TYPED</div>
+            <h4>Trait-driven</h4>
+            <p>
+              Buffers, clipboards, search providers — all traits. Swap
+              implementations without touching the FSM.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">05 — TESTED</div>
+            <h4>Property-tested</h4>
+            <p>
+              Vim grammar fuzzed against reference behaviour. Rope invariants
+              hold under any edit sequence.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">06 — OPEN</div>
+            <h4>MIT, all of it</h4>
+            <p>
+              Every crate, every adapter. Fork it, vendor it, ship it. No catch.
+            </p>
+          </div>
+        </div>
+      </section>
 
       <section id="crates">
         <h2>crates</h2>
@@ -895,63 +952,6 @@
               Drop into any TUI.
             </p>
           </a>
-        </div>
-      </section>
-
-      <section id="why">
-        <h2>why</h2>
-        <h3>One vim, many surfaces.</h3>
-        <div class="grid">
-          <div class="feat">
-            <div class="icon">01 — REUSE</div>
-            <h4>One FSM, many surfaces</h4>
-            <p>
-              Same FSM that drives
-              <a href="https://sqeel.kryptic.sh/">sqeel</a>,
-              <a href="https://buffr.kryptic.sh/">buffr</a>, and
-              <a href="https://inbx.kryptic.sh/">inbx</a> drives the standalone
-              hjkl editor.
-            </p>
-          </div>
-          <div class="feat">
-            <div class="icon">02 — PURE</div>
-            <h4>No I/O in the core</h4>
-            <p>
-              Bring your own renderer, your own clipboard, your own filesystem.
-              The engine just transitions states.
-            </p>
-          </div>
-          <div class="feat">
-            <div class="icon">03 — PORTABLE</div>
-            <h4><code>no_std + alloc</code></h4>
-            <p>
-              Runs anywhere Rust does. Embedded, WASM, kernel modules, your
-              weird side project — all fair game.
-            </p>
-          </div>
-          <div class="feat">
-            <div class="icon">04 — TYPED</div>
-            <h4>Trait-driven</h4>
-            <p>
-              Buffers, clipboards, search providers — all traits. Swap
-              implementations without touching the FSM.
-            </p>
-          </div>
-          <div class="feat">
-            <div class="icon">05 — TESTED</div>
-            <h4>Property-tested</h4>
-            <p>
-              Vim grammar fuzzed against reference behaviour. Rope invariants
-              hold under any edit sequence.
-            </p>
-          </div>
-          <div class="feat">
-            <div class="icon">06 — OPEN</div>
-            <h4>MIT, all of it</h4>
-            <p>
-              Every crate, every adapter. Fork it, vendor it, ship it. No catch.
-            </p>
-          </div>
         </div>
       </section>
     </main>
