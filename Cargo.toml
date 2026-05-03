@@ -3,7 +3,7 @@ name = "hjkl-tree-sitter"
 description = "Generic tree-sitter syntax highlighting for the hjkl editor stack"
 keywords = ["tree-sitter", "syntax-highlighting", "editor", "vim", "tui"]
 categories = ["text-editors", "parsing"]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-tree-sitter"
@@ -32,6 +32,18 @@ tree-sitter-c = "0.24"
 tree-sitter-html = "0.23"
 tree-sitter-css = "0.25"
 tree-sitter-javascript = "0.25"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.24"
+tree-sitter-ruby = "0.23"
+tree-sitter-swift = "0.7"
+tree-sitter-lua = "0.5"
+tree-sitter-dart = "0.2"
+tree-sitter-r = "1.2"
+tree-sitter-make = "1.1"
+tree-sitter-xml = "0.7"
+tree-sitter-diff = "0.1"
 
 [package.metadata.docs.rs]
 all-features = true
