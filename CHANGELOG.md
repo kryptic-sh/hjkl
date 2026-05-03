@@ -8,6 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-03
+
+Adopts `hjkl-clipboard` 0.5.0 — the `Backend` trait went public, with new
+`BackendKind` / `Capabilities` introspection plus async variants and the
+`MockBackend` / `SshAwareBackend` extensions. Umbrella consumes the new API in
+two places.
+
+### Added
+
+- New `:clipboard` ex command — prints the active backend kind plus the active
+  capability flags
+  (`WRITE READ CLEAR AVAILABLE PRIMARY IMAGE RICH_TEXT URI_LIST ASYNC_WRITE …`)
+  to the status line. Useful for diagnosing why a yank/paste failed silently
+  (e.g. confirming the OSC 52 fallback is active over SSH).
+- `TuiHost::clipboard()` accessor exposing the cached `Clipboard` so the
+  ex-dispatch layer can introspect without round-tripping the engine.
+
+### Changed
+
+- **`TuiHost::read_clipboard` is capability-aware.** Returns `None` immediately
+  when the active backend doesn't advertise `Capabilities::READ` (OSC 52 over
+  SSH, mocks without `preset_get`, etc), avoiding a guaranteed `UnsupportedMime`
+  round-trip through the Wayland/X11 thread.
+- `TuiHost::write_clipboard` checks `Capabilities::WRITE` before attempting the
+  set, so a misconfigured mock backend that advertises no write capability
+  silently no-ops instead of recording garbage calls.
+- `hjkl-clipboard` dep `0.4` → `0.5` (caret-minor — `0.4` does not accept
+  `0.5.x`).
+
 ## [0.6.0] - 2026-05-03
 
 Migrates the umbrella binary onto `hjkl-bonsai` 0.2.x's runtime grammar loader.
