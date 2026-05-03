@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-03
+
 ### Added
 
 - **Alpine `.apk` package** in `pkg/alpine/APKBUILD.in`, built in
@@ -928,7 +930,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.1
 [0.8.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.0
 [0.7.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.7.0
 [0.6.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.6.0
