@@ -24,6 +24,7 @@ pub mod comment_markers;
 pub mod highlighter;
 pub mod languages;
 pub mod registry;
+pub mod runtime;
 pub mod theme;
 
 // Flat re-exports for the primary public API surface.
