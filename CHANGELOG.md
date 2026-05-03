@@ -346,3 +346,15 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 ### Added
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
+
+[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.0
+[0.4.8]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.8
+[0.4.6]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.6
+[0.4.5]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.5
+[0.4.4]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.4
+[0.4.3]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.3
+[0.4.2]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.2
+[0.4.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.1
+[0.4.0]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.0
+[0.3.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.3.1
