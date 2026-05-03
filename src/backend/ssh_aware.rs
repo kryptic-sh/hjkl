@@ -15,12 +15,14 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use hjkl_clipboard::Clipboard;
+//! ```
+//! use hjkl_clipboard::{BackendKind, Capabilities, Clipboard};
+//! use hjkl_clipboard::backend::mock::MockBackend;
 //! use hjkl_clipboard::backend::ssh_aware::SshAwareBackend;
-//! use hjkl_clipboard::backend::wayland_backend::WaylandBackend;
 //!
-//! let native = WaylandBackend::new().unwrap();
+//! // Wrap any Backend — this example uses MockBackend so it compiles on every
+//! // target. Production code wraps WaylandBackend / X11Backend / etc.
+//! let native = MockBackend::new(BackendKind::Mock, Capabilities::all());
 //! let cb = Clipboard::with_backend(Box::new(SshAwareBackend::new(Box::new(native))));
 //! ```
 
