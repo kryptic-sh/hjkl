@@ -6,6 +6,34 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-03
+
+### Added
+
+- 13 new bundled grammars: JavaScript, C++, C#, Java, PHP, Ruby, Swift, Lua,
+  Dart, R, Make, XML, Diff. Bundled grammar count grows from 14 to 27.
+- JavaScript covers `.js`, `.mjs`, `.cjs`, `.jsx` (the same grammar handles
+  JSX-light syntax).
+- C++ routes `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.hh` — `.h` stays on C
+  since most C projects use `.h` for headers.
+- PHP uses `LANGUAGE_PHP` (handles embedded HTML), not `LANGUAGE_PHP_ONLY`.
+
+### Changed
+
+- Binary footprint grows ~17 MB release-stripped from the new grammars (`hjkl`
+  umbrella binary 14.8 MB → 31.8 MB). This is the practical ceiling for the
+  bake-in approach; future language additions will move to the upcoming `bonsai`
+  runtime grammar loader.
+
+### Deprecated
+
+- This crate is being superseded by
+  [`bonsai`](https://github.com/kryptic-sh/bonsai), which will replace bundled
+  grammars with a Helix-style compile-on-demand loader (`cc` on user's machine,
+  cache to `~/.cache/hjkl/`). Distros will ship pre-compiled `.so` files in
+  `/usr/share/hjkl/runtime/grammars/`. `hjkl-tree-sitter` 0.5.x is the last
+  bundled-grammar release; the next hjkl umbrella will switch to bonsai.
+
 ## [0.4.0] - 2026-05-03
 
 ### Added

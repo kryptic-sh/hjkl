@@ -8,21 +8,27 @@ Generic tree-sitter syntax highlighting for the hjkl editor stack.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
-Bundles 14 grammars (Rust, Markdown, JSON, TOML, SQL, Python, TypeScript, TSX,
-Go, YAML, Bash, C, HTML, CSS) and exposes a Helix-flavored capture-name theming
+Bundles 27 grammars (Rust, Markdown, JSON, TOML, SQL, Python, JavaScript,
+TypeScript, TSX, Go, YAML, Bash, C, C++, C#, HTML, CSS, Java, PHP, Ruby, Swift,
+Lua, Dart, R, Make, XML, Diff) and exposes a Helix-flavored capture-name theming
 system compatible with Neovim capture-name conventions. Language detection by
 file extension. Highlights are returned as a flat list of
 `(byte_range, capture_name)` spans for renderers to style.
 
+> **Heads up:** this crate is being superseded by
+> [`bonsai`](https://github.com/kryptic-sh/bonsai), which replaces bundled
+> grammars with a Helix-style compile-on-demand loader. `hjkl-tree-sitter` 0.5.x
+> is the last bundled-grammar release.
+
 ## Status
 
-14 bundled grammars, `DotFallbackTheme` for dark/light theming, incremental
+27 bundled grammars, `DotFallbackTheme` for dark/light theming, incremental
 re-parse via `tree-sitter::InputEdit`.
 
 ## Usage
 
 ```toml
-hjkl-tree-sitter = "0.4"
+hjkl-tree-sitter = "0.5"
 ```
 
 ```rust
