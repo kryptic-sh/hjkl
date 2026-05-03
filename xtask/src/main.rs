@@ -1,11 +1,13 @@
 //! `cargo xtask <subcmd>` — build automation for hjkl-bonsai.
 //!
 //! Subcommands:
-//!   sync-bonsai    Regenerate ../bonsai.toml from upstream sources.
+//!   sync-bonsai     Regenerate ../bonsai.toml from upstream sources.
+//!   build-grammars  Clone + compile every grammar into a flat dir.
 
 use std::env;
 use std::process::ExitCode;
 
+mod build_grammars;
 mod sync_bonsai;
 
 fn main() -> ExitCode {
@@ -15,7 +17,8 @@ fn main() -> ExitCode {
         None => {
             eprintln!("usage: cargo xtask <subcommand>");
             eprintln!("subcommands:");
-            eprintln!("  sync-bonsai    regenerate ../bonsai.toml");
+            eprintln!("  sync-bonsai     regenerate ../bonsai.toml");
+            eprintln!("  build-grammars  clone + compile every grammar (see --help)");
             return ExitCode::from(2);
         }
     };
@@ -23,6 +26,7 @@ fn main() -> ExitCode {
 
     let result = match cmd.as_str() {
         "sync-bonsai" => sync_bonsai::run(&rest),
+        "build-grammars" => build_grammars::run(&rest),
         other => {
             eprintln!("unknown subcommand: {other}");
             return ExitCode::from(2);
