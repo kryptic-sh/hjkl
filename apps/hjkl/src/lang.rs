@@ -16,7 +16,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry, SourceCache};
+use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry};
 
 /// Shared language resolver. `Arc<LanguageDirectory>` is the right thing to
 /// pass around so the in-memory `Grammar` cache is shared across the
@@ -24,7 +24,6 @@ use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry, SourceCache}
 pub struct LanguageDirectory {
     registry: GrammarRegistry,
     loader: GrammarLoader,
-    sources: SourceCache,
     cache: Mutex<HashMap<String, Arc<Grammar>>>,
 }
 
@@ -35,19 +34,18 @@ impl LanguageDirectory {
         Ok(Self {
             registry: GrammarRegistry::embedded()?,
             loader: GrammarLoader::user_default()?,
-            sources: SourceCache::user_default()?,
             cache: Mutex::new(HashMap::new()),
         })
     }
 
     /// Resolve a language name (e.g. `"rust"`, `"python"`) to a loaded
-    /// grammar. May block on first use to clone + compile.
+    /// grammar. May block on first use to clone + compile + install.
     pub fn by_name(&self, name: &str) -> Option<Arc<Grammar>> {
         if let Some(g) = self.cache_get(name) {
             return Some(g);
         }
         let spec = self.registry.by_name(name)?;
-        let grammar = Grammar::load(name, spec, &self.loader, &self.sources).ok()?;
+        let grammar = Grammar::load(name, spec, &self.loader).ok()?;
         Some(self.cache_insert(name, grammar))
     }
 
