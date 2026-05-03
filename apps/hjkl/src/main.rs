@@ -64,11 +64,25 @@ pub struct Args {
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
 /// Preserves the binary name in the clap stream so clap's prog detection
 /// stays correct.
+///
+/// Conventions:
+/// - The argv\[0\] (binary name) is never treated as a vim token.
+/// - A bare `+` (length 1) is *not* a vim token — it falls through to clap
+///   as a positional (treated as a literal filename `+`).
+/// - `--` ends vim-token processing: everything after stays in the clap
+///   stream verbatim, matching POSIX end-of-options semantics. This lets
+///   `hjkl -- +42` open a file literally named `+42`.
 fn split_vim_tokens(raw: Vec<String>) -> (Vec<String>, Vec<String>) {
     let mut clap_args: Vec<String> = Vec::with_capacity(raw.len());
     let mut vim_tokens: Vec<String> = Vec::new();
+    let mut after_dashdash = false;
     for (i, arg) in raw.into_iter().enumerate() {
-        if i > 0 && arg.starts_with('+') && arg.len() > 1 {
+        if !after_dashdash && i > 0 && arg == "--" {
+            after_dashdash = true;
+            clap_args.push(arg);
+            continue;
+        }
+        if !after_dashdash && i > 0 && arg.starts_with('+') && arg.len() > 1 {
             vim_tokens.push(arg);
         } else {
             clap_args.push(arg);
@@ -77,9 +91,14 @@ fn split_vim_tokens(raw: Vec<String>) -> (Vec<String>, Vec<String>) {
     (clap_args, vim_tokens)
 }
 
-/// Apply parsed `+`-prefixed tokens onto an `Args` builder. Unknown
-/// `+` tokens are warned to stderr (matches the legacy parser behavior).
-fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) {
+/// Apply parsed `+`-prefixed tokens onto an `Args` builder. Returns a list
+/// of warnings (currently: unknown `+cmd` tokens). The caller decides how
+/// to surface them — `main` prints to stderr, tests assert the contents.
+///
+/// Last-write-wins: repeated `+N` overwrites `args.line`; repeated `+/PAT`
+/// overwrites `args.pattern`.
+fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
+    let mut warnings: Vec<String> = Vec::new();
     for tok in vim_tokens {
         let rest = &tok[1..];
         if let Some(pat) = rest.strip_prefix('/') {
@@ -91,13 +110,15 @@ fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) {
         } else if rest == "picker" {
             args.picker = true;
         } else {
-            eprintln!("hjkl: ignoring unknown +cmd: {tok}");
+            warnings.push(format!("hjkl: ignoring unknown +cmd: {tok}"));
         }
     }
+    warnings
 }
 
-fn parse_args() -> Result<Args> {
-    let raw: Vec<String> = std::env::args().collect();
+/// Parse a raw `argv` (including `argv[0]` binary name) into `(args, warnings)`.
+/// Pure function — no env, no stderr — so tests can drive every branch.
+fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
     let (clap_argv, vim_tokens) = split_vim_tokens(raw);
     let cli = Cli::parse_from(clap_argv);
     let mut args = Args {
@@ -108,7 +129,16 @@ fn parse_args() -> Result<Args> {
         perf: false,
         picker: false,
     };
-    apply_vim_tokens(&mut args, &vim_tokens);
+    let warnings = apply_vim_tokens(&mut args, &vim_tokens);
+    Ok((args, warnings))
+}
+
+fn parse_args() -> Result<Args> {
+    let raw: Vec<String> = std::env::args().collect();
+    let (args, warnings) = parse_argv(raw)?;
+    for w in warnings {
+        eprintln!("{w}");
+    }
     Ok(args)
 }
 
@@ -200,15 +230,8 @@ mod cli_tests {
 
     #[test]
     fn apply_vim_tokens_sets_line_pattern_perf_picker() {
-        let mut args = Args {
-            files: vec![],
-            line: None,
-            pattern: None,
-            readonly: false,
-            perf: false,
-            picker: false,
-        };
-        apply_vim_tokens(
+        let mut args = blank_args();
+        let warnings = apply_vim_tokens(
             &mut args,
             &[
                 "+42".into(),
@@ -221,5 +244,114 @@ mod cli_tests {
         assert_eq!(args.pattern.as_deref(), Some("needle"));
         assert!(args.perf);
         assert!(args.picker);
+        assert!(warnings.is_empty());
+    }
+
+    /// A bare `+` (length 1) is not a vim token — it survives into the
+    /// clap stream as a positional, equivalent to opening a file literally
+    /// named `+`. Vim has the same behavior.
+    #[test]
+    fn split_vim_tokens_passes_bare_plus_to_clap() {
+        let raw: Vec<String> = ["hjkl", "+", "file.txt"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (clap_argv, vim) = split_vim_tokens(raw);
+        assert_eq!(clap_argv, vec!["hjkl", "+", "file.txt"]);
+        assert!(vim.is_empty());
+    }
+
+    /// `--` ends vim-token processing. Anything after — including
+    /// `+`-prefixed tokens — is passed to clap verbatim. This lets users
+    /// open a file literally named `+42` via `hjkl -- +42`.
+    #[test]
+    fn split_vim_tokens_honors_dashdash_separator() {
+        let raw: Vec<String> = ["hjkl", "+10", "--", "+42", "+/notapattern"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (clap_argv, vim) = split_vim_tokens(raw);
+        assert_eq!(clap_argv, vec!["hjkl", "--", "+42", "+/notapattern"]);
+        assert_eq!(vim, vec!["+10"]);
+    }
+
+    /// Repeated `+N` / `+/PAT` overwrite — last write wins. Matches vim's
+    /// behavior when both `+10` and `+20` are given.
+    #[test]
+    fn apply_vim_tokens_last_write_wins() {
+        let mut args = blank_args();
+        let _ = apply_vim_tokens(
+            &mut args,
+            &[
+                "+10".into(),
+                "+20".into(),
+                "+/first".into(),
+                "+/second".into(),
+            ],
+        );
+        assert_eq!(args.line, Some(20));
+        assert_eq!(args.pattern.as_deref(), Some("second"));
+    }
+
+    /// Unknown `+cmd` tokens produce a warning string (returned, not
+    /// printed). Other state on `args` is left untouched.
+    #[test]
+    fn apply_vim_tokens_unknown_token_produces_warning() {
+        let mut args = blank_args();
+        args.line = Some(7); // pre-existing state must survive
+        let warnings = apply_vim_tokens(&mut args, &["+bogus".into(), "+also-bogus".into()]);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings[0].contains("+bogus"), "got: {:?}", warnings[0]);
+        assert!(
+            warnings[1].contains("+also-bogus"),
+            "got: {:?}",
+            warnings[1]
+        );
+        // Pre-existing state untouched.
+        assert_eq!(args.line, Some(7));
+        assert_eq!(args.pattern, None);
+        assert!(!args.perf);
+        assert!(!args.picker);
+    }
+
+    /// `+/` with empty pattern currently sets `pattern = Some("")`. This
+    /// is a documented quirk of the current implementation — a downstream
+    /// search-engine layer will treat the empty pattern as a no-op. If the
+    /// behavior changes, this test pins the new contract.
+    #[test]
+    fn apply_vim_tokens_empty_pattern_is_some_empty_string() {
+        let mut args = blank_args();
+        let _ = apply_vim_tokens(&mut args, &["+/".into()]);
+        assert_eq!(args.pattern.as_deref(), Some(""));
+    }
+
+    /// End-to-end `parse_argv`: clap-handled flags + vim tokens work
+    /// together; warnings are returned in order.
+    #[test]
+    fn parse_argv_round_trip_mixed_args() {
+        let raw: Vec<String> = ["hjkl", "-R", "+42", "src/main.rs", "+/foo", "+xyzzy"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (args, warnings) = parse_argv(raw).expect("parse_argv");
+        assert!(args.readonly);
+        assert_eq!(args.line, Some(42));
+        assert_eq!(args.pattern.as_deref(), Some("foo"));
+        assert_eq!(args.files, vec![PathBuf::from("src/main.rs")]);
+        assert!(!args.perf);
+        assert!(!args.picker);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("+xyzzy"));
+    }
+
+    fn blank_args() -> Args {
+        Args {
+            files: vec![],
+            line: None,
+            pattern: None,
+            readonly: false,
+            perf: false,
+            picker: false,
+        }
     }
 }

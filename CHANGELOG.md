@@ -27,6 +27,19 @@ patch bumps.
   contains the embedded art block and the version, vim-token splitter separates
   `+N`/`+/foo` from clap-handled args, vim-token applier sets
   line/pattern/perf/picker correctly.
+- Edge-case tests for vim-style tokens: bare `+` survives into the clap stream
+  as a positional, `--` ends vim-token processing (`hjkl -- +42` opens a file
+  literally named `+42`), repeated `+N` / `+/PAT` overwrite (last-write-wins),
+  unknown `+cmd` produces a warning string, `+/` (empty pattern) currently sets
+  `pattern = Some("")` (documented quirk), end-to-end `parse_argv` round-trips
+  mixed flags + tokens + warnings.
+
+### Changed (internal)
+
+- `parse_args` extracted into pure
+  `parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)>` for testability;
+  the env+stderr wrapper remains as `parse_args` for `main` to call.
+  `apply_vim_tokens` now returns warnings instead of printing to stderr.
 
 ## [0.7.0] - 2026-05-03
 
