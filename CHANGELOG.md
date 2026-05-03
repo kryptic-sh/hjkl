@@ -8,6 +8,60 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-03
+
+Migrates the umbrella binary onto `hjkl-bonsai` 0.2.x's runtime grammar loader.
+Grammars are no longer baked into the binary; they're cloned, compiled, and
+installed on demand the first time the editor encounters a language. Distros
+that pre-populate `/usr/share/hjkl/grammars/` skip the on-demand path entirely.
+
+### Changed
+
+- **Release binary shrinks 31 MB → 5.1 MB.** The 27 baked `tree-sitter-*`
+  grammar crates that bonsai 0.1.x bundled are gone.
+- New `apps/hjkl/src/lang.rs` `LanguageDirectory` facade wraps
+  `bonsai::runtime::{GrammarRegistry, GrammarLoader}` and caches loaded
+  `Arc<Grammar>` per-name. `App` owns one `Arc<LanguageDirectory>`;
+  `SyntaxLayer` and the three `Highlighted*Source` pickers all share it so each
+  language `dlopen`s once per process.
+- `SyntaxWorker` IPC now ships `Arc<Grammar>` (Send+Sync via tree-sitter's
+  `unsafe impl`s + `libloading::Library`'s thread-safety) in place of
+  `&'static LanguageConfig`.
+- First-ever edit of an unknown file extension now blocks for ~1–3 s on a
+  `git clone` + `cc` compile. Subsequent edits of the same language hit the
+  user-data install (`<user_data>/hjkl/grammars/`) instantly. System-shipped
+  grammars skip the build entirely.
+- On-disk layout reorganized (see hjkl-bonsai 0.2.0 changelog for full detail).
+  Existing `~/.local/share/hjkl/grammars/sources/` and
+  `~/.cache/hjkl/build-grammars/` from v0.5.0 are now orphan and safe to delete.
+
+### Fixed
+
+- Cross-platform user-directory resolution: Windows / macOS no longer bail with
+  `$HOME not set` because the loader now uses the `dirs` crate.
+
+### Internal
+
+- Tests that need a real grammar (network clone + cc compile of
+  tree-sitter-rust) are gated behind `#[ignore]` so the default `cargo test`
+  lane stays offline. Run them with `cargo test -p hjkl -- --ignored`.
+
+## [0.5.0] - 2026-05-03
+
+### Added
+
+- TOML-driven UI + syntax theme matching the `hjkl.kryptic.sh` palette. Themes
+  load from baked `themes/{ui,syntax}-dark.toml` at startup;
+  `:set background={dark,light}` swaps live.
+- Migrated from the legacy `hjkl-tree-sitter` crate to the renamed `hjkl-bonsai`
+  0.1.x (same baked-grammar API, just rebadged). No code changes for end users.
+
+### Fixed
+
+- `:wq` (and `:x`) refuse to exit when the save fails. `do_save` / `save_slot`
+  now return `bool`; `E32` (no filename), `E45` (readonly), and IO errors no
+  longer silently quit and lose unsaved content.
+
 ## [0.4.6] - 2026-05-03
 
 ### Fixed
