@@ -447,6 +447,10 @@ jobs:
           # the file), but abuild still wants a key to sign the index it
           # writes alongside.
           su builder -c 'abuild-keygen -a -n'
+          # abuild's final step writes a signed APKINDEX; the signing
+          # check rejects packages whose pubkey isn't in /etc/apk/keys.
+          # Install the throwaway pubkey there so the index step passes.
+          cp /home/builder/.abuild/*.rsa.pub /etc/apk/keys/
           # -F: force build even though we're not in an aports tree.
           # -r: install missing build deps automatically.
           su builder -c 'cd out && SRCDEST=/var/cache/distfiles cp src/*.tar.gz /var/cache/distfiles/ && abuild -F -r'
