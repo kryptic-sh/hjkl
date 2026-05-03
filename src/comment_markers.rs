@@ -431,7 +431,7 @@ fn is_consecutive(bytes: &[u8], prev_end: usize, next_start: usize) -> bool {
 mod tests {
     use super::*;
     use crate::Highlighter;
-    use crate::runtime::{Grammar, GrammarCompiler, GrammarLoader, LangSpec, SourceCache};
+    use crate::runtime::{Grammar, GrammarLoader, LangSpec};
     use std::sync::{Arc, OnceLock};
 
     /// Tree-sitter-rust pinned rev for tests; matches what `bonsai.toml` ships.
@@ -444,9 +444,7 @@ mod tests {
     fn rust_grammar() -> Arc<Grammar> {
         static G: OnceLock<Arc<Grammar>> = OnceLock::new();
         G.get_or_init(|| {
-            let sources = SourceCache::user_default().expect("XDG paths");
-            let compiler = GrammarCompiler::user_default().expect("XDG paths");
-            let loader = GrammarLoader::new(vec![], vec![], sources.clone(), compiler);
+            let loader = GrammarLoader::user_default().expect("XDG paths");
             let spec = LangSpec {
                 git_url: RUST_GIT.into(),
                 git_rev: RUST_REV.into(),
@@ -456,7 +454,7 @@ mod tests {
                 query_dir: "queries".into(),
                 source: None,
             };
-            Arc::new(Grammar::load("rust", &spec, &loader, &sources).expect("rust grammar"))
+            Arc::new(Grammar::load("rust", &spec, &loader).expect("rust grammar"))
         })
         .clone()
     }

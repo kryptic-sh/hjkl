@@ -10,14 +10,13 @@
 //! ```no_run
 //! use std::sync::Arc;
 //! use hjkl_bonsai::{Highlighter, DotFallbackTheme, Theme};
-//! use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry, SourceCache};
+//! use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry};
 //!
 //! let registry = GrammarRegistry::embedded()?;
 //! let loader = GrammarLoader::user_default()?;
-//! let sources = SourceCache::user_default()?;
 //!
 //! let spec = registry.by_name("rust").unwrap();
-//! let grammar = Arc::new(Grammar::load("rust", spec, &loader, &sources)?);
+//! let grammar = Arc::new(Grammar::load("rust", spec, &loader)?);
 //! let mut highlighter = Highlighter::new(grammar)?;
 //! let spans = highlighter.highlight(b"fn main() {}");
 //!

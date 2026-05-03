@@ -334,9 +334,9 @@ mod tests {
 
     fn c_grammar_loader() -> (Arc<Grammar>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
-        let sources = SourceCache::new(tmp.path().join("sources"));
-        let compiler = GrammarCompiler::new(tmp.path().join("cache"));
-        let loader = GrammarLoader::new(vec![], vec![], sources.clone(), compiler);
+        let sources = SourceCache::new(tmp.path().join("cache"));
+        let user_dir = tmp.path().join("user");
+        let loader = GrammarLoader::new(vec![], user_dir, sources, GrammarCompiler::new());
 
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
@@ -348,7 +348,7 @@ mod tests {
             source: None,
         };
 
-        let g = Grammar::load("c", &spec, &loader, &sources).unwrap();
+        let g = Grammar::load("c", &spec, &loader).unwrap();
         (Arc::new(g), tmp)
     }
 

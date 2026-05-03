@@ -28,14 +28,19 @@ impl SourceCache {
         Self { base }
     }
 
-    /// User-default cache rooted at the platform's user-data directory:
-    /// - Unix: `$XDG_DATA_HOME/hjkl/grammars/sources/` (falls back to
-    ///   `$HOME/.local/share/hjkl/grammars/sources/`)
-    /// - macOS: `$HOME/Library/Application Support/hjkl/grammars/sources/`
-    /// - Windows: `%APPDATA%\hjkl\grammars\sources\`
+    /// User-default cache rooted at the platform's user-cache directory:
+    /// - Unix: `$XDG_CACHE_HOME/hjkl/grammars/` (falls back to
+    ///   `$HOME/.cache/hjkl/grammars/`)
+    /// - macOS: `$HOME/Library/Caches/hjkl/grammars/`
+    /// - Windows: `%LOCALAPPDATA%\hjkl\grammars\`
+    ///
+    /// Each cloned grammar lives under `<base>/<name>-<short-rev>/`. The
+    /// compiled `<name>.{so|dylib|dll}` is built **in-place** inside the
+    /// same dir (see [`GrammarCompiler`]) and then installed to the
+    /// durable user-data layer (see [`GrammarLoader`]).
     pub fn user_default() -> Result<Self> {
-        let mut p = dirs::data_dir().context("could not resolve user data directory")?;
-        p.push("hjkl/grammars/sources");
+        let mut p = dirs::cache_dir().context("could not resolve user cache directory")?;
+        p.push("hjkl/grammars");
         Ok(Self::new(p))
     }
 

@@ -7,14 +7,13 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use libloading::Library;
 use tree_sitter::Language;
 use tree_sitter_language::LanguageFn;
 
 use super::loader::GrammarLoader;
 use super::manifest::LangSpec;
-use super::source::SourceCache;
 
 /// Standard query files tree-sitter recognizes. Read in this order; missing
 /// files are tolerated (return `None`).
@@ -60,18 +59,11 @@ impl Grammar {
         self.injections_scm.as_deref()
     }
 
-    /// Load a grammar by name, walking the standard chain:
-    /// 1. Resolve the parser `.so` via [`GrammarLoader::load`] (system →
-    ///    user → cache → compile).
-    /// 2. Read the `.scm` query files. Source-cloning happens via the
-    ///    [`SourceCache`] reference so the queries can come from the same
-    ///    upstream tree the parser was built from.
-    pub fn load(
-        name: &str,
-        spec: &LangSpec,
-        loader: &GrammarLoader,
-        sources: &SourceCache,
-    ) -> Result<Self> {
+    /// Load a grammar by name. The [`GrammarLoader`] handles parser
+    /// resolution (system → user → on-demand clone+compile+install).
+    /// Queries are read from the sibling layout the loader installs:
+    /// `<so_parent>/<name>/{highlights,locals,injections}.scm`.
+    pub fn load(name: &str, spec: &LangSpec, loader: &GrammarLoader) -> Result<Self> {
         let so = loader
             .load(name, spec)
             .with_context(|| format!("resolve grammar {name}"))?;
@@ -89,10 +81,16 @@ impl Grammar {
         let lang_fn = unsafe { LanguageFn::from_raw(raw) };
         let language = Language::from(lang_fn);
 
-        let source_root = sources
-            .acquire(name, spec)
-            .with_context(|| format!("acquire source for {name} (queries)"))?;
-        let query_dir = source_root.join(&spec.query_dir);
+        let parent = so
+            .parent()
+            .with_context(|| format!("grammar {} has no parent dir", so.display()))?;
+        let query_dir = parent.join(name);
+        if !query_dir.is_dir() {
+            bail!(
+                "query dir missing for grammar {name}: {}",
+                query_dir.display()
+            );
+        }
         let highlights_scm = read_required_query(&query_dir, HIGHLIGHTS_FILE, name)?;
         let locals_scm = read_optional_query(&query_dir, LOCALS_FILE);
         let injections_scm = read_optional_query(&query_dir, INJECTIONS_FILE);
@@ -170,14 +168,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "network + compiler: clones tree-sitter-c, builds, dlopens"]
+    #[ignore = "network + compiler: clones tree-sitter-c, builds, installs, dlopens"]
     fn load_real_grammar_end_to_end() {
         use super::super::compile::GrammarCompiler;
+        use super::super::source::SourceCache;
 
         let tmp = tempfile::tempdir().unwrap();
-        let sources = SourceCache::new(tmp.path().join("sources"));
-        let compiler = GrammarCompiler::new(tmp.path().join("cache"));
-        let loader = GrammarLoader::new(vec![], vec![], sources.clone(), compiler);
+        let sources = SourceCache::new(tmp.path().join("cache"));
+        let user_dir = tmp.path().join("user");
+        let loader = GrammarLoader::new(vec![], user_dir, sources, GrammarCompiler::new());
 
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
@@ -189,7 +188,7 @@ mod tests {
             source: None,
         };
 
-        let grammar = Grammar::load("c", &spec, &loader, &sources).unwrap();
+        let grammar = Grammar::load("c", &spec, &loader).unwrap();
         assert_eq!(grammar.name(), "c");
         // Sanity: the language resolved enough to compile a trivial query.
         let q = tree_sitter::Query::new(grammar.language(), grammar.highlights_scm());

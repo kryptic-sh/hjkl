@@ -1,9 +1,13 @@
 //! Compile a tree-sitter grammar's C/C++ sources into a shared library.
 //!
 //! Honors `$CC` / `$CXX` if set, otherwise falls back to `cc` / `c++` on
-//! `PATH`. Artifacts land in `$XDG_CACHE_HOME/hjkl/grammars/` named
-//! `<name>-<short-rev>-abi<N>.{so|dylib|dll}` so a tree-sitter ABI bump
-//! invalidates old caches naturally.
+//! `PATH`. The compiled `<name>.{so|dylib|dll}` is written **in-place
+//! inside the source clone** (e.g.
+//! `~/.cache/hjkl/grammars/<name>-<rev>/<name>.so`) — sources and their
+//! built parser stay together so the cache dir is one self-contained
+//! tree per grammar revision. The durable user-data install (the parser
+//! that the loader actually picks up across runs) is the
+//! [`GrammarLoader`]'s responsibility.
 //!
 //! `cc-rs` is intentionally avoided: its compiler-discovery path expects
 //! build-script environment (OPT_LEVEL, HOST, TARGET, …) we don't have here.
@@ -17,67 +21,41 @@ use anyhow::{Context, Result, bail};
 
 use super::manifest::LangSpec;
 
-/// Cache of compiled grammar shared libraries.
-#[derive(Debug, Clone)]
-pub struct GrammarCompiler {
-    out_dir: PathBuf,
-}
+/// Compiles a grammar's C/C++ sources to a shared library inside the
+/// grammar's own source-clone directory. Stateless aside from the choice
+/// of compiler binary (resolved via `$CC` / `$CXX`).
+#[derive(Debug, Clone, Default)]
+pub struct GrammarCompiler;
 
 impl GrammarCompiler {
-    /// Wrap an arbitrary output directory.
-    pub fn new(out_dir: PathBuf) -> Self {
-        Self { out_dir }
+    pub fn new() -> Self {
+        Self
     }
 
-    /// Default cache rooted at the platform's user-cache directory:
-    /// - Unix: `$XDG_CACHE_HOME/hjkl/grammars/` (falls back to
-    ///   `$HOME/.cache/hjkl/grammars/`)
-    /// - macOS: `$HOME/Library/Caches/hjkl/grammars/`
-    /// - Windows: `%LOCALAPPDATA%\hjkl\grammars\`
-    pub fn user_default() -> Result<Self> {
-        let mut p = dirs::cache_dir().context("could not resolve user cache directory")?;
-        p.push("hjkl/grammars");
-        Ok(Self::new(p))
+    /// Path where the compiled artifact for `(name, source_root)` would
+    /// live (whether or not it has been built yet). Matches what
+    /// [`Self::compile`] produces.
+    pub fn artifact_path(&self, name: &str, source_root: &Path) -> PathBuf {
+        source_root.join(format!("{name}{}", shared_lib_ext()))
     }
 
-    /// Output directory for compiled artifacts. Created on first compile.
-    pub fn out_dir(&self) -> &Path {
-        &self.out_dir
-    }
-
-    /// Path where the compiled artifact for `(name, spec)` would live (whether
-    /// or not it has been built yet).
-    pub fn artifact_path(&self, name: &str, spec: &LangSpec) -> PathBuf {
-        self.out_dir.join(format!(
-            "{name}-{}-abi{}{}",
-            short_rev(&spec.git_rev),
-            tree_sitter::LANGUAGE_VERSION,
-            shared_lib_ext(),
-        ))
-    }
-
-    /// Compile the grammar at `source_root` into a shared library. Idempotent
-    /// — returns the cached artifact path on a hit.
-    ///
-    /// `source_root` is the directory containing the grammar's `src/`
-    /// subdirectory (i.e. the output of [`SourceCache::acquire`]).
+    /// Compile the grammar at `source_root` into a shared library at
+    /// `<source_root>/<name>.<ext>`. Idempotent — returns the existing
+    /// artifact path on a hit.
     pub fn compile(&self, name: &str, spec: &LangSpec, source_root: &Path) -> Result<PathBuf> {
-        let dest = self.artifact_path(name, spec);
+        let dest = self.artifact_path(name, source_root);
         if dest.exists() {
             return Ok(dest);
         }
-        std::fs::create_dir_all(&self.out_dir)
-            .with_context(|| format!("create out dir {}", self.out_dir.display()))?;
 
-        let staging = dest.with_extension(format!(
-            "tmp-{}{}",
+        let staging = source_root.join(format!(
+            "{name}.tmp-{}{}",
             std::process::id(),
-            shared_lib_ext().trim_start_matches('.'),
+            shared_lib_ext(),
         ));
         let _ = std::fs::remove_file(&staging);
 
-        let result = compile_into(spec, source_root, &staging);
-        match result {
+        match compile_into(spec, source_root, &staging) {
             Ok(()) => {}
             Err(e) => {
                 let _ = std::fs::remove_file(&staging);
@@ -161,12 +139,7 @@ fn pick_compiler(cpp: bool) -> String {
     if cpp { "c++".into() } else { "cc".into() }
 }
 
-fn short_rev(rev: &str) -> &str {
-    let take = rev.len().min(12);
-    &rev[..take]
-}
-
-fn shared_lib_ext() -> &'static str {
+pub(super) fn shared_lib_ext() -> &'static str {
     if cfg!(target_os = "macos") {
         ".dylib"
     } else if cfg!(target_os = "windows") {
@@ -193,13 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn artifact_path_includes_abi_and_short_rev() {
-        let c = GrammarCompiler::new(PathBuf::from("/tmp/cache"));
-        let spec = dummy_spec("0123456789abcdef00112233");
-        let p = c.artifact_path("rust", &spec);
-        let s = p.to_string_lossy();
-        assert!(s.contains("rust-0123456789ab-abi"), "got: {s}");
-        assert!(s.ends_with(shared_lib_ext()), "got: {s}");
+    fn artifact_path_lives_inside_source_root() {
+        let c = GrammarCompiler::new();
+        let root = PathBuf::from("/tmp/cache/rust-deadbeef");
+        let p = c.artifact_path("rust", &root);
+        assert_eq!(p, root.join(format!("rust{}", shared_lib_ext())));
     }
 
     #[test]
@@ -217,7 +188,7 @@ mod tests {
     #[test]
     fn compile_errors_on_missing_source() {
         let tmp = tempfile::tempdir().unwrap();
-        let c = GrammarCompiler::new(tmp.path().to_path_buf());
+        let c = GrammarCompiler::new();
         let spec = dummy_spec("deadbeef00000000");
         let bad_root = tmp.path().join("nonexistent");
         let err = c.compile("ghost", &spec, &bad_root).unwrap_err();
@@ -232,10 +203,9 @@ mod tests {
     fn compile_real_grammar_end_to_end() {
         use super::super::source::SourceCache;
 
-        let src_tmp = tempfile::tempdir().unwrap();
-        let out_tmp = tempfile::tempdir().unwrap();
-        let cache = SourceCache::new(src_tmp.path().to_path_buf());
-        let compiler = GrammarCompiler::new(out_tmp.path().to_path_buf());
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = SourceCache::new(tmp.path().to_path_buf());
+        let compiler = GrammarCompiler::new();
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
             git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
@@ -248,10 +218,11 @@ mod tests {
         let root = cache.acquire("c", &spec).unwrap();
         let so = compiler.compile("c", &spec, &root).unwrap();
         assert!(so.is_file(), "expected artifact at {}", so.display());
+        assert_eq!(so.parent().unwrap(), root);
         let meta = std::fs::metadata(&so).unwrap();
         assert!(meta.len() > 1024, "artifact suspiciously small");
 
-        // Second compile is a cache hit.
+        // Second compile is idempotent.
         let so2 = compiler.compile("c", &spec, &root).unwrap();
         assert_eq!(so, so2);
     }
