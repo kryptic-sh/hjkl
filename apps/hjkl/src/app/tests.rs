@@ -21,11 +21,34 @@ fn palette_open_and_submit_runs_dispatch_and_closes() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     assert!(app.command_field.is_some());
-    type_str(&mut app, "wq");
-    assert_eq!(app.command_field.as_ref().unwrap().text(), "wq");
+    type_str(&mut app, "q");
+    assert_eq!(app.command_field.as_ref().unwrap().text(), "q");
     app.handle_command_field_key(key(KeyCode::Enter));
     assert!(app.command_field.is_none());
     assert!(app.exit_requested);
+}
+
+#[test]
+fn wq_no_filename_does_not_exit() {
+    // :wq on a [No Name] buffer with content must NOT quit — the save
+    // fails with E32 and the user would lose their work otherwise.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "unsaved work");
+    app.active_mut().dirty = true;
+    app.dispatch_ex("wq");
+    assert!(!app.exit_requested, "wq must not exit when save fails");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("E32"), "expected E32, got: {msg}");
+}
+
+#[test]
+fn wq_readonly_does_not_exit() {
+    let mut app = App::new(None, true, None, None).unwrap();
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/hjkl_wq_ro_test.txt"));
+    app.dispatch_ex("wq");
+    assert!(!app.exit_requested, "wq must not exit when save fails");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("E45"), "expected E45, got: {msg}");
 }
 
 #[test]

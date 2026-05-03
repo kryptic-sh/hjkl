@@ -186,9 +186,11 @@ impl App {
                 self.do_save(Some(PathBuf::from(path)));
             }
             ExEffect::Quit { force, save } => {
-                if save {
-                    self.do_save(None);
-                    // Fall through to close-or-quit.
+                if save && !self.do_save(None) {
+                    // Save failed (E32 / E45 / IO error). Status_message
+                    // already set by do_save; refuse to exit so the user
+                    // doesn't lose unsaved content.
+                    return;
                 }
                 // E4: multi-slot — close active slot, stay in app.
                 if self.slots.len() > 1 {
@@ -240,23 +242,25 @@ impl App {
     }
 
     /// Write buffer content to `path` (or `self.active().filename` if `path` is `None`).
-    pub(crate) fn do_save(&mut self, path: Option<PathBuf>) {
+    /// Returns `true` on success, `false` on any failure (E32 / E45 / IO error).
+    pub(crate) fn do_save(&mut self, path: Option<PathBuf>) -> bool {
         let idx = self.active;
-        self.save_slot(idx, path);
+        self.save_slot(idx, path)
     }
 
     /// Write slot `idx`'s buffer to `path` (or the slot's own filename if
     /// `path` is `None`). Updates `status_message` on success or failure.
-    /// Does NOT change `self.active`.
-    fn save_slot(&mut self, idx: usize, path: Option<PathBuf>) {
+    /// Does NOT change `self.active`. Returns `true` on success.
+    fn save_slot(&mut self, idx: usize, path: Option<PathBuf>) -> bool {
         if self.slots[idx].editor.is_readonly() {
             self.status_message = Some("E45: 'readonly' option is set (add ! to override)".into());
-            return;
+            return false;
         }
         let target = path.or_else(|| self.slots[idx].filename.clone());
         match target {
             None => {
                 self.status_message = Some("E32: No file name".into());
+                false
             }
             Some(p) => {
                 let lines = self.slots[idx].editor.buffer().lines();
@@ -283,9 +287,11 @@ impl App {
                         if idx == self.active {
                             self.refresh_git_signs_force();
                         }
+                        true
                     }
                     Err(e) => {
                         self.status_message = Some(format!("E: {}: {e}", p.display()));
+                        false
                     }
                 }
             }
