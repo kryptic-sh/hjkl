@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-03
+
+### Changed
+
+- README rewritten for the 0.2.0 runtime loader API: dropped the bundled-
+  grammar narrative, added the lookup chain, distro packaging recipe via
+  `cargo xtask build-grammars`, and the per-platform user-dir table. Affects the
+  rendered crates.io page only — no code changes.
+
 ## [0.2.0] - 2026-05-03
 
 Major rework: runtime grammar loading. The 27 baked `tree-sitter-*` dependencies
