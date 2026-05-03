@@ -16,7 +16,7 @@
 //! Mirrors the shape of `sqeel-tui::SqeelHost` so the eventual switch
 //! to `Editor<B, H>` is a single-callsite swap.
 
-use hjkl_clipboard::{Clipboard, MimeType, Selection};
+use hjkl_clipboard::{Capabilities, Clipboard, MimeType, Selection};
 use hjkl_engine::{CursorShape, Host, Viewport};
 use std::time::Instant;
 
@@ -62,6 +62,14 @@ impl TuiHost {
     pub fn set_cancel(&mut self, cancel: bool) {
         self.cancel = cancel;
     }
+
+    /// Borrow the active clipboard, if construction succeeded.
+    ///
+    /// Used by the `:clipboard` ex command to display backend kind +
+    /// capabilities without the host having to pre-format the status string.
+    pub fn clipboard(&self) -> Option<&Clipboard> {
+        self.clipboard.as_ref()
+    }
 }
 
 impl Default for TuiHost {
@@ -74,13 +82,20 @@ impl Host for TuiHost {
     type Intent = ();
 
     fn write_clipboard(&mut self, text: String) {
-        if let Some(cb) = &self.clipboard {
+        if let Some(cb) = &self.clipboard
+            && cb.capabilities().contains(Capabilities::WRITE)
+        {
             let _ = cb.set(Selection::Clipboard, MimeType::Text, text.as_bytes());
         }
     }
 
     fn read_clipboard(&mut self) -> Option<String> {
         let cb = self.clipboard.as_ref()?;
+        // Skip the round-trip when the active backend can't read at all
+        // (OSC 52 over SSH, Mock without preset_get, etc).
+        if !cb.capabilities().contains(Capabilities::READ) {
+            return None;
+        }
         let bytes = cb.get(Selection::Clipboard, MimeType::Text).ok()?;
         String::from_utf8(bytes).ok()
     }

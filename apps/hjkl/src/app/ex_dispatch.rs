@@ -132,6 +132,10 @@ impl App {
                 self.status_message = Some(self.list_buffers());
                 return;
             }
+            "clipboard" => {
+                self.status_message = Some(self.clipboard_status());
+                return;
+            }
             "b#" => {
                 self.buffer_alt();
                 return;
@@ -239,6 +243,38 @@ impl App {
                 self.status_message = Some(format!("E492: Not an editor command: :{c}"));
             }
         }
+    }
+
+    /// Format a one-line summary of the active clipboard backend for the
+    /// status line. Used by `:clipboard`.
+    fn clipboard_status(&self) -> String {
+        let Some(cb) = self.active().editor.host().clipboard() else {
+            return "clipboard: unavailable (probe failed)".into();
+        };
+        let kind = cb.kind();
+        let caps = cb.capabilities();
+        let flags = [
+            (hjkl_clipboard::Capabilities::WRITE, "WRITE"),
+            (hjkl_clipboard::Capabilities::READ, "READ"),
+            (hjkl_clipboard::Capabilities::CLEAR, "CLEAR"),
+            (hjkl_clipboard::Capabilities::AVAILABLE, "AVAILABLE"),
+            (hjkl_clipboard::Capabilities::PRIMARY, "PRIMARY"),
+            (hjkl_clipboard::Capabilities::IMAGE, "IMAGE"),
+            (hjkl_clipboard::Capabilities::RICH_TEXT, "RICH_TEXT"),
+            (hjkl_clipboard::Capabilities::URI_LIST, "URI_LIST"),
+            (hjkl_clipboard::Capabilities::ASYNC_WRITE, "ASYNC_WRITE"),
+            (hjkl_clipboard::Capabilities::ASYNC_READ, "ASYNC_READ"),
+            (hjkl_clipboard::Capabilities::ASYNC_CLEAR, "ASYNC_CLEAR"),
+            (
+                hjkl_clipboard::Capabilities::ASYNC_AVAILABLE,
+                "ASYNC_AVAILABLE",
+            ),
+        ];
+        let active: Vec<&str> = flags
+            .iter()
+            .filter_map(|(f, name)| caps.contains(*f).then_some(*name))
+            .collect();
+        format!("clipboard: {kind} | {}", active.join(" "))
     }
 
     /// Write buffer content to `path` (or `self.active().filename` if `path` is `None`).
