@@ -7,11 +7,11 @@
     <title>hjkl — modal editor + vim engine in Rust</title>
     <meta
       name="description"
-      content="hjkl — a vim-style modal editor in Rust. Built on a reusable engine, rope buffer, and editor primitives that also power sqeel, buffr, and inbx. no_std + alloc."
+      content="hjkl — a vim-style modal editor in Rust. Built on a reusable engine, rope buffer, and editor primitives that also power sqeel, buffr, and inbx."
     />
     <meta
       name="keywords"
-      content="hjkl, vim editor, modal editor, vim engine, rope buffer, rust editor, rust no_std, ratatui, kryptic, sqeel, buffr"
+      content="hjkl, vim editor, modal editor, vim engine, rope buffer, rust editor, ratatui, kryptic, sqeel, buffr"
     />
     <link rel="canonical" href="https://hjkl.kryptic.sh/" />
     <meta name="robots" content="index, follow" />
@@ -718,7 +718,7 @@
         <div class="badges">
           <span class="badge live">● __VERSION__</span>
           <span class="badge">MIT</span>
-          <span class="badge">no_std + alloc</span>
+          <span class="badge">Rust</span>
         </div>
         <h1>
           Modal editor.<br />
@@ -798,10 +798,11 @@
           </div>
           <div class="feat">
             <div class="icon">03 — PORTABLE</div>
-            <h4><code>no_std + alloc</code></h4>
+            <h4>Pure Rust, host-agnostic</h4>
             <p>
-              Runs anywhere Rust does. Embedded, WASM, kernel modules, your
-              weird side project — all fair game.
+              The engine doesn't pin a renderer, clipboard, or filesystem. Same
+              crate drives ratatui TUIs, GPU-composited overlays, and egui
+              windows.
             </p>
           </div>
           <div class="feat">
@@ -855,7 +856,7 @@
             rel="noopener"
           >
             <div class="crate-name">hjkl-engine</div>
-            <div class="crate-meta">no_std + alloc · core</div>
+            <div class="crate-meta">core · vim FSM</div>
             <p class="crate-desc">
               Vim FSM + grammar. Pending-operator state, motions, text objects,
               registers. No I/O deps.
@@ -868,7 +869,7 @@
             rel="noopener"
           >
             <div class="crate-name">hjkl-buffer</div>
-            <div class="crate-meta">no_std + alloc · data</div>
+            <div class="crate-meta">data · rope</div>
             <p class="crate-desc">
               Rope-backed text buffer with cursor, edits, and undo tree. O(log
               n) inserts and deletes.
