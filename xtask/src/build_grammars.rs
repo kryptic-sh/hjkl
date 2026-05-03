@@ -6,9 +6,8 @@
 //! the resulting directory at `/usr/share/hjkl/runtime/grammars/`.
 //!
 //! Layout produced under `<out>/`:
-//!   `<name>.{so|dylib|dll}`        — compiled parser
-//!   `<name>/{highlights,locals,injections}.scm` — queries (subset present
-//!                                                in the upstream grammar)
+//!   `<name>.{so|dylib|dll}` — compiled parser
+//!   `<name>.scm`            — highlights query
 //!
 //! Sources are cloned through the user's runtime cache
 //! (`$XDG_CACHE_HOME/hjkl/grammars/`) and the .so is built in-place inside
@@ -181,13 +180,13 @@ const HELP: &str = "\
 cargo xtask build-grammars [OPTIONS]
 
 Compile every grammar in bonsai.toml and install into <out>/ in the
-runtime layout the GrammarLoader expects:
+layout the GrammarLoader expects:
 
   <out>/<name>.{so,dylib,dll}
-  <out>/<name>/{highlights,locals,injections}.scm
+  <out>/<name>.scm
 
 Distro maintainers ship the resulting dir at
-/usr/share/hjkl/runtime/grammars/ (or /usr/local/share/...).
+/usr/share/hjkl/grammars/ (or /usr/local/share/hjkl/grammars/).
 
 Source clones live in the user's runtime cache
 ($XDG_CACHE_HOME/hjkl/grammars/) and are reused across runs, so

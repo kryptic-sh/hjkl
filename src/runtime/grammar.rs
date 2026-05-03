@@ -5,9 +5,7 @@
 //! matters: `tree_sitter::Language` references data inside `_lib`, so `_lib`
 //! must outlive it. Rust drops fields top-down, so `_lib` stays last.
 
-use std::path::{Path, PathBuf};
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use libloading::Library;
 use tree_sitter::Language;
 use tree_sitter_language::LanguageFn;
@@ -15,19 +13,17 @@ use tree_sitter_language::LanguageFn;
 use super::loader::GrammarLoader;
 use super::manifest::LangSpec;
 
-/// Standard query files tree-sitter recognizes. Read in this order; missing
-/// files are tolerated (return `None`).
+/// Filename of the upstream query we ship — `highlights.scm`. We don't
+/// currently use `locals.scm` / `injections.scm`; if a consumer needs
+/// those later, add a parallel pipeline rather than overloading this
+/// constant.
 pub const HIGHLIGHTS_FILE: &str = "highlights.scm";
-pub const LOCALS_FILE: &str = "locals.scm";
-pub const INJECTIONS_FILE: &str = "injections.scm";
 
-/// A loaded tree-sitter grammar — parser shared library + query sources.
+/// A loaded tree-sitter grammar — parser shared library + highlights query.
 pub struct Grammar {
     name: String,
     language: Language,
     highlights_scm: String,
-    locals_scm: Option<String>,
-    injections_scm: Option<String>,
     /// Kept alive so `language`'s underlying pointer stays valid. Must be
     /// the LAST field so its `Drop` runs after `language`'s.
     _lib: Library,
@@ -44,25 +40,14 @@ impl Grammar {
         &self.language
     }
 
-    /// `highlights.scm` source — required.
+    /// `highlights.scm` source.
     pub fn highlights_scm(&self) -> &str {
         &self.highlights_scm
     }
 
-    /// `locals.scm` source if present.
-    pub fn locals_scm(&self) -> Option<&str> {
-        self.locals_scm.as_deref()
-    }
-
-    /// `injections.scm` source if present.
-    pub fn injections_scm(&self) -> Option<&str> {
-        self.injections_scm.as_deref()
-    }
-
     /// Load a grammar by name. The [`GrammarLoader`] handles parser
     /// resolution (system → user → on-demand clone+compile+install).
-    /// Queries are read from the sibling layout the loader installs:
-    /// `<so_parent>/<name>/{highlights,locals,injections}.scm`.
+    /// The highlights query is read from `<so_parent>/<name>.scm`.
     pub fn load(name: &str, spec: &LangSpec, loader: &GrammarLoader) -> Result<Self> {
         let so = loader
             .load(name, spec)
@@ -84,23 +69,18 @@ impl Grammar {
         let parent = so
             .parent()
             .with_context(|| format!("grammar {} has no parent dir", so.display()))?;
-        let query_dir = parent.join(name);
-        if !query_dir.is_dir() {
-            bail!(
-                "query dir missing for grammar {name}: {}",
-                query_dir.display()
-            );
-        }
-        let highlights_scm = read_required_query(&query_dir, HIGHLIGHTS_FILE, name)?;
-        let locals_scm = read_optional_query(&query_dir, LOCALS_FILE);
-        let injections_scm = read_optional_query(&query_dir, INJECTIONS_FILE);
+        let highlights_path = parent.join(format!("{name}.scm"));
+        let highlights_scm = std::fs::read_to_string(&highlights_path).with_context(|| {
+            format!(
+                "read highlights query for {name} at {}",
+                highlights_path.display()
+            )
+        })?;
 
         Ok(Self {
             name: name.to_string(),
             language,
             highlights_scm,
-            locals_scm,
-            injections_scm,
             _lib: lib,
         })
     }
@@ -120,15 +100,11 @@ impl Grammar {
         lib: Library,
         language: Language,
         highlights_scm: impl Into<String>,
-        locals_scm: Option<String>,
-        injections_scm: Option<String>,
     ) -> Self {
         Self {
             name: name.into(),
             language,
             highlights_scm: highlights_scm.into(),
-            locals_scm,
-            injections_scm,
             _lib: lib,
         }
     }
@@ -139,21 +115,6 @@ impl Grammar {
 /// already matches, but defensive normalization handles future entries.
 fn symbol_name(name: &str) -> String {
     name.replace('-', "_")
-}
-
-fn read_required_query(query_dir: &Path, filename: &str, lang: &str) -> Result<String> {
-    let p = query_dir.join(filename);
-    std::fs::read_to_string(&p).with_context(|| {
-        format!(
-            "read required query {filename} for {lang} at {}",
-            p.display()
-        )
-    })
-}
-
-fn read_optional_query(query_dir: &Path, filename: &str) -> Option<String> {
-    let p: PathBuf = query_dir.join(filename);
-    std::fs::read_to_string(&p).ok()
 }
 
 #[cfg(test)]

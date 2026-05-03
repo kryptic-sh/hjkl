@@ -1,5 +1,5 @@
 //! Grammar loader — walks the lookup chain to resolve a language name to a
-//! ready-to-`dlopen` parser, installing the `.scm` queries alongside.
+//! ready-to-`dlopen` parser, installing the highlights query alongside.
 //!
 //! Lookup order:
 //!   1. **System**: `<system_dir>/<name><ext>` — distro-shipped, never built.
@@ -8,13 +8,12 @@
 //!      across runs.
 //!   3. **Build on demand**: clone source via [`SourceCache`], compile via
 //!      [`GrammarCompiler`] (which writes `<source_root>/<name><ext>`),
-//!      then install both the parser and the `.scm` queries into
-//!      `<user_dir>/`.
+//!      then install the parser + `<query_dir>/highlights.scm` into
+//!      `<user_dir>/<name><ext>` + `<user_dir>/<name>.scm`.
 //!
 //! Layout written by the install step (and expected by [`Grammar::load`]):
-//! - `<user_dir>/<name><ext>`        — parser
-//! - `<user_dir>/<name>/<file>.scm`  — queries (highlights, locals,
-//!   injections — present subset only)
+//! - `<user_dir>/<name><ext>` — parser
+//! - `<user_dir>/<name>.scm`  — highlights query
 //!
 //! Distro maintainers shipping pre-built grammars should reproduce that
 //! layout under one of `system_dirs`. `cargo xtask build-grammars` does
@@ -25,7 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::compile::{GrammarCompiler, shared_lib_ext};
-use super::grammar::{HIGHLIGHTS_FILE, INJECTIONS_FILE, LOCALS_FILE};
+use super::grammar::HIGHLIGHTS_FILE;
 use super::manifest::LangSpec;
 use super::source::SourceCache;
 
@@ -57,16 +56,16 @@ impl GrammarLoader {
     }
 
     /// Default loader for end-user installs:
-    /// - system: `/usr/share/hjkl/runtime/grammars/`,
-    ///   `/usr/local/share/hjkl/runtime/grammars/` (Unix only)
+    /// - system: `/usr/share/hjkl/grammars/`,
+    ///   `/usr/local/share/hjkl/grammars/` (Unix only)
     /// - user:   platform user-data dir + `hjkl/grammars/`
     /// - sources / compile: [`SourceCache::user_default`] +
     ///   [`GrammarCompiler::new`]
     pub fn user_default() -> Result<Self> {
         let system_dirs = if cfg!(target_family = "unix") {
             vec![
-                PathBuf::from("/usr/share/hjkl/runtime/grammars"),
-                PathBuf::from("/usr/local/share/hjkl/runtime/grammars"),
+                PathBuf::from("/usr/share/hjkl/grammars"),
+                PathBuf::from("/usr/local/share/hjkl/grammars"),
             ]
         } else {
             Vec::new()
@@ -126,8 +125,8 @@ impl GrammarLoader {
     }
 }
 
-/// Copy `built_so` into `<user_dir>/<name><ext>` and the per-language
-/// `.scm` query files into `<user_dir>/<name>/`. Returns the installed
+/// Copy `built_so` to `<user_dir>/<name><ext>` and the upstream
+/// `highlights.scm` to `<user_dir>/<name>.scm`. Returns the installed
 /// parser path (i.e. the path subsequent `lookup_only` calls will hit).
 fn install_into_user_dir(
     name: &str,
@@ -142,28 +141,15 @@ fn install_into_user_dir(
     let dest = user_dir.join(format!("{name}{}", shared_lib_ext()));
     copy_atomic(built_so, &dest)?;
 
-    let queries_src = source_root.join(&spec.query_dir);
-    if !queries_src.is_dir() {
+    let highlights_src = source_root.join(&spec.query_dir).join(HIGHLIGHTS_FILE);
+    if !highlights_src.is_file() {
         bail!(
-            "query dir missing in source clone: {}",
-            queries_src.display()
+            "highlights.scm missing in source clone: {}",
+            highlights_src.display()
         );
     }
-    let queries_dest = user_dir.join(name);
-    std::fs::create_dir_all(&queries_dest)
-        .with_context(|| format!("create query dir {}", queries_dest.display()))?;
-    let mut copied = 0;
-    for filename in [HIGHLIGHTS_FILE, LOCALS_FILE, INJECTIONS_FILE] {
-        let from = queries_src.join(filename);
-        if from.is_file() {
-            let to = queries_dest.join(filename);
-            copy_atomic(&from, &to)?;
-            copied += 1;
-        }
-    }
-    if copied == 0 {
-        bail!("no .scm queries found under {}", queries_src.display());
-    }
+    let highlights_dest = user_dir.join(format!("{name}.scm"));
+    copy_atomic(&highlights_src, &highlights_dest)?;
 
     Ok(dest)
 }
@@ -288,15 +274,15 @@ mod tests {
     }
 
     #[test]
-    fn install_copies_parser_and_queries() {
+    fn install_copies_parser_and_highlights_query() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
         let source_root = tmp.path().join("source");
         let queries = source_root.join("queries");
         std::fs::create_dir_all(&queries).unwrap();
         std::fs::write(queries.join("highlights.scm"), "; highlights").unwrap();
+        // locals.scm / injections.scm intentionally present — must be ignored.
         std::fs::write(queries.join("locals.scm"), "; locals").unwrap();
-        // injections.scm intentionally omitted — must be tolerated.
 
         let built = source_root.join(format!("rust{}", shared_lib_ext()));
         std::fs::write(&built, b"fake parser bytes").unwrap();
@@ -306,9 +292,8 @@ mod tests {
 
         assert_eq!(installed, user.join(format!("rust{}", shared_lib_ext())));
         assert!(installed.is_file());
-        assert!(user.join("rust/highlights.scm").is_file());
-        assert!(user.join("rust/locals.scm").is_file());
-        assert!(!user.join("rust/injections.scm").exists());
+        assert!(user.join("rust.scm").is_file());
+        assert!(!user.join("rust").exists(), "no per-lang subdir expected");
     }
 
     #[test]
@@ -322,6 +307,9 @@ mod tests {
 
         let spec = dummy_spec("deadbeef00000000");
         let err = install_into_user_dir("rust", &spec, &built, &source_root, &user).unwrap_err();
-        assert!(err.to_string().contains("no .scm queries"), "got: {err:#}");
+        assert!(
+            err.to_string().contains("highlights.scm missing"),
+            "got: {err:#}"
+        );
     }
 }
