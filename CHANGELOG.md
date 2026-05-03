@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-03
+
 ### Added
 
 - **Public `Backend` trait.** Promoted from `pub(crate)` to `pub`, with new
