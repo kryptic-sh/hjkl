@@ -9,6 +9,8 @@
 
 mod manifest;
 mod registry;
+mod source;
 
 pub use manifest::{LangSpec, Manifest};
 pub use registry::GrammarRegistry;
+pub use source::SourceCache;
