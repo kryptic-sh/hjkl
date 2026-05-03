@@ -25,7 +25,7 @@ hjkl-bonsai = "0.2"
 hjkl-clipboard = "0.5"
 hjkl-form = "0.3"
 hjkl-picker = "0.3"
-hjkl-config = "0.1"
+hjkl-config = "0.2"
 ratatui = "0.30"
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
