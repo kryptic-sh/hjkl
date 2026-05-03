@@ -419,8 +419,20 @@ mod tests {
             "yaml",
             "bash",
             "c",
+            "cpp",
+            "c-sharp",
             "html",
             "css",
+            "java",
+            "php",
+            "ruby",
+            "swift",
+            "lua",
+            "dart",
+            "r",
+            "make",
+            "xml",
+            "diff",
         ] {
             let config = reg
                 .by_name(name)

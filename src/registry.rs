@@ -36,8 +36,20 @@ impl LanguageRegistry {
                 &languages::yaml::CONFIG,
                 &languages::bash::CONFIG,
                 &languages::c::CONFIG,
+                &languages::cpp::CONFIG,
+                &languages::c_sharp::CONFIG,
                 &languages::html::CONFIG,
                 &languages::css::CONFIG,
+                &languages::java::CONFIG,
+                &languages::php::CONFIG,
+                &languages::ruby::CONFIG,
+                &languages::swift::CONFIG,
+                &languages::lua::CONFIG,
+                &languages::dart::CONFIG,
+                &languages::r::CONFIG,
+                &languages::make::CONFIG,
+                &languages::xml::CONFIG,
+                &languages::diff::CONFIG,
             ],
         }
     }
@@ -260,5 +272,182 @@ mod tests {
     fn registry_by_name_css() {
         let reg = LanguageRegistry::new();
         assert!(reg.by_name("css").is_some());
+    }
+
+    #[test]
+    fn registry_detects_cpp_extension() {
+        let reg = LanguageRegistry::new();
+        for ext in ["main.cpp", "lib.cc", "x.cxx", "h.hpp", "h.hxx", "h.hh"] {
+            let cfg = reg.detect_for_path(Path::new(ext)).unwrap();
+            assert_eq!(cfg.name, "cpp", "{ext} should be cpp");
+        }
+    }
+
+    #[test]
+    fn registry_c_h_still_routes_to_c() {
+        // .h stays on C since most C projects use .h for headers; C++
+        // projects use .hpp/.hxx instead.
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("foo.h")).unwrap();
+        assert_eq!(cfg.name, "c");
+    }
+
+    #[test]
+    fn registry_by_name_cpp() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("cpp").is_some());
+    }
+
+    #[test]
+    fn registry_detects_c_sharp_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("Program.cs")).unwrap();
+        assert_eq!(cfg.name, "c-sharp");
+    }
+
+    #[test]
+    fn registry_by_name_c_sharp() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("c-sharp").is_some());
+    }
+
+    #[test]
+    fn registry_detects_java_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("Foo.java")).unwrap();
+        assert_eq!(cfg.name, "java");
+    }
+
+    #[test]
+    fn registry_by_name_java() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("java").is_some());
+    }
+
+    #[test]
+    fn registry_detects_php_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("index.php")).unwrap();
+        assert_eq!(cfg.name, "php");
+        let cfg = reg.detect_for_path(Path::new("page.phtml")).unwrap();
+        assert_eq!(cfg.name, "php");
+    }
+
+    #[test]
+    fn registry_by_name_php() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("php").is_some());
+    }
+
+    #[test]
+    fn registry_detects_ruby_extension() {
+        let reg = LanguageRegistry::new();
+        for ext in ["app.rb", "lib.rake", "x.gemspec"] {
+            let cfg = reg.detect_for_path(Path::new(ext)).unwrap();
+            assert_eq!(cfg.name, "ruby", "{ext} should be ruby");
+        }
+    }
+
+    #[test]
+    fn registry_by_name_ruby() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("ruby").is_some());
+    }
+
+    #[test]
+    fn registry_detects_swift_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("App.swift")).unwrap();
+        assert_eq!(cfg.name, "swift");
+    }
+
+    #[test]
+    fn registry_by_name_swift() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("swift").is_some());
+    }
+
+    #[test]
+    fn registry_detects_lua_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("init.lua")).unwrap();
+        assert_eq!(cfg.name, "lua");
+    }
+
+    #[test]
+    fn registry_by_name_lua() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("lua").is_some());
+    }
+
+    #[test]
+    fn registry_detects_dart_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("main.dart")).unwrap();
+        assert_eq!(cfg.name, "dart");
+    }
+
+    #[test]
+    fn registry_by_name_dart() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("dart").is_some());
+    }
+
+    #[test]
+    fn registry_detects_r_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("script.r")).unwrap();
+        assert_eq!(cfg.name, "r");
+        let cfg = reg.detect_for_path(Path::new("script.R")).unwrap();
+        assert_eq!(cfg.name, "r");
+    }
+
+    #[test]
+    fn registry_by_name_r() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("r").is_some());
+    }
+
+    #[test]
+    fn registry_detects_make_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("rules.mk")).unwrap();
+        assert_eq!(cfg.name, "make");
+    }
+
+    #[test]
+    fn registry_by_name_make() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("make").is_some());
+    }
+
+    #[test]
+    fn registry_detects_xml_extension() {
+        let reg = LanguageRegistry::new();
+        for ext in ["pom.xml", "schema.xsd", "style.xsl", "icon.svg"] {
+            let cfg = reg.detect_for_path(Path::new(ext)).unwrap();
+            assert_eq!(cfg.name, "xml", "{ext} should be xml");
+        }
+    }
+
+    #[test]
+    fn registry_by_name_xml() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("xml").is_some());
+    }
+
+    #[test]
+    fn registry_detects_diff_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("change.diff")).unwrap();
+        assert_eq!(cfg.name, "diff");
+        let cfg = reg.detect_for_path(Path::new("fix.patch")).unwrap();
+        assert_eq!(cfg.name, "diff");
+    }
+
+    #[test]
+    fn registry_by_name_diff() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("diff").is_some());
     }
 }
