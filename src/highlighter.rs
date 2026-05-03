@@ -412,6 +412,7 @@ mod tests {
             "toml",
             "sql",
             "python",
+            "javascript",
             "typescript",
             "tsx",
             "go",

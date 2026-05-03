@@ -29,6 +29,7 @@ impl LanguageRegistry {
                 &languages::toml::CONFIG,
                 &languages::sql::CONFIG,
                 &languages::python::CONFIG,
+                &languages::javascript::CONFIG,
                 &languages::typescript::CONFIG,
                 &languages::tsx::CONFIG,
                 &languages::go::CONFIG,
@@ -140,6 +141,21 @@ mod tests {
     fn registry_by_name_python() {
         let reg = LanguageRegistry::new();
         assert!(reg.by_name("python").is_some());
+    }
+
+    #[test]
+    fn registry_detects_javascript_extension() {
+        let reg = LanguageRegistry::new();
+        let cfg = reg.detect_for_path(Path::new("app.js")).unwrap();
+        assert_eq!(cfg.name, "javascript");
+        let cfg = reg.detect_for_path(Path::new("App.jsx")).unwrap();
+        assert_eq!(cfg.name, "javascript");
+    }
+
+    #[test]
+    fn registry_by_name_javascript() {
+        let reg = LanguageRegistry::new();
+        assert!(reg.by_name("javascript").is_some());
     }
 
     #[test]
