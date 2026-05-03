@@ -6,6 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-05-03
+
+### Fixed
+
+- Wayland `wl_registry.bind` failed against sway/wlroots and Hyprland with
+  cryptic `"invalid arguments for wl_registry#2.bind"` — sometimes masked
+  further by `Connection reset by peer` when the compositor RST'd before the
+  `wl_display.error` reached us. Root cause: client-allocated `new_id` values
+  started at 100, but those compositors validate IDs differently for the
+  contiguous client range. Match libwayland-client and start allocating from 4
+  monotonically.
+- Allocate IDs sequentially in send order in `init_bind` rather than
+  pre-allocating manager/device IDs before the seat is bound — some compositors
+  are sensitive to gaps in the in-flight ID range.
+
+### Added
+
+- `tests/wayland_sway.rs` integration test: spawns sway in headless wlroots mode
+  (`WLR_BACKENDS=headless`), scrapes the wayland-N socket out of
+  `$XDG_RUNTIME_DIR`, and asserts our bind handshake against
+  `ext_data_control_manager_v1` actually completes. Wired into CI as
+  `sway-integration` (runs in `archlinux:latest` because Ubuntu's sway is too
+  old to ship the protocol).
+- Per-bind sync diagnostic: `init_bind` now syncs after each step (`wl_seat`,
+  `ext_data_control_manager_v1`, `manager.get_data_device`) so any
+  `wl_display.error` names which step failed.
+- `wl_display.error` payload (object/code/msg) is now included in the
+  `ClipboardError` instead of a bare `"during bind sync"` string.
+
+### CI
+
+- New `sway-integration` job runs `cargo test --test wayland_sway` against a
+  real headless sway compositor. Mock-socket unit tests can't catch
+  wire-protocol bugs like this one.
+
 ## [0.4.6] - 2026-05-03
 
 ### CI
