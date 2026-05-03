@@ -1,35 +1,42 @@
 //! `hjkl-bonsai` — generic tree-sitter syntax highlighting for the hjkl editor stack.
 //!
+//! Grammars are loaded at runtime via the [`runtime`] module: the loader
+//! resolves `<name>.so` from a system / user / cache lookup chain, falling
+//! back to a clone + compile-on-demand path. Pair a [`runtime::Grammar`] with
+//! a [`Highlighter`] to drive parsing.
+//!
 //! # Quick start
 //!
-//! ```rust
-//! use std::path::Path;
-//! use hjkl_bonsai::{LanguageRegistry, Highlighter, DotFallbackTheme, Theme};
+//! ```no_run
+//! use std::sync::Arc;
+//! use hjkl_bonsai::{Highlighter, DotFallbackTheme, Theme};
+//! use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry, SourceCache};
 //!
-//! let registry = LanguageRegistry::new();
-//! let config = registry.by_name("rust").unwrap();
-//! let mut highlighter = Highlighter::new(config).unwrap();
+//! let registry = GrammarRegistry::embedded()?;
+//! let loader = GrammarLoader::user_default()?;
+//! let sources = SourceCache::user_default()?;
+//!
+//! let spec = registry.by_name("rust").unwrap();
+//! let grammar = Arc::new(Grammar::load("rust", spec, &loader, &sources)?);
+//! let mut highlighter = Highlighter::new(grammar)?;
 //! let spans = highlighter.highlight(b"fn main() {}");
 //!
 //! let theme = DotFallbackTheme::dark();
 //! for span in &spans {
-//!     if let Some(style) = theme.style(span.capture()) {
+//!     if let Some(_style) = theme.style(span.capture()) {
 //!         // apply style to byte_range in your renderer
-//!         let _ = style;
 //!     }
 //! }
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 
 pub mod comment_markers;
 pub mod highlighter;
-pub mod languages;
-pub mod registry;
 pub mod runtime;
 pub mod theme;
 
 // Flat re-exports for the primary public API surface.
 pub use comment_markers::{CommentMarkerPass, MarkerWord, default_markers};
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
-pub use registry::{LanguageConfig, LanguageRegistry, detect_language_for_path};
 pub use theme::{DotFallbackTheme, Style, Theme};
 pub use tree_sitter::{InputEdit, Point};
