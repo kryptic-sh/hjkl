@@ -31,7 +31,9 @@ impl App {
     /// Open the fuzzy file picker.
     pub(crate) fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let source = Box::new(crate::picker::HighlightedFileSource::new(cwd));
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_tree_sitter::Theme + Send + Sync>;
+        let source = Box::new(crate::picker::HighlightedFileSource::new(cwd, theme));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
@@ -53,7 +55,9 @@ impl App {
             |s| snapshot_buffer_window(s.editor.buffer()).1,
             |s| snapshot_buffer_window(s.editor.buffer()).2,
         );
-        let source = Box::new(crate::picker::HighlightedBufferSource::new(inner));
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_tree_sitter::Theme + Send + Sync>;
+        let source = Box::new(crate::picker::HighlightedBufferSource::new(inner, theme));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
@@ -62,7 +66,9 @@ impl App {
     /// the query with `pattern`.
     pub(crate) fn open_grep_picker(&mut self, pattern: Option<&str>) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let source = Box::new(crate::picker::HighlightedRgSource::new(cwd));
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_tree_sitter::Theme + Send + Sync>;
+        let source = Box::new(crate::picker::HighlightedRgSource::new(cwd, theme));
         self.picker = Some(match pattern {
             Some(p) if !p.is_empty() => crate::picker::Picker::new_with_query(source, p),
             _ => crate::picker::Picker::new(source),

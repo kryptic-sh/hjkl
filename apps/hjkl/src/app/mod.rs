@@ -187,6 +187,9 @@ pub struct App {
     /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
     /// and active theme. Multiplexed by BufferId (Phase A API).
     syntax: SyntaxLayer,
+    /// App-wide theme (UI chrome + syntax). Loaded once at startup from
+    /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
+    pub theme: crate::theme::AppTheme,
     /// Toggled by `:perf`. When true, render shows last-frame timings.
     pub perf_overlay: bool,
     pub last_recompute_us: u128,
@@ -332,8 +335,12 @@ impl App {
         goto_line: Option<usize>,
         search_pattern: Option<String>,
     ) -> Result<Self> {
-        // Build syntax layer (dark theme default) then load the first slot.
-        let mut syntax = syntax::default_layer();
+        // Load the app theme up front and build the syntax layer with the
+        // override theme — so apps/hjkl renders with the website palette
+        // (hjkl-tree-sitter's bundled DotFallbackTheme is left untouched
+        // for other consumers).
+        let theme = crate::theme::AppTheme::default_dark();
+        let mut syntax = syntax::layer_with_theme(theme.syntax.clone());
         let buffer_id: BufferId = 0;
         let mut slot =
             build_slot(&mut syntax, buffer_id, filename).map_err(|s| anyhow::anyhow!(s))?;
@@ -381,6 +388,7 @@ impl App {
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
+            theme,
             perf_overlay: false,
             last_recompute_us: 0,
             last_install_us: 0,

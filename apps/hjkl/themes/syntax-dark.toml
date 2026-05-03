@@ -1,0 +1,76 @@
+# hjkl syntax theme — dark.
+# Override for hjkl-tree-sitter's bundled DotFallbackTheme. Same TOML
+# shape: capture-name → { fg, bg, bold, italic, underline }, dot-fallback
+# applies. Loaded via include_str! in apps/hjkl/src/theme.rs and passed
+# to DotFallbackTheme::from_toml().
+#
+# Palette anchors (hjkl.kryptic.sh CSS custom properties):
+#   --bg #0b0d10  --fg #e5e9f0
+#   --accent #bb9af7  --blue #7aa2f7  --green #7ee787  --orange #ff9e64
+#   --keyword #c792ea  --string #a3e88a
+#   --number #f78c6c  --comment #8597a3
+
+default             = { fg = "#e5e9f0" }
+
+"keyword"           = { fg = "#c792ea", bold = true }
+"keyword.control"   = { fg = "#bb9af7", bold = true }
+"keyword.return"    = { fg = "#bb9af7", bold = true }
+"keyword.operator"  = { fg = "#c792ea" }
+
+"string"            = { fg = "#a3e88a" }
+"string.escape"     = { fg = "#ff9e64" }
+"string.special"    = { fg = "#7aa2f7" }
+
+"comment"           = { fg = "#8597a3", italic = true }
+
+"number"            = { fg = "#f78c6c" }
+
+"function"          = { fg = "#7aa2f7" }
+"function.builtin"  = { fg = "#bb9af7" }
+"function.method"   = { fg = "#7aa2f7" }
+"function.macro"    = { fg = "#bb9af7", bold = true }
+
+"type"              = { fg = "#ff9e64" }
+"type.builtin"      = { fg = "#ff9e64", bold = true }
+
+"variable"          = { fg = "#e5e9f0" }
+"variable.builtin"  = { fg = "#bb9af7" }
+"variable.parameter" = { fg = "#e5e9f0", italic = true }
+
+"constant"          = { fg = "#bb9af7" }
+"constant.builtin"  = { fg = "#bb9af7", bold = true }
+
+"punctuation"       = { fg = "#8b95a7" }
+"punctuation.bracket" = { fg = "#8b95a7" }
+"punctuation.delimiter" = { fg = "#8b95a7" }
+
+"operator"          = { fg = "#7aa2f7" }
+
+# Markdown
+"tag"               = { fg = "#7aa2f7" }
+"heading"           = { fg = "#bb9af7", bold = true }
+"link"              = { fg = "#7aa2f7", underline = true }
+"code"              = { fg = "#a3e88a" }
+
+# TOML
+"property"          = { fg = "#7aa2f7" }
+"table"             = { fg = "#ff9e64" }
+
+# SQL
+"keyword.sql"       = { fg = "#c792ea", bold = true }
+"identifier"        = { fg = "#e5e9f0" }
+
+# Comment markers (TODO / FIXME / NOTE / WARN badges)
+# Label: coloured bg, dark fg, bold
+# Tail:  same colour as label bg, italic, no bg
+"comment.marker.todo"       = { fg = "#0b0d10", bg = "#ff9e64", bold = true }
+"comment.marker.tail.todo"  = { fg = "#ff9e64", italic = true }
+
+"comment.marker.fixme"      = { fg = "#0b0d10", bg = "#f78c6c", bold = true }
+"comment.marker.tail.fixme" = { fg = "#f78c6c", italic = true }
+
+"comment.marker.note"       = { fg = "#0b0d10", bg = "#7aa2f7", bold = true }
+"comment.marker.tail.note"  = { fg = "#7aa2f7", italic = true }
+
+"comment.marker.warn"       = { fg = "#0b0d10", bg = "#bb9af7", bold = true }
+"comment.marker.tail.warn"  = { fg = "#bb9af7", italic = true }

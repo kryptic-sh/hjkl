@@ -26,8 +26,8 @@ fn gutter_width(line_count: usize) -> u16 {
 /// Bg painted across the cursor row in both the editor pane and the
 /// picker preview pane. Subtle blue-grey — visible enough to track the
 /// cursor at a glance without competing with the syntax foreground.
-fn cursor_line_bg() -> Style {
-    Style::default().bg(Color::Rgb(60, 70, 100))
+fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
+    Style::default().bg(theme.cursor_line_bg)
 }
 
 /// Render one complete frame into `frame`.
@@ -101,12 +101,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 /// Shows all open slots with the active one highlighted and a `+` marker
 /// on dirty slots. Only called when `app.slots.len() > 1`.
 fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
+    let ui = &app.theme.ui;
     let active_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::White)
+        .fg(ui.on_accent)
+        .bg(ui.mode_normal_bg)
         .add_modifier(Modifier::BOLD);
-    let inactive_style = Style::default().fg(Color::Gray);
-    let sep_style = Style::default().fg(Color::DarkGray);
+    let inactive_style = Style::default().fg(ui.text_dim);
+    let sep_style = Style::default().fg(ui.border);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     let max_width = area.width as usize;
@@ -163,7 +164,7 @@ fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
 fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gutter_width: u16) {
     let gutter = Gutter {
         width: gutter_width,
-        style: Style::default().fg(Color::DarkGray),
+        style: Style::default().fg(app.theme.ui.gutter),
         line_offset: 0,
     };
 
@@ -194,11 +195,11 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
     // Stable sort by row keeps BufferView's max_by_key dedupe deterministic.
     visible_signs.sort_by_key(|s| s.row);
 
-    // Use a subtle yellow background for search match highlighting (vim's `Search` hl).
+    // Search match highlight — uses theme's --orange + on-bright fg.
     let search_bg = if search_pattern.is_some() {
         Style::default()
-            .bg(Color::Rgb(147, 103, 0))
-            .fg(Color::White)
+            .bg(app.theme.ui.search_bg)
+            .fg(app.theme.ui.search_fg)
     } else {
         Style::default()
     };
@@ -217,7 +218,7 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         cursor_line_bg: if in_prompt {
             Style::default()
         } else {
-            cursor_line_bg()
+            cursor_line_bg(&app.theme.ui)
         },
         cursor_column_bg: Style::default(),
         selection_bg: Style::default().bg(Color::Blue),
@@ -262,19 +263,23 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// Render a prompt status row: prompt content on the left, a right-aligned
 /// `[I]` (Insert) or `[N]` (Normal) mode tag for users on terminals that
 /// don't render cursor-shape changes (or who want a discoverable visual cue).
-fn prompt_line(content: &str, mode: hjkl_form::VimMode, width: u16) -> Line<'static> {
-    // Insert: warm dark gray (active typing). Normal: cooler blue-tinted
-    // dark (navigating). Subtle ambient cue layered on top of cursor shape
-    // + the [I]/[N] tag.
+fn prompt_line(
+    content: &str,
+    mode: hjkl_form::VimMode,
+    theme: &crate::theme::UiTheme,
+    width: u16,
+) -> Line<'static> {
+    // Insert vs Normal use different bgs sourced from the app theme so the
+    // mode is visible without relying on cursor shape.
     let (bg, tag, tag_fg) = match mode {
-        hjkl_form::VimMode::Insert => (Color::DarkGray, " [I]", Color::Yellow),
-        _ => (Color::Rgb(35, 40, 60), " [N]", Color::Gray),
+        hjkl_form::VimMode::Insert => (theme.form_insert_bg, " [I]", theme.form_tag_insert_fg),
+        _ => (theme.form_normal_bg, " [N]", theme.form_tag_normal_fg),
     };
     let body_width = (width as usize).saturating_sub(tag.len());
     let visible: String = content.chars().take(body_width).collect();
     let body = format!("{visible:<body_width$}");
     Line::from(vec![
-        Span::styled(body, Style::default().bg(bg).fg(Color::White)),
+        Span::styled(body, Style::default().bg(bg).fg(theme.text)),
         Span::styled(tag, Style::default().bg(bg).fg(tag_fg)),
     ])
 }
@@ -328,7 +333,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
         return (
-            prompt_line(&content, field.vim_mode(), width),
+            prompt_line(&content, field.vim_mode(), &app.theme.ui, width),
             Some(cursor_col),
         );
     }
@@ -345,7 +350,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
         return (
-            prompt_line(&content, field.vim_mode(), width),
+            prompt_line(&content, field.vim_mode(), &app.theme.ui, width),
             Some(cursor_col),
         );
     }
@@ -372,7 +377,9 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         return (
             Line::from(vec![Span::styled(
                 padded,
-                Style::default().bg(Color::DarkGray).fg(Color::White),
+                Style::default()
+                    .bg(app.theme.ui.surface_bg)
+                    .fg(app.theme.ui.text),
             )]),
             None,
         );
@@ -385,38 +392,34 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         return (
             Line::from(vec![Span::styled(
                 padded,
-                Style::default().bg(Color::DarkGray).fg(Color::White),
+                Style::default()
+                    .bg(app.theme.ui.surface_bg)
+                    .fg(app.theme.ui.text),
             )]),
             None,
         );
     }
 
     // ── Normal status line (lualine-style colored sections) ─────────────────
-    // Palette derived from default-dark.toml (hjkl-tree-sitter): mode
-    // colours map to keyword (purple), string (green), function.builtin
-    // (blue) so the status bar visually matches the syntax theme.
-    const HJ_BASE: Color = Color::Rgb(46, 52, 64); // overall bg fill
-    const HJ_SURFACE: Color = Color::Rgb(59, 66, 82); // mid sections (filename / position)
-    const HJ_TEXT: Color = Color::Rgb(216, 222, 233); // default fg
-    const HJ_BLUE: Color = Color::Rgb(94, 129, 172); // NORMAL
-    const HJ_GREEN: Color = Color::Rgb(163, 190, 140); // INSERT
-    const HJ_PURPLE: Color = Color::Rgb(204, 153, 204); // VISUAL*
-    const HJ_RED: Color = Color::Rgb(255, 170, 170); // dirty marker
-    const HJ_DARK: Color = Color::Rgb(46, 52, 64); // mode-fg (dark on bright)
-
+    // Palette pulled from app theme (themes/ui-dark.toml). Mode colors map
+    // to website --blue / --green / --accent so the status bar visually
+    // matches both the syntax theme and the project's web identity.
+    let ui = &app.theme.ui;
     let mode = app.mode_label();
     let mode_color = match mode {
-        "INSERT" => HJ_GREEN,
-        "VISUAL" | "VISUAL LINE" | "VISUAL BLOCK" => HJ_PURPLE,
-        _ => HJ_BLUE,
+        "INSERT" => ui.mode_insert_bg,
+        "VISUAL" | "VISUAL LINE" | "VISUAL BLOCK" => ui.mode_visual_bg,
+        _ => ui.mode_normal_bg,
     };
     let mode_style = Style::default()
         .bg(mode_color)
-        .fg(HJ_DARK)
+        .fg(ui.on_accent)
         .add_modifier(Modifier::BOLD);
-    let mid_style = Style::default().bg(HJ_SURFACE).fg(HJ_TEXT);
-    let fill_style = Style::default().bg(HJ_BASE).fg(HJ_TEXT);
-    let dirty_style = Style::default().bg(HJ_SURFACE).fg(HJ_RED);
+    let mid_style = Style::default().bg(ui.surface_bg).fg(ui.text);
+    let fill_style = Style::default().bg(ui.panel_bg).fg(ui.text);
+    let dirty_style = Style::default()
+        .bg(ui.surface_bg)
+        .fg(ui.status_dirty_marker);
 
     // Tags & markers
     let ro_tag = if app.active().editor.is_readonly() {
@@ -509,12 +512,12 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let spacer: String = " ".repeat(w.saturating_sub(used));
 
     let rec_style = Style::default()
-        .bg(HJ_RED)
-        .fg(HJ_DARK)
+        .bg(ui.recording_bg)
+        .fg(ui.recording_fg)
         .add_modifier(Modifier::BOLD);
     let pending_style = Style::default()
-        .bg(HJ_SURFACE)
-        .fg(HJ_TEXT)
+        .bg(ui.surface_bg)
+        .fg(ui.text)
         .add_modifier(Modifier::ITALIC);
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
@@ -644,10 +647,10 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         (area, None)
     };
 
-    render_picker_input_and_list(frame, p, left_area);
+    render_picker_input_and_list(frame, p, &app.theme.ui, left_area);
 
     if let Some(right) = preview_area {
-        picker_preview_pane(frame, p, right);
+        picker_preview_pane(frame, p, &app.theme.ui, right);
     }
 }
 
@@ -655,6 +658,7 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
 fn render_picker_input_and_list(
     frame: &mut Frame,
     picker: &mut crate::picker::Picker,
+    theme: &crate::theme::UiTheme,
     left_area: Rect,
 ) {
     let layout = Layout::default()
@@ -679,7 +683,7 @@ fn render_picker_input_and_list(
     let input_block = Block::default()
         .borders(Borders::ALL)
         .title(title)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(theme.border_active));
     let input_inner = input_block.inner(input_area);
     frame.render_widget(input_block, input_area);
     let input_para = Paragraph::new(format!("/ {display}"));
@@ -693,8 +697,10 @@ fn render_picker_input_and_list(
     }
 
     let entries = picker.visible_entries();
+    // Match-position highlight inside picker rows — uses the same orange
+    // as search match highlighting.
     let match_style = Style::default()
-        .fg(Color::Yellow)
+        .fg(theme.search_bg)
         .add_modifier(Modifier::BOLD);
     let items: Vec<ListItem> = entries
         .iter()
@@ -722,10 +728,10 @@ fn render_picker_input_and_list(
     let label_count = entries.len();
     let list_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(theme.border));
     let list = List::new(items).block(list_block).highlight_style(
         Style::default()
-            .bg(Color::Rgb(60, 70, 100))
+            .bg(theme.picker_selection_bg)
             .add_modifier(Modifier::BOLD),
     );
     let mut state = ListState::default();
@@ -737,7 +743,12 @@ fn render_picker_input_and_list(
 
 /// Render the preview pane via `BufferView` so the gutter, line
 /// numbers, and per-row layout match the editor proper.
-fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: Rect) {
+fn picker_preview_pane(
+    frame: &mut Frame,
+    picker: &crate::picker::Picker,
+    theme: &crate::theme::UiTheme,
+    area: Rect,
+) {
     let label = picker.preview_label().unwrap_or("(none)").to_string();
     let status = picker.preview_status();
     let title = if status.is_empty() {
@@ -747,7 +758,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(theme.border))
         .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -781,7 +792,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
             .unwrap_or_default()
     };
     let cursor_line_bg = if picker.preview_match_row().is_some() {
-        cursor_line_bg()
+        cursor_line_bg(theme)
     } else {
         Style::default()
     };
@@ -796,7 +807,7 @@ fn picker_preview_pane(frame: &mut Frame, picker: &crate::picker::Picker, area: 
         cursor_style: Style::default(),
         gutter: Some(Gutter {
             width: gw,
-            style: Style::default().fg(Color::DarkGray),
+            style: Style::default().fg(theme.gutter),
             line_offset: picker.preview_line_offset(),
         }),
         search_bg: Style::default(),
@@ -820,7 +831,7 @@ fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(app.theme.ui.border_active))
         .title(" info ");
     let inner = block.inner(area);
     frame.render_widget(block, area);

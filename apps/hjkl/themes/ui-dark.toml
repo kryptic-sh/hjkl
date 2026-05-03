@@ -1,0 +1,47 @@
+# hjkl UI theme — dark.
+# Palette mirrors hjkl.kryptic.sh CSS custom properties:
+#   --bg #0b0d10  --panel #141820  --border #1f2530  --border-strong #2a3240
+#   --fg #e5e9f0  --fg-dim #8b95a7  --fg-muted #8a93a4
+#   --accent #bb9af7  --green #7ee787  --orange #ff9e64  --blue #7aa2f7
+#
+# Loaded by apps/hjkl/src/theme.rs via include_str!. Hex colors are
+# #rrggbb. Every key in the schema must be present — the loader rejects
+# missing fields rather than silently defaulting.
+
+[chrome]
+text          = "#e5e9f0"  # default fg on status/tab lines
+text_dim      = "#8b95a7"  # inactive tab labels, status hints
+panel_bg      = "#141820"  # status bar fill / inactive surfaces
+surface_bg    = "#1f2530"  # mid sections (filename slot, tag bg)
+border        = "#1f2530"  # popup/list borders, dim separators
+border_active = "#bb9af7"  # active popup borders (info popup, picker)
+gutter        = "#8b95a7"  # line-number gutter fg
+on_accent     = "#0b0d10"  # fg painted on bright bg (mode badge / search hit)
+
+[mode]
+normal_bg     = "#7aa2f7"  # NORMAL — --blue
+insert_bg     = "#7ee787"  # INSERT — --green
+visual_bg     = "#bb9af7"  # VISUAL / VISUAL LINE / VISUAL BLOCK — --accent
+
+[cursor_line]
+bg            = "#2a3240"  # subtle highlight under cursor row
+
+[search]
+bg            = "#ff9e64"  # match highlight bg
+fg            = "#0b0d10"  # match fg on bright bg
+
+[picker]
+selection_bg  = "#2a3240"  # highlighted picker entry
+
+[form]
+normal_bg     = "#1f2530"  # form-Normal mode field background
+insert_bg     = "#2a3240"  # form-Insert mode field background
+tag_normal_fg = "#8b95a7"  # [N] tag fg
+tag_insert_fg = "#ff9e64"  # [I] tag fg
+
+[status]
+dirty_marker  = "#ff9e64"  # `[+]` modified-buffer marker
+
+[recording]
+bg            = "#bb9af7"  # `REC@r` macro-recording badge bg
+fg            = "#0b0d10"  # badge fg

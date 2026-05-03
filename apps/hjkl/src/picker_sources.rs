@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
-use hjkl_tree_sitter::{CommentMarkerPass, DotFallbackTheme, Highlighter, LanguageRegistry, Theme};
+use hjkl_tree_sitter::{CommentMarkerPass, Highlighter, LanguageRegistry, Theme};
 
 // ── BufferSource ─────────────────────────────────────────────────────────────
 
@@ -165,11 +165,11 @@ pub struct HighlightedBufferSource {
 }
 
 impl HighlightedBufferSource {
-    pub fn new(inner: BufferSource) -> Self {
+    pub fn new(inner: BufferSource, theme: Arc<dyn Theme + Send + Sync>) -> Self {
         Self {
             inner,
             registry: LanguageRegistry::new(),
-            theme: Arc::new(DotFallbackTheme::dark()),
+            theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }
@@ -288,11 +288,11 @@ pub struct HighlightedFileSource {
 }
 
 impl HighlightedFileSource {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, theme: Arc<dyn Theme + Send + Sync>) -> Self {
         Self {
             inner: FileSource::new(root),
             registry: LanguageRegistry::new(),
-            theme: Arc::new(DotFallbackTheme::dark()),
+            theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }
@@ -407,12 +407,12 @@ pub struct HighlightedRgSource {
 }
 
 impl HighlightedRgSource {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, theme: Arc<dyn Theme + Send + Sync>) -> Self {
         Self {
             inner: RgSource::new(root.clone()),
             root,
             registry: LanguageRegistry::new(),
-            theme: Arc::new(DotFallbackTheme::dark()),
+            theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }

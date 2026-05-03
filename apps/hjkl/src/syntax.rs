@@ -815,7 +815,15 @@ impl SyntaxLayer {
     }
 }
 
-/// Build the default dark `SyntaxLayer`.
+/// Build a `SyntaxLayer` using the given theme.
+pub fn layer_with_theme(theme: Arc<DotFallbackTheme>) -> SyntaxLayer {
+    SyntaxLayer::new(theme)
+}
+
+/// Build a `SyntaxLayer` with hjkl-tree-sitter's bundled dark theme.
+/// Used by tests; the production app constructs via [`layer_with_theme`]
+/// with the [`crate::theme::AppTheme`] override.
+#[cfg(test)]
 pub fn default_layer() -> SyntaxLayer {
     SyntaxLayer::new(Arc::new(DotFallbackTheme::dark()))
 }

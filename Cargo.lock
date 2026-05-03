@@ -825,7 +825,9 @@ dependencies = [
  "ignore",
  "ratatui",
  "regex",
+ "serde",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
