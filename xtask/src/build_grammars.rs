@@ -4,6 +4,11 @@
 //!
 //! Distro maintainers run this once per release per architecture and ship
 //! the resulting directory at `/usr/share/hjkl/runtime/grammars/`.
+//!
+//! The output directory only contains the compiled artifacts. Source
+//! clones and the compile cache live in `--work-dir` (default:
+//! `$XDG_CACHE_HOME/hjkl/build-grammars/`) so a packager can ship the
+//! out dir as-is without any cleanup step.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,10 +24,14 @@ pub fn run(args: &[String]) -> Result<()> {
 
     std::fs::create_dir_all(&opts.out_dir)
         .with_context(|| format!("create out dir {}", opts.out_dir.display()))?;
-    let work_dir = opts
-        .work_dir
-        .clone()
-        .unwrap_or_else(|| opts.out_dir.join(".work"));
+    // Work dir defaults to a persistent location *outside* out_dir so the
+    // output stays clean (only .so/.dylib/.dll files) and incremental
+    // rebuilds still hit the cache. Override with --work-dir for hermetic
+    // builds (e.g. CI: `--work-dir $(mktemp -d)`).
+    let work_dir = match opts.work_dir.clone() {
+        Some(d) => d,
+        None => default_work_dir()?,
+    };
     let sources = SourceCache::new(work_dir.join("sources"));
     let compiler = GrammarCompiler::new(work_dir.join("cache"));
 
@@ -100,6 +109,18 @@ fn build_one(
     } else {
         Ok(BuildKind::Built)
     }
+}
+
+fn default_work_dir() -> Result<PathBuf> {
+    let base = if let Some(p) = std::env::var_os("XDG_CACHE_HOME")
+        && !p.is_empty()
+    {
+        PathBuf::from(p)
+    } else {
+        let home = std::env::var_os("HOME").context("HOME not set")?;
+        PathBuf::from(home).join(".cache")
+    };
+    Ok(base.join("hjkl/build-grammars"))
 }
 
 fn shared_lib_ext() -> &'static str {
@@ -185,10 +206,17 @@ Compile every grammar in bonsai.toml into <out>/<name>.{so|dylib|dll}.
 Distro maintainers ship the resulting dir at
 /usr/share/hjkl/runtime/grammars/.
 
+The output directory only ever contains the compiled .so/.dylib/.dll
+files — sources and the compile cache live elsewhere so packagers can
+ship out_dir as-is.
+
 Options:
-  -o, --out <dir>      Output directory (default: build/grammars/)
+  -o, --out <dir>      Output directory (default: build/grammars/).
+                       Only ever contains <name>.{so,dylib,dll} files.
       --work-dir <dir> Where to clone sources / cache compiled artifacts.
-                       Defaults to <out>/.work/. Reusable across runs.
+                       Defaults to $XDG_CACHE_HOME/hjkl/build-grammars/
+                       (persistent across runs). Pass a fresh tempdir for
+                       hermetic CI builds.
       --only <list>    Comma-separated allowlist of language names.
       --exclude <list> Comma-separated denylist of language names.
   -h, --help           Show this help.
