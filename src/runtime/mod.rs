@@ -7,10 +7,12 @@
 //! The default registry is built from the embedded `bonsai.toml` shipped with
 //! the crate via [`GrammarRegistry::embedded`].
 
+mod compile;
 mod manifest;
 mod registry;
 mod source;
 
+pub use compile::GrammarCompiler;
 pub use manifest::{LangSpec, Manifest};
 pub use registry::GrammarRegistry;
 pub use source::SourceCache;
