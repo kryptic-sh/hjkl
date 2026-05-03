@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-03
+
+### Changed
+
+- **`hjkl-bonsai` 0.2 → 0.3.** Tree-sitter grammar storage subdir renamed
+  `hjkl/grammars/` → `bonsai/grammars/`, and macOS/Windows now follow
+  XDG-everywhere instead of `~/Library/Application Support` / `%APPDATA%`.
+  Existing grammars under the old paths are not migrated — hjkl re-fetches and
+  re-compiles them into `~/.local/share/bonsai/grammars/` on first use. Distro
+  packagers shipping pre-built grammars must move from
+  `/usr/share/hjkl/grammars/` to `/usr/share/bonsai/grammars/` (the AUR PKGBUILD
+  here doesn't ship grammars, so no PKGBUILD change). See
+  `crates/hjkl-bonsai/CHANGELOG.md` for full detail.
+
 ## [0.8.1] - 2026-05-03
 
 ### Added
@@ -930,7 +944,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.0
 [0.8.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.1
 [0.8.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.8.0
 [0.7.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.7.0
