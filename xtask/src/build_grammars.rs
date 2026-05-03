@@ -15,7 +15,7 @@
 //! sources and already-built .so files are reused.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use hjkl_bonsai::runtime::{GrammarCompiler, GrammarLoader, LangSpec, Manifest, SourceCache};
@@ -52,7 +52,7 @@ pub fn run(args: &[String]) -> Result<()> {
             skipped += 1;
             continue;
         }
-        match build_one(name, spec, &loader, &opts.out_dir) {
+        match build_one(name, spec, &loader) {
             Ok(BuildKind::Built) => {
                 built += 1;
                 println!("  built  {name}");
@@ -89,12 +89,7 @@ enum BuildKind {
     Cached,
 }
 
-fn build_one(
-    name: &str,
-    spec: &LangSpec,
-    loader: &GrammarLoader,
-    _out_dir: &Path,
-) -> Result<BuildKind> {
+fn build_one(name: &str, spec: &LangSpec, loader: &GrammarLoader) -> Result<BuildKind> {
     let was_fresh = loader.lookup_fresh(name, spec).is_some();
     loader
         .load(name, spec)
