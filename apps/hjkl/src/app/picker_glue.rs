@@ -33,7 +33,11 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let theme =
             self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedFileSource::new(cwd, theme));
+        let source = Box::new(crate::picker::HighlightedFileSource::new(
+            cwd,
+            theme,
+            self.directory.clone(),
+        ));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
@@ -57,7 +61,11 @@ impl App {
         );
         let theme =
             self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedBufferSource::new(inner, theme));
+        let source = Box::new(crate::picker::HighlightedBufferSource::new(
+            inner,
+            theme,
+            self.directory.clone(),
+        ));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
@@ -68,7 +76,11 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let theme =
             self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedRgSource::new(cwd, theme));
+        let source = Box::new(crate::picker::HighlightedRgSource::new(
+            cwd,
+            theme,
+            self.directory.clone(),
+        ));
         self.picker = Some(match pattern {
             Some(p) if !p.is_empty() => crate::picker::Picker::new_with_query(source, p),
             _ => crate::picker::Picker::new(source),

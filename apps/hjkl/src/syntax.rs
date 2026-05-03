@@ -15,12 +15,12 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use hjkl_bonsai::{
-    CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, LanguageConfig, LanguageRegistry,
-    Point, Theme,
-};
+use hjkl_bonsai::runtime::Grammar;
+use hjkl_bonsai::{CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, Point, Theme};
 use hjkl_buffer::Sign;
 use hjkl_engine::Query;
+
+use crate::lang::LanguageDirectory;
 
 /// Stable identifier for an open buffer. Assigned by the App; carried
 /// through every syntax-pipeline message so the worker can multiplex
@@ -105,7 +105,7 @@ struct ParseRequest {
 enum Msg {
     /// Set / replace the highlighter for a buffer. `None` detaches (no
     /// highlighter → parse requests for this buffer are dropped).
-    SetLanguage(BufferId, Option<&'static LanguageConfig>),
+    SetLanguage(BufferId, Option<Arc<Grammar>>),
     /// Drop the retained tree for a buffer so the next parse is cold.
     #[allow(dead_code)] // Phase B: wired via ParseRequest.reset flag for now.
     Reset(BufferId),
@@ -183,8 +183,8 @@ impl SyntaxWorker {
     }
 
     /// Set / replace the highlighter for a buffer. `None` detaches.
-    pub fn set_language(&self, id: BufferId, config: Option<&'static LanguageConfig>) {
-        self.enqueue_control(Msg::SetLanguage(id, config));
+    pub fn set_language(&self, id: BufferId, grammar: Option<Arc<Grammar>>) {
+        self.enqueue_control(Msg::SetLanguage(id, grammar));
     }
 
     /// Drop a buffer's retained tree so the next parse for it is cold.
@@ -300,7 +300,7 @@ fn worker_loop(
             Msg::SetLanguage(id, None) => {
                 buffers.remove(&id);
             }
-            Msg::SetLanguage(id, Some(cfg)) => match Highlighter::new(cfg) {
+            Msg::SetLanguage(id, Some(grammar)) => match Highlighter::new(grammar) {
                 Ok(h) => {
                     buffers.insert(
                         id,
@@ -480,9 +480,10 @@ fn collect_diag_signs(
 struct BufferClient {
     /// `true` when a language is attached. Gates `submit_render`.
     has_language: bool,
-    /// Active language config — used by `preview_render` to spin up a
-    /// one-shot `Highlighter`.
-    current_lang: Option<&'static LanguageConfig>,
+    /// Active grammar — used by `preview_render` to spin up a one-shot
+    /// `Highlighter`. Cloned-Arc so the worker doesn't race the main
+    /// thread on language swaps.
+    current_lang: Option<Arc<Grammar>>,
     /// Cached `(source, row_starts)` — rebuilt on `dirty_gen` change.
     cache: Option<RenderCache>,
     /// Edits queued since the last submit.
@@ -499,7 +500,9 @@ struct BufferClient {
 /// (worker-side) plus source-cache and edit queue (here). One worker
 /// thread serves all buffers.
 pub struct SyntaxLayer {
-    registry: LanguageRegistry,
+    /// Shared grammar resolver. `Arc` so picker sources (and any future
+    /// subsystem) can hold the same in-memory `Grammar` cache.
+    directory: Arc<LanguageDirectory>,
     /// Active theme — cloned to the worker on spawn / `set_theme`, kept
     /// on the layer so `preview_render` can resolve capture styles
     /// without crossing the worker boundary.
@@ -513,11 +516,14 @@ pub struct SyntaxLayer {
 }
 
 impl SyntaxLayer {
-    /// Create a new layer with no buffers attached and the given theme.
-    pub fn new(theme: Arc<dyn Theme + Send + Sync>) -> Self {
+    /// Create a new layer with no buffers attached, the given theme, and
+    /// the given language directory. The directory is the only place
+    /// language `Grammar`s live, so sharing it across subsystems
+    /// (`HighlightedBufferSource`, etc.) deduplicates dlopen+query loads.
+    pub fn new(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
         let worker = SyntaxWorker::spawn(Arc::clone(&theme));
         Self {
-            registry: LanguageRegistry::new(),
+            directory,
             theme,
             worker,
             clients: HashMap::new(),
@@ -536,11 +542,11 @@ impl SyntaxLayer {
     /// Returns `true` when a language was found, `false` for unknown
     /// extensions (no highlighter attached for this buffer).
     pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> bool {
-        match self.registry.detect_for_path(path) {
-            Some(config) => {
-                self.worker.set_language(id, Some(config));
+        match self.directory.for_path(path) {
+            Some(grammar) => {
+                self.worker.set_language(id, Some(grammar.clone()));
                 let c = self.client_mut(id);
-                c.current_lang = Some(config);
+                c.current_lang = Some(grammar);
                 c.has_language = true;
                 true
             }
@@ -595,7 +601,7 @@ impl SyntaxLayer {
         viewport_top: usize,
         viewport_height: usize,
     ) -> Option<RenderOutput> {
-        let cfg = self.clients.get(&id).and_then(|c| c.current_lang)?;
+        let grammar = self.clients.get(&id).and_then(|c| c.current_lang.clone())?;
         let row_count = buffer.line_count() as usize;
         if row_count == 0 || viewport_height == 0 {
             return None;
@@ -622,7 +628,7 @@ impl SyntaxLayer {
         }
         let local_row_count = vp_end_row - vp_top;
 
-        let mut h = Highlighter::new(cfg).ok()?;
+        let mut h = Highlighter::new(grammar).ok()?;
         h.parse_initial(bytes);
         let mut flat_spans = h.highlight_range(bytes, 0..bytes.len());
 
@@ -815,9 +821,12 @@ impl SyntaxLayer {
     }
 }
 
-/// Build a `SyntaxLayer` using the given theme.
-pub fn layer_with_theme(theme: Arc<DotFallbackTheme>) -> SyntaxLayer {
-    SyntaxLayer::new(theme)
+/// Build a `SyntaxLayer` using the given theme + language directory.
+pub fn layer_with_theme(
+    theme: Arc<DotFallbackTheme>,
+    directory: Arc<LanguageDirectory>,
+) -> SyntaxLayer {
+    SyntaxLayer::new(theme, directory)
 }
 
 /// Build a `SyntaxLayer` with hjkl-bonsai's bundled dark theme.
@@ -825,7 +834,8 @@ pub fn layer_with_theme(theme: Arc<DotFallbackTheme>) -> SyntaxLayer {
 /// with the [`crate::theme::AppTheme`] override.
 #[cfg(test)]
 pub fn default_layer() -> SyntaxLayer {
-    SyntaxLayer::new(Arc::new(DotFallbackTheme::dark()))
+    let directory = Arc::new(LanguageDirectory::new().expect("language directory"));
+    SyntaxLayer::new(Arc::new(DotFallbackTheme::dark()), directory)
 }
 
 #[cfg(test)]
@@ -850,6 +860,7 @@ mod tests {
     const TID: BufferId = 0;
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn parse_and_render_small_rust_buffer() {
         let buf = Buffer::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
@@ -893,6 +904,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn first_load_highlights_entire_viewport() {
         let mut content = String::new();
         for i in 0..50 {
@@ -914,6 +926,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn first_load_full_viewport_matches_full_parse() {
         let mut content = String::new();
         for i in 0..50 {
@@ -938,6 +951,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn diagnostics_emit_sign_for_syntax_error() {
         let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
@@ -955,6 +969,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn diagnostics_clean_source_no_signs() {
         let buf = Buffer::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
@@ -968,6 +983,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn incremental_path_matches_cold_for_small_edit() {
         // Pre: parse a buffer through the worker.
         let pre = Buffer::from_str("fn main() { let x = 1; }");
@@ -1008,6 +1024,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn reset_pending_request_is_consumed_once() {
         let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
@@ -1022,6 +1039,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn forget_drops_buffer_state() {
         let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
@@ -1044,6 +1062,7 @@ mod perf_smoke {
     /// 100 viewport scrolls + a single edit. Skipped when the file isn't
     /// present. Not a regression gate — eyeballs only via `--nocapture`.
     #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn big_rs_smoke() {
         let path = Path::new("/tmp/big.rs");
         if !path.exists() {

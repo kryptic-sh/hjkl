@@ -184,9 +184,13 @@ pub struct App {
     pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal.
     last_cursor_shape: CursorShape,
-    /// Tree-sitter syntax highlighting layer. Owns the registry, highlighter,
-    /// and active theme. Multiplexed by BufferId (Phase A API).
+    /// Tree-sitter syntax highlighting layer. Owns the worker thread + the
+    /// active theme. Multiplexed by BufferId.
     syntax: SyntaxLayer,
+    /// Shared grammar resolver. `Arc` so the syntax layer and every picker
+    /// source point at the same in-memory `Grammar` cache (one dlopen +
+    /// query parse per language, app-wide).
+    pub directory: std::sync::Arc<crate::lang::LanguageDirectory>,
     /// App-wide theme (UI chrome + syntax). Loaded once at startup from
     /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
     pub theme: crate::theme::AppTheme,
@@ -340,7 +344,8 @@ impl App {
         // (hjkl-bonsai's bundled DotFallbackTheme is left untouched
         // for other consumers).
         let theme = crate::theme::AppTheme::default_dark();
-        let mut syntax = syntax::layer_with_theme(theme.syntax.clone());
+        let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new()?);
+        let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
         let buffer_id: BufferId = 0;
         let mut slot =
             build_slot(&mut syntax, buffer_id, filename).map_err(|s| anyhow::anyhow!(s))?;
@@ -388,6 +393,7 @@ impl App {
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
+            directory,
             theme,
             perf_overlay: false,
             last_recompute_us: 0,

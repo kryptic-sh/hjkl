@@ -7,6 +7,7 @@ mod app;
 mod editorconfig;
 mod git;
 mod host;
+mod lang;
 mod picker;
 mod picker_sources;
 mod render;

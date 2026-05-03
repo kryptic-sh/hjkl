@@ -11,7 +11,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use hjkl_bonsai::{CommentMarkerPass, Highlighter, LanguageRegistry, Theme};
+use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
+
+use crate::lang::LanguageDirectory;
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
 
@@ -159,40 +161,31 @@ impl PickerLogic for BufferSource {
 /// `preview()` to run tree-sitter and call `PreviewSpans::from_byte_ranges`.
 pub struct HighlightedBufferSource {
     inner: BufferSource,
-    registry: LanguageRegistry,
+    directory: Arc<LanguageDirectory>,
     theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<&'static str, Highlighter>>,
+    highlighters: Mutex<HashMap<String, Highlighter>>,
 }
 
 impl HighlightedBufferSource {
-    pub fn new(inner: BufferSource, theme: Arc<dyn Theme + Send + Sync>) -> Self {
+    pub fn new(
+        inner: BufferSource,
+        theme: Arc<dyn Theme + Send + Sync>,
+        directory: Arc<LanguageDirectory>,
+    ) -> Self {
         Self {
             inner,
-            registry: LanguageRegistry::new(),
+            directory,
             theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }
 
     fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let Some(cfg) = self.registry.detect_for_path(abs) else {
+        let bytes = content.as_bytes();
+        let flat = preview_spans(&self.directory, &self.highlighters, abs, bytes);
+        let Some(mut flat) = flat else {
             return PreviewSpans::default();
         };
-        let mut hl_cache = match self.highlighters.lock() {
-            Ok(g) => g,
-            Err(_) => return PreviewSpans::default(),
-        };
-        let h = match hl_cache.entry(cfg.name) {
-            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(cfg) {
-                Ok(h) => v.insert(h),
-                Err(_) => return PreviewSpans::default(),
-            },
-        };
-        h.reset();
-        let bytes = content.as_bytes();
-        h.parse_initial(bytes);
-        let mut flat = h.highlight_range(bytes, 0..bytes.len());
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
@@ -205,6 +198,30 @@ impl HighlightedBufferSource {
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)
     }
+}
+
+/// Shared helper for the three `Highlighted*Source` previews. Resolves the
+/// grammar via the directory, looks up (or builds) a per-language
+/// `Highlighter` from `cache`, and returns the flat span list.
+fn preview_spans(
+    directory: &LanguageDirectory,
+    cache: &Mutex<HashMap<String, Highlighter>>,
+    path: &Path,
+    bytes: &[u8],
+) -> Option<Vec<hjkl_bonsai::HighlightSpan>> {
+    let grammar = directory.for_path(path)?;
+    let name = grammar.name().to_string();
+    let mut hl_cache = cache.lock().ok()?;
+    let h = match hl_cache.entry(name) {
+        std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+        std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
+            Ok(h) => v.insert(h),
+            Err(_) => return None,
+        },
+    };
+    h.reset();
+    h.parse_initial(bytes);
+    Some(h.highlight_range(bytes, 0..bytes.len()))
 }
 
 impl PickerLogic for HighlightedBufferSource {
@@ -282,40 +299,30 @@ impl PickerLogic for HighlightedBufferSource {
 /// `preview()` to run tree-sitter and call `PreviewSpans::from_byte_ranges`.
 pub struct HighlightedFileSource {
     inner: FileSource,
-    registry: LanguageRegistry,
+    directory: Arc<LanguageDirectory>,
     theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<&'static str, Highlighter>>,
+    highlighters: Mutex<HashMap<String, Highlighter>>,
 }
 
 impl HighlightedFileSource {
-    pub fn new(root: PathBuf, theme: Arc<dyn Theme + Send + Sync>) -> Self {
+    pub fn new(
+        root: PathBuf,
+        theme: Arc<dyn Theme + Send + Sync>,
+        directory: Arc<LanguageDirectory>,
+    ) -> Self {
         Self {
             inner: FileSource::new(root),
-            registry: LanguageRegistry::new(),
+            directory,
             theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }
 
     fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let Some(cfg) = self.registry.detect_for_path(abs) else {
+        let bytes = content.as_bytes();
+        let Some(mut flat) = preview_spans(&self.directory, &self.highlighters, abs, bytes) else {
             return PreviewSpans::default();
         };
-        let mut hl_cache = match self.highlighters.lock() {
-            Ok(g) => g,
-            Err(_) => return PreviewSpans::default(),
-        };
-        let h = match hl_cache.entry(cfg.name) {
-            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(cfg) {
-                Ok(h) => v.insert(h),
-                Err(_) => return PreviewSpans::default(),
-            },
-        };
-        h.reset();
-        let bytes = content.as_bytes();
-        h.parse_initial(bytes);
-        let mut flat = h.highlight_range(bytes, 0..bytes.len());
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
@@ -401,41 +408,31 @@ impl PickerLogic for HighlightedFileSource {
 pub struct HighlightedRgSource {
     inner: RgSource,
     root: PathBuf,
-    registry: LanguageRegistry,
+    directory: Arc<LanguageDirectory>,
     theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<&'static str, Highlighter>>,
+    highlighters: Mutex<HashMap<String, Highlighter>>,
 }
 
 impl HighlightedRgSource {
-    pub fn new(root: PathBuf, theme: Arc<dyn Theme + Send + Sync>) -> Self {
+    pub fn new(
+        root: PathBuf,
+        theme: Arc<dyn Theme + Send + Sync>,
+        directory: Arc<LanguageDirectory>,
+    ) -> Self {
         Self {
             inner: RgSource::new(root.clone()),
             root,
-            registry: LanguageRegistry::new(),
+            directory,
             theme,
             highlighters: Mutex::new(HashMap::new()),
         }
     }
 
     fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let Some(cfg) = self.registry.detect_for_path(abs) else {
+        let bytes = content.as_bytes();
+        let Some(mut flat) = preview_spans(&self.directory, &self.highlighters, abs, bytes) else {
             return PreviewSpans::default();
         };
-        let mut hl_cache = match self.highlighters.lock() {
-            Ok(g) => g,
-            Err(_) => return PreviewSpans::default(),
-        };
-        let h = match hl_cache.entry(cfg.name) {
-            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(cfg) {
-                Ok(h) => v.insert(h),
-                Err(_) => return PreviewSpans::default(),
-            },
-        };
-        h.reset();
-        let bytes = content.as_bytes();
-        h.parse_initial(bytes);
-        let mut flat = h.highlight_range(bytes, 0..bytes.len());
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = Arc::clone(&self.theme);
         let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
