@@ -129,28 +129,52 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
         }
     }
 
-    // Hint lines below the art.
-    let hints = [
-        "press any key to start editing",
-        ":e <file>   open a file",
-        ":q          quit",
-    ];
+    // Call-to-action centered on its own row; the ex-command hints render
+    // as a left-aligned block so their `:` columns line up vertically.
     let hint_style = Style::default().fg(theme.ui.text_dim);
-    for (i, hint) in hints.iter().enumerate() {
-        let y = art_top + ART_ROWS + 1 + i as u16;
+    let cta = "press any key to start editing";
+    let ex_hints = [(":e <file>", "open a file"), (":q", "quit")];
+
+    let cmd_col_width = ex_hints.iter().map(|(cmd, _)| cmd.len()).max().unwrap_or(0);
+    let gap = 3;
+    let block_width = ex_hints
+        .iter()
+        .map(|(_, desc)| cmd_col_width + gap + desc.len())
+        .max()
+        .unwrap_or(0) as u16;
+
+    let cta_y = art_top + ART_ROWS + 1;
+    if cta_y < area.y + area.height {
+        let cta_len = cta.len() as u16;
+        let x = area.x + area.width.saturating_sub(cta_len) / 2;
+        let rect = Rect {
+            x,
+            y: cta_y,
+            width: cta_len.min(area.width),
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(cta, hint_style)])),
+            rect,
+        );
+    }
+
+    let block_x = area.x + area.width.saturating_sub(block_width) / 2;
+    for (i, (cmd, desc)) in ex_hints.iter().enumerate() {
+        let y = art_top + ART_ROWS + 3 + i as u16;
         if y >= area.y + area.height {
             break;
         }
-        // Center each hint line.
-        let hint_len = hint.len() as u16;
-        let x = area.x + area.width.saturating_sub(hint_len) / 2;
-        let hint_rect = Rect {
-            x,
+        let line = format!("{cmd:<cmd_col_width$}{:gap$}{desc}", "");
+        let rect = Rect {
+            x: block_x,
             y,
-            width: hint_len.min(area.width),
+            width: block_width.min(area.width),
             height: 1,
         };
-        let span = Span::styled(*hint, hint_style);
-        frame.render_widget(Paragraph::new(Line::from(vec![span])), hint_rect);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![Span::styled(line, hint_style)])),
+            rect,
+        );
     }
 }
