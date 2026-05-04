@@ -1,8 +1,12 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-use hjkl_engine::Host;
+use hjkl_buffer::Buffer;
+use hjkl_engine::{BufferEdit, Editor, Host, Options};
 
-use super::App;
+use super::{App, BufferSlot, STATUS_LINE_HEIGHT};
+use crate::host::TuiHost;
+use crate::syntax::BufferId;
 
 /// Window radius (in lines) around the cursor when snapshotting a buffer
 /// for the picker preview. Bounds the per-frame tree-sitter parse cost
@@ -88,6 +92,21 @@ impl App {
         self.pending_leader = false;
     }
 
+    /// Open the git-log commit picker.
+    pub(crate) fn open_git_log_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+        let source = Box::new(crate::picker_git::GitLogPicker::new(
+            cwd,
+            theme,
+            self.directory.clone(),
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     /// Open the git-status fuzzy picker.
     pub(crate) fn open_git_status_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -143,7 +162,121 @@ impl App {
                     vp.top_row = top;
                 }
             }
+            crate::picker::PickerAction::ShowCommit(sha) => self.do_show_commit(&sha),
             crate::picker::PickerAction::None => {}
         }
     }
+
+    pub(crate) fn do_show_commit(&mut self, sha: &str) {
+        let repo = match git2::Repository::discover(
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        ) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+        let oid = match git2::Oid::from_str(sha) {
+            Ok(o) => o,
+            Err(e) => {
+                self.status_message = Some(format!("git: bad sha: {e}"));
+                return;
+            }
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+        let content = crate::picker_git::render_commit(&repo, &commit);
+        let short_sha = &sha[..7.min(sha.len())];
+        match build_scratch_slot(
+            &mut self.syntax,
+            self.next_buffer_id,
+            &content,
+            &self.config,
+        ) {
+            Ok(slot) => {
+                self.next_buffer_id += 1;
+                self.slots.push(slot);
+                let new_idx = self.slots.len() - 1;
+                self.switch_to(new_idx);
+                self.status_message = Some(format!("showing commit {short_sha}"));
+            }
+            Err(e) => {
+                self.status_message = Some(e);
+            }
+        }
+    }
+}
+
+/// Build a scratch [`BufferSlot`] pre-loaded with `content`. Mirrors
+/// `build_slot`'s file-read path but injects content directly instead of
+/// reading from disk, avoiding a file round-trip for ephemeral commit views.
+fn build_scratch_slot(
+    syntax: &mut crate::syntax::SyntaxLayer,
+    buffer_id: BufferId,
+    content: &str,
+    config: &crate::config::Config,
+) -> Result<BufferSlot, String> {
+    let mut buffer = Buffer::new();
+    let content = content.strip_suffix('\n').unwrap_or(content);
+    BufferEdit::replace_all(&mut buffer, content);
+
+    let host = TuiHost::new();
+    let opts = Options {
+        expandtab: config.editor.expandtab,
+        tabstop: config.editor.tab_width as u32,
+        shiftwidth: config.editor.tab_width as u32,
+        softtabstop: config.editor.tab_width as u32,
+        readonly: true,
+        ..Options::default()
+    };
+    let mut editor = Editor::new(buffer, host, opts);
+    if let Ok(size) = crossterm::terminal::size() {
+        let vp = editor.host_mut().viewport_mut();
+        vp.width = size.0;
+        vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+    }
+    let _ = editor.take_content_edits();
+    let _ = editor.take_content_reset();
+
+    let (vp_top, vp_height) = {
+        let vp = editor.host().viewport();
+        (vp.top_row, vp.height as usize)
+    };
+    if let Some(out) = syntax.preview_render(buffer_id, editor.buffer(), vp_top, vp_height) {
+        editor.install_ratatui_syntax_spans(out.spans);
+    }
+    let initial_dg = editor.buffer().dirty_gen();
+    let (key, signs) = if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150))
+    {
+        let k = out.key;
+        editor.install_ratatui_syntax_spans(out.spans);
+        (Some(k), out.signs)
+    } else {
+        (Some((initial_dg, vp_top, vp_height)), Vec::new())
+    };
+
+    let mut slot = BufferSlot {
+        buffer_id,
+        editor,
+        filename: None,
+        dirty: false,
+        is_new_file: false,
+        is_untracked: false,
+        diag_signs: signs,
+        git_signs: Vec::new(),
+        last_git_dirty_gen: None,
+        last_git_refresh_at: Instant::now(),
+        last_recompute_at: Instant::now() - Duration::from_secs(1),
+        last_recompute_key: key,
+        saved_hash: 0,
+        saved_len: 0,
+    };
+    slot.snapshot_saved();
+    Ok(slot)
 }

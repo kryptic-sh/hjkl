@@ -121,8 +121,12 @@ impl App {
                     if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_git = false;
                         self.pending_leader = false;
-                        if key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Char('s') {
-                            self.open_git_status_picker();
+                        if key.modifiers == KeyModifiers::NONE {
+                            match key.code {
+                                KeyCode::Char('s') => self.open_git_status_picker(),
+                                KeyCode::Char('l') => self.open_git_log_picker(),
+                                _ => {}
+                            }
                         }
                         continue;
                     }

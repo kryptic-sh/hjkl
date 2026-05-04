@@ -1033,6 +1033,35 @@ fn git_status_picker_title_is_git_status() {
     assert_eq!(source.title(), "git status");
 }
 
+// ── Git log picker smoke tests ─────────────────────────────────────────
+
+#[test]
+fn git_log_picker_opens_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_log_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_log_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_log_picker_title_is_git_log() {
+    use crate::picker_git::GitLogPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let theme = AppTheme::default_dark();
+    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
+    let source = GitLogPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
+    assert_eq!(source.title(), "git log");
+}
+
 #[test]
 fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     use crate::picker_git::GitStatusPicker;
