@@ -30,6 +30,66 @@ pub struct GitStatusPicker {
     highlighters: Mutex<HashMap<String, Highlighter>>,
 }
 
+/// 2-char initials for an author name, lazygit-style. Wide unicode → that
+/// single grapheme; single word → first 2 chars; multi-word → first char of
+/// word[0] + first char of word[1]. Empty input returns two spaces.
+fn author_initials(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "  ".to_string();
+    }
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    let take_first = |w: &str| w.chars().next().unwrap_or(' ').to_uppercase().to_string();
+    if words.len() == 1 {
+        let w = words[0];
+        let mut chars = w.chars();
+        let a = chars.next().unwrap_or(' ').to_uppercase().to_string();
+        let b = chars
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| " ".to_string());
+        return format!("{a}{b}");
+    }
+    format!("{}{}", take_first(words[0]), take_first(words[1]))
+}
+
+/// Deterministic color from author name. FNV-1a hash → HSL → RGB. Matches
+/// lazygit's behavior: same name always picks the same color.
+fn author_color(name: &str) -> Color {
+    let h = fnv1a_64(name.as_bytes());
+    let hue = ((h & 0xFFFF) as f32 / 65535.0) * 360.0;
+    let sat = 0.6 + (((h >> 16) & 0xFFFF) as f32 / 65535.0) * 0.4;
+    let lit = 0.45 + (((h >> 32) & 0xFFFF) as f32 / 65535.0) * 0.15;
+    let (r, g, b) = hsl_to_rgb(hue, sat, lit);
+    Color::Rgb(r, g, b)
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_p = h / 60.0;
+    let x = c * (1.0 - (h_p.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match h_p as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let to_u8 = |v: f32| ((v + m) * 255.0).clamp(0.0, 255.0) as u8;
+    (to_u8(r1), to_u8(g1), to_u8(b1))
+}
+
 /// Detects a Conventional Commits prefix at `start` (char index) inside
 /// `label`. Returns the char index just past the colon if matched.
 /// Pattern: `<type>(<scope>)?!?:` where type is alphanumerics + `_`/`-`,
@@ -555,6 +615,7 @@ impl PickerLogic for GitStatusPicker {
 struct GitLogItem {
     sha: String,
     short_sha: String,
+    author: String,
     subject: String,
 }
 
@@ -601,6 +662,7 @@ fn scan_git_log(
                 g.push(GitLogItem {
                     sha: String::new(),
                     short_sha: String::new(),
+                    author: String::new(),
                     subject: String::new(),
                 });
             }
@@ -641,10 +703,12 @@ fn scan_git_log(
         };
         let sha = commit.id().to_string();
         let short_sha = sha[..7.min(sha.len())].to_string();
+        let author = commit.author().name().unwrap_or("").to_owned();
         let subject = commit.summary().unwrap_or("").to_owned();
         batch.push(GitLogItem {
             sha,
             short_sha,
+            author,
             subject,
         });
         count += 1;
@@ -681,15 +745,16 @@ impl PickerLogic for GitLogPicker {
             .lock()
             .ok()
             .and_then(|g| {
-                g.get(idx)
-                    .map(|item| format!("  {}  {}", item.short_sha, item.subject))
+                g.get(idx).map(|item| {
+                    let initials = author_initials(&item.author);
+                    format!("  {}  {}  {}", item.short_sha, initials, item.subject)
+                })
             })
             .unwrap_or_default()
     }
 
     fn match_text(&self, idx: usize) -> String {
-        // Match on the visible label (sha + subject). Author isn't shown so
-        // matching on it would highlight nothing.
+        // Match on the visible label (sha + initials + subject).
         self.label(idx)
     }
 
@@ -701,21 +766,26 @@ impl PickerLogic for GitLogPicker {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
-        let short_len = self
+        let (short_len, author) = self
             .items
             .lock()
             .ok()
-            .and_then(|g| g.get(idx).map(|i| i.short_sha.chars().count()))?;
+            .and_then(|g| g.get(idx).map(|i| (i.short_sha.chars().count(), i.author.clone())))?;
         let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
-        // Hash: skip 2-char gutter, then short_sha chars.
         let hash_start = 2usize;
         let hash_end = hash_start + short_len;
+        out.push((hash_start..hash_end, Style::default().fg(Color::Yellow)));
+        // Initials column: 2 chars after a 2-space gap.
+        let initials_start = hash_end + 2;
+        let initials_end = initials_start + 2;
         out.push((
-            hash_start..hash_end,
-            Style::default().fg(Color::Yellow),
+            initials_start..initials_end,
+            Style::default()
+                .fg(author_color(&author))
+                .add_modifier(ratatui::style::Modifier::BOLD),
         ));
-        // Subject starts after `<short>  ` (two spaces between hash and subject).
-        let subject_start = hash_end + 2;
+        // Subject starts after another 2-space gap.
+        let subject_start = initials_end + 2;
         if let Some(end) = conv_commit_prefix_end(label, subject_start) {
             out.push((
                 subject_start..end,
