@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-05
+
+### Added
+
+- `Highlighter::highlight_range_with_injections` — viewport-scoped variant of
+  `highlight_with_injections`. Skips parsing (caller-driven), restricts both the
+  parent-span query and the injection-query walk to `byte_range`, and clips
+  translated child spans to the same range. Same merge semantics: child spans
+  replace parent spans inside injected ranges.
+
 ## [0.4.1] - 2026-05-04
 
 ### Changed
@@ -235,8 +245,10 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.0
 [0.4.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.4.1
+[0.4.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.3.0
 [0.2.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.2.1
 [0.2.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.2.0
