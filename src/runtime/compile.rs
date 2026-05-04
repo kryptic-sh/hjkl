@@ -160,7 +160,8 @@ mod tests {
             subpath: None,
             extensions: vec!["x".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: super::super::manifest::QuerySource::Helix,
+            query_subdir: None,
             source: None,
         }
     }
@@ -212,7 +213,8 @@ mod tests {
             subpath: None,
             extensions: vec!["c".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: super::super::manifest::QuerySource::Helix,
+            query_subdir: None,
             source: None,
         };
         let root = cache.acquire("c", &spec).unwrap();

@@ -5,6 +5,24 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+/// Which curated query source repo supplies highlights for this language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuerySource {
+    Helix,
+    NvimTreesitter,
+}
+
+impl QuerySource {
+    /// Sub-path prefix inside the source repo that holds `<lang>/highlights.scm`.
+    pub fn query_prefix(self) -> &'static str {
+        match self {
+            QuerySource::Helix => "runtime/queries",
+            QuerySource::NvimTreesitter => "queries",
+        }
+    }
+}
+
 /// One `[language.<name>]` entry in `bonsai.toml`.
 ///
 /// Field set mirrors the union of helix's `languages.toml` and
@@ -25,16 +43,29 @@ pub struct LangSpec {
     /// C source files (relative to grammar root, including `subpath`) that
     /// must be compiled by the runtime loader.
     pub c_files: Vec<String>,
-    /// Directory (relative to grammar root) holding `.scm` query files.
-    pub query_dir: String,
+    /// Which curated query source repo supplies `highlights.scm`.
+    pub query_source: QuerySource,
+    /// Override the per-source default `<lang>` subdirectory (rare).
+    #[serde(default)]
+    pub query_subdir: Option<String>,
     /// Provenance tag — `"helix"`, `"nvim-treesitter"`, or
     /// `"helix+nvim-treesitter"`. Informational; not used by the loader.
     #[serde(default)]
     pub source: Option<String>,
 }
 
+/// Top-level `[meta]` block — pinned revisions for the two query-source repos.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ManifestMeta {
+    pub helix_repo: String,
+    pub helix_rev: String,
+    pub nvim_treesitter_repo: String,
+    pub nvim_treesitter_rev: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ManifestRaw {
+    meta: ManifestMeta,
     language: BTreeMap<String, LangSpec>,
 }
 
@@ -43,6 +74,7 @@ struct ManifestRaw {
 /// deterministic first-match-wins extension resolution.
 #[derive(Debug, Clone)]
 pub struct Manifest {
+    pub meta: ManifestMeta,
     languages: BTreeMap<String, LangSpec>,
 }
 
@@ -51,6 +83,7 @@ impl Manifest {
     pub fn from_toml_str(s: &str) -> Result<Self> {
         let raw: ManifestRaw = toml::from_str(s).context("parse bonsai.toml")?;
         Ok(Self {
+            meta: raw.meta,
             languages: raw.language,
         })
     }
@@ -81,12 +114,18 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"
+        [meta]
+        helix_repo = "https://github.com/helix-editor/helix"
+        helix_rev = "aaaa0000bbbb1111cccc2222dddd3333eeee4444"
+        nvim_treesitter_repo = "https://github.com/nvim-treesitter/nvim-treesitter"
+        nvim_treesitter_rev = "ffff5555aaaa0000bbbb1111cccc2222dddd3333"
+
         [language.rust]
         git_url = "https://example/rust"
         git_rev = "deadbeef"
         extensions = ["rs"]
         c_files = ["src/parser.c"]
-        query_dir = "queries"
+        query_source = "helix"
 
         [language.typescript]
         git_url = "https://example/ts"
@@ -94,7 +133,7 @@ mod tests {
         subpath = "typescript"
         extensions = ["ts"]
         c_files = ["src/parser.c", "src/scanner.c"]
-        query_dir = "queries"
+        query_source = "nvim_treesitter"
         source = "helix+nvim-treesitter"
     "#;
 
@@ -105,9 +144,18 @@ mod tests {
         let rust = m.get("rust").unwrap();
         assert_eq!(rust.extensions, vec!["rs"]);
         assert_eq!(rust.subpath, None);
+        assert_eq!(rust.query_source, QuerySource::Helix);
         let ts = m.get("typescript").unwrap();
         assert_eq!(ts.subpath.as_deref(), Some("typescript"));
+        assert_eq!(ts.query_source, QuerySource::NvimTreesitter);
         assert_eq!(ts.source.as_deref(), Some("helix+nvim-treesitter"));
+    }
+
+    #[test]
+    fn parses_meta_block() {
+        let m = Manifest::from_toml_str(SAMPLE).unwrap();
+        assert_eq!(m.meta.helix_repo, "https://github.com/helix-editor/helix");
+        assert_eq!(m.meta.helix_rev, "aaaa0000bbbb1111cccc2222dddd3333eeee4444");
     }
 
     #[test]

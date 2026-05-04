@@ -9,6 +9,10 @@
 //! `git_url + git_rev` (updates more frequently), takes extensions union,
 //! records provenance in `source`.
 //!
+//! `query_source` is derived from merge provenance: helix-only → Helix,
+//! nvim-only or both → NvimTreesitter (nvim-treesitter has more comprehensive
+//! queries for shared grammars).
+//!
 //! URLs, git revs, and file paths are facts (not copyrightable). Format
 //! and aggregation logic are MIT (this xtask).
 
@@ -26,6 +30,11 @@ const HELIX_LANGUAGES_TOML: &str =
 const NVIM_LOCKFILE_JSON: &str =
     "https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/master/lockfile.json";
 const NVIM_PARSERS_LUA: &str = "https://raw.githubusercontent.com/nvim-treesitter/nvim-treesitter/master/lua/nvim-treesitter/parsers.lua";
+
+const HELIX_REPO: &str = "https://github.com/helix-editor/helix";
+const NVIM_REPO: &str = "https://github.com/nvim-treesitter/nvim-treesitter";
+
+const GITHUB_API: &str = "https://api.github.com/repos";
 
 pub fn run(_args: &[String]) -> Result<()> {
     eprintln!("fetching {HELIX_LANGUAGES_TOML}");
@@ -45,11 +54,31 @@ pub fn run(_args: &[String]) -> Result<()> {
     let merged = merge(&helix, &nvim);
     eprintln!("merged: {} languages", merged.len());
 
-    let toml = emit_toml(&merged);
+    // Fetch current HEAD SHAs for the two query-source repos.
+    eprintln!("fetching helix HEAD SHA");
+    let helix_rev = fetch_head_sha("helix-editor", "helix")?;
+    eprintln!("helix HEAD: {helix_rev}");
+
+    eprintln!("fetching nvim-treesitter HEAD SHA");
+    let nvim_rev = fetch_head_sha("nvim-treesitter", "nvim-treesitter")?;
+    eprintln!("nvim-treesitter HEAD: {nvim_rev}");
+
+    let toml = emit_toml(&merged, &helix_rev, &nvim_rev);
     let dest = manifest_path()?;
     fs::write(&dest, toml).with_context(|| format!("write {}", dest.display()))?;
     eprintln!("wrote {}", dest.display());
     Ok(())
+}
+
+fn fetch_head_sha(owner: &str, repo: &str) -> Result<String> {
+    let url = format!("{GITHUB_API}/{owner}/{repo}/git/refs/heads/master");
+    let body = http_get(&url)?;
+    // Parse {"ref":…,"object":{"sha":"…","type":"commit","url":"…"},"url":…}
+    let v: serde_json::Value = serde_json::from_str(&body).context("parse GitHub refs JSON")?;
+    v["object"]["sha"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("missing object.sha in {url}"))
 }
 
 fn http_get(url: &str) -> Result<String> {
@@ -65,7 +94,6 @@ fn http_get(url: &str) -> Result<String> {
 }
 
 fn manifest_path() -> Result<PathBuf> {
-    // xtask runs from xtask/ — bonsai.toml lives one level up.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     Ok(manifest
         .parent()
@@ -84,8 +112,14 @@ struct Entry {
     subpath: Option<String>,
     extensions: BTreeSet<String>,
     c_files: Vec<String>,
-    query_dir: String,
     source: String,
+    query_source: QuerySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuerySource {
+    Helix,
+    NvimTreesitter,
 }
 
 // ----------------------------------------------------------------------------
@@ -112,6 +146,7 @@ struct HelixLanguage {
 #[serde(untagged)]
 enum HelixFileType {
     Bare(String),
+    #[allow(dead_code)]
     Map {
         #[serde(default)]
         suffix: Option<String>,
@@ -174,8 +209,8 @@ fn parse_helix(toml_src: &str) -> Result<BTreeMap<String, Entry>> {
             subpath: g.source.subpath.clone(),
             extensions,
             c_files: vec!["src/parser.c".into(), "src/scanner.c".into()],
-            query_dir: "queries".into(),
             source: "helix".into(),
+            query_source: QuerySource::Helix,
         };
         out.insert(lang.name.to_lowercase(), entry);
     }
@@ -187,18 +222,6 @@ fn parse_helix(toml_src: &str) -> Result<BTreeMap<String, Entry>> {
 // ----------------------------------------------------------------------------
 
 fn parse_nvim_lua(lua: &str) -> Result<BTreeMap<String, Entry>> {
-    // The file shape is:
-    //
-    //     list.<name> = {
-    //       install_info = { url = "...", files = { ... }, ... },
-    //       maintainers = { ... },
-    //       filetype = "...",        -- optional
-    //       filetypes = { ... },     -- optional
-    //     }
-    //
-    // Use a simple brace-counting scanner to extract each top-level
-    // `list.<name> = { ... }` body. Then regex inside that body for
-    // the fields we care about.
     let url_re = Regex::new(r#"url\s*=\s*"([^"]+)""#)?;
     let files_re = Regex::new(r"(?s)files\s*=\s*\{([^{}]*)\}")?;
     let location_re = Regex::new(r#"location\s*=\s*"([^"]+)""#)?;
@@ -213,7 +236,7 @@ fn parse_nvim_lua(lua: &str) -> Result<BTreeMap<String, Entry>> {
     let mut out = BTreeMap::new();
     for hdr in entry_header_re.captures_iter(lua) {
         let name = hdr.get(1).unwrap().as_str().to_lowercase();
-        let body_start = hdr.get(0).unwrap().end(); // just after the `{`
+        let body_start = hdr.get(0).unwrap().end();
         let Some(body_end) = match_close(bytes, body_start - 1) else {
             continue;
         };
@@ -225,7 +248,6 @@ fn parse_nvim_lua(lua: &str) -> Result<BTreeMap<String, Entry>> {
         let install = install_m.name("install").unwrap().as_str();
 
         if requires_gen_re.is_match(install) {
-            // Skip — needs `tree-sitter generate` (CLI required at install).
             continue;
         }
         let Some(url_m) = url_re.captures(install) else {
@@ -264,7 +286,6 @@ fn parse_nvim_lua(lua: &str) -> Result<BTreeMap<String, Entry>> {
             .captures(install)
             .map(|m| m.get(1).unwrap().as_str().to_string());
 
-        // Extensions: prefer filetypes list, fall back to single filetype, else lang name.
         let mut extensions = BTreeSet::new();
         if let Some(list) = filetypes_re.captures(body) {
             for tok in list.get(1).unwrap().as_str().split(',') {
@@ -289,21 +310,18 @@ fn parse_nvim_lua(lua: &str) -> Result<BTreeMap<String, Entry>> {
             name,
             Entry {
                 git_url: url,
-                git_rev: String::new(), // filled from lockfile
+                git_rev: String::new(),
                 subpath,
                 extensions,
                 c_files,
-                query_dir: "queries".into(),
                 source: "nvim-treesitter".into(),
+                query_source: QuerySource::NvimTreesitter,
             },
         );
     }
     Ok(out)
 }
 
-/// Given a position in `bytes` pointing at `{`, return the position of
-/// the matching close `}`. Skips over nested `{}` pairs. Returns `None`
-/// on unbalanced input.
 fn match_close(bytes: &[u8], open: usize) -> Option<usize> {
     debug_assert_eq!(bytes.get(open).copied(), Some(b'{'));
     let mut depth: i32 = 0;
@@ -317,7 +335,6 @@ fn match_close(bytes: &[u8], open: usize) -> Option<usize> {
                     return Some(i);
                 }
             }
-            // Skip past Lua string literals so braces inside `"..."` don't confuse us.
             b'"' => {
                 i += 1;
                 while i < bytes.len() && bytes[i] != b'"' {
@@ -367,11 +384,13 @@ fn merge(
     for name in names {
         let h = helix.get(&name);
         let n = nvim.get(&name);
+        // Both → nvim base (better queries); helix-only → helix; nvim-only → nvim.
         let entry = match (h, n) {
             (Some(h), Some(n)) => {
                 let mut e = n.clone();
                 e.extensions.extend(h.extensions.iter().cloned());
                 e.source = "helix+nvim-treesitter".into();
+                e.query_source = QuerySource::NvimTreesitter;
                 e
             }
             (None, Some(n)) => n.clone(),
@@ -379,7 +398,6 @@ fn merge(
             (None, None) => unreachable!(),
         };
         if entry.git_rev.is_empty() {
-            // Can't pin reproducibly without a rev — skip.
             continue;
         }
         if entry.extensions.is_empty() {
@@ -394,7 +412,7 @@ fn merge(
 // Emit
 // ----------------------------------------------------------------------------
 
-fn emit_toml(grammars: &BTreeMap<String, Entry>) -> String {
+fn emit_toml(grammars: &BTreeMap<String, Entry>, helix_rev: &str, nvim_rev: &str) -> String {
     let mut s = String::new();
     s.push_str("# bonsai.toml — language manifest for hjkl-bonsai.\n");
     s.push_str("#\n");
@@ -404,7 +422,20 @@ fn emit_toml(grammars: &BTreeMap<String, Entry>) -> String {
     s.push_str("#\n");
     s.push_str("# URLs, git revs, and file paths are facts (not copyrightable).\n");
     s.push_str("# Re-generate via: cargo xtask sync-bonsai\n\n");
+
+    // [meta] block
+    s.push_str("[meta]\n");
+    s.push_str(&format!("helix_repo = \"{HELIX_REPO}\"\n"));
+    s.push_str(&format!("helix_rev = \"{helix_rev}\"\n"));
+    s.push_str(&format!("nvim_treesitter_repo = \"{NVIM_REPO}\"\n"));
+    s.push_str(&format!("nvim_treesitter_rev = \"{nvim_rev}\"\n"));
+    s.push('\n');
+
     for (name, g) in grammars {
+        let qs = match g.query_source {
+            QuerySource::Helix => "helix",
+            QuerySource::NvimTreesitter => "nvim_treesitter",
+        };
         s.push_str(&format!("[language.{name}]\n"));
         s.push_str(&format!("git_url = \"{}\"\n", g.git_url));
         s.push_str(&format!("git_rev = \"{}\"\n", g.git_rev));
@@ -425,9 +456,188 @@ fn emit_toml(grammars: &BTreeMap<String, Entry>) -> String {
             .collect::<Vec<_>>()
             .join(", ");
         s.push_str(&format!("c_files = [{cf}]\n"));
-        s.push_str(&format!("query_dir = \"{}\"\n", g.query_dir));
+        s.push_str(&format!("query_source = \"{qs}\"\n"));
         s.push_str(&format!("source = \"{}\"\n", g.source));
         s.push('\n');
     }
     s
+}
+
+// ----------------------------------------------------------------------------
+// Tests (canned fixtures, no network)
+// ----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_helix_toml() -> &'static str {
+        r#"
+[[grammar]]
+name = "rust"
+[grammar.source]
+git = "https://github.com/tree-sitter/tree-sitter-rust"
+rev = "aaaa0000bbbb"
+
+[[grammar]]
+name = "python"
+[grammar.source]
+git = "https://github.com/tree-sitter/tree-sitter-python"
+rev = "bbbb1111cccc"
+
+[[language]]
+name = "rust"
+file-types = ["rs"]
+
+[[language]]
+name = "python"
+file-types = ["py"]
+"#
+    }
+
+    fn fake_nvim_lua() -> &'static str {
+        r#"
+list.go = {
+  install_info = {
+    url = "https://github.com/tree-sitter/tree-sitter-go",
+    files = { "src/parser.c" },
+  },
+  filetype = "go",
+}
+
+list.python = {
+  install_info = {
+    url = "https://github.com/tree-sitter/tree-sitter-python",
+    files = { "src/parser.c" },
+  },
+  filetype = "py",
+}
+"#
+    }
+
+    fn fake_lockfile() -> &'static str {
+        r#"{"go": {"revision": "dddd4444eeee"}, "python": {"revision": "cccc2222ffff"}}"#
+    }
+
+    #[test]
+    fn parse_helix_extracts_entries() {
+        let out = parse_helix(fake_helix_toml()).unwrap();
+        assert!(out.contains_key("rust"), "rust missing");
+        assert!(out.contains_key("python"), "python missing");
+        assert_eq!(out["rust"].git_rev, "aaaa0000bbbb");
+    }
+
+    #[test]
+    fn parse_helix_sets_helix_query_source() {
+        let out = parse_helix(fake_helix_toml()).unwrap();
+        assert_eq!(out["rust"].query_source, QuerySource::Helix);
+        assert_eq!(out["python"].query_source, QuerySource::Helix);
+    }
+
+    #[test]
+    fn parse_nvim_lua_extracts_entries() {
+        let out = parse_nvim_lua(fake_nvim_lua()).unwrap();
+        assert!(out.contains_key("go"), "go missing");
+    }
+
+    #[test]
+    fn parse_nvim_lua_sets_nvim_query_source() {
+        let out = parse_nvim_lua(fake_nvim_lua()).unwrap();
+        assert_eq!(out["go"].query_source, QuerySource::NvimTreesitter);
+    }
+
+    #[test]
+    fn apply_lockfile_fills_revs() {
+        let mut nvim = parse_nvim_lua(fake_nvim_lua()).unwrap();
+        apply_lockfile(&mut nvim, fake_lockfile()).unwrap();
+        assert_eq!(nvim["go"].git_rev, "dddd4444eeee");
+    }
+
+    #[test]
+    fn merge_unions_extensions_and_sets_source() {
+        let helix = parse_helix(fake_helix_toml()).unwrap();
+        let mut nvim = parse_nvim_lua(fake_nvim_lua()).unwrap();
+        apply_lockfile(&mut nvim, fake_lockfile()).unwrap();
+        let merged = merge(&helix, &nvim);
+        // helix-only
+        assert!(merged.contains_key("rust"));
+        assert_eq!(merged["rust"].source, "helix");
+        // nvim-only
+        assert!(merged.contains_key("go"));
+        assert_eq!(merged["go"].source, "nvim-treesitter");
+    }
+
+    #[test]
+    fn merge_provenance_determines_query_source() {
+        let helix = parse_helix(fake_helix_toml()).unwrap();
+        let mut nvim = parse_nvim_lua(fake_nvim_lua()).unwrap();
+        apply_lockfile(&mut nvim, fake_lockfile()).unwrap();
+        let merged = merge(&helix, &nvim);
+
+        // helix-only → Helix
+        assert_eq!(merged["rust"].query_source, QuerySource::Helix);
+        // nvim-only → NvimTreesitter
+        assert_eq!(merged["go"].query_source, QuerySource::NvimTreesitter);
+        // both → NvimTreesitter
+        assert_eq!(merged["python"].query_source, QuerySource::NvimTreesitter);
+        assert_eq!(merged["python"].source, "helix+nvim-treesitter");
+    }
+
+    #[test]
+    fn emit_toml_writes_meta_block() {
+        let mut grammars = BTreeMap::new();
+        grammars.insert(
+            "rust".to_string(),
+            Entry {
+                git_url: "https://github.com/tree-sitter/tree-sitter-rust".into(),
+                git_rev: "aaaa".into(),
+                subpath: None,
+                extensions: ["rs".into()].into(),
+                c_files: vec!["src/parser.c".into()],
+                source: "helix".into(),
+                query_source: QuerySource::Helix,
+            },
+        );
+        let out = emit_toml(&grammars, "helix-sha-123", "nvim-sha-456");
+        assert!(out.contains("[meta]"), "[meta] block missing");
+        assert!(
+            out.contains("helix_rev = \"helix-sha-123\""),
+            "helix_rev missing"
+        );
+        assert!(
+            out.contains("nvim_treesitter_rev = \"nvim-sha-456\""),
+            "nvim_rev missing"
+        );
+        assert!(
+            out.contains("query_source = \"helix\""),
+            "query_source missing"
+        );
+        assert!(!out.contains("query_dir"), "old query_dir must not appear");
+    }
+
+    #[test]
+    fn emitted_toml_parses_back() {
+        use hjkl_bonsai::runtime::Manifest;
+        let mut grammars = BTreeMap::new();
+        grammars.insert(
+            "rust".to_string(),
+            Entry {
+                git_url: "https://github.com/tree-sitter/tree-sitter-rust".into(),
+                git_rev: "aaaa0000bbbb1111cccc2222dddd3333eeee4444".into(),
+                subpath: None,
+                extensions: ["rs".into()].into(),
+                c_files: vec!["src/parser.c".into()],
+                source: "helix".into(),
+                query_source: QuerySource::Helix,
+            },
+        );
+        let toml_str = emit_toml(
+            &grammars,
+            "aaaa0000bbbb1111cccc2222dddd3333eeee4444",
+            "ffff5555aaaa0000bbbb1111cccc2222dddd3333",
+        );
+        let m = Manifest::from_toml_str(&toml_str).expect("emitted TOML must parse back");
+        assert!(m.get("rust").is_some());
+        assert_eq!(m.meta.helix_rev, "aaaa0000bbbb1111cccc2222dddd3333eeee4444");
+    }
 }

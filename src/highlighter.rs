@@ -330,25 +330,41 @@ fn collect_parse_errors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{GrammarCompiler, GrammarLoader, LangSpec, SourceCache};
+    use crate::runtime::{
+        GrammarCompiler, GrammarLoader, LangSpec, ManifestMeta, QuerySource, QuerySourceCache,
+        SourceCache,
+    };
 
     fn c_grammar_loader() -> (Arc<Grammar>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
         let sources = SourceCache::new(tmp.path().join("cache"));
+        let query_sources = QuerySourceCache::new(tmp.path().join("qcache"));
         let user_dir = tmp.path().join("user");
-        let loader = GrammarLoader::new(vec![], user_dir, sources, GrammarCompiler::new());
-
+        let loader = GrammarLoader::new(
+            vec![],
+            user_dir,
+            sources,
+            query_sources,
+            GrammarCompiler::new(),
+        );
+        let meta = ManifestMeta {
+            helix_repo: "https://github.com/helix-editor/helix".into(),
+            helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
+            nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
+            nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
+        };
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
             git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
             subpath: None,
             extensions: vec!["c".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: QuerySource::Helix,
+            query_subdir: None,
             source: None,
         };
 
-        let g = Grammar::load("c", &spec, &loader).unwrap();
+        let g = Grammar::load("c", &spec, &loader, &meta).unwrap();
         (Arc::new(g), tmp)
     }
 

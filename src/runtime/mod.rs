@@ -18,6 +18,6 @@ mod xdg;
 pub use compile::GrammarCompiler;
 pub use grammar::Grammar;
 pub use loader::GrammarLoader;
-pub use manifest::{LangSpec, Manifest};
+pub use manifest::{LangSpec, Manifest, ManifestMeta, QuerySource};
 pub use registry::GrammarRegistry;
-pub use source::SourceCache;
+pub use source::{QuerySourceCache, SourceCache};

@@ -431,7 +431,7 @@ fn is_consecutive(bytes: &[u8], prev_end: usize, next_start: usize) -> bool {
 mod tests {
     use super::*;
     use crate::Highlighter;
-    use crate::runtime::{Grammar, GrammarLoader, LangSpec};
+    use crate::runtime::{Grammar, GrammarLoader, LangSpec, ManifestMeta, QuerySource};
     use std::sync::{Arc, OnceLock};
 
     /// Tree-sitter-rust pinned rev for tests; matches what `bonsai.toml` ships.
@@ -444,17 +444,24 @@ mod tests {
     fn rust_grammar() -> Arc<Grammar> {
         static G: OnceLock<Arc<Grammar>> = OnceLock::new();
         G.get_or_init(|| {
-            let loader = GrammarLoader::user_default().expect("XDG paths");
+            let meta = ManifestMeta {
+                helix_repo: "https://github.com/helix-editor/helix".into(),
+                helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
+                nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
+                nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
+            };
+            let loader = GrammarLoader::user_default(&meta).expect("XDG paths");
             let spec = LangSpec {
                 git_url: RUST_GIT.into(),
                 git_rev: RUST_REV.into(),
                 subpath: None,
                 extensions: vec!["rs".into()],
                 c_files: vec!["src/parser.c".into(), "src/scanner.c".into()],
-                query_dir: "queries".into(),
+                query_source: QuerySource::Helix,
+                query_subdir: None,
                 source: None,
             };
-            Arc::new(Grammar::load("rust", &spec, &loader).expect("rust grammar"))
+            Arc::new(Grammar::load("rust", &spec, &loader, &meta).expect("rust grammar"))
         })
         .clone()
     }

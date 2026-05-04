@@ -8,18 +8,17 @@
 //!      across runs.
 //!   3. **Build on demand**: clone source via [`SourceCache`], compile via
 //!      [`GrammarCompiler`] (which writes `<source_root>/<name><ext>`),
-//!      then install the parser + `<query_dir>/highlights.scm` into
+//!      then install the parser + resolved `highlights.scm` into
 //!      `<user_dir>/<name><ext>` + `<user_dir>/<name>.scm`.
 //!
 //! Layout written by the install step (and expected by [`Grammar::load`]):
 //! - `<user_dir>/<name><ext>` — parser
 //! - `<user_dir>/<name>.scm`  — highlights query
-//! - `<user_dir>/<name>.rev`  — sidecar `<git_rev>:abi<N>` for staleness
-//!   detection. When the manifest pins a new rev or tree-sitter bumps
-//!   its ABI, an existing user-dir install reads as stale and gets
-//!   recompiled (overwriting in place — no stale files left behind).
-//!   System dirs are *not* rev-checked: distro packagers own that
-//!   lifecycle.
+//! - `<user_dir>/<name>.rev`  — sidecar `<git_rev>:<query_short_rev>:abi<N>` for
+//!   staleness detection. Updating either the grammar rev or the query-source rev
+//!   triggers a re-install (overwriting in place). Old two-field sidecars parse
+//!   as stale → rebuild (correct behavior across the schema bump).
+//!   System dirs are *not* rev-checked: distro packagers own that lifecycle.
 //!
 //! Distro maintainers shipping pre-built grammars should reproduce the
 //! parser + .scm pair under one of `system_dirs`. `cargo xtask
@@ -30,9 +29,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::compile::{GrammarCompiler, shared_lib_ext};
-use super::grammar::HIGHLIGHTS_FILE;
-use super::manifest::LangSpec;
-use super::source::SourceCache;
+use super::manifest::{LangSpec, ManifestMeta};
+use super::source::{QuerySourceCache, SourceCache, short_rev};
 use super::xdg;
 
 /// Configurable grammar resolver. Construct once, reuse across lookups.
@@ -41,6 +39,7 @@ pub struct GrammarLoader {
     system_dirs: Vec<PathBuf>,
     user_dir: PathBuf,
     sources: SourceCache,
+    query_sources: QuerySourceCache,
     compiler: GrammarCompiler,
 }
 
@@ -52,12 +51,14 @@ impl GrammarLoader {
         system_dirs: Vec<PathBuf>,
         user_dir: PathBuf,
         sources: SourceCache,
+        query_sources: QuerySourceCache,
         compiler: GrammarCompiler,
     ) -> Self {
         Self {
             system_dirs,
             user_dir,
             sources,
+            query_sources,
             compiler,
         }
     }
@@ -69,7 +70,7 @@ impl GrammarLoader {
     ///   to `~/.local/share/bonsai/grammars/` on every platform)
     /// - sources / compile: [`SourceCache::user_default`] +
     ///   [`GrammarCompiler::new`]
-    pub fn user_default() -> Result<Self> {
+    pub fn user_default(_meta: &ManifestMeta) -> Result<Self> {
         let system_dirs = if cfg!(target_family = "unix") {
             vec![
                 PathBuf::from("/usr/share/bonsai/grammars"),
@@ -83,6 +84,7 @@ impl GrammarLoader {
             system_dirs,
             user,
             SourceCache::user_default()?,
+            QuerySourceCache::user_default()?,
             GrammarCompiler::new(),
         ))
     }
@@ -97,8 +99,8 @@ impl GrammarLoader {
     /// artifact exists. A user-dir hit whose `<name>.rev` sidecar
     /// disagrees with `spec.git_rev` / current ABI is treated as stale
     /// and recompiled (overwriting in place).
-    pub fn load(&self, name: &str, spec: &LangSpec) -> Result<PathBuf> {
-        if let Some(p) = self.lookup_fresh(name, spec) {
+    pub fn load(&self, name: &str, spec: &LangSpec, meta: &ManifestMeta) -> Result<PathBuf> {
+        if let Some(p) = self.lookup_fresh(name, spec, meta) {
             return Ok(p);
         }
 
@@ -110,8 +112,27 @@ impl GrammarLoader {
             .compiler
             .compile(name, spec, &source_root)
             .with_context(|| format!("compile grammar {name}"))?;
-        install_into_user_dir(name, spec, &built, &source_root, &self.user_dir)
-            .with_context(|| format!("install grammar {name}"))
+
+        let highlights_src = self
+            .query_sources
+            .resolve_highlights(spec.query_source, meta, name, spec.query_subdir.as_deref())
+            .with_context(|| format!("resolve highlights for {name}"))?;
+
+        let query_rev = match spec.query_source {
+            crate::runtime::manifest::QuerySource::Helix => meta.helix_rev.as_str(),
+            crate::runtime::manifest::QuerySource::NvimTreesitter => {
+                meta.nvim_treesitter_rev.as_str()
+            }
+        };
+        install_into_user_dir(
+            name,
+            spec,
+            &built,
+            &highlights_src,
+            query_rev,
+            &self.user_dir,
+        )
+        .with_context(|| format!("install grammar {name}"))
     }
 
     /// Look up an installed parser **with** the freshness check applied
@@ -119,7 +140,12 @@ impl GrammarLoader {
     /// regardless of rev (distro's responsibility). User-dir hits are
     /// filtered against the sidecar — stale installs read as `None` so
     /// the caller falls through to a recompile.
-    pub fn lookup_fresh(&self, name: &str, spec: &LangSpec) -> Option<PathBuf> {
+    pub fn lookup_fresh(
+        &self,
+        name: &str,
+        spec: &LangSpec,
+        meta: &ManifestMeta,
+    ) -> Option<PathBuf> {
         let flat = format!("{name}{}", shared_lib_ext());
         for dir in &self.system_dirs {
             let candidate = dir.join(&flat);
@@ -128,7 +154,7 @@ impl GrammarLoader {
             }
         }
         let user_candidate = self.user_dir.join(&flat);
-        if user_candidate.is_file() && is_user_install_fresh(&self.user_dir, name, spec) {
+        if user_candidate.is_file() && is_user_install_fresh(&self.user_dir, name, spec, meta) {
             return Some(user_candidate);
         }
         None
@@ -155,45 +181,54 @@ impl GrammarLoader {
 }
 
 /// Read `<user_dir>/<name>.rev` and check it matches the spec's pinned
-/// rev + the tree-sitter ABI we're built against. Missing or
-/// unparseable sidecars count as stale.
-fn is_user_install_fresh(user_dir: &Path, name: &str, spec: &LangSpec) -> bool {
+/// rev + query-source rev + the tree-sitter ABI we're built against. Missing
+/// or unparseable sidecars count as stale.
+fn is_user_install_fresh(
+    user_dir: &Path,
+    name: &str,
+    spec: &LangSpec,
+    meta: &ManifestMeta,
+) -> bool {
     let rev_path = user_dir.join(format!("{name}.rev"));
     let Ok(content) = std::fs::read_to_string(&rev_path) else {
         return false;
     };
-    let Some((rev, abi)) = parse_rev_sidecar(content.trim()) else {
+    let Some((grammar_rev, query_short, abi)) = parse_rev_sidecar(content.trim()) else {
         return false;
     };
-    rev == spec.git_rev && abi == tree_sitter::LANGUAGE_VERSION
+    let expected_query_rev = match spec.query_source {
+        crate::runtime::manifest::QuerySource::Helix => meta.helix_rev.as_str(),
+        crate::runtime::manifest::QuerySource::NvimTreesitter => meta.nvim_treesitter_rev.as_str(),
+    };
+    grammar_rev == spec.git_rev
+        && query_short == short_rev(expected_query_rev)
+        && abi == tree_sitter::LANGUAGE_VERSION
 }
 
-/// Parse the one-line `<git_rev>:abi<N>` payload. `None` when malformed.
-fn parse_rev_sidecar(s: &str) -> Option<(&str, usize)> {
-    let (rev, abi_part) = s.split_once(':')?;
+/// Parse the three-field `<git_rev>:<query_short_rev>:abi<N>` payload.
+/// `None` when malformed (including old two-field format → stale → rebuild).
+fn parse_rev_sidecar(s: &str) -> Option<(&str, &str, usize)> {
+    let mut parts = s.splitn(3, ':');
+    let grammar_rev = parts.next()?;
+    let query_short = parts.next()?;
+    let abi_part = parts.next()?;
     let abi_str = abi_part.strip_prefix("abi")?;
     let abi = abi_str.parse().ok()?;
-    Some((rev, abi))
+    Some((grammar_rev, query_short, abi))
 }
 
-/// Copy `built_so` to `<user_dir>/<name><ext>` and the upstream
-/// `highlights.scm` to `<user_dir>/<name>.scm`, then write the
-/// `<user_dir>/<name>.rev` sidecar **last** so an interrupted install
-/// leaves the previous (or no) rev recorded — the next `load` rebuilds.
+/// Copy `built_so` to `<user_dir>/<name><ext>`, `highlights_src` to
+/// `<user_dir>/<name>.scm`, then write the `<user_dir>/<name>.rev` sidecar
+/// **last** so an interrupted install leaves no partial set of files.
 /// Returns the installed parser path.
-///
-/// All preconditions (e.g. `highlights.scm` existence) are checked before
-/// any file is written to `user_dir` so a failed install never leaves a
-/// partial set of files behind (`.so` without `.scm`/`.rev`).
 fn install_into_user_dir(
     name: &str,
     spec: &LangSpec,
     built_so: &Path,
-    source_root: &Path,
+    highlights_src: &Path,
+    query_rev: &str,
     user_dir: &Path,
 ) -> Result<PathBuf> {
-    // Validate everything before touching user_dir — keeps the install atomic.
-    let highlights_src = source_root.join(&spec.query_dir).join(HIGHLIGHTS_FILE);
     if !highlights_src.is_file() {
         bail!(
             "highlights.scm missing in source clone: {}",
@@ -208,10 +243,15 @@ fn install_into_user_dir(
     copy_atomic(built_so, &dest)?;
 
     let highlights_dest = user_dir.join(format!("{name}.scm"));
-    copy_atomic(&highlights_src, &highlights_dest)?;
+    copy_atomic(highlights_src, &highlights_dest)?;
 
     let rev_dest = user_dir.join(format!("{name}.rev"));
-    let rev_payload = format!("{}:abi{}", spec.git_rev, tree_sitter::LANGUAGE_VERSION);
+    let rev_payload = format!(
+        "{}:{}:abi{}",
+        spec.git_rev,
+        short_rev(query_rev),
+        tree_sitter::LANGUAGE_VERSION
+    );
     write_atomic(&rev_dest, rev_payload.as_bytes())?;
 
     Ok(dest)
@@ -260,6 +300,17 @@ fn copy_atomic(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::manifest::QuerySource;
+    use crate::runtime::source::QuerySourceCache;
+
+    fn dummy_meta() -> ManifestMeta {
+        ManifestMeta {
+            helix_repo: "https://github.com/helix-editor/helix".into(),
+            helix_rev: "aaaa0000bbbb1111cccc2222dddd3333eeee4444".into(),
+            nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
+            nvim_treesitter_rev: "ffff5555aaaa0000bbbb1111cccc2222dddd3333".into(),
+        }
+    }
 
     fn dummy_spec(rev: &str) -> LangSpec {
         LangSpec {
@@ -268,7 +319,8 @@ mod tests {
             subpath: None,
             extensions: vec!["x".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: QuerySource::Helix,
+            query_subdir: None,
             source: None,
         }
     }
@@ -282,13 +334,30 @@ mod tests {
         system_dirs: Vec<PathBuf>,
         user_dir: PathBuf,
         cache_root: PathBuf,
+        query_cache_root: PathBuf,
     ) -> GrammarLoader {
         GrammarLoader::new(
             system_dirs,
             user_dir,
             SourceCache::new(cache_root),
+            QuerySourceCache::new(query_cache_root),
             GrammarCompiler::new(),
         )
+    }
+
+    fn write_rev_sidecar(
+        user_dir: &Path,
+        name: &str,
+        grammar_rev: &str,
+        query_short: &str,
+        abi: usize,
+    ) {
+        std::fs::create_dir_all(user_dir).unwrap();
+        std::fs::write(
+            user_dir.join(format!("{name}.rev")),
+            format!("{grammar_rev}:{query_short}:abi{abi}"),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -296,7 +365,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sys = tmp.path().join("sys");
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![sys.clone()], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![sys.clone()],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
 
         let name = "rust";
         let want = sys.join(format!("{name}{}", shared_lib_ext()));
@@ -311,7 +385,12 @@ mod tests {
     fn user_dir_used_when_no_system_match() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
 
         let name = "python";
         let want = user.join(format!("{name}{}", shared_lib_ext()));
@@ -323,27 +402,26 @@ mod tests {
     #[test]
     fn lookup_only_returns_none_when_nothing_exists() {
         let tmp = tempfile::tempdir().unwrap();
-        let loader = loader_with(vec![], tmp.path().join("user"), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            tmp.path().join("user"),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
         assert!(loader.lookup_only("nope").is_none());
-    }
-
-    fn write_rev_sidecar(user_dir: &Path, name: &str, rev: &str, abi: usize) {
-        std::fs::create_dir_all(user_dir).unwrap();
-        std::fs::write(
-            user_dir.join(format!("{name}.rev")),
-            format!("{rev}:abi{abi}"),
-        )
-        .unwrap();
     }
 
     #[test]
     fn load_short_circuits_on_fresh_user_install() {
-        // load() must not attempt a clone when the user dir already has
-        // a parser whose .rev sidecar matches — bogus git URL would fail
-        // any acquire.
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
 
         let name = "fake";
         let rev = "0000000000000000";
@@ -353,14 +431,21 @@ mod tests {
             subpath: None,
             extensions: vec!["x".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: QuerySource::Helix,
+            query_subdir: None,
             source: None,
         };
         let pre = user.join(format!("{name}{}", shared_lib_ext()));
         touch(&pre);
-        write_rev_sidecar(&user, name, rev, tree_sitter::LANGUAGE_VERSION);
+        write_rev_sidecar(
+            &user,
+            name,
+            rev,
+            short_rev(&meta.helix_rev),
+            tree_sitter::LANGUAGE_VERSION,
+        );
 
-        let resolved = loader.load(name, &spec).unwrap();
+        let resolved = loader.load(name, &spec, &meta).unwrap();
         assert_eq!(resolved, pre);
     }
 
@@ -368,15 +453,19 @@ mod tests {
     fn lookup_fresh_misses_when_sidecar_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
 
         let spec = dummy_spec("aaaaaaaaaaaa");
         let pre = user.join(format!("rust{}", shared_lib_ext()));
         touch(&pre);
-        // No .rev sidecar — counts as stale.
 
-        assert!(loader.lookup_fresh("rust", &spec).is_none());
-        // lookup_only ignores the sidecar and still finds the .so.
+        assert!(loader.lookup_fresh("rust", &spec, &meta).is_none());
         assert_eq!(loader.lookup_only("rust"), Some(pre));
     }
 
@@ -384,142 +473,169 @@ mod tests {
     fn lookup_fresh_misses_when_rev_changed() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
 
         let spec = dummy_spec("new-rev-aaaa");
         let pre = user.join(format!("rust{}", shared_lib_ext()));
         touch(&pre);
-        write_rev_sidecar(&user, "rust", "old-rev-bbbb", tree_sitter::LANGUAGE_VERSION);
+        write_rev_sidecar(
+            &user,
+            "rust",
+            "old-rev-bbbb",
+            short_rev(&meta.helix_rev),
+            tree_sitter::LANGUAGE_VERSION,
+        );
 
-        assert!(loader.lookup_fresh("rust", &spec).is_none());
+        assert!(loader.lookup_fresh("rust", &spec, &meta).is_none());
     }
 
     #[test]
     fn lookup_fresh_misses_when_abi_changed() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![], user.clone(), tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
 
         let rev = "deadbeef0000";
         let spec = dummy_spec(rev);
         let pre = user.join(format!("rust{}", shared_lib_ext()));
         touch(&pre);
         let stale_abi = tree_sitter::LANGUAGE_VERSION + 1;
-        write_rev_sidecar(&user, "rust", rev, stale_abi);
+        write_rev_sidecar(&user, "rust", rev, short_rev(&meta.helix_rev), stale_abi);
 
-        assert!(loader.lookup_fresh("rust", &spec).is_none());
+        assert!(loader.lookup_fresh("rust", &spec, &meta).is_none());
     }
 
     #[test]
     fn lookup_fresh_skips_sidecar_check_for_system_dirs() {
-        // Distros own the rev for system-dir installs — even with no
-        // sidecar at all, a system-dir hit must be returned.
         let tmp = tempfile::tempdir().unwrap();
         let sys = tmp.path().join("sys");
         let user = tmp.path().join("user");
-        let loader = loader_with(vec![sys.clone()], user, tmp.path().join("cache"));
+        let loader = loader_with(
+            vec![sys.clone()],
+            user,
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
 
         let spec = dummy_spec("aaaaaaaaaaaa");
         let want = sys.join(format!("rust{}", shared_lib_ext()));
         touch(&want);
 
-        assert_eq!(loader.lookup_fresh("rust", &spec), Some(want));
+        assert_eq!(loader.lookup_fresh("rust", &spec, &meta), Some(want));
     }
 
     #[test]
     fn parse_rev_sidecar_parses_normal_payload() {
-        assert_eq!(parse_rev_sidecar("abc123:abi15"), Some(("abc123", 15)));
+        assert_eq!(
+            parse_rev_sidecar("abc123:deadbeef0000:abi15"),
+            Some(("abc123", "deadbeef0000", 15))
+        );
+    }
+
+    #[test]
+    fn parse_rev_sidecar_rejects_old_two_field_format() {
+        // Old format "rev:abiN" must parse as stale (None) so stale installs rebuild.
+        assert!(parse_rev_sidecar("abc123:abi15").is_none());
     }
 
     #[test]
     fn parse_rev_sidecar_rejects_malformed() {
         assert!(parse_rev_sidecar("no-colon").is_none());
-        assert!(parse_rev_sidecar("rev:abi").is_none()); // missing number
-        assert!(parse_rev_sidecar("rev:15").is_none()); // missing abi prefix
+        assert!(parse_rev_sidecar("rev:qrev:abi").is_none()); // missing number
+        assert!(parse_rev_sidecar("rev:qrev:15").is_none()); // missing abi prefix
     }
 
     #[test]
     fn install_copies_parser_highlights_and_writes_rev_sidecar() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let source_root = tmp.path().join("source");
-        let queries = source_root.join("queries");
-        std::fs::create_dir_all(&queries).unwrap();
-        std::fs::write(queries.join("highlights.scm"), "; highlights").unwrap();
-        // locals.scm intentionally present — must be ignored.
-        std::fs::write(queries.join("locals.scm"), "; locals").unwrap();
 
-        let built = source_root.join(format!("rust{}", shared_lib_ext()));
+        // Pre-resolved highlights.scm (the loader hands in an already-resolved path).
+        let highlights_src = tmp.path().join("rust.resolved.scm");
+        std::fs::write(&highlights_src, "; highlights").unwrap();
+
+        let built = tmp.path().join(format!("rust{}", shared_lib_ext()));
         std::fs::write(&built, b"fake parser bytes").unwrap();
 
         let rev = "deadbeef00000000";
+        let query_rev = "aaaa0000bbbb1111cccc2222dddd3333eeee4444";
         let spec = dummy_spec(rev);
-        let installed = install_into_user_dir("rust", &spec, &built, &source_root, &user).unwrap();
+        let installed =
+            install_into_user_dir("rust", &spec, &built, &highlights_src, query_rev, &user)
+                .unwrap();
 
         assert_eq!(installed, user.join(format!("rust{}", shared_lib_ext())));
         assert!(installed.is_file());
         assert!(user.join("rust.scm").is_file());
-        assert!(!user.join("rust").exists(), "no per-lang subdir expected");
+        assert!(!user.join("rust").exists());
 
         let rev_payload = std::fs::read_to_string(user.join("rust.rev")).unwrap();
         assert_eq!(
             rev_payload,
-            format!("{rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
+            format!(
+                "{rev}:{}:abi{}",
+                short_rev(query_rev),
+                tree_sitter::LANGUAGE_VERSION
+            )
         );
     }
 
     #[test]
-    fn install_errors_when_no_queries_present() {
+    fn install_errors_when_no_highlights_present() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let source_root = tmp.path().join("source");
-        std::fs::create_dir_all(source_root.join("queries")).unwrap();
-        let built = source_root.join(format!("rust{}", shared_lib_ext()));
+        let highlights_src = tmp.path().join("ghost.scm"); // does not exist
+        let built = tmp.path().join(format!("rust{}", shared_lib_ext()));
         std::fs::write(&built, b"x").unwrap();
 
         let spec = dummy_spec("deadbeef00000000");
-        let err = install_into_user_dir("rust", &spec, &built, &source_root, &user).unwrap_err();
+        let err = install_into_user_dir("rust", &spec, &built, &highlights_src, "qrev", &user)
+            .unwrap_err();
         assert!(
             err.to_string().contains("highlights.scm missing"),
             "got: {err:#}"
         );
     }
 
-    // Regression: grammars with `subpath` (e.g. xml in tree-sitter-xml which
-    // hosts both `xml/` and `dtd/` under one repo) were susceptible to a
-    // partial install — the .so landed in user_dir before the bail fired for a
-    // missing highlights.scm, leaving .scm and .rev absent. The fix moves the
-    // precondition check before any writes.
-    //
-    // This test mirrors the xml layout: clone_dir/<subpath>/queries/highlights.scm
-    // and asserts that all three files (.so, .scm, .rev) appear in user_dir.
     #[test]
-    fn install_with_subpath_produces_all_three_files() {
+    fn install_with_preresolved_path_produces_all_three_files() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
 
-        // clone_dir = the raw repo checkout; source_root = clone_dir/xml (subpath applied).
-        let clone_dir = tmp.path().join("clone");
-        let source_root = clone_dir.join("xml");
-        let queries = source_root.join("queries");
-        std::fs::create_dir_all(&queries).unwrap();
-        std::fs::write(queries.join("highlights.scm"), "; xml highlights").unwrap();
+        let highlights_src = tmp.path().join("xml.resolved.scm");
+        std::fs::write(&highlights_src, "; xml highlights").unwrap();
 
-        let built = source_root.join(format!("xml{}", shared_lib_ext()));
+        let built = tmp.path().join(format!("xml{}", shared_lib_ext()));
         std::fs::write(&built, b"fake xml parser bytes").unwrap();
 
         let rev = "0d9a8099c963ed53";
+        let query_rev = "aaaa0000bbbb1111cccc2222dddd3333eeee4444";
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter-grammars/tree-sitter-xml".into(),
             git_rev: rev.into(),
             subpath: Some("xml".into()),
             extensions: vec!["xml".into()],
             c_files: vec!["src/parser.c".into(), "src/scanner.c".into()],
-            query_dir: "queries".into(),
+            query_source: QuerySource::Helix,
+            query_subdir: None,
             source: Some("helix+nvim-treesitter".into()),
         };
 
-        let installed = install_into_user_dir("xml", &spec, &built, &source_root, &user).unwrap();
+        let installed =
+            install_into_user_dir("xml", &spec, &built, &highlights_src, query_rev, &user).unwrap();
 
         assert_eq!(
             installed,
@@ -533,35 +649,64 @@ mod tests {
         let rev_payload = std::fs::read_to_string(user.join("xml.rev")).unwrap();
         assert_eq!(
             rev_payload,
-            format!("{rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
+            format!(
+                "{rev}:{}:abi{}",
+                short_rev(query_rev),
+                tree_sitter::LANGUAGE_VERSION
+            )
         );
     }
 
-    // Regression: when highlights.scm is missing, no file must be written to
-    // user_dir — not even the .so. Before the fix, copy_atomic for the .so ran
-    // first, leaving an orphaned .so without .scm/.rev on every failed install.
     #[test]
     fn install_leaves_no_so_in_user_dir_when_highlights_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user");
-        let source_root = tmp.path().join("source");
-        // queries dir exists but highlights.scm is absent.
-        std::fs::create_dir_all(source_root.join("queries")).unwrap();
-        let built = source_root.join(format!("xml{}", shared_lib_ext()));
+        let highlights_src = tmp.path().join("ghost.scm"); // absent
+        let built = tmp.path().join(format!("xml{}", shared_lib_ext()));
         std::fs::write(&built, b"fake parser bytes").unwrap();
 
         let spec = dummy_spec("deadbeef00000000");
-        let err = install_into_user_dir("xml", &spec, &built, &source_root, &user).unwrap_err();
+        let err = install_into_user_dir("xml", &spec, &built, &highlights_src, "qrev", &user)
+            .unwrap_err();
         assert!(
             err.to_string().contains("highlights.scm missing"),
             "got: {err:#}"
         );
 
-        // user_dir may not even exist, but if it does the .so must not be there.
         let so_path = user.join(format!("xml{}", shared_lib_ext()));
         assert!(
             !so_path.exists(),
             ".so must not be written when highlights.scm is missing; found {so_path:?}"
+        );
+    }
+
+    #[test]
+    fn old_sidecar_format_counts_as_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        let loader = loader_with(
+            vec![],
+            user.clone(),
+            tmp.path().join("cache"),
+            tmp.path().join("qcache"),
+        );
+        let meta = dummy_meta();
+
+        let rev = "deadbeef0000";
+        let spec = dummy_spec(rev);
+        let pre = user.join(format!("rust{}", shared_lib_ext()));
+        touch(&pre);
+        // Write old two-field format — must be treated as stale.
+        std::fs::create_dir_all(&user).unwrap();
+        std::fs::write(
+            user.join("rust.rev"),
+            format!("{rev}:abi{}", tree_sitter::LANGUAGE_VERSION),
+        )
+        .unwrap();
+
+        assert!(
+            loader.lookup_fresh("rust", &spec, &meta).is_none(),
+            "old sidecar must count as stale"
         );
     }
 }

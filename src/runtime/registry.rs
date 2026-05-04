@@ -65,6 +65,11 @@ impl GrammarRegistry {
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
     }
+
+    /// Manifest meta (pinned query-source revisions).
+    pub fn meta(&self) -> &super::manifest::ManifestMeta {
+        &self.manifest.meta
+    }
 }
 
 #[cfg(test)]
@@ -143,19 +148,25 @@ mod tests {
     fn handcrafted_alphabetical_precedence() {
         // Two grammars claiming the same extension; alphabetically first wins.
         let toml = r#"
+            [meta]
+            helix_repo = "https://github.com/helix-editor/helix"
+            helix_rev = "aaaa0000bbbb1111cccc2222dddd3333eeee4444"
+            nvim_treesitter_repo = "https://github.com/nvim-treesitter/nvim-treesitter"
+            nvim_treesitter_rev = "ffff5555aaaa0000bbbb1111cccc2222dddd3333"
+
             [language.aaa]
             git_url = "https://example/aaa"
             git_rev = "1"
             extensions = ["x"]
             c_files = ["src/parser.c"]
-            query_dir = "queries"
+            query_source = "helix"
 
             [language.bbb]
             git_url = "https://example/bbb"
             git_rev = "2"
             extensions = ["x"]
             c_files = ["src/parser.c"]
-            query_dir = "queries"
+            query_source = "helix"
         "#;
         let r = GrammarRegistry::new(Manifest::from_toml_str(toml).unwrap());
         assert_eq!(r.name_for_path(&PathBuf::from("foo.x")), Some("aaa"));

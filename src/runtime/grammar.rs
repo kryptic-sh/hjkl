@@ -11,13 +11,7 @@ use tree_sitter::Language;
 use tree_sitter_language::LanguageFn;
 
 use super::loader::GrammarLoader;
-use super::manifest::LangSpec;
-
-/// Filename of the upstream query we ship — `highlights.scm`. We don't
-/// currently use `locals.scm` / `injections.scm`; if a consumer needs
-/// those later, add a parallel pipeline rather than overloading this
-/// constant.
-pub const HIGHLIGHTS_FILE: &str = "highlights.scm";
+use super::manifest::{LangSpec, ManifestMeta};
 
 /// A loaded tree-sitter grammar — parser shared library + highlights query.
 pub struct Grammar {
@@ -48,9 +42,14 @@ impl Grammar {
     /// Load a grammar by name. The [`GrammarLoader`] handles parser
     /// resolution (system → user → on-demand clone+compile+install).
     /// The highlights query is read from `<so_parent>/<name>.scm`.
-    pub fn load(name: &str, spec: &LangSpec, loader: &GrammarLoader) -> Result<Self> {
+    pub fn load(
+        name: &str,
+        spec: &LangSpec,
+        loader: &GrammarLoader,
+        meta: &ManifestMeta,
+    ) -> Result<Self> {
         let so = loader
-            .load(name, spec)
+            .load(name, spec, meta)
             .with_context(|| format!("resolve grammar {name}"))?;
         let lib =
             unsafe { Library::new(&so) }.with_context(|| format!("dlopen {}", so.display()))?;
@@ -129,29 +128,43 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "network + compiler: clones tree-sitter-c, builds, installs, dlopens"]
+    #[ignore = "network + compiler: clones tree-sitter-c + helix queries, builds, installs, dlopens"]
     fn load_real_grammar_end_to_end() {
         use super::super::compile::GrammarCompiler;
-        use super::super::source::SourceCache;
+        use super::super::manifest::{ManifestMeta, QuerySource};
+        use super::super::source::{QuerySourceCache, SourceCache};
 
         let tmp = tempfile::tempdir().unwrap();
         let sources = SourceCache::new(tmp.path().join("cache"));
+        let query_sources = QuerySourceCache::new(tmp.path().join("qcache"));
         let user_dir = tmp.path().join("user");
-        let loader = GrammarLoader::new(vec![], user_dir, sources, GrammarCompiler::new());
+        let loader = GrammarLoader::new(
+            vec![],
+            user_dir,
+            sources,
+            query_sources,
+            GrammarCompiler::new(),
+        );
 
+        let meta = ManifestMeta {
+            helix_repo: "https://github.com/helix-editor/helix".into(),
+            helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
+            nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
+            nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
+        };
         let spec = LangSpec {
             git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
             git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
             subpath: None,
             extensions: vec!["c".into()],
             c_files: vec!["src/parser.c".into()],
-            query_dir: "queries".into(),
+            query_source: QuerySource::Helix,
+            query_subdir: None,
             source: None,
         };
 
-        let grammar = Grammar::load("c", &spec, &loader).unwrap();
+        let grammar = Grammar::load("c", &spec, &loader, &meta).unwrap();
         assert_eq!(grammar.name(), "c");
-        // Sanity: the language resolved enough to compile a trivial query.
         let q = tree_sitter::Query::new(grammar.language(), grammar.highlights_scm());
         assert!(q.is_ok(), "highlights.scm failed to compile: {:?}", q.err());
     }

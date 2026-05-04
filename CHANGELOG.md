@@ -6,6 +6,44 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-04
+
+### Breaking
+
+- **`LangSpec.query_dir: String` removed.** Replaced by
+  `query_source: QuerySource` (enum: `Helix | NvimTreesitter`) and
+  `query_subdir: Option<String>`. Callers constructing `LangSpec` manually must
+  update field names. `bonsai.toml` entries that used `query_dir = "..."` now
+  use `query_source = "helix"` or `query_source = "nvim_treesitter"`.
+- **`GrammarLoader::new` takes a fifth argument `QuerySourceCache`.** All call
+  sites must supply one (use `QuerySourceCache::user_default()` for the standard
+  path).
+- **`GrammarLoader::user_default`, `GrammarLoader::load`,
+  `GrammarLoader::lookup_fresh`, and `Grammar::load` now take `&ManifestMeta`.**
+  Callers obtain this from `Manifest::meta` or `GrammarRegistry::meta()`.
+- **`.rev` sidecar format changed from `<rev>:abi<N>` to
+  `<rev>:<query_short_rev>:abi<N>`.** Old two-field sidecars parse as stale →
+  all existing user-dir grammars will be recompiled on first use after upgrade.
+- **`bonsai.toml` now requires a `[meta]` block** with `helix_repo`,
+  `helix_rev`, `nvim_treesitter_repo`, and `nvim_treesitter_rev`.
+
+### Changed
+
+- Query sources are now helix and nvim-treesitter repos (curators), not each
+  grammar repo's own `queries/` directory. Queries are fetched via sparse-clone
+  into `<XDG_CACHE_HOME>/bonsai/query-sources/{helix,nvim-treesitter}-<rev>/`.
+- `; inherits: foo,bar` directives in helix/nvim-treesitter query files are
+  expanded at install time: parent content is concatenated before child content,
+  transitively. The resolved single-file `.scm` is what gets installed as
+  `<name>.scm` in the user dir.
+- `xtask sync-bonsai` derives `query_source` from merge provenance: helix-only
+  grammars get `QuerySource::Helix`; nvim-only or shared grammars get
+  `QuerySource::NvimTreesitter` (nvim-treesitter has more comprehensive queries
+  for shared langs). No network probes — two HEAD-SHA fetches and done. The
+  `[meta]` block is written with pinned HEAD SHAs of both source repos.
+- `GrammarRegistry::meta()` added — returns `&ManifestMeta` so callers can build
+  a `GrammarLoader` with one registry lookup.
+
 ## [0.3.0] - 2026-05-03
 
 ### Breaking

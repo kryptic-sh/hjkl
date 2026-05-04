@@ -13,10 +13,10 @@
 //! use hjkl_bonsai::runtime::{Grammar, GrammarLoader, GrammarRegistry};
 //!
 //! let registry = GrammarRegistry::embedded()?;
-//! let loader = GrammarLoader::user_default()?;
+//! let loader = GrammarLoader::user_default(registry.meta())?;
 //!
 //! let spec = registry.by_name("rust").unwrap();
-//! let grammar = Arc::new(Grammar::load("rust", spec, &loader)?);
+//! let grammar = Arc::new(Grammar::load("rust", spec, &loader, registry.meta())?);
 //! let mut highlighter = Highlighter::new(grammar)?;
 //! let spans = highlighter.highlight(b"fn main() {}");
 //!

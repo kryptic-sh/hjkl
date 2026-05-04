@@ -18,26 +18,27 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use hjkl_bonsai::runtime::{GrammarCompiler, GrammarLoader, LangSpec, Manifest, SourceCache};
+use hjkl_bonsai::runtime::{
+    GrammarCompiler, GrammarLoader, LangSpec, Manifest, ManifestMeta, QuerySourceCache, SourceCache,
+};
 
 const MANIFEST: &str = include_str!("../../bonsai.toml");
 
 pub fn run(args: &[String]) -> Result<()> {
     let opts = Options::parse(args)?;
     let manifest = Manifest::from_toml_str(MANIFEST).context("parse embedded bonsai.toml")?;
+    let meta = manifest.meta.clone();
 
     std::fs::create_dir_all(&opts.out_dir)
         .with_context(|| format!("create out dir {}", opts.out_dir.display()))?;
 
-    // The loader is doing the heavy lifting (acquire → compile → install).
-    // We point its `user_dir` at the requested out dir, leave system_dirs
-    // empty (so we always go through the install path), and reuse the
-    // user's standard cache for source clones so re-runs are warm.
     let sources = SourceCache::user_default()?;
+    let query_sources = QuerySourceCache::user_default()?;
     let loader = GrammarLoader::new(
         Vec::new(),
         opts.out_dir.clone(),
         sources,
+        query_sources,
         GrammarCompiler::new(),
     );
 
@@ -52,7 +53,7 @@ pub fn run(args: &[String]) -> Result<()> {
             skipped += 1;
             continue;
         }
-        match build_one(name, spec, &loader) {
+        match build_one(name, spec, &loader, &meta) {
             Ok(BuildKind::Built) => {
                 built += 1;
                 println!("  built  {name}");
@@ -89,10 +90,15 @@ enum BuildKind {
     Cached,
 }
 
-fn build_one(name: &str, spec: &LangSpec, loader: &GrammarLoader) -> Result<BuildKind> {
-    let was_fresh = loader.lookup_fresh(name, spec).is_some();
+fn build_one(
+    name: &str,
+    spec: &LangSpec,
+    loader: &GrammarLoader,
+    meta: &ManifestMeta,
+) -> Result<BuildKind> {
+    let was_fresh = loader.lookup_fresh(name, spec, meta).is_some();
     loader
-        .load(name, spec)
+        .load(name, spec, meta)
         .with_context(|| format!("install {name}"))?;
     Ok(if was_fresh {
         BuildKind::Cached
