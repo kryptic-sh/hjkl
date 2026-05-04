@@ -13,8 +13,8 @@ homepage.workspace = true
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-hjkl-buffer = { path = "../hjkl-buffer" }
-hjkl-engine = { path = "../hjkl-engine" }
+hjkl-buffer = { version = "0.3", path = "../hjkl-buffer" }
+hjkl-engine = { version = "0.3", path = "../hjkl-engine" }
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros"] }

@@ -6,10 +6,11 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "warn"
 ignore = [
-  # `paste` is unmaintained but only pulled transitively by ratatui.
-  # No replacement exists in ratatui's tree; the macro is a stable
-  # build-time helper. Re-evaluate when ratatui drops the dep.
-  { id = "RUSTSEC-2024-0436", reason = "transitive via ratatui — accept until ratatui drops paste" },
+  # `tokio-io` is unmaintained (Tokio 0.1 era); pulled transitively
+  # via futures-util via nvim-rs into the workspace-only,
+  # publish = false `hjkl-compat-oracle` test crate. Not redistributed
+  # in any released hjkl artifact.
+  { id = "RUSTSEC-2026-0058", reason = "transitive via nvim-rs in test-only crate" },
 ]
 
 [licenses]
@@ -25,6 +26,12 @@ allow = [
   "Unicode-DFS-2016",
   "Zlib",
   "CC0-1.0",
+]
+exceptions = [
+  # nvim-rs is LGPL-3.0; pulled only by the workspace-only,
+  # publish = false `hjkl-compat-oracle` test crate. Not redistributed
+  # in any released hjkl artifact.
+  { allow = ["LGPL-3.0"], crate = "nvim-rs" },
 ]
 confidence-threshold = 0.8
 
