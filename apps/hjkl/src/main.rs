@@ -16,7 +16,7 @@ mod theme;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::{execute, terminal};
+use crossterm::{event, execute, terminal};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::path::PathBuf;
@@ -214,7 +214,11 @@ fn main() -> Result<()> {
     }
 
     terminal::enable_raw_mode()?;
-    execute!(stdout(), terminal::EnterAlternateScreen)?;
+    execute!(
+        stdout(),
+        terminal::EnterAlternateScreen,
+        event::EnableFocusChange
+    )?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
@@ -222,7 +226,11 @@ fn main() -> Result<()> {
 
     // Restore terminal regardless of outcome.
     let _ = terminal::disable_raw_mode();
-    let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen);
+    let _ = execute!(
+        io::stdout(),
+        event::DisableFocusChange,
+        terminal::LeaveAlternateScreen
+    );
 
     result
 }

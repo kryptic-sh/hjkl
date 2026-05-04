@@ -5,7 +5,7 @@ use git2::{BranchType, ErrorCode};
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Editor, Host, Options};
 
-use super::{App, BufferSlot, STATUS_LINE_HEIGHT};
+use super::{App, BufferSlot, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
 use crate::syntax::BufferId;
 
@@ -479,6 +479,9 @@ fn build_scratch_slot(
         last_recompute_key: key,
         saved_hash: 0,
         saved_len: 0,
+        disk_mtime: None,
+        disk_len: None,
+        disk_state: DiskState::Synced,
     };
     slot.snapshot_saved();
     Ok(slot)

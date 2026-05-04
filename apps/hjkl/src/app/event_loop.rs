@@ -313,6 +313,9 @@ impl App {
                     vp.width = w;
                     vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
                 }
+                Event::FocusGained => {
+                    self.checktime_all();
+                }
                 _ => {}
             }
 

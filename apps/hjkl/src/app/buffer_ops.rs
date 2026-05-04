@@ -2,7 +2,7 @@ use hjkl_buffer::Buffer;
 use hjkl_engine::{Editor, Host, Options};
 use std::path::PathBuf;
 
-use super::{App, STATUS_LINE_HEIGHT};
+use super::{App, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
 
 impl App {
@@ -110,6 +110,9 @@ impl App {
             slot.last_recompute_key = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
+            slot.disk_mtime = None;
+            slot.disk_len = None;
+            slot.disk_state = DiskState::Synced;
             slot.snapshot_saved();
             self.status_message = Some("buffer closed (replaced with [No Name])".into());
             return;

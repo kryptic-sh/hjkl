@@ -1,5 +1,6 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::time::Duration;
 
 use crate::theme::AppTheme;
 
@@ -1207,4 +1208,98 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
         );
         matches!(source.select(0), crate::picker::PickerAction::None);
     }
+}
+
+// ── checktime / disk-change detection tests ────────────────────────────
+
+/// Helper: bump mtime by writing a file then sleeping briefly so the
+/// filesystem timestamp advances past the stored baseline.
+fn write_and_wait(path: &std::path::Path, content: &str) {
+    std::fs::write(path, content).unwrap();
+    // Give the FS time to advance mtime past what we stored at load.
+    std::thread::sleep(Duration::from_millis(50));
+}
+
+#[test]
+fn checktime_reloads_clean_buffer_when_disk_changed() {
+    let path = std::env::temp_dir().join("hjkl_ct_reload.txt");
+    std::fs::write(&path, "line1\nline2\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    assert_eq!(app.active().editor.buffer().lines(), vec!["line1", "line2"]);
+
+    write_and_wait(&path, "new content\n");
+    app.checktime_all();
+
+    assert_eq!(
+        app.active().editor.buffer().lines(),
+        vec!["new content"],
+        "buffer should be reloaded from disk"
+    );
+    assert!(!app.active().dirty, "reloaded buffer must not be dirty");
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn checktime_marks_dirty_buffer_as_changed_on_disk_no_reload() {
+    let path = std::env::temp_dir().join("hjkl_ct_dirty.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    // Dirty the buffer without touching disk.
+    app.active_mut().dirty = true;
+
+    write_and_wait(&path, "changed on disk\n");
+    app.checktime_all();
+
+    // Content must NOT have changed.
+    assert_eq!(
+        app.active().editor.buffer().lines(),
+        vec!["original"],
+        "dirty buffer must not be reloaded"
+    );
+    assert_eq!(
+        app.active().disk_state,
+        DiskState::ChangedOnDisk,
+        "disk_state must be ChangedOnDisk"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn checktime_marks_deleted_when_file_removed() {
+    let path = std::env::temp_dir().join("hjkl_ct_deleted.txt");
+    std::fs::write(&path, "content\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    std::fs::remove_file(&path).unwrap();
+    app.checktime_all();
+
+    assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
+    // Buffer content preserved.
+    assert_eq!(app.active().editor.buffer().lines(), vec!["content"]);
+}
+
+#[test]
+fn checktime_recovers_after_file_recreated() {
+    let path = std::env::temp_dir().join("hjkl_ct_recover.txt");
+    std::fs::write(&path, "v1\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    // Delete → marks DeletedOnDisk.
+    std::fs::remove_file(&path).unwrap();
+    app.checktime_all();
+    assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
+
+    // Recreate with new content — next checktime should reload (not dirty).
+    write_and_wait(&path, "v2\n");
+    app.checktime_all();
+
+    assert_eq!(
+        app.active().editor.buffer().lines(),
+        vec!["v2"],
+        "recreated file should be reloaded"
+    );
+    assert_eq!(app.active().disk_state, DiskState::Synced);
+    let _ = std::fs::remove_file(&path);
 }

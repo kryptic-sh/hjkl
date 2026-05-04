@@ -4,7 +4,7 @@ use hjkl_engine::{Host, Query};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::App;
+use super::{App, DiskState};
 
 impl App {
     /// Execute an ex command string (without the leading `:`).
@@ -180,6 +180,42 @@ impl App {
             return;
         }
 
+        // `:checktime` — check all open buffers for changes on disk.
+        if cmd == "checktime" {
+            self.checktime_all();
+            return;
+        }
+
+        // `:write[!]` — intercept before the engine to enforce disk-state guard.
+        if cmd == "write"
+            || cmd == "write!"
+            || cmd.starts_with("write ")
+            || cmd.starts_with("write!")
+        {
+            let force = cmd == "write!" || cmd.starts_with("write!");
+            let path_arg = if let Some(rest) = cmd.strip_prefix("write!") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("write ") {
+                rest.trim()
+            } else {
+                ""
+            };
+            let target = if path_arg.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(path_arg))
+            };
+            if !force && self.active().disk_state == DiskState::ChangedOnDisk {
+                self.status_message =
+                    Some("E13: file has changed on disk (add ! to override)".into());
+                return;
+            }
+            if self.do_save(target) {
+                self.active_mut().disk_state = DiskState::Synced;
+            }
+            return;
+        }
+
         match ex::run(&mut self.slots[self.active].editor, cmd) {
             ExEffect::None => {}
             ExEffect::Ok => {}
@@ -317,6 +353,12 @@ impl App {
                             line_count,
                             byte_count,
                         ));
+                        // Record disk metadata so checktime knows the new baseline.
+                        if let Ok(meta) = std::fs::metadata(&p) {
+                            self.slots[idx].disk_mtime = meta.modified().ok();
+                            self.slots[idx].disk_len = Some(meta.len());
+                        }
+                        self.slots[idx].disk_state = DiskState::Synced;
                         self.slots[idx].filename = Some(p);
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
@@ -496,6 +538,12 @@ impl App {
             vp.top_col = 0;
         }
         self.active_mut().is_new_file = false;
+        // Record fresh disk metadata and clear the disk-change flag.
+        if let Ok(meta) = std::fs::metadata(&path) {
+            self.active_mut().disk_mtime = meta.modified().ok();
+            self.active_mut().disk_len = Some(meta.len());
+        }
+        self.active_mut().disk_state = DiskState::Synced;
         let buffer_id = self.active().buffer_id;
         self.syntax.set_language_for_path(buffer_id, &path);
         self.syntax.reset(buffer_id);
@@ -522,5 +570,109 @@ impl App {
             "\"{}\" {line_count}L, {byte_count}B",
             path.display()
         ));
+    }
+
+    /// Check all open slots for external changes. Called on focus-regain
+    /// and by `:checktime`. Non-dirty slots whose file changed are reloaded
+    /// automatically; dirty slots and deleted files get a status warning
+    /// (emitted once per state transition).
+    pub(crate) fn checktime_all(&mut self) {
+        let mut messages: Vec<String> = Vec::new();
+        for idx in 0..self.slots.len() {
+            let path = match self.slots[idx].filename.clone() {
+                Some(p) => p,
+                None => continue,
+            };
+            match std::fs::metadata(&path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let prev = self.slots[idx].disk_state;
+                    self.slots[idx].disk_state = DiskState::DeletedOnDisk;
+                    if prev != DiskState::DeletedOnDisk {
+                        messages.push(format!("W: \"{}\" deleted on disk", path.display()));
+                    }
+                }
+                Err(_) => {
+                    // Non-NotFound I/O error — skip silently.
+                }
+                Ok(meta) => {
+                    let new_mtime = meta.modified().ok();
+                    let new_len = meta.len();
+                    // Compare against stored baseline.
+                    let changed = self.slots[idx].disk_mtime != new_mtime
+                        || self.slots[idx].disk_len != Some(new_len);
+                    if !changed {
+                        if self.slots[idx].disk_state == DiskState::DeletedOnDisk {
+                            // File reappeared. If we were in Deleted state,
+                            // reset to Synced so a follow-up checktime can pick
+                            // it up properly (the next block below handles
+                            // the actual reload when dirty==false).
+                            self.slots[idx].disk_state = DiskState::Synced;
+                        }
+                        continue;
+                    }
+                    // File changed. If dirty — warn once; don't reload.
+                    if self.slots[idx].dirty {
+                        let prev = self.slots[idx].disk_state;
+                        self.slots[idx].disk_state = DiskState::ChangedOnDisk;
+                        if prev != DiskState::ChangedOnDisk {
+                            messages.push(format!(
+                                "W: \"{}\" changed on disk (buffer is dirty, use :e! to reload)",
+                                path.display()
+                            ));
+                        }
+                    } else {
+                        // Clean buffer — reload automatically.
+                        let content = match std::fs::read_to_string(&path) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let trimmed = content.strip_suffix('\n').unwrap_or(&content);
+                        // Preserve cursor position clamped to new line count.
+                        let (cur_row, cur_col) = self.slots[idx].editor.cursor();
+                        self.slots[idx].editor.set_content(trimmed);
+                        let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
+                        let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
+                        self.slots[idx].editor.goto_line(clamped_row + 1);
+                        let _ = cur_col; // column is reset by goto_line
+                        self.slots[idx].is_new_file = false;
+                        // Update disk metadata baseline.
+                        self.slots[idx].disk_mtime = new_mtime;
+                        self.slots[idx].disk_len = Some(new_len);
+                        self.slots[idx].disk_state = DiskState::Synced;
+                        self.slots[idx].snapshot_saved();
+                        // Refresh syntax + git for the reloaded slot.
+                        let buffer_id = self.slots[idx].buffer_id;
+                        self.syntax.set_language_for_path(buffer_id, &path);
+                        self.syntax.reset(buffer_id);
+                        self.slots[idx].last_recompute_key = None;
+                        if idx == self.active {
+                            self.slots[idx]
+                                .editor
+                                .install_ratatui_syntax_spans(Vec::new());
+                            let (vp_top, vp_height) = {
+                                let vp = self.slots[idx].editor.host().viewport();
+                                (vp.top_row, vp.height as usize)
+                            };
+                            if let Some(out) = self.syntax.preview_render(
+                                buffer_id,
+                                self.slots[idx].editor.buffer(),
+                                vp_top,
+                                vp_height,
+                            ) {
+                                self.slots[idx]
+                                    .editor
+                                    .install_ratatui_syntax_spans(out.spans);
+                            }
+                            self.recompute_and_install();
+                            self.refresh_git_signs_force();
+                        }
+                        messages.push(format!("\"{}\" reloaded from disk", path.display()));
+                    }
+                }
+            }
+        }
+        if !messages.is_empty() {
+            self.status_message = Some(messages.join(" | "));
+        }
     }
 }

@@ -8,7 +8,7 @@ use hjkl_form::TextFieldEditor;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
@@ -63,6 +63,17 @@ fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
         len += l.len();
     }
     (hasher.finish(), len)
+}
+
+/// Whether the on-disk file is in sync with what was last loaded/saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskState {
+    /// File matches what we loaded/saved last.
+    Synced,
+    /// File changed on disk since last load/save (and buffer is dirty — no auto-reload).
+    ChangedOnDisk,
+    /// File no longer exists on disk.
+    DeletedOnDisk,
 }
 
 /// Direction of an active host-driven search prompt. `/` opens a
@@ -122,6 +133,12 @@ pub struct BufferSlot {
     /// recent save (or load).
     saved_hash: u64,
     saved_len: usize,
+    /// mtime of the file on disk at the most recent load or save.
+    pub disk_mtime: Option<SystemTime>,
+    /// Byte length of the file on disk at the most recent load or save.
+    pub disk_len: Option<u64>,
+    /// Whether the on-disk file is in sync, changed, or deleted.
+    pub disk_state: DiskState,
 }
 
 impl BufferSlot {
@@ -246,9 +263,16 @@ pub(super) fn build_slot(
 ) -> Result<BufferSlot, String> {
     let mut buffer = Buffer::new();
     let mut is_new_file = false;
+    let mut disk_mtime: Option<SystemTime> = None;
+    let mut disk_len: Option<u64> = None;
     if let Some(ref p) = path {
         match std::fs::read_to_string(p) {
             Ok(content) => {
+                // Snapshot disk metadata right after a successful read.
+                if let Ok(meta) = std::fs::metadata(p) {
+                    disk_mtime = meta.modified().ok();
+                    disk_len = Some(meta.len());
+                }
                 let content = content.strip_suffix('\n').unwrap_or(&content);
                 BufferEdit::replace_all(&mut buffer, content);
             }
@@ -317,6 +341,9 @@ pub(super) fn build_slot(
         last_recompute_key: key,
         saved_hash: 0,
         saved_len: 0,
+        disk_mtime,
+        disk_len,
+        disk_state: DiskState::Synced,
     };
     slot.snapshot_saved();
     Ok(slot)

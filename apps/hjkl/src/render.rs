@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, BUFFER_LINE_HEIGHT, STATUS_LINE_HEIGHT};
+use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = line_count.to_string().len() + 2`. The renderer must
@@ -442,6 +442,11 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     } else {
         ""
     };
+    let disk_tag = match app.active().disk_state {
+        DiskState::DeletedOnDisk => " [deleted]",
+        DiskState::ChangedOnDisk => " [changed on disk]",
+        DiskState::Synced => "",
+    };
     let untracked_tag = if app.active().is_untracked && !app.active().is_new_file {
         " [Untracked]"
     } else {
@@ -484,7 +489,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let search_count_block: String = search_count(app)
         .map(|(idx, total)| format!(" [{idx}/{total}] "))
         .unwrap_or_default();
-    let suffix = format!("{ro_tag}{new_tag}{untracked_tag}");
+    let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
 
     // Filename block — surface bg, with leading + trailing space.
     // Truncate with leading `…` if the line doesn't fit.
