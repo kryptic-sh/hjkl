@@ -30,6 +30,74 @@ pub struct GitStatusPicker {
     highlighters: Mutex<HashMap<String, Highlighter>>,
 }
 
+/// Detects a Conventional Commits prefix at `start` (char index) inside
+/// `label`. Returns the char index just past the colon if matched.
+/// Pattern: `<type>(<scope>)?!?:` where type is alphanumerics + `_`/`-`,
+/// scope is anything except `)`/`(`.
+fn conv_commit_prefix_end(label: &str, start: usize) -> Option<usize> {
+    let mut iter = label.chars().enumerate().skip_while(|&(i, _)| i < start);
+    let mut ci = start;
+    let mut saw_type = false;
+    // Type chars
+    for (i, c) in iter.by_ref() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            saw_type = true;
+            ci = i + 1;
+        } else {
+            ci = i;
+            break;
+        }
+    }
+    if !saw_type {
+        return None;
+    }
+    // Look at next char: '(' for scope, '!' for breaking, ':' for end.
+    let rest: String = label.chars().skip(ci).collect();
+    let mut chars = rest.chars();
+    let mut consumed = 0usize;
+    match chars.next()? {
+        '(' => {
+            consumed += 1;
+            // Scope until ')'
+            let mut closed = false;
+            for c in chars.by_ref() {
+                consumed += 1;
+                if c == ')' {
+                    closed = true;
+                    break;
+                }
+                if c == '(' {
+                    return None;
+                }
+            }
+            if !closed {
+                return None;
+            }
+            // Optional '!'
+            if let Some('!') = chars.clone().next() {
+                chars.next();
+                consumed += 1;
+            }
+            if chars.next()? != ':' {
+                return None;
+            }
+            consumed += 1;
+        }
+        '!' => {
+            consumed += 1;
+            if chars.next()? != ':' {
+                return None;
+            }
+            consumed += 1;
+        }
+        ':' => {
+            consumed += 1;
+        }
+        _ => return None,
+    }
+    Some(ci + consumed)
+}
+
 fn diff_spans(content: &str) -> PreviewSpans {
     let bytes = content.as_bytes();
     let mut ranges: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
@@ -642,6 +710,40 @@ impl PickerLogic for GitLogPicker {
                     .map(|item| format!("{} {} {}", item.short_sha, item.author, item.subject))
             })
             .unwrap_or_default()
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let short_len = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.short_sha.chars().count()))?;
+        let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+        // Hash: skip 2-char gutter, then short_sha chars.
+        let hash_start = 2usize;
+        let hash_end = hash_start + short_len;
+        out.push((
+            hash_start..hash_end,
+            Style::default().fg(Color::Yellow),
+        ));
+        // Subject starts after `<short>  ` (two spaces between hash and subject).
+        let subject_start = hash_end + 2;
+        if let Some(end) = conv_commit_prefix_end(label, subject_start) {
+            out.push((
+                subject_start..end,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+        }
+        Some(out)
     }
 
     fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {

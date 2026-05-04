@@ -707,6 +707,7 @@ fn render_picker_input_and_list(
     }
 
     let entries = picker.visible_entries();
+    let row_styles = picker.visible_entry_styles();
     // Match-position highlight inside picker rows — uses the same orange
     // as search match highlighting.
     let match_style = Style::default()
@@ -714,9 +715,10 @@ fn render_picker_input_and_list(
         .add_modifier(Modifier::BOLD);
     let items: Vec<ListItem> = entries
         .iter()
-        .map(|(label, matches)| {
-            if matches.is_empty() {
-                // No query or no match positions — render plain text.
+        .enumerate()
+        .map(|(row_idx, (label, matches))| {
+            let styles = row_styles.get(row_idx).map(Vec::as_slice).unwrap_or(&[]);
+            if matches.is_empty() && styles.is_empty() {
                 return ListItem::new(label.clone());
             }
             let spans: Vec<Span> = label
@@ -724,8 +726,15 @@ fn render_picker_input_and_list(
                 .enumerate()
                 .map(|(ci, ch)| {
                     let s = ch.to_string();
+                    let base = styles
+                        .iter()
+                        .find(|(r, _)| r.contains(&ci))
+                        .map(|(_, st)| *st)
+                        .unwrap_or_default();
                     if matches.contains(&ci) {
-                        Span::styled(s, match_style)
+                        Span::styled(s, base.patch(match_style))
+                    } else if base != Style::default() {
+                        Span::styled(s, base)
                     } else {
                         Span::raw(s)
                     }
