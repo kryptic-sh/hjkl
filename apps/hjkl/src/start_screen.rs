@@ -76,12 +76,10 @@ fn trail_color(age: usize) -> Color {
 pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate::theme::AppTheme) {
     let cursor_idx = screen.tick as usize % PATH.len();
 
-    // Paint the whole splash area with the editor body bg so the art block
-    // doesn't read as a discoloured rectangle.
-    frame.render_widget(
-        Paragraph::new("").style(Style::default().bg(theme.ui.surface_bg)),
-        area,
-    );
+    // No bg paint: the editor body lets the terminal default show through
+    // (BufferView only paints text cells), so the splash matches by doing
+    // the same. Painting an explicit theme bg here would only line up on
+    // terminals whose bg already equals the theme's surface_bg.
 
     // Center the art block in `area`.
     let art_top = area.y + area.height.saturating_sub(ART_ROWS + 4) / 2;
@@ -98,11 +96,7 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
             width: ART_COLS.min(area.width),
             height: 1,
         };
-        let para = Paragraph::new(art_line).style(
-            Style::default()
-                .fg(theme.ui.text_dim)
-                .bg(theme.ui.surface_bg),
-        );
+        let para = Paragraph::new(art_line).style(Style::default().fg(theme.ui.text_dim));
         frame.render_widget(para, art_rect);
     }
 
@@ -124,7 +118,7 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
                     cell.set_char(seg_char);
                     cell.set_style(
                         Style::default()
-                            .fg(theme.ui.surface_bg)
+                            .fg(theme.ui.text)
                             .bg(theme.ui.cursor_line_bg),
                     );
                 }
