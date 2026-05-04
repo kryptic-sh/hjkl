@@ -10,6 +10,10 @@ patch bumps.
 
 ### Added
 
+- Homebrew tap auto-publish for `hjkl` on tag push. New
+  `pkg/homebrew/hjkl.rb.in` template + `brew-tap` job in `release.yml` renders
+  the formula with the just-uploaded macOS sha256s and pushes it to
+  `kryptic-sh/homebrew-tap`. Install with `brew install kryptic-sh/tap/hjkl`.
 - **`hjkl-compat-oracle` crate** (workspace-only, `publish = false`) — headless
   neovim diff harness for vim-compat regression testing. Spawns
   `nvim --headless --embed` per case, drives both nvim and the hjkl engine

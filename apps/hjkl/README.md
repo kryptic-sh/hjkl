@@ -20,6 +20,14 @@ smart indent, `.editorconfig`, `softtabstop`, and clipboard via our in-house
 
 ## Install
 
+**macOS (Homebrew)**
+
+```bash
+brew install kryptic-sh/tap/hjkl
+```
+
+**From source**
+
 ```bash
 cargo install hjkl
 ```
@@ -95,8 +103,8 @@ hjkl +picker          # open fuzzy file picker immediately
 - [`hjkl-engine`](https://crates.io/crates/hjkl-engine) — modal-editing FSM
 - [`hjkl-editor`](https://crates.io/crates/hjkl-editor) — ex commands, search,
   shell exec
-- [`hjkl-bonsai`](https://crates.io/crates/hjkl-bonsai) — bundled
-  tree-sitter grammars + Neovim-flavoured highlight themes
+- [`hjkl-bonsai`](https://crates.io/crates/hjkl-bonsai) — bundled tree-sitter
+  grammars + Neovim-flavoured highlight themes
 - [`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) — system clipboard
   adapter
 - [`hjkl-form`](https://crates.io/crates/hjkl-form) — single-line form input
