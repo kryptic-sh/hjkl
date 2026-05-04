@@ -644,6 +644,44 @@ fn buffer_source_select_returns_switch_buffer() {
 }
 
 #[test]
+fn edit_drops_pristine_default_buffer_when_first_real_file_opens() {
+    let path = std::env::temp_dir().join("hjkl_drop_pristine.txt");
+    std::fs::write(&path, "hello\n").unwrap();
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.slots.len(), 1);
+    assert!(app.active().filename.is_none());
+    app.dispatch_ex(&format!("e {}", path.display()));
+    assert_eq!(
+        app.slots.len(),
+        1,
+        "pristine default buffer should have been dropped"
+    );
+    assert_eq!(app.active, 0);
+    assert_eq!(
+        app.active().filename.as_deref(),
+        Some(path.as_path()),
+        "active slot should now be the opened file"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn edit_keeps_dirty_default_buffer_when_opening_real_file() {
+    let path = std::env::temp_dir().join("hjkl_keep_dirty_default.txt");
+    std::fs::write(&path, "hello\n").unwrap();
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Mark default as dirty without giving it a name.
+    app.slots[0].dirty = true;
+    app.dispatch_ex(&format!("e {}", path.display()));
+    assert_eq!(
+        app.slots.len(),
+        2,
+        "dirty unnamed buffer must not be dropped silently"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn open_extra_adds_slot_and_leaves_active_zero() {
     let path_a = std::env::temp_dir().join("hjkl_open_extra_a.txt");
     let path_b = std::env::temp_dir().join("hjkl_open_extra_b.txt");

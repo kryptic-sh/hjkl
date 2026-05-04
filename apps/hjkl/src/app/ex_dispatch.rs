@@ -427,6 +427,11 @@ impl App {
         }
 
         // Otherwise create a new slot.
+        let prev_idx = self.active;
+        let prev_pristine = {
+            let s = &self.slots[prev_idx];
+            s.filename.is_none() && !s.dirty
+        };
         match self.open_new_slot(path) {
             Ok(idx) => {
                 // Track alt-buffer before switching.
@@ -441,6 +446,16 @@ impl App {
                     .unwrap_or_default();
                 self.status_message = Some(format!("\"{path_display}\" {line_count}L"));
                 self.refresh_git_signs_force();
+
+                // Drop the pristine default buffer once a real file is open.
+                if prev_pristine && self.slots.len() > 1 {
+                    let removed = self.slots.remove(prev_idx);
+                    self.syntax.forget(removed.buffer_id);
+                    if prev_idx < self.active {
+                        self.active -= 1;
+                    }
+                    self.prev_active = None;
+                }
             }
             Err(msg) => {
                 self.status_message = Some(msg);
