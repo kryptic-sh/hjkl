@@ -8,9 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-05
+
 ### Added
 
-- Homebrew tap auto-publish for `hjkl` on tag push. New
+- **Markdown fenced code blocks render with sub-language highlighting.**
+  ` ```rust ` / ` ```python ` / etc. inside `.md` buffers now show the inner
+  code with the target language's tree-sitter highlights instead of plain
+  `markup.raw.block`. Powered by `hjkl-bonsai` 0.5's new
+  `Highlighter::highlight_with_injections` / `highlight_range_with_injections`
+  methods plus a per-process child grammar cache in `LanguageDirectory`. First
+  fence of an unseen language pays a one-time clone+compile (worker thread, off
+  the input path); subsequent renders are a cache hit.
+- **Homebrew tap auto-publish** for `hjkl` on tag push. New
   `pkg/homebrew/hjkl.rb.in` template + `brew-tap` job in `release.yml` renders
   the formula with the just-uploaded macOS sha256s and pushes it to
   `kryptic-sh/homebrew-tap`. Install with `brew install kryptic-sh/tap/hjkl`.
@@ -22,6 +32,22 @@ patch bumps.
   in `corpus/tier1.toml`. 8 confirmed engine divergences surfaced and tracked
   separately in `corpus/known_divergences.toml` + issue #24. Wired into cron CI
   (`.github/workflows/cron.yml`). Closes #23.
+- AUR + Alpine `.apk` install paths added to README and the marketing site.
+
+### Fixed
+
+- `hjkl-engine` 0.3.6: `pos_at_byte` no longer panics on byte indices that land
+  inside a multi-byte UTF-8 codepoint. Caught by the cargo-fuzz `handle_key`
+  target on a Cyrillic-seeded input after the fuzz workspace + patch-deps
+  plumbing in `crates/hjkl-engine/fuzz` was repaired.
+
+### Changed
+
+- `hjkl-bonsai` 0.4.1 → 0.5.0 (new injection methods).
+- `hjkl-engine` 0.3.4 → 0.3.6 (added `decode_macro` re-export at crate root in
+  0.3.5; UTF-8 fix in 0.3.6).
+- Marketing site refreshed for v0.10.x: nine ecosystem crates including
+  `hjkl-config`, `<leader>g` git surface tagline, `.apk` in install line.
 
 ## [0.10.1] - 2026-05-05
 
@@ -1078,7 +1104,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.0
 [0.10.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.1
 [0.10.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.0
 [0.9.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.3
