@@ -182,6 +182,15 @@ impl App {
         self.pending_git = false;
     }
 
+    /// Open the git-stash picker.
+    pub(crate) fn open_git_stash_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source = Box::new(crate::picker_git::GitStashPicker::new(cwd));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     /// Open the git-status fuzzy picker.
     pub(crate) fn open_git_status_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -239,6 +248,9 @@ impl App {
             }
             crate::picker::PickerAction::ShowCommit(sha) => self.do_show_commit(&sha),
             crate::picker::PickerAction::CheckoutBranch(name) => self.do_checkout_branch(&name),
+            crate::picker::PickerAction::StashApply(idx) => self.do_stash_apply(idx),
+            crate::picker::PickerAction::StashPop(idx) => self.do_stash_pop(idx),
+            crate::picker::PickerAction::StashDrop(idx) => self.do_stash_drop(idx),
             crate::picker::PickerAction::None => {}
         }
     }
@@ -370,6 +382,67 @@ impl App {
         self.status_message = Some(format!("checked out {name}"));
         // Reload non-dirty buffers whose disk file changed during checkout.
         self.checktime_all();
+    }
+
+    pub(crate) fn do_stash_apply(&mut self, idx: usize) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+        let mut opts = git2::StashApplyOptions::new();
+        match repo.stash_apply(idx, Some(&mut opts)) {
+            Ok(()) => {
+                self.status_message = Some(format!("applied stash@{{{idx}}}"));
+                self.checktime_all();
+            }
+            Err(e) => {
+                self.status_message = Some(format!("stash apply conflict — {e}"));
+            }
+        }
+    }
+
+    pub(crate) fn do_stash_pop(&mut self, idx: usize) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+        let mut opts = git2::StashApplyOptions::new();
+        match repo.stash_pop(idx, Some(&mut opts)) {
+            Ok(()) => {
+                self.status_message = Some(format!("popped stash@{{{idx}}}"));
+                self.checktime_all();
+            }
+            Err(e) => {
+                self.status_message = Some(format!("stash pop conflict — {e}"));
+            }
+        }
+    }
+
+    pub(crate) fn do_stash_drop(&mut self, idx: usize) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+        match repo.stash_drop(idx) {
+            Ok(()) => {
+                self.status_message = Some(format!("dropped stash@{{{idx}}}"));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("git: stash drop failed — {e}"));
+            }
+        }
     }
 
     pub(crate) fn do_show_commit(&mut self, sha: &str) {

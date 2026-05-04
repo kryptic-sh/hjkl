@@ -139,6 +139,13 @@ impl App {
                             {
                                 self.open_git_file_history_picker();
                             }
+                            // <leader>gS — stashes picker (uppercase S).
+                            KeyCode::Char('S')
+                                if key.modifiers == KeyModifiers::NONE
+                                    || key.modifiers == KeyModifiers::SHIFT =>
+                            {
+                                self.open_git_stash_picker();
+                            }
                             _ => {}
                         }
                         continue;

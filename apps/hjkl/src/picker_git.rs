@@ -1659,3 +1659,307 @@ impl PickerLogic for GitBranchPicker {
             .ok()
     }
 }
+
+// ── GitStashPicker ────────────────────────────────────────────────────────
+
+struct StashItem {
+    index: usize,
+    oid: git2::Oid,
+    message: String,
+    branch_hint: String,
+}
+
+pub struct GitStashPicker {
+    root: PathBuf,
+    items: Arc<Mutex<Vec<StashItem>>>,
+    scan_done: Arc<AtomicBool>,
+    is_sentinel: Arc<AtomicBool>,
+}
+
+impl GitStashPicker {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            is_sentinel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Parse branch hint from stash message.
+/// "WIP on <branch>: ..." or "On <branch>: ..." → branch name.
+fn parse_stash_branch(msg: &str) -> String {
+    let body = msg
+        .strip_prefix("WIP on ")
+        .or_else(|| msg.strip_prefix("On "))
+        .unwrap_or("");
+    match body.find(':') {
+        Some(i) => body[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+fn scan_git_stashes(
+    root: PathBuf,
+    items: Arc<Mutex<Vec<StashItem>>>,
+    done: Arc<AtomicBool>,
+    sentinel: Arc<AtomicBool>,
+    _cancel: Arc<AtomicBool>,
+) {
+    let mut repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(StashItem {
+                    index: 0,
+                    oid: git2::Oid::zero(),
+                    message: String::new(),
+                    branch_hint: String::new(),
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let mut collected: Vec<StashItem> = Vec::new();
+    let _ = repo.stash_foreach(|index, message, oid| {
+        let branch_hint = parse_stash_branch(message);
+        collected.push(StashItem {
+            index,
+            oid: *oid,
+            message: message.to_string(),
+            branch_hint,
+        });
+        true
+    });
+
+    if collected.is_empty() {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(StashItem {
+                index: 0,
+                oid: git2::Oid::zero(),
+                message: "no stashes".to_string(),
+                branch_hint: String::new(),
+            });
+        }
+    } else if let Ok(mut g) = items.lock() {
+        g.extend(collected);
+    }
+
+    done.store(true, Ordering::Release);
+}
+
+impl PickerLogic for GitStashPicker {
+    fn title(&self) -> &str {
+        "git stashes"
+    }
+
+    fn preserve_source_order(&self) -> bool {
+        true
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            let msg = self
+                .items
+                .lock()
+                .ok()
+                .and_then(|g| g.first().map(|i| i.message.clone()))
+                .unwrap_or_default();
+            if msg.is_empty() {
+                return SENTINEL_LABEL.to_owned();
+            }
+            return format!("  {msg}");
+        }
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx).map(|item| {
+                    let branch = if item.branch_hint.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  on {}", item.branch_hint)
+                    };
+                    format!("  stash@{{{}}}{}  {}", item.index, branch, item.message)
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        _label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let (stash_idx, branch_hint) = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| (i.index, i.branch_hint.clone())))?;
+        let index_str = format!("stash@{{{stash_idx}}}");
+        let index_len = index_str.chars().count();
+        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        // "  stash@{N}" — index starts at char 2.
+        let index_start = 2usize;
+        let index_end = index_start + index_len;
+        out.push((
+            index_start..index_end,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+        ));
+        if !branch_hint.is_empty() {
+            // "  on <branch>" — 2 chars gap after index
+            let branch_label = format!("  on {branch_hint}");
+            let branch_start = index_end;
+            let branch_end = branch_start + branch_label.chars().count();
+            out.push((
+                branch_start..branch_end,
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ));
+        }
+        Some(out)
+    }
+
+    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return (
+                hjkl_buffer::Buffer::new(),
+                String::new(),
+                PreviewSpans::default(),
+            );
+        }
+
+        let oid = match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.oid))
+        {
+            Some(o) if o != git2::Oid::zero() => o,
+            _ => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    String::new(),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let repo = match Repository::discover(&self.root) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        // Diff stash commit tree against parent 0 (HEAD at stash time).
+        let diff_text = if let Ok(parent) = commit.parent(0) {
+            let parent_tree = parent.tree().ok();
+            let stash_tree = commit.tree().ok();
+            match repo.diff_tree_to_tree(parent_tree.as_ref(), stash_tree.as_ref(), None) {
+                Ok(d) => collect_diff(d),
+                Err(_) => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        let spans = diff_spans(&diff_text);
+        (
+            hjkl_buffer::Buffer::from_str(&diff_text),
+            String::new(),
+            spans,
+        )
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return PickerAction::None;
+        }
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.index))
+        {
+            Some(stash_idx) => PickerAction::StashApply(stash_idx),
+            None => PickerAction::None,
+        }
+    }
+
+    fn handle_key(&self, idx: usize, key: crossterm::event::KeyEvent) -> Option<PickerAction> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let stash_idx = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.index))?;
+        // Alt+P / Alt+D so plain p/d stay free for filter input.
+        if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
+            return None;
+        }
+        match key.code {
+            crossterm::event::KeyCode::Char('p') => Some(PickerAction::StashPop(stash_idx)),
+            crossterm::event::KeyCode::Char('d') => Some(PickerAction::StashDrop(stash_idx)),
+            _ => None,
+        }
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        RequeryMode::FilterInMemory
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let sentinel = Arc::clone(&self.is_sentinel);
+        let root = self.root.clone();
+
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        sentinel.store(false, Ordering::Release);
+
+        thread::Builder::new()
+            .name("hjkl-picker-git-stash".into())
+            .spawn(move || scan_git_stashes(root, items, done, sentinel, cancel))
+            .ok()
+    }
+}

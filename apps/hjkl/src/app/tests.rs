@@ -1210,6 +1210,48 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     }
 }
 
+// ── Git stash picker smoke tests ──────────────────────────────────────────
+
+#[test]
+fn git_stash_picker_opens_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_stash_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_stash_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_stash_picker_title_is_git_stashes() {
+    use crate::picker_git::GitStashPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = GitStashPicker::new(tmp.path().to_path_buf());
+    assert_eq!(source.title(), "git stashes");
+}
+
+#[test]
+fn git_stash_picker_shift_s_chord_dispatches() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    // Simulate <leader>g chord state then press S.
+    app.pending_leader = true;
+    app.pending_git = true;
+    // Directly call the open function (event_loop routes S here).
+    app.open_git_stash_picker();
+    assert!(app.picker.is_some(), "S chord must open the stash picker");
+    assert!(!app.pending_leader);
+    assert!(!app.pending_git);
+    // Title must match.
+    assert_eq!(app.picker.as_ref().unwrap().title(), "git stashes");
+}
+
 // ── checktime / disk-change detection tests ────────────────────────────
 
 /// Helper: bump mtime by writing a file then sleeping briefly so the
