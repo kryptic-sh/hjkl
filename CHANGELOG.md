@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-05
+
+### Docs
+
+- Bump `hjkl-buffer` 0.3.4 → 0.3.5. Inlines former `IMPLEMENTERS.md` invariants
+  into rustdoc on the actual types and methods (`Position`, `Edit` + variants,
+  `Fold`, `Viewport`, `Span`, `Buffer::set_cursor` / `clamp_position` /
+  `ensure_cursor_visible`, `BufferView` render module). Now renders on docs.rs
+  next to each symbol and shows up in IDE hover. No binary behavior change.
+
 ## [0.10.0] - 2026-05-05
 
 ### Added
@@ -1053,7 +1063,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.1
 [0.10.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.0
 [0.9.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.3
 [0.9.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.2
