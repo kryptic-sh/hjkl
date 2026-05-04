@@ -459,17 +459,10 @@ impl PickerLogic for GitStatusPicker {
     }
 
     fn match_text(&self, idx: usize) -> String {
-        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return SENTINEL_LABEL.to_owned();
-        }
-        self.items
-            .lock()
-            .ok()
-            .and_then(|g| {
-                g.get(idx)
-                    .map(|item| item.path.to_string_lossy().into_owned())
-            })
-            .unwrap_or_default()
+        // Identical to label so fuzzy match positions index into the visible
+        // string. As a side benefit, users can filter on the status code
+        // (e.g. typing `??` finds untracked).
+        self.label(idx)
     }
 
     fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
@@ -562,7 +555,6 @@ impl PickerLogic for GitStatusPicker {
 struct GitLogItem {
     sha: String,
     short_sha: String,
-    author: String,
     subject: String,
 }
 
@@ -609,7 +601,6 @@ fn scan_git_log(
                 g.push(GitLogItem {
                     sha: String::new(),
                     short_sha: String::new(),
-                    author: String::new(),
                     subject: String::new(),
                 });
             }
@@ -650,12 +641,10 @@ fn scan_git_log(
         };
         let sha = commit.id().to_string();
         let short_sha = sha[..7.min(sha.len())].to_string();
-        let author = commit.author().name().unwrap_or("").to_owned();
         let subject = commit.summary().unwrap_or("").to_owned();
         batch.push(GitLogItem {
             sha,
             short_sha,
-            author,
             subject,
         });
         count += 1;
@@ -699,17 +688,9 @@ impl PickerLogic for GitLogPicker {
     }
 
     fn match_text(&self, idx: usize) -> String {
-        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
-            return SENTINEL_LABEL.to_owned();
-        }
-        self.items
-            .lock()
-            .ok()
-            .and_then(|g| {
-                g.get(idx)
-                    .map(|item| format!("{} {} {}", item.short_sha, item.author, item.subject))
-            })
-            .unwrap_or_default()
+        // Match on the visible label (sha + subject). Author isn't shown so
+        // matching on it would highlight nothing.
+        self.label(idx)
     }
 
     fn label_styles(
