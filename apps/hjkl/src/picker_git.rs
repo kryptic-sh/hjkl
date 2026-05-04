@@ -736,6 +736,10 @@ impl PickerLogic for GitLogPicker {
         "git log"
     }
 
+    fn preserve_source_order(&self) -> bool {
+        true
+    }
+
     fn item_count(&self) -> usize {
         self.items.lock().map(|g| g.len()).unwrap_or(0)
     }
@@ -1056,6 +1060,10 @@ fn scan_git_branches(
 impl PickerLogic for GitBranchPicker {
     fn title(&self) -> &str {
         "git branches"
+    }
+
+    fn preserve_source_order(&self) -> bool {
+        true
     }
 
     fn item_count(&self) -> usize {
