@@ -146,6 +146,14 @@ impl App {
                             {
                                 self.open_git_stash_picker();
                             }
+                            // <leader>gt — tags picker.
+                            KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => {
+                                self.open_git_tags_picker();
+                            }
+                            // <leader>gr — remotes picker.
+                            KeyCode::Char('r') if key.modifiers == KeyModifiers::NONE => {
+                                self.open_git_remotes_picker();
+                            }
                             _ => {}
                         }
                         continue;

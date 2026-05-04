@@ -1261,6 +1261,112 @@ fn git_stash_picker_shift_s_chord_dispatches() {
     assert_eq!(app.picker.as_ref().unwrap().title(), "git stashes");
 }
 
+// ── Git tags picker smoke tests ───────────────────────────────────────────
+
+#[test]
+fn git_tags_picker_opens_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_tags_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_tags_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_tags_picker_title_is_git_tags() {
+    use crate::picker_git::GitTagsPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = GitTagsPicker::new(tmp.path().to_path_buf());
+    assert_eq!(source.title(), "git tags");
+}
+
+#[test]
+fn git_tags_picker_no_repo_produces_sentinel() {
+    use crate::picker_git::GitTagsPicker;
+    use hjkl_picker::PickerLogic;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut source = GitTagsPicker::new(tmp.path().to_path_buf());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let handle = source.enumerate(None, Arc::clone(&cancel));
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    let count = source.item_count();
+    assert!(count > 0, "should have at least a sentinel item");
+    let label = source.label(0);
+    assert!(
+        label.contains("no tags") || label.contains("not a git repo"),
+        "sentinel label unexpected: {label:?}"
+    );
+    assert!(matches!(
+        source.select(0),
+        crate::picker::PickerAction::None
+    ));
+}
+
+// ── Git remotes picker smoke tests ────────────────────────────────────────
+
+#[test]
+fn git_remotes_picker_opens_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_remotes_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_remotes_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_remotes_picker_title_is_git_remotes() {
+    use crate::picker_git::GitRemotesPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = GitRemotesPicker::new(tmp.path().to_path_buf());
+    assert_eq!(source.title(), "git remotes");
+}
+
+#[test]
+fn git_remotes_picker_no_repo_produces_sentinel() {
+    use crate::picker_git::GitRemotesPicker;
+    use hjkl_picker::PickerLogic;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut source = GitRemotesPicker::new(tmp.path().to_path_buf());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let handle = source.enumerate(None, Arc::clone(&cancel));
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+    let count = source.item_count();
+    assert!(count > 0, "should have at least a sentinel item");
+    let label = source.label(0);
+    assert!(
+        label.contains("no remotes") || label.contains("not a git repo"),
+        "sentinel label unexpected: {label:?}"
+    );
+    assert!(matches!(
+        source.select(0),
+        crate::picker::PickerAction::None
+    ));
+}
+
 // ── PickerAction downcast test ─────────────────────────────────────────
 
 #[test]

@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 
 use git2::{
     BranchType, Commit, DiffFormat, DiffOptions, ObjectType, Repository, Sort, Status,
-    StatusOptions,
+    StatusOptions, Time,
 };
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_buffer::Buffer;
@@ -1967,6 +1967,595 @@ impl PickerLogic for GitStashPicker {
         thread::Builder::new()
             .name("hjkl-picker-git-stash".into())
             .spawn(move || scan_git_stashes(root, items, done, sentinel, cancel))
+            .ok()
+    }
+}
+
+// ── GitTagsPicker ─────────────────────────────────────────────────────────
+
+struct TagItem {
+    name: String,
+    target_oid: git2::Oid,
+    message: String,
+    tagger: Option<(String, i64)>,
+}
+
+pub struct GitTagsPicker {
+    root: PathBuf,
+    items: Arc<Mutex<Vec<TagItem>>>,
+    scan_done: Arc<AtomicBool>,
+    is_sentinel: Arc<AtomicBool>,
+}
+
+impl GitTagsPicker {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            is_sentinel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn format_tag_time(secs: i64) -> String {
+    let t = Time::new(secs, 0);
+    let adjusted = t.seconds();
+    let (year, month, day, _weekday) = days_to_ymd(adjusted.div_euclid(86400));
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mon_str = months.get((month - 1) as usize).copied().unwrap_or("???");
+    format!("{day} {mon_str} {year}")
+}
+
+fn scan_git_tags(
+    root: PathBuf,
+    items: Arc<Mutex<Vec<TagItem>>>,
+    done: Arc<AtomicBool>,
+    sentinel: Arc<AtomicBool>,
+    _cancel: Arc<AtomicBool>,
+) {
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(TagItem {
+                    name: "no tags".to_string(),
+                    target_oid: git2::Oid::zero(),
+                    message: String::new(),
+                    tagger: None,
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let mut tags: Vec<TagItem> = Vec::new();
+    let _ = repo.tag_foreach(|oid, name_bytes| {
+        let name = String::from_utf8_lossy(name_bytes)
+            .strip_prefix("refs/tags/")
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            return true;
+        }
+        let (target_oid, message, tagger) = if let Ok(tag) = repo.find_tag(oid) {
+            let target = tag.target_id();
+            let msg = tag.message().unwrap_or("").trim().to_string();
+            let sig = tag
+                .tagger()
+                .map(|s| (s.name().unwrap_or("").to_string(), s.when().seconds()));
+            (target, msg, sig)
+        } else {
+            (oid, String::new(), None)
+        };
+        tags.push(TagItem {
+            name,
+            target_oid,
+            message,
+            tagger,
+        });
+        true
+    });
+
+    if tags.is_empty() {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(TagItem {
+                name: "no tags".to_string(),
+                target_oid: git2::Oid::zero(),
+                message: String::new(),
+                tagger: None,
+            });
+        }
+        done.store(true, Ordering::Release);
+        return;
+    }
+
+    tags.sort_by(|a, b| {
+        let ta = a.tagger.as_ref().map(|(_, t)| *t).unwrap_or(0);
+        let tb = b.tagger.as_ref().map(|(_, t)| *t).unwrap_or(0);
+        tb.cmp(&ta).then(b.name.cmp(&a.name))
+    });
+
+    if let Ok(mut g) = items.lock() {
+        g.extend(tags);
+    }
+
+    done.store(true, Ordering::Release);
+}
+
+impl PickerLogic for GitTagsPicker {
+    fn title(&self) -> &str {
+        "git tags"
+    }
+
+    fn preserve_source_order(&self) -> bool {
+        true
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            let name = self
+                .items
+                .lock()
+                .ok()
+                .and_then(|g| g.first().map(|i| i.name.clone()))
+                .unwrap_or_default();
+            return format!("  {name}");
+        }
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx).map(|item| {
+                    if item.message.is_empty() {
+                        format!("  {}", item.name)
+                    } else {
+                        format!("  {}  {}", item.name, item.message)
+                    }
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        _label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let name_len = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.name.chars().count()))?;
+        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        let name_start = 2usize;
+        let name_end = name_start + name_len;
+        out.push((
+            name_start..name_end,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+        ));
+        Some(out)
+    }
+
+    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return (
+                hjkl_buffer::Buffer::new(),
+                String::new(),
+                PreviewSpans::default(),
+            );
+        }
+
+        let (target_oid, tag_name, tag_message, tag_tagger) =
+            match self.items.lock().ok().and_then(|g| {
+                g.get(idx).map(|i| {
+                    (
+                        i.target_oid,
+                        i.name.clone(),
+                        i.message.clone(),
+                        i.tagger.clone(),
+                    )
+                })
+            }) {
+                Some(v) => v,
+                None => {
+                    return (
+                        hjkl_buffer::Buffer::new(),
+                        String::new(),
+                        PreviewSpans::default(),
+                    );
+                }
+            };
+
+        let repo = match Repository::discover(&self.root) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let commit = match repo
+            .find_object(target_oid, None)
+            .and_then(|o| o.peel_to_commit())
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let commit_body = render_commit(&repo, &commit);
+
+        let body = if !tag_message.is_empty() || tag_tagger.is_some() {
+            let mut header = format!("Tag: {tag_name}\n");
+            if let Some((tagger_name, tagger_secs)) = tag_tagger {
+                header.push_str(&format!("Tagger: {tagger_name}\n"));
+                header.push_str(&format!("Date:   {}\n", format_tag_time(tagger_secs)));
+            }
+            if !tag_message.is_empty() {
+                header.push('\n');
+                for line in tag_message.lines() {
+                    header.push_str("    ");
+                    header.push_str(line);
+                    header.push('\n');
+                }
+            }
+            header.push_str("\n--- COMMIT ---\n\n");
+            header + &commit_body
+        } else {
+            commit_body
+        };
+
+        let spans = diff_spans(&body);
+        (hjkl_buffer::Buffer::from_str(&body), String::new(), spans)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return PickerAction::None;
+        }
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.name.clone()))
+        {
+            Some(name) => PickerAction::Custom(Box::new(AppAction::CheckoutTag(name))),
+            None => PickerAction::None,
+        }
+    }
+
+    fn requery_mode(&self) -> hjkl_picker::RequeryMode {
+        hjkl_picker::RequeryMode::FilterInMemory
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let sentinel = Arc::clone(&self.is_sentinel);
+        let root = self.root.clone();
+
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        sentinel.store(false, Ordering::Release);
+
+        thread::Builder::new()
+            .name("hjkl-picker-git-tags".into())
+            .spawn(move || scan_git_tags(root, items, done, sentinel, cancel))
+            .ok()
+    }
+}
+
+// ── GitRemotesPicker ──────────────────────────────────────────────────────
+
+struct RemoteItem {
+    name: String,
+    url: String,
+    branch_count: usize,
+}
+
+pub struct GitRemotesPicker {
+    root: PathBuf,
+    items: Arc<Mutex<Vec<RemoteItem>>>,
+    scan_done: Arc<AtomicBool>,
+    is_sentinel: Arc<AtomicBool>,
+}
+
+impl GitRemotesPicker {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            is_sentinel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn scan_git_remotes(
+    root: PathBuf,
+    items: Arc<Mutex<Vec<RemoteItem>>>,
+    done: Arc<AtomicBool>,
+    sentinel: Arc<AtomicBool>,
+    _cancel: Arc<AtomicBool>,
+) {
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(RemoteItem {
+                    name: "no remotes".to_string(),
+                    url: String::new(),
+                    branch_count: 0,
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let names = match repo.remotes() {
+        Ok(n) => n,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(RemoteItem {
+                    name: "no remotes".to_string(),
+                    url: String::new(),
+                    branch_count: 0,
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let mut remotes: Vec<RemoteItem> = Vec::new();
+    for name in names.iter().flatten() {
+        if let Ok(remote) = repo.find_remote(name) {
+            let url = remote.url().unwrap_or("").to_string();
+            let prefix = format!("refs/remotes/{name}/");
+            let branch_count = repo
+                .references_glob(&format!("{prefix}*"))
+                .map(|iter| iter.count())
+                .unwrap_or(0);
+            remotes.push(RemoteItem {
+                name: name.to_string(),
+                url,
+                branch_count,
+            });
+        }
+    }
+
+    if remotes.is_empty() {
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(RemoteItem {
+                name: "no remotes".to_string(),
+                url: String::new(),
+                branch_count: 0,
+            });
+        }
+        done.store(true, Ordering::Release);
+        return;
+    }
+
+    remotes.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if let Ok(mut g) = items.lock() {
+        g.extend(remotes);
+    }
+
+    done.store(true, Ordering::Release);
+}
+
+impl PickerLogic for GitRemotesPicker {
+    fn title(&self) -> &str {
+        "git remotes"
+    }
+
+    fn preserve_source_order(&self) -> bool {
+        true
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            let name = self
+                .items
+                .lock()
+                .ok()
+                .and_then(|g| g.first().map(|i| i.name.clone()))
+                .unwrap_or_default();
+            return format!("  {name}");
+        }
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx)
+                    .map(|item| format!("  {}  ↑{}  {}", item.name, item.branch_count, item.url))
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        _label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let (name_len, branch_count) = self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| (i.name.chars().count(), i.branch_count)))?;
+        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        // Name in yellow: "  <name>"
+        let name_start = 2usize;
+        let name_end = name_start + name_len;
+        out.push((
+            name_start..name_end,
+            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+        ));
+        // Branch count dim: "  ↑N" — ↑ is 3 bytes (U+2191), count digits vary.
+        // char positions: name_end, then 2 spaces, then ↑, then digits.
+        // We work in chars: ↑ is 1 char.
+        let count_arrow_start = name_end + 2; // "  "
+        let count_str = format!("↑{branch_count}");
+        let count_end = count_arrow_start + count_str.chars().count();
+        out.push((
+            count_arrow_start..count_end,
+            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+        ));
+        Some(out)
+    }
+
+    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return (
+                hjkl_buffer::Buffer::new(),
+                String::new(),
+                PreviewSpans::default(),
+            );
+        }
+
+        let (name, url) = match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| (i.name.clone(), i.url.clone())))
+        {
+            Some(v) => v,
+            None => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    String::new(),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let repo = match Repository::discover(&self.root) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let mut body = format!("Remote: {name}\nURL:    {url}\n\nBranches:\n");
+        let prefix = format!("refs/remotes/{name}/");
+        if let Ok(iter) = repo.references_glob(&format!("{prefix}*")) {
+            let mut count = 0usize;
+            for r in iter.flatten() {
+                let short = r
+                    .shorthand()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| r.name().unwrap_or("").to_string());
+                if short.ends_with("/HEAD") {
+                    continue;
+                }
+                body.push_str(&format!("  {short}\n"));
+                count += 1;
+                if count >= 50 {
+                    body.push_str("  ...\n");
+                    break;
+                }
+            }
+            if count == 0 {
+                body.push_str("  (none fetched yet)\n");
+            }
+        }
+
+        (
+            hjkl_buffer::Buffer::from_str(&body),
+            String::new(),
+            PreviewSpans::default(),
+        )
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return PickerAction::None;
+        }
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.name.clone()))
+        {
+            Some(name) => PickerAction::Custom(Box::new(AppAction::FetchRemote(name))),
+            None => PickerAction::None,
+        }
+    }
+
+    fn requery_mode(&self) -> hjkl_picker::RequeryMode {
+        hjkl_picker::RequeryMode::FilterInMemory
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let sentinel = Arc::clone(&self.is_sentinel);
+        let root = self.root.clone();
+
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        sentinel.store(false, Ordering::Release);
+
+        thread::Builder::new()
+            .name("hjkl-picker-git-remotes".into())
+            .spawn(move || scan_git_remotes(root, items, done, sentinel, cancel))
             .ok()
     }
 }

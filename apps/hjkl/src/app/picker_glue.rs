@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::picker_action::AppAction;
 
-use git2::{BranchType, ErrorCode};
+use git2::{BranchType, ErrorCode, ObjectType};
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Editor, Host, Options};
 
@@ -184,6 +184,24 @@ impl App {
         self.pending_git = false;
     }
 
+    /// Open the git-tags picker.
+    pub(crate) fn open_git_tags_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source = Box::new(crate::picker_git::GitTagsPicker::new(cwd));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
+    /// Open the git-remotes picker.
+    pub(crate) fn open_git_remotes_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source = Box::new(crate::picker_git::GitRemotesPicker::new(cwd));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     /// Open the git-stash picker.
     pub(crate) fn open_git_stash_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -261,6 +279,8 @@ impl App {
             }
             AppAction::ShowCommit(sha) => self.do_show_commit(&sha),
             AppAction::CheckoutBranch(name) => self.do_checkout_branch(&name),
+            AppAction::CheckoutTag(name) => self.do_checkout_tag(&name),
+            AppAction::FetchRemote(name) => self.do_fetch_remote(&name),
             AppAction::StashApply(idx) => self.do_stash_apply(idx),
             AppAction::StashPop(idx) => self.do_stash_pop(idx),
             AppAction::StashDrop(idx) => self.do_stash_drop(idx),
@@ -394,6 +414,141 @@ impl App {
         self.status_message = Some(format!("checked out {name}"));
         // Reload non-dirty buffers whose disk file changed during checkout.
         self.checktime_all();
+    }
+
+    pub(crate) fn do_checkout_tag(&mut self, name: &str) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+
+        let refname = format!("refs/tags/{name}");
+        let tag_ref = match repo.find_reference(&refname) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some(format!("git: tag '{name}' not found"));
+                return;
+            }
+        };
+
+        let target_obj = match tag_ref.peel(ObjectType::Commit) {
+            Ok(o) => o,
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+        let target_oid = target_obj.id();
+
+        let tree = match target_obj.peel_to_tree() {
+            Ok(t) => t,
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+
+        // Pre-flight conflict check: same pattern as do_checkout_branch.
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let touched: std::collections::HashSet<String> = match head_tree.as_ref() {
+            Some(ht) => match repo.diff_tree_to_tree(Some(ht), Some(&tree), None) {
+                Ok(diff) => {
+                    let mut set = std::collections::HashSet::new();
+                    diff.foreach(
+                        &mut |delta, _| {
+                            if let Some(p) = delta.new_file().path().and_then(|p| p.to_str()) {
+                                set.insert(p.to_string());
+                            }
+                            if let Some(p) = delta.old_file().path().and_then(|p| p.to_str()) {
+                                set.insert(p.to_string());
+                            }
+                            true
+                        },
+                        None,
+                        None,
+                        None,
+                    )
+                    .ok();
+                    set
+                }
+                Err(_) => std::collections::HashSet::new(),
+            },
+            None => std::collections::HashSet::new(),
+        };
+
+        let mut so = git2::StatusOptions::new();
+        so.include_untracked(false).include_ignored(false);
+        let dirty: Vec<String> = match repo.statuses(Some(&mut so)) {
+            Ok(statuses) => statuses
+                .iter()
+                .filter(|s| !s.status().is_empty())
+                .filter_map(|s| s.path().map(|p| p.to_string()))
+                .filter(|p| touched.contains(p))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        if !dirty.is_empty() {
+            let preview: Vec<&str> = dirty.iter().take(3).map(String::as_str).collect();
+            let suffix = if dirty.len() > 3 {
+                format!(", +{} more", dirty.len() - 3)
+            } else {
+                String::new()
+            };
+            self.status_message = Some(format!(
+                "git: uncommitted changes in {}{} — stash or commit first",
+                preview.join(", "),
+                suffix,
+            ));
+            return;
+        }
+
+        let mut cb = git2::build::CheckoutBuilder::new();
+        cb.safe();
+        if let Err(e) = repo.checkout_tree(tree.as_object(), Some(&mut cb)) {
+            self.status_message = Some(format!("git: checkout failed: {e}"));
+            return;
+        }
+
+        if let Err(e) = repo.set_head_detached(target_oid) {
+            self.status_message = Some(format!("git: {e}"));
+            return;
+        }
+
+        self.status_message = Some(format!("checked out tag {name} (detached HEAD)"));
+        self.checktime_all();
+    }
+
+    pub(crate) fn do_fetch_remote(&mut self, name: &str) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+
+        let mut remote = match repo.find_remote(name) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some(format!("git: remote '{name}' not found"));
+                return;
+            }
+        };
+
+        match remote.fetch(&[] as &[&str], None, None) {
+            Ok(()) => {
+                self.status_message = Some(format!("fetched {name}"));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("git: fetch {name} failed — {e}"));
+            }
+        }
     }
 
     pub(crate) fn do_stash_apply(&mut self, idx: usize) {

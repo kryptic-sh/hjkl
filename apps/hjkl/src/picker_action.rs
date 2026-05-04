@@ -8,6 +8,8 @@ pub enum AppAction {
     OpenPathAtLine(PathBuf, u32),
     ShowCommit(String),
     CheckoutBranch(String),
+    CheckoutTag(String),
+    FetchRemote(String),
     SwitchSlot(usize),
     StashApply(usize),
     StashPop(usize),
