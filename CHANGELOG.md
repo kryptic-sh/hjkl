@@ -8,6 +8,33 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-05-04
+
+### Added
+
+- Animated start screen on `hjkl` launched without a file argument: centered
+  `HJKL` figlet with a cursor walking the letterforms in vim-motion order (h → j
+  → k → l), trailing fading `h`/`j`/`k`/`l` glyphs. Any non-Ctrl-C keypress
+  dismisses; the dismissing key falls through to normal handling so `:` opens
+  the command bar on the same press. Splash inherits the terminal background to
+  match the editor body across themes.
+
+### Changed
+
+- Bump `hjkl-bonsai` dep from `"0.3"` to `"0.4"`. Picks up the breaking schema
+  refactor where highlight queries are sourced from helix + nvim-treesitter (the
+  curated upstreams) rather than each grammar repo's own `queries/` dir.
+  Resolves silent partial-install failures for grammars whose upstream layout
+  doesn't match the prior hardcoded `query_dir` (xml/dtd were affected at the
+  pinned revs).
+
+### Fixed
+
+- Cron CI: `cargo install cargo-fuzz` no longer passes `--locked`. The
+  cargo-fuzz published `Cargo.lock` pinned an old `rustix` that uses internal
+  `rustc_layout_scalar_valid_range_*` attributes nightly now rejects, breaking
+  the fuzz harness install.
+
 ## [0.9.2] - 2026-05-03
 
 ### Fixed
@@ -962,7 +989,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.3
 [0.9.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.2
 [0.9.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.1
 [0.9.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.0
