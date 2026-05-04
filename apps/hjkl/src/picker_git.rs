@@ -898,6 +898,351 @@ impl PickerLogic for GitLogPicker {
     }
 }
 
+// ── GitFileHistoryPicker ──────────────────────────────────────────────────
+
+pub struct GitFileHistoryPicker {
+    root: PathBuf,
+    /// Path relative to the repo workdir.
+    rel_path: PathBuf,
+    items: Arc<Mutex<Vec<GitLogItem>>>,
+    scan_done: Arc<AtomicBool>,
+    is_sentinel: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    directory: Arc<LanguageDirectory>,
+    #[allow(dead_code)]
+    theme: Arc<dyn Theme + Send + Sync>,
+}
+
+impl GitFileHistoryPicker {
+    pub fn new(
+        root: PathBuf,
+        rel_path: PathBuf,
+        theme: Arc<dyn Theme + Send + Sync>,
+        directory: Arc<LanguageDirectory>,
+    ) -> Self {
+        Self {
+            root,
+            rel_path,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            is_sentinel: Arc::new(AtomicBool::new(false)),
+            directory,
+            theme,
+        }
+    }
+}
+
+fn scan_git_file_history(
+    root: PathBuf,
+    rel_path: PathBuf,
+    items: Arc<Mutex<Vec<GitLogItem>>>,
+    done: Arc<AtomicBool>,
+    sentinel: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+) {
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(GitLogItem {
+                    sha: String::new(),
+                    short_sha: String::new(),
+                    author: String::new(),
+                    subject: String::new(),
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let mut revwalk = match repo.revwalk() {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    if revwalk.push_head().is_err() || revwalk.set_sorting(Sort::TIME).is_err() {
+        sentinel.store(true, Ordering::Release);
+        done.store(true, Ordering::Release);
+        return;
+    }
+
+    let mut batch: Vec<GitLogItem> = Vec::new();
+    let mut count = 0usize;
+
+    for oid_result in revwalk {
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let oid = match oid_result {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Check whether this commit touched rel_path by comparing the blob
+        // OID in this commit's tree vs its first parent's tree (or vs
+        // "absent" for root commits / file additions).
+        let this_tree = match commit.tree() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let this_entry = this_tree.get_path(&rel_path).ok();
+
+        let touched = if let Ok(parent) = commit.parent(0) {
+            let parent_tree = match parent.tree() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let parent_entry = parent_tree.get_path(&rel_path).ok();
+            match (this_entry.as_ref(), parent_entry.as_ref()) {
+                (Some(a), Some(b)) => a.id() != b.id(),
+                (Some(_), None) => true, // file was added
+                (None, Some(_)) => true, // file was deleted
+                (None, None) => false,   // path never existed
+            }
+        } else {
+            // Root commit: touched if path exists in this tree.
+            this_entry.is_some()
+        };
+
+        if !touched {
+            continue;
+        }
+
+        let sha = commit.id().to_string();
+        let short_sha = sha[..7.min(sha.len())].to_string();
+        let author = commit.author().name().unwrap_or("").to_owned();
+        let subject = commit.summary().unwrap_or("").to_owned();
+        batch.push(GitLogItem {
+            sha,
+            short_sha,
+            author,
+            subject,
+        });
+        count += 1;
+        if count >= 1000 {
+            break;
+        }
+        if count.is_multiple_of(32) && cancel.load(Ordering::Acquire) {
+            break;
+        }
+    }
+
+    if batch.is_empty() {
+        // No commits touched this file — show a "no commits" sentinel row.
+        sentinel.store(true, Ordering::Release);
+        if let Ok(mut g) = items.lock() {
+            g.push(GitLogItem {
+                sha: String::new(),
+                short_sha: String::new(),
+                author: String::new(),
+                subject: "no commits".to_owned(),
+            });
+        }
+    } else if let Ok(mut g) = items.lock() {
+        g.extend(batch);
+    }
+
+    done.store(true, Ordering::Release);
+}
+
+impl PickerLogic for GitFileHistoryPicker {
+    fn title(&self) -> &str {
+        // PickerLogic requires &str but the title is dynamic; store a
+        // 'static sentinel and let the picker title widget call make_title()
+        // separately. We return a fixed prefix here — the full path is in
+        // the window title set by open_git_file_history_picker.
+        "git file history"
+    }
+
+    fn preserve_source_order(&self) -> bool {
+        true
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            let subject = self
+                .items
+                .lock()
+                .ok()
+                .and_then(|g| g.first().map(|i| i.subject.clone()))
+                .unwrap_or_default();
+            if subject.is_empty() {
+                return SENTINEL_LABEL.to_owned();
+            }
+            return format!("  {subject}");
+        }
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx).map(|item| {
+                    let initials = author_initials(&item.author);
+                    format!("  {}  {}  {}", item.short_sha, initials, item.subject)
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let (short_len, author) = self.items.lock().ok().and_then(|g| {
+            g.get(idx)
+                .map(|i| (i.short_sha.chars().count(), i.author.clone()))
+        })?;
+        let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+        let hash_start = 2usize;
+        let hash_end = hash_start + short_len;
+        out.push((hash_start..hash_end, Style::default().fg(Color::Yellow)));
+        let initials_start = hash_end + 2;
+        let initials_end = initials_start + 2;
+        out.push((
+            initials_start..initials_end,
+            Style::default()
+                .fg(author_color(&author))
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        let subject_start = initials_end + 2;
+        if let Some(end) = conv_commit_prefix_end(label, subject_start) {
+            out.push((
+                subject_start..end,
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+        }
+        Some(out)
+    }
+
+    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return (
+                hjkl_buffer::Buffer::new(),
+                String::new(),
+                PreviewSpans::default(),
+            );
+        }
+
+        let sha = match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
+        {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    String::new(),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let repo = match Repository::discover(&self.root) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let oid = match git2::Oid::from_str(&sha) {
+            Ok(o) => o,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let body = render_commit(&repo, &commit);
+        let spans = diff_spans(&body);
+        (hjkl_buffer::Buffer::from_str(&body), String::new(), spans)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return PickerAction::None;
+        }
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
+        {
+            Some(sha) if !sha.is_empty() => PickerAction::ShowCommit(sha),
+            _ => PickerAction::None,
+        }
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        RequeryMode::FilterInMemory
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let sentinel = Arc::clone(&self.is_sentinel);
+        let root = self.root.clone();
+        let rel_path = self.rel_path.clone();
+
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        sentinel.store(false, Ordering::Release);
+
+        thread::Builder::new()
+            .name("hjkl-picker-git-file-history".into())
+            .spawn(move || scan_git_file_history(root, rel_path, items, done, sentinel, cancel))
+            .ok()
+    }
+}
+
 // ── GitBranchPicker ───────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]

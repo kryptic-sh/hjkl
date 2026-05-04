@@ -1088,6 +1088,58 @@ fn git_branch_picker_title_is_git_branches() {
     assert_eq!(source.title(), "git branches");
 }
 
+// ── Git file history picker smoke tests ───────────────────────────────────
+
+#[test]
+fn git_file_history_picker_opens_and_clears_pending() {
+    let path = std::env::temp_dir().join("hjkl_gB_smoke.txt");
+    std::fs::write(&path, "content\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    // Buffer has a path — picker opens (it may show sentinel if not a repo).
+    app.open_git_file_history_picker();
+    // pending flags must always be cleared.
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn git_file_history_picker_no_path_sets_status_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.active().filename.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_file_history_picker();
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+    assert!(app.picker.is_none(), "picker must not open without a path");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no path"),
+        "expected 'no path' status message, got: {msg:?}"
+    );
+}
+
+#[test]
+fn git_file_history_picker_title_is_git_file_history() {
+    use crate::picker_git::GitFileHistoryPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let theme = AppTheme::default_dark();
+    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
+    let source = GitFileHistoryPicker::new(
+        tmp.path().to_path_buf(),
+        std::path::PathBuf::from("src/main.rs"),
+        theme_arc,
+        directory,
+    );
+    assert_eq!(source.title(), "git file history");
+}
+
 #[test]
 fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     use crate::picker_git::GitStatusPicker;

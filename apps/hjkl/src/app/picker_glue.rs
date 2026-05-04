@@ -117,6 +117,71 @@ impl App {
         self.pending_git = false;
     }
 
+    /// Open the git file-history picker for the current buffer's path.
+    pub(crate) fn open_git_file_history_picker(&mut self) {
+        let filename = match self.active().filename.clone() {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("git: current buffer has no path".into());
+                self.pending_leader = false;
+                self.pending_git = false;
+                return;
+            }
+        };
+
+        // Resolve relative path inside the repo workdir.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let abs = if filename.is_absolute() {
+            filename.clone()
+        } else {
+            cwd.join(&filename)
+        };
+
+        // Discover repo to obtain workdir.
+        let repo = match git2::Repository::discover(&abs) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a git repo".into());
+                self.pending_leader = false;
+                self.pending_git = false;
+                return;
+            }
+        };
+
+        let workdir = match repo.workdir() {
+            Some(w) => w.to_path_buf(),
+            None => {
+                self.status_message = Some("git: bare repo — no workdir".into());
+                self.pending_leader = false;
+                self.pending_git = false;
+                return;
+            }
+        };
+
+        let rel_path = match abs.strip_prefix(&workdir) {
+            Ok(r) => r.to_path_buf(),
+            Err(_) => {
+                self.status_message =
+                    Some("git: current buffer is outside the repo workdir".into());
+                self.pending_leader = false;
+                self.pending_git = false;
+                return;
+            }
+        };
+
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+        let source = Box::new(crate::picker_git::GitFileHistoryPicker::new(
+            workdir,
+            rel_path,
+            theme,
+            self.directory.clone(),
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     /// Open the git-status fuzzy picker.
     pub(crate) fn open_git_status_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -223,6 +288,63 @@ impl App {
                 return;
             }
         };
+
+        // Pre-flight: paths that switching would touch (diff HEAD tree vs target tree)
+        // intersected with dirty paths in workdir/index. Refuse with friendly list
+        // instead of letting libgit2's safe() return opaque Conflict (-13).
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        let touched: std::collections::HashSet<String> = match head_tree.as_ref() {
+            Some(ht) => match repo.diff_tree_to_tree(Some(ht), Some(&tree), None) {
+                Ok(diff) => {
+                    let mut set = std::collections::HashSet::new();
+                    diff.foreach(
+                        &mut |delta, _| {
+                            if let Some(p) = delta.new_file().path().and_then(|p| p.to_str()) {
+                                set.insert(p.to_string());
+                            }
+                            if let Some(p) = delta.old_file().path().and_then(|p| p.to_str()) {
+                                set.insert(p.to_string());
+                            }
+                            true
+                        },
+                        None,
+                        None,
+                        None,
+                    )
+                    .ok();
+                    set
+                }
+                Err(_) => std::collections::HashSet::new(),
+            },
+            None => std::collections::HashSet::new(),
+        };
+
+        let mut so = git2::StatusOptions::new();
+        so.include_untracked(false).include_ignored(false);
+        let dirty: Vec<String> = match repo.statuses(Some(&mut so)) {
+            Ok(statuses) => statuses
+                .iter()
+                .filter(|s| !s.status().is_empty())
+                .filter_map(|s| s.path().map(|p| p.to_string()))
+                .filter(|p| touched.contains(p))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+
+        if !dirty.is_empty() {
+            let preview: Vec<&str> = dirty.iter().take(3).map(String::as_str).collect();
+            let suffix = if dirty.len() > 3 {
+                format!(", +{} more", dirty.len() - 3)
+            } else {
+                String::new()
+            };
+            self.status_message = Some(format!(
+                "git: uncommitted changes in {}{} — stash or commit first",
+                preview.join(", "),
+                suffix,
+            ));
+            return;
+        }
 
         let mut cb = git2::build::CheckoutBuilder::new();
         cb.safe();

@@ -121,13 +121,25 @@ impl App {
                     if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_git = false;
                         self.pending_leader = false;
-                        if key.modifiers == KeyModifiers::NONE {
-                            match key.code {
-                                KeyCode::Char('s') => self.open_git_status_picker(),
-                                KeyCode::Char('l') => self.open_git_log_picker(),
-                                KeyCode::Char('b') => self.open_git_branch_picker(),
-                                _ => {}
+                        match key.code {
+                            KeyCode::Char('s') if key.modifiers == KeyModifiers::NONE => {
+                                self.open_git_status_picker();
                             }
+                            KeyCode::Char('l') if key.modifiers == KeyModifiers::NONE => {
+                                self.open_git_log_picker();
+                            }
+                            KeyCode::Char('b') if key.modifiers == KeyModifiers::NONE => {
+                                self.open_git_branch_picker();
+                            }
+                            // <leader>gB — file history for the current buffer.
+                            // Uppercase B (Shift+b).
+                            KeyCode::Char('B')
+                                if key.modifiers == KeyModifiers::NONE
+                                    || key.modifiers == KeyModifiers::SHIFT =>
+                            {
+                                self.open_git_file_history_picker();
+                            }
+                            _ => {}
                         }
                         continue;
                     }
