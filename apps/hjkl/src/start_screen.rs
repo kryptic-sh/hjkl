@@ -76,11 +76,17 @@ fn trail_color(age: usize) -> Color {
 pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate::theme::AppTheme) {
     let cursor_idx = screen.tick as usize % PATH.len();
 
+    // Paint the whole splash area with the editor body bg so the art block
+    // doesn't read as a discoloured rectangle.
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(theme.ui.surface_bg)),
+        area,
+    );
+
     // Center the art block in `area`.
     let art_top = area.y + area.height.saturating_sub(ART_ROWS + 4) / 2;
     let art_left = area.x + area.width.saturating_sub(ART_COLS) / 2;
 
-    // Render the art rows as plain styled paragraphs first.
     for (row_idx, art_line) in ART.lines().take(ART_ROWS as usize).enumerate() {
         let y = art_top + row_idx as u16;
         if y >= area.y + area.height {
@@ -92,8 +98,11 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
             width: ART_COLS.min(area.width),
             height: 1,
         };
-        let para = Paragraph::new(art_line)
-            .style(Style::default().fg(theme.ui.text_dim).bg(theme.ui.panel_bg));
+        let para = Paragraph::new(art_line).style(
+            Style::default()
+                .fg(theme.ui.text_dim)
+                .bg(theme.ui.surface_bg),
+        );
         frame.render_widget(para, art_rect);
     }
 
@@ -115,7 +124,7 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
                     cell.set_char(seg_char);
                     cell.set_style(
                         Style::default()
-                            .fg(theme.ui.panel_bg)
+                            .fg(theme.ui.surface_bg)
                             .bg(theme.ui.cursor_line_bg),
                     );
                 }
