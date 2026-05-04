@@ -26,13 +26,30 @@ smart indent, `.editorconfig`, `softtabstop`, and clipboard via our in-house
 brew install kryptic-sh/tap/hjkl
 ```
 
+**Arch Linux (AUR)**
+
+```bash
+paru -S hjkl-bin
+```
+
+**Alpine Linux**
+
+```bash
+apk add --allow-untrusted hjkl-*.apk   # download .apk from releases page
+```
+
+**Debian / Ubuntu** — `.deb` for amd64 + arm64 on the
+[releases page](https://github.com/kryptic-sh/hjkl/releases).
+
+**Fedora / RHEL** — `.rpm` for x86_64 + aarch64 on the same page.
+
 **From source**
 
 ```bash
 cargo install hjkl
 ```
 
-Or grab a pre-built binary from the
+Or grab a pre-built tarball for any platform from the
 [releases page](https://github.com/kryptic-sh/hjkl/releases).
 
 ## Usage
