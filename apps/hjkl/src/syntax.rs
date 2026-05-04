@@ -157,15 +157,16 @@ pub struct SyntaxWorker {
 }
 
 impl SyntaxWorker {
-    /// Spawn a fresh worker thread with the given theme. The worker has
-    /// no language attached yet — call [`SyntaxWorker::set_language`].
-    pub fn spawn(theme: Arc<dyn Theme + Send + Sync>) -> Self {
+    /// Spawn a fresh worker thread with the given theme and language directory.
+    /// The worker has no language attached yet — call
+    /// [`SyntaxWorker::set_language`].
+    pub fn spawn(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
         let pending = Arc::new((Mutex::new(Pending::new()), Condvar::new()));
         let (tx, rx) = std::sync::mpsc::channel();
         let pending_for_thread = Arc::clone(&pending);
         let handle = thread::Builder::new()
             .name("hjkl-syntax".into())
-            .spawn(move || worker_loop(pending_for_thread, tx, theme))
+            .spawn(move || worker_loop(pending_for_thread, tx, theme, directory))
             .expect("spawn syntax worker");
         Self {
             pending,
@@ -271,6 +272,7 @@ fn worker_loop(
     pending: Arc<(Mutex<Pending>, Condvar)>,
     tx: std::sync::mpsc::Sender<RenderOutput>,
     initial_theme: Arc<dyn Theme + Send + Sync>,
+    directory: Arc<LanguageDirectory>,
 ) {
     use std::time::Instant;
 
@@ -360,7 +362,11 @@ fn worker_loop(
                 let bytes = req.source.as_bytes();
 
                 let t = Instant::now();
-                let mut flat_spans = h.highlight_range(bytes, req.viewport_byte_range.clone());
+                let mut flat_spans = h.highlight_range_with_injections(
+                    bytes,
+                    req.viewport_byte_range.clone(),
+                    |name| directory.by_name(name),
+                );
                 perf.highlight_us = t.elapsed().as_micros();
 
                 // Overlay TODO/FIXME/NOTE/WARN marker spans onto comment spans.
@@ -521,7 +527,7 @@ impl SyntaxLayer {
     /// language `Grammar`s live, so sharing it across subsystems
     /// (`HighlightedBufferSource`, etc.) deduplicates dlopen+query loads.
     pub fn new(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
-        let worker = SyntaxWorker::spawn(Arc::clone(&theme));
+        let worker = SyntaxWorker::spawn(Arc::clone(&theme), Arc::clone(&directory));
         Self {
             directory,
             theme,
@@ -629,8 +635,8 @@ impl SyntaxLayer {
         let local_row_count = vp_end_row - vp_top;
 
         let mut h = Highlighter::new(grammar).ok()?;
-        h.parse_initial(bytes);
-        let mut flat_spans = h.highlight_range(bytes, 0..bytes.len());
+        let mut flat_spans =
+            h.highlight_with_injections(bytes, |name| self.directory.by_name(name));
 
         // Overlay TODO/FIXME/NOTE/WARN marker spans.
         let marker_pass = CommentMarkerPass::new();
