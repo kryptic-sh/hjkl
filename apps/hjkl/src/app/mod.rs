@@ -210,6 +210,9 @@ pub struct App {
     /// XDG-merged value via [`Self::with_config`] before entering the
     /// event loop.
     pub config: crate::config::Config,
+    /// Animated start screen shown when no file argument was given.
+    /// Cleared (set to `None`) on the first keypress.
+    pub start_screen: Option<crate::start_screen::StartScreen>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -367,6 +370,7 @@ impl App {
         // tests never customize config and main re-applies overrides via
         // `apply_options` after `with_config`.
         let bootstrap_config = crate::config::Config::default();
+        let no_file = filename.is_none();
         let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
             .map_err(|s| anyhow::anyhow!(s))?;
 
@@ -397,6 +401,12 @@ impl App {
             }
         }
 
+        let start_screen = if no_file {
+            Some(crate::start_screen::StartScreen::new())
+        } else {
+            None
+        };
+
         Ok(Self {
             slots: vec![slot],
             active: 0,
@@ -425,6 +435,7 @@ impl App {
             recompute_throttled: 0,
             recompute_runs: 0,
             config: crate::config::Config::default(),
+            start_screen,
         })
     }
 
@@ -462,6 +473,9 @@ impl App {
 
     /// Mode label for the status line.
     pub fn mode_label(&self) -> &'static str {
+        if self.start_screen.is_some() {
+            return "START";
+        }
         match self.active().editor.vim_mode() {
             VimMode::Normal => "NORMAL",
             VimMode::Insert => "INSERT",

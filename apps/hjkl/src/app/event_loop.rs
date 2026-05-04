@@ -53,6 +53,10 @@ impl App {
 
             // Wait for the next event with a 120 ms ceiling.
             if !event::poll(Duration::from_millis(120))? {
+                // Timeout — advance the splash animation if active.
+                if let Some(ref mut screen) = self.start_screen {
+                    screen.advance();
+                }
                 continue;
             }
             match event::read()? {
@@ -69,6 +73,12 @@ impl App {
                             continue;
                         }
                         break;
+                    }
+
+                    // Dismiss the start screen on any non-Ctrl-C keypress.
+                    if self.start_screen.is_some() {
+                        self.start_screen = None;
+                        continue;
                     }
 
                     self.status_message = None;

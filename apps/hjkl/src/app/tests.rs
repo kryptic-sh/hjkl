@@ -866,6 +866,46 @@ fn q_on_last_slot_quits_app() {
     assert!(app.exit_requested, "`:q` on clean last slot should exit");
 }
 
+// ── Start screen tests ─────────────────────────────────────────────────
+
+#[test]
+fn start_screen_present_when_no_file() {
+    let app = App::new(None, false, None, None).unwrap();
+    assert!(
+        app.start_screen.is_some(),
+        "start_screen must be Some when no file given"
+    );
+}
+
+#[test]
+fn start_screen_absent_when_file_given() {
+    let path = std::env::temp_dir().join("hjkl_splash_with_file.txt");
+    std::fs::write(&path, "x\n").unwrap();
+    let app = App::new(Some(path.clone()), false, None, None).unwrap();
+    assert!(
+        app.start_screen.is_none(),
+        "start_screen must be None when file given"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn mode_label_returns_start_during_splash() {
+    let app = App::new(None, false, None, None).unwrap();
+    assert!(app.start_screen.is_some());
+    assert_eq!(app.mode_label(), "START");
+}
+
+#[test]
+fn start_screen_advance_increments_tick() {
+    let mut screen = crate::start_screen::StartScreen::new();
+    assert_eq!(screen.tick, 0);
+    screen.advance();
+    assert_eq!(screen.tick, 1);
+    screen.advance();
+    assert_eq!(screen.tick, 2);
+}
+
 // ── Config layering tests ──────────────────────────────────────────────
 
 #[test]

@@ -53,6 +53,16 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         (chunks[0], chunks[1], None)
     };
 
+    // Splash screen path — skip all buffer rendering while active.
+    if let Some(ref screen) = app.start_screen {
+        if let Some(bl_area) = bufline_area {
+            buffer_line(frame, app, bl_area);
+        }
+        crate::start_screen::render(frame, buf_area, screen, &app.theme);
+        status_line(frame, app, status_area);
+        return;
+    }
+
     let gw = gutter_width(app.active().editor.buffer().line_count() as usize);
     let text_width = buf_area.width.saturating_sub(gw);
 

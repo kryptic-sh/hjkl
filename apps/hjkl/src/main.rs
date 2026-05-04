@@ -9,6 +9,7 @@ mod lang;
 mod picker;
 mod picker_sources;
 mod render;
+mod start_screen;
 mod syntax;
 mod theme;
 
