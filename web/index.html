@@ -728,8 +728,11 @@
           A vim-style editor in Rust — and the engine that powers it.
         </p>
         <p class="tagline" style="color: var(--fg-muted); font-size: 16px">
-          Multi-buffer TUI editor with fuzzy file/buffer/grep pickers and
-          tree-sitter highlighting. Same FSM also drives sqeel, buffr, inbx.
+          Multi-buffer TUI editor with fuzzy file/buffer/grep pickers,
+          lazygit-adjacent <code>&lt;leader&gt;g</code> git surface (status,
+          log, branches, file history, stash, tags, remotes), tree-sitter
+          highlighting, and focus-regain disk auto-reload. Same FSM also drives
+          sqeel, buffr, inbx.
         </p>
 
         <div class="cta">
@@ -817,8 +820,9 @@
             <div class="icon">05 — TESTED</div>
             <h4>Property-tested</h4>
             <p>
-              Vim grammar fuzzed against reference behaviour. Rope invariants
-              hold under any edit sequence.
+              Rope invariants hold under any edit sequence. Vim grammar
+              regression-suite covers motions, operators, text objects, and ex
+              commands.
             </p>
           </div>
           <div class="feat">
@@ -833,7 +837,7 @@
 
       <section id="crates">
         <h2>crates</h2>
-        <h3>One binary. Eight ecosystem crates. Each in its own repo.</h3>
+        <h3>One binary. Nine ecosystem crates. Each in its own repo.</h3>
         <div class="crates">
           <a
             class="crate"
@@ -932,6 +936,20 @@
           </a>
           <a
             class="crate"
+            href="https://github.com/kryptic-sh/hjkl-config"
+            target="_blank"
+            rel="noopener"
+          >
+            <div class="crate-name">hjkl-config</div>
+            <div class="crate-meta">std · loader</div>
+            <p class="crate-desc">
+              Shared TOML config loader. XDG path resolution, span-aware parse
+              errors, opt-in <code>Validate</code> hook, layered defaults + user
+              overrides.
+            </p>
+          </a>
+          <a
+            class="crate"
             href="https://github.com/kryptic-sh/hjkl-clipboard"
             target="_blank"
             rel="noopener"
@@ -965,9 +983,9 @@
         <h2>install</h2>
         <h3>Prebuilt binaries on every tagged release.</h3>
         <p style="color: var(--fg-muted); margin: 0 0 20px">
-          Linux (x86_64, aarch64) — .tar.gz / .deb / .rpm / musl. macOS (Apple
-          Silicon, Intel) — .tar.gz. Windows (x64) — .zip. Arch users: AUR
-          <code>hjkl-bin</code>. SHA-256 sidecars on every artifact.
+          Linux (x86_64, aarch64) — .tar.gz / .deb / .rpm / .apk / musl. macOS
+          (Apple Silicon, Intel) — .tar.gz. Windows (x64) — .zip. Arch users:
+          AUR <code>hjkl-bin</code>. SHA-256 sidecars on every artifact.
         </p>
         <div class="cta">
           <a
