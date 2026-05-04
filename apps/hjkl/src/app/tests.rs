@@ -1,6 +1,8 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::theme::AppTheme;
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -1000,4 +1002,63 @@ fn config_load_from_disk_validation_failure_surfaces() {
     use hjkl_config::Validate;
     let err = cfg.validate().unwrap_err();
     assert_eq!(err.field, "editor.huge_file_threshold");
+}
+
+// ── Git status picker smoke tests ──────────────────────────────────────
+
+#[test]
+fn open_git_status_picker_sets_picker_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_status_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_status_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_status_picker_title_is_git_status() {
+    use crate::picker::{HighlightedGitStatusSource, PickerLogic};
+    let tmp = tempfile::tempdir().unwrap();
+    let theme = AppTheme::default_dark();
+    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
+    let source = HighlightedGitStatusSource::new(tmp.path().to_path_buf(), theme_arc, directory);
+    assert_eq!(source.title(), "git status");
+}
+
+#[test]
+fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
+    use crate::picker::{HighlightedGitStatusSource, PickerLogic};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let theme = AppTheme::default_dark();
+    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
+    let mut source =
+        HighlightedGitStatusSource::new(tmp.path().to_path_buf(), theme_arc, directory);
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let handle = source.enumerate(None, Arc::clone(&cancel));
+    if let Some(h) = handle {
+        let _ = h.join();
+    }
+
+    // Either a sentinel item (label says "not a git repo") or empty.
+    let count = source.item_count();
+    if count > 0 {
+        let label = source.label(0);
+        assert!(
+            label.contains("not a git repo"),
+            "sentinel label unexpected: {label:?}"
+        );
+        matches!(source.select(0), crate::picker::PickerAction::None);
+    }
 }

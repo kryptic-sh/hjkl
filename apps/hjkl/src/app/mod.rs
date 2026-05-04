@@ -176,6 +176,9 @@ pub struct App {
     /// `true` after the user pressed `<Space>` in normal mode and we're
     /// waiting for the next key to resolve the leader sequence.
     pub pending_leader: bool,
+    /// `true` after the user typed `<leader>g` — waiting for the next key
+    /// to resolve the git sub-command (e.g. `s` → git status picker).
+    pub pending_git: bool,
     /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
     /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
     /// once the motion is resolved or forwarded to the engine.
@@ -419,6 +422,7 @@ impl App {
             search_field: None,
             picker: None,
             pending_leader: false,
+            pending_git: false,
             pending_buffer_motion: None,
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,

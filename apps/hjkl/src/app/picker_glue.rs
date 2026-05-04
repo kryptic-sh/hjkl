@@ -88,6 +88,21 @@ impl App {
         self.pending_leader = false;
     }
 
+    /// Open the git-status fuzzy picker.
+    pub(crate) fn open_git_status_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let theme =
+            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
+        let source = Box::new(crate::picker::HighlightedGitStatusSource::new(
+            cwd,
+            theme,
+            self.directory.clone(),
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
         let event = match self.picker.as_mut() {
             Some(p) => p.handle_key(key),

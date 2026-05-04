@@ -15,7 +15,9 @@ use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 
 use crate::lang::LanguageDirectory;
 use hjkl_buffer::Buffer;
-use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
+use hjkl_picker::{
+    FileSource, GitStatusSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource,
+};
 
 // ── BufferSource ─────────────────────────────────────────────────────────────
 
@@ -519,6 +521,142 @@ impl PickerLogic for HighlightedRgSource {
 
     fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
         self.inner.label_match_positions(idx, query, label)
+    }
+
+    fn enumerate(
+        &mut self,
+        query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        self.inner.enumerate(query, cancel)
+    }
+}
+
+// ── HighlightedGitStatusSource ────────────────────────────────────────────────
+
+/// Git-status source with diff coloring in the preview.
+///
+/// Overrides `preview()` to apply diff span coloring for tracked files and
+/// tree-sitter highlighting for untracked files.
+pub struct HighlightedGitStatusSource {
+    inner: GitStatusSource,
+    directory: Arc<LanguageDirectory>,
+    theme: Arc<dyn Theme + Send + Sync>,
+    highlighters: Mutex<HashMap<String, Highlighter>>,
+}
+
+impl HighlightedGitStatusSource {
+    pub fn new(
+        root: PathBuf,
+        theme: Arc<dyn Theme + Send + Sync>,
+        directory: Arc<LanguageDirectory>,
+    ) -> Self {
+        Self {
+            inner: GitStatusSource::new(root),
+            directory,
+            theme,
+            highlighters: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn diff_spans(&self, content: &str) -> PreviewSpans {
+        use ratatui::style::{Color, Style};
+
+        let bytes = content.as_bytes();
+        let mut ranges: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+
+        let added_style = Style::default().fg(Color::Green);
+        let removed_style = Style::default().fg(Color::Red);
+        let hunk_style = Style::default().fg(Color::Cyan);
+        let header_style = Style::default().fg(Color::Blue);
+
+        let mut pos = 0usize;
+        for line in content.lines() {
+            let line_start = pos;
+            let line_end = pos + line.len();
+            if line.starts_with("+++") || line.starts_with("---") {
+                ranges.push((line_start..line_end, header_style));
+            } else if line.starts_with("@@") {
+                ranges.push((line_start..line_end, hunk_style));
+            } else if line.starts_with('+') {
+                ranges.push((line_start..line_end, added_style));
+            } else if line.starts_with('-') {
+                ranges.push((line_start..line_end, removed_style));
+            }
+            // +1 for the '\n' that `lines()` strips.
+            pos = line_end + 1;
+            if pos > bytes.len() {
+                pos = bytes.len();
+            }
+        }
+
+        PreviewSpans::from_byte_ranges(&ranges, bytes)
+    }
+
+    fn highlight_file(&self, abs: &Path, content: &str) -> PreviewSpans {
+        let bytes = content.as_bytes();
+        let Some(mut flat) = preview_spans(&self.directory, &self.highlighters, abs, bytes) else {
+            return PreviewSpans::default();
+        };
+        CommentMarkerPass::new().apply(&mut flat, bytes);
+        let theme = Arc::clone(&self.theme);
+        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
+            .into_iter()
+            .filter_map(|span| {
+                theme
+                    .style(span.capture())
+                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
+            })
+            .collect();
+        PreviewSpans::from_byte_ranges(&ranges, bytes)
+    }
+}
+
+impl PickerLogic for HighlightedGitStatusSource {
+    fn title(&self) -> &str {
+        self.inner.title()
+    }
+
+    fn item_count(&self) -> usize {
+        self.inner.item_count()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.inner.label(idx)
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.inner.match_text(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        self.inner.has_preview()
+    }
+
+    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
+        let (buf, status, _) = self.inner.preview(idx);
+        let content = buf.as_string();
+
+        if status.starts_with("git diff") {
+            let spans = self.diff_spans(&content);
+            (Buffer::from_str(&content), status, spans)
+        } else if status.ends_with("(untracked)") {
+            // Recover the path from the status line: "<path> (untracked)".
+            let path_str = status.trim_end_matches(" (untracked)");
+            let abs = self.inner.root.join(path_str);
+            let spans = self.highlight_file(&abs, &content);
+            (Buffer::from_str(&content), status, spans)
+        } else {
+            (buf, status, PreviewSpans::default())
+        }
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        self.inner.select(idx)
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        self.inner.requery_mode()
     }
 
     fn enumerate(

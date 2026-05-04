@@ -117,6 +117,16 @@ impl App {
                         continue;
                     }
 
+                    // ── Git sub-command resolution ───────────────────────────
+                    if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
+                        self.pending_git = false;
+                        self.pending_leader = false;
+                        if key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Char('s') {
+                            self.open_git_status_picker();
+                        }
+                        continue;
+                    }
+
                     // ── Leader resolution ────────────────────────────────────
                     let leader = self.config.editor.leader;
                     if self.pending_leader && self.active().editor.vim_mode() == VimMode::Normal {
@@ -136,6 +146,10 @@ impl App {
                                 }
                                 KeyCode::Char('/') => {
                                     self.open_grep_picker(None);
+                                }
+                                KeyCode::Char('g') => {
+                                    // Begin git sub-command chord.
+                                    self.pending_git = true;
                                 }
                                 _ => {}
                             }
@@ -211,8 +225,10 @@ impl App {
                             }
                         }
                     } else {
-                        // Any non-Normal key clears the pending motion.
+                        // Any non-Normal key clears pending motions.
                         self.pending_buffer_motion = None;
+                        self.pending_git = false;
+                        self.pending_leader = false;
                     }
 
                     // ── Intercept `:` in Normal mode ─────────────────────────
