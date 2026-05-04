@@ -1023,18 +1023,20 @@ fn open_git_status_picker_sets_picker_and_clears_pending() {
 
 #[test]
 fn git_status_picker_title_is_git_status() {
-    use crate::picker::{HighlightedGitStatusSource, PickerLogic};
+    use crate::picker_git::GitStatusPicker;
+    use hjkl_picker::PickerLogic;
     let tmp = tempfile::tempdir().unwrap();
     let theme = AppTheme::default_dark();
     let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
     let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
-    let source = HighlightedGitStatusSource::new(tmp.path().to_path_buf(), theme_arc, directory);
+    let source = GitStatusPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
     assert_eq!(source.title(), "git status");
 }
 
 #[test]
 fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
-    use crate::picker::{HighlightedGitStatusSource, PickerLogic};
+    use crate::picker_git::GitStatusPicker;
+    use hjkl_picker::PickerLogic;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -1042,8 +1044,7 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     let theme = AppTheme::default_dark();
     let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
     let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
-    let mut source =
-        HighlightedGitStatusSource::new(tmp.path().to_path_buf(), theme_arc, directory);
+    let mut source = GitStatusPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
 
     let cancel = Arc::new(AtomicBool::new(false));
     let handle = source.enumerate(None, Arc::clone(&cancel));

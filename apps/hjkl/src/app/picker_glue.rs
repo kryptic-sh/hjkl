@@ -93,7 +93,7 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let theme =
             self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedGitStatusSource::new(
+        let source = Box::new(crate::picker_git::GitStatusPicker::new(
             cwd,
             theme,
             self.directory.clone(),
