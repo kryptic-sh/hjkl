@@ -75,10 +75,11 @@ impl App {
                         break;
                     }
 
-                    // Dismiss the start screen on any non-Ctrl-C keypress.
+                    // Dismiss the start screen on any non-Ctrl-C keypress and
+                    // let the key fall through to normal handling so `:`,
+                    // `/`, `i`, etc. take effect on the same press.
                     if self.start_screen.is_some() {
                         self.start_screen = None;
-                        continue;
                     }
 
                     self.status_message = None;
