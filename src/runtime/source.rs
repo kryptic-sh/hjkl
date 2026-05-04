@@ -61,6 +61,28 @@ impl SourceCache {
             .join(format!("{name}-{}", short_rev(&spec.git_rev)))
     }
 
+    /// Resolve `injections.scm` from the grammar source's own `queries/`
+    /// directory. Grammar repos (e.g. MDeiml/tree-sitter-markdown) typically
+    /// ship `queries/injections.scm` using the standard tree-sitter injection
+    /// protocol (`@injection.language` + `@injection.content`).
+    ///
+    /// This intentionally reads from the **grammar source**, NOT the curated
+    /// query repos (helix / nvim-treesitter): those files often use
+    /// non-standard predicates (`#set-lang-from-info-string!`) that are
+    /// nvim-specific and won't compile with stock tree-sitter.
+    ///
+    /// Returns `None` when the grammar does not ship `queries/injections.scm`
+    /// — normal and not an error. Returns `Err` only on unexpected I/O.
+    pub fn injections_path(&self, grammar_source_root: &Path) -> Result<Option<PathBuf>> {
+        let injections_path = grammar_source_root.join("queries").join("injections.scm");
+        match std::fs::metadata(&injections_path) {
+            Ok(_) => Ok(Some(injections_path)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e)
+                .with_context(|| format!("stat injections.scm at {}", injections_path.display())),
+        }
+    }
+
     /// Clone the grammar source if not already present. Returns the path to
     /// the (possibly nested via `subpath`) grammar directory ready for
     /// compilation.

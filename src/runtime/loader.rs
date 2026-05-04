@@ -118,6 +118,14 @@ impl GrammarLoader {
             .resolve_highlights(spec.query_source, meta, name, spec.query_subdir.as_deref())
             .with_context(|| format!("resolve highlights for {name}"))?;
 
+        // Injections come from the grammar's own source tree (not the curated
+        // query repos — those use non-standard predicates). Optional: None when
+        // the grammar does not ship injections.scm.
+        let injections_src = self
+            .sources
+            .injections_path(&source_root)
+            .with_context(|| format!("check injections for {name}"))?;
+
         let query_rev = match spec.query_source {
             crate::runtime::manifest::QuerySource::Helix => meta.helix_rev.as_str(),
             crate::runtime::manifest::QuerySource::NvimTreesitter => {
@@ -129,6 +137,7 @@ impl GrammarLoader {
             spec,
             &built,
             &highlights_src,
+            injections_src.as_deref(),
             query_rev,
             &self.user_dir,
         )
@@ -218,14 +227,16 @@ fn parse_rev_sidecar(s: &str) -> Option<(&str, &str, usize)> {
 }
 
 /// Copy `built_so` to `<user_dir>/<name><ext>`, `highlights_src` to
-/// `<user_dir>/<name>.scm`, then write the `<user_dir>/<name>.rev` sidecar
-/// **last** so an interrupted install leaves no partial set of files.
+/// `<user_dir>/<name>.scm`, optionally copy `injections_src` to
+/// `<user_dir>/<name>.injections.scm`, then write the `<user_dir>/<name>.rev`
+/// sidecar **last** so an interrupted install leaves no partial set of files.
 /// Returns the installed parser path.
 fn install_into_user_dir(
     name: &str,
     spec: &LangSpec,
     built_so: &Path,
     highlights_src: &Path,
+    injections_src: Option<&Path>,
     query_rev: &str,
     user_dir: &Path,
 ) -> Result<PathBuf> {
@@ -244,6 +255,11 @@ fn install_into_user_dir(
 
     let highlights_dest = user_dir.join(format!("{name}.scm"));
     copy_atomic(highlights_src, &highlights_dest)?;
+
+    if let Some(inj_src) = injections_src {
+        let inj_dest = user_dir.join(format!("{name}.injections.scm"));
+        copy_atomic(inj_src, &inj_dest)?;
+    }
 
     let rev_dest = user_dir.join(format!("{name}.rev"));
     let rev_payload = format!(
@@ -573,9 +589,16 @@ mod tests {
         let rev = "deadbeef00000000";
         let query_rev = "aaaa0000bbbb1111cccc2222dddd3333eeee4444";
         let spec = dummy_spec(rev);
-        let installed =
-            install_into_user_dir("rust", &spec, &built, &highlights_src, query_rev, &user)
-                .unwrap();
+        let installed = install_into_user_dir(
+            "rust",
+            &spec,
+            &built,
+            &highlights_src,
+            None,
+            query_rev,
+            &user,
+        )
+        .unwrap();
 
         assert_eq!(installed, user.join(format!("rust{}", shared_lib_ext())));
         assert!(installed.is_file());
@@ -602,8 +625,9 @@ mod tests {
         std::fs::write(&built, b"x").unwrap();
 
         let spec = dummy_spec("deadbeef00000000");
-        let err = install_into_user_dir("rust", &spec, &built, &highlights_src, "qrev", &user)
-            .unwrap_err();
+        let err =
+            install_into_user_dir("rust", &spec, &built, &highlights_src, None, "qrev", &user)
+                .unwrap_err();
         assert!(
             err.to_string().contains("highlights.scm missing"),
             "got: {err:#}"
@@ -634,8 +658,16 @@ mod tests {
             source: Some("helix+nvim-treesitter".into()),
         };
 
-        let installed =
-            install_into_user_dir("xml", &spec, &built, &highlights_src, query_rev, &user).unwrap();
+        let installed = install_into_user_dir(
+            "xml",
+            &spec,
+            &built,
+            &highlights_src,
+            None,
+            query_rev,
+            &user,
+        )
+        .unwrap();
 
         assert_eq!(
             installed,
@@ -666,7 +698,7 @@ mod tests {
         std::fs::write(&built, b"fake parser bytes").unwrap();
 
         let spec = dummy_spec("deadbeef00000000");
-        let err = install_into_user_dir("xml", &spec, &built, &highlights_src, "qrev", &user)
+        let err = install_into_user_dir("xml", &spec, &built, &highlights_src, None, "qrev", &user)
             .unwrap_err();
         assert!(
             err.to_string().contains("highlights.scm missing"),

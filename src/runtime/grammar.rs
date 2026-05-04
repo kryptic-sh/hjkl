@@ -18,6 +18,10 @@ pub struct Grammar {
     name: String,
     language: Language,
     highlights_scm: String,
+    /// Language-injection query sourced from `<name>.injections.scm` next to
+    /// `<name>.scm`. `None` when the grammar does not ship one (normal — most
+    /// grammars don't define injections).
+    injections_scm: Option<String>,
     /// Kept alive so `language`'s underlying pointer stays valid. Must be
     /// the LAST field so its `Drop` runs after `language`'s.
     _lib: Library,
@@ -39,9 +43,17 @@ impl Grammar {
         &self.highlights_scm
     }
 
+    /// `injections.scm` source, if this grammar ships one. Grammars that do
+    /// not define language injections return `None`.
+    pub fn injections_scm(&self) -> Option<&str> {
+        self.injections_scm.as_deref()
+    }
+
     /// Load a grammar by name. The [`GrammarLoader`] handles parser
     /// resolution (system → user → on-demand clone+compile+install).
     /// The highlights query is read from `<so_parent>/<name>.scm`.
+    /// The injections query is read from `<so_parent>/<name>.injections.scm`
+    /// when present (absent = no injections, not an error).
     pub fn load(
         name: &str,
         spec: &LangSpec,
@@ -76,10 +88,26 @@ impl Grammar {
             )
         })?;
 
+        // Injections are optional — NotFound maps to None, other IO errors propagate.
+        let injections_path = parent.join(format!("{name}.injections.scm"));
+        let injections_scm = match std::fs::read_to_string(&injections_path) {
+            Ok(s) => Some(s),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "read injections query for {name} at {}",
+                        injections_path.display()
+                    )
+                });
+            }
+        };
+
         Ok(Self {
             name: name.to_string(),
             language,
             highlights_scm,
+            injections_scm,
             _lib: lib,
         })
     }
@@ -99,11 +127,13 @@ impl Grammar {
         lib: Library,
         language: Language,
         highlights_scm: impl Into<String>,
+        injections_scm: Option<impl Into<String>>,
     ) -> Self {
         Self {
             name: name.into(),
             language,
             highlights_scm: highlights_scm.into(),
+            injections_scm: injections_scm.map(|s| s.into()),
             _lib: lib,
         }
     }

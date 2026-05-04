@@ -13,6 +13,11 @@ use tree_sitter::{ParseOptions, Parser, Query, QueryCursor, StreamingIterator as
 
 use crate::runtime::Grammar;
 
+/// Index for `@injection.language` capture.
+const INJ_LANG_CAPTURE: &str = "injection.language";
+/// Index for `@injection.content` capture.
+const INJ_CONTENT_CAPTURE: &str = "injection.content";
+
 /// A byte-range tagged with the tree-sitter capture name that applies to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HighlightSpan {
@@ -66,6 +71,9 @@ pub struct Highlighter {
     parser: Parser,
     query: Query,
     capture_names: Vec<String>,
+    /// Compiled injection query from `injections.scm`, if the grammar ships
+    /// one. `None` = this grammar has no injection rules.
+    injection_query: Option<Query>,
     tree: Option<tree_sitter::Tree>,
     parse_timeout_micros: u64,
     /// Held to keep the dlopen-ed shared library alive. Field order matters
@@ -76,7 +84,9 @@ pub struct Highlighter {
 
 impl Highlighter {
     /// Create a new highlighter for `grammar`'s language using its bundled
-    /// `highlights.scm`.
+    /// `highlights.scm`. If the grammar ships an `injections.scm`, that query
+    /// is compiled too — a compilation failure is logged and skipped rather
+    /// than poisoning the whole highlighter.
     pub fn new(grammar: Arc<Grammar>) -> Result<Self> {
         let mut parser = Parser::new();
         parser
@@ -92,10 +102,29 @@ impl Highlighter {
             .map(|s| s.to_string())
             .collect();
 
+        // Compile the injection query if present. Failure is non-fatal: a
+        // grammar whose injections.scm uses unsupported predicates will still
+        // highlight normally, just without injection support.
+        let injection_query =
+            grammar
+                .injections_scm()
+                .and_then(|inj| match Query::new(grammar.language(), inj) {
+                    Ok(q) => Some(q),
+                    Err(e) => {
+                        tracing::warn!(
+                            grammar = grammar.name(),
+                            error = %e,
+                            "injections.scm failed to compile — injection highlighting disabled"
+                        );
+                        None
+                    }
+                });
+
         Ok(Self {
             parser,
             query,
             capture_names,
+            injection_query,
             tree: None,
             parse_timeout_micros: DEFAULT_PARSE_TIMEOUT_MICROS,
             _grammar: grammar,
@@ -259,6 +288,162 @@ impl Highlighter {
             return Vec::new();
         }
         self.highlight_range(source, 0..source.len())
+    }
+
+    /// Parse `source`, run the highlights query, and recursively highlight any
+    /// injected language ranges declared in `injections.scm`.
+    ///
+    /// `resolve` is called with a language name string (e.g. `"rust"`) and
+    /// should return a loaded `Grammar` for that language, or `None` to skip
+    /// the injection. The closure is invoked once per injected language name
+    /// found in the source — callers should memoize if repeated lookups are
+    /// expensive.
+    ///
+    /// ## Merge semantics (v1)
+    ///
+    /// Child spans (from injected language parsers) are collected and their
+    /// byte offsets translated back into parent-buffer coordinates. For
+    /// rendering, child spans win inside the injected range: parent spans that
+    /// fall entirely within an injected range are dropped; parent spans that
+    /// partially overlap are kept as-is (rare in practice — a parser node
+    /// seldom straddles a code-fence boundary). The result is sorted by
+    /// `byte_range.start`.
+    ///
+    /// When `injections.scm` is absent or produces no matches, this method
+    /// behaves identically to [`Highlighter::highlight`].
+    pub fn highlight_with_injections<F>(
+        &mut self,
+        source: &[u8],
+        mut resolve: F,
+    ) -> Vec<HighlightSpan>
+    where
+        F: FnMut(&str) -> Option<Arc<Grammar>>,
+    {
+        // Parse / re-parse the parent buffer first.
+        if self.tree.is_none() {
+            self.parse_initial(source);
+        } else if !self.parse_incremental(source) {
+            return Vec::new();
+        }
+
+        let parent_spans = self.highlight_range(source, 0..source.len());
+
+        let Some(inj_query) = self.injection_query.as_ref() else {
+            return parent_spans;
+        };
+
+        // Find the capture indices for @injection.language and @injection.content.
+        let lang_idx = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_LANG_CAPTURE);
+        let content_idx = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_CONTENT_CAPTURE);
+
+        let (Some(lang_idx), Some(content_idx)) = (lang_idx, content_idx) else {
+            // This grammar's injections.scm doesn't use the standard captures.
+            return parent_spans;
+        };
+
+        let lang_idx = lang_idx as u32;
+        let content_idx = content_idx as u32;
+
+        let Some(tree) = self.tree.as_ref() else {
+            return parent_spans;
+        };
+
+        // Walk injection query matches, collecting (language_name, byte_range) pairs.
+        let mut injections: Vec<(String, Range<usize>)> = Vec::new();
+        {
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(inj_query, tree.root_node(), source);
+
+            while let Some(m) = matches.next() {
+                // Each match may have both @injection.language and
+                // @injection.content captures, possibly in either order.
+                let mut lang_text: Option<&[u8]> = None;
+                let mut content_range: Option<Range<usize>> = None;
+
+                for cap in m.captures {
+                    if cap.index == lang_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source.len() {
+                            lang_text = Some(&source[s..e]);
+                        }
+                    } else if cap.index == content_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source.len() {
+                            content_range = Some(s..e);
+                        }
+                    }
+                }
+
+                if let (Some(raw_name), Some(range)) = (lang_text, content_range) {
+                    // Reject non-ASCII or suspiciously long language names.
+                    if let Ok(name_str) = std::str::from_utf8(raw_name) {
+                        let name = name_str.trim();
+                        if !name.is_empty()
+                            && name.len() <= 64
+                            && name
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        {
+                            injections.push((name.to_string(), range));
+                        }
+                    }
+                }
+            }
+        }
+
+        if injections.is_empty() {
+            return parent_spans;
+        }
+
+        // For each injection, spin up a child Highlighter and collect spans
+        // translated to parent-buffer coordinates.
+        let mut child_spans: Vec<HighlightSpan> = Vec::new();
+        // Track which byte ranges have child coverage for the merge step.
+        let mut injected_ranges: Vec<Range<usize>> = Vec::new();
+
+        for (lang_name, content_range) in &injections {
+            let Some(child_grammar) = resolve(lang_name) else {
+                continue;
+            };
+            let Ok(mut child_hl) = Highlighter::new(child_grammar) else {
+                continue;
+            };
+            let slice = &source[content_range.clone()];
+            child_hl.parse_initial(slice);
+            let child_raw = child_hl.highlight_range(slice, 0..slice.len());
+
+            let offset = content_range.start;
+            for span in child_raw {
+                child_spans.push(HighlightSpan {
+                    byte_range: (span.byte_range.start + offset)..(span.byte_range.end + offset),
+                    capture: span.capture,
+                });
+            }
+            injected_ranges.push(content_range.clone());
+        }
+
+        // Merge: keep parent spans that do NOT fall entirely within an injected range.
+        // Spans that partially overlap are kept (rare edge case — see doc comment).
+        let mut merged: Vec<HighlightSpan> = parent_spans
+            .into_iter()
+            .filter(|span| {
+                !injected_ranges
+                    .iter()
+                    .any(|ir| span.byte_range.start >= ir.start && span.byte_range.end <= ir.end)
+            })
+            .collect();
+
+        merged.extend(child_spans);
+        merged.sort_by_key(|s| s.byte_range.start);
+        merged
     }
 
     /// Parse `source` and harvest ERROR / MISSING nodes as `ParseError`s.
