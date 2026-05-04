@@ -1015,15 +1015,20 @@ fn scan_git_branches(
         }
     }
 
-    // Sort: HEAD first, then locals by recency, then remotes by recency.
+    // Sort buckets:
+    //   0 — HEAD
+    //   1 — local, top-level (no '/' in name)
+    //   2 — local, namespaced (contains '/', e.g. feature/x)
+    //   3 — remote
+    // Within each bucket: most-recent commit first.
     raw.sort_by(|a, b| {
         let rank = |r: &RawBranch| {
             if r.is_head {
                 0u8
             } else if r.kind == BranchKind::Local {
-                1u8
+                if r.name.contains('/') { 2u8 } else { 1u8 }
             } else {
-                2u8
+                3u8
             }
         };
         rank(a)
