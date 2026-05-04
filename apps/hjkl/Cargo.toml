@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 hjkl-buffer = "0.3"
 hjkl-engine = "0.3"
-hjkl-editor = "0.3"
+hjkl-editor = "0.4"
 hjkl-ratatui = "0.3"
 hjkl-bonsai = "0.5"
 hjkl-clipboard = "0.5"
