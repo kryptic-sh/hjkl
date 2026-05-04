@@ -543,7 +543,8 @@ git_rev = "0d9a8099c963ed53e183425c1b47fa2622c8eaf7"
 subpath = "dtd"
 extensions = ["dtd", "ent"]
 c_files = ["src/parser.c", "src/scanner.c"]
-query_dir = "queries"
+# See xml entry: queries live at <repo>/queries/<lang>/, not <subpath>/queries/.
+query_dir = "../queries/dtd"
 source = "helix+nvim-treesitter"
 
 [language.earthfile]
@@ -3326,7 +3327,9 @@ git_rev = "0d9a8099c963ed53e183425c1b47fa2622c8eaf7"
 subpath = "xml"
 extensions = ["ascx", "atom", "axaml", "axml", "bpmn", "checkstyle", "cpt", "csl", "csproj.user", "dita", "ditamap", "dtml", "fods", "fodt", "fxml", "gir", "glif", "gml", "gpx", "iml", "isml", "itermcolors", "jmx", "kml", "launch", "menu", "mobileconfig", "mpd", "musicxml", "mxml", "ncx", "nuspec", "opml", "osc", "osm", "plist", "policy", "pt", "publishsettings", "pubxml", "pubxml.user", "rbxlx", "rbxmx", "resx", "rng", "rss", "shproj", "smil", "storyboard", "sublime-snippet", "svg", "terminal", "tld", "tmx", "ui", "vbproj.user", "vcxproj", "vcxproj.filters", "wixproj", "wsdl", "wxi", "wxs", "xaml", "xbl", "xib", "xlf", "xliff", "xml", "xmp", "xoml", "xpdl", "xrc", "xsd", "xsl", "xul"]
 c_files = ["src/parser.c", "src/scanner.c"]
-query_dir = "queries"
+# Upstream stores queries at <repo>/queries/<lang>/, not <subpath>/queries/.
+# The `..` escape brings us back to the clone root before joining `queries/xml`.
+query_dir = "../queries/xml"
 source = "helix+nvim-treesitter"
 
 [language.xresources]
