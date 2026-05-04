@@ -46,7 +46,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        # No --locked: cargo-fuzz's published Cargo.lock pins an old rustix
+        # that uses internal `rustc_layout_scalar_valid_range_*` attributes
+        # rejected by current nightly. Letting cargo resolve newer deps
+        # avoids the build break.
+        run: cargo install cargo-fuzz
       - name: Discover and run fuzz targets
         run: |
           if [ -d crates/hjkl-engine/fuzz ]; then
