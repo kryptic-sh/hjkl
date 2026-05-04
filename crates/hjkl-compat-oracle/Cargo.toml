@@ -12,8 +12,16 @@ homepage.workspace = true
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
+hjkl-buffer = { path = "../hjkl-buffer" }
+hjkl-engine = { path = "../hjkl-engine" }
+nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros"] }
 toml = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [package.metadata.docs.rs]
 all-features = true

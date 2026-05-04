@@ -12,6 +12,15 @@
 
 use std::path::Path;
 
+pub mod diff;
+pub mod hjkl_driver;
+pub mod nvim_driver;
+mod test_host;
+
+pub use diff::{CaseResult, CaseStatus, run_oracle};
+pub use hjkl_driver::HjklOutcome;
+pub use nvim_driver::{NvimOutcome, nvim_available};
+
 /// A single vim-compatibility test case.
 ///
 /// All string keys use vim macro notation (`<Esc>`, `<C-r>`, `dd`, ...).
