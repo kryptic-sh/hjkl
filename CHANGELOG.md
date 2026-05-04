@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-04
+
+### Docs
+
+- Internal CHANGELOG hygiene: backfilled missing release entries and added
+  reference link definitions for all version headings. No functional changes.
+
 ## [0.5.0] - 2026-05-03
 
 ### Added
@@ -347,7 +354,8 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.0
 [0.4.8]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.8
 [0.4.6]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.6
