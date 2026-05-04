@@ -6,7 +6,7 @@
 #
 # Naming convention: <category>_<motion/op>_<descriptor>
 # Cursor positions: 0-based (row, col).
-# Cases marked DIVERGENCE_* expose confirmed hjkl engine bugs vs nvim.
+# Confirmed divergences from neovim semantics live in known_divergences.toml.
 
 # ─── Motions ──────────────────────────────────────────────────────────────────
 
@@ -98,15 +98,6 @@ keys = "gg"
 expected_buffer = "foo\nbar\nbaz\n"
 expected_cursor = [0, 0]
 
-# KNOWN_DIVERGENCE: G lands on phantom row 3 (past last line) instead of row 2
-[[cases]]
-name = "DIVERGENCE_motion_G_file_bottom"
-initial_buffer = "foo\nbar\nbaz\n"
-initial_cursor = [0, 0]
-keys = "G"
-expected_buffer = "foo\nbar\nbaz\n"
-expected_cursor = [2, 0]
-
 [[cases]]
 name = "motion_f_find_forward"
 initial_buffer = "hello world\n"
@@ -148,26 +139,6 @@ initial_cursor = [0, 0]
 keys = "dd"
 expected_buffer = "bar\nbaz\n"
 expected_cursor = [0, 0]
-
-# KNOWN_DIVERGENCE: after dd on last line, hjkl cursor stays at row 1 (past end)
-# instead of clamping to row 0 (the new last line)
-[[cases]]
-name = "DIVERGENCE_operator_dd_last_line"
-initial_buffer = "foo\nbar\n"
-initial_cursor = [1, 0]
-keys = "dd"
-expected_buffer = "foo\n"
-expected_cursor = [0, 0]
-
-# KNOWN_DIVERGENCE: after d$, hjkl cursor col is 5 (past last char) instead of 4
-# on "hello\n"; off-by-one in post-operator cursor clamp
-[[cases]]
-name = "DIVERGENCE_operator_d_dollar_to_eol"
-initial_buffer = "hello world\n"
-initial_cursor = [0, 5]
-keys = "d$"
-expected_buffer = "hello\n"
-expected_cursor = [0, 4]
 
 [[cases]]
 name = "operator_d_zero_to_sol"
@@ -273,16 +244,6 @@ keys = "diw"
 expected_buffer = "foo  baz\n"
 expected_cursor = [0, 4]
 
-# KNOWN_DIVERGENCE: da" in hjkl does not eat the adjacent whitespace after the
-# closing quote; leaves "say  there\n" (double space) vs nvim's "say there\n"
-[[cases]]
-name = "DIVERGENCE_textobj_da_doublequote"
-initial_buffer = "say \"hello\" there\n"
-initial_cursor = [0, 6]
-keys = "da\""
-expected_buffer = "say there\n"
-expected_cursor = [0, 4]
-
 [[cases]]
 name = "textobj_di_doublequote"
 initial_buffer = "say \"hello\" there\n"
@@ -307,26 +268,6 @@ keys = "di)"
 expected_buffer = "foo()baz\n"
 expected_cursor = [0, 4]
 
-# KNOWN_DIVERGENCE: after daB on multiline brace block, hjkl cursor col is 7
-# instead of nvim's 6; off-by-one in post-daB cursor placement
-[[cases]]
-name = "DIVERGENCE_textobj_daB_delete_around_brace"
-initial_buffer = "fn x() {\n    body\n}\n"
-initial_cursor = [1, 4]
-keys = "daB"
-expected_buffer = "fn x() \n"
-expected_cursor = [0, 6]
-
-# KNOWN_DIVERGENCE: diB on "{\n    body\n}\n" — hjkl collapses to "{}\n" (deletes
-# all newlines inside braces), nvim correctly leaves "{\n}\n"
-[[cases]]
-name = "DIVERGENCE_textobj_diB_delete_inner_brace"
-initial_buffer = "{\n    body\n}\n"
-initial_cursor = [1, 4]
-keys = "diB"
-expected_buffer = "{\n}\n"
-expected_cursor = [1, 0]
-
 # Note: dat/dit (XML tag text objects) skipped — buffer complexity for
 # well-formed XML tags is disproportionate to Tier 1 scope; reserved for Tier 2.
 
@@ -347,17 +288,6 @@ initial_cursor = [0, 0]
 keys = "d3j"
 expected_buffer = "5\n"
 expected_cursor = [0, 0]
-
-# KNOWN_DIVERGENCE: hjkl does not fill the default register on x/X; nvim puts
-# deleted chars into `"` so they can be retrieved with p/P
-[[cases]]
-name = "DIVERGENCE_count_5x_delete_chars"
-initial_buffer = "hello world\n"
-initial_cursor = [0, 0]
-keys = "5x"
-expected_buffer = " world\n"
-expected_cursor = [0, 0]
-expected_register = ['"', "hello"]
 
 # ─── Insert mode basics ───────────────────────────────────────────────────────
 
@@ -432,16 +362,6 @@ initial_cursor = [0, 0]
 keys = "dwudw<C-r>"
 expected_buffer = "bar\n"
 expected_cursor = [0, 0]
-
-# KNOWN_DIVERGENCE: after `a word<Esc>u`, hjkl cursor col is 5 (one past the
-# last char of "hello") instead of 4; undo does not clamp cursor to last-valid col
-[[cases]]
-name = "DIVERGENCE_undo_insert_then_u"
-initial_buffer = "hello\n"
-initial_cursor = [0, 5]
-keys = "a world<Esc>u"
-expected_buffer = "hello\n"
-expected_cursor = [0, 4]
 
 # ─── Registers ────────────────────────────────────────────────────────────────
 

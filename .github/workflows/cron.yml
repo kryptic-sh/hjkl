@@ -132,6 +132,20 @@ jobs:
             echo "wasm not produced — skipping"
           fi
 
-  # vim_compat: headless vim diff harness lands once 0.1.0 trait
-  # extraction stabilises the public Editor surface. See
-  # MIGRATION.md phase 0 "vim compatibility oracle".
+  vim_compat:
+    name: vim-compat oracle (neovim)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install neovim
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends neovim
+          nvim --version | head -1
+      - name: Run compat oracle
+        run: cargo test -p hjkl-compat-oracle --all-targets -- --nocapture

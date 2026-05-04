@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **`hjkl-compat-oracle` crate** (workspace-only, `publish = false`) — headless
+  neovim diff harness for vim-compat regression testing. Spawns
+  `nvim --headless --embed` per case, drives both nvim and the hjkl engine
+  through identical key inputs, diffs buffer/cursor/mode/registers. Tier 1
+  corpus covers 44 motion/operator/text-object/count/insert/undo/register cases
+  in `corpus/tier1.toml`. 8 confirmed engine divergences surfaced and tracked
+  separately in `corpus/known_divergences.toml` + issue #24. Wired into cron CI
+  (`.github/workflows/cron.yml`). Closes #23.
+
 ## [0.10.1] - 2026-05-05
 
 ### Docs
