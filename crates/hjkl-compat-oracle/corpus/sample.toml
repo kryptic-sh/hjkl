@@ -1,0 +1,12 @@
+[[cases]]
+name = "noop"
+initial_buffer = "hello\n"
+keys = ""
+expected_buffer = "hello\n"
+
+[[cases]]
+name = "motion_l_basic"
+initial_buffer = "hello\n"
+keys = "l"
+expected_buffer = "hello\n"
+expected_cursor = [0, 1]

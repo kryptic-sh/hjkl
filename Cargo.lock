@@ -912,6 +912,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-compat-oracle"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "hjkl-config"
 version = "0.2.0"
 dependencies = [
