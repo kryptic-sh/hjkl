@@ -368,6 +368,8 @@ impl App {
         }
 
         self.status_message = Some(format!("checked out {name}"));
+        // Reload non-dirty buffers whose disk file changed during checkout.
+        self.checktime_all();
     }
 
     pub(crate) fn do_show_commit(&mut self, sha: &str) {
