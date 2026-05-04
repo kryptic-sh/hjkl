@@ -17,6 +17,8 @@ use crate::lang::LanguageDirectory;
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
 
+use crate::picker_action::AppAction;
+
 // ── BufferSource ─────────────────────────────────────────────────────────────
 
 /// Snapshot of one open buffer slot for use in the buffer picker.
@@ -138,7 +140,7 @@ impl PickerLogic for BufferSource {
 
     fn select(&self, idx: usize) -> PickerAction {
         match self.entries.get(idx) {
-            Some(e) => PickerAction::SwitchSlot(e.idx),
+            Some(e) => PickerAction::Custom(Box::new(AppAction::SwitchSlot(e.idx))),
             None => PickerAction::None,
         }
     }
@@ -379,7 +381,16 @@ impl PickerLogic for HighlightedFileSource {
     }
 
     fn select(&self, idx: usize) -> PickerAction {
-        self.inner.select(idx)
+        match self
+            .inner
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).cloned())
+        {
+            Some(p) => PickerAction::Custom(Box::new(AppAction::OpenPath(p))),
+            None => PickerAction::None,
+        }
     }
 
     fn requery_mode(&self) -> RequeryMode {
@@ -514,7 +525,18 @@ impl PickerLogic for HighlightedRgSource {
     }
 
     fn select(&self, idx: usize) -> PickerAction {
-        self.inner.select(idx)
+        match self
+            .inner
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
+        {
+            Some((path, line)) if !path.as_os_str().is_empty() => {
+                PickerAction::Custom(Box::new(AppAction::OpenPathAtLine(path, line)))
+            }
+            _ => PickerAction::None,
+        }
     }
 
     fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {

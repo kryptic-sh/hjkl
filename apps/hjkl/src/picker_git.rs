@@ -14,6 +14,7 @@ use hjkl_picker::{PickerAction, PickerLogic, PreviewSpans, RequeryMode, load_pre
 use ratatui::style::{Color, Style};
 
 use crate::lang::LanguageDirectory;
+use crate::picker_action::AppAction;
 
 const SENTINEL_LABEL: &str = "  not a git repo";
 
@@ -626,7 +627,7 @@ impl PickerLogic for GitStatusPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.path.clone()))
         {
-            Some(p) => PickerAction::OpenPath(p),
+            Some(p) => PickerAction::Custom(Box::new(AppAction::OpenPath(p))),
             None => PickerAction::None,
         }
     }
@@ -911,7 +912,7 @@ impl PickerLogic for GitLogPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
         {
-            Some(sha) => PickerAction::ShowCommit(sha),
+            Some(sha) => PickerAction::Custom(Box::new(AppAction::ShowCommit(sha))),
             None => PickerAction::None,
         }
     }
@@ -1255,7 +1256,9 @@ impl PickerLogic for GitFileHistoryPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.sha.clone()))
         {
-            Some(sha) if !sha.is_empty() => PickerAction::ShowCommit(sha),
+            Some(sha) if !sha.is_empty() => {
+                PickerAction::Custom(Box::new(AppAction::ShowCommit(sha)))
+            }
             _ => PickerAction::None,
         }
     }
@@ -1628,7 +1631,7 @@ impl PickerLogic for GitBranchPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.name.clone()))
         {
-            Some(name) => PickerAction::CheckoutBranch(name),
+            Some(name) => PickerAction::Custom(Box::new(AppAction::CheckoutBranch(name))),
             None => PickerAction::None,
         }
     }
@@ -1912,7 +1915,7 @@ impl PickerLogic for GitStashPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.index))
         {
-            Some(stash_idx) => PickerAction::StashApply(stash_idx),
+            Some(stash_idx) => PickerAction::Custom(Box::new(AppAction::StashApply(stash_idx))),
             None => PickerAction::None,
         }
     }
@@ -1931,8 +1934,12 @@ impl PickerLogic for GitStashPicker {
             return None;
         }
         match key.code {
-            crossterm::event::KeyCode::Char('p') => Some(PickerAction::StashPop(stash_idx)),
-            crossterm::event::KeyCode::Char('d') => Some(PickerAction::StashDrop(stash_idx)),
+            crossterm::event::KeyCode::Char('p') => Some(PickerAction::Custom(Box::new(
+                AppAction::StashPop(stash_idx),
+            ))),
+            crossterm::event::KeyCode::Char('d') => Some(PickerAction::Custom(Box::new(
+                AppAction::StashDrop(stash_idx),
+            ))),
             _ => None,
         }
     }

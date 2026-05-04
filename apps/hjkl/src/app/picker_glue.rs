@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::picker_action::AppAction;
+
 use git2::{BranchType, ErrorCode};
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Editor, Host, Options};
@@ -224,17 +226,28 @@ impl App {
     }
 
     pub(crate) fn dispatch_picker_action(&mut self, action: crate::picker::PickerAction) {
-        match action {
-            crate::picker::PickerAction::OpenPath(path) => {
+        let boxed = match action {
+            crate::picker::PickerAction::Custom(b) => b,
+            crate::picker::PickerAction::None => return,
+        };
+        let app_action = match boxed.downcast::<AppAction>() {
+            Ok(a) => *a,
+            Err(_) => {
+                self.status_message = Some("picker: unknown action type".into());
+                return;
+            }
+        };
+        match app_action {
+            AppAction::OpenPath(path) => {
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
             }
-            crate::picker::PickerAction::SwitchSlot(idx) => {
+            AppAction::SwitchSlot(idx) => {
                 if idx < self.slots.len() {
                     self.switch_to(idx);
                 }
             }
-            crate::picker::PickerAction::OpenPathAtLine(path, line) => {
+            AppAction::OpenPathAtLine(path, line) => {
                 let s = path.to_string_lossy().to_string();
                 self.do_edit(&s, false);
                 // goto_line is 1-based and clamps to buffer length.
@@ -246,12 +259,11 @@ impl App {
                     vp.top_row = top;
                 }
             }
-            crate::picker::PickerAction::ShowCommit(sha) => self.do_show_commit(&sha),
-            crate::picker::PickerAction::CheckoutBranch(name) => self.do_checkout_branch(&name),
-            crate::picker::PickerAction::StashApply(idx) => self.do_stash_apply(idx),
-            crate::picker::PickerAction::StashPop(idx) => self.do_stash_pop(idx),
-            crate::picker::PickerAction::StashDrop(idx) => self.do_stash_drop(idx),
-            crate::picker::PickerAction::None => {}
+            AppAction::ShowCommit(sha) => self.do_show_commit(&sha),
+            AppAction::CheckoutBranch(name) => self.do_checkout_branch(&name),
+            AppAction::StashApply(idx) => self.do_stash_apply(idx),
+            AppAction::StashPop(idx) => self.do_stash_pop(idx),
+            AppAction::StashDrop(idx) => self.do_stash_drop(idx),
         }
     }
 

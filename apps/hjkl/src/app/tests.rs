@@ -618,6 +618,7 @@ fn buffer_source_new_produces_n_entries() {
 #[test]
 fn buffer_source_select_returns_switch_buffer() {
     use crate::picker::{BufferSource, PickerAction, PickerLogic};
+    use crate::picker_action::AppAction;
     let path = std::env::temp_dir().join("hjkl_d4_sel.txt");
     std::fs::write(&path, "x\n").unwrap();
     let app = App::new(Some(path.clone()), false, None, None).unwrap();
@@ -638,8 +639,13 @@ fn buffer_source_select_returns_switch_buffer() {
     );
     // Index 0 corresponds to the first entry (the only slot).
     match source.select(0) {
-        PickerAction::SwitchSlot(i) => assert_eq!(i, 0),
-        _ => panic!("expected SwitchSlot(0)"),
+        PickerAction::Custom(b) => {
+            let a = b
+                .downcast::<AppAction>()
+                .expect("should downcast to AppAction");
+            assert!(matches!(*a, AppAction::SwitchSlot(0)));
+        }
+        _ => panic!("expected Custom(AppAction::SwitchSlot(0))"),
     }
     let _ = std::fs::remove_file(&path);
 }
@@ -1206,7 +1212,10 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
             label.contains("not a git repo"),
             "sentinel label unexpected: {label:?}"
         );
-        matches!(source.select(0), crate::picker::PickerAction::None);
+        assert!(matches!(
+            source.select(0),
+            crate::picker::PickerAction::None
+        ));
     }
 }
 
@@ -1250,6 +1259,21 @@ fn git_stash_picker_shift_s_chord_dispatches() {
     assert!(!app.pending_git);
     // Title must match.
     assert_eq!(app.picker.as_ref().unwrap().title(), "git stashes");
+}
+
+// ── PickerAction downcast test ─────────────────────────────────────────
+
+#[test]
+fn picker_action_custom_downcasts_to_app_action() {
+    use crate::picker_action::AppAction;
+    use hjkl_picker::PickerAction;
+    let action = PickerAction::Custom(Box::new(AppAction::SwitchSlot(2)));
+    if let PickerAction::Custom(b) = action {
+        let recovered = b.downcast::<AppAction>().expect("should downcast");
+        assert!(matches!(*recovered, AppAction::SwitchSlot(2)));
+    } else {
+        panic!("expected Custom");
+    }
 }
 
 // ── checktime / disk-change detection tests ────────────────────────────

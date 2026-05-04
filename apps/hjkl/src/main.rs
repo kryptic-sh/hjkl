@@ -7,6 +7,7 @@ mod git;
 mod host;
 mod lang;
 mod picker;
+mod picker_action;
 mod picker_git;
 mod picker_sources;
 mod render;
