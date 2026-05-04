@@ -78,6 +78,26 @@ reports progress without failing the build.
 | `count_5x_delete_chars`           | `x`/`X` does not write to the default register `"` (breaks `xp` swap)  |
 | `undo_insert_then_u`              | cursor col not clamped to last valid column after undo of insert       |
 
+## License boundary (LGPL-3.0 dep)
+
+This crate depends on [`nvim-rs`](https://github.com/KillTheMule/nvim-rs)
+(LGPL-3.0). The rest of the hjkl workspace is MIT. Coexistence is fine because:
+
+- `hjkl-compat-oracle` is `publish = false` and is **not** a dependency of
+  `apps/hjkl` (the released binary). `nvim-rs` never enters the released hjkl
+  artifacts.
+- LGPL-3.0 only constrains **distributed binaries** that statically link LGPL
+  code. We never distribute such a binary — this crate only runs as `cargo test`
+  in cron CI.
+- LGPL-3.0 source coexisting with MIT source in the same repo is explicitly
+  permitted by both licenses; LGPL doesn't infect MIT siblings.
+
+If you fork hjkl and decide to ship `hjkl-compat-oracle` itself as a binary or
+library, you inherit the LGPL-3.0 obligations on that artifact (provide the LGPL
+source + your own object files so users can relink, or re-license your binary
+under LGPL-3.0+). The `cargo-deny` config carries an explicit per-crate
+exception for `nvim-rs` so this trade-off is auditable.
+
 ## Neovim version
 
 Not pinned. The cron CI installs whatever `neovim` package `ubuntu-24.04` ships
