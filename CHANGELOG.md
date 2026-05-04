@@ -8,6 +8,70 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-05
+
+### Added
+
+- **Git pickers under `<leader>g`.** Lazygit-adjacent surface, all bound to the
+  `<leader>g` chord:
+  - `<leader>gs` — status picker. Modified / staged / untracked entries; preview
+    shows the working-tree diff (body + `+`/`-`/space prefix).
+  - `<leader>gl` — log picker. Hash dimmed yellow, conventional-commit prefix
+    colored by type, lazygit-style author initials with deterministic per-author
+    color, preserves chronological sort on empty query.
+  - `<leader>gb` — branches picker. Locals bucketed before namespaced and
+    remotes; checkout does a pre-flight conflict check (diff HEAD↔target ∩
+    workdir status) and aborts with a path preview instead of letting libgit2
+    return an opaque `class=Checkout (20); code=Conflict (-13)`.
+  - `<leader>gB` — file history picker for the current buffer's path.
+  - `<leader>gS` — stash picker. `Alt+P` pops, `Alt+D` drops, Enter applies.
+  - `<leader>gt` — tags picker. Sorted by tagger time desc with alpha tiebreak;
+    Enter checks out the tag's commit (detached HEAD).
+  - `<leader>gr` — remotes picker. Lists configured remotes with branch counts;
+    Enter fetches.
+- **Auto-reload buffers from disk on focus regain.** `Event::FocusGained`
+  triggers `checktime_all()`; non-dirty buffers whose mtime+len changed are
+  reloaded silently. Dirty buffers and deleted-on-disk files are flagged with
+  vim-style `[changed on disk]` / `[deleted]` suffixes in the status line.
+  `:checktime` ex command available for manual sweep. `:write!` overrides the
+  `E13: file has changed on disk` guard.
+- **Colored git commit header in preview.** `commit` / `Author` / `Date` /
+  subject lines styled distinctly; conventional-commit prefix in the subject
+  picks up the same color used by the log picker.
+- **Drop pristine default buffer when first real file opens.** Empty unnamed
+  unmodified default slot is closed automatically once the first `:edit`
+  succeeds, so the buffer list stays clean.
+- Animated splash background now inherits the terminal background across themes
+  (carry-over polish from 0.9.3).
+
+### Changed
+
+- **`hjkl-picker` 0.3 → 0.4.** Picks up the
+  `PickerAction::Custom(Box<dyn Any + Send>)` refactor that drops app-specific
+  variants (`OpenPath`, `ShowCommit`, `CheckoutBranch`, etc.) from the library,
+  plus `handle_key` / `label_styles` / `preserve_source_order` source hooks.
+  App-side `AppAction` enum now carries all hjkl-specific intents and is
+  downcast in `dispatch_picker_action`.
+- **Git status picker moved app-side.** `GitStatusSource` removed from
+  `hjkl-picker` to keep the library free of `git2`. Now lives in
+  `apps/hjkl/src/picker_git.rs` alongside the other git pickers.
+- **`hjkl-bonsai` 0.4.0 → 0.4.1.** Adds `build/` to the crate's `.gitignore` so
+  compiled grammar artifacts no longer pollute `git status`.
+- Sub-dep patch bumps (no behavior change in this app, picked up via caret):
+  `hjkl-buffer` 0.3.4, `hjkl-clipboard` 0.5.1, `hjkl-editor` 0.3.3,
+  `hjkl-engine` 0.3.4, `hjkl-form` 0.3.3, `hjkl-ratatui` 0.3.3.
+
+### Fixed
+
+- Branch + log pickers preserve their source-defined sort (locals-first,
+  chronological) on empty query instead of falling back to alphabetical.
+- Git status preview rendered headers only — now includes the diff body and
+  `+`/`-`/space prefix per hunk line.
+- Picker fuzzy-match highlight positions are aligned to the visible label
+  (post-prefix/icon) rather than the raw entry text.
+- `checktime_all()` now runs after `<leader>gb` branch checkout so reloaded
+  buffers reflect the new tree without manual `:checktime`.
+
 ## [0.9.3] - 2026-05-04
 
 ### Added
@@ -989,7 +1053,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.0
 [0.9.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.3
 [0.9.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.2
 [0.9.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.9.1
