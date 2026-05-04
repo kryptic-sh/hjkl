@@ -31,9 +31,11 @@ impl LanguageDirectory {
     /// Build a new directory rooted at the user's standard XDG dirs. Fails
     /// only if the embedded `bonsai.toml` doesn't parse or `$HOME` is unset.
     pub fn new() -> Result<Self> {
+        let registry = GrammarRegistry::embedded()?;
+        let loader = GrammarLoader::user_default(registry.meta())?;
         Ok(Self {
-            registry: GrammarRegistry::embedded()?,
-            loader: GrammarLoader::user_default()?,
+            registry,
+            loader,
             cache: Mutex::new(HashMap::new()),
         })
     }
@@ -45,7 +47,7 @@ impl LanguageDirectory {
             return Some(g);
         }
         let spec = self.registry.by_name(name)?;
-        let grammar = Grammar::load(name, spec, &self.loader).ok()?;
+        let grammar = Grammar::load(name, spec, &self.loader, self.registry.meta()).ok()?;
         Some(self.cache_insert(name, grammar))
     }
 
