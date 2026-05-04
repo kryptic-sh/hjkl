@@ -247,7 +247,10 @@ impl App {
                     self.exit_requested = true;
                 }
             }
-            ExEffect::Substituted { count } => {
+            ExEffect::Substituted {
+                count,
+                lines_changed,
+            } => {
                 // Engine applied the substitution in-place; propagate dirty
                 // and fan ContentEdits into the syntax tree.
                 if self.slots[self.active].editor.take_dirty() {
@@ -263,7 +266,11 @@ impl App {
                     }
                     self.recompute_and_install();
                 }
-                self.status_message = Some(format!("{count} substitution(s)"));
+                self.status_message = Some(if count == 0 {
+                    "Pattern not found".into()
+                } else {
+                    format!("{count} substitutions on {lines_changed} lines")
+                });
             }
             ExEffect::Info(msg) => {
                 if msg.contains('\n') {

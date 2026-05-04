@@ -1475,3 +1475,65 @@ fn checktime_recovers_after_file_recreated() {
     assert_eq!(app.active().disk_state, DiskState::Synced);
     let _ = std::fs::remove_file(&path);
 }
+
+// ── Substitute ex-command tests ──────────────────────────────────────────────
+
+/// `:%s/foo/bar/g` over a multi-line buffer replaces all occurrences.
+#[test]
+fn substitute_percent_global_multi_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo foo\nfoo");
+    app.dispatch_ex("%s/foo/bar/g");
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["bar bar", "bar"],
+        "buffer should be fully substituted"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "3 substitutions on 2 lines", "status: {msg}");
+}
+
+/// `:s/foo/bar/` on the current line replaces only the first occurrence.
+#[test]
+fn substitute_current_line_first_only() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo foo\nfoo");
+    app.dispatch_ex("s/foo/bar/");
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines[0], "bar foo", "only first occurrence on current line");
+    assert_eq!(lines[1], "foo", "second line unchanged");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "1 substitutions on 1 lines", "status: {msg}");
+}
+
+/// `:s//xxx/` after a `/foo` search reuses the last pattern.
+#[test]
+fn substitute_empty_pattern_reuses_last_search() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    // Simulate a prior search by setting last_search directly.
+    app.active_mut()
+        .editor
+        .set_last_search(Some("world".to_string()), true);
+    app.dispatch_ex("s//planet/");
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines[0], "hello planet",
+        "should replace using last search pattern"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "1 substitutions on 1 lines", "status: {msg}");
+}
+
+/// `:s/foo/bar/` with no match leaves the buffer unchanged and shows "Pattern not found".
+#[test]
+fn substitute_no_match_shows_pattern_not_found() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.dispatch_ex("s/xyz/bar/");
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines[0], "hello world", "buffer should be unchanged");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "Pattern not found", "status: {msg}");
+}

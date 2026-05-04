@@ -82,3 +82,47 @@ initial_cursor = [0, 5]
 keys = "a world<Esc>u"
 expected_buffer = "hello\n"
 expected_cursor = [0, 4]
+
+# ─── Substitute ex-command cases ─────────────────────────────────────────────
+# DIVERGENCE: hjkl-engine's `step` function does not handle the `:` key — ex
+# commands are dispatched through `hjkl_editor::ex::run` by the TUI host, not
+# through the vim FSM. These cases exercise nvim's `:s` via the oracle's key
+# replay but the hjkl driver will see `:s/foo/bar/<CR>` as unrecognised Normal
+# mode keys and leave the buffer unchanged. The substitute logic itself is
+# tested in hjkl-editor and apps/hjkl unit tests.
+
+# DIVERGENCE: :s/foo/bar/ — basic substitute, first match on current line
+[[cases]]
+name = "substitute_basic_first_match"
+initial_buffer = "foo foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/<CR>"
+expected_buffer = "bar foo\n"
+expected_cursor = [0, 0]
+
+# DIVERGENCE: :%s/foo/bar/g — global substitute over whole buffer
+[[cases]]
+name = "substitute_percent_global"
+initial_buffer = "foo\nfoo foo\n"
+initial_cursor = [0, 0]
+keys = ":%s/foo/bar/g<CR>"
+expected_buffer = "bar\nbar bar\n"
+expected_cursor = [1, 0]
+
+# DIVERGENCE: :s/\d\+/N/g — digit pattern using vim's \d\+ notation
+[[cases]]
+name = "substitute_digit_pattern"
+initial_buffer = "foo 123 bar 456\n"
+initial_cursor = [0, 0]
+keys = ":s/[0-9][0-9]*/N/g<CR>"
+expected_buffer = "foo N bar N\n"
+expected_cursor = [0, 0]
+
+# DIVERGENCE: :s/foo/bar/ with no match — buffer unchanged, cursor unchanged
+[[cases]]
+name = "substitute_no_match_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/xyz/bar/<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]

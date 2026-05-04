@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
