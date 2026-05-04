@@ -446,6 +446,164 @@ impl Highlighter {
         merged
     }
 
+    /// Run the highlights query and injection-query walk scoped to
+    /// `byte_range`, without re-parsing. The caller is responsible for
+    /// driving `parse_incremental` before calling this method; the
+    /// retained tree must already reflect `source`.
+    ///
+    /// ## Algorithm
+    ///
+    /// 1. Get parent spans via [`Highlighter::highlight_range`] over `byte_range`.
+    /// 2. Walk the injection query with its `QueryCursor` byte range set to
+    ///    `byte_range`, so injections outside the viewport trigger no work.
+    /// 3. For each injection match whose content range intersects the viewport,
+    ///    slice `&source[content_range]`, parse with the child grammar's parser,
+    ///    run that grammar's highlights query over the slice, translate spans
+    ///    `+content_range.start`, then clip translated child spans to
+    ///    `byte_range` (dropping empty spans after clip).
+    /// 4. Merge: parent spans entirely within an injected range are dropped;
+    ///    child spans replace them. Same v1 semantics as
+    ///    [`Highlighter::highlight_with_injections`].
+    ///
+    /// When `injections.scm` is absent or produces no matches inside the
+    /// viewport, this behaves identically to
+    /// [`Highlighter::highlight_range`].
+    pub fn highlight_range_with_injections<F>(
+        &mut self,
+        source: &[u8],
+        byte_range: Range<usize>,
+        mut resolve: F,
+    ) -> Vec<HighlightSpan>
+    where
+        F: FnMut(&str) -> Option<Arc<Grammar>>,
+    {
+        let parent_spans = self.highlight_range(source, byte_range.clone());
+
+        let Some(inj_query) = self.injection_query.as_ref() else {
+            return parent_spans;
+        };
+
+        // Find the capture indices for @injection.language and @injection.content.
+        let lang_idx = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_LANG_CAPTURE);
+        let content_idx = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_CONTENT_CAPTURE);
+
+        let (Some(lang_idx), Some(content_idx)) = (lang_idx, content_idx) else {
+            return parent_spans;
+        };
+
+        let lang_idx = lang_idx as u32;
+        let content_idx = content_idx as u32;
+
+        let Some(tree) = self.tree.as_ref() else {
+            return parent_spans;
+        };
+
+        // Walk injection matches restricted to the viewport byte range.
+        let mut injections: Vec<(String, Range<usize>)> = Vec::new();
+        {
+            let mut cursor = QueryCursor::new();
+            cursor.set_byte_range(byte_range.clone());
+            let mut matches = cursor.matches(inj_query, tree.root_node(), source);
+
+            while let Some(m) = matches.next() {
+                let mut lang_text: Option<&[u8]> = None;
+                let mut content_range: Option<Range<usize>> = None;
+
+                for cap in m.captures {
+                    if cap.index == lang_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source.len() {
+                            lang_text = Some(&source[s..e]);
+                        }
+                    } else if cap.index == content_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source.len() {
+                            content_range = Some(s..e);
+                        }
+                    }
+                }
+
+                if let (Some(raw_name), Some(range)) = (lang_text, content_range) {
+                    // Only include injections that intersect the viewport.
+                    if range.start >= byte_range.end || range.end <= byte_range.start {
+                        continue;
+                    }
+                    if let Ok(name_str) = std::str::from_utf8(raw_name) {
+                        let name = name_str.trim();
+                        if !name.is_empty()
+                            && name.len() <= 64
+                            && name
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        {
+                            injections.push((name.to_string(), range));
+                        }
+                    }
+                }
+            }
+        }
+
+        if injections.is_empty() {
+            return parent_spans;
+        }
+
+        // For each injection, spin up a child Highlighter and collect spans
+        // translated and clipped to the viewport.
+        let mut child_spans: Vec<HighlightSpan> = Vec::new();
+        let mut injected_ranges: Vec<Range<usize>> = Vec::new();
+
+        for (lang_name, content_range) in &injections {
+            let Some(child_grammar) = resolve(lang_name) else {
+                continue;
+            };
+            let Ok(mut child_hl) = Highlighter::new(child_grammar) else {
+                continue;
+            };
+            let slice = &source[content_range.clone()];
+            child_hl.parse_initial(slice);
+            let child_raw = child_hl.highlight_range(slice, 0..slice.len());
+
+            let offset = content_range.start;
+            for span in child_raw {
+                let abs_start = span.byte_range.start + offset;
+                let abs_end = span.byte_range.end + offset;
+                // Clip to viewport.
+                let clipped_start = abs_start.max(byte_range.start);
+                let clipped_end = abs_end.min(byte_range.end);
+                if clipped_start >= clipped_end {
+                    continue;
+                }
+                child_spans.push(HighlightSpan {
+                    byte_range: clipped_start..clipped_end,
+                    capture: span.capture,
+                });
+            }
+            injected_ranges.push(content_range.clone());
+        }
+
+        // Merge: keep parent spans not entirely inside an injected range.
+        let mut merged: Vec<HighlightSpan> = parent_spans
+            .into_iter()
+            .filter(|span| {
+                !injected_ranges
+                    .iter()
+                    .any(|ir| span.byte_range.start >= ir.start && span.byte_range.end <= ir.end)
+            })
+            .collect();
+
+        merged.extend(child_spans);
+        merged.sort_by_key(|s| s.byte_range.start);
+        merged
+    }
+
     /// Parse `source` and harvest ERROR / MISSING nodes as `ParseError`s.
     pub fn parse_errors(&mut self, source: &[u8]) -> Vec<ParseError> {
         if self.tree.is_none() {
