@@ -181,6 +181,10 @@ fn parse_rev_sidecar(s: &str) -> Option<(&str, usize)> {
 /// `<user_dir>/<name>.rev` sidecar **last** so an interrupted install
 /// leaves the previous (or no) rev recorded — the next `load` rebuilds.
 /// Returns the installed parser path.
+///
+/// All preconditions (e.g. `highlights.scm` existence) are checked before
+/// any file is written to `user_dir` so a failed install never leaves a
+/// partial set of files behind (`.so` without `.scm`/`.rev`).
 fn install_into_user_dir(
     name: &str,
     spec: &LangSpec,
@@ -188,12 +192,7 @@ fn install_into_user_dir(
     source_root: &Path,
     user_dir: &Path,
 ) -> Result<PathBuf> {
-    std::fs::create_dir_all(user_dir)
-        .with_context(|| format!("create user dir {}", user_dir.display()))?;
-
-    let dest = user_dir.join(format!("{name}{}", shared_lib_ext()));
-    copy_atomic(built_so, &dest)?;
-
+    // Validate everything before touching user_dir — keeps the install atomic.
     let highlights_src = source_root.join(&spec.query_dir).join(HIGHLIGHTS_FILE);
     if !highlights_src.is_file() {
         bail!(
@@ -201,6 +200,13 @@ fn install_into_user_dir(
             highlights_src.display()
         );
     }
+
+    std::fs::create_dir_all(user_dir)
+        .with_context(|| format!("create user dir {}", user_dir.display()))?;
+
+    let dest = user_dir.join(format!("{name}{}", shared_lib_ext()));
+    copy_atomic(built_so, &dest)?;
+
     let highlights_dest = user_dir.join(format!("{name}.scm"));
     copy_atomic(&highlights_src, &highlights_dest)?;
 
@@ -476,6 +482,86 @@ mod tests {
         assert!(
             err.to_string().contains("highlights.scm missing"),
             "got: {err:#}"
+        );
+    }
+
+    // Regression: grammars with `subpath` (e.g. xml in tree-sitter-xml which
+    // hosts both `xml/` and `dtd/` under one repo) were susceptible to a
+    // partial install — the .so landed in user_dir before the bail fired for a
+    // missing highlights.scm, leaving .scm and .rev absent. The fix moves the
+    // precondition check before any writes.
+    //
+    // This test mirrors the xml layout: clone_dir/<subpath>/queries/highlights.scm
+    // and asserts that all three files (.so, .scm, .rev) appear in user_dir.
+    #[test]
+    fn install_with_subpath_produces_all_three_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+
+        // clone_dir = the raw repo checkout; source_root = clone_dir/xml (subpath applied).
+        let clone_dir = tmp.path().join("clone");
+        let source_root = clone_dir.join("xml");
+        let queries = source_root.join("queries");
+        std::fs::create_dir_all(&queries).unwrap();
+        std::fs::write(queries.join("highlights.scm"), "; xml highlights").unwrap();
+
+        let built = source_root.join(format!("xml{}", shared_lib_ext()));
+        std::fs::write(&built, b"fake xml parser bytes").unwrap();
+
+        let rev = "0d9a8099c963ed53";
+        let spec = LangSpec {
+            git_url: "https://github.com/tree-sitter-grammars/tree-sitter-xml".into(),
+            git_rev: rev.into(),
+            subpath: Some("xml".into()),
+            extensions: vec!["xml".into()],
+            c_files: vec!["src/parser.c".into(), "src/scanner.c".into()],
+            query_dir: "queries".into(),
+            source: Some("helix+nvim-treesitter".into()),
+        };
+
+        let installed = install_into_user_dir("xml", &spec, &built, &source_root, &user).unwrap();
+
+        assert_eq!(
+            installed,
+            user.join(format!("xml{}", shared_lib_ext())),
+            ".so path mismatch"
+        );
+        assert!(installed.is_file(), ".so missing from user_dir");
+        assert!(user.join("xml.scm").is_file(), ".scm missing from user_dir");
+        assert!(user.join("xml.rev").is_file(), ".rev missing from user_dir");
+
+        let rev_payload = std::fs::read_to_string(user.join("xml.rev")).unwrap();
+        assert_eq!(
+            rev_payload,
+            format!("{rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
+        );
+    }
+
+    // Regression: when highlights.scm is missing, no file must be written to
+    // user_dir — not even the .so. Before the fix, copy_atomic for the .so ran
+    // first, leaving an orphaned .so without .scm/.rev on every failed install.
+    #[test]
+    fn install_leaves_no_so_in_user_dir_when_highlights_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+        let source_root = tmp.path().join("source");
+        // queries dir exists but highlights.scm is absent.
+        std::fs::create_dir_all(source_root.join("queries")).unwrap();
+        let built = source_root.join(format!("xml{}", shared_lib_ext()));
+        std::fs::write(&built, b"fake parser bytes").unwrap();
+
+        let spec = dummy_spec("deadbeef00000000");
+        let err = install_into_user_dir("xml", &spec, &built, &source_root, &user).unwrap_err();
+        assert!(
+            err.to_string().contains("highlights.scm missing"),
+            "got: {err:#}"
+        );
+
+        // user_dir may not even exist, but if it does the .so must not be there.
+        let so_path = user.join(format!("xml{}", shared_lib_ext()));
+        assert!(
+            !so_path.exists(),
+            ".so must not be written when highlights.scm is missing; found {so_path:?}"
         );
     }
 }
