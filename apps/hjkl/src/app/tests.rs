@@ -1062,6 +1062,32 @@ fn git_log_picker_title_is_git_log() {
     assert_eq!(source.title(), "git log");
 }
 
+// ── Git branch picker smoke tests ──────────────────────────────────────
+
+#[test]
+fn git_branch_picker_opens_and_clears_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none());
+    app.pending_leader = true;
+    app.pending_git = true;
+    app.open_git_branch_picker();
+    assert!(
+        app.picker.is_some(),
+        "picker should be open after open_git_branch_picker"
+    );
+    assert!(!app.pending_leader, "pending_leader must be cleared");
+    assert!(!app.pending_git, "pending_git must be cleared");
+}
+
+#[test]
+fn git_branch_picker_title_is_git_branches() {
+    use crate::picker_git::GitBranchPicker;
+    use hjkl_picker::PickerLogic;
+    let tmp = tempfile::tempdir().unwrap();
+    let source = GitBranchPicker::new(tmp.path().to_path_buf());
+    assert_eq!(source.title(), "git branches");
+}
+
 #[test]
 fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     use crate::picker_git::GitStatusPicker;

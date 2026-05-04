@@ -125,6 +125,7 @@ impl App {
                             match key.code {
                                 KeyCode::Char('s') => self.open_git_status_picker(),
                                 KeyCode::Char('l') => self.open_git_log_picker(),
+                                KeyCode::Char('b') => self.open_git_branch_picker(),
                                 _ => {}
                             }
                         }

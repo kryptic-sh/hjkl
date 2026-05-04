@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use git2::{BranchType, ErrorCode};
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Editor, Host, Options};
 
@@ -107,6 +108,15 @@ impl App {
         self.pending_git = false;
     }
 
+    /// Open the git-branch picker.
+    pub(crate) fn open_git_branch_picker(&mut self) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let source = Box::new(crate::picker_git::GitBranchPicker::new(cwd));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
+        self.pending_git = false;
+    }
+
     /// Open the git-status fuzzy picker.
     pub(crate) fn open_git_status_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -163,8 +173,79 @@ impl App {
                 }
             }
             crate::picker::PickerAction::ShowCommit(sha) => self.do_show_commit(&sha),
+            crate::picker::PickerAction::CheckoutBranch(name) => self.do_checkout_branch(&name),
             crate::picker::PickerAction::None => {}
         }
+    }
+
+    pub(crate) fn do_checkout_branch(&mut self, name: &str) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let repo = match git2::Repository::discover(&cwd) {
+            Ok(r) => r,
+            Err(_) => {
+                self.status_message = Some("git: not in a repo".into());
+                return;
+            }
+        };
+
+        // Try local first, then remote.
+        let local_result = repo.find_branch(name, BranchType::Local);
+        let (branch, is_remote) = match local_result {
+            Ok(b) => (b, false),
+            Err(ref e) if e.code() == ErrorCode::NotFound => {
+                match repo.find_branch(name, BranchType::Remote) {
+                    Ok(b) => (b, true),
+                    Err(_) => {
+                        self.status_message = Some(format!("git: branch '{name}' not found"));
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+
+        let target_obj = match branch.get().peel(git2::ObjectType::Commit) {
+            Ok(o) => o,
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+        let target_oid = target_obj.id();
+
+        let tree = match branch.get().peel_to_tree() {
+            Ok(t) => t,
+            Err(e) => {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        };
+
+        let mut cb = git2::build::CheckoutBuilder::new();
+        cb.safe();
+        if let Err(e) = repo.checkout_tree(tree.as_object(), Some(&mut cb)) {
+            self.status_message = Some(format!("git: checkout failed: {e}"));
+            return;
+        }
+
+        if is_remote {
+            // Detached HEAD for remote branch checkouts.
+            if let Err(e) = repo.set_head_detached(target_oid) {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        } else {
+            let refname = format!("refs/heads/{name}");
+            if let Err(e) = repo.set_head(&refname) {
+                self.status_message = Some(format!("git: {e}"));
+                return;
+            }
+        }
+
+        self.status_message = Some(format!("checked out {name}"));
     }
 
     pub(crate) fn do_show_commit(&mut self, sha: &str) {

@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use git2::{Commit, DiffFormat, DiffOptions, Repository, Sort, Status, StatusOptions};
+use git2::{
+    BranchType, Commit, DiffFormat, DiffOptions, ObjectType, Repository, Sort, Status,
+    StatusOptions,
+};
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_buffer::Buffer;
 use hjkl_picker::{PickerAction, PickerLogic, PreviewSpans, RequeryMode, load_preview};
@@ -766,11 +769,10 @@ impl PickerLogic for GitLogPicker {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
-        let (short_len, author) = self
-            .items
-            .lock()
-            .ok()
-            .and_then(|g| g.get(idx).map(|i| (i.short_sha.chars().count(), i.author.clone())))?;
+        let (short_len, author) = self.items.lock().ok().and_then(|g| {
+            g.get(idx)
+                .map(|i| (i.short_sha.chars().count(), i.author.clone()))
+        })?;
         let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
         let hash_start = 2usize;
         let hash_end = hash_start + short_len;
@@ -888,6 +890,369 @@ impl PickerLogic for GitLogPicker {
         thread::Builder::new()
             .name("hjkl-picker-git-log".into())
             .spawn(move || scan_git_log(root, items, done, sentinel, cancel))
+            .ok()
+    }
+}
+
+// ── GitBranchPicker ───────────────────────────────────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchKind {
+    Local,
+    Remote,
+}
+
+struct GitBranchItem {
+    name: String,
+    kind: BranchKind,
+    is_head: bool,
+    target_sha: Option<String>,
+}
+
+pub struct GitBranchPicker {
+    root: PathBuf,
+    items: Arc<Mutex<Vec<GitBranchItem>>>,
+    scan_done: Arc<AtomicBool>,
+    is_sentinel: Arc<AtomicBool>,
+}
+
+impl GitBranchPicker {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            items: Arc::new(Mutex::new(Vec::new())),
+            scan_done: Arc::new(AtomicBool::new(false)),
+            is_sentinel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn scan_git_branches(
+    root: PathBuf,
+    items: Arc<Mutex<Vec<GitBranchItem>>>,
+    done: Arc<AtomicBool>,
+    sentinel: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+) {
+    let repo = match Repository::discover(&root) {
+        Ok(r) => r,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            if let Ok(mut g) = items.lock() {
+                g.push(GitBranchItem {
+                    name: String::new(),
+                    kind: BranchKind::Local,
+                    is_head: false,
+                    target_sha: None,
+                });
+            }
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    let branches_iter = match repo.branches(None) {
+        Ok(b) => b,
+        Err(_) => {
+            sentinel.store(true, Ordering::Release);
+            done.store(true, Ordering::Release);
+            return;
+        }
+    };
+
+    struct RawBranch {
+        name: String,
+        kind: BranchKind,
+        is_head: bool,
+        commit_time: i64,
+        sha: String,
+    }
+
+    let mut raw: Vec<RawBranch> = Vec::new();
+
+    for result in branches_iter {
+        if cancel.load(Ordering::Acquire) {
+            done.store(true, Ordering::Release);
+            return;
+        }
+        let (branch, branch_type) = match result {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let name = match branch.name() {
+            Ok(Some(n)) => n.to_owned(),
+            _ => continue,
+        };
+        // Skip HEAD symbolic remote refs.
+        if name.ends_with("/HEAD") {
+            continue;
+        }
+        let kind = match branch_type {
+            BranchType::Local => BranchKind::Local,
+            BranchType::Remote => BranchKind::Remote,
+        };
+        let is_head = branch.is_head();
+        let (commit_time, sha) = match branch.get().peel(ObjectType::Commit) {
+            Ok(obj) => match obj.into_commit() {
+                Ok(c) => {
+                    let time = c.time().seconds();
+                    let sha = c.id().to_string();
+                    (time, sha)
+                }
+                Err(_) => (-1i64, String::new()),
+            },
+            Err(_) => (-1i64, String::new()),
+        };
+        raw.push(RawBranch {
+            name,
+            kind,
+            is_head,
+            commit_time,
+            sha,
+        });
+        if raw.len() >= 500 {
+            break;
+        }
+    }
+
+    // Sort: HEAD first, then locals by recency, then remotes by recency.
+    raw.sort_by(|a, b| {
+        let rank = |r: &RawBranch| {
+            if r.is_head {
+                0u8
+            } else if r.kind == BranchKind::Local {
+                1u8
+            } else {
+                2u8
+            }
+        };
+        rank(a)
+            .cmp(&rank(b))
+            .then_with(|| b.commit_time.cmp(&a.commit_time))
+    });
+
+    let mut parsed: Vec<GitBranchItem> = raw
+        .into_iter()
+        .map(|r| GitBranchItem {
+            name: r.name,
+            kind: r.kind,
+            is_head: r.is_head,
+            target_sha: if r.sha.is_empty() { None } else { Some(r.sha) },
+        })
+        .collect();
+
+    if let Ok(mut g) = items.lock() {
+        g.append(&mut parsed);
+    }
+
+    done.store(true, Ordering::Release);
+}
+
+impl PickerLogic for GitBranchPicker {
+    fn title(&self) -> &str {
+        "git branches"
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.lock().map(|g| g.len()).unwrap_or(0)
+    }
+
+    fn label(&self, idx: usize) -> String {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return SENTINEL_LABEL.to_owned();
+        }
+        self.items
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.get(idx).map(|item| {
+                    let marker = if item.is_head { '*' } else { ' ' };
+                    format!("  {} {}", marker, item.name)
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn label_styles(
+        &self,
+        idx: usize,
+        _label: &str,
+    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return None;
+        }
+        let (is_head, kind, name_len) = self.items.lock().ok().and_then(|g| {
+            g.get(idx)
+                .map(|i| (i.is_head, i.kind, i.name.chars().count()))
+        })?;
+        let _ = name_len;
+        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+
+        // Marker at char index 2..3.
+        if is_head {
+            out.push((
+                2..3,
+                ratatui::style::Style::default().fg(ratatui::style::Color::Green),
+            ));
+        }
+
+        // Branch name starts at char index 4.
+        // Compute byte offset for char 4 to end of label.
+        // We store char ranges per the PickerLogic contract.
+        let name_char_start = 4usize;
+        let label = self.label(idx);
+        let name_char_end = label.chars().count();
+        if name_char_start < name_char_end {
+            let style = match kind {
+                BranchKind::Local => {
+                    ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)
+                }
+                BranchKind::Remote => {
+                    ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
+                }
+            };
+            out.push((name_char_start..name_char_end, style));
+        }
+
+        Some(out)
+    }
+
+    fn preview(&self, idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return (
+                hjkl_buffer::Buffer::new(),
+                String::new(),
+                PreviewSpans::default(),
+            );
+        }
+
+        let target_sha = match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).and_then(|i| i.target_sha.clone()))
+        {
+            Some(s) => s,
+            None => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    String::new(),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let repo = match Repository::discover(&self.root) {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let oid = match git2::Oid::from_str(&target_sha) {
+            Ok(o) => o,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        let mut revwalk = match repo.revwalk() {
+            Ok(r) => r,
+            Err(e) => {
+                return (
+                    hjkl_buffer::Buffer::new(),
+                    format!("git error: {e}"),
+                    PreviewSpans::default(),
+                );
+            }
+        };
+
+        if let Err(e) = revwalk.push(oid) {
+            return (
+                hjkl_buffer::Buffer::new(),
+                format!("git error: {e}"),
+                PreviewSpans::default(),
+            );
+        }
+
+        let mut text = String::new();
+        let mut count = 0usize;
+        for oid_result in revwalk {
+            let oid = match oid_result {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+            let commit = match repo.find_commit(oid) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let sha = commit.id().to_string();
+            let short_sha = &sha[..7.min(sha.len())];
+            let subject = commit.summary().unwrap_or("").to_owned();
+            text.push_str(&format!("{short_sha}  {subject}\n"));
+            count += 1;
+            if count >= 30 {
+                break;
+            }
+        }
+
+        (
+            hjkl_buffer::Buffer::from_str(&text),
+            String::new(),
+            PreviewSpans::default(),
+        )
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
+            return PickerAction::None;
+        }
+        match self
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|i| i.name.clone()))
+        {
+            Some(name) => PickerAction::CheckoutBranch(name),
+            None => PickerAction::None,
+        }
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        RequeryMode::FilterInMemory
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        let items = Arc::clone(&self.items);
+        let done = Arc::clone(&self.scan_done);
+        let sentinel = Arc::clone(&self.is_sentinel);
+        let root = self.root.clone();
+
+        if let Ok(mut g) = items.lock() {
+            g.clear();
+        }
+        done.store(false, Ordering::Release);
+        sentinel.store(false, Ordering::Release);
+
+        thread::Builder::new()
+            .name("hjkl-picker-git-branch".into())
+            .spawn(move || scan_git_branches(root, items, done, sentinel, cancel))
             .ok()
     }
 }
