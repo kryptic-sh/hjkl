@@ -185,8 +185,14 @@ fn git_diff_for_path(repo: &Repository, root: &std::path::Path, path: &std::path
 fn collect_diff(diff: git2::Diff) -> String {
     let mut out = String::new();
     let _ = diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
-        let content = String::from_utf8_lossy(line.content());
-        out.push_str(&content);
+        // line.content() omits the leading +/-/space; line.origin() carries
+        // it. For file/hunk headers (origin 'F'/'H') the content already
+        // includes the marker, so don't double-prefix those.
+        match line.origin() {
+            '+' | '-' | ' ' => out.push(line.origin()),
+            _ => {}
+        }
+        out.push_str(&String::from_utf8_lossy(line.content()));
         true
     });
     out
@@ -322,13 +328,14 @@ impl PickerLogic for GitStatusPicker {
         let abs = self.root.join(&path);
 
         if is_untracked {
-            let (content, _load_status) = load_preview(&abs);
-            let status_line = format!("{} (untracked)", path.to_string_lossy());
-            let spans = self.highlight_file(&abs, &content);
-            return (Buffer::from_str(&content), status_line, spans);
+            let (content, load_status) = load_preview(&abs);
+            let spans = if load_status.is_empty() {
+                self.highlight_file(&abs, &content)
+            } else {
+                PreviewSpans::default()
+            };
+            return (Buffer::from_str(&content), load_status, spans);
         }
-
-        let status_line = format!("git diff HEAD -- {}", path.to_string_lossy());
 
         let repo = match Repository::discover(&self.root) {
             Ok(r) => r,
@@ -343,7 +350,7 @@ impl PickerLogic for GitStatusPicker {
 
         let diff_text = git_diff_for_path(&repo, &self.root, &path);
         let spans = self.diff_spans(&diff_text);
-        (Buffer::from_str(&diff_text), status_line, spans)
+        (Buffer::from_str(&diff_text), String::new(), spans)
     }
 
     fn select(&self, idx: usize) -> PickerAction {
