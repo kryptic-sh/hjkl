@@ -168,21 +168,66 @@ fn diff_spans(content: &str) -> PreviewSpans {
     let added_style = Style::default().fg(Color::Green);
     let removed_style = Style::default().fg(Color::Red);
     let hunk_style = Style::default().fg(Color::Cyan);
-    let header_style = Style::default().fg(Color::Blue);
+    let file_header_style = Style::default().fg(Color::Blue);
+    let bold = ratatui::style::Modifier::BOLD;
+    let dim = ratatui::style::Modifier::DIM;
+    let label_style = Style::default().add_modifier(dim);
+    let sha_style = Style::default().fg(Color::Yellow);
+    let email_style = Style::default().add_modifier(dim);
+    let prefix_style = Style::default().fg(Color::Magenta).add_modifier(bold);
 
     let mut pos = 0usize;
+    let mut in_diff = false;
+    let mut header_done = false;
     for line in content.lines() {
         let line_start = pos;
         let line_end = pos + line.len();
-        if line.starts_with("+++") || line.starts_with("---") {
-            ranges.push((line_start..line_end, header_style));
-        } else if line.starts_with("@@") {
-            ranges.push((line_start..line_end, hunk_style));
-        } else if line.starts_with('+') {
-            ranges.push((line_start..line_end, added_style));
-        } else if line.starts_with('-') {
-            ranges.push((line_start..line_end, removed_style));
+
+        if !in_diff && line.starts_with("diff --git") {
+            in_diff = true;
+            ranges.push((line_start..line_end, file_header_style));
+        } else if in_diff {
+            if line.starts_with("+++") || line.starts_with("---") {
+                ranges.push((line_start..line_end, file_header_style));
+            } else if line.starts_with("@@") {
+                ranges.push((line_start..line_end, hunk_style));
+            } else if line.starts_with('+') {
+                ranges.push((line_start..line_end, added_style));
+            } else if line.starts_with('-') {
+                ranges.push((line_start..line_end, removed_style));
+            }
+        } else if let Some(rest) = line.strip_prefix("commit ") {
+            ranges.push((line_start..line_start + 6, label_style));
+            let sha_start = line_start + 7;
+            ranges.push((sha_start..sha_start + rest.len(), sha_style));
+        } else if let Some(rest) = line.strip_prefix("Author: ") {
+            ranges.push((line_start..line_start + 7, label_style));
+            // Color the name via author_color; dim the <email> tail.
+            let name_start = line_start + 8;
+            let (name, email_part) = match rest.find(" <") {
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, ""),
+            };
+            let name_end = name_start + name.len();
+            ranges.push((
+                name_start..name_end,
+                Style::default().fg(author_color(name)),
+            ));
+            if !email_part.is_empty() {
+                ranges.push((name_end..name_end + email_part.len(), email_style));
+            }
+        } else if line.starts_with("Date:") {
+            // "Date:" label dimmed; the date itself stays default.
+            ranges.push((line_start..line_start + 5, label_style));
+        } else if !header_done && line.starts_with("    ") && !line.trim().is_empty() {
+            // First indented non-empty line in the header is the subject.
+            // Color any conventional-commit prefix.
+            if let Some(end) = conv_commit_prefix_end(line, 4) {
+                ranges.push((line_start + 4..line_start + end, prefix_style));
+            }
+            header_done = true;
         }
+
         pos = line_end + 1;
         if pos > bytes.len() {
             pos = bytes.len();
