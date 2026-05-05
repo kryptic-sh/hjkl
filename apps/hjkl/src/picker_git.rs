@@ -351,6 +351,9 @@ impl GitStatusPicker {
 
     fn highlight_file(&self, abs: &std::path::Path, content: &str) -> PreviewSpans {
         let bytes = content.as_bytes();
+        // Sync `for_path` is intentional here: picker workers run on their
+        // own background threads where blocking is fine.  Migrating to the
+        // async API is out of scope for hjkl#17.
         let grammar = match self.directory.for_path(abs) {
             Some(g) => g,
             None => return PreviewSpans::default(),

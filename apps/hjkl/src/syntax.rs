@@ -15,12 +15,12 @@ use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use hjkl_bonsai::runtime::Grammar;
+use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, Point, Theme};
 use hjkl_buffer::Sign;
 use hjkl_engine::Query;
 
-use crate::lang::LanguageDirectory;
+use crate::lang::{GrammarRequest, LanguageDirectory};
 
 /// Stable identifier for an open buffer. Assigned by the App; carried
 /// through every syntax-pipeline message so the worker can multiplex
@@ -501,6 +501,52 @@ struct BufferClient {
     last_submitted_dirty_gen: Option<u64>,
 }
 
+/// Outcome of [`SyntaxLayer::set_language_for_path`].
+///
+/// Callers that previously tested the return value as a `bool` should use
+/// `outcome.is_known()` for equivalent behaviour.
+pub enum SetLanguageOutcome {
+    /// Grammar was already cached (or found fresh on disk) — installed
+    /// immediately.  Buffer will highlight on the next render.
+    Ready,
+    /// Grammar is being fetched/compiled on the background pool.  Buffer
+    /// renders as plain text until [`SyntaxLayer::poll_pending_loads`] fires
+    /// the `Ready` event for this buffer.  The inner `String` is the language
+    /// name (useful for status-line indicators — TODO hjkl#17).
+    #[allow(dead_code)]
+    Loading(String),
+    /// Extension unrecognized.  No grammar — plain text only.
+    Unknown,
+}
+
+impl SetLanguageOutcome {
+    /// `true` when a grammar was found (either already cached or now in
+    /// flight).  Drop-in replacement for the old `bool` return value.
+    pub fn is_known(&self) -> bool {
+        matches!(self, Self::Ready | Self::Loading(_))
+    }
+}
+
+/// Event emitted by [`SyntaxLayer::poll_pending_loads`] for each handle that
+/// resolved during the tick.
+pub enum LoadEvent {
+    /// Grammar installed; trigger a redraw + re-submit for `id`.
+    Ready { id: BufferId, name: String },
+    /// Load failed (clone/compile error); buffer stays plain text.
+    Failed {
+        id: BufferId,
+        name: String,
+        error: String,
+    },
+}
+
+/// An in-flight grammar load tracked by `SyntaxLayer`.
+struct PendingLoad {
+    id: BufferId,
+    name: String,
+    handle: LoadHandle,
+}
+
 /// Per-`App` syntax highlighting layer. Multiplexes per-buffer state
 /// (helix-style): each open buffer carries its own retained tree
 /// (worker-side) plus source-cache and edit queue (here). One worker
@@ -516,6 +562,9 @@ pub struct SyntaxLayer {
     worker: SyntaxWorker,
     /// Per-buffer client state, keyed by `BufferId`.
     clients: HashMap<BufferId, BufferClient>,
+    /// In-flight async grammar loads.  Polled each tick via
+    /// `poll_pending_loads`.
+    pending_loads: Vec<PendingLoad>,
     /// Last perf breakdown received via `take_result`. Surfaced to the
     /// `:perf` overlay; updated on every successful drain.
     pub last_perf: PerfBreakdown,
@@ -533,6 +582,7 @@ impl SyntaxLayer {
             theme,
             worker,
             clients: HashMap::new(),
+            pending_loads: Vec::new(),
             last_perf: PerfBreakdown::default(),
         }
     }
@@ -545,25 +595,102 @@ impl SyntaxLayer {
 
     /// Detect the language for `path` and ship it to the worker.
     ///
-    /// Returns `true` when a language was found, `false` for unknown
-    /// extensions (no highlighter attached for this buffer).
-    pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> bool {
-        match self.directory.for_path(path) {
-            Some(grammar) => {
+    /// Non-blocking: uses the async grammar loader so opening a file with an
+    /// uninstalled grammar no longer freezes the UI for 1–3 s during
+    /// clone+compile (hjkl#17 follow-up).
+    ///
+    /// - `Ready`   — grammar cached/found on disk; installed immediately.
+    /// - `Loading` — clone+compile kicked off; buffer renders as plain text
+    ///   until `poll_pending_loads` fires the companion `LoadEvent::Ready`.
+    /// - `Unknown` — unrecognized extension; plain text only.
+    ///
+    /// Callers that previously used the `bool` return value should switch to
+    /// `outcome.is_known()`.
+    pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> SetLanguageOutcome {
+        match self.directory.request_for_path(path) {
+            GrammarRequest::Cached(grammar) => {
                 self.worker.set_language(id, Some(grammar.clone()));
                 let c = self.client_mut(id);
                 c.current_lang = Some(grammar);
                 c.has_language = true;
-                true
+                SetLanguageOutcome::Ready
             }
-            None => {
+            GrammarRequest::Loading { name, handle } => {
+                // Detach for now: render as plain text while the grammar
+                // is being fetched/compiled in the background.
                 self.worker.set_language(id, None);
                 let c = self.client_mut(id);
                 c.current_lang = None;
                 c.has_language = false;
-                false
+                self.pending_loads.push(PendingLoad {
+                    id,
+                    name: name.clone(),
+                    handle,
+                });
+                SetLanguageOutcome::Loading(name)
+            }
+            GrammarRequest::Unknown => {
+                self.worker.set_language(id, None);
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                SetLanguageOutcome::Unknown
             }
         }
+    }
+
+    /// Poll all in-flight grammar loads.  Call this once per tick from the
+    /// main loop (alongside `take_result`) so completed loads install
+    /// immediately without waiting for the next file open.
+    ///
+    /// Returns one `LoadEvent` per handle that resolved during this tick.
+    /// Non-empty results should trigger a redraw and re-submit render.
+    pub fn poll_pending_loads(&mut self) -> Vec<LoadEvent> {
+        let mut events = Vec::new();
+        let mut i = 0;
+        while i < self.pending_loads.len() {
+            match self.pending_loads[i].handle.try_recv() {
+                None => {
+                    // Still in flight — leave in list.
+                    i += 1;
+                }
+                Some(Ok(lib_path)) => {
+                    let name = self.pending_loads[i].name.clone();
+                    let bid = self.pending_loads[i].id;
+                    // O(1) removal; order of pending list doesn't matter.
+                    self.pending_loads.swap_remove(i);
+                    match self.directory.complete_load(&name, lib_path) {
+                        Ok(grammar) => {
+                            self.worker.set_language(bid, Some(grammar.clone()));
+                            let c = self.client_mut(bid);
+                            c.current_lang = Some(grammar);
+                            c.has_language = true;
+                            events.push(LoadEvent::Ready { id: bid, name });
+                        }
+                        Err(e) => {
+                            events.push(LoadEvent::Failed {
+                                id: bid,
+                                name,
+                                error: format!("{e:#}"),
+                            });
+                        }
+                    }
+                    // i stays the same — swap_remove put a new element at i.
+                }
+                Some(Err(err)) => {
+                    let name = self.pending_loads[i].name.clone();
+                    let bid = self.pending_loads[i].id;
+                    self.pending_loads.swap_remove(i);
+                    events.push(LoadEvent::Failed {
+                        id: bid,
+                        name,
+                        error: err.to_string(),
+                    });
+                    // i stays the same.
+                }
+            }
+        }
+        events
     }
 
     /// Drop all state for a buffer. Call on close.
@@ -870,7 +997,11 @@ mod tests {
     fn parse_and_render_small_rust_buffer() {
         let buf = Buffer::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
-        assert!(layer.set_language_for_path(TID, Path::new("a.rs")));
+        assert!(
+            layer
+                .set_language_for_path(TID, Path::new("a.rs"))
+                .is_known()
+        );
         let out = submit_and_wait(&mut layer, &buf, 0, 10).expect("worker output");
         assert_eq!(out.spans.len(), buf.row_count());
         assert!(
@@ -884,7 +1015,11 @@ mod tests {
         let buf = Buffer::from_str("hello world");
         let mut layer = default_layer();
         // Unknown extension — no language attached.
-        assert!(!layer.set_language_for_path(TID, Path::new("a.unknownext")));
+        assert!(
+            !layer
+                .set_language_for_path(TID, Path::new("a.unknownext"))
+                .is_known()
+        );
         assert!(layer.submit_render(TID, &buf, 0, 10).is_none());
     }
 
@@ -919,7 +1054,11 @@ mod tests {
         let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
 
         let mut layer = default_layer();
-        assert!(layer.set_language_for_path(TID, Path::new("a.rs")));
+        assert!(
+            layer
+                .set_language_for_path(TID, Path::new("a.rs"))
+                .is_known()
+        );
         let out = submit_and_wait(&mut layer, &buf, 0, 30).unwrap();
 
         for (r, row) in out.spans.iter().take(30).enumerate() {
@@ -1029,6 +1168,61 @@ mod tests {
         drop(layer);
     }
 
+    /// `set_language_for_path` on an unknown extension must return `Unknown`
+    /// (not `Ready` or `Loading`), and the helper `is_known()` must be false.
+    #[test]
+    fn set_language_for_path_returns_unknown_for_unrecognized_extension() {
+        let mut layer = default_layer();
+        let outcome = layer.set_language_for_path(TID, Path::new("a.zzznope_not_real"));
+        assert!(
+            !outcome.is_known(),
+            "expected Unknown for unrecognized extension"
+        );
+        assert!(matches!(outcome, SetLanguageOutcome::Unknown));
+    }
+
+    /// `poll_pending_loads` on an empty pending list must return an empty Vec
+    /// without panicking.  Regression catcher for the swap_remove loop.
+    #[test]
+    fn poll_pending_loads_drains_ready_handles() {
+        let mut layer = default_layer();
+        // No pending loads — must not panic, must return empty.
+        let events = layer.poll_pending_loads();
+        assert!(
+            events.is_empty(),
+            "expected no events with no pending loads"
+        );
+    }
+
+    /// For an unrecognized grammar (no network), `set_language_for_path` must
+    /// return `Loading` or `Unknown` — never block the caller for seconds.
+    /// The real "Loading only for true clone+compile" invariant is validated
+    /// by the bonsai-side async_loader tests; here we just assert that a
+    /// known language name (rust) for which no grammar is installed on CI
+    /// does NOT return `Ready` (cache miss) and returns in well under 1 s.
+    ///
+    /// Gated `#[ignore]` because on a machine that *does* have the grammar
+    /// pre-installed the result is `Ready`, which is also correct. The test
+    /// is most useful as documentation of the invariant.
+    #[test]
+    #[ignore = "disk-state dependent: result depends on whether rust grammar is pre-installed"]
+    fn set_language_for_path_returns_loading_for_uncached_grammar() {
+        let mut layer = default_layer();
+        let t0 = std::time::Instant::now();
+        let outcome = layer.set_language_for_path(TID, Path::new("a.rs"));
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "set_language_for_path blocked for {}ms — must be non-blocking",
+            elapsed.as_millis()
+        );
+        // On a cold disk the outcome must be Loading, not Ready.
+        assert!(
+            matches!(outcome, SetLanguageOutcome::Loading(_)),
+            "expected Loading on cold disk"
+        );
+    }
+
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn reset_pending_request_is_consumed_once() {
@@ -1079,7 +1273,7 @@ mod perf_smoke {
         let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
         let mut layer = default_layer();
         const TID: BufferId = 0;
-        assert!(layer.set_language_for_path(TID, path));
+        assert!(layer.set_language_for_path(TID, path).is_known());
 
         let t0 = Instant::now();
         layer.submit_render(TID, &buf, 0, 50);

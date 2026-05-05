@@ -1,6 +1,8 @@
 use hjkl_engine::{Host, Query};
 use std::time::{Duration, Instant};
 
+use crate::syntax::LoadEvent;
+
 use super::App;
 
 impl App {
@@ -51,6 +53,39 @@ impl App {
         slot.is_untracked = is_untracked;
         slot.last_git_dirty_gen = Some(dg);
         slot.last_git_refresh_at = now;
+    }
+
+    /// Poll in-flight async grammar loads and wire any that completed into
+    /// the syntax layer.  Called each tick alongside `try_recv_latest` so
+    /// freshly-compiled grammars activate without waiting for the next
+    /// file-open event.
+    ///
+    /// Returns `true` when at least one load resolved and a redraw is needed.
+    pub(crate) fn poll_grammar_loads(&mut self) -> bool {
+        let events = self.syntax.poll_pending_loads();
+        if events.is_empty() {
+            return false;
+        }
+        let active_id = self.active().buffer_id;
+        for event in &events {
+            match event {
+                LoadEvent::Ready { id, name } => {
+                    tracing::debug!("grammar load complete: {name} (buffer {id})");
+                    // If the completed load is for the active buffer, clear
+                    // the recompute cache key so the next recompute_and_install
+                    // submits a fresh parse with the new language.
+                    if *id == active_id {
+                        self.active_mut().last_recompute_key = None;
+                    }
+                }
+                LoadEvent::Failed { id, name, error } => {
+                    tracing::debug!("grammar load failed: {name} (buffer {id}): {error}");
+                    // TODO(hjkl#17): surface as a transient status indicator
+                    // once the "grammar loading…" UX is implemented.
+                }
+            }
+        }
+        true
     }
 
     /// Submit a new viewport-scoped parse on the syntax worker and install

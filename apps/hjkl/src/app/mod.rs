@@ -302,8 +302,11 @@ pub(super) fn build_slot(
         vp.width = size.0;
         vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
     }
+    // Non-blocking: returns immediately; Loading case is handled by
+    // poll_grammar_loads each tick.
     if let Some(ref p) = path {
-        syntax.set_language_for_path(buffer_id, p);
+        let outcome = syntax.set_language_for_path(buffer_id, p);
+        let _ = outcome; // Outcome handled via poll_grammar_loads for Loading.
     }
 
     let (vp_top, vp_height) = {

@@ -51,6 +51,12 @@ impl App {
             // Draw the current frame.
             terminal.draw(|frame| render::frame(frame, self))?;
 
+            // Poll any in-flight async grammar loads each tick so a freshly
+            // compiled grammar installs without needing a keypress.
+            if self.poll_grammar_loads() {
+                self.recompute_and_install();
+            }
+
             // Wait for the next event with a 120 ms ceiling.
             if !event::poll(Duration::from_millis(120))? {
                 // Timeout — advance the splash animation if active.

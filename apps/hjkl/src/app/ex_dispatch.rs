@@ -552,7 +552,9 @@ impl App {
         }
         self.active_mut().disk_state = DiskState::Synced;
         let buffer_id = self.active().buffer_id;
-        self.syntax.set_language_for_path(buffer_id, &path);
+        // Non-blocking: Loading case activates via poll_grammar_loads each tick.
+        let outcome = self.syntax.set_language_for_path(buffer_id, &path);
+        let _ = outcome.is_known(); // Suppresses unused-result warning.
         self.syntax.reset(buffer_id);
         self.active_mut().last_recompute_key = None;
         self.active_mut()
@@ -649,7 +651,9 @@ impl App {
                         self.slots[idx].snapshot_saved();
                         // Refresh syntax + git for the reloaded slot.
                         let buffer_id = self.slots[idx].buffer_id;
-                        self.syntax.set_language_for_path(buffer_id, &path);
+                        // Non-blocking: Loading case activates via poll_grammar_loads each tick.
+                        let outcome = self.syntax.set_language_for_path(buffer_id, &path);
+                        let _ = outcome.is_known(); // Suppresses unused-result warning.
                         self.syntax.reset(buffer_id);
                         self.slots[idx].last_recompute_key = None;
                         if idx == self.active {

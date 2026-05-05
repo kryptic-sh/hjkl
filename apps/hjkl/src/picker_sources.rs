@@ -211,6 +211,9 @@ fn preview_spans(
     path: &Path,
     bytes: &[u8],
 ) -> Option<Vec<hjkl_bonsai::HighlightSpan>> {
+    // Sync `for_path` is intentional here: picker source workers run on their
+    // own background threads where blocking is fine.  Migrating to the async
+    // API is out of scope for hjkl#17.
     let grammar = directory.for_path(path)?;
     let name = grammar.name().to_string();
     let mut hl_cache = cache.lock().ok()?;
