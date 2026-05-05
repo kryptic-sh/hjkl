@@ -25,7 +25,7 @@ env:
 jobs:
   fmt:
     name: rustfmt
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -38,7 +38,7 @@ jobs:
 
   clippy:
     name: clippy
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -52,7 +52,7 @@ jobs:
 
   test:
     name: test ${{ matrix.os }}
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -72,7 +72,7 @@ jobs:
 
   no_std:
     name: no_std + wasm smoke (deferred)
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
+    if: "${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}"
     runs-on: ubuntu-latest
     # hjkl-engine pulls ratatui+crossterm unconditionally until phase 5 lands
     # the engine-native Style type + trait extraction (per SPEC). Keep this
