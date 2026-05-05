@@ -123,7 +123,7 @@ pub async fn run_case_via_nvim_api(case: &OracleCase) -> anyhow::Result<HjklOutc
     let result = run_case_via_nvim_api_inner(&nvim, case).await;
 
     // Shut down hjkl gracefully.
-    let _ = nvim.command("q!").await;
+    let _ = nvim.command("qa!").await;
     let _ = child.wait().await;
 
     result

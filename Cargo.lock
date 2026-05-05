@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
