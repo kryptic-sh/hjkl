@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.5.2] - 2026-05-05
+## [0.5.3] - 2026-05-05
 
 ### Added
 
@@ -16,6 +16,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
   together. Used by consumers that complete an `AsyncGrammarLoader` job and need
   to materialize the `Grammar` from the resolved path without re-running
   freshness checks.
+
+  (v0.5.2 announced this addition but its commit accidentally staged only the
+  manifest + changelog; the function body was never committed. Use 0.5.3+.)
 
 ## [0.5.1] - 2026-05-05
 
@@ -268,7 +271,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.0

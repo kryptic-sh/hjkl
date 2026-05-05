@@ -112,6 +112,59 @@ impl Grammar {
         })
     }
 
+    /// Load a grammar from an already-resolved shared library path.
+    ///
+    /// This is the fast path used by `complete_load` after the async loader
+    /// finishes a clone+compile: by the time this is called the `.so`,
+    /// `<name>.scm`, and optional `<name>.injections.scm` are already on disk
+    /// next to each other, so we skip the `GrammarLoader` chain entirely and
+    /// go straight to `dlopen` + query reads.
+    pub fn load_from_path(name: &str, so: &std::path::Path) -> Result<Self> {
+        let lib =
+            unsafe { Library::new(so) }.with_context(|| format!("dlopen {}", so.display()))?;
+
+        let symbol = format!("tree_sitter_{}", symbol_name(name));
+        let raw: unsafe extern "C" fn() -> *const () = unsafe {
+            *lib.get(symbol.as_bytes())
+                .with_context(|| format!("missing symbol `{symbol}` in {}", so.display()))?
+        };
+        let lang_fn = unsafe { LanguageFn::from_raw(raw) };
+        let language = Language::from(lang_fn);
+
+        let parent = so
+            .parent()
+            .with_context(|| format!("grammar {} has no parent dir", so.display()))?;
+        let highlights_path = parent.join(format!("{name}.scm"));
+        let highlights_scm = std::fs::read_to_string(&highlights_path).with_context(|| {
+            format!(
+                "read highlights query for {name} at {}",
+                highlights_path.display()
+            )
+        })?;
+
+        let injections_path = parent.join(format!("{name}.injections.scm"));
+        let injections_scm = match std::fs::read_to_string(&injections_path) {
+            Ok(s) => Some(s),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "read injections query for {name} at {}",
+                        injections_path.display()
+                    )
+                });
+            }
+        };
+
+        Ok(Self {
+            name: name.to_string(),
+            language,
+            highlights_scm,
+            injections_scm,
+            _lib: lib,
+        })
+    }
+
     /// Construct a [`Grammar`] from already-resolved pieces. Useful for
     /// tests or callers that have a custom parser source.
     ///
