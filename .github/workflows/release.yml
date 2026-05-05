@@ -23,8 +23,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate the release pipeline on the full CI suite (fmt + clippy + tests on
+  # all three OSes). The tag-push commit is also exercised by ci.yml on the
+  # parallel `push: main` event, but that's independent of this workflow —
+  # nothing prevents tagging a commit that wasn't pushed to main, or a CI
+  # failure on one stream while release proceeds on the other. Calling
+  # ci.yml as a reusable workflow here makes the gate explicit.
+  gate:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build ${{ matrix.target }}
+    needs: [gate]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write

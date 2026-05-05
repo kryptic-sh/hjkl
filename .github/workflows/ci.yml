@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # Allow release.yml (and other workflows) to gate on this entire suite
+  # by calling it as a reusable workflow.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
