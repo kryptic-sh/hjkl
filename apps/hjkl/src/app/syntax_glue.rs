@@ -62,9 +62,19 @@ impl App {
     ///
     /// Returns `true` when at least one load resolved and a redraw is needed.
     pub(crate) fn poll_grammar_loads(&mut self) -> bool {
+        let mut needs_redraw = false;
+        // Expire stale grammar-load errors so the indicator clears itself.
+        if self
+            .grammar_load_error
+            .as_ref()
+            .is_some_and(|e| e.is_expired())
+        {
+            self.grammar_load_error = None;
+            needs_redraw = true;
+        }
         let events = self.syntax.poll_pending_loads();
         if events.is_empty() {
-            return false;
+            return needs_redraw;
         }
         let active_id = self.active().buffer_id;
         for event in &events {
@@ -80,8 +90,11 @@ impl App {
                 }
                 LoadEvent::Failed { id, name, error } => {
                     tracing::debug!("grammar load failed: {name} (buffer {id}): {error}");
-                    // TODO(hjkl#17): surface as a transient status indicator
-                    // once the "grammar loading…" UX is implemented.
+                    self.grammar_load_error = Some(crate::app::GrammarLoadError {
+                        name: name.clone(),
+                        message: error.clone(),
+                        at: Instant::now(),
+                    });
                 }
             }
         }

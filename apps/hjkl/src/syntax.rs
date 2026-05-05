@@ -693,6 +693,15 @@ impl SyntaxLayer {
         events
     }
 
+    /// Lightweight read-only accessor for the renderer. Returns the name of
+    /// the grammar currently being loaded for `id`, if any.
+    pub fn pending_load_name_for(&self, id: BufferId) -> Option<&str> {
+        self.pending_loads
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.as_str())
+    }
+
     /// Drop all state for a buffer. Call on close.
     pub fn forget(&mut self, id: BufferId) {
         self.clients.remove(&id);
@@ -1332,5 +1341,17 @@ mod perf_smoke {
             t.elapsed(),
             out.as_ref().map(|o| o.perf),
         );
+    }
+
+    #[test]
+    fn pending_load_name_for_returns_none_when_empty() {
+        // Regression catcher: a fresh SyntaxLayer with no pending loads must
+        // return None for any BufferId.
+        let theme = crate::theme::AppTheme::default_dark();
+        let directory =
+            std::sync::Arc::new(crate::lang::LanguageDirectory::new().expect("directory"));
+        let layer = SyntaxLayer::new(theme.syntax.clone(), directory);
+        assert_eq!(layer.pending_load_name_for(0), None);
+        assert_eq!(layer.pending_load_name_for(99), None);
     }
 }

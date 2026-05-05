@@ -25,6 +25,24 @@ mod tests;
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// How long a grammar-load failure stays visible in the status line before
+/// auto-expiring.
+const GRAMMAR_ERR_TTL: Duration = Duration::from_secs(5);
+
+/// A grammar-load failure surfaced as a transient status message.
+#[derive(Clone)]
+pub(crate) struct GrammarLoadError {
+    pub name: String,
+    pub message: String,
+    pub at: Instant,
+}
+
+impl GrammarLoadError {
+    pub fn is_expired(&self) -> bool {
+        self.at.elapsed() >= GRAMMAR_ERR_TTL
+    }
+}
+
 /// Height of the buffer/tab line at the top of the screen, when shown.
 pub const BUFFER_LINE_HEIGHT: u16 = 1;
 
@@ -233,6 +251,9 @@ pub struct App {
     /// Animated start screen shown when no file argument was given.
     /// Cleared (set to `None`) on the first keypress.
     pub start_screen: Option<crate::start_screen::StartScreen>,
+    /// Recent grammar-load failure surfaced as a transient status message.
+    /// Auto-expires after `GRAMMAR_ERR_TTL` so a stale error doesn't stick.
+    pub(crate) grammar_load_error: Option<GrammarLoadError>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -363,6 +384,14 @@ impl App {
         &mut self.slots[self.active]
     }
 
+    /// The name of the grammar currently being loaded for the active buffer,
+    /// if any. Used by the renderer to show the `loading grammar: <name>…`
+    /// status-line indicator.
+    pub fn pending_grammar_name_for_active(&self) -> Option<&str> {
+        let id = self.slots[self.active].buffer_id;
+        self.syntax.pending_load_name_for(id)
+    }
+
     /// Return a shared slice of all buffer slots.
     pub fn slots(&self) -> &[BufferSlot] {
         &self.slots
@@ -470,6 +499,7 @@ impl App {
             recompute_runs: 0,
             config: crate::config::Config::default(),
             start_screen,
+            grammar_load_error: None,
         })
     }
 

@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Grammar-load status indicator (closes hjkl#17 acceptance gap).** The status
+  line now shows `loading grammar: <name>…` while an async grammar load is in
+  flight for the active buffer, and `grammar load failed: <name> — <error>` for
+  5 seconds when a load fails. Both use the same takeover pattern as the
+  `recording @r` indicator.
+
 ## [0.11.3] - 2026-05-05
 
 ### Added
