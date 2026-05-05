@@ -245,22 +245,33 @@ impl App {
                             continue;
                         }
                         // tmux-navigator: bare Ctrl-j/k/h/l navigate splits
-                        // in normal mode. Ctrl-h may collide with backspace
-                        // on some terminals; normal mode only to avoid conflict.
+                        // in normal mode. Only intercept when a neighbour
+                        // exists in that direction — otherwise let the key
+                        // fall through to the engine so single-window users
+                        // keep vim semantics (Ctrl-h = h, Ctrl-l = redraw).
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            if key.code == KeyCode::Char('j') {
+                            let focused = self.focused_window;
+                            if key.code == KeyCode::Char('j')
+                                && self.layout.neighbor_below(focused).is_some()
+                            {
                                 self.focus_below();
                                 continue;
                             }
-                            if key.code == KeyCode::Char('k') {
+                            if key.code == KeyCode::Char('k')
+                                && self.layout.neighbor_above(focused).is_some()
+                            {
                                 self.focus_above();
                                 continue;
                             }
-                            if key.code == KeyCode::Char('h') {
+                            if key.code == KeyCode::Char('h')
+                                && self.layout.neighbor_left(focused).is_some()
+                            {
                                 self.focus_left();
                                 continue;
                             }
-                            if key.code == KeyCode::Char('l') {
+                            if key.code == KeyCode::Char('l')
+                                && self.layout.neighbor_right(focused).is_some()
+                            {
                                 self.focus_right();
                                 continue;
                             }
