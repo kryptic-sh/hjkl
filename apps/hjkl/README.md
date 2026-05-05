@@ -114,6 +114,11 @@ See [`docs/embed-rpc.md`](../../docs/embed-rpc.md) for the full method
 catalogue, error codes, and examples. Phase 2 of
 [issue #26](https://github.com/kryptic-sh/hjkl/issues/26).
 
+`hjkl --nvim-api` speaks the **msgpack-rpc** wire protocol with nvim-compatible
+method names (`nvim_buf_set_lines`, `nvim_input`, `nvim_command`, etc.) so
+existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
+[issue #26](https://github.com/kryptic-sh/hjkl/issues/26).
+
 ## What works (v0)
 
 - Normal / Insert / Visual / Command modes with full mode-indicator cursor shape

@@ -8,6 +8,7 @@ mod git;
 mod headless;
 mod host;
 mod lang;
+mod nvim_api;
 mod picker;
 mod picker_action;
 mod picker_git;
@@ -71,6 +72,14 @@ struct Cli {
     #[arg(long)]
     embed: bool,
 
+    /// Run without a terminal: speak msgpack-rpc over stdin/stdout using
+    /// nvim-compatible method names. The wire protocol matches the neovim
+    /// msgpack-rpc spec so existing nvim-rs clients can drive hjkl unchanged.
+    /// See `docs/embed-rpc.md` ("nvim-api mode") for the method catalogue.
+    /// Implies headless; +cmd / -c CMD are ignored.
+    #[arg(long = "nvim-api")]
+    nvim_api: bool,
+
     /// Ex command to run after loading FILEs (without leading ':'). Repeatable.
     /// In headless mode all -c commands run first, then all +cmd tokens.
     /// Requires --headless (TUI -c dispatch is Phase 2 of issue #26).
@@ -96,6 +105,9 @@ pub struct Args {
     /// Run as JSON-RPC 2.0 server over stdin/stdout. Phase 2 of issue #26.
     /// Implies headless; +cmd / -c CMD are ignored in this mode.
     pub embed: bool,
+    /// Run as msgpack-rpc server with nvim-compatible methods. Phase 3 of issue #26.
+    /// Implies headless; +cmd / -c CMD are ignored in this mode.
+    pub nvim_api: bool,
     /// Ex commands to dispatch in headless mode. `-c` commands precede `+cmd`
     /// tokens; argv interleaving within each group is preserved.
     pub commands: Vec<String>,
@@ -186,8 +198,9 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         perf: false,
         picker: false,
         config: cli.config,
-        headless: cli.headless || cli.embed,
+        headless: cli.headless || cli.embed || cli.nvim_api,
         embed: cli.embed,
+        nvim_api: cli.nvim_api,
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
     };
@@ -207,13 +220,20 @@ fn parse_args() -> Result<Args> {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
-    // Guard: -c without --headless / --embed is not supported.
-    if !args.commands.is_empty() && !args.headless && !args.embed {
+    // Guard: -c without --headless / --embed / --nvim-api is not supported.
+    if !args.commands.is_empty() && !args.headless && !args.embed && !args.nvim_api {
         eprintln!(
             "hjkl: -c requires --headless in this build \
              (Phase 1 of #26; TUI -c dispatch is Phase 2)"
         );
         std::process::exit(2);
+    }
+
+    // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since
+    // it is the most specific. +cmd / -c CMD are silently ignored.
+    if args.nvim_api {
+        let code = nvim_api::run(args.files)?;
+        std::process::exit(code);
     }
 
     // Embed mode (JSON-RPC 2.0 server) — check BEFORE headless since it is
@@ -492,6 +512,7 @@ mod cli_tests {
             config: None,
             headless: false,
             embed: false,
+            nvim_api: false,
             commands: vec![],
         }
     }

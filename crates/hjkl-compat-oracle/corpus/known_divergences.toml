@@ -4,12 +4,21 @@
 # (which still pass / which begin to pass) but failures here do NOT fail CI.
 
 # ─── Substitute ex-command cases ─────────────────────────────────────────────
-# DIVERGENCE: hjkl-engine's `step` function does not handle the `:` key — ex
-# commands are dispatched through `hjkl_editor::ex::run` by the TUI host, not
-# through the vim FSM. These cases exercise nvim's `:s` via the oracle's key
-# replay but the hjkl driver will see `:s/foo/bar/<CR>` as unrecognised Normal
-# mode keys and leave the buffer unchanged. The substitute logic itself is
-# tested in hjkl-editor and apps/hjkl unit tests.
+# DIVERGENCE (in-process driver): hjkl-engine's `step` function does not handle
+# the `:` key — ex commands are dispatched through `hjkl_editor::ex::run` by
+# the TUI host, not through the vim FSM. When driven by the in-process
+# hjkl_driver (key replay), `:s/foo/bar/<CR>` is seen as unrecognised Normal
+# mode keys and leaves the buffer unchanged.
+#
+# RESOLVED (nvim-api driver, issue #26 phase 3): `hjkl --nvim-api` routes
+# `nvim_command(":%s/foo/bar/g")` directly through `ex::run`, so these cases
+# pass when the oracle is driven via msgpack-rpc. Run with:
+#
+#   HJKL_ORACLE_NVIM_API=1 cargo test -p hjkl-compat-oracle substitute_via_nvim_api
+#
+# These cases remain here because the *in-process* oracle (tier1 CI) still
+# diverges. Moving them to tier1.toml would break `tier1_corpus_passes` which
+# uses key-replay through the vim FSM, not ex-command dispatch.
 
 # DIVERGENCE: :s/foo/bar/ — basic substitute, first match on current line
 [[cases]]
