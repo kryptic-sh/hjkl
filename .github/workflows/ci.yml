@@ -14,9 +14,18 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
 
+# When BCTP pushes a `chore: bump version` commit to main, the same SHA is
+# tag-pushed moments later — release.yml fires and invokes this workflow as
+# a gate. Skip the standalone main-push run for that exact commit subject so
+# CI doesn't execute twice on the same SHA. Disambiguation:
+#   - main-push of bump commit  → ref=refs/heads/main, msg=chore: bump… → SKIP
+#   - tag-push via release.yml  → ref=refs/tags/vX.Y.Z                  → RUN
+#   - PR / direct main push     → other event, or different msg          → RUN
+
 jobs:
   fmt:
     name: rustfmt
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,6 +38,7 @@ jobs:
 
   clippy:
     name: clippy
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -42,6 +52,7 @@ jobs:
 
   test:
     name: test ${{ matrix.os }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -61,6 +72,7 @@ jobs:
 
   no_std:
     name: no_std + wasm smoke (deferred)
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'chore: bump version')) }}
     runs-on: ubuntu-latest
     # hjkl-engine pulls ratatui+crossterm unconditionally until phase 5 lands
     # the engine-native Style type + trait extraction (per SPEC). Keep this
