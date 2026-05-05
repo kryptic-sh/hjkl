@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-bonsai"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "dirs",
