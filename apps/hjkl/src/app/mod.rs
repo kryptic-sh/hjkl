@@ -47,6 +47,10 @@ impl GrammarLoadError {
 /// Height of the buffer/tab line at the top of the screen, when shown.
 pub const BUFFER_LINE_HEIGHT: u16 = 1;
 
+/// Height of the vim-style tab bar at the top of the screen, when shown
+/// (only when more than one tab is open).
+pub const TAB_BAR_HEIGHT: u16 = 1;
+
 /// Resolve a path for buffer-list matching. Two paths that point to
 /// the same file should compare equal here even when one is relative
 /// and the other absolute. We try `canonicalize` first (only works for
@@ -186,10 +190,11 @@ pub struct App {
     /// Window list. Indexed by `WindowId`. Entries are `Option<Window>`;
     /// closed windows are set to `None` so ids stay stable.
     pub windows: Vec<Option<window::Window>>,
-    /// Spatial layout tree. Leaves reference `WindowId`s into `windows`.
-    pub layout: window::LayoutTree,
-    /// Id of the currently focused window.
-    pub focused_window: window::WindowId,
+    /// All open tabs. Each tab owns its own layout tree + focused window.
+    /// Never empty — always at least one tab.
+    pub tabs: Vec<window::Tab>,
+    /// Index of the currently active tab into `tabs`.
+    pub active_tab: usize,
     /// Counter for the next fresh `WindowId`.
     next_window_id: window::WindowId,
     /// `true` while waiting for the second key of a `Ctrl-w` chord.
@@ -384,9 +389,45 @@ pub(super) fn build_slot(
 }
 
 impl App {
+    // ── Tab accessors ──────────────────────────────────────────────────────
+
+    /// Shared reference to the active tab's layout tree.
+    pub fn layout(&self) -> &window::LayoutTree {
+        &self.tabs[self.active_tab].layout
+    }
+
+    /// Mutable reference to the active tab's layout tree.
+    pub fn layout_mut(&mut self) -> &mut window::LayoutTree {
+        &mut self.tabs[self.active_tab].layout
+    }
+
+    /// The `WindowId` that has focus in the active tab.
+    pub fn focused_window(&self) -> window::WindowId {
+        self.tabs[self.active_tab].focused_window
+    }
+
+    /// Set the focused window in the active tab.
+    pub fn set_focused_window(&mut self, id: window::WindowId) {
+        self.tabs[self.active_tab].focused_window = id;
+    }
+
+    /// Temporarily take the active tab's layout, replacing it with a
+    /// sentinel, so we can pass `&mut LayoutTree` to the renderer while
+    /// still holding `&mut App`.
+    pub fn take_layout(&mut self) -> window::LayoutTree {
+        std::mem::replace(self.layout_mut(), window::LayoutTree::Leaf(usize::MAX))
+    }
+
+    /// Restore the layout after a [`take_layout`] call.
+    pub fn restore_layout(&mut self, layout: window::LayoutTree) {
+        *self.layout_mut() = layout;
+    }
+
+    // ── Core helpers ──────────────────────────────────────────────────────
+
     /// Slot index for the focused window.
     fn focused_slot_idx(&self) -> usize {
-        self.windows[self.focused_window]
+        self.windows[self.focused_window()]
             .as_ref()
             .expect("focused_window must point to an open window")
             .slot
@@ -434,9 +475,8 @@ impl App {
     /// editor's host viewport. Call BEFORE input dispatch so the engine's
     /// scroll math starts from the right offset.
     pub fn sync_viewport_to_editor(&mut self) {
-        let win = self.windows[self.focused_window]
-            .as_ref()
-            .expect("focused_window open");
+        let fw = self.focused_window();
+        let win = self.windows[fw].as_ref().expect("focused_window open");
         let (top_row, top_col) = (win.top_row, win.top_col);
         let maybe_rect = win.last_rect;
         if let Some(rect) = maybe_rect {
@@ -454,9 +494,8 @@ impl App {
     pub fn sync_viewport_from_editor(&mut self) {
         let vp = self.active().editor.host().viewport();
         let (top_row, top_col) = (vp.top_row, vp.top_col);
-        let win = self.windows[self.focused_window]
-            .as_mut()
-            .expect("focused_window open");
+        let fw = self.focused_window();
+        let win = self.windows[fw].as_mut().expect("focused_window open");
         win.top_row = top_row;
         win.top_col = top_col;
     }
@@ -465,54 +504,60 @@ impl App {
 
     /// Move focus to the window below the current one (`Ctrl-w j`).
     pub fn focus_below(&mut self) {
-        if let Some(target) = self.layout.neighbor_below(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().neighbor_below(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
 
     /// Move focus to the window above the current one (`Ctrl-w k`).
     pub fn focus_above(&mut self) {
-        if let Some(target) = self.layout.neighbor_above(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().neighbor_above(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
 
     /// Move focus to the window left of the current one (`Ctrl-w h`).
     pub fn focus_left(&mut self) {
-        if let Some(target) = self.layout.neighbor_left(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().neighbor_left(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
 
     /// Move focus to the window right of the current one (`Ctrl-w l`).
     pub fn focus_right(&mut self) {
-        if let Some(target) = self.layout.neighbor_right(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().neighbor_right(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
 
     /// Move focus to the next window in pre-order traversal, wrapping around (`Ctrl-w w`).
     pub fn focus_next(&mut self) {
-        if let Some(target) = self.layout.next_leaf(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().next_leaf(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
 
     /// Move focus to the previous window in pre-order traversal, wrapping around (`Ctrl-w W`).
     pub fn focus_previous(&mut self) {
-        if let Some(target) = self.layout.prev_leaf(self.focused_window) {
+        let fw = self.focused_window();
+        if let Some(target) = self.layout().prev_leaf(fw) {
             self.sync_viewport_from_editor();
-            self.focused_window = target;
+            self.set_focused_window(target);
             self.sync_viewport_to_editor();
         }
     }
@@ -520,22 +565,22 @@ impl App {
     /// Close all windows except the focused one. Replaces the layout with a
     /// single leaf and drops the `Option<Window>` entries for all other windows.
     pub fn only_focused_window(&mut self) {
-        let focused = self.focused_window;
-        let all_leaves = self.layout.leaves();
+        let focused = self.focused_window();
+        let all_leaves = self.layout().leaves();
         for id in all_leaves {
             if id != focused {
                 self.windows[id] = None;
             }
         }
-        self.layout = window::LayoutTree::Leaf(focused);
+        *self.layout_mut() = window::LayoutTree::Leaf(focused);
         self.status_message = Some("only".into());
     }
 
     /// Swap the focused leaf with its sibling in the immediately enclosing
     /// Split. No-op (with no message) when the focused window is the only one.
     pub fn swap_with_sibling(&mut self) {
-        let focused = self.focused_window;
-        if self.layout.swap_with_sibling(focused) {
+        let focused = self.focused_window();
+        if self.layout_mut().swap_with_sibling(focused) {
             self.status_message = Some("swap".into());
         }
     }
@@ -544,14 +589,14 @@ impl App {
     /// window remains.  On success the layout collapses and focus moves to the
     /// sibling that took over.
     pub fn close_focused_window(&mut self) {
-        let focused = self.focused_window;
-        match self.layout.remove_leaf(focused) {
+        let focused = self.focused_window();
+        match self.layout_mut().remove_leaf(focused) {
             Err(_) => {
                 self.status_message = Some("E444: Cannot close last window".into());
             }
             Ok(new_focus) => {
                 self.windows[focused] = None;
-                self.focused_window = new_focus;
+                self.set_focused_window(new_focus);
                 self.sync_viewport_to_editor();
                 self.status_message = Some("window closed".into());
             }
@@ -565,9 +610,10 @@ impl App {
     /// No-op when there is no enclosing Horizontal split or last_rect is None.
     pub fn resize_height(&mut self, delta: i32) {
         use window::SplitDir;
+        let fw = self.focused_window();
         if let Some((ratio, Some(rect), in_a)) = self
-            .layout
-            .enclosing_split_mut(self.focused_window, SplitDir::Horizontal)
+            .layout_mut()
+            .enclosing_split_mut(fw, SplitDir::Horizontal)
         {
             let parent_h = rect.height as i32;
             if parent_h < 2 {
@@ -593,9 +639,10 @@ impl App {
     /// No-op when there is no enclosing Vertical split or last_rect is None.
     pub fn resize_width(&mut self, delta: i32) {
         use window::SplitDir;
+        let fw = self.focused_window();
         if let Some((ratio, Some(rect), in_a)) = self
-            .layout
-            .enclosing_split_mut(self.focused_window, SplitDir::Vertical)
+            .layout_mut()
+            .enclosing_split_mut(fw, SplitDir::Vertical)
         {
             let parent_w = rect.width as i32;
             if parent_w < 2 {
@@ -618,7 +665,7 @@ impl App {
 
     /// Equalize all splits to 0.5 ratio.
     pub fn equalize_layout(&mut self) {
-        self.layout.equalize_all();
+        self.layout_mut().equalize_all();
     }
 
     /// Maximize focused window's height — set every enclosing Horizontal
@@ -626,8 +673,8 @@ impl App {
     /// collapse to 1 line each).
     pub fn maximize_height(&mut self) {
         use window::SplitDir;
-        let focused = self.focused_window;
-        self.layout
+        let focused = self.focused_window();
+        self.layout_mut()
             .for_each_ancestor(focused, &mut |dir, ratio, in_a, rect| {
                 if dir != SplitDir::Horizontal {
                     return;
@@ -649,8 +696,8 @@ impl App {
     /// to 1 column each).
     pub fn maximize_width(&mut self) {
         use window::SplitDir;
-        let focused = self.focused_window;
-        self.layout
+        let focused = self.focused_window();
+        self.layout_mut()
             .for_each_ancestor(focused, &mut |dir, ratio, in_a, rect| {
                 if dir != SplitDir::Vertical {
                     return;
@@ -745,8 +792,11 @@ impl App {
         Ok(Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
-            layout: window::LayoutTree::Leaf(0),
-            focused_window: 0,
+            tabs: vec![window::Tab {
+                layout: window::LayoutTree::Leaf(0),
+                focused_window: 0,
+            }],
+            active_tab: 0,
             next_window_id: 1,
             pending_window_motion: false,
             next_buffer_id: 1,

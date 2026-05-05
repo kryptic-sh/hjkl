@@ -9,6 +9,20 @@
 /// value from `App::next_window_id`.
 pub type WindowId = usize;
 
+/// Per-tab layout + focus state.
+///
+/// Each tab owns one [`LayoutTree`] (the window arrangement within that tab)
+/// and records which window in that tree currently has focus.  Windows and
+/// slots are shared across tabs — a `WindowId` refers into `App::windows`
+/// regardless of which tab it lives in.
+#[derive(Debug, Clone)]
+pub struct Tab {
+    /// Spatial layout tree for this tab. Leaves reference [`WindowId`]s.
+    pub layout: LayoutTree,
+    /// The window that has focus within this tab.
+    pub focused_window: WindowId,
+}
+
 /// Per-window scroll + geometry state.
 #[derive(Debug, Clone)]
 pub struct Window {
@@ -420,6 +434,22 @@ fn last_leaf(tree: &LayoutTree) -> WindowId {
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tab_tests {
+    use super::*;
+
+    #[test]
+    fn tab_struct_constructs_with_layout_and_focus() {
+        let layout = LayoutTree::Leaf(0);
+        let tab = Tab {
+            layout,
+            focused_window: 0,
+        };
+        assert_eq!(tab.focused_window, 0);
+        assert_eq!(tab.layout.leaves(), vec![0]);
+    }
+}
 
 #[cfg(test)]
 mod tests {

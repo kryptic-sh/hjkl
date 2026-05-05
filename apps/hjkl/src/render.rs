@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT, window};
+use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT, TAB_BAR_HEIGHT, window};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = max(numberwidth, line_count.to_string().len() + 1)`.
@@ -117,7 +117,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             win.slot,
             win.top_row,
             win.top_col,
-            win_id == app.focused_window,
+            win_id == app.focused_window(),
         )
     };
 
@@ -258,26 +258,50 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     let multi = app.slots().len() > 1;
-    let (buf_area, status_area, bufline_area) = if multi {
+    let show_tab_bar = app.tabs.len() > 1;
+    let (buf_area, status_area, bufline_area, tabbar_area) = {
+        // Build constraint list dynamically based on what rows are visible.
+        let mut constraints = Vec::new();
+        if show_tab_bar {
+            constraints.push(Constraint::Length(TAB_BAR_HEIGHT));
+        }
+        if multi {
+            constraints.push(Constraint::Length(BUFFER_LINE_HEIGHT));
+        }
+        constraints.push(Constraint::Min(1));
+        constraints.push(Constraint::Length(STATUS_LINE_HEIGHT));
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(BUFFER_LINE_HEIGHT),
-                Constraint::Min(1),
-                Constraint::Length(STATUS_LINE_HEIGHT),
-            ])
+            .constraints(constraints)
             .split(area);
-        (chunks[1], chunks[2], Some(chunks[0]))
-    } else {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(STATUS_LINE_HEIGHT)])
-            .split(area);
-        (chunks[0], chunks[1], None)
+
+        let mut idx = 0usize;
+        let tab_area = if show_tab_bar {
+            let a = Some(chunks[idx]);
+            idx += 1;
+            a
+        } else {
+            None
+        };
+        let bl_area = if multi {
+            let a = Some(chunks[idx]);
+            idx += 1;
+            a
+        } else {
+            None
+        };
+        let buf = chunks[idx];
+        idx += 1;
+        let stat = chunks[idx];
+        (buf, stat, bl_area, tab_area)
     };
 
     // Splash screen path — skip all buffer rendering while active.
     if let Some(ref screen) = app.start_screen {
+        if let Some(ta) = tabbar_area {
+            tab_bar(frame, app, ta);
+        }
         if let Some(bl_area) = bufline_area {
             buffer_line(frame, app, bl_area);
         }
@@ -293,17 +317,21 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // is ~140µs even on 100k-line files.
     app.recompute_and_install();
 
+    if let Some(ta) = tabbar_area {
+        tab_bar(frame, app, ta);
+    }
+
     if let Some(bl_area) = bufline_area {
         buffer_line(frame, app, bl_area);
     }
 
-    // Walk the window tree and render each pane. Swap the layout out so
-    // we can pass it as `&mut` to render_layout (which writes last_rect on
-    // Split nodes) while also holding `&mut App` for render_window. After
-    // the call the mutated layout is swapped back.
-    let mut layout = std::mem::replace(&mut app.layout, window::LayoutTree::Leaf(usize::MAX));
+    // Walk the window tree and render each pane. Use take_layout /
+    // restore_layout so we can pass `&mut LayoutTree` to render_layout
+    // (which writes last_rect on Split nodes) while also holding
+    // `&mut App` for render_window.
+    let mut layout = app.take_layout();
     render_layout(frame, app, buf_area, &mut layout);
-    app.layout = layout;
+    app.restore_layout(layout);
 
     status_line(frame, app, status_area);
 
@@ -318,6 +346,77 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if app.info_popup.is_some() {
         info_popup_overlay(frame, app, buf_area);
     }
+}
+
+/// Render the vim-style tab bar. Only called when `app.tabs.len() > 1`.
+///
+/// Format: `[1: foo.rs] [2: +bar.rs]` where the number is the 1-based tab
+/// index, the label is the focused window's slot basename (or `[No Name]`),
+/// and a leading `+` marks any dirty slot in the tab.  Active tab is
+/// highlighted; inactive tabs are dimmed.
+fn tab_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let ui = &app.theme.ui;
+    let active_style = Style::default()
+        .fg(ui.on_accent)
+        .bg(ui.mode_normal_bg)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(ui.text_dim);
+    let sep_style = Style::default().fg(ui.border);
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let max_width = area.width as usize;
+    let mut used = 0usize;
+
+    for (i, tab) in app.tabs.iter().enumerate() {
+        // Find the focused window's slot for this tab.
+        let slot_idx = app.windows[tab.focused_window]
+            .as_ref()
+            .map(|w| w.slot)
+            .unwrap_or(0);
+        let slot = &app.slots()[slot_idx];
+        let base_name = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[No Name]");
+        // Mark tab dirty if any window in the tab has a dirty slot.
+        let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
+            app.windows[wid]
+                .as_ref()
+                .map(|w| app.slots()[w.slot].dirty)
+                .unwrap_or(false)
+        });
+        let label = if tab_dirty {
+            format!("[{}: +{}]", i + 1, base_name)
+        } else {
+            format!("[{}: {}]", i + 1, base_name)
+        };
+
+        let sep = if i == 0 { "" } else { " " };
+        let entry_width = sep.len() + label.len();
+
+        if used + entry_width > max_width {
+            if used < max_width {
+                spans.push(Span::styled("…".to_string(), sep_style));
+            }
+            break;
+        }
+
+        if i > 0 {
+            spans.push(Span::styled(" ".to_string(), sep_style));
+        }
+        let style = if i == app.active_tab {
+            active_style
+        } else {
+            inactive_style
+        };
+        spans.push(Span::styled(label, style));
+        used += entry_width;
+    }
+
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
 }
 
 /// Render the one-row buffer/tab line at the top of the screen.

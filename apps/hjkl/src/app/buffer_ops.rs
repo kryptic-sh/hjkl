@@ -19,10 +19,8 @@ impl App {
             *self.slots[idx].editor.registers_mut() = regs;
         }
         // Point the focused window at the new slot.
-        self.windows[self.focused_window]
-            .as_mut()
-            .expect("focused_window open")
-            .slot = idx;
+        let fw = self.focused_window();
+        self.windows[fw].as_mut().expect("focused_window open").slot = idx;
         if let Ok(size) = crossterm::terminal::size() {
             let vp = self.active_mut().editor.host_mut().viewport_mut();
             vp.width = size.0;

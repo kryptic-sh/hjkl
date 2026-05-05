@@ -287,6 +287,47 @@ impl App {
             return;
         }
 
+        // ─── Tab commands ────────────────────────────────────────────────────
+
+        // `:tabnew [file]` / `:tabedit [file]` / `:tabe [file]`
+        if cmd == "tabnew"
+            || cmd.starts_with("tabnew ")
+            || cmd == "tabedit"
+            || cmd.starts_with("tabedit ")
+            || cmd == "tabe"
+            || cmd.starts_with("tabe ")
+        {
+            let arg = if let Some(rest) = cmd.strip_prefix("tabnew ") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("tabedit ") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("tabe ") {
+                rest.trim()
+            } else {
+                ""
+            };
+            self.do_tabnew(arg);
+            return;
+        }
+
+        // `:tabnext` / `:tabn`
+        if cmd == "tabnext" || cmd == "tabn" {
+            self.do_tabnext();
+            return;
+        }
+
+        // `:tabprev` / `:tabp` / `:tabN` (uppercase N = previous in vim)
+        if cmd == "tabprev" || cmd == "tabp" || cmd == "tabN" {
+            self.do_tabprev();
+            return;
+        }
+
+        // `:tabclose` / `:tabc`
+        if cmd == "tabclose" || cmd == "tabc" {
+            self.do_tabclose();
+            return;
+        }
+
         // `:resize [+|-]N` — adjust focused window height.
         // `:vertical resize [+|-]N` / `:vert res [+|-]N` — adjust width.
         let (is_resize, is_vertical) = if cmd == "resize" || cmd.starts_with("resize ") {
@@ -340,7 +381,7 @@ impl App {
                 // window (same as :close). :q! with multiple windows also
                 // just closes the focused window (force discards dirty state
                 // for that window but doesn't quit the app).
-                if self.layout.leaves().len() > 1 {
+                if self.layout().leaves().len() > 1 {
                     self.close_focused_window();
                     return;
                 }
@@ -407,7 +448,7 @@ impl App {
     /// scroll).  With a filename: opens a new slot in the upper half.
     fn do_split(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        let focused = self.focused_window;
+        let focused = self.focused_window();
         let cur_slot = self.windows[focused]
             .as_ref()
             .expect("focused_window open")
@@ -440,7 +481,7 @@ impl App {
         }));
         // Replace the focused leaf with a horizontal split:
         // new window on top (a), existing window below (b).
-        self.layout
+        self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio: 0.5,
@@ -448,7 +489,7 @@ impl App {
                 b: Box::new(LayoutTree::Leaf(id)),
                 last_rect: None,
             });
-        self.focused_window = new_win_id;
+        self.set_focused_window(new_win_id);
         self.status_message = Some("split".into());
     }
 
@@ -459,7 +500,7 @@ impl App {
     /// New window goes on the left (vim convention).
     fn do_vsplit(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        let focused = self.focused_window;
+        let focused = self.focused_window();
         let cur_slot = self.windows[focused]
             .as_ref()
             .expect("focused_window open")
@@ -492,7 +533,7 @@ impl App {
         }));
         // Replace the focused leaf with a vertical split:
         // new window on the left (a), existing window on the right (b).
-        self.layout
+        self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
                 dir: SplitDir::Vertical,
                 ratio: 0.5,
@@ -500,14 +541,14 @@ impl App {
                 b: Box::new(LayoutTree::Leaf(id)),
                 last_rect: None,
             });
-        self.focused_window = new_win_id;
+        self.set_focused_window(new_win_id);
         self.status_message = Some("vsplit".into());
     }
 
     /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
     fn do_vnew(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        let focused = self.focused_window;
+        let focused = self.focused_window();
         let (top_row, top_col) = {
             let win = self.windows[focused].as_ref().expect("focused_window open");
             (win.top_row, win.top_col)
@@ -564,7 +605,7 @@ impl App {
             last_rect: None,
         }));
         // New window on the left (a), existing on the right (b).
-        self.layout
+        self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
                 dir: SplitDir::Vertical,
                 ratio: 0.5,
@@ -572,7 +613,7 @@ impl App {
                 b: Box::new(LayoutTree::Leaf(id)),
                 last_rect: None,
             });
-        self.focused_window = new_win_id;
+        self.set_focused_window(new_win_id);
         self.status_message = Some("vnew".into());
     }
 
@@ -581,7 +622,7 @@ impl App {
     /// New window appears on top (a), existing window stays below (b).
     fn do_new(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
-        let focused = self.focused_window;
+        let focused = self.focused_window();
         let (top_row, top_col) = {
             let win = self.windows[focused].as_ref().expect("focused_window open");
             (win.top_row, win.top_col)
@@ -638,7 +679,7 @@ impl App {
             last_rect: None,
         }));
         // New window on top (a), existing window below (b).
-        self.layout
+        self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio: 0.5,
@@ -646,7 +687,7 @@ impl App {
                 b: Box::new(LayoutTree::Leaf(id)),
                 last_rect: None,
             });
-        self.focused_window = new_win_id;
+        self.set_focused_window(new_win_id);
         self.status_message = Some("new".into());
     }
 
@@ -848,10 +889,8 @@ impl App {
                 // Track alt-buffer before switching.
                 self.prev_active = Some(prev_idx);
                 // Point the focused window at the new slot.
-                self.windows[self.focused_window]
-                    .as_mut()
-                    .expect("focused_window open")
-                    .slot = new_slot_idx;
+                let fw = self.focused_window();
+                self.windows[fw].as_mut().expect("focused_window open").slot = new_slot_idx;
                 let line_count = self.active().editor.buffer().line_count() as usize;
                 let path_display = self
                     .active()
@@ -1056,5 +1095,150 @@ impl App {
         if !messages.is_empty() {
             self.status_message = Some(messages.join(" | "));
         }
+    }
+
+    // ─── Tab helpers ─────────────────────────────────────────────────────────
+
+    /// `:tabnew [file]` / `:tabedit [file]` / `:tabe [file]`
+    ///
+    /// Open a new tab. With a file argument: load the file into a new slot.
+    /// Without: open an empty unnamed buffer. The new tab gets its own layout
+    /// and focused window; windows and slots are shared globally.
+    fn do_tabnew(&mut self, arg: &str) {
+        use crate::app::STATUS_LINE_HEIGHT;
+        use crate::app::window::{LayoutTree, Tab, Window};
+        use crate::host::TuiHost;
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::{Editor, Options};
+
+        // Save current tab's viewport state before switching.
+        self.sync_viewport_from_editor();
+
+        // Determine the slot for the new tab.
+        let new_slot_idx = if arg.is_empty() {
+            // Empty scratch buffer.
+            let buffer_id = self.next_buffer_id;
+            self.next_buffer_id += 1;
+            let host = TuiHost::new();
+            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            if let Ok(size) = crossterm::terminal::size() {
+                let vp = editor.host_mut().viewport_mut();
+                vp.width = size.0;
+                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+            }
+            let _ = editor.take_content_edits();
+            let _ = editor.take_content_reset();
+            let mut slot = super::BufferSlot {
+                buffer_id,
+                editor,
+                filename: None,
+                dirty: false,
+                is_new_file: false,
+                is_untracked: false,
+                diag_signs: Vec::new(),
+                git_signs: Vec::new(),
+                last_git_dirty_gen: None,
+                last_git_refresh_at: std::time::Instant::now(),
+                last_recompute_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
+                last_recompute_key: None,
+                saved_hash: 0,
+                saved_len: 0,
+                disk_mtime: None,
+                disk_len: None,
+                disk_state: super::DiskState::Synced,
+            };
+            slot.snapshot_saved();
+            self.slots.push(slot);
+            self.slots.len() - 1
+        } else {
+            match self.open_new_slot(std::path::PathBuf::from(arg)) {
+                Ok(idx) => idx,
+                Err(msg) => {
+                    self.status_message = Some(msg);
+                    return;
+                }
+            }
+        };
+
+        // Allocate a new window for the new tab.
+        let new_win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(Window {
+            slot: new_slot_idx,
+            top_row: 0,
+            top_col: 0,
+            last_rect: None,
+        }));
+
+        // Push the new tab and switch to it.
+        self.tabs.push(Tab {
+            layout: LayoutTree::Leaf(new_win_id),
+            focused_window: new_win_id,
+        });
+        self.active_tab = self.tabs.len() - 1;
+
+        // Sync viewport for the new tab's editor.
+        self.sync_viewport_to_editor();
+        self.status_message = Some("tabnew".into());
+    }
+
+    /// `:tabnext` / `:tabn` — cycle to the next tab (wraps).
+    fn do_tabnext(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.status_message = Some("only one tab".into());
+            return;
+        }
+        self.sync_viewport_from_editor();
+        self.active_tab = (self.active_tab + 1) % self.tabs.len();
+        self.sync_viewport_to_editor();
+        let n = self.active_tab + 1;
+        let m = self.tabs.len();
+        self.status_message = Some(format!("tab {n}/{m}"));
+    }
+
+    /// `:tabprev` / `:tabp` / `:tabN` — cycle to the previous tab (wraps).
+    fn do_tabprev(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.status_message = Some("only one tab".into());
+            return;
+        }
+        self.sync_viewport_from_editor();
+        self.active_tab = (self.active_tab + self.tabs.len() - 1) % self.tabs.len();
+        self.sync_viewport_to_editor();
+        let n = self.active_tab + 1;
+        let m = self.tabs.len();
+        self.status_message = Some(format!("tab {n}/{m}"));
+    }
+
+    /// `:tabclose` / `:tabc` — close the current tab.
+    ///
+    /// Refuses when only one tab remains (E444). On success, drops all windows
+    /// that belonged exclusively to this tab and adjusts `active_tab`.
+    fn do_tabclose(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.status_message = Some("E444: Cannot close last tab".into());
+            return;
+        }
+        self.sync_viewport_from_editor();
+
+        // Collect window ids in the closing tab.
+        let closing_leaves = self.tabs[self.active_tab].layout.leaves();
+        // Drop those windows.
+        for wid in closing_leaves {
+            self.windows[wid] = None;
+        }
+
+        // Remove the tab.
+        self.tabs.remove(self.active_tab);
+
+        // Adjust active_tab: clamp to last if we were at the end.
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+
+        self.sync_viewport_to_editor();
+        let n = self.active_tab + 1;
+        let m = self.tabs.len();
+        self.status_message = Some(format!("tab {n}/{m}"));
     }
 }

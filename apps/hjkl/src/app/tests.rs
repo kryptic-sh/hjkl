@@ -1565,7 +1565,7 @@ fn poll_grammar_loads_clears_expired_error() {
 fn sp_splits_focused_window() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert_eq!(app.windows.len(), 1);
-    assert_eq!(app.focused_window, 0);
+    assert_eq!(app.focused_window(), 0);
 
     app.dispatch_ex("sp");
 
@@ -1576,11 +1576,11 @@ fn sp_splits_focused_window() {
         "expected 2 open windows after :sp"
     );
     // Focus moved to the new (upper) window.
-    let new_win_id = app.focused_window;
+    let new_win_id = app.focused_window();
     assert_ne!(new_win_id, 0, "focus must have moved to the new window");
     // The layout should no longer be a single leaf.
     assert!(
-        app.layout.leaves().len() == 2,
+        app.layout().leaves().len() == 2,
         "layout must have 2 leaves after split"
     );
 }
@@ -1590,7 +1590,7 @@ fn close_focused_window_collapses_split() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
     assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 2);
-    let focused_before_close = app.focused_window;
+    let focused_before_close = app.focused_window();
 
     app.dispatch_ex("close");
 
@@ -1601,7 +1601,7 @@ fn close_focused_window_collapses_split() {
     );
     // Layout should be back to a single leaf.
     assert_eq!(
-        app.layout.leaves().len(),
+        app.layout().leaves().len(),
         1,
         "layout must collapse to 1 leaf"
     );
@@ -1635,16 +1635,17 @@ fn ctrl_w_j_focuses_below() {
     let mut app = App::new(None, false, None, None).unwrap();
     // After :sp, focused window is the new (top) one.
     app.dispatch_ex("sp");
-    let top_win = app.focused_window;
+    let top_win = app.focused_window();
 
     // Ctrl-w j should move focus to the window below (the original).
     app.focus_below();
-    let bottom_win = app.focused_window;
+    let bottom_win = app.focused_window();
     assert_ne!(top_win, bottom_win, "focus must have moved down");
     // Moving below from bottom-most is a no-op.
     app.focus_below();
     assert_eq!(
-        app.focused_window, bottom_win,
+        app.focused_window(),
+        bottom_win,
         "focus must not move below the bottom-most window"
     );
 }
@@ -1655,16 +1656,17 @@ fn ctrl_w_k_focuses_above() {
     app.dispatch_ex("sp");
     // Currently on top — move to bottom first.
     app.focus_below();
-    let bottom_win = app.focused_window;
+    let bottom_win = app.focused_window();
 
     // Ctrl-w k should move back up.
     app.focus_above();
-    let top_win = app.focused_window;
+    let top_win = app.focused_window();
     assert_ne!(bottom_win, top_win, "focus must have moved up");
     // Moving above from top-most is a no-op.
     app.focus_above();
     assert_eq!(
-        app.focused_window, top_win,
+        app.focused_window(),
+        top_win,
         "focus must not move above the top-most window"
     );
 }
@@ -1681,10 +1683,10 @@ fn non_focused_window_keeps_scroll_after_focused_scrolls() {
 
     // Split: new window on top (id = 1 typically), original below (id = 0).
     app.dispatch_ex("sp");
-    let top_win = app.focused_window;
+    let top_win = app.focused_window();
     // Move focus to bottom window.
     app.focus_below();
-    let bottom_win = app.focused_window;
+    let bottom_win = app.focused_window();
     assert_ne!(top_win, bottom_win);
 
     // Record top window's scroll before we scroll the bottom one.
@@ -1706,7 +1708,7 @@ fn non_focused_window_keeps_scroll_after_focused_scrolls() {
 #[test]
 fn vsp_creates_vertical_split_with_new_on_left() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let original_win = app.focused_window;
+    let original_win = app.focused_window();
 
     app.dispatch_ex("vsp");
 
@@ -1717,15 +1719,15 @@ fn vsp_creates_vertical_split_with_new_on_left() {
         "expected 2 open windows after :vsp"
     );
     // Layout has 2 leaves.
-    assert_eq!(app.layout.leaves().len(), 2, "layout must have 2 leaves");
+    assert_eq!(app.layout().leaves().len(), 2, "layout must have 2 leaves");
 
     // Focus moved to the new (left) window.
-    let new_win = app.focused_window;
+    let new_win = app.focused_window();
     assert_ne!(new_win, original_win, "focus must have moved to new window");
 
     // New window is on the left (a-side) of a Vertical split — its
     // neighbor_right is the original window.
-    let right = app.layout.neighbor_right(new_win);
+    let right = app.layout().neighbor_right(new_win);
     assert_eq!(
         right,
         Some(original_win),
@@ -1743,7 +1745,7 @@ fn vsp_creates_vertical_split_with_new_on_left() {
 #[test]
 fn vnew_creates_empty_buffer_in_left_split() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let original_win = app.focused_window;
+    let original_win = app.focused_window();
 
     app.dispatch_ex("vnew");
 
@@ -1752,9 +1754,9 @@ fn vnew_creates_empty_buffer_in_left_split() {
         2,
         "expected 2 open windows after :vnew"
     );
-    assert_eq!(app.layout.leaves().len(), 2);
+    assert_eq!(app.layout().leaves().len(), 2);
 
-    let new_win = app.focused_window;
+    let new_win = app.focused_window();
     assert_ne!(new_win, original_win);
 
     // The new window points at an unnamed empty slot.
@@ -1774,23 +1776,25 @@ fn ctrl_w_h_focuses_left() {
     let mut app = App::new(None, false, None, None).unwrap();
     // After :vsp, focus is on the new left window.
     app.dispatch_ex("vsp");
-    let left_win = app.focused_window;
+    let left_win = app.focused_window();
 
     // Can't go further left — no-op.
     app.focus_left();
     assert_eq!(
-        app.focused_window, left_win,
+        app.focused_window(),
+        left_win,
         "focus_left from leftmost must be a no-op"
     );
 
     // Move right first, then come back left.
     app.focus_right();
-    let right_win = app.focused_window;
+    let right_win = app.focused_window();
     assert_ne!(left_win, right_win, "focus must have moved right");
 
     app.focus_left();
     assert_eq!(
-        app.focused_window, left_win,
+        app.focused_window(),
+        left_win,
         "focus_left must return to left window"
     );
 }
@@ -1800,17 +1804,18 @@ fn ctrl_w_l_focuses_right() {
     let mut app = App::new(None, false, None, None).unwrap();
     // After :vsp, focus is on the left (new) window.
     app.dispatch_ex("vsp");
-    let left_win = app.focused_window;
+    let left_win = app.focused_window();
 
     // Move right.
     app.focus_right();
-    let right_win = app.focused_window;
+    let right_win = app.focused_window();
     assert_ne!(left_win, right_win, "focus must have moved right");
 
     // Can't go further right — no-op.
     app.focus_right();
     assert_eq!(
-        app.focused_window, right_win,
+        app.focused_window(),
+        right_win,
         "focus_right from rightmost must be a no-op"
     );
 }
@@ -1820,16 +1825,16 @@ fn ctrl_w_w_cycles_next() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Create two windows via :sp.
     app.dispatch_ex("sp");
-    let leaves = app.layout.leaves();
+    let leaves = app.layout().leaves();
     assert_eq!(leaves.len(), 2);
 
     // From the current focused window, next should cycle.
-    let initial = app.focused_window;
+    let initial = app.focused_window();
     app.focus_next();
-    let after_one = app.focused_window;
+    let after_one = app.focused_window();
     assert_ne!(initial, after_one, "focus_next must move focus");
     app.focus_next();
-    let after_two = app.focused_window;
+    let after_two = app.focused_window();
     // With 2 windows, two focus_next should bring us back.
     assert_eq!(after_two, initial, "two focus_next calls must wrap around");
 }
@@ -1839,12 +1844,12 @@ fn ctrl_w_shift_w_cycles_previous() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
 
-    let initial = app.focused_window;
+    let initial = app.focused_window();
     app.focus_previous();
-    let after_one = app.focused_window;
+    let after_one = app.focused_window();
     assert_ne!(initial, after_one, "focus_previous must move focus");
     app.focus_previous();
-    let after_two = app.focused_window;
+    let after_two = app.focused_window();
     assert_eq!(
         after_two, initial,
         "two focus_previous calls must wrap around"
@@ -1887,9 +1892,10 @@ fn resize_height_grows_focused_window() {
         width: 80,
         height: 40,
     };
-    inject_split_rect(&mut app.layout, app.focused_window, rect);
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
 
-    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -1897,7 +1903,7 @@ fn resize_height_grows_focused_window() {
 
     app.resize_height(2);
 
-    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -1920,12 +1926,13 @@ fn resize_height_clamps_at_minimum() {
         width: 80,
         height: 10,
     };
-    inject_split_rect(&mut app.layout, app.focused_window, rect);
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
 
     // Try to shrink by far more than available — should clamp, not underflow.
     app.resize_height(-1000);
 
-    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -1948,9 +1955,10 @@ fn resize_width_grows_focused_window() {
         width: 80,
         height: 24,
     };
-    inject_split_rect(&mut app.layout, app.focused_window, rect);
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
 
-    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -1958,7 +1966,7 @@ fn resize_width_grows_focused_window() {
 
     app.resize_width(4);
 
-    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -1977,13 +1985,13 @@ fn equalize_layout_resets_uneven_splits() {
     app.dispatch_ex("sp");
 
     // Manually skew the ratio.
-    if let window::LayoutTree::Split { ratio, .. } = &mut app.layout {
+    if let window::LayoutTree::Split { ratio, .. } = app.layout_mut() {
         *ratio = 0.3;
     }
 
     app.equalize_layout();
 
-    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -2004,11 +2012,12 @@ fn maximize_height_collapses_siblings() {
         width: 80,
         height: 24,
     };
-    inject_split_rect(&mut app.layout, app.focused_window, rect);
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
 
     app.maximize_height();
 
-    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -2034,9 +2043,10 @@ fn ctrl_w_plus_grows_focused() {
         width: 80,
         height: 40,
     };
-    inject_split_rect(&mut app.layout, app.focused_window, rect);
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
 
-    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -2045,7 +2055,7 @@ fn ctrl_w_plus_grows_focused() {
     // This is what event_loop.rs dispatches for Ctrl-w '+'.
     app.resize_height(1);
 
-    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
         *ratio
     } else {
         panic!("expected Split");
@@ -2065,18 +2075,18 @@ fn only_drops_other_windows() {
     app.dispatch_ex("sp");
     app.dispatch_ex("sp");
     assert_eq!(
-        app.layout.leaves().len(),
+        app.layout().leaves().len(),
         3,
         "expected 3 windows before :only"
     );
 
     // Focus is on the most recently created window.
-    let focused = app.focused_window;
+    let focused = app.focused_window();
     app.dispatch_ex("only");
 
     // Layout must collapse to a single leaf.
     assert_eq!(
-        app.layout.leaves(),
+        app.layout().leaves(),
         vec![focused],
         "only focused leaf should remain"
     );
@@ -2095,17 +2105,17 @@ fn only_drops_other_windows() {
 #[test]
 fn only_no_op_with_single_window() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let focused = app.focused_window;
+    let focused = app.focused_window();
     app.dispatch_ex("only");
     // Still one window, still the same focused window.
-    assert_eq!(app.layout.leaves(), vec![focused]);
+    assert_eq!(app.layout().leaves(), vec![focused]);
     assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 1);
 }
 
 #[test]
 fn new_creates_horizontal_split_empty_buffer() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let original_win = app.focused_window;
+    let original_win = app.focused_window();
 
     app.dispatch_ex("new");
 
@@ -2115,10 +2125,10 @@ fn new_creates_horizontal_split_empty_buffer() {
         2,
         "expected 2 open windows after :new"
     );
-    assert_eq!(app.layout.leaves().len(), 2, "layout must have 2 leaves");
+    assert_eq!(app.layout().leaves().len(), 2, "layout must have 2 leaves");
 
     // Focus moved to the new window.
-    let new_win = app.focused_window;
+    let new_win = app.focused_window();
     assert_ne!(new_win, original_win, "focus must have moved to new window");
 
     // The new window points at an unnamed empty slot.
@@ -2129,7 +2139,7 @@ fn new_creates_horizontal_split_empty_buffer() {
     );
 
     // The layout is a horizontal split (new window on top, original below).
-    let below = app.layout.neighbor_below(new_win);
+    let below = app.layout().neighbor_below(new_win);
     assert_eq!(
         below,
         Some(original_win),
@@ -2144,12 +2154,12 @@ fn new_creates_horizontal_split_empty_buffer() {
 fn ctrl_w_o_invokes_only() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
-    assert_eq!(app.layout.leaves().len(), 2);
+    assert_eq!(app.layout().leaves().len(), 2);
 
-    let focused = app.focused_window;
+    let focused = app.focused_window();
     app.only_focused_window();
 
-    assert_eq!(app.layout.leaves(), vec![focused]);
+    assert_eq!(app.layout().leaves(), vec![focused]);
     assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 1);
 }
 
@@ -2160,12 +2170,12 @@ fn ctrl_w_x_swaps_with_sibling() {
 
     // After :sp, layout is: hsplit(new_win, original_win).
     // leaves() order should be [new_win, original_win].
-    let leaves_before = app.layout.leaves();
+    let leaves_before = app.layout().leaves();
     assert_eq!(leaves_before.len(), 2);
 
     app.swap_with_sibling();
 
-    let leaves_after = app.layout.leaves();
+    let leaves_after = app.layout().leaves();
     // The two leaves should be swapped in pre-order.
     assert_eq!(
         leaves_after,
@@ -2180,17 +2190,17 @@ fn ctrl_w_x_swaps_with_sibling() {
 #[test]
 fn ctrl_w_n_creates_horizontal_empty_split() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let original_win = app.focused_window;
+    let original_win = app.focused_window();
 
     // Simulate Ctrl-w n by calling dispatch_ex("new") — same path.
     app.dispatch_ex("new");
 
-    assert_eq!(app.layout.leaves().len(), 2);
-    let new_win = app.focused_window;
+    assert_eq!(app.layout().leaves().len(), 2);
+    let new_win = app.focused_window();
     assert_ne!(new_win, original_win);
 
     // New window is on top (a-side), original is below.
-    let below = app.layout.neighbor_below(new_win);
+    let below = app.layout().neighbor_below(new_win);
     assert_eq!(below, Some(original_win));
 }
 
@@ -2198,12 +2208,12 @@ fn ctrl_w_n_creates_horizontal_empty_split() {
 fn ctrl_w_q_closes_window_when_multiple() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
-    assert_eq!(app.layout.leaves().len(), 2);
+    assert_eq!(app.layout().leaves().len(), 2);
 
-    let focused_before = app.focused_window;
+    let focused_before = app.focused_window();
 
     // Simulate Ctrl-w q behavior.
-    if app.layout.leaves().len() > 1 {
+    if app.layout().leaves().len() > 1 {
         app.close_focused_window();
     } else {
         app.exit_requested = true;
@@ -2217,16 +2227,16 @@ fn ctrl_w_q_closes_window_when_multiple() {
         app.windows[focused_before].is_none(),
         "focused window must be closed"
     );
-    assert_eq!(app.layout.leaves().len(), 1, "layout must collapse");
+    assert_eq!(app.layout().leaves().len(), 1, "layout must collapse");
 }
 
 #[test]
 fn ctrl_w_q_quits_when_last() {
     let mut app = App::new(None, false, None, None).unwrap();
-    assert_eq!(app.layout.leaves().len(), 1);
+    assert_eq!(app.layout().leaves().len(), 1);
 
     // Simulate Ctrl-w q behavior.
-    if app.layout.leaves().len() > 1 {
+    if app.layout().leaves().len() > 1 {
         app.close_focused_window();
     } else {
         app.exit_requested = true;
@@ -2241,8 +2251,8 @@ fn colon_q_closes_window_when_multiple() {
     // not the application.
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
-    assert_eq!(app.layout.leaves().len(), 2);
-    let focused_before = app.focused_window;
+    assert_eq!(app.layout().leaves().len(), 2);
+    let focused_before = app.focused_window();
 
     app.dispatch_ex("q");
 
@@ -2254,17 +2264,168 @@ fn colon_q_closes_window_when_multiple() {
         app.windows[focused_before].is_none(),
         "focused window must be closed by :q"
     );
-    assert_eq!(app.layout.leaves().len(), 1, "layout must collapse to 1");
+    assert_eq!(app.layout().leaves().len(), 1, "layout must collapse to 1");
 }
 
 #[test]
 fn colon_q_quits_when_last() {
     // :q with a single window and clean buffer should exit the app.
     let mut app = App::new(None, false, None, None).unwrap();
-    assert_eq!(app.layout.leaves().len(), 1);
+    assert_eq!(app.layout().leaves().len(), 1);
     assert!(!app.active().dirty);
 
     app.dispatch_ex("q");
 
     assert!(app.exit_requested, ":q on last window must exit");
+}
+
+// ── Phase tab: vim-style tab tests ──────────────────────────────────────────
+
+#[test]
+fn tabnew_creates_second_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.active_tab, 0);
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2, "tabnew must create a second tab");
+    assert_eq!(app.active_tab, 1, "active_tab must advance to the new tab");
+}
+
+#[test]
+fn tabnew_no_arg_uses_empty_buffer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    // New tab's focused window must point at an unnamed empty slot.
+    let tab = &app.tabs[app.active_tab];
+    let slot_idx = app.windows[tab.focused_window].as_ref().unwrap().slot;
+    assert!(
+        app.slots[slot_idx].filename.is_none(),
+        "tabnew with no arg must use an unnamed buffer"
+    );
+    let lines = app.slots[slot_idx].editor.buffer().lines();
+    assert!(
+        lines.is_empty() || (lines.len() == 1 && lines[0].is_empty()),
+        "tabnew buffer must be empty"
+    );
+}
+
+#[test]
+fn tabnext_wraps_at_end() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3);
+    // active = 2 (last)
+    assert_eq!(app.active_tab, 2);
+    // tabnext should wrap to 0
+    app.dispatch_ex("tabnext");
+    assert_eq!(app.active_tab, 0, "tabnext must wrap to the first tab");
+}
+
+#[test]
+fn tabprev_wraps_at_start() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3);
+    // Go back to tab 0 first.
+    app.dispatch_ex("tabnext");
+    assert_eq!(app.active_tab, 0);
+    // tabprev from 0 should wrap to 2 (last).
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 2, "tabprev must wrap to the last tab");
+}
+
+#[test]
+fn tabclose_removes_current_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab, 1);
+    app.dispatch_ex("tabclose");
+    assert_eq!(app.tabs.len(), 1, "tabclose must remove the current tab");
+    assert_eq!(app.active_tab, 0, "active_tab must fall back to 0");
+}
+
+#[test]
+fn tabclose_last_tab_errors() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.tabs.len(), 1);
+    app.dispatch_ex("tabclose");
+    // Must refuse — only one tab.
+    assert_eq!(app.tabs.len(), 1, "tabclose must not close the last tab");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("E444"), "expected E444 error, got: {msg}");
+}
+
+#[test]
+fn gt_switches_tab() {
+    // Full keyboard path: g then t via pending_buffer_motion → tabnext.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    // Go back to tab 0.
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 0);
+    // Simulate the 'g' prefix being set, then dispatch 't'.
+    app.pending_buffer_motion = Some('g');
+    let key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('t'),
+        crossterm::event::KeyModifiers::NONE,
+    );
+    // The event_loop dispatches tabnext when pending_buffer_motion=Some('g') + 't'.
+    // Replicate that logic here directly.
+    if let Some(prefix) = app.pending_buffer_motion.take()
+        && prefix == 'g'
+        && key.code == crossterm::event::KeyCode::Char('t')
+    {
+        app.dispatch_ex("tabnext");
+    }
+    assert_eq!(app.active_tab, 1, "gt must advance to the next tab");
+}
+
+#[test]
+fn gt_switches_tab_backward() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab, 1);
+    // Simulate gT → tabprev.
+    app.pending_buffer_motion = Some('g');
+    let key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('T'),
+        crossterm::event::KeyModifiers::NONE,
+    );
+    if let Some(prefix) = app.pending_buffer_motion.take()
+        && prefix == 'g'
+        && key.code == crossterm::event::KeyCode::Char('T')
+    {
+        app.dispatch_ex("tabprev");
+    }
+    assert_eq!(app.active_tab, 0, "gT must switch to the previous tab");
+}
+
+#[test]
+fn each_tab_keeps_independent_layout() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Tab 0: split into 2 windows.
+    app.dispatch_ex("sp");
+    let tab0_leaves = app.tabs[0].layout.leaves().len();
+    assert_eq!(tab0_leaves, 2, "tab 0 must have 2 leaves after :sp");
+
+    // Open tab 1 (fresh — single leaf).
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 1);
+    let tab1_leaves = app.tabs[1].layout.leaves().len();
+    assert_eq!(tab1_leaves, 1, "tab 1 must start with 1 leaf");
+
+    // Switch back to tab 0 and verify its layout is still 2 leaves.
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 0);
+    let tab0_leaves_after = app.tabs[0].layout.leaves().len();
+    assert_eq!(
+        tab0_leaves_after, 2,
+        "tab 0 layout must be preserved after switching tabs"
+    );
 }

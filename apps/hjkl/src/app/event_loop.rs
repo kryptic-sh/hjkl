@@ -236,7 +236,7 @@ impl App {
                                 // Ctrl-w q: vim parity — close window when multiple,
                                 // quit app when last.
                                 KeyCode::Char('q') => {
-                                    if self.layout.leaves().len() > 1 {
+                                    if self.layout().leaves().len() > 1 {
                                         self.close_focused_window();
                                     } else {
                                         self.exit_requested = true;
@@ -292,27 +292,27 @@ impl App {
                         // fall through to the engine so single-window users
                         // keep vim semantics (Ctrl-h = h, Ctrl-l = redraw).
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            let focused = self.focused_window;
+                            let focused = self.focused_window();
                             if key.code == KeyCode::Char('j')
-                                && self.layout.neighbor_below(focused).is_some()
+                                && self.layout().neighbor_below(focused).is_some()
                             {
                                 self.focus_below();
                                 continue;
                             }
                             if key.code == KeyCode::Char('k')
-                                && self.layout.neighbor_above(focused).is_some()
+                                && self.layout().neighbor_above(focused).is_some()
                             {
                                 self.focus_above();
                                 continue;
                             }
                             if key.code == KeyCode::Char('h')
-                                && self.layout.neighbor_left(focused).is_some()
+                                && self.layout().neighbor_left(focused).is_some()
                             {
                                 self.focus_left();
                                 continue;
                             }
                             if key.code == KeyCode::Char('l')
-                                && self.layout.neighbor_right(focused).is_some()
+                                && self.layout().neighbor_right(focused).is_some()
                             {
                                 self.focus_right();
                                 continue;
@@ -357,11 +357,11 @@ impl App {
                         if let Some(prefix) = self.pending_buffer_motion.take() {
                             match (prefix, key.code) {
                                 ('g', KeyCode::Char('t')) => {
-                                    self.buffer_next();
+                                    self.dispatch_ex("tabnext");
                                     continue;
                                 }
                                 ('g', KeyCode::Char('T')) => {
-                                    self.buffer_prev();
+                                    self.dispatch_ex("tabprev");
                                     continue;
                                 }
                                 (']', KeyCode::Char('b')) => {
