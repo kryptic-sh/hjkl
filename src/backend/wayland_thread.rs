@@ -1430,6 +1430,36 @@ fn do_get(
     sel: Selection,
     mime: &MimeType,
 ) -> Result<Vec<u8>, ClipboardError> {
+    // Self-paste short-circuit: when we own the data_source for this
+    // selection, return the cached payload directly. Going through
+    // offer.receive + read_fd_to_end would deadlock — the bg thread
+    // cannot dispatch the matching `data_source.send` event while it's
+    // blocked reading from the pipe.
+    if let Some(own) = match sel {
+        Selection::Clipboard => state.clipboard_source.as_ref(),
+        Selection::Primary => state.primary_source.as_ref(),
+    } {
+        let candidates: &[&str] = match mime {
+            MimeType::Text => &[
+                "text/plain;charset=utf-8",
+                "UTF8_STRING",
+                "text/plain",
+                "STRING",
+            ],
+            MimeType::Html => &["text/html"],
+            MimeType::Rtf => &["text/rtf", "application/rtf"],
+            MimeType::UriList => &["text/uri-list"],
+            MimeType::Png => &["image/png"],
+            MimeType::Custom(s) => &[s.as_str()],
+        };
+        for c in candidates {
+            if let Some(bytes) = own.payloads.get(*c) {
+                return Ok(bytes.clone());
+            }
+        }
+        return Err(ClipboardError::UnsupportedMime);
+    }
+
     let offer = match sel {
         Selection::Clipboard => state.current_clipboard_offer.as_ref(),
         Selection::Primary => state.current_primary_offer.as_ref(),
@@ -2748,6 +2778,10 @@ mod tests {
         };
 
         mock.state().reset();
+        // Clear any owned source left over from a prior test in this
+        // process — otherwise do_get short-circuits to our own payload
+        // instead of fetching the mock's advertised offer.
+        let _ = clear_clipboard(thread, Selection::Clipboard);
 
         let mut payloads = HashMap::new();
         payloads.insert("text/plain;charset=utf-8".to_owned(), b"hello".to_vec());
@@ -2777,6 +2811,7 @@ mod tests {
         };
 
         mock.state().reset();
+        let _ = clear_clipboard(thread, Selection::Clipboard);
 
         let html = b"<b>x</b>";
         let mut payloads = HashMap::new();
@@ -2855,6 +2890,7 @@ mod tests {
         //
         // Just verify that if we ask for a mime not in the current offer,
         // we get UnsupportedMime.
+        let _ = clear_clipboard(thread, Selection::Clipboard);
         let mut payloads = HashMap::new();
         payloads.insert("text/html".to_owned(), b"html".to_vec());
         mock.advertise_clipboard_offer(vec!["text/html".to_owned()], payloads);
@@ -2866,6 +2902,41 @@ mod tests {
             matches!(result, Err(ClipboardError::UnsupportedMime)),
             "expected UnsupportedMime, got: {result:?}"
         );
+    }
+
+    /// Regression: self-paste must not deadlock.
+    ///
+    /// When we own the clipboard data_source, calling `get` previously
+    /// went through `offer.receive(write_fd) → read_fd_to_end(read_fd)`,
+    /// which deadlocked because the matching `data_source.send` event
+    /// could not be dispatched while the bg thread was blocked in
+    /// `read`. The fix short-circuits `do_get` when
+    /// `state.clipboard_source.is_some()` and returns the cached
+    /// payload directly.
+    #[test]
+    fn self_paste_after_set_does_not_deadlock() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mock = match ensure_mock() {
+            Some(m) => m,
+            None => return,
+        };
+        let thread = match get_thread_for_test() {
+            Some(t) => t,
+            None => return,
+        };
+
+        mock.state().reset();
+        let _ = clear_clipboard(thread, Selection::Clipboard);
+
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"self-paste")
+            .expect("set should succeed");
+
+        // Without the short-circuit this call would block forever on a
+        // pipe that only this same bg thread can write to. With the
+        // short-circuit it returns the cached payload immediately.
+        let bytes = get_clipboard(thread, Selection::Clipboard, &MimeType::Text)
+            .expect("self-paste get should succeed");
+        assert_eq!(bytes, b"self-paste");
     }
 
     /// No current offer; available() should return Ok(vec![]).

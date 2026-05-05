@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-05
+
+### Fixed
+
+- Wayland self-paste no longer deadlocks. When the consumer owns the clipboard
+  data_source and then calls `get(Clipboard, …)` (e.g. CEF reading the system
+  clipboard during a Ctrl+V into a contentEditable), the bg thread previously
+  issued `offer.receive(write_fd)` and blocked in `read_fd_to_end(read_fd)`, but
+  the matching `data_source.send` event for our own source could not be
+  dispatched while the bg thread was stuck in that `read`. `do_get` now
+  short-circuits when `state.clipboard_source` is `Some` and returns the cached
+  payload directly, bypassing the pipe round-trip entirely. Same for
+  `Selection::Primary` via `state.primary_source`. Closes kryptic-sh/buffr#34
+  (issue #4 follow-up — 0.5.2 only fixed the inverse direction where an external
+  app pasted from us).
+
 ## [0.5.2] - 2026-05-05
 
 ### Fixed
@@ -369,7 +385,8 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.0
