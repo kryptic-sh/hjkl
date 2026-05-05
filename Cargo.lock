@@ -962,6 +962,7 @@ dependencies = [
  "hjkl-form",
  "hjkl-picker",
  "hjkl-ratatui",
+ "hjkl-splash",
  "ignore",
  "nvim-rs",
  "ratatui",
@@ -1093,6 +1094,13 @@ dependencies = [
  "crossterm",
  "hjkl-engine",
  "hjkl-form",
+ "ratatui",
+]
+
+[[package]]
+name = "hjkl-splash"
+version = "0.1.0"
+dependencies = [
  "ratatui",
 ]
 

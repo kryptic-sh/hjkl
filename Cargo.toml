@@ -22,6 +22,7 @@ hjkl-picker = { path = "crates/hjkl-picker" }
 hjkl-ratatui = { path = "crates/hjkl-ratatui" }
 hjkl-bonsai = { path = "crates/hjkl-bonsai" }
 hjkl-config = { path = "crates/hjkl-config" }
+hjkl-splash = { path = "crates/hjkl-splash" }
 
 [profile.release]
 lto = "thin"

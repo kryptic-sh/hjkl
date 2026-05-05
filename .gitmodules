@@ -25,3 +25,6 @@
 [submodule "crates/hjkl-config"]
 	path = crates/hjkl-config
 	url = https://github.com/kryptic-sh/hjkl-config.git
+[submodule "crates/hjkl-splash"]
+	path = crates/hjkl-splash
+	url = https://github.com/kryptic-sh/hjkl-splash.git

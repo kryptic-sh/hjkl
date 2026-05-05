@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **`hjkl-splash` crate (v0.1.0).** Extracts the HJKL splash-screen animation
+  from `apps/hjkl/src/start_screen.rs` into a rendering-agnostic crate so other
+  kryptic-sh projects can reuse the same cursor-trail-on- letterforms animation
+  in TUI or GUI frontends. Core API emits pure `SplashCell` items via an
+  iterator; an optional `ratatui` feature ships a
+  `From<Rgb> for ratatui::style::Color` adapter. The hjkl letterforms + path are
+  bundled as `presets::hjkl`.
+
 ### Changed
 
 - **Compat-oracle: graduate substitute cases to a dedicated nvim-api tier
