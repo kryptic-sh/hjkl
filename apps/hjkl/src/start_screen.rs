@@ -8,23 +8,14 @@ use ratatui::{
 };
 
 pub struct StartScreen {
-    /// Current tick — exposed as a public field so existing callers compile
-    /// without changes (e.g. `screen.tick` in tests).
-    pub tick: u64,
     splash: Splash<'static>,
 }
 
 impl StartScreen {
     pub fn new() -> Self {
         Self {
-            tick: 0,
             splash: Splash::new(presets::hjkl::ART, presets::hjkl::PATH),
         }
-    }
-
-    pub fn advance(&mut self) {
-        self.splash.advance();
-        self.tick = self.splash.tick();
     }
 }
 
@@ -39,7 +30,6 @@ pub fn render(frame: &mut Frame, area: Rect, screen: &StartScreen, theme: &crate
     let art_top = area.y + layout.origin_y;
     let art_left = area.x + layout.origin_x;
 
-    // Translate layout-relative origins to absolute frame coordinates.
     let abs_layout = hjkl_splash::Layout {
         origin_x: art_left,
         origin_y: art_top,

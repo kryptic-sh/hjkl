@@ -57,12 +57,10 @@ impl App {
                 self.recompute_and_install();
             }
 
-            // Wait for the next event with a 120 ms ceiling.
+            // Wait for the next event with a 120 ms ceiling so the splash
+            // animation can repaint without input. The splash itself reads
+            // the wall clock — we just need a redraw cadence here.
             if !event::poll(Duration::from_millis(120))? {
-                // Timeout — advance the splash animation if active.
-                if let Some(ref mut screen) = self.start_screen {
-                    screen.advance();
-                }
                 continue;
             }
             match event::read()? {

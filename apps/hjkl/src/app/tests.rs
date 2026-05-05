@@ -943,15 +943,9 @@ fn mode_label_returns_start_during_splash() {
     assert_eq!(app.mode_label(), "START");
 }
 
-#[test]
-fn start_screen_advance_increments_tick() {
-    let mut screen = crate::start_screen::StartScreen::new();
-    assert_eq!(screen.tick, 0);
-    screen.advance();
-    assert_eq!(screen.tick, 1);
-    screen.advance();
-    assert_eq!(screen.tick, 2);
-}
+// Splash tick advancement is now wall-clock driven inside `hjkl-splash`
+// (see its own unit tests); apps/hjkl just constructs the splash and
+// renders it. No tick assertions live here.
 
 // ── Config layering tests ──────────────────────────────────────────────
 

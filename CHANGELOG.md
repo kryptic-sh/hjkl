@@ -8,18 +8,30 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-05-06
+
 ### Added
 
-- **`hjkl-splash` crate (v0.1.0).** Extracts the HJKL splash-screen animation
-  from `apps/hjkl/src/start_screen.rs` into a rendering-agnostic crate so other
-  kryptic-sh projects can reuse the same cursor-trail-on- letterforms animation
+- **`hjkl-splash` crate, extracted to a standalone repo + crates.io publish.**
+  The HJKL splash-screen animation moved out of `apps/hjkl/src/start_screen.rs`
+  into a rendering-agnostic crate at
+  [kryptic-sh/hjkl-splash](https://github.com/kryptic-sh/hjkl-splash) so other
+  kryptic-sh projects can reuse the same cursor-trail-on-letterforms animation
   in TUI or GUI frontends. Core API emits pure `SplashCell` items via an
   iterator; an optional `ratatui` feature ships a
   `From<Rgb> for ratatui::style::Color` adapter. The hjkl letterforms + path are
-  bundled as `presets::hjkl`.
+  bundled as `presets::hjkl`. Wired in via the existing submodule pattern
+  - `[patch.crates-io]`.
 
 ### Changed
 
+- **Splash now wall-clock driven (via hjkl-splash 0.2.0).** Animation tick is
+  derived from `Instant::now()` inside the crate; consumer code no longer calls
+  `screen.advance()`, so the animation cannot stall when high-frequency events
+  (mouse motion, focus, resize) starve the event-loop timeout branch.
+  `apps/hjkl/src/start_screen.rs` is now a thin ratatui adapter; the
+  per-iteration `advance()` call in `apps/hjkl/src/app/event_loop.rs` is
+  removed.
 - **Compat-oracle: graduate substitute cases to a dedicated nvim-api tier
   (closes #26).** New `corpus/nvim_api_tier.toml` holds the four substitute
   cases that previously sat in `known_divergences.toml`; a new
@@ -1231,7 +1243,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.5...HEAD
+[0.11.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.5
 [0.11.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.4
 [0.11.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.3
 [0.11.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.2
