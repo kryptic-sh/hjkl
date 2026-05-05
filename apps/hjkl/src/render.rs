@@ -4,7 +4,7 @@
 //! It splits the terminal area into a buffer pane + status line row and
 //! delegates to [`buffer_pane`] and [`status_line`].
 
-use hjkl_buffer::{BufferView, Gutter};
+use hjkl_buffer::{BufferView, Gutter, GutterNumbers};
 use hjkl_engine::{Host, Query};
 use ratatui::{
     Frame,
@@ -17,10 +17,15 @@ use ratatui::{
 use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
-/// `lnum_width = line_count.to_string().len() + 2`. The renderer must
-/// agree with the engine or terminal cursor lands off by one column.
-fn gutter_width(line_count: usize) -> u16 {
-    line_count.to_string().len() as u16 + 2
+/// `lnum_width = max(numberwidth, line_count.to_string().len() + 1)`.
+/// The renderer must agree with the engine or terminal cursor lands off by
+/// one column. Returns 0 when both `number` and `relativenumber` are false.
+fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwidth: usize) -> u16 {
+    if !number && !relativenumber {
+        return 0;
+    }
+    let needed = line_count.to_string().len() + 1; // digits + 1 trailing spacer
+    needed.max(numberwidth) as u16
 }
 
 /// Bg painted across the cursor row in both the editor pane and the
@@ -63,7 +68,14 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let gw = gutter_width(app.active().editor.buffer().line_count() as usize);
+    let s = app.active().editor.settings();
+    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
+    let gw = gutter_width(
+        app.active().editor.buffer().line_count() as usize,
+        nu,
+        rnu,
+        nuw,
+    );
     let text_width = buf_area.width.saturating_sub(gw);
 
     // Publish viewport dims so engine scrolloff math is accurate.
@@ -172,10 +184,23 @@ fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
 /// command line (`:` prompt or `/`/`?` search prompt), because the
 /// terminal cursor belongs to the bottom row in those states.
 fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gutter_width: u16) {
-    let gutter = Gutter {
-        width: gutter_width,
-        style: Style::default().fg(app.theme.ui.gutter),
-        line_offset: 0,
+    let cursor_row = app.active().editor.buffer().cursor().row;
+    let s = app.active().editor.settings();
+    let numbers = match (s.number, s.relativenumber) {
+        (false, false) => GutterNumbers::None,
+        (true, false) => GutterNumbers::Absolute,
+        (false, true) => GutterNumbers::Relative { cursor_row },
+        (true, true) => GutterNumbers::Hybrid { cursor_row },
+    };
+    let gutter = if gutter_width > 0 {
+        Some(Gutter {
+            width: gutter_width,
+            style: Style::default().fg(app.theme.ui.gutter),
+            line_offset: 0,
+            numbers,
+        })
+    } else {
+        None
     };
 
     let selection = app.active().editor.buffer_selection();
@@ -237,12 +262,13 @@ fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gu
         } else {
             Style::default()
         },
-        gutter: Some(gutter),
+        gutter,
         search_bg,
         signs: &visible_signs,
         conceals: &[],
         spans: buffer_spans,
         search_pattern,
+        non_text_style: Style::default().fg(app.theme.ui.non_text),
     };
 
     frame.render_widget(view, area);
@@ -857,7 +883,8 @@ fn picker_preview_pane(
 
     let buf = picker.preview_buffer();
     let line_count = buf.line_count() as usize;
-    let gw = gutter_width(line_count.max(1));
+    // Picker preview always shows absolute numbers with neovim default numberwidth.
+    let gw = gutter_width(line_count.max(1), true, false, 4);
     let viewport = hjkl_buffer::Viewport {
         top_row: picker.preview_top_row(),
         top_col: 0,
@@ -892,12 +919,14 @@ fn picker_preview_pane(
             width: gw,
             style: Style::default().fg(theme.gutter),
             line_offset: picker.preview_line_offset(),
+            ..Default::default()
         }),
         search_bg: Style::default(),
         signs: &[],
         conceals: &[],
         spans: &preview_spans.by_row,
         search_pattern: None,
+        non_text_style: Style::default().fg(theme.non_text),
     };
     frame.render_widget(view, inner);
 }

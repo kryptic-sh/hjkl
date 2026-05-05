@@ -68,6 +68,10 @@ pub struct UiTheme {
     pub border_active: Color,
     pub gutter: Color,
     pub on_accent: Color,
+    /// Color for vim's NonText highlight group — the `~` tilde markers
+    /// on screen rows past the last buffer line. Defaults to the gutter
+    /// color (dim fg), matching most vim themes.
+    pub non_text: Color,
 
     // [mode]
     pub mode_normal_bg: Color,
@@ -113,6 +117,7 @@ impl UiTheme {
             border_active: parse_hex(&raw.chrome.border_active)?,
             gutter: parse_hex(&raw.chrome.gutter)?,
             on_accent: parse_hex(&raw.chrome.on_accent)?,
+            non_text: parse_hex(&raw.chrome.non_text)?,
             mode_normal_bg: parse_hex(&raw.mode.normal_bg)?,
             mode_insert_bg: parse_hex(&raw.mode.insert_bg)?,
             mode_visual_bg: parse_hex(&raw.mode.visual_bg)?,
@@ -153,6 +158,7 @@ struct RawChrome {
     border_active: String,
     gutter: String,
     on_accent: String,
+    non_text: String,
 }
 
 #[derive(Deserialize)]

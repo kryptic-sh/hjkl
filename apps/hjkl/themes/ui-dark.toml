@@ -17,6 +17,7 @@ border        = "#1f2530"  # popup/list borders, dim separators
 border_active = "#bb9af7"  # active popup borders (info popup, picker)
 gutter        = "#8b95a7"  # line-number gutter fg
 on_accent     = "#0b0d10"  # fg painted on bright bg (mode badge / search hit)
+non_text      = "#4a5266"  # `~` tilde markers past end-of-buffer (vim NonText)
 
 [mode]
 normal_bg     = "#7aa2f7"  # NORMAL — --blue

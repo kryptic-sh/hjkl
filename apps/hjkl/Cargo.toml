@@ -17,9 +17,9 @@ name = "hjkl"
 path = "src/main.rs"
 
 [dependencies]
-hjkl-buffer = "0.3"
+hjkl-buffer = "0.4"
 hjkl-splash = { version = "0.2", features = ["ratatui"] }
-hjkl-engine = "0.3"
+hjkl-engine = "0.4"
 hjkl-editor = "0.4"
 hjkl-ratatui = "0.3"
 hjkl-bonsai = "0.5"

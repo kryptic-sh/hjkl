@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- `:set number` / `:set relativenumber` (and `nu` / `rnu` / `nonu` / `nornu` /
+  `nu!` / `rnu!` aliases) toggle the line-number gutter at runtime. Combined
+  `nu rnu` enables vim's hybrid mode: cursor row shows its absolute number,
+  others show the offset.
+- `:set numberwidth=N` / `:set nuw=N` (1..=20, default 4) — minimum gutter width
+  in cells, matching vim's `'numberwidth'` option.
+- `~` tilde markers paint at the first text column on every screen row past
+  end-of-buffer, matching vim's `NonText` rendering. New `non_text` theme color
+  (default `#4a5266`).
+
 ## [0.11.5] - 2026-05-06
 
 ### Added
