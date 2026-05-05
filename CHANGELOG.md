@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-05
+
+### Fixed
+
+- Wayland `data_source.send` callback no longer performs a blocking `write()` on
+  the bg thread. The write fd received via SCM_RIGHTS is immediately set to
+  `O_NONBLOCK`; if the pipe buffer is full (`EAGAIN`) the write is deferred as a
+  `PendingWrite` entry and drained on the next `poll(2)` iteration via
+  `POLLOUT`. A 5-second deadline closes abandoned fds to prevent leaks. Both the
+  `ext_data_control_source_v1.send` and `zwp_primary_selection_source_v1.send`
+  paths are fixed. Previously, a slow paste receiver (e.g. CEF 147 OSR on
+  Wayland, kryptic-sh/buffr#34) could stall the bg thread indefinitely, causing
+  any subsequent `set_text()` call from the UI thread to block on a `Condvar`
+  for 7+ seconds until the watchdog killed the process (issue #4).
+
 ## [0.5.1] - 2026-05-04
 
 ### Docs
@@ -354,7 +369,8 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.0
 [0.4.8]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.4.8

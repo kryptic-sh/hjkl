@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::ffi::c_int;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{ClipboardError, MimeType, Selection};
 
@@ -332,6 +332,24 @@ struct OwnedSource {
 }
 
 // ---------------------------------------------------------------------------
+// Non-blocking write state — queued when O_NONBLOCK write returns EAGAIN
+// ---------------------------------------------------------------------------
+
+/// A pipe-write operation that could not complete in one shot because the
+/// pipe buffer was full.  Kept in `WaylandState::pending_writes` and drained
+/// on subsequent `poll(2)` iterations when the fd reports POLLOUT.
+struct PendingWrite {
+    /// Write end of the pipe received via SCM_RIGHTS.
+    fd: c_int,
+    /// Full payload to be written.
+    payload: Vec<u8>,
+    /// Bytes already written into the pipe.
+    written: usize,
+    /// Absolute time after which we give up and close the fd.
+    deadline: Instant,
+}
+
+// ---------------------------------------------------------------------------
 // Offer tracking for the read path
 // ---------------------------------------------------------------------------
 
@@ -386,6 +404,9 @@ struct WaylandState {
     /// Set of object ids we know are data_control_offer objects (for routing
     /// offer.offer(mime) events).
     offer_ids: HashMap<u32, bool>, // id -> is_primary
+    /// Pipe writes that could not be completed in one shot (EAGAIN on O_NONBLOCK
+    /// fd).  Drained by the main event loop via POLLOUT on each fd.
+    pending_writes: Vec<PendingWrite>,
 }
 
 impl WaylandState {
@@ -604,6 +625,7 @@ impl WaylandState {
             primary_device_id,
             primary_manager_id,
             offer_ids: HashMap::new(),
+            pending_writes: Vec::new(),
         })
     }
 }
@@ -614,8 +636,26 @@ impl WaylandState {
 
 fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>) {
     loop {
-        // poll(2) on the socket with a 50ms timeout.
-        let socket_readable = poll_socket(state.socket.raw_fd(), 50);
+        // Build the poll set: Wayland socket (POLLIN) + all pending-write fds
+        // (POLLOUT).
+        let (socket_readable, writable_fds) = poll_fds(state, 50);
+
+        // Expire any pending writes whose deadline has passed.
+        let now = Instant::now();
+        state.pending_writes.retain(|pw| {
+            if now > pw.deadline {
+                // SAFETY: fd is ours (via SCM_RIGHTS); close to avoid leak.
+                unsafe { libc::close(pw.fd) };
+                false
+            } else {
+                true
+            }
+        });
+
+        // Drain writable pending writes.
+        if !writable_fds.is_empty() {
+            drain_pending_writes(state, &writable_fds);
+        }
 
         if socket_readable {
             // Drain all available compositor events.
@@ -637,17 +677,126 @@ fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>) {
     }
 }
 
-/// Call poll(2) on the socket fd with a timeout in milliseconds.
-/// Returns true if data is available to read.
-fn poll_socket(fd: c_int, timeout_ms: i32) -> bool {
-    let mut pfd = libc::pollfd {
-        fd,
+/// Call poll(2) on the Wayland socket plus any pending-write fds.
+///
+/// Returns `(socket_readable, Vec<fd>)` where `Vec<fd>` is the subset of
+/// pending-write fds that are now writable (POLLOUT fired).
+fn poll_fds(state: &WaylandState, timeout_ms: i32) -> (bool, Vec<c_int>) {
+    // Slot 0 is always the Wayland socket (POLLIN).
+    let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(1 + state.pending_writes.len());
+    pfds.push(libc::pollfd {
+        fd: state.socket.raw_fd(),
         events: libc::POLLIN,
         revents: 0,
+    });
+
+    for pw in &state.pending_writes {
+        pfds.push(libc::pollfd {
+            fd: pw.fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        });
+    }
+
+    // SAFETY: pfds is a valid slice; nfds and timeout_ms are valid.
+    let ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, timeout_ms) };
+
+    if ret <= 0 {
+        return (false, vec![]);
+    }
+
+    let socket_readable = (pfds[0].revents & libc::POLLIN) != 0;
+    let writable: Vec<c_int> = pfds[1..]
+        .iter()
+        .filter(|p| (p.revents & libc::POLLOUT) != 0)
+        .map(|p| p.fd)
+        .collect();
+
+    (socket_readable, writable)
+}
+
+/// Continue writing for each fd in `writable_fds`, removing completed (or
+/// errored) entries from `state.pending_writes`.
+fn drain_pending_writes(state: &mut WaylandState, writable_fds: &[c_int]) {
+    let mut i = 0;
+    while i < state.pending_writes.len() {
+        let pw = &state.pending_writes[i];
+        if !writable_fds.contains(&pw.fd) {
+            i += 1;
+            continue;
+        }
+
+        // Try to write the remaining bytes.
+        let fd = state.pending_writes[i].fd;
+        let done = {
+            let pw = &mut state.pending_writes[i];
+            match try_write_nonblocking(fd, &pw.payload, pw.written) {
+                WriteResult::Done => true,
+                WriteResult::Partial(n) => {
+                    pw.written += n;
+                    false
+                }
+                WriteResult::WouldBlock => false,
+                WriteResult::Error => true, // close + drop on error
+            }
+        };
+
+        if done {
+            let fd = state.pending_writes[i].fd;
+            // SAFETY: fd is ours (received via SCM_RIGHTS).
+            unsafe { libc::close(fd) };
+            state.pending_writes.swap_remove(i);
+            // Don't advance i — swap_remove puts the last element at i.
+        } else {
+            i += 1;
+        }
+    }
+}
+
+enum WriteResult {
+    /// All bytes written; fd should be closed.
+    Done,
+    /// Partial write of `n` additional bytes; more to go.
+    Partial(usize),
+    /// EAGAIN / EWOULDBLOCK; try again later.
+    WouldBlock,
+    /// Unrecoverable error (EPIPE, etc); fd should be closed.
+    Error,
+}
+
+/// Attempt a single non-blocking write of `data[written..]` into `fd`.
+fn try_write_nonblocking(fd: c_int, data: &[u8], written: usize) -> WriteResult {
+    if written >= data.len() {
+        return WriteResult::Done;
+    }
+    let remaining = &data[written..];
+    // SAFETY: fd is valid; remaining is valid memory.
+    let n = unsafe {
+        libc::write(
+            fd,
+            remaining.as_ptr() as *const libc::c_void,
+            remaining.len(),
+        )
     };
-    // SAFETY: pfd is valid; nfds=1; timeout_ms is i32.
-    let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-    ret > 0 && (pfd.revents & libc::POLLIN) != 0
+    if n > 0 {
+        let n = n as usize;
+        if written + n >= data.len() {
+            WriteResult::Done
+        } else {
+            WriteResult::Partial(n)
+        }
+    } else if n == 0 {
+        WriteResult::Done
+    } else {
+        let err = std::io::Error::last_os_error();
+        // EAGAIN and EWOULDBLOCK have the same value on Linux; allow_unused
+        // avoids an unreachable-pattern warning on that platform.
+        #[allow(unreachable_patterns)]
+        match err.raw_os_error() {
+            Some(libc::EAGAIN) | Some(libc::EWOULDBLOCK) => WriteResult::WouldBlock,
+            _ => WriteResult::Error,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -925,14 +1074,11 @@ fn handle_source_send(state: &mut WaylandState, args: &[u8], opt_fd: Option<c_in
         .cloned()
         .unwrap_or_default();
 
-    // Write payload to the pipe write end. The compositor reads from the read end.
-    write_to_fd(write_fd, &payload);
-
-    // SAFETY: write_fd is ours (received via SCM_RIGHTS); close after write.
-    unsafe { libc::close(write_fd) };
+    begin_nonblocking_write(state, write_fd, payload);
 }
 
-/// Write all bytes to fd, handling partial writes.
+/// Write all bytes to fd, handling partial writes (blocking — for test/mock use only).
+#[cfg(test)]
 fn write_to_fd(fd: c_int, data: &[u8]) {
     let mut written = 0;
     while written < data.len() {
@@ -949,6 +1095,58 @@ fn write_to_fd(fd: c_int, data: &[u8]) {
             break;
         }
         written += n as usize;
+    }
+}
+
+/// Set O_NONBLOCK on `write_fd`, attempt an immediate write, then either close
+/// the fd (all bytes sent) or stash a `PendingWrite` for deferred draining.
+///
+/// This prevents `handle_source_send` from blocking the bg thread when the
+/// paste receiver hasn't drained the pipe yet (the root cause of issue #4,
+/// downstream symptom kryptic-sh/buffr#34).
+fn begin_nonblocking_write(state: &mut WaylandState, write_fd: c_int, payload: Vec<u8>) {
+    // Set O_NONBLOCK so subsequent writes don't block.
+    // SAFETY: fcntl with F_GETFL / F_SETFL on a valid fd is safe.
+    let flags = unsafe { libc::fcntl(write_fd, libc::F_GETFL) };
+    if flags >= 0 {
+        unsafe { libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    }
+
+    if payload.is_empty() {
+        // Nothing to write — close immediately.
+        // SAFETY: write_fd is ours (received via SCM_RIGHTS).
+        unsafe { libc::close(write_fd) };
+        return;
+    }
+
+    // Attempt immediate write.
+    match try_write_nonblocking(write_fd, &payload, 0) {
+        WriteResult::Done => {
+            // SAFETY: write_fd is ours.
+            unsafe { libc::close(write_fd) };
+        }
+        WriteResult::Partial(n) => {
+            // Queue remainder for draining via POLLOUT in the main loop.
+            state.pending_writes.push(PendingWrite {
+                fd: write_fd,
+                payload,
+                written: n,
+                deadline: Instant::now() + Duration::from_secs(5),
+            });
+        }
+        WriteResult::WouldBlock => {
+            // Pipe buffer is already full — queue the whole payload.
+            state.pending_writes.push(PendingWrite {
+                fd: write_fd,
+                payload,
+                written: 0,
+                deadline: Instant::now() + Duration::from_secs(5),
+            });
+        }
+        WriteResult::Error => {
+            // SAFETY: write_fd is ours.
+            unsafe { libc::close(write_fd) };
+        }
     }
 }
 
@@ -993,10 +1191,7 @@ fn handle_primary_source_send(state: &mut WaylandState, args: &[u8], opt_fd: Opt
         .cloned()
         .unwrap_or_default();
 
-    write_to_fd(write_fd, &payload);
-
-    // SAFETY: write_fd received via SCM_RIGHTS; close after write.
-    unsafe { libc::close(write_fd) };
+    begin_nonblocking_write(state, write_fd, payload);
 }
 
 fn handle_primary_source_cancelled(state: &mut WaylandState, opt_fd: Option<c_int>) {
@@ -2763,4 +2958,111 @@ mod tests {
     // require the mock to fabricate a reflection event which diverges from
     // real compositor behaviour and would only test the mock, not the protocol.
     // Covered by the set path tests (6b) + get path tests above (6c) separately.
+
+    // -------------------------------------------------------------------------
+    // Non-blocking send path — issue #4 / buffr#34 regression test
+    // -------------------------------------------------------------------------
+
+    /// Simulate the deadlock scenario from issue #4:
+    ///
+    /// - Create a pipe whose read end is intentionally NOT drained.
+    /// - Build a payload larger than the Linux pipe buffer (default 64 KB;
+    ///   we use 256 KB) so a blocking write would stall indefinitely.
+    /// - Call `begin_nonblocking_write` directly (production helper, not the
+    ///   mock layer) and assert it returns immediately, queueing a PendingWrite
+    ///   rather than blocking.
+    ///
+    /// This test does not require a Wayland session.
+    #[test]
+    fn nonblocking_send_queues_on_full_pipe_instead_of_blocking() {
+        use super::super::wayland_socket::WaylandSocket;
+        use super::super::wayland_wire;
+
+        // Construct a minimal WaylandState using a socketpair so we have a
+        // valid WaylandSocket without a real compositor.
+        let mut sv = [0i32; 2];
+        // SAFETY: socketpair is safe with valid args.
+        let rc = unsafe {
+            libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
+                0,
+                sv.as_mut_ptr(),
+            )
+        };
+        assert_eq!(rc, 0, "socketpair failed");
+
+        // We own sv[0] as our "socket"; close sv[1] immediately (we don't
+        // need the peer for this test).
+        // SAFETY: sv[1] is valid.
+        unsafe { libc::close(sv[1]) };
+
+        let socket = unsafe { WaylandSocket::from_raw_fd(sv[0]) };
+
+        let mut state = WaylandState {
+            socket,
+            next_id: 100,
+            seat_name: 0,
+            seat_id: 0,
+            manager_name: 0,
+            manager_id: 0,
+            device_id: 0,
+            sync_id: 0,
+            clipboard_source: None,
+            primary_source: None,
+            pending_offers: HashMap::new(),
+            current_clipboard_offer: None,
+            current_primary_offer: None,
+            primary_device_id: 0,
+            primary_manager_id: 0,
+            offer_ids: HashMap::new(),
+            pending_writes: Vec::new(),
+        };
+
+        // Create a pipe.  Hold the read end open but never read from it so
+        // the pipe buffer fills up.
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe2 with O_CLOEXEC is safe.
+        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        assert_eq!(rc, 0, "pipe2 failed");
+        let read_fd = fds[0];
+        let write_fd = fds[1];
+
+        // 256 KB payload — larger than the 64 KB default Linux pipe buffer.
+        let payload = vec![0xABu8; 256 * 1024];
+
+        // This must return immediately without blocking, even though the pipe
+        // is unread (issue #4: previously this called write_to_fd which would
+        // block here until the pipe drained or the peer closed).
+        let start = std::time::Instant::now();
+        begin_nonblocking_write(&mut state, write_fd, payload.clone());
+        let elapsed = start.elapsed();
+
+        // SAFETY: read_fd is ours; close it now that we've proven the write
+        // side did not block.
+        unsafe { libc::close(read_fd) };
+
+        // The call must have returned in well under 1 second.
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "begin_nonblocking_write blocked for {elapsed:?} — deadlock regression"
+        );
+
+        // The payload was not fully writable (pipe was never read), so a
+        // PendingWrite must have been queued.
+        assert!(
+            !state.pending_writes.is_empty(),
+            "expected a PendingWrite queued for the blocked pipe write"
+        );
+
+        // Clean up: close any pending fd.
+        for pw in state.pending_writes.drain(..) {
+            // SAFETY: fd is ours.
+            unsafe { libc::close(pw.fd) };
+        }
+
+        // The _ suppresses unused-import warning on wayland_wire (it is used
+        // transitively but the compiler can't see it here).
+        let _ = wayland_wire::encode_u32;
+    }
 }
