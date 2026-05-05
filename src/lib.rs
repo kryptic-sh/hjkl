@@ -65,7 +65,7 @@ pub use folds::Fold;
 pub use motion::is_keyword_char;
 pub use position::Position;
 #[cfg(feature = "ratatui")]
-pub use render::{BufferView, Gutter, Sign, StyleResolver};
+pub use render::{BufferView, Conceal, Gutter, GutterNumbers, Sign, StyleResolver};
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
 pub use viewport::Viewport;

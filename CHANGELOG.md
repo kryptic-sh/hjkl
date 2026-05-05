@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `BufferView::non_text_style` field; rows past end-of-buffer now paint `~`
+  (vim's NonText marker) at the first text column. The gutter on those rows
+  stays blank. Style defaults to `Style::default()` when not set.
+
+## [0.4.0] - 2026-05-06
+
+### Added
+
+- `GutterNumbers` enum (`Absolute` / `Relative` / `Hybrid` / `None`) controls
+  what is rendered in the gutter. `Absolute` is the default, matching the
+  previous always-on behaviour.
+- `Gutter::numbers: GutterNumbers` field. Existing consumers using
+  `..Default::default()` keep working; consumers using exhaustive struct-init
+  syntax must add `numbers: GutterNumbers::Absolute` (minor break).
+- `GutterNumbers` is re-exported from the crate root under the `ratatui` feature
+  alongside `Gutter`.
+
 ## [0.3.5] - 2026-05-05
 
 ### Docs
@@ -59,7 +78,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.4.0
 [0.3.5]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.3.5
 [0.3.4]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.3.4
 [0.3.3]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.3.3

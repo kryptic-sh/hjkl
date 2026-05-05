@@ -112,6 +112,30 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// per step 3 of `DESIGN_33_METHOD_CLASSIFICATION.md`. The engine
     /// publishes the pattern via `Editor::search_state().pattern`.
     pub search_pattern: Option<&'a regex::Regex>,
+    /// Style for the `~` tilde marker painted on screen rows that are
+    /// past the last buffer line (vim's `NonText` highlight group).
+    /// Pass `Style::default()` to use terminal defaults.
+    ///
+    /// The gutter on those rows is painted blank; the `~` appears at the
+    /// leftmost text column. Rows within the buffer are unaffected.
+    pub non_text_style: Style,
+}
+
+/// Controls what numbers are rendered in the gutter.
+///
+/// Matches vim's `:set number` / `:set relativenumber` combinations.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum GutterNumbers {
+    /// No line numbers — gutter cells painted blank (still occupies width).
+    None,
+    /// 1-based absolute row numbers (current default).
+    #[default]
+    Absolute,
+    /// Offset from `cursor_row` for non-cursor rows; cursor row shows `0`.
+    Relative { cursor_row: usize },
+    /// Vim's `nu+rnu`: cursor row shows its absolute number, others show
+    /// offset from `cursor_row`.
+    Hybrid { cursor_row: usize },
 }
 
 /// Configuration for the line-number gutter rendered to the left of
@@ -122,12 +146,14 @@ pub struct BufferView<'a, R: StyleResolver> {
 /// `line_offset` is added to the displayed line number, so a host
 /// rendering a windowed view of a larger document (e.g. picker preview
 /// of a 7000-line buffer) can show the original line numbers instead
-/// of starting at 1.
+/// of starting at 1. Only applied in `Absolute` mode.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Gutter {
     pub width: u16,
     pub style: Style,
     pub line_offset: usize,
+    /// What kind of numbers to render. Defaults to `Absolute`.
+    pub numbers: GutterNumbers,
 }
 
 /// Single-cell marker painted into the leftmost gutter column for a
@@ -270,6 +296,21 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 screen_row += 1;
             }
             doc_row += 1;
+        }
+        // Tilde pass: paint `~` on every screen row past the last buffer
+        // line (vim's NonText marker). Gutter on those rows stays blank.
+        while screen_row < area.height {
+            // Blank gutter if present.
+            if let Some(gutter) = self.gutter {
+                self.paint_blank_gutter(term_buf, area, screen_row, gutter);
+            }
+            // Paint `~` at the first text column.
+            let y = text_area.y + screen_row;
+            if let Some(cell) = term_buf.cell_mut((text_area.x, y)) {
+                cell.set_char('~');
+                cell.set_style(self.non_text_style);
+            }
+            screen_row += 1;
         }
         // Cursorcolumn pass: layer the bg over the cursor's visible
         // column once every row is painted so it composes on top of
@@ -422,11 +463,44 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let y = area.y + screen_row;
         // Total gutter cells, leaving one trailing spacer column.
         let number_width = gutter.width.saturating_sub(1) as usize;
-        let label = format!(
-            "{:>width$}",
-            doc_row + 1 + gutter.line_offset,
-            width = number_width
-        );
+
+        // Compute the label to display based on the numbers mode.
+        let label = match gutter.numbers {
+            GutterNumbers::None => {
+                // Blank — paint all cells (including spacer) as spaces.
+                for x in area.x..(area.x + gutter.width) {
+                    if let Some(cell) = term_buf.cell_mut((x, y)) {
+                        cell.set_char(' ');
+                        cell.set_style(gutter.style);
+                    }
+                }
+                return;
+            }
+            GutterNumbers::Absolute => {
+                format!(
+                    "{:>width$}",
+                    doc_row + 1 + gutter.line_offset,
+                    width = number_width
+                )
+            }
+            GutterNumbers::Relative { cursor_row } => {
+                let n = if doc_row == cursor_row {
+                    0
+                } else {
+                    doc_row.abs_diff(cursor_row)
+                };
+                format!("{:>width$}", n, width = number_width)
+            }
+            GutterNumbers::Hybrid { cursor_row } => {
+                let n = if doc_row == cursor_row {
+                    doc_row + 1 + gutter.line_offset
+                } else {
+                    doc_row.abs_diff(cursor_row)
+                };
+                format!("{:>width$}", n, width = number_width)
+            }
+        };
+
         let mut x = area.x;
         for ch in label.chars() {
             if x >= area.x + gutter.width.saturating_sub(1) {
@@ -690,6 +764,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -718,6 +793,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -747,6 +823,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -784,6 +861,7 @@ mod tests {
             conceals: &[],
             spans: &spans,
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -808,12 +886,14 @@ mod tests {
                 width: 4,
                 style: Style::default().fg(Color::Yellow),
                 line_offset: 0,
+                ..Default::default()
             }),
             search_bg: Style::default(),
             signs: &[],
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -822,6 +902,127 @@ mod tests {
         assert_eq!(term.cell((2, 1)).unwrap().symbol(), "2");
         assert_eq!(term.cell((2, 2)).unwrap().symbol(), "3");
         // Text shifted right past the gutter.
+        assert_eq!(term.cell((4, 0)).unwrap().symbol(), "a");
+    }
+
+    #[test]
+    fn gutter_renders_relative_with_cursor_at_zero() {
+        // 5 rows, cursor on row 2 (0-based). Relative: row 2 → 0, row 0 → 2, row 4 → 2.
+        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        b.set_cursor(crate::Position::new(2, 0));
+        let v = vp(10, 5);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: Some(Gutter {
+                width: 4,
+                style: Style::default().fg(Color::Yellow),
+                line_offset: 0,
+                numbers: GutterNumbers::Relative { cursor_row: 2 },
+            }),
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+        };
+        let term = run_render(view, 10, 5);
+        // Width 4 = 3 number cells + 1 spacer.
+        // Row 0 (doc 0): distance from cursor (2) = 2 → "  2"
+        assert_eq!(term.cell((2, 0)).unwrap().symbol(), "2");
+        // Row 1 (doc 1): distance = 1 → "  1"
+        assert_eq!(term.cell((2, 1)).unwrap().symbol(), "1");
+        // Row 2 (doc 2): cursor row → "  0"
+        assert_eq!(term.cell((2, 2)).unwrap().symbol(), "0");
+        // Row 3 (doc 3): distance = 1 → "  1"
+        assert_eq!(term.cell((2, 3)).unwrap().symbol(), "1");
+        // Row 4 (doc 4): distance = 2 → "  2"
+        assert_eq!(term.cell((2, 4)).unwrap().symbol(), "2");
+    }
+
+    #[test]
+    fn gutter_renders_hybrid_cursor_row_absolute() {
+        // 3 rows, cursor on row 1 (0-based). Hybrid: row 1 → absolute (2),
+        // row 0 → offset 1, row 2 → offset 1.
+        let mut b = Buffer::from_str("a\nb\nc");
+        b.set_cursor(crate::Position::new(1, 0));
+        let v = vp(10, 3);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: Some(Gutter {
+                width: 4,
+                style: Style::default().fg(Color::Yellow),
+                line_offset: 0,
+                numbers: GutterNumbers::Hybrid { cursor_row: 1 },
+            }),
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+        };
+        let term = run_render(view, 10, 3);
+        // Row 0 (doc 0): offset from cursor row 1 → 1
+        assert_eq!(term.cell((2, 0)).unwrap().symbol(), "1");
+        // Row 1 (doc 1): cursor row → absolute 2
+        assert_eq!(term.cell((2, 1)).unwrap().symbol(), "2");
+        // Row 2 (doc 2): offset from cursor row 1 → 1
+        assert_eq!(term.cell((2, 2)).unwrap().symbol(), "1");
+    }
+
+    #[test]
+    fn gutter_none_paints_blank_cells() {
+        let b = Buffer::from_str("a\nb\nc");
+        let v = vp(10, 3);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: Some(Gutter {
+                width: 4,
+                style: Style::default().fg(Color::Yellow),
+                line_offset: 0,
+                numbers: GutterNumbers::None,
+            }),
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+        };
+        let term = run_render(view, 10, 3);
+        // All gutter cells (0..4) on every row should be blank spaces.
+        for row in 0..3u16 {
+            for x in 0..4u16 {
+                assert_eq!(
+                    term.cell((x, row)).unwrap().symbol(),
+                    " ",
+                    "expected blank at ({x}, {row})"
+                );
+            }
+        }
+        // Text still appears shifted right past the gutter.
         assert_eq!(term.cell((4, 0)).unwrap().symbol(), "a");
     }
 
@@ -846,6 +1047,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: Some(&pat),
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -884,6 +1086,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: Some(&pat),
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -921,12 +1124,14 @@ mod tests {
                 width: 3,
                 style: Style::default().fg(Color::DarkGray),
                 line_offset: 0,
+                ..Default::default()
             }),
             search_bg: Style::default(),
             signs: &signs,
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "E");
@@ -960,6 +1165,7 @@ mod tests {
             conceals: &conceals,
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -991,6 +1197,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -1022,6 +1229,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -1049,6 +1257,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -1076,6 +1285,7 @@ mod tests {
             conceals: &[],
             spans: &[],
             search_pattern: None,
+            non_text_style: Style::default(),
         }
     }
 
@@ -1146,6 +1356,7 @@ mod tests {
             width: 3,
             style: Style::default().fg(Color::Yellow),
             line_offset: 0,
+            ..Default::default()
         };
         let view = make_wrap_view(&b, &v, &r, Some(gutter));
         let term = run_render(view, 6, 3);
@@ -1266,6 +1477,7 @@ mod tests {
             conceals: &[],
             spans,
             search_pattern,
+            non_text_style: Style::default(),
         }
     }
 
@@ -1406,5 +1618,112 @@ mod tests {
         let cell = term.cell((1, 0)).unwrap();
         assert_eq!(cell.fg, Color::Green);
         assert_eq!(cell.bg, Color::Magenta);
+    }
+
+    /// Rows past the last buffer line paint `~` at the first text column
+    /// (vim's NonText marker). The `non_text_style` fg is applied to those
+    /// cells; all other cells on those rows stay default.
+    #[test]
+    fn tilde_marker_painted_past_eof() {
+        // 5-line buffer rendered in a 10-row viewport.
+        let b = Buffer::from_str("a\nb\nc\nd\ne");
+        let v = vp(10, 10);
+        let r = no_styles as fn(u32) -> Style;
+        let non_text_fg = Color::DarkGray;
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &r,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default().fg(non_text_fg),
+        };
+        let term = run_render(view, 10, 10);
+        // Rows 0-4 have content — first cell should NOT be `~`.
+        for row in 0..5u16 {
+            assert_ne!(
+                term.cell((0, row)).unwrap().symbol(),
+                "~",
+                "row {row} is a content row, expected no tilde"
+            );
+        }
+        // Rows 5-9 are past EOF — should have `~` at column 0 with non_text fg.
+        for row in 5..10u16 {
+            let cell = term.cell((0, row)).unwrap();
+            assert_eq!(cell.symbol(), "~", "row {row} is past EOF, expected tilde");
+            assert_eq!(
+                cell.fg, non_text_fg,
+                "row {row} tilde should use non_text_style fg"
+            );
+            // Rest of the row should be blank.
+            for x in 1..10u16 {
+                assert_eq!(
+                    term.cell((x, row)).unwrap().symbol(),
+                    " ",
+                    "row {row} col {x} after tilde should be blank"
+                );
+            }
+        }
+    }
+
+    /// When a gutter is present, rows past EOF paint a blank gutter and
+    /// `~` at the first text column (after the gutter).
+    #[test]
+    fn tilde_marker_with_gutter_past_eof() {
+        let b = Buffer::from_str("a\nb");
+        let v = vp(10, 5);
+        let r = no_styles as fn(u32) -> Style;
+        let non_text_fg = Color::DarkGray;
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &r,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: Some(Gutter {
+                width: 4,
+                style: Style::default().fg(Color::Yellow),
+                line_offset: 0,
+                numbers: GutterNumbers::Absolute,
+            }),
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default().fg(non_text_fg),
+        };
+        let term = run_render(view, 10, 5);
+        // Rows 2-4 are past EOF.
+        for row in 2..5u16 {
+            // Gutter (cols 0-3) should be blank.
+            for x in 0..4u16 {
+                assert_eq!(
+                    term.cell((x, row)).unwrap().symbol(),
+                    " ",
+                    "gutter col {x} on past-EOF row {row} should be blank"
+                );
+            }
+            // Text area starts at col 4: should have `~`.
+            let cell = term.cell((4, row)).unwrap();
+            assert_eq!(
+                cell.symbol(),
+                "~",
+                "past-EOF row {row}: expected tilde at text column"
+            );
+            assert_eq!(cell.fg, non_text_fg);
+        }
     }
 }
