@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-clipboard"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "async-trait",
  "bitflags 2.11.1",
