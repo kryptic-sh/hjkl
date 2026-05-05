@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-05-05
+
 ### Added
 
 - **Grammar-load status indicator (closes hjkl#17 acceptance gap).** The status
@@ -15,6 +17,10 @@ patch bumps.
   flight for the active buffer, and `grammar load failed: <name> — <error>` for
   5 seconds when a load fails. Both use the same takeover pattern as the
   `recording @r` indicator.
+- **`:qall` / `:qall!` / `:wqall` / `:wqall!` ex commands (closes #27).**
+  hjkl-editor 0.4.0 → 0.4.1 adds dispatch arms for the qall family that the
+  canonical-name table already advertised. Reverts the `:q!` workaround in
+  nvim-api tests + compat-oracle introduced in v0.11.3.
 
 ## [0.11.3] - 2026-05-05
 
@@ -1202,7 +1208,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.4
 [0.11.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.3
 [0.11.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.2
 [0.11.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.1
