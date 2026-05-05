@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **Compat-oracle: graduate substitute cases to a dedicated nvim-api tier
+  (closes #26).** New `corpus/nvim_api_tier.toml` holds the four substitute
+  cases that previously sat in `known_divergences.toml`; a new
+  `nvim_api_tier_passes` test asserts them via the `hjkl --nvim-api` subprocess
+  driver on every CI run (no `HJKL_ORACLE_NVIM_API` gate). The old
+  `substitute_via_nvim_api` test is removed; `known_divergences.toml` now tracks
+  no active divergences. Driver gains cross-platform binary discovery
+  (`std::env::consts::EXE_SUFFIX`) and drops the redundant `echo 1` sync barrier
+  — hjkl's `nvim_input` / `nvim_command` handlers process synchronously, so the
+  awaited response already implies a settled state.
+
 ## [0.11.4] - 2026-05-05
 
 ### Added

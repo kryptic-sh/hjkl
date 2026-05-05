@@ -103,42 +103,47 @@ async fn known_divergences_report() {
     // Never fails — report only.
 }
 
-/// When `HJKL_ORACLE_NVIM_API=1` is set, drive the substitute cases (which
-/// previously lived in `known_divergences.toml`) through `hjkl --nvim-api`
-/// and assert they pass. The cases are now in `tier1.toml` under the
-/// "substitute" group; we filter by name prefix to run only those.
+/// Drive the nvim-api tier corpus through `hjkl --nvim-api` and assert every
+/// case passes. No env gate — always runs.
 ///
-/// Run with:
-/// ```sh
-/// HJKL_ORACLE_NVIM_API=1 cargo test -p hjkl-compat-oracle substitute_via_nvim_api
-/// ```
+/// If the hjkl binary doesn't exist (e.g. bare `cargo test -p hjkl-compat-oracle`
+/// without a prior build), the test skips with an `eprintln!` rather than
+/// failing.
+///
+/// Binary resolution order:
+/// 1. `HJKL_BIN` environment variable.
+/// 2. `<workspace>/target/debug/hjkl{EXE_SUFFIX}` derived from `CARGO_MANIFEST_DIR`.
 #[tokio::test(flavor = "multi_thread")]
-async fn substitute_via_nvim_api() {
-    if std::env::var("HJKL_ORACLE_NVIM_API").as_deref() != Ok("1") {
-        eprintln!("skipping: HJKL_ORACLE_NVIM_API not set to 1");
-        return;
-    }
-
+async fn nvim_api_tier_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let corpus_path = PathBuf::from(manifest_dir).join("corpus/known_divergences.toml");
+    let corpus_path = PathBuf::from(manifest_dir).join("corpus/nvim_api_tier.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    // Run only the substitute_ cases (the ones that diverge in-process but
-    // pass via the nvim-api driver).
-    let sub_cases: Vec<_> = corpus
-        .cases
-        .iter()
-        .filter(|c| c.name.starts_with("substitute_"))
-        .collect();
+    // Resolve binary path using the same logic as hjkl_driver, but check
+    // existence here so we can skip gracefully.
+    let bin_path: std::path::PathBuf = if let Ok(v) = std::env::var("HJKL_BIN") {
+        v.into()
+    } else {
+        let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
+        std::path::Path::new(manifest_dir)
+            .parent() // crates/
+            .and_then(|p| p.parent()) // workspace root
+            .map(|p| p.join("target/debug").join(&exe_name))
+            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name))
+    };
 
-    if sub_cases.is_empty() {
-        eprintln!("no substitute_ cases found in tier1.toml");
+    if !bin_path.exists() {
+        eprintln!(
+            "skipping nvim_api_tier_passes: binary not found at {}. \
+             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN.",
+            bin_path.display()
+        );
         return;
     }
 
     let mut failures: Vec<String> = Vec::new();
 
-    for case in &sub_cases {
+    for case in &corpus.cases {
         match hjkl_compat_oracle::hjkl_driver::run_case_via_nvim_api(case).await {
             Err(e) => {
                 failures.push(format!("{}: driver error: {e}", case.name));
@@ -169,7 +174,7 @@ async fn substitute_via_nvim_api() {
 
     assert!(
         failures.is_empty(),
-        "substitute cases failed via nvim-api:\n{}",
+        "nvim_api_tier cases failed:\n{}",
         failures.join("\n")
     );
 }

@@ -108,11 +108,12 @@ pub async fn run_case_via_nvim_api(case: &OracleCase) -> anyhow::Result<HjklOutc
     let bin = std::env::var("HJKL_BIN").unwrap_or_else(|_| {
         // Derive from CARGO_MANIFEST_DIR: oracle is two levels below workspace root.
         let manifest = env!("CARGO_MANIFEST_DIR");
+        let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
         let workspace_root = std::path::Path::new(manifest)
             .parent() // crates/
             .and_then(|p| p.parent()) // workspace root
-            .map(|p| p.join("target/debug/hjkl"))
-            .unwrap_or_else(|| std::path::PathBuf::from("hjkl"));
+            .map(|p| p.join("target/debug").join(&exe_name))
+            .unwrap_or_else(|| std::path::PathBuf::from(&exe_name));
         workspace_root.to_string_lossy().into_owned()
     });
 
@@ -151,25 +152,42 @@ async fn run_case_via_nvim_api_inner(
         .await?;
 
     // 3. Apply keystrokes.
+    //
+    // Cases written as `:...<CR>` get routed through `nvim_command` so they
+    // reach `ex::run` directly. hjkl's `nvim_input` runs through the engine
+    // FSM, which (like the in-process oracle driver) does not dispatch `:`
+    // from key replay — that's a separate cmdline-mode gap. The corpus that
+    // uses this driver (`nvim_api_tier.toml`) is curated for ex-command
+    // exercises; non-`:` key sequences fall through to `nvim_input` for any
+    // future normal-mode cases.
     if !case.keys.is_empty() {
-        nvim.input(&case.keys).await?;
+        let keys = &case.keys;
+        if let Some(cmd) = keys
+            .strip_prefix(':')
+            .and_then(|s| s.strip_suffix("<CR>").or_else(|| s.strip_suffix("<cr>")))
+        {
+            nvim.command(cmd).await?;
+        } else {
+            nvim.input(keys).await?;
+        }
     }
 
-    // 4. Sync barrier.
-    nvim.command("echo 1").await?;
+    // No sync barrier needed: hjkl's `nvim_input` / `nvim_command` handlers
+    // process synchronously inside `dispatch`, so the awaited response above
+    // already implies the editor state has settled.
 
-    // 5. Read back buffer.
+    // 4. Read back buffer.
     let raw_lines = cur_buf.get_lines(0, -1, false).await?;
     let mut buf_str = raw_lines.join("\n");
     if has_trailing_newline {
         buf_str.push('\n');
     }
 
-    // 6. Read back cursor (convert from 1-based row to 0-based).
+    // 5. Read back cursor (convert from 1-based row to 0-based).
     let (nvim_row, nvim_col) = cur_win.get_cursor().await?;
     let cursor = ((nvim_row - 1) as usize, nvim_col as usize);
 
-    // 7. Read back mode.
+    // 6. Read back mode.
     let mode_pairs = nvim.get_mode().await?;
     let mode_char = mode_pairs
         .into_iter()
@@ -183,7 +201,7 @@ async fn run_case_via_nvim_api_inner(
         .unwrap_or_default();
     let mode = nvim_mode_to_string(&mode_char);
 
-    // 8. Read back default register.
+    // 7. Read back default register.
     let reg_val = nvim
         .call_function("getreg", vec![Value::from("\"")])
         .await?;

@@ -2,56 +2,11 @@
 # Each is tracked under issue #24 (engine vim-compat divergences) — see that
 # issue for status. The oracle runs these in cron CI to surface progress
 # (which still pass / which begin to pass) but failures here do NOT fail CI.
-
-# ─── Substitute ex-command cases ─────────────────────────────────────────────
-# DIVERGENCE (in-process driver): hjkl-engine's `step` function does not handle
-# the `:` key — ex commands are dispatched through `hjkl_editor::ex::run` by
-# the TUI host, not through the vim FSM. When driven by the in-process
-# hjkl_driver (key replay), `:s/foo/bar/<CR>` is seen as unrecognised Normal
-# mode keys and leaves the buffer unchanged.
 #
-# RESOLVED (nvim-api driver, issue #26 phase 3): `hjkl --nvim-api` routes
-# `nvim_command(":%s/foo/bar/g")` directly through `ex::run`, so these cases
-# pass when the oracle is driven via msgpack-rpc. Run with:
+# The substitute ex-command cases that formerly lived here have graduated to
+# corpus/nvim_api_tier.toml — they pass via `hjkl --nvim-api` and are now
+# asserted by the `nvim_api_tier_passes` test.
 #
-#   HJKL_ORACLE_NVIM_API=1 cargo test -p hjkl-compat-oracle substitute_via_nvim_api
-#
-# These cases remain here because the *in-process* oracle (tier1 CI) still
-# diverges. Moving them to tier1.toml would break `tier1_corpus_passes` which
-# uses key-replay through the vim FSM, not ex-command dispatch.
+# This file currently tracks no active divergences.
 
-# DIVERGENCE: :s/foo/bar/ — basic substitute, first match on current line
-[[cases]]
-name = "substitute_basic_first_match"
-initial_buffer = "foo foo\n"
-initial_cursor = [0, 0]
-keys = ":s/foo/bar/<CR>"
-expected_buffer = "bar foo\n"
-expected_cursor = [0, 0]
-
-# DIVERGENCE: :%s/foo/bar/g — global substitute over whole buffer
-[[cases]]
-name = "substitute_percent_global"
-initial_buffer = "foo\nfoo foo\n"
-initial_cursor = [0, 0]
-keys = ":%s/foo/bar/g<CR>"
-expected_buffer = "bar\nbar bar\n"
-expected_cursor = [1, 0]
-
-# DIVERGENCE: :s/\d\+/N/g — digit pattern using vim's \d\+ notation
-[[cases]]
-name = "substitute_digit_pattern"
-initial_buffer = "foo 123 bar 456\n"
-initial_cursor = [0, 0]
-keys = ":s/[0-9][0-9]*/N/g<CR>"
-expected_buffer = "foo N bar N\n"
-expected_cursor = [0, 0]
-
-# DIVERGENCE: :s/foo/bar/ with no match — buffer unchanged, cursor unchanged
-[[cases]]
-name = "substitute_no_match_noop"
-initial_buffer = "hello world\n"
-initial_cursor = [0, 0]
-keys = ":s/xyz/bar/<CR>"
-expected_buffer = "hello world\n"
-expected_cursor = [0, 0]
+cases = []
