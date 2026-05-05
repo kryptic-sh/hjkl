@@ -233,6 +233,27 @@ impl App {
                                 KeyCode::Char('c') => {
                                     self.close_focused_window();
                                 }
+                                // Ctrl-w q: vim parity — close window when multiple,
+                                // quit app when last.
+                                KeyCode::Char('q') => {
+                                    if self.layout.leaves().len() > 1 {
+                                        self.close_focused_window();
+                                    } else {
+                                        self.exit_requested = true;
+                                    }
+                                }
+                                // Ctrl-w o: close all windows except focused (:only).
+                                KeyCode::Char('o') => {
+                                    self.only_focused_window();
+                                }
+                                // Ctrl-w x / r / R: swap focused leaf with sibling.
+                                KeyCode::Char('x') | KeyCode::Char('r') | KeyCode::Char('R') => {
+                                    self.swap_with_sibling();
+                                }
+                                // Ctrl-w n: horizontal split with empty buffer (:new).
+                                KeyCode::Char('n') => {
+                                    self.dispatch_ex("new");
+                                }
                                 KeyCode::Char('+') => {
                                     self.resize_height(1);
                                 }

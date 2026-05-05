@@ -517,6 +517,29 @@ impl App {
         }
     }
 
+    /// Close all windows except the focused one. Replaces the layout with a
+    /// single leaf and drops the `Option<Window>` entries for all other windows.
+    pub fn only_focused_window(&mut self) {
+        let focused = self.focused_window;
+        let all_leaves = self.layout.leaves();
+        for id in all_leaves {
+            if id != focused {
+                self.windows[id] = None;
+            }
+        }
+        self.layout = window::LayoutTree::Leaf(focused);
+        self.status_message = Some("only".into());
+    }
+
+    /// Swap the focused leaf with its sibling in the immediately enclosing
+    /// Split. No-op (with no message) when the focused window is the only one.
+    pub fn swap_with_sibling(&mut self) {
+        let focused = self.focused_window;
+        if self.layout.swap_with_sibling(focused) {
+            self.status_message = Some("swap".into());
+        }
+    }
+
     /// Close the focused window.  Fails (with status message) when only one
     /// window remains.  On success the layout collapses and focus moves to the
     /// sibling that took over.

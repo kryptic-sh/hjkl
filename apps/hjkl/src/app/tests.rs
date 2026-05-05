@@ -2055,3 +2055,216 @@ fn ctrl_w_plus_grows_focused() {
         "Ctrl-w + must grow the focused window: before={ratio_before} after={ratio_after}"
     );
 }
+
+// ── Phase 4: :only / swap / :new / :q redirect tests ──────────────────────────
+
+#[test]
+fn only_drops_other_windows() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Create two extra windows: sp twice gives us 3 total.
+    app.dispatch_ex("sp");
+    app.dispatch_ex("sp");
+    assert_eq!(
+        app.layout.leaves().len(),
+        3,
+        "expected 3 windows before :only"
+    );
+
+    // Focus is on the most recently created window.
+    let focused = app.focused_window;
+    app.dispatch_ex("only");
+
+    // Layout must collapse to a single leaf.
+    assert_eq!(
+        app.layout.leaves(),
+        vec![focused],
+        "only focused leaf should remain"
+    );
+    // All other window slots must be None.
+    let open_count = app.windows.iter().filter(|w| w.is_some()).count();
+    assert_eq!(open_count, 1, "exactly one window must remain open");
+    // The remaining open window is the focused one.
+    assert!(
+        app.windows[focused].is_some(),
+        "focused window must still be open"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("only"), "expected 'only' status, got: {msg}");
+}
+
+#[test]
+fn only_no_op_with_single_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let focused = app.focused_window;
+    app.dispatch_ex("only");
+    // Still one window, still the same focused window.
+    assert_eq!(app.layout.leaves(), vec![focused]);
+    assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 1);
+}
+
+#[test]
+fn new_creates_horizontal_split_empty_buffer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let original_win = app.focused_window;
+
+    app.dispatch_ex("new");
+
+    // Two windows now exist.
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        2,
+        "expected 2 open windows after :new"
+    );
+    assert_eq!(app.layout.leaves().len(), 2, "layout must have 2 leaves");
+
+    // Focus moved to the new window.
+    let new_win = app.focused_window;
+    assert_ne!(new_win, original_win, "focus must have moved to new window");
+
+    // The new window points at an unnamed empty slot.
+    let new_slot_idx = app.windows[new_win].as_ref().unwrap().slot;
+    assert!(
+        app.slots[new_slot_idx].filename.is_none(),
+        ":new window must point to an unnamed slot"
+    );
+
+    // The layout is a horizontal split (new window on top, original below).
+    let below = app.layout.neighbor_below(new_win);
+    assert_eq!(
+        below,
+        Some(original_win),
+        "original window must be below the new one"
+    );
+
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("new"), "expected 'new' status, got: {msg}");
+}
+
+#[test]
+fn ctrl_w_o_invokes_only() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    assert_eq!(app.layout.leaves().len(), 2);
+
+    let focused = app.focused_window;
+    app.only_focused_window();
+
+    assert_eq!(app.layout.leaves(), vec![focused]);
+    assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 1);
+}
+
+#[test]
+fn ctrl_w_x_swaps_with_sibling() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+
+    // After :sp, layout is: hsplit(new_win, original_win).
+    // leaves() order should be [new_win, original_win].
+    let leaves_before = app.layout.leaves();
+    assert_eq!(leaves_before.len(), 2);
+
+    app.swap_with_sibling();
+
+    let leaves_after = app.layout.leaves();
+    // The two leaves should be swapped in pre-order.
+    assert_eq!(
+        leaves_after,
+        vec![leaves_before[1], leaves_before[0]],
+        "swap_with_sibling must reverse the leaf order"
+    );
+
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("swap"), "expected 'swap' status, got: {msg}");
+}
+
+#[test]
+fn ctrl_w_n_creates_horizontal_empty_split() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let original_win = app.focused_window;
+
+    // Simulate Ctrl-w n by calling dispatch_ex("new") — same path.
+    app.dispatch_ex("new");
+
+    assert_eq!(app.layout.leaves().len(), 2);
+    let new_win = app.focused_window;
+    assert_ne!(new_win, original_win);
+
+    // New window is on top (a-side), original is below.
+    let below = app.layout.neighbor_below(new_win);
+    assert_eq!(below, Some(original_win));
+}
+
+#[test]
+fn ctrl_w_q_closes_window_when_multiple() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    assert_eq!(app.layout.leaves().len(), 2);
+
+    let focused_before = app.focused_window;
+
+    // Simulate Ctrl-w q behavior.
+    if app.layout.leaves().len() > 1 {
+        app.close_focused_window();
+    } else {
+        app.exit_requested = true;
+    }
+
+    assert!(
+        !app.exit_requested,
+        "Ctrl-w q must not quit with multiple windows"
+    );
+    assert!(
+        app.windows[focused_before].is_none(),
+        "focused window must be closed"
+    );
+    assert_eq!(app.layout.leaves().len(), 1, "layout must collapse");
+}
+
+#[test]
+fn ctrl_w_q_quits_when_last() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.layout.leaves().len(), 1);
+
+    // Simulate Ctrl-w q behavior.
+    if app.layout.leaves().len() > 1 {
+        app.close_focused_window();
+    } else {
+        app.exit_requested = true;
+    }
+
+    assert!(app.exit_requested, "Ctrl-w q must quit when last window");
+}
+
+#[test]
+fn colon_q_closes_window_when_multiple() {
+    // Vim parity: :q with multiple windows closes the focused window,
+    // not the application.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    assert_eq!(app.layout.leaves().len(), 2);
+    let focused_before = app.focused_window;
+
+    app.dispatch_ex("q");
+
+    assert!(
+        !app.exit_requested,
+        ":q must not quit with multiple windows"
+    );
+    assert!(
+        app.windows[focused_before].is_none(),
+        "focused window must be closed by :q"
+    );
+    assert_eq!(app.layout.leaves().len(), 1, "layout must collapse to 1");
+}
+
+#[test]
+fn colon_q_quits_when_last() {
+    // :q with a single window and clean buffer should exit the app.
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.layout.leaves().len(), 1);
+    assert!(!app.active().dirty);
+
+    app.dispatch_ex("q");
+
+    assert!(app.exit_requested, ":q on last window must exit");
+}

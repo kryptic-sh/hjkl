@@ -324,6 +324,33 @@ impl LayoutTree {
         }
     }
 
+    /// Swap the two children of the deepest Split that directly contains
+    /// `Leaf(id)` as one of its `a` or `b` children.
+    ///
+    /// Returns `true` if the swap was applied (i.e. there is an enclosing
+    /// Split — `false` when `id` is the only window).
+    pub fn swap_with_sibling(&mut self, id: WindowId) -> bool {
+        match self {
+            LayoutTree::Leaf(_) => false,
+            LayoutTree::Split { a, b, .. } => {
+                let a_is_focused_leaf = matches!(a.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id);
+                let b_is_focused_leaf = matches!(b.as_ref(), LayoutTree::Leaf(leaf) if *leaf == id);
+                if a_is_focused_leaf || b_is_focused_leaf {
+                    std::mem::swap(a, b);
+                    return true;
+                }
+                // Recurse into whichever side contains id.
+                if a.contains(id) {
+                    return a.swap_with_sibling(id);
+                }
+                if b.contains(id) {
+                    return b.swap_with_sibling(id);
+                }
+                false
+            }
+        }
+    }
+
     /// Remove the leaf `id` from the tree.  When its parent `Split` is left
     /// with only the sibling, that split is replaced by the sibling subtree
     /// (collapse).
@@ -800,6 +827,40 @@ mod tests {
             (visited_ratios[1] - 0.7).abs() < 1e-5,
             "inner ratio should be 0.7"
         );
+    }
+
+    // ── swap_with_sibling() ───────────────────────────────────────────────────
+
+    #[test]
+    fn swap_with_sibling_swaps_two_leaves() {
+        // hsplit: a=0 (top), b=1 (bottom). Swap from 0 — should produce a=1, b=0.
+        let mut tree = hsplit(0.5, leaf(0), leaf(1));
+        let swapped = tree.swap_with_sibling(0);
+        assert!(swapped, "swap should succeed in a two-leaf split");
+        assert_eq!(tree.leaves(), vec![1, 0], "leaves should be swapped");
+    }
+
+    #[test]
+    fn swap_with_sibling_in_nested_split_swaps_at_focused_parent() {
+        // Layout: hsplit( leaf(0), vsplit( leaf(1), leaf(2) ) )
+        // Focused = 1. Its direct parent is the inner vsplit.
+        // Swap should swap 1 and 2 within the vsplit, not the outer hsplit.
+        let mut tree = hsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
+        let swapped = tree.swap_with_sibling(1);
+        assert!(swapped, "swap should succeed");
+        // Pre-order after: 0, then inner vsplit now has a=2, b=1 → [0, 2, 1]
+        assert_eq!(
+            tree.leaves(),
+            vec![0, 2, 1],
+            "inner leaves should be swapped"
+        );
+    }
+
+    #[test]
+    fn swap_with_sibling_returns_false_for_only_leaf() {
+        let mut tree = leaf(0);
+        let swapped = tree.swap_with_sibling(0);
+        assert!(!swapped, "single leaf has no sibling to swap with");
     }
 
     // ── mixed_layout_navigation ───────────────────────────────────────────────
