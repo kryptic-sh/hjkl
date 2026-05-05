@@ -410,6 +410,25 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── Macro recording indicator ───────────────────────────────────────────
+    // Vim shows "recording @r" while `q{reg}` is active. Render it as a
+    // status-message-equivalent so it visually pre-empts the lualine row,
+    // matching vim's bottom-line takeover.
+    if let Some(reg) = app.active().editor.recording_register() {
+        let content = format!(" recording @{reg}");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.surface_bg)
+                    .fg(app.theme.ui.text)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
+        );
+    }
+
     // ── Normal status line (lualine-style colored sections) ─────────────────
     // Palette pulled from app theme (themes/ui-dark.toml). Mode colors map
     // to website --blue / --green / --accent so the status bar visually
