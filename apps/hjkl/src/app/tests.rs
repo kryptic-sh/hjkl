@@ -1850,3 +1850,208 @@ fn ctrl_w_shift_w_cycles_previous() {
         "two focus_previous calls must wrap around"
     );
 }
+
+// ── Phase 3: window resize tests ─────────────────────────────────────────────
+
+/// Inject a Rect into the innermost Split node that contains `id`.
+/// Used instead of running a full render so resize methods have a
+/// populated `last_rect` to work from.
+fn inject_split_rect(
+    layout: &mut window::LayoutTree,
+    id: window::WindowId,
+    rect: ratatui::layout::Rect,
+) {
+    if let window::LayoutTree::Split {
+        a, b, last_rect, ..
+    } = layout
+        && (a.contains(id) || b.contains(id))
+    {
+        *last_rect = Some(rect);
+        if let window::LayoutTree::Split { .. } = a.as_mut() {
+            inject_split_rect(a, id, rect);
+        }
+        if let window::LayoutTree::Split { .. } = b.as_mut() {
+            inject_split_rect(b, id, rect);
+        }
+    }
+}
+
+#[test]
+fn resize_height_grows_focused_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    // ratio starts at 0.5. Inject a 40-row rect so delta=2 is meaningful.
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 40,
+    };
+    inject_split_rect(&mut app.layout, app.focused_window, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    app.resize_height(2);
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    // focused is in `a` (top), growing by 2 rows of 40 increases ratio.
+    assert!(
+        ratio_after > ratio_before,
+        "ratio should grow when resizing focused (top) window: before={ratio_before} after={ratio_after}"
+    );
+}
+
+#[test]
+fn resize_height_clamps_at_minimum() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 10,
+    };
+    inject_split_rect(&mut app.layout, app.focused_window, rect);
+
+    // Try to shrink by far more than available — should clamp, not underflow.
+    app.resize_height(-1000);
+
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+    // ratio must be at least 0.01 (our clamp) and sibling must have ≥ 1 row.
+    assert!(ratio >= 0.01, "ratio must be >= 0.01 after clamp: {ratio}");
+    assert!(
+        ratio < 1.0,
+        "ratio must be < 1.0 (sibling needs at least 1 row): {ratio}"
+    );
+}
+
+#[test]
+fn resize_width_grows_focused_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("vsp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    inject_split_rect(&mut app.layout, app.focused_window, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    app.resize_width(4);
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    // focused is in `a` (left), growing by 4 columns of 80 increases ratio.
+    assert!(
+        ratio_after > ratio_before,
+        "ratio should grow when resizing focused (left) window: before={ratio_before} after={ratio_after}"
+    );
+}
+
+#[test]
+fn equalize_layout_resets_uneven_splits() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+
+    // Manually skew the ratio.
+    if let window::LayoutTree::Split { ratio, .. } = &mut app.layout {
+        *ratio = 0.3;
+    }
+
+    app.equalize_layout();
+
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+    assert!(
+        (ratio - 0.5).abs() < 1e-5,
+        "equalize should reset ratio to 0.5, got {ratio}"
+    );
+}
+
+#[test]
+fn maximize_height_collapses_siblings() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    inject_split_rect(&mut app.layout, app.focused_window, rect);
+
+    app.maximize_height();
+
+    let ratio = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+    // Focused is in `a` (top). Maximized means ratio ≈ (height-1)/height = 23/24.
+    let expected = 23.0_f32 / 24.0;
+    assert!(
+        (ratio - expected).abs() < 0.05,
+        "maximize_height should set ratio near {expected}, got {ratio}"
+    );
+}
+
+#[test]
+fn ctrl_w_plus_grows_focused() {
+    // Full keyboard path: simulate Ctrl-w then '+' through the pending_window_motion
+    // machinery by calling the public App methods directly (event_loop integration
+    // is hard to test without a terminal; the key dispatch calls resize_height(1)).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 40,
+    };
+    inject_split_rect(&mut app.layout, app.focused_window, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    // This is what event_loop.rs dispatches for Ctrl-w '+'.
+    app.resize_height(1);
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = &app.layout {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+    assert!(
+        ratio_after > ratio_before,
+        "Ctrl-w + must grow the focused window: before={ratio_before} after={ratio_after}"
+    );
+}

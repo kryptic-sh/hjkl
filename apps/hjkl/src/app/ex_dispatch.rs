@@ -6,6 +6,26 @@ use std::sync::Arc;
 
 use super::{App, DiskState};
 
+/// Parse a resize argument string into a line/column delta.
+///
+/// Accepts:
+/// - `"+N"` → `+N` (relative grow)
+/// - `"-N"` → `-N` (relative shrink)
+/// - `"N"` → treated as a relative delta for simplicity
+fn parse_resize_arg(arg: &str) -> Option<i32> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    if let Some(rest) = arg.strip_prefix('+') {
+        rest.trim().parse::<i32>().ok()
+    } else if let Some(rest) = arg.strip_prefix('-') {
+        rest.trim().parse::<i32>().ok().map(|n| -n)
+    } else {
+        arg.parse::<i32>().ok()
+    }
+}
+
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
@@ -255,6 +275,38 @@ impl App {
             return;
         }
 
+        // `:resize [+|-]N` — adjust focused window height.
+        // `:vertical resize [+|-]N` / `:vert res [+|-]N` — adjust width.
+        let (is_resize, is_vertical) = if cmd == "resize" || cmd.starts_with("resize ") {
+            (true, false)
+        } else if cmd.starts_with("vertical resize ")
+            || cmd.starts_with("vert res ")
+            || cmd.starts_with("vert resize ")
+        {
+            (true, true)
+        } else {
+            (false, false)
+        };
+        if is_resize {
+            let arg = cmd
+                .trim_start_matches("vertical")
+                .trim_start_matches("vert")
+                .trim_start_matches("resize")
+                .trim_start_matches("res")
+                .trim();
+            if let Some(delta) = parse_resize_arg(arg) {
+                if is_vertical {
+                    self.resize_width(delta);
+                } else {
+                    self.resize_height(delta);
+                }
+                self.status_message = Some("resize".into());
+            } else {
+                self.status_message = Some("E: invalid resize argument".into());
+            }
+            return;
+        }
+
         let active_slot = self.focused_slot_idx();
         match ex::run(&mut self.slots[active_slot].editor, cmd) {
             ExEffect::None => {}
@@ -374,6 +426,7 @@ impl App {
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Leaf(new_win_id)),
                 b: Box::new(LayoutTree::Leaf(id)),
+                last_rect: None,
             });
         self.focused_window = new_win_id;
         self.status_message = Some("split".into());
@@ -425,6 +478,7 @@ impl App {
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Leaf(new_win_id)),
                 b: Box::new(LayoutTree::Leaf(id)),
+                last_rect: None,
             });
         self.focused_window = new_win_id;
         self.status_message = Some("vsplit".into());
@@ -496,6 +550,7 @@ impl App {
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Leaf(new_win_id)),
                 b: Box::new(LayoutTree::Leaf(id)),
+                last_rect: None,
             });
         self.focused_window = new_win_id;
         self.status_message = Some("vnew".into());

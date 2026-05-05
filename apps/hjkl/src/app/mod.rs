@@ -535,6 +535,115 @@ impl App {
         }
     }
 
+    // ── Window size manipulation ───────────────────────────────────────────
+
+    /// Adjust the focused window's height by `delta` lines. Positive grows,
+    /// negative shrinks. Clamps so neither sibling drops below 1 line.
+    /// No-op when there is no enclosing Horizontal split or last_rect is None.
+    pub fn resize_height(&mut self, delta: i32) {
+        use window::SplitDir;
+        if let Some((ratio, Some(rect), in_a)) = self
+            .layout
+            .enclosing_split_mut(self.focused_window, SplitDir::Horizontal)
+        {
+            let parent_h = rect.height as i32;
+            if parent_h < 2 {
+                return;
+            }
+            let current_focused_height = if in_a {
+                (parent_h as f32 * *ratio) as i32
+            } else {
+                (parent_h as f32 * (1.0 - *ratio)) as i32
+            };
+            let new_focused = (current_focused_height + delta).clamp(1, parent_h - 1);
+            let new_ratio = if in_a {
+                new_focused as f32 / parent_h as f32
+            } else {
+                (parent_h - new_focused) as f32 / parent_h as f32
+            };
+            *ratio = new_ratio.clamp(0.01, 0.99);
+        }
+    }
+
+    /// Adjust the focused window's width by `delta` columns. Positive grows,
+    /// negative shrinks. Clamps so neither sibling drops below 1 column.
+    /// No-op when there is no enclosing Vertical split or last_rect is None.
+    pub fn resize_width(&mut self, delta: i32) {
+        use window::SplitDir;
+        if let Some((ratio, Some(rect), in_a)) = self
+            .layout
+            .enclosing_split_mut(self.focused_window, SplitDir::Vertical)
+        {
+            let parent_w = rect.width as i32;
+            if parent_w < 2 {
+                return;
+            }
+            let current_focused_width = if in_a {
+                (parent_w as f32 * *ratio) as i32
+            } else {
+                (parent_w as f32 * (1.0 - *ratio)) as i32
+            };
+            let new_focused = (current_focused_width + delta).clamp(1, parent_w - 1);
+            let new_ratio = if in_a {
+                new_focused as f32 / parent_w as f32
+            } else {
+                (parent_w - new_focused) as f32 / parent_w as f32
+            };
+            *ratio = new_ratio.clamp(0.01, 0.99);
+        }
+    }
+
+    /// Equalize all splits to 0.5 ratio.
+    pub fn equalize_layout(&mut self) {
+        self.layout.equalize_all();
+    }
+
+    /// Maximize focused window's height — set every enclosing Horizontal
+    /// split so the focused branch gets as much height as possible (siblings
+    /// collapse to 1 line each).
+    pub fn maximize_height(&mut self) {
+        use window::SplitDir;
+        let focused = self.focused_window;
+        self.layout
+            .for_each_ancestor(focused, &mut |dir, ratio, in_a, rect| {
+                if dir != SplitDir::Horizontal {
+                    return;
+                }
+                if let Some(r) = rect {
+                    let h = r.height as f32;
+                    if h < 2.0 {
+                        return;
+                    }
+                    let max_branch = (h - 1.0) / h;
+                    let min_branch = 1.0 / h;
+                    *ratio = if in_a { max_branch } else { min_branch };
+                }
+            });
+    }
+
+    /// Maximize focused window's width — set every enclosing Vertical split
+    /// so the focused branch gets as much width as possible (siblings collapse
+    /// to 1 column each).
+    pub fn maximize_width(&mut self) {
+        use window::SplitDir;
+        let focused = self.focused_window;
+        self.layout
+            .for_each_ancestor(focused, &mut |dir, ratio, in_a, rect| {
+                if dir != SplitDir::Vertical {
+                    return;
+                }
+                if let Some(r) = rect {
+                    let w = r.width as f32;
+                    if w < 2.0 {
+                        return;
+                    }
+                    let max_branch = (w - 1.0) / w;
+                    let min_branch = 1.0 / w;
+                    *ratio = if in_a { max_branch } else { min_branch };
+                }
+            });
+    }
+
     /// Build a fresh [`App`], optionally loading `filename` from disk.
     ///
     /// - File found → content seeded into buffer, dirty = false.

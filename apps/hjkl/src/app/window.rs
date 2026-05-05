@@ -42,6 +42,10 @@ pub enum LayoutTree {
         ratio: f32,
         a: Box<LayoutTree>,
         b: Box<LayoutTree>,
+        /// Rect this split last occupied. Filled by render_layout each frame;
+        /// read by resize commands to convert line/col deltas to ratio updates.
+        /// None before the first render.
+        last_rect: Option<ratatui::layout::Rect>,
     },
 }
 
@@ -235,6 +239,91 @@ impl LayoutTree {
         }
     }
 
+    /// Walk the tree looking for the innermost enclosing Split with matching
+    /// `dir` that contains `id`. Returns a mutable reference to the ratio,
+    /// a copy of the last_rect, and whether the focused leaf is in `a`.
+    /// Returns None if no such enclosing Split exists.
+    pub fn enclosing_split_mut(
+        &mut self,
+        id: WindowId,
+        dir: SplitDir,
+    ) -> Option<(&mut f32, Option<ratatui::layout::Rect>, bool)> {
+        match self {
+            LayoutTree::Leaf(_) => None,
+            LayoutTree::Split {
+                dir: my_dir,
+                ratio,
+                a,
+                b,
+                last_rect,
+            } => {
+                let in_a = a.contains(id);
+                let in_b = b.contains(id);
+                if !in_a && !in_b {
+                    return None;
+                }
+
+                let my_dir = *my_dir;
+                let saved_rect = *last_rect;
+
+                // Try deeper first (innermost wins).
+                let inner = if in_a {
+                    a.enclosing_split_mut(id, dir)
+                } else {
+                    b.enclosing_split_mut(id, dir)
+                };
+                if inner.is_some() {
+                    return inner;
+                }
+
+                // No deeper match — am I a candidate?
+                if my_dir == dir {
+                    Some((ratio, saved_rect, in_a))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Reset all splits in the tree to 0.5 ratio.
+    pub fn equalize_all(&mut self) {
+        if let LayoutTree::Split { ratio, a, b, .. } = self {
+            *ratio = 0.5;
+            a.equalize_all();
+            b.equalize_all();
+        }
+    }
+
+    /// For each enclosing Split on the path from root to leaf `id`, invoke
+    /// `f` with the split's mutable state. Order: outermost first.
+    pub fn for_each_ancestor<F>(&mut self, id: WindowId, f: &mut F)
+    where
+        F: FnMut(SplitDir, &mut f32, bool, Option<ratatui::layout::Rect>),
+    {
+        if let LayoutTree::Split {
+            dir,
+            ratio,
+            a,
+            b,
+            last_rect,
+        } = self
+        {
+            let in_a = a.contains(id);
+            let in_b = b.contains(id);
+            if !in_a && !in_b {
+                return;
+            }
+            // Outermost first: call f on this node before recursing.
+            f(*dir, ratio, in_a, *last_rect);
+            if in_a {
+                a.for_each_ancestor(id, f);
+            } else {
+                b.for_each_ancestor(id, f);
+            }
+        }
+    }
+
     /// Remove the leaf `id` from the tree.  When its parent `Split` is left
     /// with only the sibling, that split is replaced by the sibling subtree
     /// (collapse).
@@ -319,6 +408,7 @@ mod tests {
             ratio,
             a: Box::new(a),
             b: Box::new(b),
+            last_rect: None,
         }
     }
 
@@ -328,6 +418,39 @@ mod tests {
             ratio,
             a: Box::new(a),
             b: Box::new(b),
+            last_rect: None,
+        }
+    }
+
+    /// Build a horizontal split with a pre-filled last_rect for resize tests.
+    fn hsplit_with_rect(
+        ratio: f32,
+        a: LayoutTree,
+        b: LayoutTree,
+        rect: ratatui::layout::Rect,
+    ) -> LayoutTree {
+        LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio,
+            a: Box::new(a),
+            b: Box::new(b),
+            last_rect: Some(rect),
+        }
+    }
+
+    /// Build a vertical split with a pre-filled last_rect for resize tests.
+    fn vsplit_with_rect(
+        ratio: f32,
+        a: LayoutTree,
+        b: LayoutTree,
+        rect: ratatui::layout::Rect,
+    ) -> LayoutTree {
+        LayoutTree::Split {
+            dir: SplitDir::Vertical,
+            ratio,
+            a: Box::new(a),
+            b: Box::new(b),
+            last_rect: Some(rect),
         }
     }
 
@@ -554,6 +677,129 @@ mod tests {
         let tree = vsplit(0.5, leaf(0), leaf(1));
         assert_eq!(tree.next_leaf(99), None);
         assert_eq!(tree.prev_leaf(99), None);
+    }
+
+    // ── enclosing_split_mut() ────────────────────────────────────────────────
+
+    #[test]
+    fn enclosing_split_mut_returns_innermost() {
+        // outer: hsplit 0 / inner: hsplit 1 / 2
+        // Querying for id=1 should return the inner split (ratio=0.6), not the outer (ratio=0.4).
+        // Pre-fill rects to verify last_rect is propagated correctly.
+        let outer_rect = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 40,
+        };
+        let inner_rect = ratatui::layout::Rect {
+            x: 0,
+            y: 20,
+            width: 80,
+            height: 20,
+        };
+        let mut tree = hsplit_with_rect(
+            0.4,
+            leaf(0),
+            hsplit_with_rect(0.6, leaf(1), leaf(2), inner_rect),
+            outer_rect,
+        );
+        let result = tree.enclosing_split_mut(1, SplitDir::Horizontal);
+        assert!(result.is_some(), "should find enclosing horizontal split");
+        let (ratio, rect, in_a) = result.unwrap();
+        assert!(
+            (*ratio - 0.6).abs() < 1e-5,
+            "innermost split ratio should be 0.6, got {ratio}"
+        );
+        assert_eq!(
+            rect,
+            Some(inner_rect),
+            "should return inner rect, not outer"
+        );
+        assert!(
+            in_a,
+            "id=1 is in the 'a' (left/top) side of the inner split"
+        );
+    }
+
+    #[test]
+    fn enclosing_split_mut_skips_wrong_dir() {
+        // vsplit at root containing a leaf — asking for Horizontal should find nothing.
+        let mut tree = vsplit(0.5, leaf(0), leaf(1));
+        let result = tree.enclosing_split_mut(0, SplitDir::Horizontal);
+        assert!(
+            result.is_none(),
+            "should not match a Vertical split for Horizontal dir"
+        );
+    }
+
+    #[test]
+    fn enclosing_split_mut_returns_none_for_only_leaf() {
+        let mut tree = leaf(0);
+        let result = tree.enclosing_split_mut(0, SplitDir::Horizontal);
+        assert!(result.is_none(), "single leaf has no enclosing split");
+    }
+
+    #[test]
+    fn equalize_all_resets_nested_splits_to_half() {
+        // Two nested hsplits with non-0.5 ratios — equalize must reset both.
+        let mut tree = hsplit(0.3, leaf(0), hsplit(0.7, leaf(1), leaf(2)));
+        tree.equalize_all();
+        // Walk and verify every split is now 0.5.
+        fn check_all_half(t: &LayoutTree) {
+            if let LayoutTree::Split { ratio, a, b, .. } = t {
+                assert!(
+                    (ratio - 0.5).abs() < 1e-5,
+                    "ratio should be 0.5, got {ratio}"
+                );
+                check_all_half(a);
+                check_all_half(b);
+            }
+        }
+        check_all_half(&tree);
+    }
+
+    #[test]
+    fn for_each_ancestor_visits_outermost_first() {
+        // outer vsplit (ratio=0.3) containing inner hsplit (ratio=0.7) at leaf 1 / leaf 2.
+        // Asking from leaf 1 — should visit outer vsplit, then inner hsplit, in that order.
+        let outer_rect = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let inner_rect = ratatui::layout::Rect {
+            x: 24,
+            y: 0,
+            width: 56,
+            height: 24,
+        };
+        let mut tree = vsplit_with_rect(
+            0.3,
+            leaf(0),
+            hsplit_with_rect(0.7, leaf(1), leaf(2), inner_rect),
+            outer_rect,
+        );
+        let mut visited_dirs: Vec<SplitDir> = Vec::new();
+        let mut visited_ratios: Vec<f32> = Vec::new();
+        tree.for_each_ancestor(1, &mut |dir, ratio, _in_a, _rect| {
+            visited_dirs.push(dir);
+            visited_ratios.push(*ratio);
+        });
+        assert_eq!(
+            visited_dirs,
+            vec![SplitDir::Vertical, SplitDir::Horizontal],
+            "outermost (Vertical) should be visited first"
+        );
+        assert!(
+            (visited_ratios[0] - 0.3).abs() < 1e-5,
+            "outer ratio should be 0.3"
+        );
+        assert!(
+            (visited_ratios[1] - 0.7).abs() < 1e-5,
+            "inner ratio should be 0.7"
+        );
     }
 
     // ── mixed_layout_navigation ───────────────────────────────────────────────

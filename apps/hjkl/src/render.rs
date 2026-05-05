@@ -78,17 +78,24 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
 }
 
 /// Walk the layout tree and render each leaf window into its allocated rect.
-fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &window::LayoutTree) {
+/// Takes `&mut LayoutTree` so that Split nodes can record their `last_rect`
+/// for use by resize commands in later phases.
+fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut window::LayoutTree) {
     match layout {
         window::LayoutTree::Leaf(id) => render_window(frame, app, area, *id),
-        window::LayoutTree::Split { dir, ratio, a, b } => {
+        window::LayoutTree::Split {
+            dir,
+            ratio,
+            a,
+            b,
+            last_rect,
+        } => {
+            // Record the rect this split occupied so resize commands can
+            // convert line/column deltas to ratio updates.
+            *last_rect = Some(area);
             let (rect_a, rect_b) = split_rect(area, *dir, *ratio);
-            // Clone sub-trees so we can pass them without holding a borrow
-            // on `app` while calling the recursive `render_layout`.
-            let a_clone = (**a).clone();
-            let b_clone = (**b).clone();
-            render_layout(frame, app, rect_a, &a_clone);
-            render_layout(frame, app, rect_b, &b_clone);
+            render_layout(frame, app, rect_a, a);
+            render_layout(frame, app, rect_b, b);
         }
     }
 }
@@ -290,9 +297,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         buffer_line(frame, app, bl_area);
     }
 
-    // Walk the window tree and render each pane.
-    let layout = app.layout.clone();
-    render_layout(frame, app, buf_area, &layout);
+    // Walk the window tree and render each pane. Swap the layout out so
+    // we can pass it as `&mut` to render_layout (which writes last_rect on
+    // Split nodes) while also holding `&mut App` for render_window. After
+    // the call the mutated layout is swapped back.
+    let mut layout = std::mem::replace(&mut app.layout, window::LayoutTree::Leaf(usize::MAX));
+    render_layout(frame, app, buf_area, &mut layout);
+    app.layout = layout;
 
     status_line(frame, app, status_area);
 

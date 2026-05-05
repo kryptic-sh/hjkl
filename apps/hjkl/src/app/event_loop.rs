@@ -233,6 +233,27 @@ impl App {
                                 KeyCode::Char('c') => {
                                     self.close_focused_window();
                                 }
+                                KeyCode::Char('+') => {
+                                    self.resize_height(1);
+                                }
+                                KeyCode::Char('-') => {
+                                    self.resize_height(-1);
+                                }
+                                KeyCode::Char('>') => {
+                                    self.resize_width(1);
+                                }
+                                KeyCode::Char('<') => {
+                                    self.resize_width(-1);
+                                }
+                                KeyCode::Char('=') => {
+                                    self.equalize_layout();
+                                }
+                                KeyCode::Char('_') => {
+                                    self.maximize_height();
+                                }
+                                KeyCode::Char('|') => {
+                                    self.maximize_width();
+                                }
                                 _ => {} // unknown second key — consume and ignore
                             }
                             continue;
