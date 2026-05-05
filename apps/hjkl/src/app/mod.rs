@@ -21,6 +21,7 @@ mod prompt;
 mod syntax_glue;
 #[cfg(test)]
 mod tests;
+pub mod window;
 
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
@@ -182,8 +183,17 @@ impl BufferSlot {
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
     slots: Vec<BufferSlot>,
-    /// Index into `slots` of the currently active buffer.
-    active: usize,
+    /// Window list. Indexed by `WindowId`. Entries are `Option<Window>`;
+    /// closed windows are set to `None` so ids stay stable.
+    pub windows: Vec<Option<window::Window>>,
+    /// Spatial layout tree. Leaves reference `WindowId`s into `windows`.
+    pub layout: window::LayoutTree,
+    /// Id of the currently focused window.
+    pub focused_window: window::WindowId,
+    /// Counter for the next fresh `WindowId`.
+    next_window_id: window::WindowId,
+    /// `true` while waiting for the second key of a `Ctrl-w` chord.
+    pub pending_window_motion: bool,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
     /// the last slot consume the next value.
@@ -374,21 +384,30 @@ pub(super) fn build_slot(
 }
 
 impl App {
+    /// Slot index for the focused window.
+    fn focused_slot_idx(&self) -> usize {
+        self.windows[self.focused_window]
+            .as_ref()
+            .expect("focused_window must point to an open window")
+            .slot
+    }
+
     /// Return a shared reference to the active buffer slot.
     pub fn active(&self) -> &BufferSlot {
-        &self.slots[self.active]
+        &self.slots[self.focused_slot_idx()]
     }
 
     /// Return a mutable reference to the active buffer slot.
     pub fn active_mut(&mut self) -> &mut BufferSlot {
-        &mut self.slots[self.active]
+        let slot_idx = self.focused_slot_idx();
+        &mut self.slots[slot_idx]
     }
 
     /// The name of the grammar currently being loaded for the active buffer,
     /// if any. Used by the renderer to show the `loading grammar: <name>…`
     /// status-line indicator.
     pub fn pending_grammar_name_for_active(&self) -> Option<&str> {
-        let id = self.slots[self.active].buffer_id;
+        let id = self.slots[self.focused_slot_idx()].buffer_id;
         self.syntax.pending_load_name_for(id)
     }
 
@@ -397,9 +416,87 @@ impl App {
         &self.slots
     }
 
-    /// Return the index of the currently active slot.
+    /// Return a mutable slice of all buffer slots. Used by the renderer to
+    /// publish viewport dimensions and set cursor positions per-window.
+    pub fn slots_mut(&mut self) -> &mut [BufferSlot] {
+        &mut self.slots
+    }
+
+    /// Return the slot index of the currently focused window (used by
+    /// the buffer-line renderer to highlight the active buffer tab).
     pub fn active_index(&self) -> usize {
-        self.active
+        self.focused_slot_idx()
+    }
+
+    // ── Viewport sync ─────────────────────────────────────────────────────
+
+    /// Copy the focused window's stored scroll position into the active
+    /// editor's host viewport. Call BEFORE input dispatch so the engine's
+    /// scroll math starts from the right offset.
+    pub fn sync_viewport_to_editor(&mut self) {
+        let win = self.windows[self.focused_window]
+            .as_ref()
+            .expect("focused_window open");
+        let (top_row, top_col) = (win.top_row, win.top_col);
+        let maybe_rect = win.last_rect;
+        if let Some(rect) = maybe_rect {
+            let vp = self.active_mut().editor.host_mut().viewport_mut();
+            vp.top_row = top_row;
+            vp.top_col = top_col;
+            vp.width = rect.width;
+            vp.height = rect.height;
+        }
+    }
+
+    /// Copy the active editor's host viewport scroll state back into the
+    /// focused window. Call AFTER input dispatch so the engine's
+    /// auto-scroll updates are persisted.
+    pub fn sync_viewport_from_editor(&mut self) {
+        let vp = self.active().editor.host().viewport();
+        let (top_row, top_col) = (vp.top_row, vp.top_col);
+        let win = self.windows[self.focused_window]
+            .as_mut()
+            .expect("focused_window open");
+        win.top_row = top_row;
+        win.top_col = top_col;
+    }
+
+    // ── Window focus navigation ───────────────────────────────────────────
+
+    /// Move focus to the window below the current one (`Ctrl-w j`).
+    pub fn focus_below(&mut self) {
+        if let Some(target) = self.layout.neighbor_below(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Move focus to the window above the current one (`Ctrl-w k`).
+    pub fn focus_above(&mut self) {
+        if let Some(target) = self.layout.neighbor_above(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Close the focused window.  Fails (with status message) when only one
+    /// window remains.  On success the layout collapses and focus moves to the
+    /// sibling that took over.
+    pub fn close_focused_window(&mut self) {
+        let focused = self.focused_window;
+        match self.layout.remove_leaf(focused) {
+            Err(_) => {
+                self.status_message = Some("E444: Cannot close last window".into());
+            }
+            Ok(new_focus) => {
+                self.windows[focused] = None;
+                self.focused_window = new_focus;
+                self.sync_viewport_to_editor();
+                self.status_message = Some("window closed".into());
+            }
+        }
     }
 
     /// Build a fresh [`App`], optionally loading `filename` from disk.
@@ -469,9 +566,21 @@ impl App {
             None
         };
 
+        // Single window pointing at slot 0.
+        let initial_window = window::Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            last_rect: None,
+        };
+
         Ok(Self {
             slots: vec![slot],
-            active: 0,
+            windows: vec![Some(initial_window)],
+            layout: window::LayoutTree::Leaf(0),
+            focused_window: 0,
+            next_window_id: 1,
+            pending_window_motion: false,
             next_buffer_id: 1,
             prev_active: None,
             exit_requested: false,

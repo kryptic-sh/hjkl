@@ -390,7 +390,7 @@ fn edit_new_path_appends_slot_and_switches() {
     assert_eq!(app.slots.len(), 1);
     app.dispatch_ex(&format!("e {}", path_b.display()));
     assert_eq!(app.slots.len(), 2);
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     assert_eq!(
         app.active().editor.buffer().lines(),
         vec!["beta".to_string()]
@@ -407,11 +407,11 @@ fn edit_existing_path_switches_to_open_slot() {
     std::fs::write(&path_b, "beta\n").unwrap();
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("e {}", path_b.display()));
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     // Re-open path_a → switch back, no third slot.
     app.dispatch_ex(&format!("e {}", path_a.display()));
     assert_eq!(app.slots.len(), 2);
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
 }
@@ -427,7 +427,7 @@ fn edit_other_open_path_does_not_block_on_dirty() {
     // Switching to a *different* file must not be gated on the
     // current slot's dirty flag — the slot isn't being destroyed.
     app.dispatch_ex(&format!("e {}", path_b.display()));
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     assert!(app.slots[0].dirty, "slot 0 should remain dirty");
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
@@ -444,15 +444,15 @@ fn bnext_bprev_cycle_active() {
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("e {}", path_b.display()));
     app.dispatch_ex(&format!("e {}", path_c.display()));
-    assert_eq!(app.active, 2);
+    assert_eq!(app.active_index(), 2);
     app.dispatch_ex("bn");
-    assert_eq!(app.active, 0, "wrap forward to 0");
+    assert_eq!(app.active_index(), 0, "wrap forward to 0");
     app.dispatch_ex("bn");
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     app.dispatch_ex("bp");
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     app.dispatch_ex("bp");
-    assert_eq!(app.active, 2, "wrap backward to last");
+    assert_eq!(app.active_index(), 2, "wrap backward to last");
     for p in [&path_a, &path_b, &path_c] {
         let _ = std::fs::remove_file(p);
     }
@@ -462,7 +462,7 @@ fn bnext_bprev_cycle_active() {
 fn bnext_no_op_with_single_slot() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("bn");
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     assert_eq!(app.slots.len(), 1);
 }
 
@@ -494,7 +494,7 @@ fn bdelete_force_removes_dirty_slot() {
     app.active_mut().dirty = true;
     app.dispatch_ex("bd!");
     assert_eq!(app.slots.len(), 1);
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     assert_eq!(app.active().editor.buffer().lines(), vec!["a".to_string()]);
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
@@ -529,17 +529,17 @@ fn buffer_alt_swaps_with_prev_active() {
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("e {}", path_b.display())); // active=1, prev=0
     app.dispatch_ex(&format!("e {}", path_c.display())); // active=2, prev=1
-    assert_eq!(app.active, 2);
+    assert_eq!(app.active_index(), 2);
     assert_eq!(app.prev_active, Some(1));
 
     // First alt: go back to 1, prev becomes 2.
     app.buffer_alt();
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     assert_eq!(app.prev_active, Some(2));
 
     // Second alt: go back to 2.
     app.buffer_alt();
-    assert_eq!(app.active, 2);
+    assert_eq!(app.active_index(), 2);
 
     for p in [&path_a, &path_b, &path_c] {
         let _ = std::fs::remove_file(p);
@@ -551,7 +551,7 @@ fn buffer_alt_with_single_slot_no_op_with_message() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert_eq!(app.slots.len(), 1);
     app.buffer_alt();
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     let msg = app.status_message.clone().unwrap_or_default();
     assert!(
         msg.contains("only one buffer"),
@@ -663,7 +663,7 @@ fn edit_drops_pristine_default_buffer_when_first_real_file_opens() {
         1,
         "pristine default buffer should have been dropped"
     );
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     assert_eq!(
         app.active().filename.as_deref(),
         Some(path.as_path()),
@@ -696,10 +696,14 @@ fn open_extra_adds_slot_and_leaves_active_zero() {
     std::fs::write(&path_b, "second\n").unwrap();
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     assert_eq!(app.slots.len(), 1);
-    assert_eq!(app.active, 0);
+    assert_eq!(app.active_index(), 0);
     app.open_extra(path_b.clone()).unwrap();
     assert_eq!(app.slots.len(), 2, "extra slot should have been added");
-    assert_eq!(app.active, 0, "active must stay at 0 after open_extra");
+    assert_eq!(
+        app.active_index(),
+        0,
+        "active must stay at 0 after open_extra"
+    );
     assert_eq!(
         app.slots[0].editor.buffer().lines(),
         vec!["first".to_string()]
@@ -746,7 +750,7 @@ fn b_num_switches_by_index() {
     app.dispatch_ex(&format!("e {}", path_c.display()));
     assert_eq!(app.slots.len(), 3);
     app.dispatch_ex("b 2");
-    assert_eq!(app.active, 1, "`:b 2` should switch to index 1");
+    assert_eq!(app.active_index(), 1, "`:b 2` should switch to index 1");
     for p in [&path_a, &path_b, &path_c] {
         let _ = std::fs::remove_file(p);
     }
@@ -769,10 +773,14 @@ fn b_name_substring_switches() {
     std::fs::write(&path_bar, "bar\n").unwrap();
     let mut app = App::new(Some(path_foo.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("e {}", path_bar.display()));
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     // Switch to the foo slot by substring
     app.dispatch_ex("b foo");
-    assert_eq!(app.active, 0, "`:b foo` should switch to foo's slot");
+    assert_eq!(
+        app.active_index(),
+        0,
+        "`:b foo` should switch to foo's slot"
+    );
     let _ = std::fs::remove_file(&path_foo);
     let _ = std::fs::remove_file(&path_bar);
 }
@@ -810,11 +818,11 @@ fn bfirst_blast_jump_to_ends() {
     assert_eq!(app.slots.len(), 3);
     // Start in middle
     app.dispatch_ex("b 2");
-    assert_eq!(app.active, 1);
+    assert_eq!(app.active_index(), 1);
     app.dispatch_ex("bfirst");
-    assert_eq!(app.active, 0, "`:bfirst` should go to slot 0");
+    assert_eq!(app.active_index(), 0, "`:bfirst` should go to slot 0");
     app.dispatch_ex("blast");
-    assert_eq!(app.active, 2, "`:blast` should go to last slot");
+    assert_eq!(app.active_index(), 2, "`:blast` should go to last slot");
     for p in [&path_a, &path_b, &path_c] {
         let _ = std::fs::remove_file(p);
     }
@@ -1548,5 +1556,147 @@ fn poll_grammar_loads_clears_expired_error() {
     assert!(
         app.grammar_load_error.is_none(),
         "expired error should be cleared"
+    );
+}
+
+// ── Phase 1: window split tests ────────────────────────────────────────────
+
+#[test]
+fn sp_splits_focused_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.windows.len(), 1);
+    assert_eq!(app.focused_window, 0);
+
+    app.dispatch_ex("sp");
+
+    // A second window should now exist.
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        2,
+        "expected 2 open windows after :sp"
+    );
+    // Focus moved to the new (upper) window.
+    let new_win_id = app.focused_window;
+    assert_ne!(new_win_id, 0, "focus must have moved to the new window");
+    // The layout should no longer be a single leaf.
+    assert!(
+        app.layout.leaves().len() == 2,
+        "layout must have 2 leaves after split"
+    );
+}
+
+#[test]
+fn close_focused_window_collapses_split() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 2);
+    let focused_before_close = app.focused_window;
+
+    app.dispatch_ex("close");
+
+    // After closing, the closed window's entry is None.
+    assert!(
+        app.windows[focused_before_close].is_none(),
+        "closed window entry must be None"
+    );
+    // Layout should be back to a single leaf.
+    assert_eq!(
+        app.layout.leaves().len(),
+        1,
+        "layout must collapse to 1 leaf"
+    );
+    // Status confirms closure.
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("window closed"),
+        "expected 'window closed' status"
+    );
+}
+
+#[test]
+fn close_last_window_errors() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.windows.iter().filter(|w| w.is_some()).count(), 1);
+
+    app.dispatch_ex("close");
+
+    // Must not close the only window.
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        1,
+        "last window must not be closed"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("E444"), "expected E444 error, got: {msg}");
+}
+
+#[test]
+fn ctrl_w_j_focuses_below() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // After :sp, focused window is the new (top) one.
+    app.dispatch_ex("sp");
+    let top_win = app.focused_window;
+
+    // Ctrl-w j should move focus to the window below (the original).
+    app.focus_below();
+    let bottom_win = app.focused_window;
+    assert_ne!(top_win, bottom_win, "focus must have moved down");
+    // Moving below from bottom-most is a no-op.
+    app.focus_below();
+    assert_eq!(
+        app.focused_window, bottom_win,
+        "focus must not move below the bottom-most window"
+    );
+}
+
+#[test]
+fn ctrl_w_k_focuses_above() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    // Currently on top — move to bottom first.
+    app.focus_below();
+    let bottom_win = app.focused_window;
+
+    // Ctrl-w k should move back up.
+    app.focus_above();
+    let top_win = app.focused_window;
+    assert_ne!(bottom_win, top_win, "focus must have moved up");
+    // Moving above from top-most is a no-op.
+    app.focus_above();
+    assert_eq!(
+        app.focused_window, top_win,
+        "focus must not move above the top-most window"
+    );
+}
+
+#[test]
+fn non_focused_window_keeps_scroll_after_focused_scrolls() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Fill the buffer with enough lines so scrolling has room.
+    let content: String = (0..100)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    seed_buffer(&mut app, &content);
+
+    // Split: new window on top (id = 1 typically), original below (id = 0).
+    app.dispatch_ex("sp");
+    let top_win = app.focused_window;
+    // Move focus to bottom window.
+    app.focus_below();
+    let bottom_win = app.focused_window;
+    assert_ne!(top_win, bottom_win);
+
+    // Record top window's scroll before we scroll the bottom one.
+    let top_top_row_before = app.windows[top_win].as_ref().unwrap().top_row;
+
+    // Manually advance bottom window's scroll to simulate scrolling.
+    app.windows[bottom_win].as_mut().unwrap().top_row = 20;
+
+    // Top window's scroll must be unaffected.
+    let top_top_row_after = app.windows[top_win].as_ref().unwrap().top_row;
+    assert_eq!(
+        top_top_row_before, top_top_row_after,
+        "non-focused window scroll must not change when focused window scrolls"
     );
 }

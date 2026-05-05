@@ -4,7 +4,7 @@
 //! It splits the terminal area into a buffer pane + status line row and
 //! delegates to [`buffer_pane`] and [`status_line`].
 
-use hjkl_buffer::{BufferView, Gutter, GutterNumbers};
+use hjkl_buffer::{BufferView, Gutter, GutterNumbers, Viewport};
 use hjkl_engine::{Host, Query};
 use ratatui::{
     Frame,
@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT};
+use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT, window};
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = max(numberwidth, line_count.to_string().len() + 1)`.
@@ -33,6 +33,217 @@ fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwid
 /// cursor at a glance without competing with the syntax foreground.
 fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
     Style::default().bg(theme.cursor_line_bg)
+}
+
+/// Split a `Rect` into two parts according to `dir` and `ratio`.
+fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
+    match dir {
+        window::SplitDir::Horizontal => {
+            let a_h = ((area.height as f32) * ratio).round() as u16;
+            let a_h = a_h.clamp(1, area.height.saturating_sub(1).max(1));
+            let b_h = area.height.saturating_sub(a_h);
+            let rect_a = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: a_h,
+            };
+            let rect_b = Rect {
+                x: area.x,
+                y: area.y + a_h,
+                width: area.width,
+                height: b_h,
+            };
+            (rect_a, rect_b)
+        }
+        window::SplitDir::Vertical => {
+            let a_w = ((area.width as f32) * ratio).round() as u16;
+            let a_w = a_w.clamp(1, area.width.saturating_sub(1).max(1));
+            let b_w = area.width.saturating_sub(a_w);
+            let rect_a = Rect {
+                x: area.x,
+                y: area.y,
+                width: a_w,
+                height: area.height,
+            };
+            let rect_b = Rect {
+                x: area.x + a_w,
+                y: area.y,
+                width: b_w,
+                height: area.height,
+            };
+            (rect_a, rect_b)
+        }
+    }
+}
+
+/// Walk the layout tree and render each leaf window into its allocated rect.
+fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &window::LayoutTree) {
+    match layout {
+        window::LayoutTree::Leaf(id) => render_window(frame, app, area, *id),
+        window::LayoutTree::Split { dir, ratio, a, b } => {
+            let (rect_a, rect_b) = split_rect(area, *dir, *ratio);
+            // Clone sub-trees so we can pass them without holding a borrow
+            // on `app` while calling the recursive `render_layout`.
+            let a_clone = (**a).clone();
+            let b_clone = (**b).clone();
+            render_layout(frame, app, rect_a, &a_clone);
+            render_layout(frame, app, rect_b, &b_clone);
+        }
+    }
+}
+
+/// Render a single window occupying `area`.
+fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::WindowId) {
+    // Record the rendered rect for Phase 2+ direction navigation.
+    if let Some(win) = app.windows[win_id].as_mut() {
+        win.last_rect = Some(area);
+    }
+
+    // Extract window metadata (then drop the borrow so we can access slots).
+    let (slot_idx, top_row, top_col, is_focused) = {
+        let win = match app.windows[win_id].as_ref() {
+            Some(w) => w,
+            None => return, // closed window — skip
+        };
+        (
+            win.slot,
+            win.top_row,
+            win.top_col,
+            win_id == app.focused_window,
+        )
+    };
+
+    let s = app.slots()[slot_idx].editor.settings();
+    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
+    let gw = gutter_width(
+        app.slots()[slot_idx].editor.buffer().line_count() as usize,
+        nu,
+        rnu,
+        nuw,
+    );
+    let text_width = area.width.saturating_sub(gw);
+
+    // For the focused window: publish viewport dims into the engine so
+    // scrolloff math and cursor-screen-pos work correctly.
+    if is_focused {
+        let tabstop = app.slots()[slot_idx].editor.settings().tabstop as u16;
+        let vp = app.slots_mut()[slot_idx].editor.host_mut().viewport_mut();
+        vp.width = text_width;
+        vp.height = area.height;
+        vp.text_width = text_width;
+        vp.tab_width = tabstop;
+        app.slots_mut()[slot_idx]
+            .editor
+            .set_viewport_height(area.height);
+    }
+
+    let cursor_row = app.slots()[slot_idx].editor.buffer().cursor().row;
+    let numbers = match (nu, rnu) {
+        (false, false) => GutterNumbers::None,
+        (true, false) => GutterNumbers::Absolute,
+        (false, true) => GutterNumbers::Relative { cursor_row },
+        (true, true) => GutterNumbers::Hybrid { cursor_row },
+    };
+    let gutter = if gw > 0 {
+        Some(Gutter {
+            width: gw,
+            style: Style::default().fg(app.theme.ui.gutter),
+            line_offset: 0,
+            numbers,
+        })
+    } else {
+        None
+    };
+
+    // Viewport for this window: focused uses editor's live viewport (with
+    // auto-scroll applied); non-focused builds one from the window's own
+    // stored scroll position so it doesn't chase the focused editor.
+    let viewport_owned: Viewport;
+    let viewport_ref: &Viewport = if is_focused {
+        app.slots()[slot_idx].editor.host().viewport()
+    } else {
+        viewport_owned = Viewport {
+            top_row,
+            top_col,
+            width: text_width,
+            height: area.height,
+            text_width,
+            ..Viewport::default()
+        };
+        &viewport_owned
+    };
+
+    let in_prompt =
+        app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
+
+    // Merge diagnostic + git signs, filtered to the visible viewport.
+    let vp_top = viewport_ref.top_row;
+    let vp_bot = vp_top + area.height as usize;
+    let mut visible_signs: Vec<hjkl_buffer::Sign> = app.slots()[slot_idx]
+        .diag_signs
+        .iter()
+        .copied()
+        .filter(|s| s.row >= vp_top && s.row < vp_bot)
+        .chain(
+            app.slots()[slot_idx]
+                .git_signs
+                .iter()
+                .copied()
+                .filter(|s| s.row >= vp_top && s.row < vp_bot),
+        )
+        .collect();
+    visible_signs.sort_by_key(|s| s.row);
+
+    let selection = app.slots()[slot_idx].editor.buffer_selection();
+    let buffer_spans = app.slots()[slot_idx].editor.buffer_spans();
+    let search_pattern = app.slots()[slot_idx].editor.search_state().pattern.as_ref();
+
+    let search_bg = if search_pattern.is_some() {
+        Style::default()
+            .bg(app.theme.ui.search_bg)
+            .fg(app.theme.ui.search_fg)
+    } else {
+        Style::default()
+    };
+
+    let style_table = app.slots()[slot_idx].editor.style_table().to_owned();
+    let resolver = move |id: u32| style_table.get(id as usize).copied().unwrap_or_default();
+
+    // For non-focused windows, don't show cursor highlight or cursor position.
+    let show_cursor = is_focused && !in_prompt;
+
+    let view = BufferView {
+        buffer: app.slots()[slot_idx].editor.buffer(),
+        viewport: viewport_ref,
+        selection,
+        resolver: &resolver,
+        cursor_line_bg: if show_cursor {
+            cursor_line_bg(&app.theme.ui)
+        } else {
+            Style::default()
+        },
+        cursor_column_bg: Style::default(),
+        selection_bg: Style::default().bg(Color::Blue),
+        cursor_style: Style::default(),
+        gutter,
+        search_bg,
+        signs: &visible_signs,
+        conceals: &[],
+        spans: buffer_spans,
+        search_pattern,
+        non_text_style: Style::default().fg(app.theme.ui.non_text),
+    };
+    frame.render_widget(view, area);
+
+    // Emit the terminal cursor only for the focused window.
+    if show_cursor
+        && let Some((cx, cy)) = app.slots_mut()[slot_idx]
+            .editor
+            .cursor_screen_pos_in_rect(area)
+    {
+        frame.set_cursor_position((cx, cy));
+    }
 }
 
 /// Render one complete frame into `frame`.
@@ -68,30 +279,6 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    let s = app.active().editor.settings();
-    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
-    let gw = gutter_width(
-        app.active().editor.buffer().line_count() as usize,
-        nu,
-        rnu,
-        nuw,
-    );
-    let text_width = buf_area.width.saturating_sub(gw);
-
-    // Publish viewport dims so engine scrolloff math is accurate.
-    // `width` is the text-area width (gutter excluded) — `Viewport::ensure_visible`
-    // uses it as the horizontal cursor band, and the cursor lives in the text area.
-    {
-        let tabstop = app.active().editor.settings().tabstop as u16;
-        let vp = app.active_mut().editor.host_mut().viewport_mut();
-        vp.width = text_width;
-        vp.height = buf_area.height;
-        vp.text_width = text_width;
-        vp.tab_width = tabstop;
-    }
-    // Publish height to the engine's atomic so scrolloff (5-row margin) engages.
-    app.active_mut().editor.set_viewport_height(buf_area.height);
-
     // Refresh syntax spans against the now-current viewport. On the first
     // frame, App::new ran the initial parse with `viewport.height = 0`
     // (the atomic's init value) so only row 0 had spans installed. With
@@ -102,7 +289,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if let Some(bl_area) = bufline_area {
         buffer_line(frame, app, bl_area);
     }
-    buffer_pane(frame, app, buf_area, gw);
+
+    // Walk the window tree and render each pane.
+    let layout = app.layout.clone();
+    render_layout(frame, app, buf_area, &layout);
+
     status_line(frame, app, status_area);
 
     // Picker overlay sits on top of the buffer pane. Renders last so
@@ -176,108 +367,6 @@ fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
 
     let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
-}
-
-/// Render the buffer pane with line numbers, text, and the cursor.
-///
-/// The buffer-pane cursor is suppressed when the user is typing in the
-/// command line (`:` prompt or `/`/`?` search prompt), because the
-/// terminal cursor belongs to the bottom row in those states.
-fn buffer_pane(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect, gutter_width: u16) {
-    let cursor_row = app.active().editor.buffer().cursor().row;
-    let s = app.active().editor.settings();
-    let numbers = match (s.number, s.relativenumber) {
-        (false, false) => GutterNumbers::None,
-        (true, false) => GutterNumbers::Absolute,
-        (false, true) => GutterNumbers::Relative { cursor_row },
-        (true, true) => GutterNumbers::Hybrid { cursor_row },
-    };
-    let gutter = if gutter_width > 0 {
-        Some(Gutter {
-            width: gutter_width,
-            style: Style::default().fg(app.theme.ui.gutter),
-            line_offset: 0,
-            numbers,
-        })
-    } else {
-        None
-    };
-
-    let selection = app.active().editor.buffer_selection();
-    let buffer_spans = app.active().editor.buffer_spans();
-    let search_pattern = app.active().editor.search_state().pattern.as_ref();
-    let in_prompt =
-        app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
-
-    // Merge diagnostic + git signs, filtered to the visible viewport so
-    // BufferView's per-row linear scan stays cheap on large files.
-    let vp_top = app.active().editor.host().viewport().top_row;
-    let vp_bot = vp_top + area.height as usize;
-    let mut visible_signs: Vec<hjkl_buffer::Sign> = app
-        .active()
-        .diag_signs
-        .iter()
-        .copied()
-        .filter(|s| s.row >= vp_top && s.row < vp_bot)
-        .chain(
-            app.active()
-                .git_signs
-                .iter()
-                .copied()
-                .filter(|s| s.row >= vp_top && s.row < vp_bot),
-        )
-        .collect();
-    // Stable sort by row keeps BufferView's max_by_key dedupe deterministic.
-    visible_signs.sort_by_key(|s| s.row);
-
-    // Search match highlight — uses theme's --orange + on-bright fg.
-    let search_bg = if search_pattern.is_some() {
-        Style::default()
-            .bg(app.theme.ui.search_bg)
-            .fg(app.theme.ui.search_fg)
-    } else {
-        Style::default()
-    };
-
-    // Bind the style table after the viewport mutation above to avoid a
-    // double-borrow on `app.active().editor` (host_mut() and style_table() both
-    // require access to the editor).
-    let style_table = app.active().editor.style_table().to_owned();
-    let resolver = move |id: u32| style_table.get(id as usize).copied().unwrap_or_default();
-
-    let view = BufferView {
-        buffer: app.active().editor.buffer(),
-        viewport: app.active().editor.host().viewport(),
-        selection,
-        resolver: &resolver,
-        cursor_line_bg: if in_prompt {
-            Style::default()
-        } else {
-            cursor_line_bg(&app.theme.ui)
-        },
-        cursor_column_bg: Style::default(),
-        selection_bg: Style::default().bg(Color::Blue),
-        cursor_style: if in_prompt {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        },
-        gutter,
-        search_bg,
-        signs: &visible_signs,
-        conceals: &[],
-        spans: buffer_spans,
-        search_pattern,
-        non_text_style: Style::default().fg(app.theme.ui.non_text),
-    };
-
-    frame.render_widget(view, area);
-
-    // Suppress the buffer-pane cursor while the user is typing in the
-    // command line or search prompt — the cursor belongs to the status row.
-    if !in_prompt && let Some((cx, cy)) = app.active_mut().editor.cursor_screen_pos_in_rect(area) {
-        frame.set_cursor_position((cx, cy));
-    }
 }
 
 /// Render the one-row status line.

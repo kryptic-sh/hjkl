@@ -17,6 +17,10 @@ impl App {
     /// the vim FSM, handles resize, exits on Ctrl-C.
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
+            // Sync the focused window's stored scroll into the active editor
+            // so the engine's scrolloff math starts from the correct baseline.
+            self.sync_viewport_to_editor();
+
             // Update host viewport dimensions from the current terminal size.
             {
                 let size = terminal.size()?;
@@ -202,6 +206,37 @@ impl App {
                         continue;
                     }
 
+                    // ── Ctrl-w window motion chord ───────────────────────────
+                    if self.active().editor.vim_mode() == VimMode::Normal {
+                        // Second key of a Ctrl-w chord.
+                        if self.pending_window_motion {
+                            self.pending_window_motion = false;
+                            match key.code {
+                                KeyCode::Char('j') => {
+                                    self.focus_below();
+                                }
+                                KeyCode::Char('k') => {
+                                    self.focus_above();
+                                }
+                                KeyCode::Char('c') => {
+                                    self.close_focused_window();
+                                }
+                                _ => {} // unknown second key — consume and ignore
+                            }
+                            continue;
+                        }
+                        // First key: Ctrl-w sets pending.
+                        if key.code == KeyCode::Char('w')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        {
+                            self.pending_window_motion = true;
+                            continue;
+                        }
+                    } else {
+                        // Any non-Normal mode clears the pending flag.
+                        self.pending_window_motion = false;
+                    }
+
                     // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────────
                     if self.active().editor.vim_mode() == VimMode::Normal
                         && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -308,6 +343,10 @@ impl App {
                     // ── Normal editor key handling ───────────────────────────
                     self.active_mut().editor.handle_key(key);
 
+                    // Persist auto-scroll changes made by the engine back into
+                    // the focused window so they survive a window-focus switch.
+                    self.sync_viewport_from_editor();
+
                     // Drain dirty for the persistent UI flag.
                     if self.active_mut().editor.take_dirty() {
                         let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -328,6 +367,8 @@ impl App {
                     self.recompute_and_install();
                 }
                 Event::Resize(w, h) => {
+                    // Update the active editor viewport so the engine sees
+                    // the new dimensions; the renderer will repaint all panes.
                     let vp = self.active_mut().editor.host_mut().viewport_mut();
                     vp.width = w;
                     vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);

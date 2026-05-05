@@ -140,7 +140,8 @@ impl App {
                 // `self.slots`. Safety: the buffer lives inside `self.slots[active]`
                 // which is not touched inside `submit_render`.
                 let submit_result = {
-                    let buf = self.slots[self.active].editor.buffer();
+                    let active_idx = self.focused_slot_idx();
+                    let buf = self.slots[active_idx].editor.buffer();
                     self.syntax.submit_render(buffer_id, buf, top, height)
                 };
                 if submit_result.is_some() {

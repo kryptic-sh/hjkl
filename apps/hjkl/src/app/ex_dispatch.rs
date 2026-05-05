@@ -216,7 +216,27 @@ impl App {
             return;
         }
 
-        match ex::run(&mut self.slots[self.active].editor, cmd) {
+        // `:sp[lit] [file]` — horizontal split.
+        if cmd == "split" || cmd == "sp" || cmd.starts_with("split ") || cmd.starts_with("sp ") {
+            let arg = if let Some(rest) = cmd.strip_prefix("split ") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("sp ") {
+                rest.trim()
+            } else {
+                ""
+            };
+            self.do_split(arg);
+            return;
+        }
+
+        // `:close` / `:clo` — close the focused window.
+        if cmd == "close" || cmd == "clo" {
+            self.close_focused_window();
+            return;
+        }
+
+        let active_slot = self.focused_slot_idx();
+        match ex::run(&mut self.slots[active_slot].editor, cmd) {
             ExEffect::None => {}
             ExEffect::Ok => {}
             ExEffect::Save => {
@@ -253,14 +273,15 @@ impl App {
             } => {
                 // Engine applied the substitution in-place; propagate dirty
                 // and fan ContentEdits into the syntax tree.
-                if self.slots[self.active].editor.take_dirty() {
-                    let elapsed = self.slots[self.active].refresh_dirty_against_saved();
+                let aslot = self.focused_slot_idx();
+                if self.slots[aslot].editor.take_dirty() {
+                    let elapsed = self.slots[aslot].refresh_dirty_against_saved();
                     self.last_signature_us = elapsed;
-                    let buffer_id = self.slots[self.active].buffer_id;
-                    if self.slots[self.active].editor.take_content_reset() {
+                    let buffer_id = self.slots[aslot].buffer_id;
+                    if self.slots[aslot].editor.take_content_reset() {
                         self.syntax.reset(buffer_id);
                     }
-                    let edits = self.slots[self.active].editor.take_content_edits();
+                    let edits = self.slots[aslot].editor.take_content_edits();
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
@@ -286,6 +307,56 @@ impl App {
                 self.status_message = Some(format!("E492: Not an editor command: :{c}"));
             }
         }
+    }
+
+    /// `:sp [file]` / `:split [file]` — open a horizontal split.
+    ///
+    /// With no argument: duplicates the current window (same slot, same
+    /// scroll).  With a filename: opens a new slot in the upper half.
+    fn do_split(&mut self, arg: &str) {
+        use crate::app::window::{LayoutTree, SplitDir, Window};
+        let focused = self.focused_window;
+        let cur_slot = self.windows[focused]
+            .as_ref()
+            .expect("focused_window open")
+            .slot;
+        let (top_row, top_col) = {
+            let win = self.windows[focused].as_ref().unwrap();
+            (win.top_row, win.top_col)
+        };
+
+        let new_slot = if arg.is_empty() {
+            // Duplicate — same slot.
+            cur_slot
+        } else {
+            match self.open_new_slot(std::path::PathBuf::from(arg)) {
+                Ok(idx) => idx,
+                Err(msg) => {
+                    self.status_message = Some(msg);
+                    return;
+                }
+            }
+        };
+
+        let new_win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(Window {
+            slot: new_slot,
+            top_row,
+            top_col,
+            last_rect: None,
+        }));
+        // Replace the focused leaf with a horizontal split:
+        // new window on top (a), existing window below (b).
+        self.layout
+            .replace_leaf(focused, move |id| LayoutTree::Split {
+                dir: SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Leaf(new_win_id)),
+                b: Box::new(LayoutTree::Leaf(id)),
+            });
+        self.focused_window = new_win_id;
+        self.status_message = Some("split".into());
     }
 
     /// Format a one-line summary of the active clipboard backend for the
@@ -323,7 +394,7 @@ impl App {
     /// Write buffer content to `path` (or `self.active().filename` if `path` is `None`).
     /// Returns `true` on success, `false` on any failure (E32 / E45 / IO error).
     pub(crate) fn do_save(&mut self, path: Option<PathBuf>) -> bool {
-        let idx = self.active;
+        let idx = self.focused_slot_idx();
         self.save_slot(idx, path)
     }
 
@@ -369,7 +440,7 @@ impl App {
                         self.slots[idx].filename = Some(p);
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
-                        if idx == self.active {
+                        if idx == self.focused_slot_idx() {
                             self.refresh_git_signs_force();
                         }
                         true
@@ -458,7 +529,7 @@ impl App {
             .iter()
             .position(|s| s.filename.as_deref().map(super::canon_for_match) == Some(target.clone()))
         {
-            if idx == self.active {
+            if idx == self.focused_slot_idx() {
                 self.reload_current(force);
                 return;
             }
@@ -476,16 +547,20 @@ impl App {
         }
 
         // Otherwise create a new slot.
-        let prev_idx = self.active;
+        let prev_idx = self.focused_slot_idx();
         let prev_pristine = {
             let s = &self.slots[prev_idx];
             s.filename.is_none() && !s.dirty
         };
         match self.open_new_slot(path) {
-            Ok(idx) => {
+            Ok(new_slot_idx) => {
                 // Track alt-buffer before switching.
-                self.prev_active = Some(self.active);
-                self.active = idx;
+                self.prev_active = Some(prev_idx);
+                // Point the focused window at the new slot.
+                self.windows[self.focused_window]
+                    .as_mut()
+                    .expect("focused_window open")
+                    .slot = new_slot_idx;
                 let line_count = self.active().editor.buffer().line_count() as usize;
                 let path_display = self
                     .active()
@@ -500,8 +575,13 @@ impl App {
                 if prev_pristine && self.slots.len() > 1 {
                     let removed = self.slots.remove(prev_idx);
                     self.syntax.forget(removed.buffer_id);
-                    if prev_idx < self.active {
-                        self.active -= 1;
+                    // Fix all window slot pointers.
+                    let slot_count = self.slots.len();
+                    for win in self.windows.iter_mut().flatten() {
+                        if win.slot > prev_idx {
+                            win.slot -= 1;
+                        }
+                        win.slot = win.slot.min(slot_count.saturating_sub(1));
                     }
                     self.prev_active = None;
                 }
@@ -656,7 +736,7 @@ impl App {
                         let _ = outcome.is_known(); // Suppresses unused-result warning.
                         self.syntax.reset(buffer_id);
                         self.slots[idx].last_recompute_key = None;
-                        if idx == self.active {
+                        if idx == self.focused_slot_idx() {
                             self.slots[idx]
                                 .editor
                                 .install_ratatui_syntax_spans(Vec::new());

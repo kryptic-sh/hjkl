@@ -6,17 +6,23 @@ use super::{App, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
 
 impl App {
-    /// Switch active to `idx` and refresh its viewport spans.
-    /// Records the previous active index in `prev_active` for alt-buffer.
+    /// Switch the focused window to display slot `idx` and refresh its
+    /// viewport spans.  Records the previous slot index in `prev_active`
+    /// for alt-buffer (`<C-^>` / `:b#`).
     pub(crate) fn switch_to(&mut self, idx: usize) {
-        if idx != self.active {
-            self.prev_active = Some(self.active);
+        let current_slot = self.focused_slot_idx();
+        if idx != current_slot {
+            self.prev_active = Some(current_slot);
             // Carry the register bank across slots so vim's yank/paste
             // works cross-buffer (`yy` in slot 0, `p` in slot 1).
-            let regs = self.slots[self.active].editor.registers().clone();
+            let regs = self.slots[current_slot].editor.registers().clone();
             *self.slots[idx].editor.registers_mut() = regs;
         }
-        self.active = idx;
+        // Point the focused window at the new slot.
+        self.windows[self.focused_window]
+            .as_mut()
+            .expect("focused_window open")
+            .slot = idx;
         if let Ok(size) = crossterm::terminal::size() {
             let vp = self.active_mut().editor.host_mut().viewport_mut();
             vp.width = size.0;
@@ -45,7 +51,7 @@ impl App {
         if !self.require_multi_buffer() {
             return;
         }
-        let next = (self.active + 1) % self.slots.len();
+        let next = (self.focused_slot_idx() + 1) % self.slots.len();
         self.switch_to(next);
     }
 
@@ -54,7 +60,7 @@ impl App {
         if !self.require_multi_buffer() {
             return;
         }
-        let prev = (self.active + self.slots.len() - 1) % self.slots.len();
+        let prev = (self.focused_slot_idx() + self.slots.len() - 1) % self.slots.len();
         self.switch_to(prev);
     }
 
@@ -83,6 +89,7 @@ impl App {
                 Some("E89: No write since last change (add ! to override)".into());
             return;
         }
+        let active_slot = self.focused_slot_idx();
         if self.slots.len() == 1 {
             let old_id = self.active().buffer_id;
             self.syntax.forget(old_id);
@@ -114,15 +121,29 @@ impl App {
             slot.disk_len = None;
             slot.disk_state = DiskState::Synced;
             slot.snapshot_saved();
+            // Keep all windows pointing at slot 0 (the only one).
+            for win in self.windows.iter_mut().flatten() {
+                win.slot = 0;
+            }
             self.status_message = Some("buffer closed (replaced with [No Name])".into());
             return;
         }
-        let removed = self.slots.remove(self.active);
+        let removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
-        if self.active >= self.slots.len() {
-            self.active = self.slots.len() - 1;
+        // Fix up all window slot pointers that reference the removed or shifted slots.
+        let slot_count = self.slots.len();
+        for win in self.windows.iter_mut().flatten() {
+            if win.slot == active_slot {
+                // Was pointing at the removed slot — redirect to slot before it (or 0).
+                win.slot = if active_slot > 0 { active_slot - 1 } else { 0 };
+            } else if win.slot > active_slot {
+                // Shift down due to the Vec::remove.
+                win.slot -= 1;
+            }
+            // Clamp to valid range just in case.
+            win.slot = win.slot.min(slot_count.saturating_sub(1));
         }
-        let target = self.active;
+        let target = self.focused_slot_idx();
         self.switch_to(target);
         // Clear alt-buffer pointer after the switch: prev_active may refer
         // to a removed or re-indexed slot. Reset unconditionally.
@@ -148,9 +169,10 @@ impl App {
     /// `:ls` / `:buffers` — render the buffer list to a single status
     /// line. Marks: `%` active, `+` modified.
     pub(crate) fn list_buffers(&self) -> String {
+        let active_slot = self.focused_slot_idx();
         let mut parts = Vec::with_capacity(self.slots.len());
         for (i, slot) in self.slots.iter().enumerate() {
-            let active = if i == self.active { '%' } else { ' ' };
+            let active = if i == active_slot { '%' } else { ' ' };
             let modf = if slot.dirty { '+' } else { ' ' };
             let name = slot
                 .filename
