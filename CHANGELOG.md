@@ -8,6 +8,45 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-05-05
+
+### Added
+
+- **`--nvim-api` msgpack-rpc surface (phase 3 of #26).** New flag boots a
+  msgpack-rpc server speaking the neovim wire protocol. Existing `nvim-rs`
+  clients can target hjkl as a drop-in subprocess replacement for
+  `nvim --headless --embed`. Implemented methods: `nvim_get_current_buf`,
+  `nvim_get_current_win`, `nvim_buf_set_lines`, `nvim_buf_get_lines`,
+  `nvim_win_set_cursor`, `nvim_win_get_cursor`, `nvim_input`, `nvim_command`,
+  `nvim_get_mode`, `nvim_call_function` (`getreg` only). Compat-oracle gains an
+  opt-in `HJKL_ORACLE_NVIM_API=1` mode that drives hjkl via msgpack-rpc; the
+  four substitute cases pass on this path (still in `known_divergences` for the
+  in-process driver since the vim FSM cannot dispatch `:` from a key-replay).
+- **Non-blocking grammar loads (hjkl#17 follow-up).** `set_language_for_path` no
+  longer blocks the UI thread on first-edit clone+compile. New `GrammarRequest`
+  / `SetLanguageOutcome` enums; pending loads tracked on `SyntaxLayer` and
+  drained each tick via `poll_pending_loads`. Cache / on-disk fast paths
+  preserved — only true clone+compile cases now defer.
+
+### Changed
+
+- **hjkl-bonsai 0.5.0 → 0.5.3.** Adds `AsyncGrammarLoader` (2-worker pool with
+  in-flight dedup) and `Grammar::load_from_path` for skipping the loader chain
+  when the `.so` + queries are already on disk. Sync `GrammarLoader::load`
+  unchanged.
+- **hjkl-clipboard 0.5.1 → 0.5.3.** Wayland data_source `send` callback no
+  longer blocks the UI thread when the paste receiver doesn't drain; adds
+  O_NONBLOCK + POLLOUT deferred drain with a 5s deadline reaper. Self-paste
+  short-circuits in `do_get` when we own the source. Fixes
+  kryptic-sh/hjkl-clipboard#4 (downstream kryptic-sh/buffr#34).
+
+### Fixed
+
+- `--embed` JSON-RPC + `--nvim-api` msgpack-rpc tests sent `:qa!` for shutdown
+  but ex.rs canonicalizes `qa!` to `qall!` and has no handler arm — server
+  returned an error, never quit, tests hung 5+ minutes per case. Switched to
+  `:q!`. Proper `qall` family handler tracked in #27.
+
 ## [0.11.2] - 2026-05-05
 
 ### Added
@@ -1155,7 +1194,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.3
 [0.11.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.2
 [0.11.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.1
 [0.11.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.0
