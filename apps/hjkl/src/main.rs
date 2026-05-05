@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod editorconfig;
 mod git;
+mod headless;
 mod host;
 mod lang;
 mod picker;
@@ -55,6 +56,18 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 
+    /// Run without a terminal: load FILEs, dispatch any +cmd / -c CMD ex
+    /// commands in order, write back to disk if a command asks (e.g. +':wq'),
+    /// then exit. No ratatui, no crossterm. Useful for scripted edits in CI.
+    #[arg(long)]
+    headless: bool,
+
+    /// Ex command to run after loading FILEs (without leading ':'). Repeatable.
+    /// In headless mode all -c commands run first, then all +cmd tokens.
+    /// Requires --headless (TUI -c dispatch is Phase 2 of issue #26).
+    #[arg(short = 'c', long = "command", value_name = "CMD", action = clap::ArgAction::Append)]
+    commands: Vec<String>,
+
     /// Files to open. First is the active buffer; the rest are loaded into
     /// additional slots in argv order. If empty, a fresh buffer is started.
     files: Vec<PathBuf>,
@@ -69,6 +82,11 @@ pub struct Args {
     pub perf: bool,
     pub picker: bool,
     pub config: Option<PathBuf>,
+    /// Run without a terminal (no ratatui/crossterm). Phase 1 of issue #26.
+    pub headless: bool,
+    /// Ex commands to dispatch in headless mode. `-c` commands precede `+cmd`
+    /// tokens; argv interleaving within each group is preserved.
+    pub commands: Vec<String>,
 }
 
 /// Split raw `argv` into (tokens-clap-handles, vim-style-`+`-prefixed-tokens).
@@ -102,11 +120,17 @@ fn split_vim_tokens(raw: Vec<String>) -> (Vec<String>, Vec<String>) {
 }
 
 /// Apply parsed `+`-prefixed tokens onto an `Args` builder. Returns a list
-/// of warnings (currently: unknown `+cmd` tokens). The caller decides how
-/// to surface them — `main` prints to stderr, tests assert the contents.
+/// of warnings (currently: unknown `+cmd` tokens in TUI mode). The caller
+/// decides how to surface them — `main` prints to stderr, tests assert the
+/// contents.
 ///
 /// Last-write-wins: repeated `+N` overwrites `args.line`; repeated `+/PAT`
 /// overwrites `args.pattern`.
+///
+/// When `args.headless` is set, unrecognised `+<text>` tokens (and `+:<text>`
+/// with a leading colon) are treated as ex commands and pushed onto
+/// `args.commands`. The leading `:` is stripped so both `+wq` and `+:wq`
+/// work identically.
 fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
     let mut warnings: Vec<String> = Vec::new();
     for tok in vim_tokens {
@@ -119,6 +143,10 @@ fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
             args.perf = true;
         } else if rest == "picker" {
             args.picker = true;
+        } else if args.headless {
+            // Strip the optional leading colon so `+:wq` and `+wq` both work.
+            let cmd = rest.strip_prefix(':').unwrap_or(rest).to_string();
+            args.commands.push(cmd);
         } else {
             warnings.push(format!("hjkl: ignoring unknown +cmd: {tok}"));
         }
@@ -128,9 +156,16 @@ fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
 
 /// Parse a raw `argv` (including `argv[0]` binary name) into `(args, warnings)`.
 /// Pure function — no env, no stderr — so tests can drive every branch.
+///
+/// Ordering of ex commands in headless mode: all `-c` flags (from clap) come
+/// first, then all `+cmd` tokens in the order they appear in argv. This
+/// simplifies the implementation at the cost of strict argv interleaving;
+/// document this in your scripts if ordering matters.
 fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
     let (clap_argv, vim_tokens) = split_vim_tokens(raw);
     let cli = Cli::parse_from(clap_argv);
+    // Seed headless flag + -c commands before apply_vim_tokens so that the
+    // `args.headless` check inside it can route unknown +cmd tokens correctly.
     let mut args = Args {
         files: cli.files,
         line: None,
@@ -139,6 +174,9 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         perf: false,
         picker: false,
         config: cli.config,
+        headless: cli.headless,
+        // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
+        commands: cli.commands,
     };
     let warnings = apply_vim_tokens(&mut args, &vim_tokens);
     Ok((args, warnings))
@@ -155,6 +193,21 @@ fn parse_args() -> Result<Args> {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+
+    // Guard: -c without --headless is not supported in Phase 1.
+    if !args.commands.is_empty() && !args.headless {
+        eprintln!(
+            "hjkl: -c requires --headless in this build \
+             (Phase 1 of #26; TUI -c dispatch is Phase 2)"
+        );
+        std::process::exit(2);
+    }
+
+    // Headless script mode — no TUI, no crossterm, no ratatui.
+    if args.headless {
+        let code = headless::run(args.files, args.commands)?;
+        std::process::exit(code);
+    }
 
     // Load user config. `--config <PATH>` reads an explicit file; otherwise
     // we use the XDG path. In both cases the bundled `src/config.toml`
@@ -417,6 +470,8 @@ mod cli_tests {
             perf: false,
             picker: false,
             config: None,
+            headless: false,
+            commands: vec![],
         }
     }
 }

@@ -67,6 +67,36 @@ hjkl +picker          # open fuzzy file picker immediately
 <!-- screenshot placeholder -->
 <!-- ![hjkl screenshot](https://hjkl.kryptic.sh/screenshot.png) -->
 
+## Headless mode
+
+Run ex commands against files without a terminal. No ratatui, no crossterm —
+suitable for CI scripts and automated code-mods.
+
+```bash
+# Substitute and write back
+hjkl --headless +:%s/old/new/g +:wq src/foo.rs
+
+# Same with -c flag (colon is optional)
+hjkl --headless -c '%s/old/new/g' -c 'wq' src/foo.rs
+
+# Loop over many files
+for f in src/**/*.rs; do
+  hjkl --headless +:%s/old/new/g +:wq "$f"
+done
+```
+
+**Ordering**: all `-c CMD` flags run first (in flag order), then all `+cmd`
+tokens (in argv order). The leading `:` is optional in both forms.
+
+**No auto-write**: like vim, hjkl never writes implicitly. Include `:w`, `:wq`,
+or `:x` in your command stream or the file is left unchanged.
+
+**Exit codes**: `0` on success; `1` if any ex command returns an error or an I/O
+failure occurs.
+
+See [issue #26](https://github.com/kryptic-sh/hjkl/issues/26) for the
+multi-phase roadmap (Phase 2: `--embed`, Phase 3: RPC).
+
 ## What works (v0)
 
 - Normal / Insert / Visual / Command modes with full mode-indicator cursor shape
