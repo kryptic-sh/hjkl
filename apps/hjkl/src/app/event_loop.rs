@@ -232,6 +232,19 @@ impl App {
                             self.pending_window_motion = true;
                             continue;
                         }
+                        // tmux-navigator: bare Ctrl-j / Ctrl-k navigate
+                        // splits in normal mode. Ctrl-h / Ctrl-l reserved
+                        // for Phase 2 (vertical splits, #41).
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            if key.code == KeyCode::Char('j') {
+                                self.focus_below();
+                                continue;
+                            }
+                            if key.code == KeyCode::Char('k') {
+                                self.focus_above();
+                                continue;
+                            }
+                        }
                     } else {
                         // Any non-Normal mode clears the pending flag.
                         self.pending_window_motion = false;
