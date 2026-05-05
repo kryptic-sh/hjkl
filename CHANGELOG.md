@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-05-05
+
+### Added
+
+- **`recording @r` status indicator.** The status line now shows `recording @r`
+  while a q-macro is being recorded, matching vim's native indicator.
+- **`--headless` / `-c CMD` script runner (phase 1 of #26).** Launch hjkl with
+  `--headless +cmd` or `-c CMD` to execute ex commands non-interactively and
+  exit. Enables scripted batch processing without a terminal.
+- **JSON-RPC 2.0 server over stdin/stdout (phase 2 of #26).** `--embed` flag
+  starts an embedded RPC server, allowing external tools (LSP clients, editors,
+  scripts) to drive hjkl over a structured protocol.
+
 ## [0.11.1] - 2026-05-05
 
 ### Added
@@ -1142,7 +1155,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.2
 [0.11.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.1
 [0.11.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.0
 [0.10.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.10.1
