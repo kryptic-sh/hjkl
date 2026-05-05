@@ -391,3 +391,78 @@ keys = "\"add"
 expected_buffer = "bar\n"
 expected_cursor = [0, 0]
 expected_register = ['a', "foo\n"]
+
+# ─── Graduated from known_divergences (issue #24, fixed in 0.3.8) ────────────
+
+# motion: G lands on last content row (not phantom trailing-empty row)
+[[cases]]
+name = "motion_G_file_bottom"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "G"
+expected_buffer = "foo\nbar\nbaz\n"
+expected_cursor = [2, 0]
+
+# operator: dd on last line clamps cursor to new last row
+[[cases]]
+name = "operator_dd_last_line"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [1, 0]
+keys = "dd"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+
+# operator: d$ cursor lands on last char, not one past
+[[cases]]
+name = "operator_d_dollar_to_eol"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 5]
+keys = "d$"
+expected_buffer = "hello\n"
+expected_cursor = [0, 4]
+
+# text-object: da" eats trailing whitespace
+[[cases]]
+name = "textobj_da_doublequote"
+initial_buffer = "say \"hello\" there\n"
+initial_cursor = [0, 6]
+keys = "da\""
+expected_buffer = "say there\n"
+expected_cursor = [0, 4]
+
+# text-object: daB cursor clamped to last col after multi-line around-brace delete
+[[cases]]
+name = "textobj_daB_delete_around_brace"
+initial_buffer = "fn x() {\n    body\n}\n"
+initial_cursor = [1, 4]
+keys = "daB"
+expected_buffer = "fn x() \n"
+expected_cursor = [0, 6]
+
+# text-object: diB preserves surrounding newlines on multi-line block
+[[cases]]
+name = "textobj_diB_delete_inner_brace"
+initial_buffer = "{\n    body\n}\n"
+initial_cursor = [1, 4]
+keys = "diB"
+expected_buffer = "{\n}\n"
+expected_cursor = [1, 0]
+
+# count: x/X populate unnamed register
+[[cases]]
+name = "count_5x_delete_chars"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = "5x"
+expected_buffer = " world\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "hello"]
+
+# undo: cursor clamped to last valid col after undo
+[[cases]]
+name = "undo_insert_then_u"
+initial_buffer = "hello\n"
+initial_cursor = [0, 5]
+keys = "a world<Esc>u"
+expected_buffer = "hello\n"
+expected_cursor = [0, 4]
