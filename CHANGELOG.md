@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-05
+
+### Added
+
+- `AsyncGrammarLoader`, `LoadHandle`, and `LoadError` in `runtime::async_loader`
+  (re-exported at `runtime` level). Wraps `GrammarLoader` in a 2-worker thread
+  pool with mpsc-as-pool dispatch. Multiple concurrent `load_async("rust", …)`
+  calls share one in-flight clone+compile job — no duplicate work. Sync
+  `GrammarLoader::load` is unchanged; consumers pick the API they need.
+  Addresses [hjkl#17](https://github.com/kryptic-sh/hjkl/issues/17) — the
+  grammar-load freeze reported in the v0.6.0 release notes.
+
 ## [0.5.0] - 2026-05-05
 
 ### Added
@@ -245,7 +257,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.0
 [0.4.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.4.1
 [0.4.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.4.0

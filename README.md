@@ -28,6 +28,14 @@ The release rlib is **~720 KB** because no grammars are baked in. The first edit
 of an unknown language pays a one-time clone+compile cost; everything after that
 is a `dlopen`.
 
+## API
+
+`GrammarLoader::load` is synchronous and suitable for blocking contexts (xtask,
+CLI one-shots, tests). For TUI/GUI event loops that cannot block 1–3 s on a
+first-ever clone+compile, wrap the loader in `AsyncGrammarLoader` from
+`runtime::async_loader` — it dispatches to a 2-worker pool and automatically
+deduplicates concurrent requests for the same grammar name.
+
 ## Usage
 
 ```toml
