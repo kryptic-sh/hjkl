@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod editorconfig;
+mod embed;
 mod git;
 mod headless;
 mod host;
@@ -62,6 +63,14 @@ struct Cli {
     #[arg(long)]
     headless: bool,
 
+    /// Run without a terminal: speak JSON-RPC 2.0 over stdin/stdout.
+    /// Requests: one JSON object per line. Responses: one JSON object per line.
+    /// See `docs/embed-rpc.md` for the method catalogue. Implies --headless;
+    /// if both are passed it is a no-op. Note: +cmd / -c CMD flags are ignored
+    /// in embed mode — commands come over RPC instead.
+    #[arg(long)]
+    embed: bool,
+
     /// Ex command to run after loading FILEs (without leading ':'). Repeatable.
     /// In headless mode all -c commands run first, then all +cmd tokens.
     /// Requires --headless (TUI -c dispatch is Phase 2 of issue #26).
@@ -84,6 +93,9 @@ pub struct Args {
     pub config: Option<PathBuf>,
     /// Run without a terminal (no ratatui/crossterm). Phase 1 of issue #26.
     pub headless: bool,
+    /// Run as JSON-RPC 2.0 server over stdin/stdout. Phase 2 of issue #26.
+    /// Implies headless; +cmd / -c CMD are ignored in this mode.
+    pub embed: bool,
     /// Ex commands to dispatch in headless mode. `-c` commands precede `+cmd`
     /// tokens; argv interleaving within each group is preserved.
     pub commands: Vec<String>,
@@ -174,7 +186,8 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         perf: false,
         picker: false,
         config: cli.config,
-        headless: cli.headless,
+        headless: cli.headless || cli.embed,
+        embed: cli.embed,
         // -c commands come first; +cmd tokens are appended by apply_vim_tokens.
         commands: cli.commands,
     };
@@ -194,13 +207,20 @@ fn parse_args() -> Result<Args> {
 fn main() -> Result<()> {
     let args = parse_args()?;
 
-    // Guard: -c without --headless is not supported in Phase 1.
-    if !args.commands.is_empty() && !args.headless {
+    // Guard: -c without --headless / --embed is not supported.
+    if !args.commands.is_empty() && !args.headless && !args.embed {
         eprintln!(
             "hjkl: -c requires --headless in this build \
              (Phase 1 of #26; TUI -c dispatch is Phase 2)"
         );
         std::process::exit(2);
+    }
+
+    // Embed mode (JSON-RPC 2.0 server) — check BEFORE headless since it is
+    // more specific. +cmd / -c CMD are silently ignored in this mode.
+    if args.embed {
+        let code = embed::run(args.files)?;
+        std::process::exit(code);
     }
 
     // Headless script mode — no TUI, no crossterm, no ratatui.
@@ -471,6 +491,7 @@ mod cli_tests {
             picker: false,
             config: None,
             headless: false,
+            embed: false,
             commands: vec![],
         }
     }

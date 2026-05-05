@@ -95,7 +95,24 @@ or `:x` in your command stream or the file is left unchanged.
 failure occurs.
 
 See [issue #26](https://github.com/kryptic-sh/hjkl/issues/26) for the
-multi-phase roadmap (Phase 2: `--embed`, Phase 3: RPC).
+multi-phase roadmap (Phase 2: `--embed`, Phase 3: nvim-API msgpack-rpc).
+
+### Embed mode (RPC)
+
+`hjkl --embed` boots without a TUI and speaks JSON-RPC 2.0 over stdin/stdout
+(newline-delimited, one request per line, one response per line). External code
+can drive a live editor FSM — feed keystrokes, run ex commands, query buffer
+state, cursor position, mode, and registers.
+
+```bash
+printf '{"jsonrpc":"2.0","method":"hjkl_input","params":["iHello"],"id":1}\n' \
+  '{"jsonrpc":"2.0","method":"hjkl_get_buffer","params":[],"id":2}\n' \
+  | hjkl --embed
+```
+
+See [`docs/embed-rpc.md`](../../docs/embed-rpc.md) for the full method
+catalogue, error codes, and examples. Phase 2 of
+[issue #26](https://github.com/kryptic-sh/hjkl/issues/26).
 
 ## What works (v0)
 
