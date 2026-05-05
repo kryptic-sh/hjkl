@@ -45,7 +45,7 @@ async fn nvim_api_set_get_lines_roundtrip() {
     let lines = buf.get_lines(0, -1, false).await.expect("get_lines");
     assert_eq!(lines, vec!["hello"], "round-trip lines mismatch: {lines:?}");
 
-    let _ = nvim.command("qa!").await;
+    let _ = nvim.command("q!").await;
     let _ = child.wait().await;
 }
 
@@ -67,7 +67,7 @@ async fn nvim_api_input_inserts_text() {
         "buffer after input mismatch: {lines:?}"
     );
 
-    let _ = nvim.command("qa!").await;
+    let _ = nvim.command("q!").await;
     let _ = child.wait().await;
 }
 
@@ -90,7 +90,7 @@ async fn nvim_api_command_substitute() {
         "buffer after substitute mismatch: {lines:?}"
     );
 
-    let _ = nvim.command("qa!").await;
+    let _ = nvim.command("q!").await;
     let _ = child.wait().await;
 }
 
@@ -111,7 +111,7 @@ async fn nvim_api_cursor_roundtrip() {
     assert_eq!(row, 1, "cursor row should be 1, got {row}");
     assert_eq!(col, 2, "cursor col should be 2, got {col}");
 
-    let _ = nvim.command("qa!").await;
+    let _ = nvim.command("q!").await;
     let _ = child.wait().await;
 }
 
