@@ -481,6 +481,42 @@ impl App {
         }
     }
 
+    /// Move focus to the window left of the current one (`Ctrl-w h`).
+    pub fn focus_left(&mut self) {
+        if let Some(target) = self.layout.neighbor_left(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Move focus to the window right of the current one (`Ctrl-w l`).
+    pub fn focus_right(&mut self) {
+        if let Some(target) = self.layout.neighbor_right(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Move focus to the next window in pre-order traversal, wrapping around (`Ctrl-w w`).
+    pub fn focus_next(&mut self) {
+        if let Some(target) = self.layout.next_leaf(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
+    /// Move focus to the previous window in pre-order traversal, wrapping around (`Ctrl-w W`).
+    pub fn focus_previous(&mut self) {
+        if let Some(target) = self.layout.prev_leaf(self.focused_window) {
+            self.sync_viewport_from_editor();
+            self.focused_window = target;
+            self.sync_viewport_to_editor();
+        }
+    }
+
     /// Close the focused window.  Fails (with status message) when only one
     /// window remains.  On success the layout collapses and focus moves to the
     /// sibling that took over.

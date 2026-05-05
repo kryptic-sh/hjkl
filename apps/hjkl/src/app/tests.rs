@@ -1700,3 +1700,153 @@ fn non_focused_window_keeps_scroll_after_focused_scrolls() {
         "non-focused window scroll must not change when focused window scrolls"
     );
 }
+
+// ── Phase 2: vertical split tests ─────────────────────────────────────────────
+
+#[test]
+fn vsp_creates_vertical_split_with_new_on_left() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let original_win = app.focused_window;
+
+    app.dispatch_ex("vsp");
+
+    // Two windows now exist.
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        2,
+        "expected 2 open windows after :vsp"
+    );
+    // Layout has 2 leaves.
+    assert_eq!(app.layout.leaves().len(), 2, "layout must have 2 leaves");
+
+    // Focus moved to the new (left) window.
+    let new_win = app.focused_window;
+    assert_ne!(new_win, original_win, "focus must have moved to new window");
+
+    // New window is on the left (a-side) of a Vertical split — its
+    // neighbor_right is the original window.
+    let right = app.layout.neighbor_right(new_win);
+    assert_eq!(
+        right,
+        Some(original_win),
+        "original window must be to the right of the new one"
+    );
+
+    // Status says "vsplit".
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("vsplit"),
+        "expected 'vsplit' status, got: {msg}"
+    );
+}
+
+#[test]
+fn vnew_creates_empty_buffer_in_left_split() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let original_win = app.focused_window;
+
+    app.dispatch_ex("vnew");
+
+    assert_eq!(
+        app.windows.iter().filter(|w| w.is_some()).count(),
+        2,
+        "expected 2 open windows after :vnew"
+    );
+    assert_eq!(app.layout.leaves().len(), 2);
+
+    let new_win = app.focused_window;
+    assert_ne!(new_win, original_win);
+
+    // The new window points at an unnamed empty slot.
+    let new_slot_idx = app.windows[new_win].as_ref().unwrap().slot;
+    assert!(
+        app.slots[new_slot_idx].filename.is_none(),
+        "vnew window must point to an unnamed slot"
+    );
+
+    // Status says "vnew".
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("vnew"), "expected 'vnew' status, got: {msg}");
+}
+
+#[test]
+fn ctrl_w_h_focuses_left() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // After :vsp, focus is on the new left window.
+    app.dispatch_ex("vsp");
+    let left_win = app.focused_window;
+
+    // Can't go further left — no-op.
+    app.focus_left();
+    assert_eq!(
+        app.focused_window, left_win,
+        "focus_left from leftmost must be a no-op"
+    );
+
+    // Move right first, then come back left.
+    app.focus_right();
+    let right_win = app.focused_window;
+    assert_ne!(left_win, right_win, "focus must have moved right");
+
+    app.focus_left();
+    assert_eq!(
+        app.focused_window, left_win,
+        "focus_left must return to left window"
+    );
+}
+
+#[test]
+fn ctrl_w_l_focuses_right() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // After :vsp, focus is on the left (new) window.
+    app.dispatch_ex("vsp");
+    let left_win = app.focused_window;
+
+    // Move right.
+    app.focus_right();
+    let right_win = app.focused_window;
+    assert_ne!(left_win, right_win, "focus must have moved right");
+
+    // Can't go further right — no-op.
+    app.focus_right();
+    assert_eq!(
+        app.focused_window, right_win,
+        "focus_right from rightmost must be a no-op"
+    );
+}
+
+#[test]
+fn ctrl_w_w_cycles_next() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Create two windows via :sp.
+    app.dispatch_ex("sp");
+    let leaves = app.layout.leaves();
+    assert_eq!(leaves.len(), 2);
+
+    // From the current focused window, next should cycle.
+    let initial = app.focused_window;
+    app.focus_next();
+    let after_one = app.focused_window;
+    assert_ne!(initial, after_one, "focus_next must move focus");
+    app.focus_next();
+    let after_two = app.focused_window;
+    // With 2 windows, two focus_next should bring us back.
+    assert_eq!(after_two, initial, "two focus_next calls must wrap around");
+}
+
+#[test]
+fn ctrl_w_shift_w_cycles_previous() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+
+    let initial = app.focused_window;
+    app.focus_previous();
+    let after_one = app.focused_window;
+    assert_ne!(initial, after_one, "focus_previous must move focus");
+    app.focus_previous();
+    let after_two = app.focused_window;
+    assert_eq!(
+        after_two, initial,
+        "two focus_previous calls must wrap around"
+    );
+}

@@ -229,6 +229,26 @@ impl App {
             return;
         }
 
+        // `:vsp[lit] [file]` — vertical split.
+        if cmd == "vsplit" || cmd == "vsp" || cmd.starts_with("vsplit ") || cmd.starts_with("vsp ")
+        {
+            let arg = if let Some(rest) = cmd.strip_prefix("vsplit ") {
+                rest.trim()
+            } else if let Some(rest) = cmd.strip_prefix("vsp ") {
+                rest.trim()
+            } else {
+                ""
+            };
+            self.do_vsplit(arg);
+            return;
+        }
+
+        // `:vnew` — vertical split with a fresh empty unnamed buffer.
+        if cmd == "vnew" {
+            self.do_vnew();
+            return;
+        }
+
         // `:close` / `:clo` — close the focused window.
         if cmd == "close" || cmd == "clo" {
             self.close_focused_window();
@@ -357,6 +377,128 @@ impl App {
             });
         self.focused_window = new_win_id;
         self.status_message = Some("split".into());
+    }
+
+    /// `:vsp [file]` / `:vsplit [file]` — open a vertical split.
+    ///
+    /// With no argument: duplicates the current window (same slot, same
+    /// scroll).  With a filename: opens a new slot in the left half.
+    /// New window goes on the left (vim convention).
+    fn do_vsplit(&mut self, arg: &str) {
+        use crate::app::window::{LayoutTree, SplitDir, Window};
+        let focused = self.focused_window;
+        let cur_slot = self.windows[focused]
+            .as_ref()
+            .expect("focused_window open")
+            .slot;
+        let (top_row, top_col) = {
+            let win = self.windows[focused].as_ref().unwrap();
+            (win.top_row, win.top_col)
+        };
+
+        let new_slot = if arg.is_empty() {
+            // Duplicate — same slot.
+            cur_slot
+        } else {
+            match self.open_new_slot(std::path::PathBuf::from(arg)) {
+                Ok(idx) => idx,
+                Err(msg) => {
+                    self.status_message = Some(msg);
+                    return;
+                }
+            }
+        };
+
+        let new_win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(Window {
+            slot: new_slot,
+            top_row,
+            top_col,
+            last_rect: None,
+        }));
+        // Replace the focused leaf with a vertical split:
+        // new window on the left (a), existing window on the right (b).
+        self.layout
+            .replace_leaf(focused, move |id| LayoutTree::Split {
+                dir: SplitDir::Vertical,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Leaf(new_win_id)),
+                b: Box::new(LayoutTree::Leaf(id)),
+            });
+        self.focused_window = new_win_id;
+        self.status_message = Some("vsplit".into());
+    }
+
+    /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
+    fn do_vnew(&mut self) {
+        use crate::app::window::{LayoutTree, SplitDir, Window};
+        let focused = self.focused_window;
+        let (top_row, top_col) = {
+            let win = self.windows[focused].as_ref().expect("focused_window open");
+            (win.top_row, win.top_col)
+        };
+
+        // Create a fresh empty unnamed slot.
+        use crate::app::STATUS_LINE_HEIGHT;
+        use crate::host::TuiHost;
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::{Editor, Options};
+
+        let new_slot_idx = {
+            let buffer_id = self.next_buffer_id;
+            self.next_buffer_id += 1;
+            let host = TuiHost::new();
+            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            if let Ok(size) = crossterm::terminal::size() {
+                let vp = editor.host_mut().viewport_mut();
+                vp.width = size.0;
+                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+            }
+            let _ = editor.take_content_edits();
+            let _ = editor.take_content_reset();
+            let mut slot = super::BufferSlot {
+                buffer_id,
+                editor,
+                filename: None,
+                dirty: false,
+                is_new_file: false,
+                is_untracked: false,
+                diag_signs: Vec::new(),
+                git_signs: Vec::new(),
+                last_git_dirty_gen: None,
+                last_git_refresh_at: std::time::Instant::now(),
+                last_recompute_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
+                last_recompute_key: None,
+                saved_hash: 0,
+                saved_len: 0,
+                disk_mtime: None,
+                disk_len: None,
+                disk_state: super::DiskState::Synced,
+            };
+            slot.snapshot_saved();
+            self.slots.push(slot);
+            self.slots.len() - 1
+        };
+
+        let new_win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(Window {
+            slot: new_slot_idx,
+            top_row,
+            top_col,
+            last_rect: None,
+        }));
+        // New window on the left (a), existing on the right (b).
+        self.layout
+            .replace_leaf(focused, move |id| LayoutTree::Split {
+                dir: SplitDir::Vertical,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Leaf(new_win_id)),
+                b: Box::new(LayoutTree::Leaf(id)),
+            });
+        self.focused_window = new_win_id;
+        self.status_message = Some("vnew".into());
     }
 
     /// Format a one-line summary of the active clipboard backend for the

@@ -1,4 +1,4 @@
-//! Window-tree data model for vim-style splits (Phase 1).
+//! Window-tree data model for vim-style splits (Phase 1 + Phase 2).
 //!
 //! A [`LayoutTree`] holds either a single [`Leaf`] (one window) or a
 //! [`Split`] that recursively divides space between two sub-trees.  The
@@ -29,8 +29,6 @@ pub struct Window {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitDir {
     Horizontal,
-    /// Reserved for Phase 2 vertical splits.
-    #[allow(dead_code)]
     Vertical,
 }
 
@@ -47,10 +45,18 @@ pub enum LayoutTree {
     },
 }
 
+/// Internal direction enum used by `neighbor_direction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavDir {
+    Below,
+    Above,
+    Left,
+    Right,
+}
+
 impl LayoutTree {
     /// Pre-order traversal — returns all leaf ids in the order they appear
     /// top-to-bottom / left-to-right in the layout.
-    #[allow(dead_code)]
     pub fn leaves(&self) -> Vec<WindowId> {
         let mut out = Vec::new();
         self.collect_leaves(&mut out);
@@ -65,6 +71,27 @@ impl LayoutTree {
                 b.collect_leaves(out);
             }
         }
+    }
+
+    /// Return the next leaf in pre-order traversal, wrapping around.
+    ///
+    /// Returns `None` only if `id` is not in the tree (shouldn't happen in
+    /// practice).
+    pub fn next_leaf(&self, id: WindowId) -> Option<WindowId> {
+        let leaves = self.leaves();
+        let pos = leaves.iter().position(|&l| l == id)?;
+        Some(leaves[(pos + 1) % leaves.len()])
+    }
+
+    /// Return the previous leaf in pre-order traversal, wrapping around.
+    ///
+    /// Returns `None` only if `id` is not in the tree (shouldn't happen in
+    /// practice).
+    pub fn prev_leaf(&self, id: WindowId) -> Option<WindowId> {
+        let leaves = self.leaves();
+        let pos = leaves.iter().position(|&l| l == id)?;
+        let len = leaves.len();
+        Some(leaves[(pos + len - 1) % len])
     }
 
     /// Return `true` if `id` appears anywhere in the tree.
@@ -117,65 +144,89 @@ impl LayoutTree {
     /// first (leftmost) leaf of `b`.  If `id` is the bottom-most window
     /// (or there are no horizontal splits above it), returns `None`.
     pub fn neighbor_below(&self, id: WindowId) -> Option<WindowId> {
-        self.neighbor_direction(id, true)
+        self.neighbor_direction(id, NavDir::Below)
     }
 
     /// Return the id of the next leaf above `id` in a `Horizontal` split.
     pub fn neighbor_above(&self, id: WindowId) -> Option<WindowId> {
-        self.neighbor_direction(id, false)
+        self.neighbor_direction(id, NavDir::Above)
     }
 
-    /// Internal helper — `below=true` searches downward, `below=false` upward.
+    /// Return the id of the next leaf to the left of `id` in a `Vertical`
+    /// split.  Horizontal splits are passed through.
+    pub fn neighbor_left(&self, id: WindowId) -> Option<WindowId> {
+        self.neighbor_direction(id, NavDir::Left)
+    }
+
+    /// Return the id of the next leaf to the right of `id` in a `Vertical`
+    /// split.  Horizontal splits are passed through.
+    pub fn neighbor_right(&self, id: WindowId) -> Option<WindowId> {
+        self.neighbor_direction(id, NavDir::Right)
+    }
+
+    /// Internal unified helper for directional navigation.
     ///
-    /// Returns `Some(target_id)` if a neighbour was found in the given
-    /// direction, `None` otherwise.  The algorithm walks the tree looking for
-    /// the innermost `Horizontal` split where `id` is in one branch and there
-    /// is a meaningful sibling in the other branch in that direction.
+    /// - `Below` / `Above` act on `Horizontal` splits; `Vertical` is a pass-through.
+    /// - `Left` / `Right` act on `Vertical` splits; `Horizontal` is a pass-through.
     ///
-    /// For "below" when `id` is in `a` (top branch): first recurse into `a`
-    /// to find an inner-split neighbour; failing that, cross to `b`.
-    /// When `id` is in `b` (bottom branch): recurse into `b` only.
-    fn neighbor_direction(&self, id: WindowId, below: bool) -> Option<WindowId> {
+    /// In each "active" split direction:
+    /// - For the "forward" direction (Below / Right), when `id` is in `a`:
+    ///   try to find a deeper neighbour inside `a` first; failing that, cross to `b`.
+    ///   When `id` is in `b`: recurse into `b` only (no cross available).
+    /// - For the "backward" direction (Above / Left), symmetric.
+    fn neighbor_direction(&self, id: WindowId, dir: NavDir) -> Option<WindowId> {
         match self {
             LayoutTree::Leaf(_) => None,
-            LayoutTree::Split { dir, a, b, .. } => {
-                if *dir == SplitDir::Horizontal {
+            LayoutTree::Split {
+                dir: split_dir,
+                a,
+                b,
+                ..
+            } => {
+                // Which split direction is "active" for this nav direction?
+                let active_split = match dir {
+                    NavDir::Below | NavDir::Above => SplitDir::Horizontal,
+                    NavDir::Left | NavDir::Right => SplitDir::Vertical,
+                };
+                // Is this a "forward" traversal (a→b) or "backward" (b→a)?
+                let forward = matches!(dir, NavDir::Below | NavDir::Right);
+
+                if *split_dir == active_split {
                     if a.contains(id) {
-                        if below {
-                            // Try to find a deeper below-neighbour inside `a`.
-                            let inner = a.neighbor_direction(id, below);
+                        if forward {
+                            // Try deeper forward-neighbour inside `a`.
+                            let inner = a.neighbor_direction(id, dir);
                             if inner.is_some() {
                                 return inner;
                             }
-                            // No inner found — `b` is the next pane below.
+                            // Cross to `b`.
                             Some(first_leaf(b))
                         } else {
-                            // Searching above: `id` is in top half → recurse
-                            // into `a`; no cross to `b` possible from here.
-                            a.neighbor_direction(id, below)
+                            // Backward, `id` in `a` (the "first" half) — recurse only.
+                            a.neighbor_direction(id, dir)
                         }
                     } else if b.contains(id) {
-                        if below {
-                            // `id` is in bottom half → recurse into `b` only.
-                            b.neighbor_direction(id, below)
+                        if forward {
+                            // Forward, `id` in `b` (the "second" half) — recurse only.
+                            b.neighbor_direction(id, dir)
                         } else {
-                            // Try to find a deeper above-neighbour inside `b`.
-                            let inner = b.neighbor_direction(id, below);
+                            // Try deeper backward-neighbour inside `b`.
+                            let inner = b.neighbor_direction(id, dir);
                             if inner.is_some() {
                                 return inner;
                             }
-                            // No inner found — `a` is the next pane above.
+                            // Cross to `a`.
                             Some(last_leaf(a))
                         }
                     } else {
                         None
                     }
                 } else {
-                    // Vertical split — pass through without offering a sibling.
+                    // Pass-through: this split axis is orthogonal — recurse without offering a sibling.
                     if a.contains(id) {
-                        a.neighbor_direction(id, below)
+                        a.neighbor_direction(id, dir)
                     } else if b.contains(id) {
-                        b.neighbor_direction(id, below)
+                        b.neighbor_direction(id, dir)
                     } else {
                         None
                     }
@@ -265,6 +316,15 @@ mod tests {
     fn hsplit(ratio: f32, a: LayoutTree, b: LayoutTree) -> LayoutTree {
         LayoutTree::Split {
             dir: SplitDir::Horizontal,
+            ratio,
+            a: Box::new(a),
+            b: Box::new(b),
+        }
+    }
+
+    fn vsplit(ratio: f32, a: LayoutTree, b: LayoutTree) -> LayoutTree {
+        LayoutTree::Split {
+            dir: SplitDir::Vertical,
             ratio,
             a: Box::new(a),
             b: Box::new(b),
@@ -417,5 +477,125 @@ mod tests {
         let focus = tree.remove_leaf(1).unwrap();
         assert_eq!(focus, 2);
         assert_eq!(tree.leaves(), vec![0, 2]);
+    }
+
+    // ── neighbor_left() / neighbor_right() ───────────────────────────────────
+
+    #[test]
+    fn neighbor_left_in_vertical_split() {
+        // vsplit: a=0 (left), b=1 (right)
+        let tree = vsplit(0.5, leaf(0), leaf(1));
+        assert_eq!(tree.neighbor_left(0), None);
+        assert_eq!(tree.neighbor_left(1), Some(0));
+    }
+
+    #[test]
+    fn neighbor_right_in_vertical_split() {
+        let tree = vsplit(0.5, leaf(0), leaf(1));
+        assert_eq!(tree.neighbor_right(0), Some(1));
+        assert_eq!(tree.neighbor_right(1), None);
+    }
+
+    #[test]
+    fn neighbor_left_no_op_in_horizontal_split() {
+        // A pure horizontal split has no left/right neighbours.
+        let tree = hsplit(0.5, leaf(0), leaf(1));
+        assert_eq!(tree.neighbor_left(0), None);
+        assert_eq!(tree.neighbor_left(1), None);
+        assert_eq!(tree.neighbor_right(0), None);
+        assert_eq!(tree.neighbor_right(1), None);
+    }
+
+    #[test]
+    fn neighbor_left_three_leaf_vertical() {
+        // vsplit: 0 | (1 | 2)
+        let tree = vsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
+        assert_eq!(tree.neighbor_left(0), None);
+        assert_eq!(tree.neighbor_left(1), Some(0));
+        assert_eq!(tree.neighbor_left(2), Some(1));
+    }
+
+    #[test]
+    fn neighbor_right_three_leaf_vertical() {
+        let tree = vsplit(0.5, leaf(0), vsplit(0.5, leaf(1), leaf(2)));
+        assert_eq!(tree.neighbor_right(0), Some(1));
+        assert_eq!(tree.neighbor_right(1), Some(2));
+        assert_eq!(tree.neighbor_right(2), None);
+    }
+
+    // ── next_leaf() / prev_leaf() ─────────────────────────────────────────────
+
+    #[test]
+    fn next_leaf_cycles_through_all_leaves() {
+        // 0 | (1 / 2) — mix of vertical and horizontal
+        let tree = vsplit(0.5, leaf(0), hsplit(0.5, leaf(1), leaf(2)));
+        assert_eq!(tree.next_leaf(0), Some(1));
+        assert_eq!(tree.next_leaf(1), Some(2));
+        // wraps around
+        assert_eq!(tree.next_leaf(2), Some(0));
+    }
+
+    #[test]
+    fn prev_leaf_wraps_around() {
+        let tree = vsplit(0.5, leaf(0), hsplit(0.5, leaf(1), leaf(2)));
+        assert_eq!(tree.prev_leaf(0), Some(2));
+        assert_eq!(tree.prev_leaf(1), Some(0));
+        assert_eq!(tree.prev_leaf(2), Some(1));
+    }
+
+    #[test]
+    fn next_leaf_single_leaf_wraps_to_self() {
+        let tree = leaf(0);
+        assert_eq!(tree.next_leaf(0), Some(0));
+    }
+
+    #[test]
+    fn next_prev_returns_none_for_unknown_id() {
+        let tree = vsplit(0.5, leaf(0), leaf(1));
+        assert_eq!(tree.next_leaf(99), None);
+        assert_eq!(tree.prev_leaf(99), None);
+    }
+
+    // ── mixed_layout_navigation ───────────────────────────────────────────────
+
+    #[test]
+    fn mixed_layout_navigation() {
+        // Layout:
+        //   Horizontal split:
+        //     a = Vertical split { A=0, B=1 }   (top row, two columns)
+        //     b = Leaf(2)                         (bottom row, full width)
+        //
+        // Visual:
+        //   ┌───┬───┐
+        //   │ 0 │ 1 │
+        //   ├───┴───┤
+        //   │   2   │
+        //   └───────┘
+        let tree = hsplit(0.5, vsplit(0.5, leaf(0), leaf(1)), leaf(2));
+
+        // Left/right within the top vsplit.
+        assert_eq!(tree.neighbor_right(0), Some(1));
+        assert_eq!(tree.neighbor_left(1), Some(0));
+
+        // No right neighbour for 1 (rightmost in vsplit, hsplit passthrough).
+        assert_eq!(tree.neighbor_right(1), None);
+        // No left neighbour for 0 (leftmost in vsplit).
+        assert_eq!(tree.neighbor_left(0), None);
+
+        // Above/below across the horizontal split.
+        // 0 and 1 are both in `a`; below from either reaches 2.
+        assert_eq!(tree.neighbor_below(0), Some(2));
+        assert_eq!(tree.neighbor_below(1), Some(2));
+        assert_eq!(tree.neighbor_below(2), None);
+        assert_eq!(tree.neighbor_above(2), Some(1)); // last_leaf of `a` = last_leaf(vsplit(0,1)) = 1
+        assert_eq!(tree.neighbor_above(0), None);
+        assert_eq!(tree.neighbor_above(1), None);
+
+        // Cycle: pre-order is 0, 1, 2.
+        assert_eq!(tree.next_leaf(0), Some(1));
+        assert_eq!(tree.next_leaf(1), Some(2));
+        assert_eq!(tree.next_leaf(2), Some(0));
+        assert_eq!(tree.prev_leaf(0), Some(2));
+        assert_eq!(tree.prev_leaf(2), Some(1));
     }
 }

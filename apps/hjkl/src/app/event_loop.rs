@@ -218,6 +218,18 @@ impl App {
                                 KeyCode::Char('k') => {
                                     self.focus_above();
                                 }
+                                KeyCode::Char('h') => {
+                                    self.focus_left();
+                                }
+                                KeyCode::Char('l') => {
+                                    self.focus_right();
+                                }
+                                KeyCode::Char('w') => {
+                                    self.focus_next();
+                                }
+                                KeyCode::Char('W') => {
+                                    self.focus_previous();
+                                }
                                 KeyCode::Char('c') => {
                                     self.close_focused_window();
                                 }
@@ -232,9 +244,9 @@ impl App {
                             self.pending_window_motion = true;
                             continue;
                         }
-                        // tmux-navigator: bare Ctrl-j / Ctrl-k navigate
-                        // splits in normal mode. Ctrl-h / Ctrl-l reserved
-                        // for Phase 2 (vertical splits, #41).
+                        // tmux-navigator: bare Ctrl-j/k/h/l navigate splits
+                        // in normal mode. Ctrl-h may collide with backspace
+                        // on some terminals; normal mode only to avoid conflict.
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             if key.code == KeyCode::Char('j') {
                                 self.focus_below();
@@ -242,6 +254,14 @@ impl App {
                             }
                             if key.code == KeyCode::Char('k') {
                                 self.focus_above();
+                                continue;
+                            }
+                            if key.code == KeyCode::Char('h') {
+                                self.focus_left();
+                                continue;
+                            }
+                            if key.code == KeyCode::Char('l') {
+                                self.focus_right();
                                 continue;
                             }
                         }
