@@ -602,6 +602,7 @@ impl App {
             let win = self.windows[focused].as_ref().unwrap();
             (win.top_row, win.top_col)
         };
+        let (cursor_row, cursor_col) = self.active().editor.cursor();
 
         let new_slot = if arg.is_empty() {
             // Duplicate — same slot.
@@ -622,6 +623,8 @@ impl App {
             slot: new_slot,
             top_row,
             top_col,
+            cursor_row,
+            cursor_col,
             last_rect: None,
         }));
         // Replace the focused leaf with a horizontal split:
@@ -654,6 +657,7 @@ impl App {
             let win = self.windows[focused].as_ref().unwrap();
             (win.top_row, win.top_col)
         };
+        let (cursor_row, cursor_col) = self.active().editor.cursor();
 
         let new_slot = if arg.is_empty() {
             // Duplicate — same slot.
@@ -674,6 +678,8 @@ impl App {
             slot: new_slot,
             top_row,
             top_col,
+            cursor_row,
+            cursor_col,
             last_rect: None,
         }));
         // Replace the focused leaf with a vertical split:
@@ -750,6 +756,8 @@ impl App {
             slot: new_slot_idx,
             top_row,
             top_col,
+            cursor_row: 0,
+            cursor_col: 0,
             last_rect: None,
         }));
         // New window on the left (a), existing on the right (b).
@@ -827,6 +835,8 @@ impl App {
             slot: new_slot_idx,
             top_row,
             top_col,
+            cursor_row: 0,
+            cursor_col: 0,
             last_rect: None,
         }));
         // New window on top (a), existing window below (b).
@@ -1447,6 +1457,8 @@ impl App {
             slot: new_slot_idx,
             top_row: 0,
             top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
             last_rect: None,
         }));
 

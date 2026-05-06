@@ -33,6 +33,11 @@ pub struct Window {
     pub top_row: usize,
     /// Per-window top scroll column (char index).
     pub top_col: usize,
+    /// Per-window cursor row (0-based). Synced alongside scroll so two
+    /// windows on the same slot keep independent cursors.
+    pub cursor_row: usize,
+    /// Per-window cursor column (0-based).
+    pub cursor_col: usize,
     /// The rect this window occupied in the last rendered frame.  Written
     /// by the renderer every frame; used by direction-navigation in later
     /// phases.  `None` until the first render.

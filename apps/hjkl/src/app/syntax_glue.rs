@@ -111,10 +111,30 @@ impl App {
     pub(crate) fn recompute_and_install(&mut self) {
         const RECOMPUTE_THROTTLE: Duration = Duration::from_millis(100);
         let buffer_id = self.active().buffer_id;
-        let (top, height) = {
+        let (focused_top, focused_height) = {
             let vp = self.active().editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
+
+        // Compute the union viewport across all windows that show the same
+        // slot as the focused window.  This ensures syntax spans are
+        // populated for every visible row, not just the focused window's
+        // rows.  Without the union, switching focus between two windows on
+        // the same buffer leaves one window with un-highlighted rows.
+        let active_slot = self.focused_slot_idx();
+        let mut union_top = focused_top;
+        let mut union_bot = focused_top + focused_height;
+        for w in self.windows.iter().flatten() {
+            if w.slot == active_slot
+                && let Some(rect) = w.last_rect
+            {
+                union_top = union_top.min(w.top_row);
+                union_bot = union_bot.max(w.top_row + rect.height as usize);
+            }
+        }
+        let top = union_top;
+        let height = union_bot - union_top;
+
         let dg = self.active().editor.buffer().dirty_gen();
         let key = (dg, top, height);
 
