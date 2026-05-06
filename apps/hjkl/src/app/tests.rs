@@ -47,7 +47,7 @@ fn wq_no_filename_does_not_exit() {
 #[test]
 fn wq_readonly_does_not_exit() {
     let mut app = App::new(None, true, None, None).unwrap();
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/hjkl_wq_ro_test.txt"));
+    app.active_mut().filename = Some(tmp_path("hjkl_wq_ro_test.txt"));
     app.dispatch_ex("wq");
     assert!(!app.exit_requested, "wq must not exit when save fails");
     let msg = app.status_message.clone().unwrap_or_default();
@@ -221,7 +221,7 @@ fn app_new_readonly_flag() {
 
 #[test]
 fn app_new_not_found_sets_is_new_file() {
-    let path = std::path::PathBuf::from("/tmp/hjkl_phase5_nonexistent_abc123.txt");
+    let path = tmp_path("hjkl_phase5_nonexistent_abc123.txt");
     let _ = std::fs::remove_file(&path);
     let app = App::new(Some(path), false, None, None).unwrap();
     assert!(app.active().is_new_file);
@@ -238,7 +238,7 @@ fn app_new_goto_line_clamps() {
 #[test]
 fn do_save_readonly_blocked() {
     let mut app = App::new(None, true, None, None).unwrap();
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/hjkl_phase5_ro_test.txt"));
+    app.active_mut().filename = Some(tmp_path("hjkl_phase5_ro_test.txt"));
     app.do_save(None);
     let msg = app.status_message.unwrap_or_default();
     assert!(
@@ -2692,9 +2692,16 @@ fn pub_diags_params(file_url: &str, diags: serde_json::Value) -> serde_json::Val
     })
 }
 
-/// Returns the file:// URL string for an absolute path.
+/// Returns the file:// URL string for an absolute path. Cross-platform via
+/// hjkl_lsp::uri::from_path (handles Windows drive letters and URL-escaping).
 fn file_url(path: &std::path::Path) -> String {
-    format!("file://{}", path.display())
+    hjkl_lsp::uri::from_path(path).unwrap().to_string()
+}
+
+/// Cross-platform temp path builder. Replaces hardcoded `/tmp/...` so tests
+/// pass on Windows CI runners.
+fn tmp_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(name)
 }
 
 #[test]
@@ -2702,7 +2709,7 @@ fn publish_diagnostics_populates_slot_diags() {
     let mut app = App::new(None, false, None, None).unwrap();
 
     // Give the active slot an absolute file path.
-    let path = std::path::PathBuf::from("/tmp/hjkl_diag_test.rs");
+    let path = tmp_path("hjkl_diag_test.rs");
     app.active_mut().filename = Some(path.clone());
 
     seed_buffer(&mut app, "let x = ();\nlet y = ();");
@@ -2747,7 +2754,7 @@ fn publish_diagnostics_populates_slot_diags() {
 #[test]
 fn publish_diagnostics_replaces_existing() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_diag_replace.rs");
+    let path = tmp_path("hjkl_diag_replace.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a\nb\nc");
 
@@ -2797,7 +2804,7 @@ fn publish_diagnostics_replaces_existing() {
 #[test]
 fn publish_diagnostics_clears_on_empty() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_diag_clear.rs");
+    let path = tmp_path("hjkl_diag_clear.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a");
 
@@ -2827,13 +2834,14 @@ fn publish_diagnostics_clears_on_empty() {
 #[test]
 fn publish_diagnostics_ignores_unknown_uri() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_diag_known.rs");
+    let path = tmp_path("hjkl_diag_known.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a");
 
     // Params targeting a *different* file — should be silently ignored.
+    let unknown_path = tmp_path("hjkl_diag_unknown.rs");
     let params = pub_diags_params(
-        "file:///tmp/hjkl_diag_unknown.rs",
+        &file_url(&unknown_path),
         serde_json::json!([{
             "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
             "severity": 1,
@@ -2851,7 +2859,7 @@ fn publish_diagnostics_ignores_unknown_uri() {
 #[test]
 fn lnext_jumps_to_next_diag() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_lnext.rs");
+    let path = tmp_path("hjkl_lnext.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a\nb\nc\nhello world");
 
@@ -2888,7 +2896,7 @@ fn lnext_jumps_to_next_diag() {
 #[test]
 fn lprev_jumps_to_prev_diag_with_wrap() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_lprev.rs");
+    let path = tmp_path("hjkl_lprev.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a\nb\nc\nd");
 
@@ -2923,7 +2931,7 @@ fn lprev_jumps_to_prev_diag_with_wrap() {
 #[test]
 fn lnext_severity_skips_lower_severity() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_lnext_sev.rs");
+    let path = tmp_path("hjkl_lnext_sev.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a\nb\nc");
 
@@ -2967,7 +2975,7 @@ fn lopen_shows_no_diags_message_when_empty() {
 #[test]
 fn lopen_lists_diags_in_picker() {
     let mut app = App::new(None, false, None, None).unwrap();
-    let path = std::path::PathBuf::from("/tmp/hjkl_lopen.rs");
+    let path = tmp_path("hjkl_lopen.rs");
     app.active_mut().filename = Some(path.clone());
     seed_buffer(&mut app, "a\nb");
 
@@ -3086,9 +3094,9 @@ fn goto_definition_single_jumps_cursor() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line0\nline1\nline2\nline3");
     // Give the active slot a path so the location URI matches.
-    let path = std::path::PathBuf::from("/tmp/hjkl_gd_single.rs");
+    let path = tmp_path("hjkl_gd_single.rs");
     app.active_mut().filename = Some(path.clone());
-    let uri = format!("file://{}", path.display());
+    let uri = file_url(&path);
 
     let loc = make_location(&uri, 2, 0);
     let result = ok_val(serde_json::to_value(vec![loc]).unwrap());
@@ -3398,7 +3406,7 @@ fn apply_workspace_edit_single_file() {
     std::fs::write(&path, "hello world\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    let uri = format!("file://{}", path.display());
+    let uri = file_url(&path);
     let edit = make_workspace_edit(&uri, 0, 6, 0, 11, "rust");
     let count = app
         .apply_workspace_edit(edit)
@@ -3422,7 +3430,7 @@ fn apply_workspace_edit_sorts_edits_descending() {
     std::fs::write(&path, "hello world foo\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    let url = format!("file://{}", path.display())
+    let url = file_url(&path)
         .parse::<lsp_types::Uri>()
         .expect("valid URI");
     let mut changes = std::collections::HashMap::new();
@@ -3480,8 +3488,8 @@ fn apply_workspace_edit_multi_file() {
 
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
 
-    let uri_a = format!("file://{}", path_a.display());
-    let uri_b = format!("file://{}", path_b.display());
+    let uri_a = file_url(&path_a);
+    let uri_b = file_url(&path_b);
 
     let url_a = uri_a.parse::<lsp_types::Uri>().expect("valid URI a");
     let url_b = uri_b.parse::<lsp_types::Uri>().expect("valid URI b");
@@ -3555,7 +3563,7 @@ fn rename_response_applies_workspace_edit() {
     std::fs::write(&path, "old_name here\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    let uri = format!("file://{}", path.display());
+    let uri = file_url(&path);
     let edit = make_workspace_edit(&uri, 0, 0, 0, 8, "new_name");
     let val = serde_json::to_value(edit).unwrap();
 
@@ -3680,7 +3688,7 @@ fn code_action_response_single_applies_action() {
     std::fs::write(&path, "old content\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
 
-    let uri = format!("file://{}", path.display());
+    let uri = file_url(&path);
     let edit = make_workspace_edit(&uri, 0, 0, 0, 11, "new content");
     let action = lsp_types::CodeAction {
         title: "Replace content".to_string(),
