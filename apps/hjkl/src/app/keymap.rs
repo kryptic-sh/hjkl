@@ -132,7 +132,7 @@ impl RuntimeKeymaps {
         loop {
             guard += 1;
             if guard > 1024 {
-                out.extend(self.pending.drain(..));
+                out.append(&mut self.pending);
                 break;
             }
 
@@ -166,13 +166,12 @@ impl RuntimeKeymaps {
     fn find_exact(&self, mode: MapMode) -> Option<Mapping> {
         let mut best: Option<Mapping> = None;
         for mapping in self.mappings(mode) {
-            if mapping.lhs == self.pending {
-                if best
+            if mapping.lhs == self.pending
+                && best
                     .as_ref()
                     .is_none_or(|cur| mapping.lhs.len() >= cur.lhs.len())
-                {
-                    best = Some(mapping.clone());
-                }
+            {
+                best = Some(mapping.clone());
             }
         }
         best
@@ -309,10 +308,6 @@ pub(crate) fn parse_mode_groups(cmd: &str) -> Option<Vec<MapMode>> {
     }
 }
 
-pub(crate) fn is_runtime_map_command(cmd: &str) -> bool {
-    parse_runtime_map_command(cmd, '\\').is_some()
-}
-
 pub(crate) enum RuntimeMapCommand {
     Add {
         modes: Vec<MapMode>,
@@ -430,10 +425,6 @@ impl App {
         let mode = self.runtime_map_mode();
         let expanded = self.runtime_keymaps.translate(mode, input)?;
         Some(expanded.into_iter().map(input_to_key_event).collect())
-    }
-
-    pub(crate) fn clear_runtime_map_pending(&mut self) {
-        self.runtime_keymaps.clear_pending();
     }
 }
 
