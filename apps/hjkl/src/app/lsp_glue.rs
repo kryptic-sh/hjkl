@@ -26,7 +26,7 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
 }
 
 /// Small inline map: file extension → LSP language id.
-fn language_id_for_ext(ext: &str) -> Option<&'static str> {
+pub(super) fn language_id_for_ext(ext: &str) -> Option<&'static str> {
     match ext {
         "rs" => Some("rust"),
         "ts" | "tsx" => Some("typescript"),

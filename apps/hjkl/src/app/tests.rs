@@ -2994,24 +2994,22 @@ fn lopen_lists_diags_in_picker() {
 }
 
 #[test]
-fn lsp_info_no_servers_sets_status() {
+fn lsp_info_with_lsp_disabled_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // lsp_state is empty by default.
+    // self.lsp is None by default — :LspInfo shows the disabled state.
     app.show_lsp_info();
-    let msg = app.status_message.clone().unwrap_or_default();
+    let popup = app.info_popup.clone().unwrap_or_default();
     assert!(
-        msg.contains("no LSP servers"),
-        "expected 'no LSP servers' message, got: {msg}"
-    );
-    assert!(
-        app.info_popup.is_none(),
-        "popup must not open with no servers"
+        popup.contains("LSP: disabled"),
+        "expected 'LSP: disabled' message, got: {popup}"
     );
 }
 
 #[test]
 fn lsp_info_lists_running_servers() {
     let mut app = App::new(None, false, None, None).unwrap();
+    // Need an LspManager attached so :LspInfo doesn't show "disabled".
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
     // Manually insert a fake server into lsp_state.
     let key = hjkl_lsp::ServerKey {
         language: "rust".into(),
@@ -3028,7 +3026,7 @@ fn lsp_info_lists_running_servers() {
     app.show_lsp_info();
     assert!(
         app.info_popup.is_some(),
-        "popup must open when servers present"
+        "popup must open when LSP is enabled"
     );
     let popup = app.info_popup.as_ref().unwrap();
     assert!(popup.contains("rust"), "popup must mention server language");
@@ -3036,6 +3034,9 @@ fn lsp_info_lists_running_servers() {
         popup.contains("initialized"),
         "popup must show server state"
     );
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
 }
 
 #[test]

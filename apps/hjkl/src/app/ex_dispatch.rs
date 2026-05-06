@@ -1638,31 +1638,85 @@ impl App {
         self.info_popup = Some(text);
     }
 
-    /// `:LspInfo` — show running LSP servers in info popup.
+    /// `:LspInfo` — show running LSP servers + diagnostic info about the
+    /// active buffer's attach state. Designed to surface the most common
+    /// causes of "why isn't LSP working".
     pub(crate) fn show_lsp_info(&mut self) {
-        if self.lsp_state.is_empty() {
-            self.status_message = Some("no LSP servers running".into());
+        let mut lines = Vec::new();
+
+        // Top: enabled / disabled state.
+        if self.lsp.is_none() {
+            lines.push("LSP: disabled (set [lsp] enabled = true in config)".into());
+            self.info_popup = Some(lines.join("\n"));
             return;
         }
+        lines.push("LSP: enabled".into());
 
-        let mut lines = vec!["LSP Servers".to_string(), "-----------".to_string()];
-        for (i, (key, info)) in self.lsp_state.iter().enumerate() {
-            let state = if info.initialized {
-                "initialized"
-            } else {
-                "starting"
-            };
-            // Summarize capabilities present.
-            let caps = summarize_capabilities(&info.capabilities);
-            lines.push(format!(
-                "[{}] {} @ {}",
-                i + 1,
-                key.language,
-                key.root.display()
-            ));
-            lines.push(format!("    state: {state}"));
-            if !caps.is_empty() {
-                lines.push(format!("    capabilities: {caps}"));
+        // Active buffer diagnostic.
+        let slot = self.active();
+        match slot.filename.as_ref() {
+            None => lines.push("Active buffer: [No Name] — no LSP attach possible".into()),
+            Some(p) => {
+                let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("(none)");
+                let lang = super::lsp_glue::language_id_for_ext(ext);
+                lines.push(format!("Active buffer: {} (ext: {ext})", p.display()));
+                match lang {
+                    None => lines.push(format!("  → no language id mapped for .{ext} extension")),
+                    Some(lang_id) => {
+                        let configured = self.config.lsp.servers.contains_key(lang_id);
+                        lines.push(format!("  → language: {lang_id}"));
+                        if !configured {
+                            lines.push(format!(
+                                "  → NO server configured for {lang_id} \
+                                 (add [lsp.servers.{lang_id}] to your config.toml)"
+                            ));
+                        } else {
+                            lines.push(format!(
+                                "  → server configured: {}",
+                                self.config.lsp.servers[lang_id].command
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        lines.push(String::new());
+
+        // Configured servers in user config.
+        lines.push("Configured servers:".into());
+        if self.config.lsp.servers.is_empty() {
+            lines.push("  (none — add [lsp.servers.<lang>] blocks)".into());
+        } else {
+            for (lang, cfg) in &self.config.lsp.servers {
+                lines.push(format!("  {lang}: {}", cfg.command));
+            }
+        }
+
+        lines.push(String::new());
+
+        // Running servers.
+        if self.lsp_state.is_empty() {
+            lines.push("Running servers: (none)".into());
+        } else {
+            lines.push("Running servers:".into());
+            for (i, (key, info)) in self.lsp_state.iter().enumerate() {
+                let state = if info.initialized {
+                    "initialized"
+                } else {
+                    "starting"
+                };
+                let caps = summarize_capabilities(&info.capabilities);
+                lines.push(format!(
+                    "  [{}] {} @ {}",
+                    i + 1,
+                    key.language,
+                    key.root.display()
+                ));
+                lines.push(format!("      state: {state}"));
+                if !caps.is_empty() {
+                    lines.push(format!("      capabilities: {caps}"));
+                }
             }
         }
 
