@@ -29,10 +29,59 @@ huge_file_threshold = 50000
 name = "dark"
 
 [lsp]
-# LSP subsystem. Disabled by default; flip to true once Phase 2+ ships diagnostics UI.
+# LSP subsystem. Set `enabled = true` in your user config (~/.config/hjkl/config.toml)
+# to opt in. Default off so installs without language servers don't pay the spawn
+# cost. The `[lsp.servers.<lang>]` blocks below ship as sensible defaults — a
+# server only spawns when you open a file matching its language AND the binary
+# resolves on $PATH; missing binaries fail silently.
 enabled = false
 
-# Example server configuration (uncomment and copy to your user config to enable):
-# [lsp.servers.rust]
-# command = "rust-analyzer"
-# root_markers = ["Cargo.toml", ".git"]
+[lsp.servers.rust]
+command = "rust-analyzer"
+root_markers = ["Cargo.toml", ".git"]
+
+[lsp.servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+root_markers = ["package.json", "tsconfig.json", ".git"]
+
+[lsp.servers.javascript]
+command = "typescript-language-server"
+args = ["--stdio"]
+root_markers = ["package.json", "jsconfig.json", ".git"]
+
+[lsp.servers.python]
+command = "pyright-langserver"
+args = ["--stdio"]
+root_markers = ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile", ".git"]
+
+[lsp.servers.go]
+command = "gopls"
+root_markers = ["go.mod", ".git"]
+
+[lsp.servers.c]
+command = "clangd"
+root_markers = ["compile_commands.json", ".clangd", ".git"]
+
+[lsp.servers.cpp]
+command = "clangd"
+root_markers = ["compile_commands.json", ".clangd", ".git"]
+
+[lsp.servers.lua]
+command = "lua-language-server"
+root_markers = [".luarc.json", ".luarc.jsonc", ".git"]
+
+[lsp.servers.toml]
+command = "taplo"
+args = ["lsp", "stdio"]
+root_markers = [".taplo.toml", "taplo.toml", ".git"]
+
+[lsp.servers.json]
+command = "vscode-json-language-server"
+args = ["--stdio"]
+root_markers = [".git"]
+
+[lsp.servers.markdown]
+command = "marksman"
+args = ["server"]
+root_markers = [".marksman.toml", ".git"]
