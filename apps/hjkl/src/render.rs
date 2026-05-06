@@ -118,6 +118,53 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
     }
 }
 
+/// Draw a 1-cell-wide separator between sibling panes.
+///
+/// For `SplitDir::Vertical` (side-by-side panes) the separator is a column
+/// of `│` characters. For `SplitDir::Horizontal` (stacked panes) it is a
+/// row of `─` characters. The separator uses `theme.border` so it matches
+/// the popup / picker border color without requiring a new theme field.
+fn draw_separator(
+    frame: &mut Frame,
+    sep_rect: Rect,
+    dir: window::SplitDir,
+    border_color: ratatui::style::Color,
+) {
+    use ratatui::buffer::Cell;
+    let style = Style::default().fg(border_color);
+    let (glyph, glyph_width) = match dir {
+        window::SplitDir::Vertical => ("│", 1u16),
+        window::SplitDir::Horizontal => ("─", 1u16),
+    };
+    let buf = frame.buffer_mut();
+    match dir {
+        window::SplitDir::Vertical => {
+            // sep_rect is a single column; iterate rows.
+            for row in sep_rect.y..sep_rect.y + sep_rect.height {
+                if let Some(cell) = buf.cell_mut((sep_rect.x, row)) {
+                    *cell = Cell::default();
+                    cell.set_symbol(glyph);
+                    cell.set_style(style);
+                }
+            }
+        }
+        window::SplitDir::Horizontal => {
+            // sep_rect is a single row; iterate columns.
+            let mut col = sep_rect.x;
+            while col < sep_rect.x + sep_rect.width {
+                if let Some(cell) = buf.cell_mut((col, sep_rect.y)) {
+                    *cell = Cell::default();
+                    cell.set_symbol(glyph);
+                    cell.set_style(style);
+                    col += glyph_width;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 /// Walk the layout tree and render each leaf window into its allocated rect.
 /// Takes `&mut LayoutTree` so that Split nodes can record their `last_rect`
 /// for use by resize commands in later phases.
@@ -131,12 +178,66 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
             b,
             last_rect,
         } => {
-            // Record the rect this split occupied so resize commands can
-            // convert line/column deltas to ratio updates.
+            // Record the FULL rect (pre-separator) so that resize commands
+            // can convert line/column deltas to ratio updates correctly.
             *last_rect = Some(area);
+
             let (rect_a, rect_b) = split_rect(area, *dir, *ratio);
+
+            // Carve a 1-cell separator between the two child rects and
+            // shrink the right/bottom child by 1 cell so children never
+            // overlap the separator. Skip when the rect is too small.
+            let border_color = app.theme.ui.border;
+            let (rect_a, sep_rect, rect_b) = match *dir {
+                window::SplitDir::Vertical => {
+                    // Side-by-side: separator is the rightmost column of rect_a.
+                    // Shrink rect_a by 1 on the right; sep is that freed column;
+                    // rect_b stays (it already starts right after rect_a).
+                    if rect_a.width < 2 || rect_b.width == 0 {
+                        // Too narrow — no separator, pass through as-is.
+                        (rect_a, None, rect_b)
+                    } else {
+                        let a_shrunk = Rect {
+                            width: rect_a.width.saturating_sub(1),
+                            ..rect_a
+                        };
+                        let sep = Rect {
+                            x: rect_a.x + rect_a.width.saturating_sub(1),
+                            y: rect_a.y,
+                            width: 1,
+                            height: rect_a.height,
+                        };
+                        (a_shrunk, Some(sep), rect_b)
+                    }
+                }
+                window::SplitDir::Horizontal => {
+                    // Stacked: separator is the bottom row of rect_a.
+                    if rect_a.height < 2 || rect_b.height == 0 {
+                        (rect_a, None, rect_b)
+                    } else {
+                        let a_shrunk = Rect {
+                            height: rect_a.height.saturating_sub(1),
+                            ..rect_a
+                        };
+                        let sep = Rect {
+                            x: rect_a.x,
+                            y: rect_a.y + rect_a.height.saturating_sub(1),
+                            width: rect_a.width,
+                            height: 1,
+                        };
+                        (a_shrunk, Some(sep), rect_b)
+                    }
+                }
+            };
+
             render_layout(frame, app, rect_a, a);
             render_layout(frame, app, rect_b, b);
+
+            // Draw separator on top of both children after they render so
+            // that no window content bleeds into the separator cell.
+            if let Some(sep) = sep_rect {
+                draw_separator(frame, sep, *dir, border_color);
+            }
         }
     }
 }
