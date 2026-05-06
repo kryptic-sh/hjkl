@@ -554,3 +554,76 @@ impl PickerLogic for HighlightedRgSource {
         self.inner.enumerate(query, cancel)
     }
 }
+
+// ── DiagSource ────────────────────────────────────────────────────────────────
+
+/// A single entry in the LSP diagnostic picker.
+pub struct DiagEntry {
+    /// Formatted label shown in the picker list.
+    pub label: String,
+    /// 0-based row the diagnostic starts on (used to jump after selection).
+    pub start_row: usize,
+    /// 0-based col the diagnostic starts on.
+    pub start_col: usize,
+}
+
+/// Picker source that lists LSP diagnostics for the active buffer.
+pub struct DiagSource {
+    entries: Vec<DiagEntry>,
+}
+
+impl DiagSource {
+    pub fn new(entries: Vec<DiagEntry>) -> Self {
+        Self { entries }
+    }
+}
+
+impl PickerLogic for DiagSource {
+    fn title(&self) -> &str {
+        "diagnostics"
+    }
+
+    fn item_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.entries
+            .get(idx)
+            .map(|e| e.label.clone())
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        false
+    }
+
+    fn preview(&self, _idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        (
+            hjkl_buffer::Buffer::new(),
+            String::new(),
+            PreviewSpans::default(),
+        )
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self.entries.get(idx) {
+            Some(e) => {
+                PickerAction::Custom(Box::new(AppAction::JumpToRowCol(e.start_row, e.start_col)))
+            }
+            None => PickerAction::None,
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        _cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        None
+    }
+}

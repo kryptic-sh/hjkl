@@ -2680,3 +2680,374 @@ fn ctrl_w_t_moves_window_to_new_tab() {
     let msg = app.status_message.clone().unwrap_or_default();
     assert_eq!(msg, "moved window to new tab");
 }
+
+// ── LSP diagnostics tests ────────────────────────────────────────────────
+
+/// Build a `textDocument/publishDiagnostics` JSON payload for `file_url`
+/// containing one error diagnostic.
+fn pub_diags_params(file_url: &str, diags: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "uri": file_url,
+        "diagnostics": diags,
+    })
+}
+
+/// Returns the file:// URL string for an absolute path.
+fn file_url(path: &std::path::Path) -> String {
+    format!("file://{}", path.display())
+}
+
+#[test]
+fn publish_diagnostics_populates_slot_diags() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Give the active slot an absolute file path.
+    let path = std::path::PathBuf::from("/tmp/hjkl_diag_test.rs");
+    app.active_mut().filename = Some(path.clone());
+
+    seed_buffer(&mut app, "let x = ();\nlet y = ();");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": {
+                "start": { "line": 0, "character": 4 },
+                "end":   { "line": 0, "character": 5 }
+            },
+            "severity": 1,
+            "message": "unused variable",
+            "source": "rustc",
+            "code": "E0001"
+        }]),
+    );
+
+    app.handle_publish_diagnostics(params);
+
+    let slot = app.active();
+    assert_eq!(slot.lsp_diags.len(), 1);
+    let d = &slot.lsp_diags[0];
+    assert_eq!(d.start_row, 0);
+    assert_eq!(d.start_col, 4);
+    assert_eq!(d.end_row, 0);
+    assert_eq!(d.end_col, 5);
+    assert_eq!(d.severity, DiagSeverity::Error);
+    assert_eq!(d.message, "unused variable");
+    assert_eq!(d.source.as_deref(), Some("rustc"));
+    assert_eq!(d.code.as_deref(), Some("E0001"));
+
+    // Gutter sign must be present for row 0.
+    assert!(
+        slot.diag_signs_lsp
+            .iter()
+            .any(|s| s.row == 0 && s.ch == 'E'),
+        "expected an 'E' gutter sign for row 0"
+    );
+}
+
+#[test]
+fn publish_diagnostics_replaces_existing() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_diag_replace.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc");
+
+    // First publish: two diags.
+    let params1 = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                "severity": 1,
+                "message": "err A"
+            },
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 2,
+                "message": "warn B"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params1);
+    assert_eq!(app.active().lsp_diags.len(), 2);
+
+    // Second publish: one diag — must replace, not append.
+    let params2 = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 1 } },
+            "severity": 3,
+            "message": "info C"
+        }]),
+    );
+    app.handle_publish_diagnostics(params2);
+
+    let slot = app.active();
+    assert_eq!(
+        slot.lsp_diags.len(),
+        1,
+        "second publish must replace, not append"
+    );
+    assert_eq!(slot.lsp_diags[0].message, "info C");
+    assert_eq!(slot.lsp_diags[0].severity, DiagSeverity::Info);
+    // Old signs must be replaced too.
+    assert_eq!(slot.diag_signs_lsp.len(), 1);
+    assert_eq!(slot.diag_signs_lsp[0].row, 2);
+}
+
+#[test]
+fn publish_diagnostics_clears_on_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_diag_clear.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a");
+
+    let params_with = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "err"
+        }]),
+    );
+    app.handle_publish_diagnostics(params_with);
+    assert_eq!(app.active().lsp_diags.len(), 1);
+
+    // Empty diagnostics array clears all diags.
+    let params_clear = pub_diags_params(&file_url(&path), serde_json::json!([]));
+    app.handle_publish_diagnostics(params_clear);
+
+    let slot = app.active();
+    assert!(slot.lsp_diags.is_empty(), "empty publish must clear diags");
+    assert!(
+        slot.diag_signs_lsp.is_empty(),
+        "empty publish must clear gutter signs"
+    );
+}
+
+#[test]
+fn publish_diagnostics_ignores_unknown_uri() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_diag_known.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a");
+
+    // Params targeting a *different* file — should be silently ignored.
+    let params = pub_diags_params(
+        "file:///tmp/hjkl_diag_unknown.rs",
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "err"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    assert!(
+        app.active().lsp_diags.is_empty(),
+        "unmatched URI must not populate diags"
+    );
+}
+
+#[test]
+fn lnext_jumps_to_next_diag() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_lnext.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc\nhello world");
+
+    // Plant diags on rows 1 and 3.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 1,
+                "message": "first"
+            },
+            {
+                "range": { "start": { "line": 3, "character": 6 }, "end": { "line": 3, "character": 11 } },
+                "severity": 2,
+                "message": "second"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Cursor at row 0 — lnext should jump to row 1.
+    app.lnext_severity(None);
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 1, "lnext must jump to first diag after cursor");
+
+    // Cursor now at row 1 — lnext should jump to row 3.
+    app.lnext_severity(None);
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 3);
+    assert_eq!(col, 6, "lnext must place cursor at diag start_col");
+}
+
+#[test]
+fn lprev_jumps_to_prev_diag_with_wrap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_lprev.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc\nd");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                "severity": 1,
+                "message": "first"
+            },
+            {
+                "range": { "start": { "line": 2, "character": 1 }, "end": { "line": 2, "character": 2 } },
+                "severity": 2,
+                "message": "second"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Cursor at row 0 col 0 — lprev should wrap to the last diag (row 2).
+    app.lprev_severity(None);
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 2, "lprev from first diag must wrap to last");
+
+    // Cursor now at row 2 — lprev should jump to row 0.
+    app.lprev_severity(None);
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 0, "lprev must jump to previous diag");
+}
+
+#[test]
+fn lnext_severity_skips_lower_severity() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_lnext_sev.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc");
+
+    // Row 1: Warning, Row 2: Error.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 2,
+                "message": "warn"
+            },
+            {
+                "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 1 } },
+                "severity": 1,
+                "message": "err"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Jump to Error-only — must skip Warning on row 1 and land on row 2.
+    app.lnext_severity(Some(DiagSeverity::Error));
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 2, "lnext with Error filter must skip Warning diags");
+}
+
+#[test]
+fn lopen_shows_no_diags_message_when_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_diag_picker();
+    // No diagnostics — picker must not open; status message set.
+    assert!(app.picker.is_none(), "picker must not open when no diags");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no diagnostics"),
+        "expected 'no diagnostics', got: {msg}"
+    );
+}
+
+#[test]
+fn lopen_lists_diags_in_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = std::path::PathBuf::from("/tmp/hjkl_lopen.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "some error"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    app.open_diag_picker();
+    assert!(app.picker.is_some(), "picker must open when diags exist");
+}
+
+#[test]
+fn lsp_info_no_servers_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // lsp_state is empty by default.
+    app.show_lsp_info();
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no LSP servers"),
+        "expected 'no LSP servers' message, got: {msg}"
+    );
+    assert!(
+        app.info_popup.is_none(),
+        "popup must not open with no servers"
+    );
+}
+
+#[test]
+fn lsp_info_lists_running_servers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Manually insert a fake server into lsp_state.
+    let key = hjkl_lsp::ServerKey {
+        language: "rust".into(),
+        root: std::path::PathBuf::from("/tmp/proj"),
+    };
+    app.lsp_state.insert(
+        key,
+        LspServerInfo {
+            initialized: true,
+            capabilities: serde_json::json!({}),
+        },
+    );
+
+    app.show_lsp_info();
+    assert!(
+        app.info_popup.is_some(),
+        "popup must open when servers present"
+    );
+    let popup = app.info_popup.as_ref().unwrap();
+    assert!(popup.contains("rust"), "popup must mention server language");
+    assert!(
+        popup.contains("initialized"),
+        "popup must show server state"
+    );
+}
+
+#[test]
+fn notify_change_skipped_when_dirty_gen_unchanged() {
+    // Without a real LspManager we can't exercise the full path, but we
+    // *can* verify that the last_lsp_dirty_gen guard does not reset on
+    // repeated calls with no edits: the gen stays the same, so the
+    // second call would be a no-op (it would return early). We assert
+    // the guard value is set correctly after a manual seed.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // No LSP manager attached — lsp_notify_change_active returns early.
+    // Manually set last_lsp_dirty_gen to simulate a prior send.
+    let dg = app.active().editor.buffer().dirty_gen();
+    app.active_mut().last_lsp_dirty_gen = Some(dg);
+
+    // Call again — must not panic and must not reset the guard.
+    app.lsp_notify_change_active();
+    assert_eq!(
+        app.active().last_lsp_dirty_gen,
+        Some(dg),
+        "guard must remain unchanged when no LSP manager"
+    );
+}

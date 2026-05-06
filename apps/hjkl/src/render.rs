@@ -4,7 +4,7 @@
 //! It splits the terminal area into a buffer pane + status line row and
 //! delegates to [`buffer_pane`] and [`status_line`].
 
-use hjkl_buffer::{BufferView, Gutter, GutterNumbers, Viewport};
+use hjkl_buffer::{BufferView, DiagOverlay, Gutter, GutterNumbers, Viewport};
 use hjkl_engine::{Host, Query};
 use ratatui::{
     Frame,
@@ -14,7 +14,48 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{App, BUFFER_LINE_HEIGHT, DiskState, STATUS_LINE_HEIGHT, TAB_BAR_HEIGHT, window};
+use crate::app::{
+    App, BUFFER_LINE_HEIGHT, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TAB_BAR_HEIGHT, window,
+};
+
+/// Build the style for a diagnostic severity used in overlays and the status line.
+fn diag_severity_style(sev: DiagSeverity) -> Style {
+    match sev {
+        DiagSeverity::Error => Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::UNDERLINED),
+        DiagSeverity::Warning => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::UNDERLINED),
+        DiagSeverity::Info => Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::UNDERLINED),
+        DiagSeverity::Hint => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::UNDERLINED),
+    }
+}
+
+/// Build `DiagOverlay` items for the active buffer slot, filtered to the
+/// visible viewport. Called once per frame in `render_window`.
+fn build_diag_overlays(
+    slot: &crate::app::BufferSlot,
+    _ui: &crate::theme::UiTheme,
+) -> Vec<DiagOverlay> {
+    slot.lsp_diags
+        .iter()
+        .map(|d| DiagOverlay {
+            row: d.start_row,
+            col_start: d.start_col,
+            col_end: if d.end_row == d.start_row && d.end_col > d.start_col {
+                d.end_col
+            } else {
+                d.start_col + 1
+            },
+            style: diag_severity_style(d.severity),
+        })
+        .collect()
+}
 
 /// Gutter width formula — matches `Editor::cursor_screen_pos`'s
 /// `lnum_width = max(numberwidth, line_count.to_string().len() + 1)`.
@@ -184,7 +225,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let in_prompt =
         app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
 
-    // Merge diagnostic + git signs, filtered to the visible viewport.
+    // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
     let vp_bot = vp_top + area.height as usize;
     let mut visible_signs: Vec<hjkl_buffer::Sign> = app.slots()[slot_idx]
@@ -192,6 +233,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .iter()
         .copied()
         .filter(|s| s.row >= vp_top && s.row < vp_bot)
+        .chain(
+            app.slots()[slot_idx]
+                .diag_signs_lsp
+                .iter()
+                .copied()
+                .filter(|s| s.row >= vp_top && s.row < vp_bot),
+        )
         .chain(
             app.slots()[slot_idx]
                 .git_signs
@@ -220,6 +268,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // For non-focused windows, don't show cursor highlight or cursor position.
     let show_cursor = is_focused && !in_prompt;
 
+    let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
@@ -240,6 +289,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         spans: buffer_spans,
         search_pattern,
         non_text_style: Style::default().fg(app.theme.ui.non_text),
+        diag_overlays: &diag_overlays,
     };
     frame.render_widget(view, area);
 
@@ -773,6 +823,48 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     let search_count_block: String = search_count(app)
         .map(|(idx, total)| format!(" [{idx}/{total}] "))
         .unwrap_or_default();
+    // LSP diag count block: E:N W:N ... skip zero-count categories.
+    let diag_count_block: String = {
+        let diags = &app.active().lsp_diags;
+        if diags.is_empty() {
+            String::new()
+        } else {
+            let e = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Error)
+                .count();
+            let w2 = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Warning)
+                .count();
+            let i = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Info)
+                .count();
+            let h = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Hint)
+                .count();
+            let mut parts = Vec::new();
+            if e > 0 {
+                parts.push(format!("E:{e}"));
+            }
+            if w2 > 0 {
+                parts.push(format!("W:{w2}"));
+            }
+            if i > 0 {
+                parts.push(format!("I:{i}"));
+            }
+            if h > 0 {
+                parts.push(format!("H:{h}"));
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" {} ", parts.join(" "))
+            }
+        }
+    };
     let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
 
     // Filename block — surface bg, with leading + trailing space.
@@ -785,6 +877,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         + suffix.len()
         + dirty_block.len()
         + search_count_block.len()
+        + diag_count_block.len()
         + pos_block.len()
         + pct_block.len();
     let avail_for_name = w.saturating_sub(reserved);
@@ -806,6 +899,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         + mid_block.len()
         + dirty_block.len()
         + search_count_block.len()
+        + diag_count_block.len()
         + pos_block.len()
         + pct_block.len();
     let spacer: String = " ".repeat(w.saturating_sub(used));
@@ -833,6 +927,23 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     }
     if !search_count_block.is_empty() {
         spans.push(Span::styled(search_count_block, mid_style));
+    }
+    if !diag_count_block.is_empty() {
+        // Color the diag count by the highest-severity present.
+        let diags = &app.active().lsp_diags;
+        let diag_style = if diags.iter().any(|d| d.severity == DiagSeverity::Error) {
+            Style::default()
+                .bg(ui.surface_bg)
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD)
+        } else if diags.iter().any(|d| d.severity == DiagSeverity::Warning) {
+            Style::default().bg(ui.surface_bg).fg(Color::Yellow)
+        } else if diags.iter().any(|d| d.severity == DiagSeverity::Info) {
+            Style::default().bg(ui.surface_bg).fg(Color::Blue)
+        } else {
+            Style::default().bg(ui.surface_bg).fg(Color::Cyan)
+        };
+        spans.push(Span::styled(diag_count_block, diag_style));
     }
     spans.push(Span::styled(spacer, fill_style));
     spans.push(Span::styled(pos_block, mid_style));
@@ -1126,6 +1237,7 @@ fn picker_preview_pane(
         spans: &preview_spans.by_row,
         search_pattern: None,
         non_text_style: Style::default().fg(theme.non_text),
+        diag_overlays: &[],
     };
     frame.render_widget(view, inner);
 }

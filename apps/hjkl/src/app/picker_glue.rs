@@ -284,6 +284,10 @@ impl App {
             AppAction::StashApply(idx) => self.do_stash_apply(idx),
             AppAction::StashPop(idx) => self.do_stash_pop(idx),
             AppAction::StashDrop(idx) => self.do_stash_drop(idx),
+            AppAction::JumpToRowCol(row, col) => {
+                self.active_mut().editor.jump_cursor(row, col);
+                self.sync_viewport_from_editor();
+            }
         }
     }
 
@@ -714,6 +718,9 @@ fn build_scratch_slot(
         is_new_file: false,
         is_untracked: false,
         diag_signs: signs,
+        diag_signs_lsp: Vec::new(),
+        lsp_diags: Vec::new(),
+        last_lsp_dirty_gen: None,
         git_signs: Vec::new(),
         last_git_dirty_gen: None,
         last_git_refresh_at: Instant::now(),

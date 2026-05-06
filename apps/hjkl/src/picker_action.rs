@@ -14,4 +14,7 @@ pub enum AppAction {
     StashApply(usize),
     StashPop(usize),
     StashDrop(usize),
+    /// Jump the active buffer's cursor to a specific (0-based) row + col.
+    /// Used by the diagnostic picker to land on the diag start position.
+    JumpToRowCol(usize, usize),
 }

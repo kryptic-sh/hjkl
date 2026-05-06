@@ -194,6 +194,10 @@ impl App {
                                     // Begin git sub-command chord.
                                     self.pending_git = true;
                                 }
+                                KeyCode::Char('d') => {
+                                    // <leader>d — show diag-at-cursor in info popup.
+                                    self.show_diag_at_cursor();
+                                }
                                 _ => {}
                             }
                         }
@@ -387,6 +391,24 @@ impl App {
                                     self.buffer_prev();
                                     continue;
                                 }
+                                // ]d / [d — navigate diagnostics
+                                (']', KeyCode::Char('d')) => {
+                                    self.dispatch_ex("lnext");
+                                    continue;
+                                }
+                                ('[', KeyCode::Char('d')) => {
+                                    self.dispatch_ex("lprev");
+                                    continue;
+                                }
+                                // ]D / [D — navigate error-only diagnostics
+                                (']', KeyCode::Char('D')) => {
+                                    self.lnext_severity(Some(super::DiagSeverity::Error));
+                                    continue;
+                                }
+                                ('[', KeyCode::Char('D')) => {
+                                    self.lprev_severity(Some(super::DiagSeverity::Error));
+                                    continue;
+                                }
                                 // Didn't match — forward only the current key;
                                 // drop the pending prefix (g/]/[ alone has no
                                 // other mapped meaning in our engine yet).
@@ -465,6 +487,8 @@ impl App {
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
+                    // Notify LSP of content change (dirty-gen-gated debounce).
+                    self.lsp_notify_change_active();
                     self.recompute_and_install();
                 }
                 Event::Resize(w, h) => {

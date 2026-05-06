@@ -391,6 +391,35 @@ impl App {
             return;
         }
 
+        // ── LSP diagnostic commands ───────────────────────────────────────────
+        match cmd {
+            "lopen" => {
+                self.open_diag_picker();
+                return;
+            }
+            "lnext" => {
+                self.lnext_severity(None);
+                return;
+            }
+            "lprev" => {
+                self.lprev_severity(None);
+                return;
+            }
+            "lfirst" => {
+                self.ldiag_first();
+                return;
+            }
+            "llast" => {
+                self.ldiag_last();
+                return;
+            }
+            "LspInfo" => {
+                self.show_lsp_info();
+                return;
+            }
+            _ => {}
+        }
+
         let active_slot = self.focused_slot_idx();
         match ex::run(&mut self.slots[active_slot].editor, cmd) {
             ExEffect::None => {}
@@ -611,6 +640,9 @@ impl App {
                 is_new_file: false,
                 is_untracked: false,
                 diag_signs: Vec::new(),
+                diag_signs_lsp: Vec::new(),
+                lsp_diags: Vec::new(),
+                last_lsp_dirty_gen: None,
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
@@ -685,6 +717,9 @@ impl App {
                 is_new_file: false,
                 is_untracked: false,
                 diag_signs: Vec::new(),
+                diag_signs_lsp: Vec::new(),
+                lsp_diags: Vec::new(),
+                last_lsp_dirty_gen: None,
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
@@ -1283,6 +1318,9 @@ impl App {
                 is_new_file: false,
                 is_untracked: false,
                 diag_signs: Vec::new(),
+                diag_signs_lsp: Vec::new(),
+                lsp_diags: Vec::new(),
+                last_lsp_dirty_gen: None,
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
@@ -1388,4 +1426,244 @@ impl App {
         let m = self.tabs.len();
         self.status_message = Some(format!("tab {n}/{m}"));
     }
+
+    // ── LSP diagnostic navigation ─────────────────────────────────────────────
+
+    /// `:lopen` — open a picker listing all LSP diagnostics for the active buffer.
+    pub(crate) fn open_diag_picker(&mut self) {
+        let diags = self.active().lsp_diags.clone();
+        if diags.is_empty() {
+            self.status_message = Some("no diagnostics".into());
+            return;
+        }
+
+        let entries: Vec<crate::picker_sources::DiagEntry> = diags
+            .iter()
+            .map(|d| {
+                let src = d.source.as_deref().unwrap_or("");
+                let code = d.code.as_deref().unwrap_or("");
+                let annotation = match (src, code) {
+                    ("", "") => String::new(),
+                    (s, "") | ("", s) => format!(" ({s})"),
+                    (s, c) => format!(" ({s}[{c}])"),
+                };
+                crate::picker_sources::DiagEntry {
+                    label: format!(
+                        "{}:{} [{}]{} {}",
+                        d.start_row + 1,
+                        d.start_col + 1,
+                        sev_label(d.severity),
+                        annotation,
+                        d.message.lines().next().unwrap_or("")
+                    ),
+                    start_row: d.start_row,
+                    start_col: d.start_col,
+                }
+            })
+            .collect();
+
+        let source = Box::new(crate::picker_sources::DiagSource::new(entries));
+        self.picker = Some(crate::picker::Picker::new(source));
+    }
+
+    /// Jump to the next diagnostic (optionally filtered by minimum severity).
+    /// `severity` = `Some(Error)` means skip non-Error diags.
+    pub(crate) fn lnext_severity(&mut self, severity: Option<super::DiagSeverity>) {
+        let (row, col) = self.active().editor.cursor();
+        // Clone data we need before any mutable borrow.
+        let candidates: Vec<super::LspDiag> = self
+            .active()
+            .lsp_diags
+            .iter()
+            .filter(|d| severity.is_none_or(|s| d.severity <= s))
+            .cloned()
+            .collect();
+
+        if candidates.is_empty() {
+            self.status_message = Some("no diagnostics".into());
+            return;
+        }
+
+        // Find the first diag after the current cursor position; wrap around.
+        let target = candidates
+            .iter()
+            .find(|d| (d.start_row, d.start_col) > (row, col))
+            .or_else(|| candidates.first())
+            .cloned();
+
+        if let Some(d) = target {
+            self.active_mut()
+                .editor
+                .jump_cursor(d.start_row, d.start_col);
+            self.sync_viewport_from_editor();
+            let msg = d.message.lines().next().unwrap_or("").to_string();
+            self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+        }
+    }
+
+    /// Jump to the previous diagnostic (optionally filtered).
+    pub(crate) fn lprev_severity(&mut self, severity: Option<super::DiagSeverity>) {
+        let (row, col) = self.active().editor.cursor();
+        let candidates: Vec<super::LspDiag> = self
+            .active()
+            .lsp_diags
+            .iter()
+            .filter(|d| severity.is_none_or(|s| d.severity <= s))
+            .cloned()
+            .collect();
+
+        if candidates.is_empty() {
+            self.status_message = Some("no diagnostics".into());
+            return;
+        }
+
+        // Find the last diag before the current cursor position; wrap around.
+        let target = candidates
+            .iter()
+            .rev()
+            .find(|d| (d.start_row, d.start_col) < (row, col))
+            .or_else(|| candidates.last())
+            .cloned();
+
+        if let Some(d) = target {
+            self.active_mut()
+                .editor
+                .jump_cursor(d.start_row, d.start_col);
+            self.sync_viewport_from_editor();
+            let msg = d.message.lines().next().unwrap_or("").to_string();
+            self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+        }
+    }
+
+    /// `:lfirst` — jump to the first diagnostic.
+    pub(crate) fn ldiag_first(&mut self) {
+        let target = self.active().lsp_diags.first().cloned();
+        match target {
+            None => {
+                self.status_message = Some("no diagnostics".into());
+            }
+            Some(d) => {
+                self.active_mut()
+                    .editor
+                    .jump_cursor(d.start_row, d.start_col);
+                self.sync_viewport_from_editor();
+                let msg = d.message.lines().next().unwrap_or("").to_string();
+                self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+            }
+        }
+    }
+
+    /// `:llast` — jump to the last diagnostic.
+    pub(crate) fn ldiag_last(&mut self) {
+        let target = self.active().lsp_diags.last().cloned();
+        match target {
+            None => {
+                self.status_message = Some("no diagnostics".into());
+            }
+            Some(d) => {
+                self.active_mut()
+                    .editor
+                    .jump_cursor(d.start_row, d.start_col);
+                self.sync_viewport_from_editor();
+                let msg = d.message.lines().next().unwrap_or("").to_string();
+                self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+            }
+        }
+    }
+
+    /// `<leader>d` — show all diagnostics overlapping the cursor in info popup.
+    pub(crate) fn show_diag_at_cursor(&mut self) {
+        let (row, col) = self.active().editor.cursor();
+        let diags = &self.active().lsp_diags;
+        let hits: Vec<_> = diags
+            .iter()
+            .filter(|d| {
+                // Overlaps cursor if cursor falls within [start, end).
+                let after_start = (row, col) >= (d.start_row, d.start_col);
+                let before_end = (row, col) < (d.end_row, d.end_col)
+                    || (row == d.end_row && d.end_col == 0 && row == d.start_row);
+                after_start && (before_end || row == d.start_row)
+            })
+            .collect();
+
+        if hits.is_empty() {
+            self.status_message = Some("no diagnostics at cursor".into());
+            return;
+        }
+
+        let text = hits
+            .iter()
+            .map(|d| format!("[{}] {}", sev_label(d.severity), d.message))
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+        self.info_popup = Some(text);
+    }
+
+    /// `:LspInfo` — show running LSP servers in info popup.
+    pub(crate) fn show_lsp_info(&mut self) {
+        if self.lsp_state.is_empty() {
+            self.status_message = Some("no LSP servers running".into());
+            return;
+        }
+
+        let mut lines = vec!["LSP Servers".to_string(), "-----------".to_string()];
+        for (i, (key, info)) in self.lsp_state.iter().enumerate() {
+            let state = if info.initialized {
+                "initialized"
+            } else {
+                "starting"
+            };
+            // Summarize capabilities present.
+            let caps = summarize_capabilities(&info.capabilities);
+            lines.push(format!(
+                "[{}] {} @ {}",
+                i + 1,
+                key.language,
+                key.root.display()
+            ));
+            lines.push(format!("    state: {state}"));
+            if !caps.is_empty() {
+                lines.push(format!("    capabilities: {caps}"));
+            }
+        }
+
+        self.info_popup = Some(lines.join("\n"));
+    }
+}
+
+/// Short severity label.
+fn sev_label(s: super::DiagSeverity) -> &'static str {
+    match s {
+        super::DiagSeverity::Error => "E",
+        super::DiagSeverity::Warning => "W",
+        super::DiagSeverity::Info => "I",
+        super::DiagSeverity::Hint => "H",
+    }
+}
+
+/// Build a comma-separated list of capability names present in an LSP
+/// server capabilities JSON object.
+fn summarize_capabilities(caps: &serde_json::Value) -> String {
+    let known = &[
+        ("hoverProvider", "hover"),
+        ("definitionProvider", "definition"),
+        ("completionProvider", "completion"),
+        ("referencesProvider", "references"),
+        ("documentFormattingProvider", "formatting"),
+        ("renameProvider", "rename"),
+        ("codeActionProvider", "codeAction"),
+        ("signatureHelpProvider", "signatureHelp"),
+    ];
+    let mut out = Vec::new();
+    if let Some(obj) = caps.as_object() {
+        for (key, label) in known {
+            if obj
+                .get(*key)
+                .is_some_and(|v| v.as_bool().unwrap_or(true) && !v.is_null())
+            {
+                out.push(*label);
+            }
+        }
+    }
+    out.join(", ")
 }

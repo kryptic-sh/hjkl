@@ -5,6 +5,7 @@ use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
 use hjkl_form::TextFieldEditor;
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -111,6 +112,38 @@ pub enum SearchDir {
     Backward,
 }
 
+/// LSP diagnostic severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DiagSeverity {
+    Error = 1,
+    Warning = 2,
+    Info = 3,
+    Hint = 4,
+}
+
+/// A single LSP diagnostic stored on a `BufferSlot`.
+#[derive(Debug, Clone)]
+pub struct LspDiag {
+    /// 0-based start row.
+    pub start_row: usize,
+    /// 0-based start char-column.
+    pub start_col: usize,
+    /// 0-based end row.
+    pub end_row: usize,
+    /// 0-based end char-column.
+    pub end_col: usize,
+    pub severity: DiagSeverity,
+    pub message: String,
+    pub source: Option<String>,
+    pub code: Option<String>,
+}
+
+/// Snapshot of a running LSP server's state, tracked by the app.
+pub struct LspServerInfo {
+    pub initialized: bool,
+    pub capabilities: serde_json::Value,
+}
+
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 pub struct BufferSlot {
@@ -135,6 +168,16 @@ pub struct BufferSlot {
     /// current viewport. Refreshed by `recompute_and_install`; read by
     /// `render::buffer_pane`.
     pub diag_signs: Vec<hjkl_buffer::Sign>,
+    /// LSP diagnostic gutter signs. Separate from `diag_signs` so the
+    /// oracle/syntax source can be cleared independently of LSP.
+    pub diag_signs_lsp: Vec<hjkl_buffer::Sign>,
+    /// Full LSP diagnostic list for the buffer. Replaced wholesale each
+    /// time `textDocument/publishDiagnostics` arrives (server is source
+    /// of truth — empty notification clears all diags).
+    pub lsp_diags: Vec<LspDiag>,
+    /// `dirty_gen` of the buffer the last time we sent `textDocument/didChange`
+    /// to the LSP. `None` = never sent.
+    pub(crate) last_lsp_dirty_gen: Option<u64>,
     /// Git diff signs (`+` / `~` / `_`) against HEAD. Recomputed
     /// whenever the buffer's `dirty_gen` advances so unsaved edits
     /// show in the gutter live. Filtered to the viewport per-frame
@@ -272,6 +315,9 @@ pub struct App {
     pub(crate) grammar_load_error: Option<GrammarLoadError>,
     /// LSP subsystem handle. `None` when `config.lsp.enabled = false` (default).
     pub lsp: Option<hjkl_lsp::LspManager>,
+    /// Tracks the state of running LSP servers. Populated/updated by
+    /// `drain_lsp_events` on `ServerInitialized` / `ServerExited`.
+    pub lsp_state: HashMap<hjkl_lsp::ServerKey, LspServerInfo>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -376,6 +422,9 @@ pub(super) fn build_slot(
         is_new_file,
         is_untracked: false,
         diag_signs: signs,
+        diag_signs_lsp: Vec::new(),
+        lsp_diags: Vec::new(),
+        last_lsp_dirty_gen: None,
         git_signs: Vec::new(),
         last_git_dirty_gen: None,
         last_git_refresh_at: Instant::now(),
@@ -863,6 +912,7 @@ impl App {
             start_screen,
             grammar_load_error: None,
             lsp: None,
+            lsp_state: HashMap::new(),
         })
     }
 

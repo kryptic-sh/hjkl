@@ -984,6 +984,7 @@ dependencies = [
  "hjkl-ratatui",
  "hjkl-splash",
  "ignore",
+ "lsp-types",
  "nvim-rs",
  "ratatui",
  "regex",
@@ -994,6 +995,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1015,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "proptest",
