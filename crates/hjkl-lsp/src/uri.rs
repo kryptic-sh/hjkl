@@ -32,9 +32,27 @@ pub fn to_path(u: &url::Url) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // `url::Url::from_file_path` requires platform-absolute paths: Unix-style
+    // (`/foo`) on Unix, drive-rooted (`C:\foo`) on Windows. The roundtrip
+    // semantics are the same on both; only the input path syntax differs.
+    #[cfg(unix)]
+    const SIMPLE: &str = "/home/user/foo.rs";
+    #[cfg(windows)]
+    const SIMPLE: &str = r"C:\Users\user\foo.rs";
+
+    #[cfg(unix)]
+    const WITH_SPACES: &str = "/home/user/my project/foo bar.rs";
+    #[cfg(windows)]
+    const WITH_SPACES: &str = r"C:\Users\user\my project\foo bar.rs";
+
+    #[cfg(unix)]
+    const NESTED: &str = "/a/b/c/d/e.toml";
+    #[cfg(windows)]
+    const NESTED: &str = r"C:\a\b\c\d\e.toml";
+
     #[test]
     fn roundtrip_simple_path() {
-        let p = Path::new("/home/user/foo.rs");
+        let p = Path::new(SIMPLE);
         let url = from_path(p).unwrap();
         assert_eq!(url.scheme(), "file");
         let back = to_path(&url).unwrap();
@@ -43,7 +61,7 @@ mod tests {
 
     #[test]
     fn roundtrip_path_with_spaces() {
-        let p = Path::new("/home/user/my project/foo bar.rs");
+        let p = Path::new(WITH_SPACES);
         let url = from_path(p).unwrap();
         assert!(
             url.as_str().contains("%20"),
@@ -55,7 +73,7 @@ mod tests {
 
     #[test]
     fn roundtrip_nested_path() {
-        let p = Path::new("/a/b/c/d/e.toml");
+        let p = Path::new(NESTED);
         let url = from_path(p).unwrap();
         let back = to_path(&url).unwrap();
         assert_eq!(back, p);
