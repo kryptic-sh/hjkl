@@ -223,7 +223,17 @@ impl App {
         };
         h.reset();
         h.parse_initial(bytes);
-        let mut flat = h.highlight_range(bytes, 0..bytes.len());
+        // Resolve injected languages via the async loader so unknown grammars
+        // kick off a background clone+compile (global spinner reflects this);
+        // returns None while loading so the parent renders without injection
+        // spans for now — the next preview tick after the grammar lands picks
+        // up the Cached fast path and fills in the children.
+        let directory = std::sync::Arc::clone(&self.directory);
+        let resolve = move |name: &str| match directory.request_by_name(name) {
+            GrammarRequest::Cached(g) => Some(g),
+            GrammarRequest::Loading { .. } | GrammarRequest::Unknown => None,
+        };
+        let mut flat = h.highlight_range_with_injections(bytes, 0..bytes.len(), resolve);
         drop(cache);
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = self.theme.syntax.clone();
