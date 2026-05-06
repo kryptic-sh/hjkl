@@ -7,16 +7,19 @@ Vim-modal terminal editor. Standalone TUI built on the hjkl engine.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
 [![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
-Native vim-modal editor. Single static binary, no plugins, no config files.
-Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) + rope buffer.
+Native vim-modal editor. Single static binary, no plugins, no config files
+required. Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) +
+rope buffer.
 
 ## Status
 
-`0.4.0` — multi-buffer editing, fuzzy file/buffer/grep pickers with
-syntax-highlighted preview, tree-sitter highlighting + comment-marker overlay,
-smart indent, `.editorconfig`, `softtabstop`, and clipboard via our in-house
-[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard) (sync + async, OSC
-52 SSH fallback). See [SCOPE.md](SCOPE.md) for the full feature roadmap.
+`0.12.2` — full LSP client (5 phases: diagnostics, goto/hover, completion, code
+actions/rename/format), window splits (`:sp`/`:vsp`, `Ctrl-w` nav, resize),
+tabs, tmux-navigator handoff, mouse scroll, line numbers, multi-buffer editing,
+fuzzy file/buffer/grep pickers with syntax-highlighted preview, tree-sitter
+highlighting, smart indent, `.editorconfig`, and clipboard via
+[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
+[SCOPE.md](SCOPE.md) for the full feature roadmap.
 
 ## Install
 
@@ -62,6 +65,7 @@ hjkl -R file.txt      # read-only
 hjkl +42 file.txt     # jump to line 42
 hjkl +/foo file.txt   # search for "foo" on open
 hjkl +picker          # open fuzzy file picker immediately
+hjkl +vsp file1 file2 # open two files in a vertical split
 ```
 
 <!-- screenshot placeholder -->
@@ -119,13 +123,14 @@ method names (`nvim_buf_set_lines`, `nvim_input`, `nvim_command`, etc.) so
 existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
 [issue #26](https://github.com/kryptic-sh/hjkl/issues/26).
 
-## What works (v0)
+## What works
 
 - Normal / Insert / Visual / Command modes with full mode-indicator cursor shape
 - All standard motions, operators, and text objects (free from the engine FSM)
 - Status line: filename, mode, cursor position, dirty marker; `REC@r` badge
   while recording a macro; pending count + operator; search count `[n/m]`
 - Cursor-line background (subtle blue-grey; suppressed during `:` / `/` prompts)
+- `~` tilde markers on rows past end-of-buffer (vim `NonText` style)
 - `:w` save, `:q` quit, `:wq` / `:x` write-quit, `:e` open file
 - `:set` options, `:%s` search-and-replace with confirmation prompt
 - `:!cmd` shell exec, `:r !cmd` / `:r file` read-into-buffer
@@ -135,18 +140,44 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
 - Terminal resize handled mid-frame
 - Read-only guard (`-R` flag + engine-level mutation block)
 - Jump to line (`+N`) and search-on-open (`+/pattern`)
-- **Multi-buffer**: open many files (`hjkl a.rs b.rs c.rs`); tab line at top
-  when more than one buffer is open; switch with `:bn` / `:bp` / `:bd[!]` /
-  `:bfirst` / `:blast` / `:b N` / `:b name` / `:ls` / `:buffers`; alt buffer
-  (`Ctrl-^` / `:b#`); cycle with `Shift-H` / `Shift-L` and `gt` / `gT` / `]b` /
-  `[b`; bulk save/quit with `:wa` / `:qa[!]` / `:wqa[!]`; helix-style `:q`
-  closes the active slot when more than one buffer is open
+- **`:set number` / `:set relativenumber`** line-number gutter. Aliases `nu` /
+  `rnu` / `nonu` / `nornu`; combined `nu rnu` enables vim hybrid mode. Plus
+  `:set numberwidth=N` for minimum gutter width.
+- **Multi-buffer**: open many files; tab line at top when more than one buffer
+  is open; switch with `:bn` / `:bp` / `:bd[!]` / `:bfirst` / `:blast` / `:b N`
+  / `:b name` / `:ls` / `:buffers`; alt buffer (`Ctrl-^` / `:b#`); cycle with
+  `Shift-H` / `Shift-L` and `gt` / `gT` / `]b` / `[b`; bulk save/quit with `:wa`
+  / `:qa[!]` / `:wqa[!]`
+- **Window splits** — `:sp` / `:vsp`, `Ctrl-w j/k/h/l/w/W` navigation, resize
+  (`Ctrl-w +/-/>/<`/`=`/`_`/`|`), `:resize` / `:vertical resize`, `:only` /
+  `Ctrl-w o`, `:new` / `:vnew`; per-window cursor + viewport state; 1-cell
+  separator between panes
+- **Tabs** — `:tabnew`, `gt` / `gT`, `:tabnext` / `:tabprev` / `:tabclose` /
+  `:tabfirst` / `:tablast` / `:tabonly` / `:tabmove` / `:tabs`, `Ctrl-w T`
+- **tmux-navigator handoff** — `Ctrl-h/j/k/l` in Normal mode move between hjkl
+  windows; at an edge and `$TMUX` is set, falls through to `tmux select-pane`
+- **Mouse wheel scroll** — wheel scrolls viewport with cursor clamped inside,
+  respecting `scrolloff`. Toggle with `editor.mouse` config field or
+  `:set mouse` / `:set nomouse` / `:set mouse!`
+- **LSP** — per-language server lifecycle (bundled configs for rust-analyzer,
+  pyright, typescript-language-server, clangd, gopls, lua-language-server):
+  - Diagnostics: inline + signcolumn rendering, severity highlighting, `]d` /
+    `[d` motions, `:LspInfo`
+  - Goto: `gd` / `gD` / `gi` / `gy`, hover with `K`, references with `gr` /
+    `:lreferences`
+  - Completion: triggered + manual popup, kind icons, snippet expansion, async
+    resolve
+  - Code actions: `<leader>ca` / `:LspCodeAction`
+  - Rename: `<leader>rn` / `:LspRename`
+  - Format: `:LspFormat` / `:LspFormatRange` with workspace-edit application
+  - Status-line spinner while LSP requests are in flight
 - **Fuzzy file picker** (`<Space><Space>` / `<Space>f` / `:picker` /
   `hjkl +picker`) with syntax-highlighted preview
 - **Buffer picker** (`<Space>b` / `:bpicker`)
 - **Grep picker** (`<Space>/` / `:rg <pattern>`) — ripgrep-backed content search
   with grep / findstr fallback; preview jumps to and highlights the match line
-- **Tree-sitter syntax highlighting** (Rust, Markdown, JSON, TOML, SQL bundled)
+- **Tree-sitter syntax highlighting** (Rust, Markdown, JSON, TOML, SQL bundled);
+  grammar-load spinner in status line
 - **Comment marker overlay** — `TODO` / `FIXME` / `FIX` / `NOTE` / `INFO` /
   `WARN` markers highlighted; consecutive single-line comments inherit the
   marker
@@ -162,9 +193,7 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
 
 ## What's deferred
 
-- Splits / multiple windows
-- Plugins / config files
-- LSP
+- Plugins
 
 ## Related crates
 
@@ -182,6 +211,7 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
   (`Picker`, `PickerLogic`, `FileSource`, `RgSource`, scorer)
 - [`hjkl-ratatui`](https://crates.io/crates/hjkl-ratatui) — ratatui rendering
   adapters + shared spinner
+- [`hjkl-lsp`](https://crates.io/crates/hjkl-lsp) — LSP client crate
 
 See [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the engine trait
 reference.

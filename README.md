@@ -15,30 +15,32 @@ sqeel, [buffr](https://github.com/kryptic-sh/buffr), and the standalone
 
 ## Status
 
-`0.4.0` — Buffer trait split across Cursor/Query/BufferEdit/Search,
-`Editor<B, H>` generic over backend + host, clipboard via our in-house
-[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
-[CHANGELOG.md](CHANGELOG.md) for the release arc and
+`0.12.2` — full LSP client (diagnostics, goto, hover, completion, code actions,
+rename, format), window splits, tabs, tmux-navigator handoff, mouse scroll, line
+numbers, and a consumer-agnostic picker `PreviewHighlighter` trait. See
+[CHANGELOG.md](CHANGELOG.md) for the full release arc and
 [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the trait reference.
 
 ## Crates
 
-| Crate              | Role                                                               |
-| ------------------ | ------------------------------------------------------------------ |
-| `hjkl-engine`      | Vim FSM + grammar, traits, no I/O deps.                            |
-| `hjkl-buffer`      | Rope-backed text buffer with cursor + edits + folds + search.      |
-| `hjkl-editor`      | Front-door facade: re-exports engine + buffer + spec types.        |
-| `hjkl-ratatui`     | Ratatui `Style` adapters and `crossterm::KeyEvent` bridge.         |
-| `hjkl-clipboard`   | In-house clipboard for the ecosystem (sync + async, OSC 52 SSH).   |
-| `hjkl-form`        | Vim-modal forms with full vim grammar inside every text field.     |
-| `hjkl-tree-sitter` | Tree-sitter syntax highlighting (Rust, Markdown, JSON, TOML, SQL). |
-| `hjkl-picker`      | Fuzzy picker subsystem: file walk, grep search, custom sources.    |
-| `hjkl-config`      | Shared TOML config loader: XDG paths, span errors, layered merge.  |
+| Crate            | Role                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `hjkl-engine`    | Vim FSM + grammar, traits, no I/O deps.                                              |
+| `hjkl-buffer`    | Rope-backed text buffer with cursor + edits + folds + search.                        |
+| `hjkl-editor`    | Front-door facade: re-exports engine + buffer + spec types.                          |
+| `hjkl-ratatui`   | Ratatui `Style` adapters and `crossterm::KeyEvent` bridge.                           |
+| `hjkl-clipboard` | In-house clipboard for the ecosystem (sync + async, OSC 52 SSH).                     |
+| `hjkl-form`      | Vim-modal forms with full vim grammar inside every text field.                       |
+| `hjkl-bonsai`    | Tree-sitter syntax highlighting; runtime `.so` grammars, Neovim-flavoured themes.    |
+| `hjkl-picker`    | Fuzzy picker subsystem: file walk, grep, custom sources, `PreviewHighlighter` trait. |
+| `hjkl-config`    | Shared TOML config loader: XDG paths, span errors, layered merge.                    |
+| `hjkl-splash`    | Startup splash screen widget (ratatui feature).                                      |
+| `hjkl-lsp`       | LSP client: per-language server lifecycle, full text-sync, diagnostics.              |
 
 Published on crates.io. Add to `Cargo.toml`:
 
 ```toml
-hjkl-editor = "0.3"
+hjkl-editor = "0.4"
 ```
 
 ## Configuring `hjkl`
