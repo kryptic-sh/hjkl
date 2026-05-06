@@ -47,7 +47,7 @@ const LONG_ABOUT: &str = concat!(
     version,
     about = "vim-modal terminal editor",
     long_about = LONG_ABOUT,
-    after_help = "Vim-style tokens (interspersed with FILEs):\n  +N           jump to 1-based line N on open\n  +/PATTERN    search for PATTERN on open\n  +perf        enable the :perf overlay\n  +picker      open the file picker",
+    after_help = "Vim-style tokens (interspersed with FILEs):\n  +N           jump to 1-based line N on open\n  +/PATTERN    search for PATTERN on open\n  +perf        enable the :perf overlay\n  +picker      open the file picker\n  +CMD         run any other text as an ex command (e.g. +vsp, +'vsp other.rs', +set\\ nomouse)",
 )]
 struct Cli {
     /// Open files read-only.
@@ -82,8 +82,8 @@ struct Cli {
     nvim_api: bool,
 
     /// Ex command to run after loading FILEs (without leading ':'). Repeatable.
-    /// In headless mode all -c commands run first, then all +cmd tokens.
-    /// Requires --headless (TUI -c dispatch is Phase 2 of issue #26).
+    /// All -c commands run first, then all +cmd tokens in argv order. Works
+    /// in both TUI and headless mode (e.g. `hjkl -c 'vsp other.rs' main.rs`).
     #[arg(short = 'c', long = "command", value_name = "CMD", action = clap::ArgAction::Append)]
     commands: Vec<String>,
 
@@ -145,19 +145,21 @@ fn split_vim_tokens(raw: Vec<String>) -> (Vec<String>, Vec<String>) {
 }
 
 /// Apply parsed `+`-prefixed tokens onto an `Args` builder. Returns a list
-/// of warnings (currently: unknown `+cmd` tokens in TUI mode). The caller
-/// decides how to surface them — `main` prints to stderr, tests assert the
-/// contents.
+/// of warnings (reserved — currently always empty). The caller decides how
+/// to surface them; `main` prints to stderr.
 ///
 /// Last-write-wins: repeated `+N` overwrites `args.line`; repeated `+/PAT`
 /// overwrites `args.pattern`.
 ///
-/// When `args.headless` is set, unrecognised `+<text>` tokens (and `+:<text>`
-/// with a leading colon) are treated as ex commands and pushed onto
-/// `args.commands`. The leading `:` is stripped so both `+wq` and `+:wq`
+/// Unrecognised `+<text>` tokens (and `+:<text>` with a leading colon) are
+/// treated as ex commands and pushed onto `args.commands` regardless of
+/// `args.headless`. TUI dispatch runs them after files are loaded; headless
+/// dispatch runs them in the existing scripted-mode path. Errors surface at
+/// the ex layer (unknown commands, bad ranges) rather than here, matching
+/// vim's `+cmd` behaviour. The leading `:` is stripped so `+vsp` and `+:vsp`
 /// work identically.
 fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
-    let mut warnings: Vec<String> = Vec::new();
+    let warnings: Vec<String> = Vec::new();
     for tok in vim_tokens {
         let rest = &tok[1..];
         if let Some(pat) = rest.strip_prefix('/') {
@@ -168,12 +170,10 @@ fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
             args.perf = true;
         } else if rest == "picker" {
             args.picker = true;
-        } else if args.headless {
-            // Strip the optional leading colon so `+:wq` and `+wq` both work.
+        } else {
+            // Strip the optional leading colon so `+:vsp` and `+vsp` both work.
             let cmd = rest.strip_prefix(':').unwrap_or(rest).to_string();
             args.commands.push(cmd);
-        } else {
-            warnings.push(format!("hjkl: ignoring unknown +cmd: {tok}"));
         }
     }
     warnings
@@ -220,15 +220,6 @@ fn parse_args() -> Result<Args> {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
-
-    // Guard: -c without --headless / --embed / --nvim-api is not supported.
-    if !args.commands.is_empty() && !args.headless && !args.embed && !args.nvim_api {
-        eprintln!(
-            "hjkl: -c requires --headless in this build \
-             (Phase 1 of #26; TUI -c dispatch is Phase 2)"
-        );
-        std::process::exit(2);
-    }
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since
     // it is the most specific. +cmd / -c CMD are silently ignored.
@@ -313,6 +304,17 @@ fn main() -> Result<()> {
     }
     if args.picker {
         app.open_picker();
+    }
+    // Run any +cmd / -c CMD tokens before entering raw mode. Errors surface
+    // via app.status_message and become visible on the first frame. Matches
+    // vim/nvim: `nvim +vsp file.txt` opens the file then runs `:vsp`.
+    for cmd in &args.commands {
+        app.dispatch_ex(cmd);
+        if app.exit_requested {
+            // A `+wq` / `+q!` style command requested exit before the loop
+            // even runs — honour it without entering the alternate screen.
+            return Ok(());
+        }
     }
 
     terminal::enable_raw_mode()?;
@@ -465,19 +467,30 @@ mod cli_tests {
         assert_eq!(args.pattern.as_deref(), Some("second"));
     }
 
-    /// Unknown `+cmd` tokens produce a warning string (returned, not
-    /// printed). Other state on `args` is left untouched.
+    /// Unknown `+cmd` tokens are pushed onto `args.commands` for the TUI /
+    /// headless dispatcher to run as ex commands (vim/nvim parity). The
+    /// leading `:` is stripped, so `+:vsp` and `+vsp` produce the same
+    /// command. Errors surface at the ex layer rather than as warnings.
     #[test]
-    fn apply_vim_tokens_unknown_token_produces_warning() {
+    fn apply_vim_tokens_unknown_token_pushes_ex_command() {
         let mut args = blank_args();
         args.line = Some(7); // pre-existing state must survive
-        let warnings = apply_vim_tokens(&mut args, &["+bogus".into(), "+also-bogus".into()]);
-        assert_eq!(warnings.len(), 2);
-        assert!(warnings[0].contains("+bogus"), "got: {:?}", warnings[0]);
+        let warnings = apply_vim_tokens(
+            &mut args,
+            &["+vsp".into(), "+:wq".into(), "+set nomouse".into()],
+        );
         assert!(
-            warnings[1].contains("+also-bogus"),
-            "got: {:?}",
-            warnings[1]
+            warnings.is_empty(),
+            "no warnings expected, got: {warnings:?}"
+        );
+        assert_eq!(
+            args.commands,
+            vec![
+                "vsp".to_string(),
+                "wq".to_string(),
+                "set nomouse".to_string()
+            ],
+            "unknown +cmd tokens should land on args.commands with leading `:` stripped"
         );
         // Pre-existing state untouched.
         assert_eq!(args.line, Some(7));
@@ -498,10 +511,11 @@ mod cli_tests {
     }
 
     /// End-to-end `parse_argv`: clap-handled flags + vim tokens work
-    /// together; warnings are returned in order.
+    /// together; unknown +cmd tokens land on args.commands for the TUI /
+    /// headless dispatcher.
     #[test]
     fn parse_argv_round_trip_mixed_args() {
-        let raw: Vec<String> = ["hjkl", "-R", "+42", "src/main.rs", "+/foo", "+xyzzy"]
+        let raw: Vec<String> = ["hjkl", "-R", "+42", "src/main.rs", "+/foo", "+vsp"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -512,8 +526,11 @@ mod cli_tests {
         assert_eq!(args.files, vec![PathBuf::from("src/main.rs")]);
         assert!(!args.perf);
         assert!(!args.picker);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("+xyzzy"));
+        assert!(
+            warnings.is_empty(),
+            "no warnings expected, got: {warnings:?}"
+        );
+        assert_eq!(args.commands, vec!["vsp".to_string()]);
     }
 
     fn blank_args() -> Args {
