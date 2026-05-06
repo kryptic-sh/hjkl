@@ -166,6 +166,15 @@ impl AsyncGrammarLoader {
     pub fn inner(&self) -> &GrammarLoader {
         &self.inner
     }
+
+    /// Snapshot of grammar names with at least one in-flight load. Order
+    /// is unspecified. Used by the renderer to surface a global
+    /// "loading grammar(s)" indicator independent of which buffer is
+    /// active.
+    pub fn in_flight_names(&self) -> Vec<String> {
+        let map = self.in_flight.lock().expect("in_flight mutex poisoned");
+        map.keys().cloned().collect()
+    }
 }
 
 // ── worker ────────────────────────────────────────────────────────────────────
