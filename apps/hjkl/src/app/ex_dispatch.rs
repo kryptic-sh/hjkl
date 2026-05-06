@@ -848,6 +848,16 @@ impl App {
                     s.push('\n');
                     s
                 };
+                // Create parent dir(s) if missing so writing into a fresh
+                // path like ~/.config/hjkl/config.toml works first try.
+                if let Some(parent) = p.parent()
+                    && !parent.as_os_str().is_empty()
+                    && !parent.exists()
+                    && let Err(e) = std::fs::create_dir_all(parent)
+                {
+                    self.status_message = Some(format!("E: {}: {e}", parent.display()));
+                    return false;
+                }
                 match std::fs::write(&p, &content) {
                     Ok(()) => {
                         let line_count = lines.len();
