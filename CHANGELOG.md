@@ -8,6 +8,12 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
+  post-step CI noise.
+- Bumped `hjkl-picker` dep to `^0.5` (bonsai-agnostic `PreviewHighlighter` API).
+
 ## [0.12.0] - 2026-05-06
 
 ### Added
