@@ -627,3 +627,84 @@ impl PickerLogic for DiagSource {
         None
     }
 }
+
+// ── StaticListSource ──────────────────────────────────────────────────────────
+
+/// A generic picker source backed by a static list of (label, action) pairs.
+/// Used by the LSP goto/references picker.
+pub struct StaticListSource {
+    title: String,
+    entries: Vec<(String, AppAction)>,
+}
+
+impl StaticListSource {
+    pub fn new(title: String, entries: Vec<(String, AppAction)>) -> Self {
+        Self { title, entries }
+    }
+}
+
+impl PickerLogic for StaticListSource {
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn item_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.entries
+            .get(idx)
+            .map(|(l, _)| l.clone())
+            .unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.label(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        false
+    }
+
+    fn preview(&self, _idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
+        (
+            hjkl_buffer::Buffer::new(),
+            String::new(),
+            PreviewSpans::default(),
+        )
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self.entries.get(idx) {
+            Some((_, action)) => {
+                // Clone the action into a boxed AppAction.
+                let boxed: Box<dyn std::any::Any + Send> = match action {
+                    AppAction::OpenPath(p) => Box::new(AppAction::OpenPath(p.clone())),
+                    AppAction::OpenPathAtLine(p, l) => {
+                        Box::new(AppAction::OpenPathAtLine(p.clone(), *l))
+                    }
+                    AppAction::JumpToRowCol(r, c) => Box::new(AppAction::JumpToRowCol(*r, *c)),
+                    AppAction::SwitchSlot(i) => Box::new(AppAction::SwitchSlot(*i)),
+                    AppAction::ShowCommit(s) => Box::new(AppAction::ShowCommit(s.clone())),
+                    AppAction::CheckoutBranch(s) => Box::new(AppAction::CheckoutBranch(s.clone())),
+                    AppAction::CheckoutTag(s) => Box::new(AppAction::CheckoutTag(s.clone())),
+                    AppAction::FetchRemote(s) => Box::new(AppAction::FetchRemote(s.clone())),
+                    AppAction::StashApply(i) => Box::new(AppAction::StashApply(*i)),
+                    AppAction::StashPop(i) => Box::new(AppAction::StashPop(*i)),
+                    AppAction::StashDrop(i) => Box::new(AppAction::StashDrop(*i)),
+                };
+                PickerAction::Custom(boxed)
+            }
+            None => PickerAction::None,
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        _cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        None
+    }
+}

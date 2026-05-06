@@ -3051,3 +3051,163 @@ fn notify_change_skipped_when_dirty_gen_unchanged() {
         "guard must remain unchanged when no LSP manager"
     );
 }
+
+// ── Phase 3: goto + hover tests ────────────────────────────────────────────
+
+fn make_location(uri: &str, row: u32, col: u32) -> lsp_types::Location {
+    lsp_types::Location {
+        uri: uri.parse::<lsp_types::Uri>().expect("valid URI"),
+        range: lsp_types::Range {
+            start: lsp_types::Position {
+                line: row,
+                character: col,
+            },
+            end: lsp_types::Position {
+                line: row,
+                character: col + 1,
+            },
+        },
+    }
+}
+
+fn ok_val(v: serde_json::Value) -> Result<serde_json::Value, hjkl_lsp::RpcError> {
+    Ok(v)
+}
+
+fn err_val(msg: &str) -> Result<serde_json::Value, hjkl_lsp::RpcError> {
+    Err(hjkl_lsp::RpcError {
+        code: -32601,
+        message: msg.to_string(),
+    })
+}
+
+#[test]
+fn goto_definition_single_jumps_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3");
+    // Give the active slot a path so the location URI matches.
+    let path = std::path::PathBuf::from("/tmp/hjkl_gd_single.rs");
+    app.active_mut().filename = Some(path.clone());
+    let uri = format!("file://{}", path.display());
+
+    let loc = make_location(&uri, 2, 0);
+    let result = ok_val(serde_json::to_value(vec![loc]).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    // Cursor must have moved to row 2.
+    assert_eq!(app.active().editor.buffer().cursor().row, 2);
+    assert!(app.picker.is_none(), "single result must not open picker");
+}
+
+#[test]
+fn goto_definition_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result = ok_val(serde_json::Value::Null);
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("no definition found"),
+        "expected 'no definition found', got: {msg}"
+    );
+    assert!(app.picker.is_none());
+}
+
+#[test]
+fn goto_definition_multi_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let locs = vec![
+        make_location("file:///tmp/a.rs", 0, 0),
+        make_location("file:///tmp/b.rs", 5, 3),
+        make_location("file:///tmp/c.rs", 10, 1),
+    ];
+    let result = ok_val(serde_json::to_value(locs).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    assert!(app.picker.is_some(), "multiple results must open picker");
+}
+
+#[test]
+fn goto_references_always_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Single result — references always opens picker.
+    let locs = vec![make_location("file:///tmp/only.rs", 3, 0)];
+    let result = ok_val(serde_json::to_value(locs).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_references_response(buffer_id, (0, 0), result);
+
+    assert!(app.picker.is_some(), "references must always open picker");
+}
+
+#[test]
+fn hover_response_sets_info_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let hover = lsp_types::Hover {
+        contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: "**fn** foo() -> i32".to_string(),
+        }),
+        range: None,
+    };
+    let result = ok_val(serde_json::to_value(hover).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_hover_response(buffer_id, (0, 0), result);
+
+    assert!(app.info_popup.is_some(), "hover must set info_popup");
+    let popup = app.info_popup.as_ref().unwrap();
+    assert!(popup.contains("foo"), "popup must contain function name");
+}
+
+#[test]
+fn hover_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result: Result<serde_json::Value, hjkl_lsp::RpcError> = Ok(serde_json::Value::Null);
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_hover_response(buffer_id, (0, 0), result);
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("no hover info"),
+        "expected 'no hover info', got: {msg}"
+    );
+    assert!(app.info_popup.is_none());
+}
+
+#[test]
+fn goto_definition_error_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result = err_val("server error");
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("server error"),
+        "expected error message, got: {msg}"
+    );
+}
+
+#[test]
+fn k_dispatches_hover() {
+    // Without a real LspManager the call returns early (no panic).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/k_test.rs"));
+    // No LSP attached — lsp_hover returns early without panicking.
+    app.lsp_hover();
+    // State unchanged.
+    assert!(app.info_popup.is_none());
+    assert!(app.status_message.is_none());
+}
+
+#[test]
+fn gd_dispatches_goto_definition() {
+    // Without a real LspManager the call returns early (no panic).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/gd_test.rs"));
+    app.lsp_goto_definition();
+    // No LSP — nothing pending, no crash.
+    assert!(app.lsp_pending.is_empty());
+}

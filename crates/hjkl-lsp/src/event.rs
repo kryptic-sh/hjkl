@@ -27,6 +27,16 @@ pub enum LspCommand {
     NotifyChange { id: BufferId, full_text: String },
     /// Cancel an in-flight request by id. Reserved for Phase 4.
     Cancel { request_id: i64 },
+    /// Send a JSON-RPC request to the server attached to `buffer_id`.
+    /// `request_id` is app-allocated (monotonic counter); it will appear in
+    /// `LspEvent::Response { request_id, .. }` so the app can correlate
+    /// the response without knowing the server's internal numbering.
+    Request {
+        request_id: i64,
+        buffer_id: crate::BufferId,
+        method: String,
+        params: serde_json::Value,
+    },
     /// Gracefully shut down all servers and exit the runtime loop.
     ShutdownAll,
 }

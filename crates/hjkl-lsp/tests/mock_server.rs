@@ -289,3 +289,171 @@ async fn server_push_notification_forwarded() {
     .await
     .expect("server_push_notification_forwarded timed out");
 }
+
+/// A request sent via `Server::send_request` is forwarded to the mock server,
+/// and the response arrives as `LspEvent::Response` with the app-allocated id.
+#[tokio::test(flavor = "current_thread")]
+async fn request_response_roundtrip() {
+    tokio::time::timeout(Duration::from_millis(500), async {
+        let (client_io, driver_io) = duplex(64 * 1024);
+        let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+        let key = ServerKey {
+            language: "rust".to_string(),
+            root: std::path::PathBuf::from("/tmp/rr-workspace"),
+        };
+
+        let (driver_read, mut driver_write) = tokio::io::split(driver_io);
+        let mut driver_reader = BufReader::with_capacity(256 * 1024, driver_read);
+        let (client_read, client_write) = tokio::io::split(client_io);
+
+        let server_task = tokio::spawn({
+            let key = key.clone();
+            async move {
+                hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx)
+                    .await
+            }
+        });
+
+        // Complete the initialize handshake.
+        let req = read_json(&mut driver_reader).await;
+        let req_id = req["id"].as_i64().unwrap();
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": { "capabilities": { "definitionProvider": true } }
+            }),
+        )
+        .await;
+        let _notif = read_json(&mut driver_reader).await; // initialized
+
+        let mut server = server_task.await.unwrap().unwrap();
+
+        // App sends a textDocument/definition request with app_id = 42.
+        let app_id: i64 = 42;
+        server.send_request(
+            app_id,
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": "file:///tmp/rr-workspace/src/main.rs" },
+                "position": { "line": 5, "character": 10 },
+            }),
+        );
+
+        // Driver reads the request — the jsonrpc id is server-internal.
+        let def_req = read_json(&mut driver_reader).await;
+        assert_eq!(def_req["method"], "textDocument/definition");
+        let jsonrpc_id = def_req["id"].as_i64().expect("request must have an id");
+
+        // Driver replies with a location.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": jsonrpc_id,
+                "result": [{
+                    "uri": "file:///tmp/rr-workspace/src/lib.rs",
+                    "range": {
+                        "start": { "line": 10, "character": 4 },
+                        "end":   { "line": 10, "character": 12 },
+                    }
+                }]
+            }),
+        )
+        .await;
+
+        // The response must arrive with the APP-allocated id (42), not the
+        // server's internal jsonrpc id.
+        assert!(
+            wait_for_event_async(&evt_rx, Duration::from_millis(200), |e| matches!(
+                e,
+                LspEvent::Response { request_id, result: Ok(_) }
+                    if *request_id == app_id
+            ))
+            .await,
+            "LspEvent::Response with app_id={app_id} not received"
+        );
+
+        drop(driver_write);
+        drop(driver_reader);
+    })
+    .await
+    .expect("request_response_roundtrip timed out");
+}
+
+/// When the mock server replies with a JSON-RPC error, the response arrives
+/// as `LspEvent::Response { result: Err(RpcError { .. }) }`.
+#[tokio::test(flavor = "current_thread")]
+async fn request_with_error_returns_rpc_error() {
+    tokio::time::timeout(Duration::from_millis(500), async {
+        let (client_io, driver_io) = duplex(64 * 1024);
+        let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+
+        let key = ServerKey {
+            language: "python".to_string(),
+            root: std::path::PathBuf::from("/tmp/err-workspace"),
+        };
+
+        let (driver_read, mut driver_write) = tokio::io::split(driver_io);
+        let mut driver_reader = BufReader::with_capacity(256 * 1024, driver_read);
+        let (client_read, client_write) = tokio::io::split(client_io);
+
+        let server_task = tokio::spawn({
+            let key = key.clone();
+            async move {
+                hjkl_lsp::testing::spawn_server_from_io(key, client_write, client_read, evt_tx)
+                    .await
+            }
+        });
+
+        let req = read_json(&mut driver_reader).await;
+        let req_id = req["id"].as_i64().unwrap();
+        write_json(
+            &mut driver_write,
+            &json!({ "jsonrpc": "2.0", "id": req_id, "result": { "capabilities": {} } }),
+        )
+        .await;
+        let _notif = read_json(&mut driver_reader).await; // initialized
+
+        let mut server = server_task.await.unwrap().unwrap();
+
+        let app_id: i64 = 7;
+        server.send_request(
+            app_id,
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": "file:///tmp/err-workspace/main.py" }, "position": { "line": 0, "character": 0 } }),
+        );
+
+        // Read the hover request.
+        let hover_req = read_json(&mut driver_reader).await;
+        let jid = hover_req["id"].as_i64().unwrap();
+
+        // Reply with an error.
+        write_json(
+            &mut driver_write,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": jid,
+                "error": { "code": -32601, "message": "method not supported" }
+            }),
+        )
+        .await;
+
+        assert!(
+            wait_for_event_async(&evt_rx, Duration::from_millis(200), |e| matches!(
+                e,
+                LspEvent::Response { request_id, result: Err(_) }
+                    if *request_id == app_id
+            ))
+            .await,
+            "LspEvent::Response Err with app_id={app_id} not received"
+        );
+
+        drop(driver_write);
+        drop(driver_reader);
+    })
+    .await
+    .expect("request_with_error_returns_rpc_error timed out");
+}

@@ -1,8 +1,11 @@
 //! LSP glue — bridges `App` state with `hjkl_lsp::LspManager`.
 
-use ratatui::style::{Color, Modifier, Style};
+use std::path::PathBuf;
 
-use super::{App, DiagSeverity, LspDiag, LspServerInfo};
+use ratatui::style::{Color, Modifier, Style};
+use serde_json::json;
+
+use super::{App, DiagSeverity, LspDiag, LspPendingRequest, LspServerInfo};
 
 /// Small inline map: file extension → LSP language id.
 fn language_id_for_ext(ext: &str) -> Option<&'static str> {
@@ -103,8 +106,11 @@ impl App {
                         self.handle_publish_diagnostics(params);
                     }
                 }
-                hjkl_lsp::LspEvent::Response { request_id, .. } => {
+                hjkl_lsp::LspEvent::Response { request_id, result } => {
                     tracing::debug!(request_id, "lsp response");
+                    if let Some(pending) = self.lsp_pending.remove(&request_id) {
+                        self.handle_lsp_response(pending, result);
+                    }
                 }
             }
         }
@@ -283,4 +289,397 @@ impl App {
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
         mgr.detach_buffer(buffer_id);
     }
+
+    /// Allocate a fresh monotonic request id for an outgoing LSP request.
+    pub(crate) fn lsp_alloc_request_id(&mut self) -> i64 {
+        let id = self.lsp_next_request_id;
+        self.lsp_next_request_id += 1;
+        id
+    }
+
+    // ── Request helpers ───────────────────────────────────────────────────
+
+    /// Build `TextDocumentPositionParams` JSON for the current cursor position.
+    fn lsp_position_params(
+        &self,
+    ) -> Option<(serde_json::Value, hjkl_lsp::BufferId, (usize, usize))> {
+        let slot = self.active();
+        let path = slot.filename.as_ref()?;
+        let uri = hjkl_lsp::uri::from_path(path).ok()?;
+        let cursor = slot.editor.buffer().cursor();
+        let row = cursor.row;
+        let col = cursor.col;
+        let params = json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": row as u32, "character": col as u32 },
+        });
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+        Some((params, buffer_id, (row, col)))
+    }
+
+    /// Internal: send a goto-flavour request and register it as pending.
+    fn lsp_send_goto(
+        &mut self,
+        method: &str,
+        make_pending: impl FnOnce(hjkl_lsp::BufferId, (usize, usize)) -> LspPendingRequest,
+    ) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let (params, buffer_id, origin) = match self.lsp_position_params() {
+            Some(v) => v,
+            None => {
+                self.status_message = Some("LSP: buffer has no path".into());
+                return;
+            }
+        };
+        let request_id = self.lsp_alloc_request_id();
+        let pending = make_pending(buffer_id, origin);
+        self.lsp_pending.insert(request_id, pending);
+        // Reborrow after mutable ops are done.
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, method, params);
+        }
+    }
+
+    // ── Public goto / hover entry points ─────────────────────────────────
+
+    /// `gd` — goto definition.
+    pub(crate) fn lsp_goto_definition(&mut self) {
+        self.lsp_send_goto("textDocument/definition", |buf, orig| {
+            LspPendingRequest::GotoDefinition {
+                buffer_id: buf,
+                origin: orig,
+            }
+        });
+    }
+
+    /// `gD` — goto declaration.
+    pub(crate) fn lsp_goto_declaration(&mut self) {
+        self.lsp_send_goto("textDocument/declaration", |buf, orig| {
+            LspPendingRequest::GotoDeclaration {
+                buffer_id: buf,
+                origin: orig,
+            }
+        });
+    }
+
+    /// `gy` — goto type definition.
+    pub(crate) fn lsp_goto_type_definition(&mut self) {
+        self.lsp_send_goto("textDocument/typeDefinition", |buf, orig| {
+            LspPendingRequest::GotoTypeDefinition {
+                buffer_id: buf,
+                origin: orig,
+            }
+        });
+    }
+
+    /// `gi` — goto implementation.
+    pub(crate) fn lsp_goto_implementation(&mut self) {
+        self.lsp_send_goto("textDocument/implementation", |buf, orig| {
+            LspPendingRequest::GotoImplementation {
+                buffer_id: buf,
+                origin: orig,
+            }
+        });
+    }
+
+    /// `gr` — goto references (always opens picker).
+    pub(crate) fn lsp_goto_references(&mut self) {
+        self.lsp_send_goto("textDocument/references", |buf, orig| {
+            LspPendingRequest::GotoReferences {
+                buffer_id: buf,
+                origin: orig,
+            }
+        });
+    }
+
+    /// `K` — show hover info.
+    pub(crate) fn lsp_hover(&mut self) {
+        self.lsp_send_goto("textDocument/hover", |buf, orig| LspPendingRequest::Hover {
+            buffer_id: buf,
+            origin: orig,
+        });
+    }
+
+    // ── Response handlers ─────────────────────────────────────────────────
+
+    /// Dispatch a received LSP response to the appropriate handler.
+    pub(crate) fn handle_lsp_response(
+        &mut self,
+        pending: LspPendingRequest,
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        match pending {
+            LspPendingRequest::GotoDefinition { buffer_id, origin } => {
+                self.handle_goto_response(buffer_id, origin, result, "definition");
+            }
+            LspPendingRequest::GotoDeclaration { buffer_id, origin } => {
+                self.handle_goto_response(buffer_id, origin, result, "declaration");
+            }
+            LspPendingRequest::GotoTypeDefinition { buffer_id, origin } => {
+                self.handle_goto_response(buffer_id, origin, result, "type definition");
+            }
+            LspPendingRequest::GotoImplementation { buffer_id, origin } => {
+                self.handle_goto_response(buffer_id, origin, result, "implementation");
+            }
+            LspPendingRequest::GotoReferences { buffer_id, origin } => {
+                self.handle_references_response(buffer_id, origin, result);
+            }
+            LspPendingRequest::Hover { buffer_id, origin } => {
+                self.handle_hover_response(buffer_id, origin, result);
+            }
+        }
+    }
+
+    /// Normalize a goto-style response into a `Vec<lsp_types::Location>`.
+    fn parse_goto_locations(result: serde_json::Value) -> Vec<lsp_types::Location> {
+        // The result can be: null, Location, Location[], or LocationLink[].
+        if result.is_null() {
+            return Vec::new();
+        }
+        // Try GotoDefinitionResponse (covers all three variants).
+        if let Ok(resp) =
+            serde_json::from_value::<lsp_types::GotoDefinitionResponse>(result.clone())
+        {
+            return match resp {
+                lsp_types::GotoDefinitionResponse::Scalar(loc) => vec![loc],
+                lsp_types::GotoDefinitionResponse::Array(locs) => locs,
+                lsp_types::GotoDefinitionResponse::Link(links) => links
+                    .into_iter()
+                    .map(|l| lsp_types::Location {
+                        uri: l.target_uri,
+                        range: l.target_selection_range,
+                    })
+                    .collect(),
+            };
+        }
+        // Fall back to a plain Vec<Location>.
+        if let Ok(locs) = serde_json::from_value::<Vec<lsp_types::Location>>(result.clone()) {
+            return locs;
+        }
+        // Single Location.
+        if let Ok(loc) = serde_json::from_value::<lsp_types::Location>(result) {
+            return vec![loc];
+        }
+        Vec::new()
+    }
+
+    /// Jump the cursor (and possibly switch buffer) to `loc`.
+    fn jump_to_location(&mut self, loc: &lsp_types::Location) {
+        let target_path: Option<PathBuf> = {
+            let url: url::Url = match url::Url::parse(loc.uri.as_str()) {
+                Ok(u) => u,
+                Err(_) => return,
+            };
+            hjkl_lsp::uri::to_path(&url)
+        };
+        let row = loc.range.start.line as usize;
+        let col = loc.range.start.character as usize;
+
+        // Determine if target matches an already-open slot.
+        let slot_idx = if let Some(ref tp) = target_path {
+            self.slots.iter().position(|s| {
+                s.filename
+                    .as_ref()
+                    .map(|p| {
+                        let abs_p = if p.is_absolute() {
+                            p.clone()
+                        } else {
+                            std::env::current_dir().unwrap_or_default().join(p)
+                        };
+                        &abs_p == tp
+                    })
+                    .unwrap_or(false)
+            })
+        } else {
+            None
+        };
+
+        if let Some(idx) = slot_idx {
+            // Already open — switch if needed, then move cursor.
+            if idx != self.focused_slot_idx() {
+                self.switch_to(idx);
+            }
+        } else if let Some(ref tp) = target_path {
+            // Open new slot.
+            match self.open_new_slot(tp.clone()) {
+                Ok(idx) => {
+                    self.switch_to(idx);
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("LSP goto: {e}"));
+                    return;
+                }
+            }
+        } else {
+            self.status_message = Some("LSP goto: non-file URI".into());
+            return;
+        }
+
+        self.active_mut().editor.jump_cursor(row, col);
+        self.sync_viewport_from_editor();
+    }
+
+    /// Handle a goto-flavour response (definition/declaration/type/implementation).
+    pub(crate) fn handle_goto_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _origin: (usize, usize),
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+        kind_label: &str,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP {kind_label}: {}", e.message));
+                return;
+            }
+        };
+        let locs = Self::parse_goto_locations(val);
+        if locs.is_empty() {
+            self.status_message = Some(format!("no {kind_label} found"));
+            return;
+        }
+        if locs.len() == 1 {
+            self.jump_to_location(&locs[0]);
+        } else {
+            self.open_lsp_locations_picker(&locs, kind_label);
+        }
+    }
+
+    /// Handle a references response — always opens picker (even single result).
+    pub(crate) fn handle_references_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _origin: (usize, usize),
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP references: {}", e.message));
+                return;
+            }
+        };
+        let locs = Self::parse_goto_locations(val);
+        if locs.is_empty() {
+            self.status_message = Some("no references found".into());
+            return;
+        }
+        self.open_lsp_locations_picker(&locs, "references");
+    }
+
+    /// Open a picker over a set of LSP locations.
+    fn open_lsp_locations_picker(&mut self, locs: &[lsp_types::Location], kind_label: &str) {
+        use crate::picker_action::AppAction;
+
+        // Build (label, action) pairs.
+        let entries: Vec<(String, AppAction)> = locs
+            .iter()
+            .filter_map(|loc| {
+                let url: url::Url = url::Url::parse(loc.uri.as_str()).ok()?;
+                let path = hjkl_lsp::uri::to_path(&url)?;
+                let row = loc.range.start.line;
+                let col = loc.range.start.character as usize;
+                let label = format!("{}:{}: col {}", path.display(), row + 1, col + 1);
+                // Use OpenPathAtLine for the action — goto_line is 1-based.
+                Some((label, AppAction::OpenPathAtLine(path, row + 1)))
+            })
+            .collect();
+
+        if entries.is_empty() {
+            self.status_message = Some(format!("no {kind_label} found"));
+            return;
+        }
+
+        let source = Box::new(crate::picker_sources::StaticListSource::new(
+            kind_label.to_string(),
+            entries,
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+    }
+
+    /// Handle a hover response — set `info_popup` with extracted text.
+    pub(crate) fn handle_hover_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _origin: (usize, usize),
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP hover: {}", e.message));
+                return;
+            }
+        };
+        if val.is_null() {
+            self.status_message = Some("no hover info".into());
+            return;
+        }
+        let hover: lsp_types::Hover = match serde_json::from_value(val) {
+            Ok(h) => h,
+            Err(_) => {
+                self.status_message = Some("LSP hover: could not parse response".into());
+                return;
+            }
+        };
+        let text = extract_hover_text(&hover.contents);
+        if text.trim().is_empty() {
+            self.status_message = Some("no hover info".into());
+        } else {
+            self.info_popup = Some(text);
+        }
+    }
+}
+
+/// Extract plain text from LSP hover contents.
+/// TODO(#15): replace with proper Markdown rendering once hjkl-md lands.
+fn extract_hover_text(contents: &lsp_types::HoverContents) -> String {
+    match contents {
+        lsp_types::HoverContents::Scalar(ms) => marked_string_text(ms),
+        lsp_types::HoverContents::Array(items) => items
+            .iter()
+            .map(marked_string_text)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        lsp_types::HoverContents::Markup(mc) => strip_markdown(&mc.value),
+    }
+}
+
+fn marked_string_text(ms: &lsp_types::MarkedString) -> String {
+    match ms {
+        lsp_types::MarkedString::String(s) => strip_markdown(s),
+        lsp_types::MarkedString::LanguageString(ls) => {
+            format!("[{}]\n{}", ls.language, ls.value)
+        }
+    }
+}
+
+/// Minimal markdown stripper — removes backtick fences and asterisks.
+/// TODO(#15): replace with proper renderer.
+fn strip_markdown(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_fence = false;
+    for line in s.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            if in_fence {
+                // Emit language hint as a label if present.
+                let lang = trimmed.trim_start_matches('`').trim();
+                if !lang.is_empty() {
+                    out.push_str(lang);
+                    out.push('\n');
+                }
+            }
+            continue;
+        }
+        // Strip inline code backticks and bold/italic asterisks.
+        let stripped: String = line.replace("**", "").replace(['*', '`'], "");
+        out.push_str(&stripped);
+        out.push('\n');
+    }
+    out
 }

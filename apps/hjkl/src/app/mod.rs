@@ -144,6 +144,39 @@ pub struct LspServerInfo {
     pub capabilities: serde_json::Value,
 }
 
+/// Tracks an in-flight LSP request so the response handler knows what to do.
+/// Each variant carries the buffer context and cursor origin so the result can
+/// be acted on (jump, picker, popup) without re-reading app state at response
+/// time (the active buffer may have changed by then).
+#[derive(Debug, Clone)]
+pub enum LspPendingRequest {
+    GotoDefinition {
+        buffer_id: hjkl_lsp::BufferId,
+        /// 0-based (row, col) of the cursor when the request was sent.
+        origin: (usize, usize),
+    },
+    GotoDeclaration {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
+    GotoTypeDefinition {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
+    GotoImplementation {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
+    GotoReferences {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
+    Hover {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
+}
+
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 pub struct BufferSlot {
@@ -318,6 +351,11 @@ pub struct App {
     /// Tracks the state of running LSP servers. Populated/updated by
     /// `drain_lsp_events` on `ServerInitialized` / `ServerExited`.
     pub lsp_state: HashMap<hjkl_lsp::ServerKey, LspServerInfo>,
+    /// Monotonic counter for allocating request ids sent to the LSP runtime.
+    pub lsp_next_request_id: i64,
+    /// Maps app-allocated request id → what the request was for, so the
+    /// response handler knows how to act on the result.
+    pub lsp_pending: HashMap<i64, LspPendingRequest>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -913,6 +951,8 @@ impl App {
             grammar_load_error: None,
             lsp: None,
             lsp_state: HashMap::new(),
+            lsp_next_request_id: 0,
+            lsp_pending: HashMap::new(),
         })
     }
 

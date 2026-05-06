@@ -383,6 +383,27 @@ impl App {
                                     self.dispatch_ex("tabprev");
                                     continue;
                                 }
+                                // LSP goto motions (g-prefix)
+                                ('g', KeyCode::Char('d')) => {
+                                    self.lsp_goto_definition();
+                                    continue;
+                                }
+                                ('g', KeyCode::Char('D')) => {
+                                    self.lsp_goto_declaration();
+                                    continue;
+                                }
+                                ('g', KeyCode::Char('r')) => {
+                                    self.lsp_goto_references();
+                                    continue;
+                                }
+                                ('g', KeyCode::Char('i')) => {
+                                    self.lsp_goto_implementation();
+                                    continue;
+                                }
+                                ('g', KeyCode::Char('y')) => {
+                                    self.lsp_goto_type_definition();
+                                    continue;
+                                }
                                 (']', KeyCode::Char('b')) => {
                                     self.buffer_next();
                                     continue;
@@ -423,6 +444,17 @@ impl App {
                         self.pending_buffer_motion = None;
                         self.pending_git = false;
                         self.pending_leader = false;
+                    }
+
+                    // ── LSP hover (`K`) in Normal mode ───────────────────────
+                    // TODO: Ctrl-w K (split-then-hover) deferred; popup hover works.
+                    if key.code == KeyCode::Char('K')
+                        && (key.modifiers == KeyModifiers::NONE
+                            || key.modifiers == KeyModifiers::SHIFT)
+                        && self.active().editor.vim_mode() == VimMode::Normal
+                    {
+                        self.lsp_hover();
+                        continue;
                     }
 
                     // ── Intercept `:` in Normal mode ─────────────────────────

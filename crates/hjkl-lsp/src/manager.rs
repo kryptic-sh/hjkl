@@ -84,6 +84,25 @@ impl LspManager {
         });
     }
 
+    /// Send a JSON-RPC request to the server attached to `buffer_id`.
+    ///
+    /// `request_id` is app-allocated — it will appear in
+    /// `LspEvent::Response { request_id, .. }` when the response arrives.
+    pub fn send_request(
+        &self,
+        request_id: i64,
+        buffer_id: BufferId,
+        method: &str,
+        params: serde_json::Value,
+    ) {
+        let _ = self.cmd_tx.send(LspCommand::Request {
+            request_id,
+            buffer_id,
+            method: method.to_string(),
+            params,
+        });
+    }
+
     /// Non-blocking poll: returns the next pending event, or `None` if empty.
     pub fn try_recv_event(&self) -> Option<LspEvent> {
         self.evt_rx.try_recv().ok()

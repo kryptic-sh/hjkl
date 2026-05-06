@@ -64,6 +64,21 @@ pub(crate) async fn dispatch(
                     "LspCommand::Cancel received (Phase 4 placeholder)"
                 );
             }
+            LspCommand::Request {
+                request_id,
+                buffer_id,
+                method,
+                params,
+            } => {
+                handle_request(
+                    request_id,
+                    buffer_id,
+                    &method,
+                    params,
+                    &mut servers,
+                    &buffers,
+                );
+            }
             LspCommand::ShutdownAll => {
                 tracing::info!("shutting down all LSP servers");
                 for (_key, server) in servers.drain() {
@@ -182,6 +197,28 @@ fn handle_detach(
         );
     }
     // Phase 1: keep server alive — don't shut it down on detach.
+}
+
+fn handle_request(
+    request_id: i64,
+    buffer_id: BufferId,
+    method: &str,
+    params: serde_json::Value,
+    servers: &mut HashMap<ServerKey, Server>,
+    buffers: &HashMap<BufferId, AttachedBuffer>,
+) {
+    let buf = match buffers.get(&buffer_id) {
+        Some(b) => b,
+        None => {
+            tracing::debug!(buffer_id, method, "Request: buffer not attached");
+            return;
+        }
+    };
+    if let Some(server) = servers.get_mut(&buf.server_key) {
+        server.send_request(request_id, method, params);
+    } else {
+        tracing::debug!(key = ?buf.server_key, method, "Request: server not found");
+    }
 }
 
 fn handle_notify_change(

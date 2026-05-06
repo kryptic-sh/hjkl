@@ -1,6 +1,7 @@
 //! LSP server actor — owns the child process and JSON-RPC I/O tasks.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, bail};
 use crossbeam_channel::Sender;
@@ -13,6 +14,11 @@ use crate::codec;
 use crate::config::ServerConfig;
 use crate::event::{LspEvent, RpcError, ServerKey};
 
+/// Shared map from JSON-RPC id → app-allocated request id.
+/// Inserted by `Server::send_request`; consumed by the stdout dispatch task
+/// when the corresponding response arrives.
+type PendingMap = Arc<Mutex<HashMap<i64, i64>>>;
+
 /// Wraps an active language-server child process.
 pub struct Server {
     pub key: ServerKey,
@@ -20,8 +26,9 @@ pub struct Server {
     /// Channel for sending serialized JSON frames to the stdin writer task.
     stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
     next_request_id: i64,
-    /// Tracks in-flight requests. Phase 4 will store a oneshot sender here.
-    in_flight: HashMap<i64, ()>,
+    /// Maps JSON-RPC request id → app-allocated request id.
+    /// Shared with the stdout dispatch task so responses can be correlated.
+    pending: PendingMap,
 }
 
 impl Server {
@@ -58,10 +65,13 @@ impl Server {
         // Spawn stderr logger task.
         tokio::spawn(stderr_task(stderr, key.language.clone()));
 
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+
         // We need to perform the initialize handshake before spawning the
         // stdout dispatch loop. We do this by owning the stdout reader here,
         // completing initialize, then handing it off to the dispatch task.
-        let capabilities = initialize_handshake(&key, &stdin_tx, stdout, evt_tx.clone()).await?;
+        let capabilities =
+            initialize_handshake(&key, &stdin_tx, stdout, evt_tx.clone(), pending.clone()).await?;
 
         // Spawn wait task so ServerExited is emitted when the child exits.
         spawn_wait_task(child, key.clone(), evt_tx);
@@ -71,7 +81,7 @@ impl Server {
             capabilities,
             stdin_tx,
             next_request_id: 1,
-            in_flight: HashMap::new(),
+            pending,
         })
     }
 
@@ -85,11 +95,19 @@ impl Server {
         self.enqueue(msg);
     }
 
-    /// Send a JSON-RPC request and return the request id.
-    pub fn send_request(&mut self, method: &str, params: Value) -> i64 {
+    /// Send a JSON-RPC request, mapping the server's internal id back to
+    /// the app-allocated `app_id` when the response arrives.
+    ///
+    /// The `app_id` is the value that will appear in
+    /// `LspEvent::Response { request_id, .. }` so the app can correlate
+    /// the response with its `lsp_pending` table without knowing the
+    /// server's internal numbering.
+    pub fn send_request(&mut self, app_id: i64, method: &str, params: Value) {
         let id = self.next_request_id;
         self.next_request_id += 1;
-        self.in_flight.insert(id, ());
+        if let Ok(mut map) = self.pending.lock() {
+            map.insert(id, app_id);
+        }
         let msg = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -97,15 +115,16 @@ impl Server {
             "params": params,
         });
         self.enqueue(msg);
-        id
     }
 
     /// Gracefully shut down: send `shutdown` request, then `exit` notification,
     /// then drop the stdin sender so the stdin task terminates.
     pub async fn shutdown(mut self) {
-        let id = self.send_request("shutdown", Value::Null);
+        // Use -1 as the app_id for the internal shutdown request — it won't
+        // match anything in the app's pending table, which is intentional.
+        self.send_request(-1, "shutdown", Value::Null);
         // We don't wait for the response here — just flush and exit.
-        tracing::debug!(key = ?self.key, request_id = id, "sent shutdown request");
+        tracing::debug!(key = ?self.key, "sent shutdown request");
         self.send_notification("exit", Value::Null);
         // Dropping `stdin_tx` closes the channel; the stdin task will drain
         // remaining messages and exit naturally.
@@ -133,6 +152,7 @@ async fn initialize_handshake(
     stdin_tx: &mpsc::UnboundedSender<Vec<u8>>,
     stdout: impl AsyncRead + Unpin + Send + 'static,
     evt_tx: Sender<LspEvent>,
+    pending: PendingMap,
 ) -> anyhow::Result<Value> {
     let root_uri = crate::uri::from_path(&key.root).map_err(|_| {
         anyhow::anyhow!(
@@ -211,7 +231,7 @@ async fn initialize_handshake(
 
     // Spawn the stdout dispatch loop with the remaining reader.
     let key_clone = key.clone();
-    tokio::spawn(stdout_task(reader, key_clone, evt_tx));
+    tokio::spawn(stdout_task(reader, key_clone, evt_tx, pending));
 
     Ok(capabilities)
 }
@@ -231,14 +251,16 @@ where
     let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     tokio::spawn(stdin_task(stdin_rx, stdin_writer));
 
-    let capabilities = initialize_handshake(&key, &stdin_tx, stdout_reader, evt_tx).await?;
+    let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+    let capabilities =
+        initialize_handshake(&key, &stdin_tx, stdout_reader, evt_tx, pending.clone()).await?;
 
     Ok(Server {
         key,
         capabilities,
         stdin_tx,
         next_request_id: 1,
-        in_flight: HashMap::new(),
+        pending,
     })
 }
 
@@ -257,6 +279,7 @@ async fn stdout_task<R: AsyncRead + Unpin>(
     mut reader: BufReader<R>,
     key: ServerKey,
     evt_tx: Sender<LspEvent>,
+    pending: PendingMap,
 ) {
     loop {
         let raw = match codec::read_message(&mut reader).await {
@@ -279,21 +302,31 @@ async fn stdout_task<R: AsyncRead + Unpin>(
             }
         };
 
-        dispatch_message(&key, val, &evt_tx);
+        dispatch_message(&key, val, &evt_tx, &pending);
     }
 }
 
 /// Dispatch a decoded JSON-RPC value as either a response or a notification.
-fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>) {
+fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>, pending: &PendingMap) {
     let has_id = val.get("id").is_some();
     let has_method = val.get("method").is_some();
 
     if has_id && !has_method {
         // Response to one of our requests.
-        let id = match val.get("id").and_then(Value::as_i64) {
+        let jsonrpc_id = match val.get("id").and_then(Value::as_i64) {
             Some(i) => i,
             None => {
                 tracing::warn!(key = ?key, "LSP response with non-integer id; ignoring");
+                return;
+            }
+        };
+        // Map the JSON-RPC id back to the app-allocated request id.
+        // If the id is not found (e.g. the internal shutdown request uses -1),
+        // drop the response silently.
+        let app_id = match pending.lock().ok().and_then(|mut m| m.remove(&jsonrpc_id)) {
+            Some(id) => id,
+            None => {
+                tracing::debug!(key = ?key, jsonrpc_id, "LSP response for unknown id; ignoring");
                 return;
             }
         };
@@ -309,7 +342,7 @@ fn dispatch_message(key: &ServerKey, val: Value, evt_tx: &Sender<LspEvent>) {
             Ok(val.get("result").cloned().unwrap_or(Value::Null))
         };
         let _ = evt_tx.send(LspEvent::Response {
-            request_id: id,
+            request_id: app_id,
             result,
         });
     } else if has_method {
