@@ -17,7 +17,7 @@ name = "hjkl"
 path = "src/main.rs"
 
 [dependencies]
-hjkl-lsp = { version = "0.1", path = "../../crates/hjkl-lsp" }
+hjkl-lsp = "0.1"
 crossbeam-channel = "0.5"
 hjkl-buffer = "0.5"
 hjkl-splash = { version = "0.2", features = ["ratatui"] }
