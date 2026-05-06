@@ -9,6 +9,22 @@ use crate::completion::{Completion, item_from_lsp};
 
 use super::{App, DiagSeverity, LspDiag, LspPendingRequest, LspServerInfo};
 
+/// Resolve a (possibly relative) buffer path against `current_dir` so the
+/// resulting `PathBuf` is absolute. `url::Url::from_file_path` (used by
+/// `hjkl_lsp::uri::from_path`) requires an absolute path; without this
+/// helper, opening hjkl with a relative path like `apps/hjkl/src/main.rs`
+/// silently fails to attach to the LSP server.
+fn absolutize(p: &std::path::Path) -> PathBuf {
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|| p.to_path_buf())
+    }
+}
+
 /// Small inline map: file extension → LSP language id.
 fn language_id_for_ext(ext: &str) -> Option<&'static str> {
     match ext {
@@ -256,7 +272,7 @@ impl App {
 
         let slot = &self.slots[slot_idx];
         let path = match slot.filename.as_ref() {
-            Some(p) => p.clone(),
+            Some(p) => absolutize(p),
             None => return,
         };
 
@@ -306,8 +322,8 @@ impl App {
         &self,
     ) -> Option<(serde_json::Value, hjkl_lsp::BufferId, (usize, usize))> {
         let slot = self.active();
-        let path = slot.filename.as_ref()?;
-        let uri = hjkl_lsp::uri::from_path(path).ok()?;
+        let path = absolutize(slot.filename.as_ref()?);
+        let uri = hjkl_lsp::uri::from_path(&path).ok()?;
         let cursor = slot.editor.buffer().cursor();
         let row = cursor.row;
         let col = cursor.col;
@@ -713,7 +729,7 @@ impl App {
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
-            Some(p) => p.clone(),
+            Some(p) => absolutize(p),
             None => {
                 self.status_message = Some(
                     "LSP: no file open in this buffer (use :e <file> or open from the picker)"
@@ -1038,7 +1054,7 @@ impl App {
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
-            Some(p) => p.clone(),
+            Some(p) => absolutize(p),
             None => {
                 self.status_message = Some(
                     "LSP: no file open in this buffer (use :e <file> or open from the picker)"
@@ -1129,7 +1145,7 @@ impl App {
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
-            Some(p) => p.clone(),
+            Some(p) => absolutize(p),
             None => {
                 self.status_message = Some(
                     "LSP: no file open in this buffer (use :e <file> or open from the picker)"
