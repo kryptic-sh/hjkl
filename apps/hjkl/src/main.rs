@@ -319,7 +319,8 @@ fn main() -> Result<()> {
     execute!(
         stdout(),
         terminal::EnterAlternateScreen,
-        event::EnableFocusChange
+        event::EnableFocusChange,
+        event::EnableMouseCapture
     )?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -330,6 +331,7 @@ fn main() -> Result<()> {
     let _ = terminal::disable_raw_mode();
     let _ = execute!(
         io::stdout(),
+        event::DisableMouseCapture,
         event::DisableFocusChange,
         terminal::LeaveAlternateScreen
     );

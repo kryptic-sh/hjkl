@@ -793,6 +793,34 @@ impl App {
                     self.lsp_notify_change_active();
                     self.recompute_and_install();
                 }
+                Event::Mouse(me) => {
+                    use crossterm::event::MouseEventKind;
+                    // Skip while overlays are active — let the
+                    // overlay's own key handling (or future mouse
+                    // handling) keep ownership of input.
+                    if self.command_field.is_some()
+                        || self.search_field.is_some()
+                        || self.picker.is_some()
+                        || self.info_popup.is_some()
+                    {
+                        continue;
+                    }
+                    // 3 lines per wheel notch — vim's `mousescroll` default.
+                    const WHEEL_LINES: i16 = 3;
+                    match me.kind {
+                        MouseEventKind::ScrollDown => {
+                            self.active_mut().editor.scroll_down(WHEEL_LINES);
+                            self.sync_viewport_from_editor();
+                            self.recompute_and_install();
+                        }
+                        MouseEventKind::ScrollUp => {
+                            self.active_mut().editor.scroll_up(WHEEL_LINES);
+                            self.sync_viewport_from_editor();
+                            self.recompute_and_install();
+                        }
+                        _ => {}
+                    }
+                }
                 Event::Resize(w, h) => {
                     // Update the active editor viewport so the engine sees
                     // the new dimensions; the renderer will repaint all panes.
