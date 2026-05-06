@@ -2894,6 +2894,55 @@ fn lnext_jumps_to_next_diag() {
 }
 
 #[test]
+fn gg_scrolls_window_viewport_to_top() {
+    // Regression: gg moved cursor to (0,0) and the engine called
+    // ensure_cursor_in_scrolloff, but the host's `_ =>` branch in the
+    // pending_buffer_motion match forwarded the key to the engine
+    // WITHOUT calling sync_viewport_from_editor — so the focused
+    // window's stored top_row stayed at the old position.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+
+    // Position cursor + viewport deep in the buffer. The viewport_height
+    // atomic must also be set — every vim::step resyncs vp.height from
+    // it, so leaving the atomic at 0 would zero the host viewport mid-step
+    // and disable scrolloff math.
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+        vp.top_row = 60;
+    }
+    app.active_mut().editor.jump_cursor(70, 0);
+    app.sync_viewport_from_editor();
+    let fw = app.focused_window();
+    assert_eq!(app.windows[fw].as_ref().unwrap().top_row, 60);
+
+    // Drive `gg` through the engine. First `g` sets engine-side pending,
+    // second `g` triggers the gg motion (cursor → top + auto-scroll).
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+    // The fix added in event_loop.rs's `_ =>` arm of pending_buffer_motion:
+    // sync the editor's auto-scrolled viewport back to the focused window.
+    app.sync_viewport_from_editor();
+
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "gg must put cursor at row 0");
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top < 60,
+        "gg must scroll window viewport to top, but stored top_row stayed at {stored_top}"
+    );
+}
+
+#[test]
 fn search_count_cursor_on_match_stays_on_match() {
     // Regression: /<pat><CR> from a cursor that's already ON a match used
     // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds

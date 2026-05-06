@@ -463,8 +463,13 @@ impl App {
                                 // Didn't match — forward only the current key;
                                 // drop the pending prefix (g/]/[ alone has no
                                 // other mapped meaning in our engine yet).
+                                // Engine-handled motions like gg/gj/gk/G need
+                                // the viewport synced back so the focused
+                                // window's stored top_row picks up the
+                                // engine's auto-scroll.
                                 _ => {
                                     self.active_mut().editor.handle_key(key);
+                                    self.sync_viewport_from_editor();
                                     continue;
                                 }
                             }
