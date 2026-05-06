@@ -336,9 +336,14 @@ impl App {
     }
 
     /// Internal: send a goto-flavour request and register it as pending.
+    /// `extras` is merged into the top-level params object before sending —
+    /// most goto methods take only `TextDocumentPositionParams`, but
+    /// `textDocument/references` requires an additional `context` field
+    /// (`{ includeDeclaration: bool }`) per the LSP spec.
     fn lsp_send_goto(
         &mut self,
         method: &str,
+        extras: Option<serde_json::Value>,
         make_pending: impl FnOnce(hjkl_lsp::BufferId, (usize, usize)) -> LspPendingRequest,
     ) {
         if self.lsp.is_none() {
@@ -346,7 +351,7 @@ impl App {
                 Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
-        let (params, buffer_id, origin) = match self.lsp_position_params() {
+        let (mut params, buffer_id, origin) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
                 self.status_message = Some(
@@ -356,6 +361,13 @@ impl App {
                 return;
             }
         };
+        if let (Some(extra), Some(obj)) = (extras, params.as_object_mut())
+            && let Some(extra_obj) = extra.as_object()
+        {
+            for (k, v) in extra_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
         let request_id = self.lsp_alloc_request_id();
         let pending = make_pending(buffer_id, origin);
         self.lsp_pending.insert(request_id, pending);
@@ -369,7 +381,7 @@ impl App {
 
     /// `gd` — goto definition.
     pub(crate) fn lsp_goto_definition(&mut self) {
-        self.lsp_send_goto("textDocument/definition", |buf, orig| {
+        self.lsp_send_goto("textDocument/definition", None, |buf, orig| {
             LspPendingRequest::GotoDefinition {
                 buffer_id: buf,
                 origin: orig,
@@ -379,7 +391,7 @@ impl App {
 
     /// `gD` — goto declaration.
     pub(crate) fn lsp_goto_declaration(&mut self) {
-        self.lsp_send_goto("textDocument/declaration", |buf, orig| {
+        self.lsp_send_goto("textDocument/declaration", None, |buf, orig| {
             LspPendingRequest::GotoDeclaration {
                 buffer_id: buf,
                 origin: orig,
@@ -389,7 +401,7 @@ impl App {
 
     /// `gy` — goto type definition.
     pub(crate) fn lsp_goto_type_definition(&mut self) {
-        self.lsp_send_goto("textDocument/typeDefinition", |buf, orig| {
+        self.lsp_send_goto("textDocument/typeDefinition", None, |buf, orig| {
             LspPendingRequest::GotoTypeDefinition {
                 buffer_id: buf,
                 origin: orig,
@@ -399,7 +411,7 @@ impl App {
 
     /// `gi` — goto implementation.
     pub(crate) fn lsp_goto_implementation(&mut self) {
-        self.lsp_send_goto("textDocument/implementation", |buf, orig| {
+        self.lsp_send_goto("textDocument/implementation", None, |buf, orig| {
             LspPendingRequest::GotoImplementation {
                 buffer_id: buf,
                 origin: orig,
@@ -407,21 +419,28 @@ impl App {
         });
     }
 
-    /// `gr` — goto references (always opens picker).
+    /// `gr` — goto references (always opens picker). LSP requires a
+    /// `context: { includeDeclaration }` field on top of the standard
+    /// position params; servers reject the request with a deserialization
+    /// error when it's missing.
     pub(crate) fn lsp_goto_references(&mut self) {
-        self.lsp_send_goto("textDocument/references", |buf, orig| {
-            LspPendingRequest::GotoReferences {
+        self.lsp_send_goto(
+            "textDocument/references",
+            Some(json!({ "context": { "includeDeclaration": true } })),
+            |buf, orig| LspPendingRequest::GotoReferences {
                 buffer_id: buf,
                 origin: orig,
-            }
-        });
+            },
+        );
     }
 
     /// `K` — show hover info.
     pub(crate) fn lsp_hover(&mut self) {
-        self.lsp_send_goto("textDocument/hover", |buf, orig| LspPendingRequest::Hover {
-            buffer_id: buf,
-            origin: orig,
+        self.lsp_send_goto("textDocument/hover", None, |buf, orig| {
+            LspPendingRequest::Hover {
+                buffer_id: buf,
+                origin: orig,
+            }
         });
     }
 
