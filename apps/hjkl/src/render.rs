@@ -730,12 +730,27 @@ pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     let pat = st.pattern.as_ref()?;
     let buf = app.active().editor.buffer();
     let (cursor_row, cursor_col) = app.active().editor.cursor();
+    // The engine reports `cursor_col` as a char index, but `regex::Match::start`
+    // returns a byte offset. On lines with multi-byte chars before the match
+    // (e.g. an em-dash in a doc comment) byte > char and the comparison drops
+    // the match the cursor is sitting on. Convert the cursor to a byte offset
+    // on its own line so both sides of the inequality are byte-counted.
+    let cursor_byte = buf
+        .lines()
+        .get(cursor_row)
+        .map(|line| {
+            line.char_indices()
+                .nth(cursor_col)
+                .map(|(b, _)| b)
+                .unwrap_or(line.len())
+        })
+        .unwrap_or(0);
     let mut total = 0usize;
     let mut current_idx = 0usize;
     'outer: for (row_idx, line) in buf.lines().iter().enumerate() {
         for m in pat.find_iter(line) {
             total += 1;
-            if (row_idx, m.start()) <= (cursor_row, cursor_col) {
+            if (row_idx, m.start()) <= (cursor_row, cursor_byte) {
                 current_idx = total;
             }
             if total >= MATCH_CAP {

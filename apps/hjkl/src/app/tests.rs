@@ -3221,6 +3221,37 @@ fn search_count_n_press_increments_by_one() {
 }
 
 #[test]
+fn search_count_handles_multibyte_chars_before_match() {
+    // Regression: search_count compared cursor_col (char index) against
+    // m.start() (byte offset). A match on a line with multi-byte chars
+    // before it (e.g. an em-dash in a doc comment) had byte > char, so
+    // the inequality `(row, byte) <= (row, char)` falsely excluded the
+    // match the cursor was sitting on — counter showed 0/N instead of 1/N.
+    //
+    // Real-world repro: `/main` in apps/hjkl/src/main.rs landed on a
+    // line "/// surface them — `main` prints …" with an em-dash and
+    // showed [0/6] on commit, then [2/6] after one `n` press.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Two matches; first sits behind a multi-byte em-dash.
+    seed_buffer(&mut app, "alpha\n/// — main one\nbeta\nmain two");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 10;
+        vp.top_row = 0;
+    }
+    app.commit_search("main");
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((1, 2)),
+        "/main must land on M1 with counter 1/2, even when M1 sits \
+         behind a multi-byte char (em-dash) on its line"
+    );
+    // n -> M2 -> 2/2.
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(crate::render::search_count(&app), Some((2, 2)));
+}
+
+#[test]
 fn search_count_through_full_key_flow() {
     // Regression: simulate the actual key path / -> 'f' -> 'o' -> 'o' -> Enter.
     // Counter must end at 1/3 (or N/3 with N=1), never skipping past 1.
