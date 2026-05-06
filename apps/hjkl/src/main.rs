@@ -25,6 +25,7 @@ use crossterm::{event, execute, terminal};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::path::PathBuf;
+use tracing_subscriber::EnvFilter;
 
 /// ASCII-art banner. Regenerate with:
 ///
@@ -219,6 +220,8 @@ fn parse_args() -> Result<Args> {
 }
 
 fn main() -> Result<()> {
+    init_tracing();
+
     let args = parse_args()?;
 
     // nvim-api mode (msgpack-rpc server, nvim-compatible) — check FIRST since
@@ -344,6 +347,53 @@ fn main() -> Result<()> {
     );
 
     result
+}
+
+fn init_tracing() {
+    let data_dir = match hjkl_config::data_dir("hjkl") {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("hjkl: tracing disabled (data_dir): {e}");
+            return;
+        }
+    };
+
+    let log_dir = data_dir.join("logs");
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!(
+            "hjkl: tracing disabled (create log dir {}): {e}",
+            log_dir.display()
+        );
+        return;
+    }
+
+    let log_path = log_dir.join("hjkl.log");
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!(
+                "hjkl: tracing disabled (open log file {}): {e}",
+                log_path.display()
+            );
+            return;
+        }
+    };
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_ansi(false)
+        .with_writer(move || file.try_clone().expect("clone hjkl.log file handle"))
+        .finish();
+
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("hjkl: tracing disabled (set global subscriber): {e}");
+    }
 }
 
 #[cfg(test)]

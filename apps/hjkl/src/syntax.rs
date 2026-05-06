@@ -302,20 +302,29 @@ fn worker_loop(
             Msg::SetLanguage(id, None) => {
                 buffers.remove(&id);
             }
-            Msg::SetLanguage(id, Some(grammar)) => match Highlighter::new(grammar) {
-                Ok(h) => {
-                    buffers.insert(
-                        id,
-                        WorkerBufferState {
-                            highlighter: h,
-                            last_parsed_dirty_gen: None,
-                        },
-                    );
+            Msg::SetLanguage(id, Some(grammar)) => {
+                let lang = grammar.name().to_string();
+                match Highlighter::new(grammar) {
+                    Ok(h) => {
+                        buffers.insert(
+                            id,
+                            WorkerBufferState {
+                                highlighter: h,
+                                last_parsed_dirty_gen: None,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            buffer_id = id,
+                            language = %lang,
+                            error = %e,
+                            "failed to attach syntax highlighter"
+                        );
+                        buffers.remove(&id);
+                    }
                 }
-                Err(_) => {
-                    buffers.remove(&id);
-                }
-            },
+            }
             Msg::Reset(id) => {
                 if let Some(s) = buffers.get_mut(&id) {
                     s.highlighter.reset();
