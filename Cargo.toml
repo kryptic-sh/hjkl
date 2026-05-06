@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 anyhow = "1"
 thiserror = "2"
 ratatui = "0.30"
-libloading = "0.8"
+libloading = "0.9"
 dirs = "6"
 tracing = "0.1"
 
