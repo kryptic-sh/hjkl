@@ -3219,6 +3219,31 @@ fn gd_dispatches_goto_definition() {
     assert!(app.lsp_pending.is_empty());
 }
 
+#[test]
+fn lsp_request_works_with_relative_filename() {
+    // Regression: opening hjkl with a relative path like
+    // `apps/hjkl/src/main.rs` used to silently fail to attach to the LSP
+    // server because url::Url::from_file_path requires absolute paths.
+    // The absolutize() helper now joins relative paths against
+    // current_dir() before URI conversion.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let mgr = hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default());
+    app.lsp = Some(mgr);
+    app.active_mut().filename = Some(std::path::PathBuf::from("src/main.rs"));
+    app.lsp_goto_definition();
+    // Request was registered as pending — absolutize made URI conversion
+    // succeed even though the buffer's filename is relative.
+    assert_eq!(
+        app.lsp_pending.len(),
+        1,
+        "relative-path goto must produce a pending request, not the \
+         'no file open' error path"
+    );
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
+}
+
 // ── Phase 4: completion popup tests ────────────────────────────────────────
 
 fn make_completion_item(label: &str) -> crate::completion::CompletionItem {
