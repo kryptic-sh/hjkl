@@ -192,31 +192,9 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Cache zig
-        if: matrix.zig == 'true'
-        id: cache-zig
-        uses: actions/cache@v4
-        with:
-          path: ~/.zig
-          key: zig-0.14.0-${{ runner.arch }}
-
       - name: Setup zig
-        if: matrix.zig == 'true' && steps.cache-zig.outputs.cache-hit != 'true'
-        run: |
-          ZIG_VERSION="0.14.0"
-          case "$(uname -m)" in
-            aarch64) ZIG_ARCH="aarch64" ;;
-            *)       ZIG_ARCH="x86_64"  ;;
-          esac
-          ZIG_DIR="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}"
-          mkdir -p ~/.zig
-          curl -fsSL --retry 3 --retry-delay 5 \
-            "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIR}.tar.xz" \
-            | tar -xJ --strip-components=1 -C ~/.zig
-
-      - name: Add zig to PATH
         if: matrix.zig == 'true'
-        run: echo "$HOME/.zig" >> "$GITHUB_PATH"
+        uses: mlugg/setup-zig@v2.2.1
 
       - name: Install cargo-zigbuild
         if: matrix.zig == 'true'
