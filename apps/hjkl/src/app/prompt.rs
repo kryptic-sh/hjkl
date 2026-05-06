@@ -138,8 +138,18 @@ impl App {
             Ok(re) => {
                 self.active_mut().editor.set_search_pattern(Some(re));
                 let forward = self.search_dir == SearchDir::Forward;
+                // Vim semantics for the / and ? prompts are asymmetric:
+                //   /<pat><CR> — searches AT-OR-AFTER the cursor (cursor
+                //                stays on the match if it's already on one)
+                //   ?<pat><CR> — searches strictly BEFORE the cursor
+                //                (always moves to a previous match)
+                // skip_current=false on forward prevents /<CR> from
+                // double-stepping past the cursor's match (counter went
+                // 0/3 → 2/3 because the cursor advanced past M1).
+                // skip_current=true on backward keeps the existing /?:
+                // behavior of jumping to the previous match.
                 if forward {
-                    self.active_mut().editor.search_advance_forward(true);
+                    self.active_mut().editor.search_advance_forward(false);
                 } else {
                     self.active_mut().editor.search_advance_backward(true);
                 }

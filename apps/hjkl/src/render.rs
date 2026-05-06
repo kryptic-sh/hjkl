@@ -724,7 +724,7 @@ fn prompt_line(
 /// `current_idx` is 1-based (the match the cursor is on or just passed).
 /// Returns `None` when no pattern is active or there are no matches.
 /// Caps at 10 000 matches to avoid stalling on huge files.
-fn search_count(app: &App) -> Option<(usize, usize)> {
+pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     const MATCH_CAP: usize = 10_000;
     let st = app.active().editor.search_state();
     let pat = st.pattern.as_ref()?;

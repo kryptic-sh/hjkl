@@ -2894,6 +2894,109 @@ fn lnext_jumps_to_next_diag() {
 }
 
 #[test]
+fn search_count_cursor_on_match_stays_on_match() {
+    // Regression: /<pat><CR> from a cursor that's already ON a match used
+    // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds
+    // the first match AT-OR-AFTER the cursor — only `n` advances.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Cursor at (0,0) — exactly on the first 'foo'.
+    app.commit_search("foo");
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((1, 3)),
+        "/<pat><CR> from cursor on a match must keep counter at 1/3, \
+         not advance to 2/3"
+    );
+}
+
+#[test]
+fn search_count_n_press_increments_by_one() {
+    // After /foo<CR> lands on M1, pressing n should advance to M2 (counter 2/3).
+    // If counter skips to 3/3, the n-jump is double-stepping.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    app.commit_search("foo");
+    assert_eq!(crate::render::search_count(&app), Some((1, 3)));
+    // Now drive `n` via the engine.
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((2, 3)),
+        "n must advance counter from 1/3 to 2/3, not skip"
+    );
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(crate::render::search_count(&app), Some((3, 3)));
+}
+
+#[test]
+fn search_count_through_full_key_flow() {
+    // Regression: simulate the actual key path / -> 'f' -> 'o' -> 'o' -> Enter.
+    // Counter must end at 1/3 (or N/3 with N=1), never skipping past 1.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Open / prompt.
+    app.open_search_prompt(crate::app::SearchDir::Forward);
+    // Type 'f' 'o' 'o' through handle_search_field_key.
+    for ch in ['f', 'o', 'o'] {
+        let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+        app.handle_search_field_key(key);
+    }
+    // During typing the counter should be 0/3 (cursor before all matches).
+    let count = crate::render::search_count(&app);
+    assert_eq!(count, Some((0, 3)), "during typing, counter must be 0/3");
+    // Submit.
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    app.handle_search_field_key(enter);
+    // After submit the counter must show 1/3, NOT 2/3.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 3)),
+        "after / submit, counter must be 1/3 — bug was 2/3"
+    );
+}
+
+#[test]
+fn search_count_after_commit_lands_on_first_match() {
+    // Regression: `/<pat><CR>` from a non-match cursor was incrementing
+    // the match counter to 2 (skipping 1) because commit_search passed
+    // skip_current=true even on the first jump.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    // Cursor at (0,0), 'X' — before all matches.
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Submit `/foo<CR>` programmatically.
+    app.commit_search("foo");
+    // Counter should now show 1/3 (first match), not 2/3.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 3)),
+        "/{{pat}}<CR> from a non-match cursor must land on match 1, not skip to 2"
+    );
+}
+
+#[test]
 fn lsp_jump_reveals_cursor_in_viewport() {
     // Regression: jump_cursor only sets cursor; without ensure_cursor_in_
     // scrolloff afterwards, the viewport stays parked and the cursor lands
