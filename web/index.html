@@ -415,6 +415,23 @@
         font-family: var(--mono);
         font-variant-ligatures: none;
       }
+      .install-note {
+        color: var(--fg-muted);
+        margin: 0 0 20px;
+      }
+      .install-sample {
+        margin-top: 20px;
+      }
+      .install-code {
+        margin: 0;
+        padding: 14px 16px;
+        font-size: 13px;
+        line-height: 1.6;
+        overflow-x: auto;
+        color: var(--fg);
+        font-family: var(--mono);
+        font-variant-ligatures: none;
+      }
       .term-body {
         display: grid;
         grid-template-columns: 220px 1fr;
@@ -982,7 +999,7 @@
       <section id="install">
         <h2>install</h2>
         <h3>Prebuilt binaries on every tagged release.</h3>
-        <p style="color: var(--fg-muted); margin: 0 0 20px">
+        <p class="install-note">
           macOS via Homebrew tap, Arch via AUR, or grab a prebuilt binary. Linux
           (x86_64, aarch64) — .tar.gz / .deb / .rpm / .apk / musl. macOS (Apple
           Silicon, Intel) — .tar.gz. Windows (x64) — .zip. SHA-256 sidecars on
@@ -1011,42 +1028,50 @@
             >all releases ↗</a
           >
         </div>
-        <div class="terminal" style="margin-top: 20px">
+        <div class="terminal install-sample">
           <div class="bar">
             <span class="dot r"></span><span class="dot y"></span
             ><span class="dot g"></span>
             <span class="title">hjkl — macOS (Homebrew)</span>
           </div>
-          <pre><span class="ok">$</span> brew install kryptic-sh/tap/hjkl
+          <pre
+            class="install-code"
+          ><span class="ok">$</span> brew install kryptic-sh/tap/hjkl
 <span class="ok">$</span> hjkl</pre>
         </div>
-        <div class="terminal" style="margin-top: 20px">
+        <div class="terminal install-sample">
           <div class="bar">
             <span class="dot r"></span><span class="dot y"></span
             ><span class="dot g"></span>
             <span class="title">hjkl — Arch Linux (AUR)</span>
           </div>
-          <pre><span class="ok">$</span> yay -S hjkl-bin</pre>
-          <pre><span class="cm"># or </span></pre>
-          <pre><span class="ok">$</span> paru -S hjkl-bin</pre>
+          <pre
+            class="install-code"
+          ><span class="ok">$</span> yay -S hjkl-bin</pre>
+          <pre class="install-code"><span class="cm"># or </span></pre>
+          <pre
+            class="install-code"
+          ><span class="ok">$</span> paru -S hjkl-bin</pre>
         </div>
-        <div class="terminal" style="margin-top: 20px">
+        <div class="terminal install-sample">
           <div class="bar">
             <span class="dot r"></span><span class="dot y"></span
             ><span class="dot g"></span>
             <span class="title">hjkl — Alpine Linux</span>
           </div>
-          <pre><span class="cm"># download .apk from releases page, then:</span>
+          <pre
+            class="install-code"
+          ><span class="cm"># download .apk from releases page, then:</span>
 <span class="ok">$</span> apk add --allow-untrusted hjkl-*.apk
 <span class="ok">$</span> hjkl</pre>
         </div>
-        <div class="terminal" style="margin-top: 20px">
+        <div class="terminal install-sample">
           <div class="bar">
             <span class="dot r"></span><span class="dot y"></span
             ><span class="dot g"></span>
             <span class="title">hjkl — from source</span>
           </div>
-          <pre><span class="cm"># crates.io</span>
+          <pre class="install-code"><span class="cm"># crates.io</span>
 <span class="ok">$</span> cargo install hjkl
 
 <span class="cm"># or build from the repo</span>
