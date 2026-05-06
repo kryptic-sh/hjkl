@@ -128,6 +128,26 @@ impl App {
                         continue;
                     }
 
+                    // ── LSP chord resolution (<leader>c{a} / <leader>r{n}) ───
+                    if let Some(lsp_prefix) = self.pending_lsp.take() {
+                        if self.active().editor.vim_mode() == VimMode::Normal {
+                            self.pending_leader = false;
+                            match (lsp_prefix, key.code) {
+                                ('c', KeyCode::Char('a')) => {
+                                    self.lsp_code_actions();
+                                }
+                                ('r', KeyCode::Char('n')) => {
+                                    // Phase 5 MVP: prompt user to use :Rename <newname>.
+                                    // TODO: open inline prompt pre-filled with word-at-cursor.
+                                    self.status_message =
+                                        Some("use :Rename <newname> to rename".into());
+                                }
+                                _ => {}
+                            }
+                        }
+                        continue;
+                    }
+
                     // ── Git sub-command resolution ───────────────────────────
                     if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_git = false;
@@ -197,6 +217,16 @@ impl App {
                                 KeyCode::Char('d') => {
                                     // <leader>d — show diag-at-cursor in info popup.
                                     self.show_diag_at_cursor();
+                                }
+                                KeyCode::Char('c') => {
+                                    // Begin LSP 'c' sub-command chord (<leader>ca = code actions).
+                                    self.pending_lsp = Some('c');
+                                    self.pending_leader = false;
+                                }
+                                KeyCode::Char('r') => {
+                                    // Begin LSP 'r' sub-command chord (<leader>rn = rename).
+                                    self.pending_lsp = Some('r');
+                                    self.pending_leader = false;
                                 }
                                 _ => {}
                             }

@@ -693,6 +693,7 @@ impl PickerLogic for StaticListSource {
                     AppAction::StashApply(i) => Box::new(AppAction::StashApply(*i)),
                     AppAction::StashPop(i) => Box::new(AppAction::StashPop(*i)),
                     AppAction::StashDrop(i) => Box::new(AppAction::StashDrop(*i)),
+                    AppAction::ApplyCodeAction(i) => Box::new(AppAction::ApplyCodeAction(*i)),
                 };
                 PickerAction::Custom(boxed)
             }

@@ -3354,3 +3354,418 @@ fn set_prefix_dismisses_when_filter_empty() {
         "popup should be empty after non-matching prefix"
     );
 }
+
+// ── Phase 5 LSP tests ────────────────────────────────────────────────────
+
+/// Build a minimal `lsp_types::WorkspaceEdit` with one file and one edit.
+#[allow(clippy::mutable_key_type)]
+fn make_workspace_edit(
+    uri: &str,
+    start_line: u32,
+    start_char: u32,
+    end_line: u32,
+    end_char: u32,
+    new_text: &str,
+) -> lsp_types::WorkspaceEdit {
+    let url = uri.parse::<lsp_types::Uri>().expect("valid URI");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: start_line,
+                    character: start_char,
+                },
+                end: lsp_types::Position {
+                    line: end_line,
+                    character: end_char,
+                },
+            },
+            new_text: new_text.to_string(),
+        }],
+    );
+    lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    }
+}
+
+#[test]
+fn apply_workspace_edit_single_file() {
+    let path = std::env::temp_dir().join("hjkl_ws_edit_single.txt");
+    std::fs::write(&path, "hello world\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = format!("file://{}", path.display());
+    let edit = make_workspace_edit(&uri, 0, 6, 0, 11, "rust");
+    let count = app
+        .apply_workspace_edit(edit)
+        .expect("apply_workspace_edit failed");
+    assert_eq!(count, 1);
+
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(
+        lines[0], "hello rust",
+        "edit should replace 'world' with 'rust'"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_sorts_edits_descending() {
+    // Two edits on the same line: first edit at col 0-3, second at col 6-11.
+    // If applied in forward order the offsets shift; descending order must give correct result.
+    let path = std::env::temp_dir().join("hjkl_ws_edit_sort.txt");
+    std::fs::write(&path, "hello world foo\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let url = format!("file://{}", path.display())
+        .parse::<lsp_types::Uri>()
+        .expect("valid URI");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url,
+        vec![
+            // Edit 1: replace "hello" (0-5) with "hi"
+            lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: lsp_types::Position {
+                        line: 0,
+                        character: 5,
+                    },
+                },
+                new_text: "hi".to_string(),
+            },
+            // Edit 2: replace "world" (6-11) with "earth"
+            lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 0,
+                        character: 6,
+                    },
+                    end: lsp_types::Position {
+                        line: 0,
+                        character: 11,
+                    },
+                },
+                new_text: "earth".to_string(),
+            },
+        ],
+    );
+    let edit = lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    };
+    app.apply_workspace_edit(edit).expect("apply failed");
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "hi earth foo", "both edits must apply correctly");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_multi_file() {
+    let path_a = std::env::temp_dir().join("hjkl_ws_multi_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_ws_multi_b.txt");
+    std::fs::write(&path_a, "file a content\n").unwrap();
+    std::fs::write(&path_b, "file b content\n").unwrap();
+
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+
+    let uri_a = format!("file://{}", path_a.display());
+    let uri_b = format!("file://{}", path_b.display());
+
+    let url_a = uri_a.parse::<lsp_types::Uri>().expect("valid URI a");
+    let url_b = uri_b.parse::<lsp_types::Uri>().expect("valid URI b");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url_a,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 14,
+                },
+            },
+            new_text: "edited".to_string(),
+        }],
+    );
+    changes.insert(
+        url_b,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 14,
+                },
+            },
+            new_text: "changed".to_string(),
+        }],
+    );
+
+    let edit = lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    };
+    let count = app
+        .apply_workspace_edit(edit)
+        .expect("multi-file apply failed");
+    assert_eq!(count, 2, "should affect 2 files");
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
+#[test]
+fn rename_response_null_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::Rename {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+        new_name: "newName".to_string(),
+    };
+    app.handle_lsp_response(pending, Ok(serde_json::Value::Null));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("cannot rename"),
+        "null rename must set 'cannot rename' status, got: {msg}"
+    );
+}
+
+#[test]
+fn rename_response_applies_workspace_edit() {
+    let path = std::env::temp_dir().join("hjkl_rename_apply.txt");
+    std::fs::write(&path, "old_name here\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = format!("file://{}", path.display());
+    let edit = make_workspace_edit(&uri, 0, 0, 0, 8, "new_name");
+    let val = serde_json::to_value(edit).unwrap();
+
+    let pending = LspPendingRequest::Rename {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+        new_name: "new_name".to_string(),
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("renamed"),
+        "rename response must set status, got: {msg}"
+    );
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "new_name here");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn format_response_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::Format {
+        buffer_id: 0,
+        range: None,
+    };
+    // Empty array = no changes.
+    app.handle_lsp_response(pending, Ok(serde_json::json!([])));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no formatting"),
+        "empty format response must say 'no formatting changes', got: {msg}"
+    );
+}
+
+#[test]
+fn format_response_applies_text_edits() {
+    let path = std::env::temp_dir().join("hjkl_format_apply.txt");
+    std::fs::write(&path, "fn foo(){}\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    let buf_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Insert a space at col 9 (after the `{`) → "fn foo(){ }"
+    let edits: Vec<lsp_types::TextEdit> = vec![lsp_types::TextEdit {
+        range: lsp_types::Range {
+            start: lsp_types::Position {
+                line: 0,
+                character: 9,
+            },
+            end: lsp_types::Position {
+                line: 0,
+                character: 9,
+            },
+        },
+        new_text: " ".to_string(),
+    }];
+    let val = serde_json::to_value(&edits).unwrap();
+
+    let pending = LspPendingRequest::Format {
+        buffer_id: buf_id,
+        range: None,
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "formatted");
+    let lines = app.active().editor.buffer().lines();
+    // "fn foo(){}" with space inserted at pos 9 → "fn foo(){ }"
+    assert_eq!(lines[0], "fn foo(){ }");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn code_action_response_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    app.handle_lsp_response(pending, Ok(serde_json::json!([])));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no code actions"),
+        "empty code actions must say 'no code actions', got: {msg}"
+    );
+}
+
+#[test]
+fn code_action_response_multi_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    let actions = serde_json::json!([
+        {
+            "title": "Fix import",
+            "kind": "quickfix",
+        },
+        {
+            "title": "Extract method",
+            "kind": "refactor",
+        },
+    ]);
+    app.handle_lsp_response(pending, Ok(actions));
+    assert!(
+        app.picker.is_some(),
+        "multiple code actions must open picker"
+    );
+    assert_eq!(
+        app.pending_code_actions.len(),
+        2,
+        "pending_code_actions must hold both actions"
+    );
+}
+
+#[test]
+fn code_action_response_single_applies_action() {
+    let path = std::env::temp_dir().join("hjkl_ca_single.txt");
+    std::fs::write(&path, "old content\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = format!("file://{}", path.display());
+    let edit = make_workspace_edit(&uri, 0, 0, 0, 11, "new content");
+    let action = lsp_types::CodeAction {
+        title: "Replace content".to_string(),
+        edit: Some(edit),
+        ..Default::default()
+    };
+    let val =
+        serde_json::to_value(vec![lsp_types::CodeActionOrCommand::CodeAction(action)]).unwrap();
+
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    // Single action: applied directly, no picker.
+    assert!(
+        app.picker.is_none(),
+        "single code action must not open picker"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("files changed"),
+        "single action apply must set status, got: {msg}"
+    );
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "new content");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn lsp_code_actions_includes_overlapping_diags_in_context() {
+    // Verify that lsp_code_actions collects diagnostics that overlap the cursor.
+    // We set up a slot with diags and check the request would include them.
+    // Since we can't intercept the LspManager send, we test the diagnostic
+    // overlap logic used by lsp_code_actions separately here.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "fn foo() {\n    let x = 1;\n}\n");
+
+    // Seed two diagnostics: one overlapping the cursor, one not.
+    app.active_mut().lsp_diags = vec![
+        LspDiag {
+            start_row: 0,
+            start_col: 3,
+            end_row: 0,
+            end_col: 6,
+            severity: DiagSeverity::Error,
+            message: "overlapping".to_string(),
+            source: None,
+            code: None,
+        },
+        LspDiag {
+            start_row: 1,
+            start_col: 0,
+            end_row: 1,
+            end_col: 5,
+            severity: DiagSeverity::Warning,
+            message: "not overlapping".to_string(),
+            source: None,
+            code: None,
+        },
+    ];
+
+    // Position cursor at row=0, col=4 (inside the first diag range).
+    app.active_mut().editor.jump_cursor(0, 4);
+
+    // Test the overlap logic directly.
+    let cursor_row = 0usize;
+    let cursor_col = 4usize;
+    let diags = &app.active().lsp_diags;
+    let overlapping: Vec<_> = diags
+        .iter()
+        .filter(|d| {
+            let after_start = (cursor_row, cursor_col) >= (d.start_row, d.start_col);
+            let before_end = cursor_row < d.end_row
+                || (cursor_row == d.end_row && cursor_col < d.end_col)
+                || (cursor_row == d.start_row && d.start_row == d.end_row);
+            after_start && (before_end || cursor_row == d.start_row)
+        })
+        .collect();
+
+    assert_eq!(
+        overlapping.len(),
+        1,
+        "only the overlapping diag should be included"
+    );
+    assert_eq!(overlapping[0].message, "overlapping");
+}

@@ -17,4 +17,7 @@ pub enum AppAction {
     /// Jump the active buffer's cursor to a specific (0-based) row + col.
     /// Used by the diagnostic picker to land on the diag start position.
     JumpToRowCol(usize, usize),
+    /// Apply the code action at index `i` from `App::pending_code_actions`.
+    /// Phase 5 LSP code actions.
+    ApplyCodeAction(usize),
 }

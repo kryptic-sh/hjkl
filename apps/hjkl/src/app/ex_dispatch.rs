@@ -392,6 +392,35 @@ impl App {
         }
 
         // ── LSP diagnostic commands ───────────────────────────────────────────
+        // `:Rename <newname>` — LSP rename.
+        if cmd.starts_with("Rename ") || cmd == "Rename" {
+            if let Some(new_name) = cmd.strip_prefix("Rename ") {
+                let new_name = new_name.trim().to_string();
+                if new_name.is_empty() {
+                    self.status_message = Some("E: usage: :Rename <newname>".into());
+                } else {
+                    self.lsp_rename(new_name);
+                }
+            } else {
+                // TODO: open prompt-based rename UI (Phase 6).
+                self.status_message = Some("E: usage: :Rename <newname>".into());
+            }
+            return;
+        }
+
+        // `:LspFormat` / `:Format` — LSP format.
+        if cmd == "LspFormat" || cmd == "Format" {
+            // TODO: range formatting when invoked from visual mode (Phase 6).
+            self.lsp_format();
+            return;
+        }
+
+        // `:LspCodeAction` — LSP code actions.
+        if cmd == "LspCodeAction" || cmd == "CodeAction" {
+            self.lsp_code_actions();
+            return;
+        }
+
         match cmd {
             "lopen" => {
                 self.open_diag_picker();

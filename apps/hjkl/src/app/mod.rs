@@ -183,6 +183,25 @@ pub enum LspPendingRequest {
         anchor_row: usize,
         anchor_col: usize,
     },
+    /// `textDocument/codeAction` — Phase 5.
+    CodeAction {
+        buffer_id: hjkl_lsp::BufferId,
+        anchor_row: usize,
+        anchor_col: usize,
+    },
+    /// `textDocument/rename` — Phase 5.
+    Rename {
+        buffer_id: hjkl_lsp::BufferId,
+        anchor_row: usize,
+        anchor_col: usize,
+        new_name: String,
+    },
+    /// `textDocument/formatting` — Phase 5.
+    Format {
+        buffer_id: hjkl_lsp::BufferId,
+        /// `None` = full document; `Some((sr, sc, er, ec))` = range (Phase 5 always None).
+        range: Option<(usize, usize, usize, usize)>,
+    },
 }
 
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
@@ -314,6 +333,9 @@ pub struct App {
     /// `true` after the user typed `<leader>g` — waiting for the next key
     /// to resolve the git sub-command (e.g. `s` → git status picker).
     pub pending_git: bool,
+    /// Set to `'c'` after `<leader>c` waiting for the next key (e.g. `a` →
+    /// code actions). `None` when no LSP leader prefix is pending.
+    pub pending_lsp: Option<char>,
     /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
     /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
     /// once the motion is resolved or forwarded to the engine.
@@ -366,6 +388,9 @@ pub struct App {
     pub lsp_pending: HashMap<i64, LspPendingRequest>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
+    /// Code actions from the most recent `textDocument/codeAction` response.
+    /// The picker uses `ApplyCodeAction(i)` to index into this list.
+    pub pending_code_actions: Vec<lsp_types::CodeActionOrCommand>,
     /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
     /// Set to `true` after `Ctrl-x`; cleared after the next key.
     pub pending_ctrl_x: bool,
@@ -944,6 +969,7 @@ impl App {
             picker: None,
             pending_leader: false,
             pending_git: false,
+            pending_lsp: None,
             pending_buffer_motion: None,
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
@@ -967,6 +993,7 @@ impl App {
             lsp_next_request_id: 0,
             lsp_pending: HashMap::new(),
             completion: None,
+            pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
         })
     }

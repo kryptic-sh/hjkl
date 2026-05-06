@@ -438,6 +438,24 @@ impl App {
             } => {
                 self.handle_completion_response(buffer_id, anchor_row, anchor_col, result);
             }
+            LspPendingRequest::CodeAction {
+                buffer_id,
+                anchor_row,
+                anchor_col,
+            } => {
+                self.handle_code_action_response(buffer_id, anchor_row, anchor_col, result);
+            }
+            LspPendingRequest::Rename {
+                buffer_id,
+                anchor_row,
+                anchor_col,
+                new_name,
+            } => {
+                self.handle_rename_response(buffer_id, anchor_row, anchor_col, new_name, result);
+            }
+            LspPendingRequest::Format { buffer_id, range } => {
+                self.handle_format_response(buffer_id, range, result);
+            }
         }
     }
 
@@ -672,6 +690,535 @@ impl App {
         if let Some(mgr) = self.lsp.as_ref() {
             mgr.send_request(request_id, buffer_id, "textDocument/completion", params);
         }
+    }
+
+    // ── Code actions ──────────────────────────────────────────────────────
+
+    /// `<leader>ca` — request code actions at the cursor.
+    pub(crate) fn lsp_code_actions(&mut self) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let slot = self.active();
+        let path = match slot.filename.as_ref() {
+            Some(p) => p.clone(),
+            None => {
+                self.status_message = Some("LSP: buffer has no path".into());
+                return;
+            }
+        };
+        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
+            Some(u) => u,
+            None => {
+                self.status_message = Some("LSP: cannot build URI".into());
+                return;
+            }
+        };
+        let cursor = slot.editor.buffer().cursor();
+        let row = cursor.row as u32;
+        let col = cursor.col as u32;
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+
+        // Collect diagnostics that overlap the cursor position.
+        let overlapping_diags: Vec<lsp_types::Diagnostic> = slot
+            .lsp_diags
+            .iter()
+            .filter(|d| {
+                let after_start = (cursor.row, cursor.col) >= (d.start_row, d.start_col);
+                let before_end = cursor.row < d.end_row
+                    || (cursor.row == d.end_row && cursor.col < d.end_col)
+                    || (cursor.row == d.start_row && d.start_row == d.end_row);
+                after_start && (before_end || cursor.row == d.start_row)
+            })
+            .map(|d| {
+                let severity = match d.severity {
+                    super::DiagSeverity::Error => Some(lsp_types::DiagnosticSeverity::ERROR),
+                    super::DiagSeverity::Warning => Some(lsp_types::DiagnosticSeverity::WARNING),
+                    super::DiagSeverity::Info => Some(lsp_types::DiagnosticSeverity::INFORMATION),
+                    super::DiagSeverity::Hint => Some(lsp_types::DiagnosticSeverity::HINT),
+                };
+                let code = d.code.as_ref().map(|c| {
+                    if let Ok(n) = c.parse::<i32>() {
+                        lsp_types::NumberOrString::Number(n)
+                    } else {
+                        lsp_types::NumberOrString::String(c.clone())
+                    }
+                });
+                lsp_types::Diagnostic {
+                    range: lsp_types::Range {
+                        start: lsp_types::Position {
+                            line: d.start_row as u32,
+                            character: d.start_col as u32,
+                        },
+                        end: lsp_types::Position {
+                            line: d.end_row as u32,
+                            character: d.end_col as u32,
+                        },
+                    },
+                    severity,
+                    code,
+                    source: d.source.clone(),
+                    message: d.message.clone(),
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let params = json!({
+            "textDocument": { "uri": uri.as_str() },
+            "range": {
+                "start": { "line": row, "character": col },
+                "end": { "line": row, "character": col },
+            },
+            "context": {
+                "diagnostics": overlapping_diags,
+                "triggerKind": 1, // CodeActionTriggerKind::Invoked
+            },
+        });
+
+        let request_id = self.lsp_alloc_request_id();
+        self.lsp_pending.insert(
+            request_id,
+            LspPendingRequest::CodeAction {
+                buffer_id,
+                anchor_row: cursor.row,
+                anchor_col: cursor.col,
+            },
+        );
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "textDocument/codeAction", params);
+        }
+    }
+
+    /// Handle a `textDocument/codeAction` response.
+    pub(crate) fn handle_code_action_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _anchor_row: usize,
+        _anchor_col: usize,
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP codeAction: {}", e.message));
+                return;
+            }
+        };
+
+        if val.is_null() {
+            self.status_message = Some("no code actions".into());
+            return;
+        }
+
+        let actions: Vec<lsp_types::CodeActionOrCommand> = match serde_json::from_value(val) {
+            Ok(a) => a,
+            Err(_) => {
+                self.status_message = Some("LSP codeAction: could not parse response".into());
+                return;
+            }
+        };
+
+        if actions.is_empty() {
+            self.status_message = Some("no code actions".into());
+            return;
+        }
+
+        if actions.len() == 1 {
+            let action = actions.into_iter().next().unwrap();
+            self.apply_code_action_or_command(action);
+            return;
+        }
+
+        // Multiple actions — open picker. Store actions in pending_code_actions
+        // so the picker can index into them via ApplyCodeAction(i).
+        use crate::picker_action::AppAction;
+        let entries: Vec<(String, AppAction)> = actions
+            .iter()
+            .enumerate()
+            .map(|(i, action)| {
+                let label = match action {
+                    lsp_types::CodeActionOrCommand::CodeAction(ca) => ca.title.clone(),
+                    lsp_types::CodeActionOrCommand::Command(cmd) => cmd.title.clone(),
+                };
+                (label, AppAction::ApplyCodeAction(i))
+            })
+            .collect();
+
+        self.pending_code_actions = actions;
+        let source = Box::new(crate::picker_sources::StaticListSource::new(
+            "code actions".to_string(),
+            entries,
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+    }
+
+    /// Apply a single code action or command.
+    pub(crate) fn apply_code_action_or_command(&mut self, item: lsp_types::CodeActionOrCommand) {
+        match item {
+            lsp_types::CodeActionOrCommand::CodeAction(ca) => {
+                // Apply workspace edit first, then execute command if present.
+                if let Some(edit) = ca.edit {
+                    match self.apply_workspace_edit(edit) {
+                        Ok(count) => {
+                            self.status_message = Some(format!("{count} files changed"));
+                        }
+                        Err(e) => {
+                            self.status_message = Some(format!("LSP codeAction: {e}"));
+                            return;
+                        }
+                    }
+                }
+                if let Some(cmd) = ca.command {
+                    self.lsp_execute_command(&cmd.command, cmd.arguments.unwrap_or_default());
+                }
+            }
+            lsp_types::CodeActionOrCommand::Command(cmd) => {
+                self.lsp_execute_command(&cmd.command, cmd.arguments.unwrap_or_default());
+            }
+        }
+    }
+
+    /// Fire-and-forget `workspace/executeCommand`. Phase 5: no response handling.
+    fn lsp_execute_command(&mut self, command: &str, args: Vec<serde_json::Value>) {
+        let buffer_id = self.active().buffer_id as hjkl_lsp::BufferId;
+        let request_id = self.lsp_alloc_request_id();
+        let params = json!({
+            "command": command,
+            "arguments": args,
+        });
+        // Fire and forget — don't register a pending entry.
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "workspace/executeCommand", params);
+        }
+    }
+
+    // ── WorkspaceEdit application ─────────────────────────────────────────
+
+    /// Apply a `WorkspaceEdit` to the open slots (and open new ones as needed).
+    /// Returns the count of files changed on success, or an error string.
+    pub(crate) fn apply_workspace_edit(
+        &mut self,
+        edit: lsp_types::WorkspaceEdit,
+    ) -> Result<usize, String> {
+        // Collect (url, Vec<TextEdit>) pairs from either .changes or .document_changes.
+        let mut file_edits: Vec<(url::Url, Vec<lsp_types::TextEdit>)> = Vec::new();
+
+        if let Some(doc_changes) = edit.document_changes {
+            match doc_changes {
+                lsp_types::DocumentChanges::Edits(edits) => {
+                    for tde in edits {
+                        let url: url::Url = url::Url::parse(tde.text_document.uri.as_str())
+                            .map_err(|e| format!("bad URI: {e}"))?;
+                        let text_edits: Vec<lsp_types::TextEdit> = tde
+                            .edits
+                            .into_iter()
+                            .filter_map(|e| match e {
+                                lsp_types::OneOf::Left(te) => Some(te),
+                                lsp_types::OneOf::Right(_) => None, // skip annotated edits
+                            })
+                            .collect();
+                        file_edits.push((url, text_edits));
+                    }
+                }
+                lsp_types::DocumentChanges::Operations(ops) => {
+                    for op in ops {
+                        match op {
+                            lsp_types::DocumentChangeOperation::Edit(tde) => {
+                                let url: url::Url = url::Url::parse(tde.text_document.uri.as_str())
+                                    .map_err(|e| format!("bad URI: {e}"))?;
+                                let text_edits: Vec<lsp_types::TextEdit> = tde
+                                    .edits
+                                    .into_iter()
+                                    .filter_map(|e| match e {
+                                        lsp_types::OneOf::Left(te) => Some(te),
+                                        lsp_types::OneOf::Right(_) => None,
+                                    })
+                                    .collect();
+                                file_edits.push((url, text_edits));
+                            }
+                            lsp_types::DocumentChangeOperation::Op(_) => {
+                                // TODO: file create/rename/delete not supported in Phase 5.
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(changes) = edit.changes {
+            for (uri, edits) in changes {
+                let url: url::Url =
+                    url::Url::parse(uri.as_str()).map_err(|e| format!("bad URI: {e}"))?;
+                file_edits.push((url, edits));
+            }
+        }
+
+        let count = file_edits.len();
+        for (url, mut edits) in file_edits {
+            // Find or open the slot for this URI.
+            let target_path = hjkl_lsp::uri::to_path(&url);
+            let slot_idx = if let Some(ref tp) = target_path {
+                // Try to find an existing slot.
+                let existing = self.slots.iter().position(|s| {
+                    s.filename
+                        .as_ref()
+                        .map(|p| {
+                            let abs = if p.is_absolute() {
+                                p.clone()
+                            } else {
+                                std::env::current_dir().unwrap_or_default().join(p)
+                            };
+                            &abs == tp
+                        })
+                        .unwrap_or(false)
+                });
+                match existing {
+                    Some(idx) => idx,
+                    None => self.open_new_slot(tp.clone())?,
+                }
+            } else {
+                return Err(format!("non-file URI: {url}"));
+            };
+
+            // Sort edits by range END descending so applying later edits
+            // doesn't shift the positions of earlier ones.
+            edits.sort_by(|a, b| {
+                let ea = (a.range.end.line, a.range.end.character);
+                let eb = (b.range.end.line, b.range.end.character);
+                eb.cmp(&ea)
+            });
+
+            use hjkl_engine::{BufferEdit, Pos};
+            for te in edits {
+                let start = Pos {
+                    line: te.range.start.line,
+                    col: te.range.start.character,
+                };
+                let end = Pos {
+                    line: te.range.end.line,
+                    col: te.range.end.character,
+                };
+                BufferEdit::replace_range(
+                    self.slots[slot_idx].editor.buffer_mut(),
+                    start..end,
+                    &te.new_text,
+                );
+            }
+
+            // Mark dirty.
+            let _ = self.slots[slot_idx].editor.take_dirty();
+            self.slots[slot_idx].dirty = true;
+        }
+
+        Ok(count)
+    }
+
+    // ── Rename ────────────────────────────────────────────────────────────
+
+    /// Send a `textDocument/rename` request.
+    pub(crate) fn lsp_rename(&mut self, new_name: String) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let slot = self.active();
+        let path = match slot.filename.as_ref() {
+            Some(p) => p.clone(),
+            None => {
+                self.status_message = Some("LSP: buffer has no path".into());
+                return;
+            }
+        };
+        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
+            Some(u) => u,
+            None => {
+                self.status_message = Some("LSP: cannot build URI".into());
+                return;
+            }
+        };
+        let cursor = slot.editor.buffer().cursor();
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+
+        let params = json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": cursor.row as u32, "character": cursor.col as u32 },
+            "newName": new_name,
+        });
+
+        let request_id = self.lsp_alloc_request_id();
+        self.lsp_pending.insert(
+            request_id,
+            LspPendingRequest::Rename {
+                buffer_id,
+                anchor_row: cursor.row,
+                anchor_col: cursor.col,
+                new_name,
+            },
+        );
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "textDocument/rename", params);
+        }
+    }
+
+    /// Handle a `textDocument/rename` response.
+    pub(crate) fn handle_rename_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _anchor_row: usize,
+        _anchor_col: usize,
+        _new_name: String,
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP rename: {}", e.message));
+                return;
+            }
+        };
+
+        if val.is_null() {
+            self.status_message = Some("E: cannot rename here".into());
+            return;
+        }
+
+        let workspace_edit: lsp_types::WorkspaceEdit = match serde_json::from_value(val) {
+            Ok(we) => we,
+            Err(_) => {
+                self.status_message = Some("LSP rename: could not parse response".into());
+                return;
+            }
+        };
+
+        match self.apply_workspace_edit(workspace_edit) {
+            Ok(count) => {
+                self.status_message = Some(format!("renamed: {count} files changed"));
+            }
+            Err(e) => {
+                self.status_message = Some(format!("LSP rename: {e}"));
+            }
+        }
+    }
+
+    // ── Format ────────────────────────────────────────────────────────────
+
+    /// `:LspFormat` — send a `textDocument/formatting` request.
+    pub(crate) fn lsp_format(&mut self) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let slot = self.active();
+        let path = match slot.filename.as_ref() {
+            Some(p) => p.clone(),
+            None => {
+                self.status_message = Some("LSP: buffer has no path".into());
+                return;
+            }
+        };
+        let uri = match hjkl_lsp::uri::from_path(&path).ok() {
+            Some(u) => u,
+            None => {
+                self.status_message = Some("LSP: cannot build URI".into());
+                return;
+            }
+        };
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+        let tab_size = slot.editor.settings().tabstop as u32;
+        let insert_spaces = slot.editor.settings().expandtab;
+
+        let params = json!({
+            "textDocument": { "uri": uri.as_str() },
+            "options": {
+                "tabSize": tab_size,
+                "insertSpaces": insert_spaces,
+            },
+        });
+
+        let request_id = self.lsp_alloc_request_id();
+        self.lsp_pending.insert(
+            request_id,
+            LspPendingRequest::Format {
+                buffer_id,
+                range: None,
+            },
+        );
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "textDocument/formatting", params);
+        }
+    }
+
+    /// Handle a `textDocument/formatting` response.
+    pub(crate) fn handle_format_response(
+        &mut self,
+        buffer_id: hjkl_lsp::BufferId,
+        _range: Option<(usize, usize, usize, usize)>,
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP format: {}", e.message));
+                return;
+            }
+        };
+
+        if val.is_null() {
+            self.status_message = Some("no formatting changes".into());
+            return;
+        }
+
+        let edits: Vec<lsp_types::TextEdit> = match serde_json::from_value(val) {
+            Ok(e) => e,
+            Err(_) => {
+                self.status_message = Some("LSP format: could not parse response".into());
+                return;
+            }
+        };
+
+        if edits.is_empty() {
+            self.status_message = Some("no formatting changes".into());
+            return;
+        }
+
+        // Find the slot matching buffer_id.
+        let slot_idx = self
+            .slots
+            .iter()
+            .position(|s| s.buffer_id as hjkl_lsp::BufferId == buffer_id);
+        let slot_idx = match slot_idx {
+            Some(i) => i,
+            None => {
+                self.status_message = Some("LSP format: buffer no longer open".into());
+                return;
+            }
+        };
+
+        // Sort edits by range END descending.
+        let mut sorted = edits;
+        sorted.sort_by(|a, b| {
+            let ea = (a.range.end.line, a.range.end.character);
+            let eb = (b.range.end.line, b.range.end.character);
+            eb.cmp(&ea)
+        });
+
+        use hjkl_engine::{BufferEdit, Pos};
+        for te in sorted {
+            let start = Pos {
+                line: te.range.start.line,
+                col: te.range.start.character,
+            };
+            let end = Pos {
+                line: te.range.end.line,
+                col: te.range.end.character,
+            };
+            BufferEdit::replace_range(
+                self.slots[slot_idx].editor.buffer_mut(),
+                start..end,
+                &te.new_text,
+            );
+        }
+
+        let _ = self.slots[slot_idx].editor.take_dirty();
+        self.slots[slot_idx].dirty = true;
+        self.status_message = Some("formatted".into());
     }
 
     /// Handle a `textDocument/completion` response.

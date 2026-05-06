@@ -288,6 +288,16 @@ impl App {
                 self.active_mut().editor.jump_cursor(row, col);
                 self.sync_viewport_from_editor();
             }
+            AppAction::ApplyCodeAction(idx) => {
+                // Take the action from pending_code_actions by index.
+                if idx < self.pending_code_actions.len() {
+                    let action = self.pending_code_actions.remove(idx);
+                    self.pending_code_actions.clear();
+                    self.apply_code_action_or_command(action);
+                } else {
+                    self.status_message = Some("E: code action index out of range".into());
+                }
+            }
         }
     }
 
