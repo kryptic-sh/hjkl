@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-05-06
+
+### Fixed
+
+- Per-key mutex dedup in `SourceCache` and `QuerySourceCache`: two workers
+  racing on a shared Helix `QuerySourceCache` staging dir are now serialised
+  with an `Arc<Mutex<()>>` per language key; after acquiring the lock the
+  freshness check is repeated so a second caller skips a duplicate clone that
+  already completed.
+
+### Added
+
+- `AsyncGrammarLoader::in_flight_names() -> Vec<String>` — snapshot method
+  returning the names of all grammars currently being loaded. Intended for
+  driving a global spinner in TUI hosts.
+
 ## [0.5.3] - 2026-05-05
 
 ### Added
@@ -271,7 +287,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.1
