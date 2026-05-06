@@ -24,6 +24,12 @@ expandtab = true
 # recomputation. Lower this on slower machines.
 huge_file_threshold = 50000
 
+# Mouse support. When true, wheel scrolls the viewport (with scrolloff)
+# and the terminal's native text-selection requires Shift to bypass
+# capture (vim/nvim/helix convention). Toggle at runtime with
+# `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?`.
+mouse = true
+
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"

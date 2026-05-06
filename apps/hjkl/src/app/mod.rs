@@ -402,6 +402,12 @@ pub struct App {
     /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
     /// Set to `true` after `Ctrl-x`; cleared after the next key.
     pub pending_ctrl_x: bool,
+    /// Mouse-capture state. Mirrors the terminal's
+    /// EnableMouseCapture / DisableMouseCapture mode. Initialised from
+    /// `config.editor.mouse`; runtime-togglable via `:set [no]mouse`.
+    /// When false, wheel events fall through to the terminal as
+    /// synthesised arrow keys.
+    pub mouse_enabled: bool,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1020,6 +1026,9 @@ impl App {
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
+            // Default to bundled config's value; main overrides via with_config
+            // before crossterm capture is enabled.
+            mouse_enabled: crate::config::Config::default().editor.mouse,
         })
     }
 
@@ -1035,7 +1044,35 @@ impl App {
     /// rules still take precedence over user-config fallbacks.
     ///
     /// Readonly state on each slot is preserved.
+    /// Toggle terminal mouse capture at runtime. Drives the corresponding
+    /// crossterm Enable/DisableMouseCapture commands against stdout so
+    /// the change takes effect on the next event poll. Idempotent —
+    /// flipping to the current state is a no-op for the terminal but
+    /// still updates `mouse_enabled` so the field remains the source of
+    /// truth.
+    pub fn set_mouse_capture(&mut self, on: bool) {
+        if self.mouse_enabled == on {
+            self.status_message = Some(if on { "mouse" } else { "nomouse" }.into());
+            return;
+        }
+        let res = if on {
+            crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+        } else {
+            crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
+        };
+        match res {
+            Ok(()) => {
+                self.mouse_enabled = on;
+                self.status_message = Some(if on { "mouse" } else { "nomouse" }.into());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("E: failed to toggle mouse capture: {e}"));
+            }
+        }
+    }
+
     pub fn with_config(mut self, config: crate::config::Config) -> Self {
+        self.mouse_enabled = config.editor.mouse;
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();

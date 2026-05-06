@@ -319,15 +319,20 @@ fn main() -> Result<()> {
     execute!(
         stdout(),
         terminal::EnterAlternateScreen,
-        event::EnableFocusChange,
-        event::EnableMouseCapture
+        event::EnableFocusChange
     )?;
+    if app.mouse_enabled {
+        execute!(stdout(), event::EnableMouseCapture)?;
+    }
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
     let result = app.run(&mut terminal);
 
-    // Restore terminal regardless of outcome.
+    // Restore terminal regardless of outcome. The capture command
+    // sequence is idempotent on most terminals; emit unconditionally
+    // to recover from a runtime `:set mouse` that may have toggled
+    // state since startup.
     let _ = terminal::disable_raw_mode();
     let _ = execute!(
         io::stdout(),

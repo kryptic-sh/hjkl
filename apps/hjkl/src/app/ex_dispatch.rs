@@ -31,6 +31,62 @@ impl App {
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
         let canon = ex::canonical_command_name(cmd);
         let cmd: &str = canon.as_ref();
+
+        // App-level `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?`.
+        // Mouse capture is a terminal-I/O concern, not an editor-engine
+        // setting, so the app intercepts these tokens here. Residual
+        // tokens (if any) flow through to the engine as a rebuilt
+        // `:set ...` line so combined forms like `:set nu nomouse` work.
+        let rebuilt: String;
+        let cmd: &str = if let Some(body) = cmd.strip_prefix("set ") {
+            let body = body.trim();
+            if body.is_empty() {
+                cmd
+            } else {
+                let mut remaining: Vec<&str> = Vec::new();
+                let mut consumed_any = false;
+                for tok in body.split_whitespace() {
+                    match tok {
+                        "mouse" => {
+                            self.set_mouse_capture(true);
+                            consumed_any = true;
+                        }
+                        "nomouse" => {
+                            self.set_mouse_capture(false);
+                            consumed_any = true;
+                        }
+                        "mouse!" => {
+                            self.set_mouse_capture(!self.mouse_enabled);
+                            consumed_any = true;
+                        }
+                        "mouse?" => {
+                            self.status_message = Some(
+                                if self.mouse_enabled {
+                                    "mouse"
+                                } else {
+                                    "nomouse"
+                                }
+                                .into(),
+                            );
+                            consumed_any = true;
+                        }
+                        other => remaining.push(other),
+                    }
+                }
+                if consumed_any {
+                    if remaining.is_empty() {
+                        return;
+                    }
+                    rebuilt = format!("set {}", remaining.join(" "));
+                    rebuilt.as_str()
+                } else {
+                    cmd
+                }
+            }
+        } else {
+            cmd
+        };
+
         if cmd == "perf" {
             self.perf_overlay = !self.perf_overlay;
             self.recompute_hits = 0;

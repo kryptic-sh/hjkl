@@ -41,6 +41,9 @@ pub struct EditorConfig {
     pub expandtab: bool,
     /// Files with this many lines or more skip per-keystroke git diff recompute.
     pub huge_file_threshold: u32,
+    /// Whether mouse capture (and wheel-scrolls-viewport) is on at startup.
+    /// Runtime-togglable via `:set [no]mouse`.
+    pub mouse: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,6 +123,7 @@ mod tests {
         assert_eq!(cfg.editor.tab_width, 4);
         assert!(cfg.editor.expandtab);
         assert_eq!(cfg.editor.huge_file_threshold, 50_000);
+        assert!(cfg.editor.mouse, "mouse defaults on");
         assert_eq!(cfg.theme.name, "dark");
     }
 
