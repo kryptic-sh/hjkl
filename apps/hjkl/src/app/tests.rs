@@ -3211,3 +3211,146 @@ fn gd_dispatches_goto_definition() {
     // No LSP — nothing pending, no crash.
     assert!(app.lsp_pending.is_empty());
 }
+
+// ── Phase 4: completion popup tests ────────────────────────────────────────
+
+fn make_completion_item(label: &str) -> crate::completion::CompletionItem {
+    crate::completion::CompletionItem {
+        label: label.to_string(),
+        detail: None,
+        kind: crate::completion::CompletionKind::Other,
+        insert_text: label.to_string(),
+        filter_text: None,
+    }
+}
+
+fn synthesize_completion_response(labels: &[&str]) -> serde_json::Value {
+    let items: Vec<serde_json::Value> = labels
+        .iter()
+        .map(|l| serde_json::json!({ "label": l }))
+        .collect();
+    serde_json::json!(items)
+}
+
+#[test]
+fn completion_response_opens_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Enter insert mode so the guard passes.
+    app.active_mut().editor.handle_key(key(KeyCode::Char('i')));
+    // Give the buffer a filename so buffer_id matches.
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    let response_val = synthesize_completion_response(&["foo", "bar", "baz"]);
+    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+
+    assert!(app.completion.is_some(), "popup should open");
+    let popup = app.completion.as_ref().unwrap();
+    assert_eq!(popup.all_items.len(), 3);
+    assert_eq!(popup.visible.len(), 3);
+}
+
+#[test]
+fn completion_response_empty_no_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().editor.handle_key(key(KeyCode::Char('i')));
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Empty list response.
+    let response_val = serde_json::json!([]);
+    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+
+    assert!(
+        app.completion.is_none(),
+        "empty response must not open popup"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("no completions"),
+        "status should report no completions"
+    );
+}
+
+#[test]
+fn completion_request_pending_routes_to_handler() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Simulate a pending completion request.
+    app.active_mut().editor.handle_key(key(KeyCode::Char('i')));
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Insert a fake pending request.
+    let req_id = app.lsp_alloc_request_id();
+    app.lsp_pending.insert(
+        req_id,
+        LspPendingRequest::Completion {
+            buffer_id,
+            anchor_row: 0,
+            anchor_col: 0,
+        },
+    );
+
+    // Simulate receiving a response.
+    let response_val = synthesize_completion_response(&["alpha", "beta"]);
+    let pending = app.lsp_pending.remove(&req_id).unwrap();
+    app.handle_lsp_response(pending, Ok(response_val));
+
+    assert!(
+        app.completion.is_some(),
+        "response must route to popup opener"
+    );
+    let popup = app.completion.as_ref().unwrap();
+    assert_eq!(popup.all_items.len(), 2);
+}
+
+#[test]
+fn accept_completion_inserts_selected_item() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Seed buffer with some text and enter insert mode at col 0.
+    seed_buffer(&mut app, "fn foo");
+    app.active_mut().editor.handle_key(key(KeyCode::Char('i')));
+    // Open popup anchored at col 0 row 0 with two items.
+    let items = vec![make_completion_item("hello"), make_completion_item("world")];
+    app.completion = Some(crate::completion::Completion::new(0, 0, items));
+    // Select second item.
+    app.completion.as_mut().unwrap().selected = 1;
+
+    app.accept_completion();
+
+    // Popup must be gone.
+    assert!(app.completion.is_none());
+    // Buffer line should start with "world" (inserted at col 0).
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert!(
+        line.starts_with("world"),
+        "buffer line should start with inserted text, got: {line:?}"
+    );
+}
+
+#[test]
+fn dismiss_completion_clears_state() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let items = vec![make_completion_item("foo")];
+    app.completion = Some(crate::completion::Completion::new(0, 0, items));
+    app.pending_ctrl_x = true;
+
+    app.dismiss_completion();
+
+    assert!(app.completion.is_none());
+    assert!(!app.pending_ctrl_x);
+}
+
+#[test]
+fn set_prefix_dismisses_when_filter_empty() {
+    // Open popup, set prefix that matches nothing → popup auto-dismisses.
+    let items = vec![make_completion_item("alpha"), make_completion_item("beta")];
+    let mut popup = crate::completion::Completion::new(0, 0, items);
+    popup.set_prefix("xyz");
+    assert!(
+        popup.is_empty(),
+        "popup should be empty after non-matching prefix"
+    );
+}

@@ -25,6 +25,8 @@ mod syntax_glue;
 mod tests;
 pub mod window;
 
+use crate::completion::Completion;
+
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
@@ -174,6 +176,12 @@ pub enum LspPendingRequest {
     Hover {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
+    },
+    Completion {
+        buffer_id: hjkl_lsp::BufferId,
+        /// 0-based cursor position when the request was sent.
+        anchor_row: usize,
+        anchor_col: usize,
     },
 }
 
@@ -356,6 +364,11 @@ pub struct App {
     /// Maps app-allocated request id → what the request was for, so the
     /// response handler knows how to act on the result.
     pub lsp_pending: HashMap<i64, LspPendingRequest>,
+    /// Active completion popup, if any.
+    pub completion: Option<Completion>,
+    /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
+    /// Set to `true` after `Ctrl-x`; cleared after the next key.
+    pub pending_ctrl_x: bool,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -953,6 +966,8 @@ impl App {
             lsp_state: HashMap::new(),
             lsp_next_request_id: 0,
             lsp_pending: HashMap::new(),
+            completion: None,
+            pending_ctrl_x: false,
         })
     }
 
@@ -1014,5 +1029,11 @@ impl App {
     /// opens slot 0.
     pub fn open_extra(&mut self, path: PathBuf) -> Result<(), String> {
         self.open_new_slot(path).map(|_| ())
+    }
+
+    /// Dismiss the active completion popup (if any).
+    pub fn dismiss_completion(&mut self) {
+        self.completion = None;
+        self.pending_ctrl_x = false;
     }
 }

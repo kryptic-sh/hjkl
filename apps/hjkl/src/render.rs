@@ -303,6 +303,152 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 }
 
+/// Render the completion popup, floating below the cursor position.
+///
+/// Only called when `app.completion.is_some()`.
+fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
+    let popup = match app.completion.as_ref() {
+        Some(p) => p,
+        None => return,
+    };
+    if popup.is_empty() {
+        return;
+    }
+
+    // The anchor position in buffer coordinates (0-based row/col).
+    // We need to convert to screen coordinates inside buf_area.
+    // The focused window may have a gutter — compute it.
+    let slot_idx = {
+        let fw = app.focused_window();
+        app.windows[fw].as_ref().map(|w| w.slot).unwrap_or(0)
+    };
+    let s = app.slots()[slot_idx].editor.settings();
+    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
+    let gw = gutter_width(
+        app.slots()[slot_idx].editor.buffer().line_count() as usize,
+        nu,
+        rnu,
+        nuw,
+    );
+
+    let vp = app.slots()[slot_idx].editor.host().viewport();
+    let vp_top = vp.top_row;
+
+    // Screen row: anchor_row relative to viewport top, +1 so popup appears below.
+    let screen_row = popup.anchor_row.saturating_sub(vp_top) as u16 + 1;
+    // Screen col: anchor_col + gutter width.
+    let screen_col = popup.anchor_col as u16 + gw;
+
+    // Compute popup dimensions.
+    const MIN_WIDTH: u16 = 20;
+    const MAX_HEIGHT: u16 = 10;
+
+    let visible_count = popup.visible.len().min(MAX_HEIGHT as usize) as u16;
+    if visible_count == 0 {
+        return;
+    }
+
+    // Determine width from longest label + detail.
+    let content_width = popup
+        .visible
+        .iter()
+        .filter_map(|&idx| popup.all_items.get(idx))
+        .map(|item| {
+            let detail_len = item.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
+            // icon(1) + space(1) + label + space(2) + detail
+            1 + 1 + item.label.len() + 2 + detail_len
+        })
+        .max()
+        .unwrap_or(MIN_WIDTH as usize) as u16;
+    let popup_w = content_width.max(MIN_WIDTH).min(buf_area.width);
+
+    // Anchor position in screen coordinates (relative to buf_area).
+    let abs_row = buf_area.y + screen_row;
+    let abs_col = buf_area.x + screen_col;
+
+    // Clamp to screen bounds.
+    let popup_h = visible_count + 2; // +2 for border
+    let popup_y = if abs_row + popup_h > buf_area.y + buf_area.height {
+        // Would extend past bottom — shift above cursor.
+        abs_row.saturating_sub(popup_h + 1).max(buf_area.y)
+    } else {
+        abs_row
+    };
+    let popup_x = abs_col.min(buf_area.x + buf_area.width.saturating_sub(popup_w));
+
+    let area = Rect {
+        x: popup_x,
+        y: popup_y,
+        width: popup_w,
+        height: popup_h,
+    };
+
+    frame.render_widget(Clear, area);
+
+    let ui = &app.theme.ui;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ui.border_active));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let selected_style = Style::default()
+        .bg(ui.picker_selection_bg)
+        .add_modifier(Modifier::BOLD);
+    let normal_style = Style::default().fg(ui.text);
+    let detail_style = Style::default().fg(ui.text_dim);
+
+    let items: Vec<ListItem> = popup
+        .visible
+        .iter()
+        .enumerate()
+        .filter_map(|(vis_idx, &item_idx)| {
+            let item = popup.all_items.get(item_idx)?;
+            let icon = item.kind.icon();
+            let label = &item.label;
+            let mut spans = vec![
+                Span::styled(
+                    format!("{icon} "),
+                    if vis_idx == popup.selected {
+                        selected_style
+                    } else {
+                        normal_style
+                    },
+                ),
+                Span::styled(
+                    label.clone(),
+                    if vis_idx == popup.selected {
+                        selected_style
+                    } else {
+                        normal_style
+                    },
+                ),
+            ];
+            if let Some(ref detail) = item.detail {
+                // Truncate detail to avoid overflow.
+                let avail = inner.width.saturating_sub(2 + label.len() as u16 + 2) as usize;
+                let truncated: String = detail.chars().take(avail).collect();
+                if !truncated.is_empty() {
+                    spans.push(Span::styled(
+                        format!("  {truncated}"),
+                        if vis_idx == popup.selected {
+                            selected_style
+                        } else {
+                            detail_style
+                        },
+                    ));
+                }
+            }
+            Some(ListItem::new(Line::from(spans)))
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(popup.selected.min(items.len().saturating_sub(1))));
+    let list = List::new(items).highlight_style(selected_style);
+    frame.render_stateful_widget(list, inner, &mut state);
+}
+
 /// Render one complete frame into `frame`.
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -389,6 +535,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // its `Clear` widget masks the editor content beneath it.
     if app.picker.is_some() {
         picker_overlay(frame, app, buf_area);
+    }
+
+    // Completion popup: floating over the buffer, below picker/info.
+    if app.completion.is_some() {
+        completion_popup(frame, app, buf_area);
     }
 
     // Info popup (`:reg`, `:marks`, `:jumps`, `:changes`) renders on top of

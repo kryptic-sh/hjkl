@@ -1,6 +1,7 @@
 //! `hjkl` — standalone vim-modal terminal editor.
 
 mod app;
+mod completion;
 mod config;
 mod editorconfig;
 mod embed;

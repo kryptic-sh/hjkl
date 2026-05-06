@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::json;
 
+use crate::completion::{Completion, item_from_lsp};
+
 use super::{App, DiagSeverity, LspDiag, LspPendingRequest, LspServerInfo};
 
 /// Small inline map: file extension → LSP language id.
@@ -429,6 +431,13 @@ impl App {
             LspPendingRequest::Hover { buffer_id, origin } => {
                 self.handle_hover_response(buffer_id, origin, result);
             }
+            LspPendingRequest::Completion {
+                buffer_id,
+                anchor_row,
+                anchor_col,
+            } => {
+                self.handle_completion_response(buffer_id, anchor_row, anchor_col, result);
+            }
         }
     }
 
@@ -598,6 +607,159 @@ impl App {
             entries,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
+    }
+
+    // ── Completion ────────────────────────────────────────────────────────
+
+    /// Check if `ch` is a trigger character for the active LSP server, and if
+    /// so, fire a completion request. Called after inserting a char in insert mode.
+    pub(crate) fn maybe_auto_trigger_completion(&mut self, ch: char) {
+        // Need an active LSP server with capabilities.
+        let triggers: Vec<String> = self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(|ext| language_id_for_ext(ext))
+            .and_then(|lang| {
+                // Find a server key matching this language in lsp_state.
+                self.lsp_state.iter().find_map(|(key, info)| {
+                    if key.language == lang {
+                        // Pull triggerCharacters from capabilities.
+                        info.capabilities
+                            .pointer("/completionProvider/triggerCharacters")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                    } else {
+                        None
+                    }
+                })
+            })
+            .unwrap_or_default();
+
+        let ch_str = ch.to_string();
+        if triggers.contains(&ch_str) {
+            self.lsp_request_completion();
+        }
+    }
+
+    /// Send a `textDocument/completion` request for the current cursor position.
+    pub(crate) fn lsp_request_completion(&mut self) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
+            Some(v) => v,
+            None => {
+                self.status_message = Some("LSP: buffer has no path".into());
+                return;
+            }
+        };
+        let request_id = self.lsp_alloc_request_id();
+        self.lsp_pending.insert(
+            request_id,
+            LspPendingRequest::Completion {
+                buffer_id,
+                anchor_row: row,
+                anchor_col: col,
+            },
+        );
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "textDocument/completion", params);
+        }
+    }
+
+    /// Handle a `textDocument/completion` response.
+    pub(crate) fn handle_completion_response(
+        &mut self,
+        buffer_id: hjkl_lsp::BufferId,
+        anchor_row: usize,
+        anchor_col: usize,
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        let val = match result {
+            Ok(v) => v,
+            Err(e) => {
+                self.status_message = Some(format!("LSP completion: {}", e.message));
+                return;
+            }
+        };
+
+        // Guard: discard if user left insert mode or switched buffer.
+        use hjkl_engine::VimMode;
+        if self.active().editor.vim_mode() != VimMode::Insert {
+            return;
+        }
+        if (self.active().buffer_id as hjkl_lsp::BufferId) != buffer_id {
+            return;
+        }
+
+        // Parse CompletionResponse (null | CompletionList | Vec<CompletionItem>).
+        let lsp_items: Vec<lsp_types::CompletionItem> = if val.is_null() {
+            Vec::new()
+        } else if let Ok(list) = serde_json::from_value::<lsp_types::CompletionList>(val.clone()) {
+            list.items
+        } else {
+            serde_json::from_value::<Vec<lsp_types::CompletionItem>>(val).unwrap_or_default()
+        };
+
+        if lsp_items.is_empty() {
+            self.status_message = Some("no completions".into());
+            return;
+        }
+
+        let items: Vec<crate::completion::CompletionItem> =
+            lsp_items.into_iter().map(item_from_lsp).collect();
+        self.completion = Some(Completion::new(anchor_row, anchor_col, items));
+    }
+
+    /// Accept the currently selected completion item, inserting its text
+    /// into the buffer and dismissing the popup.
+    ///
+    /// Replace strategy: delete from `anchor_col` to the current cursor col
+    /// on the same row, then insert `insert_text` at that position.
+    /// TODO: honour `text_edit` with non-prefix ranges (filed for follow-up).
+    pub(crate) fn accept_completion(&mut self) {
+        let popup = match self.completion.take() {
+            Some(p) => p,
+            None => return,
+        };
+        let item = match popup.selected_item() {
+            Some(i) => i.clone(),
+            None => return,
+        };
+
+        use hjkl_engine::{BufferEdit, Pos};
+        let cursor = self.active().editor.buffer().cursor();
+        let row = cursor.row;
+        let cur_col = cursor.col;
+        let anchor_col = popup.anchor_col.min(cur_col);
+
+        let start = Pos {
+            line: row as u32,
+            col: anchor_col as u32,
+        };
+        let end = Pos {
+            line: row as u32,
+            col: cur_col as u32,
+        };
+
+        // Replace [anchor_col, cur_col) with insert_text.
+        BufferEdit::replace_range(
+            self.active_mut().editor.buffer_mut(),
+            start..end,
+            &item.insert_text,
+        );
+
+        // Move cursor past the inserted text.
+        let new_col = anchor_col + item.insert_text.len();
+        self.active_mut().editor.jump_cursor(row, new_col);
+        // completion was already taken via `take()` above, so it's already None.
     }
 
     /// Handle a hover response — set `info_popup` with extracted text.

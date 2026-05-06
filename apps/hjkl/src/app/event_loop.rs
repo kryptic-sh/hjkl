@@ -495,6 +495,241 @@ impl App {
                         // (the engine handles gj/gk/gg/G etc).
                     }
 
+                    // ── Insert-mode completion key handling ──────────────────
+                    // This block intercepts specific keys in insert mode to
+                    // manage the completion popup, before forwarding to the engine.
+                    if self.active().editor.vim_mode() == VimMode::Insert {
+                        // <C-x><C-o> manual omni-completion trigger.
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && key.code == KeyCode::Char('x')
+                        {
+                            self.pending_ctrl_x = true;
+                            continue;
+                        }
+                        if self.pending_ctrl_x {
+                            self.pending_ctrl_x = false;
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && key.code == KeyCode::Char('o')
+                            {
+                                self.lsp_request_completion();
+                                continue;
+                            }
+                            // Any other key: fall through normally (consume pending_ctrl_x).
+                        }
+
+                        // Keys that navigate/accept/dismiss the popup (popup must be open).
+                        if self.completion.is_some() {
+                            match key.code {
+                                // <C-n> / <C-p> navigate selection.
+                                KeyCode::Char('n')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    if let Some(ref mut p) = self.completion {
+                                        p.select_next();
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Char('p')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    if let Some(ref mut p) = self.completion {
+                                        p.select_prev();
+                                    }
+                                    continue;
+                                }
+                                // <Tab> or <C-y> accept selected item.
+                                KeyCode::Tab => {
+                                    self.accept_completion();
+                                    continue;
+                                }
+                                KeyCode::Char('y')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    self.accept_completion();
+                                    continue;
+                                }
+                                // <C-e> dismiss without accepting.
+                                KeyCode::Char('e')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                                {
+                                    self.dismiss_completion();
+                                    continue;
+                                }
+                                // <Esc> dismisses popup and falls through to engine
+                                // which exits insert mode.
+                                KeyCode::Esc => {
+                                    self.dismiss_completion();
+                                    // fall through to engine
+                                }
+                                // Printable char or backspace: update prefix, maybe dismiss.
+                                KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
+                                    // Let engine handle it first — we update prefix after.
+                                    self.active_mut().editor.handle_key(key);
+                                    self.sync_viewport_from_editor();
+                                    if self.active_mut().editor.take_dirty() {
+                                        let elapsed =
+                                            self.active_mut().refresh_dirty_against_saved();
+                                        self.last_signature_us = elapsed;
+                                        if self.active().dirty {
+                                            self.active_mut().is_new_file = false;
+                                        }
+                                    }
+                                    let buffer_id = self.active().buffer_id;
+                                    if self.active_mut().editor.take_content_reset() {
+                                        self.syntax.reset(buffer_id);
+                                    }
+                                    let edits = self.active_mut().editor.take_content_edits();
+                                    if !edits.is_empty() {
+                                        self.syntax.apply_edits(buffer_id, &edits);
+                                    }
+                                    self.lsp_notify_change_active();
+                                    self.recompute_and_install();
+
+                                    // Update popup prefix.
+                                    let anchor_col =
+                                        self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
+                                    let cur_col = self.active().editor.buffer().cursor().col;
+                                    let cur_row = self.active().editor.buffer().cursor().row;
+                                    let anchor_row = self
+                                        .completion
+                                        .as_ref()
+                                        .map(|p| p.anchor_row)
+                                        .unwrap_or(cur_row);
+                                    if cur_row != anchor_row || cur_col < anchor_col {
+                                        // Cursor moved out of anchor range — dismiss.
+                                        self.dismiss_completion();
+                                    } else {
+                                        let new_prefix = {
+                                            let line = self
+                                                .active()
+                                                .editor
+                                                .buffer()
+                                                .lines()
+                                                .get(cur_row)
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            line[anchor_col.min(line.len())
+                                                ..cur_col.min(line.len())]
+                                                .to_string()
+                                        };
+                                        if let Some(ref mut popup) = self.completion {
+                                            popup.set_prefix(&new_prefix);
+                                            if popup.is_empty() {
+                                                self.completion = None;
+                                            }
+                                        }
+                                    }
+                                    // Auto-trigger on trigger chars when popup just closed.
+                                    if self.completion.is_none() {
+                                        self.maybe_auto_trigger_completion(c);
+                                    }
+                                    continue;
+                                }
+                                KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => {
+                                    // Let engine handle backspace, then update prefix.
+                                    self.active_mut().editor.handle_key(key);
+                                    self.sync_viewport_from_editor();
+                                    if self.active_mut().editor.take_dirty() {
+                                        let elapsed =
+                                            self.active_mut().refresh_dirty_against_saved();
+                                        self.last_signature_us = elapsed;
+                                        if self.active().dirty {
+                                            self.active_mut().is_new_file = false;
+                                        }
+                                    }
+                                    let buffer_id = self.active().buffer_id;
+                                    if self.active_mut().editor.take_content_reset() {
+                                        self.syntax.reset(buffer_id);
+                                    }
+                                    let edits = self.active_mut().editor.take_content_edits();
+                                    if !edits.is_empty() {
+                                        self.syntax.apply_edits(buffer_id, &edits);
+                                    }
+                                    self.lsp_notify_change_active();
+                                    self.recompute_and_install();
+
+                                    let anchor_col =
+                                        self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
+                                    let cur_col = self.active().editor.buffer().cursor().col;
+                                    let cur_row = self.active().editor.buffer().cursor().row;
+                                    let anchor_row = self
+                                        .completion
+                                        .as_ref()
+                                        .map(|p| p.anchor_row)
+                                        .unwrap_or(cur_row);
+                                    if cur_row != anchor_row || cur_col < anchor_col {
+                                        self.dismiss_completion();
+                                    } else {
+                                        let new_prefix = {
+                                            let line = self
+                                                .active()
+                                                .editor
+                                                .buffer()
+                                                .lines()
+                                                .get(cur_row)
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            line[anchor_col.min(line.len())
+                                                ..cur_col.min(line.len())]
+                                                .to_string()
+                                        };
+                                        if let Some(ref mut popup) = self.completion {
+                                            popup.set_prefix(&new_prefix);
+                                            if popup.is_empty() {
+                                                self.completion = None;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+                                _ => {
+                                    // Any other key dismisses the popup.
+                                    self.dismiss_completion();
+                                }
+                            }
+                        } else {
+                            // Popup is closed. Handle <C-n>/<C-p> as manual trigger.
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && matches!(key.code, KeyCode::Char('n') | KeyCode::Char('p'))
+                            {
+                                self.lsp_request_completion();
+                                continue;
+                            }
+                            // Auto-trigger on trigger chars.
+                            if key.modifiers == KeyModifiers::NONE
+                                && let KeyCode::Char(c) = key.code
+                            {
+                                // Let engine handle it first.
+                                self.active_mut().editor.handle_key(key);
+                                self.sync_viewport_from_editor();
+                                if self.active_mut().editor.take_dirty() {
+                                    let elapsed = self.active_mut().refresh_dirty_against_saved();
+                                    self.last_signature_us = elapsed;
+                                    if self.active().dirty {
+                                        self.active_mut().is_new_file = false;
+                                    }
+                                }
+                                let buffer_id = self.active().buffer_id;
+                                if self.active_mut().editor.take_content_reset() {
+                                    self.syntax.reset(buffer_id);
+                                }
+                                let edits = self.active_mut().editor.take_content_edits();
+                                if !edits.is_empty() {
+                                    self.syntax.apply_edits(buffer_id, &edits);
+                                }
+                                self.lsp_notify_change_active();
+                                self.recompute_and_install();
+                                self.maybe_auto_trigger_completion(c);
+                                continue;
+                            }
+                        }
+                    } else {
+                        // Left insert mode — dismiss popup.
+                        if self.completion.is_some() {
+                            self.dismiss_completion();
+                        }
+                    }
+
                     // ── Normal editor key handling ───────────────────────────
                     self.active_mut().editor.handle_key(key);
 
