@@ -119,6 +119,11 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// The gutter on those rows is painted blank; the `~` appears at the
     /// leftmost text column. Rows within the buffer are unaffected.
     pub non_text_style: Style,
+    /// Diagnostic overlays (LSP inline highlights). Applied in a
+    /// post-paint pass after every row is drawn so they layer on top of
+    /// syntax and selection colours without a second layout traversal.
+    /// Pass `&[]` to disable. Added in 0.5.0.
+    pub diag_overlays: &'a [DiagOverlay],
 }
 
 /// Controls what numbers are rendered in the gutter.
@@ -178,6 +183,23 @@ pub struct Conceal {
     pub start_byte: usize,
     pub end_byte: usize,
     pub replacement: String,
+}
+
+/// A char-column range on a document row that should be styled with an
+/// overlay (e.g. an underline for LSP diagnostics). Applied in a
+/// post-paint pass so it composes on top of syntax and selection colours.
+///
+/// Added in 0.5.0 for LSP diagnostic inline rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct DiagOverlay {
+    /// 0-based document row.
+    pub row: usize,
+    /// 0-based start char-column (inclusive).
+    pub col_start: usize,
+    /// 0-based end char-column (exclusive).
+    pub col_end: usize,
+    /// Style applied to cells in `[col_start, col_end)`.
+    pub style: Style,
 }
 
 impl<R: StyleResolver> Widget for BufferView<'_, R> {
@@ -338,6 +360,54 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let y = text_area.y + sy;
                 if let Some(cell) = term_buf.cell_mut((x, y)) {
                     cell.set_style(cell.style().patch(self.cursor_column_bg));
+                }
+            }
+        }
+
+        // Diag overlay pass: apply underline / style over visible char
+        // columns. Only supported in Wrap::None mode; wrap is a future
+        // concern. Overlays beyond the visible horizontal scroll are
+        // skipped silently.
+        if matches!(wrap_mode, Wrap::None) && !self.diag_overlays.is_empty() {
+            // Build a doc_row → screen_row map from the first pass.
+            // We re-walk the viewport range instead of storing a map to
+            // keep memory allocation proportional to the viewport.
+            let vp_top = top_row;
+            let vp_bot = vp_top + area.height as usize;
+            for overlay in self.diag_overlays {
+                if overlay.row < vp_top || overlay.row >= vp_bot {
+                    continue;
+                }
+                // Compute screen row: count non-hidden rows from vp_top
+                // to overlay.row.
+                let mut sr: u16 = 0;
+                let mut dr = vp_top;
+                while dr < overlay.row && sr < area.height {
+                    if !folds.iter().any(|f| f.hides(dr)) {
+                        sr += 1;
+                    }
+                    dr += 1;
+                }
+                if sr >= area.height {
+                    continue;
+                }
+                let y = text_area.y + sr;
+                // Paint the char columns in the overlay range, clamped
+                // to the horizontal scroll window and text area width.
+                let col_start = overlay.col_start;
+                let col_end = overlay.col_end.max(col_start + 1);
+                for col in col_start..col_end {
+                    if col < top_col {
+                        continue;
+                    }
+                    let screen_col = col - top_col;
+                    if screen_col >= text_area.width as usize {
+                        break;
+                    }
+                    let x = text_area.x + screen_col as u16;
+                    if let Some(cell) = term_buf.cell_mut((x, y)) {
+                        cell.set_style(cell.style().patch(overlay.style));
+                    }
                 }
             }
         }
@@ -765,6 +835,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -794,6 +865,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -824,6 +896,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -862,6 +935,7 @@ mod tests {
             spans: &spans,
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -894,6 +968,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -932,6 +1007,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -975,6 +1051,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1010,6 +1087,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1048,6 +1126,7 @@ mod tests {
             spans: &[],
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1087,6 +1166,7 @@ mod tests {
             spans: &[],
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1132,6 +1212,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "E");
@@ -1166,6 +1247,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -1198,6 +1280,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -1230,6 +1313,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -1258,6 +1342,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -1286,6 +1371,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         }
     }
 
@@ -1478,6 +1564,7 @@ mod tests {
             spans,
             search_pattern,
             non_text_style: Style::default(),
+            diag_overlays: &[],
         }
     }
 
@@ -1646,6 +1733,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -1704,6 +1792,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
+            diag_overlays: &[],
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -1725,5 +1814,95 @@ mod tests {
             );
             assert_eq!(cell.fg, non_text_fg);
         }
+    }
+
+    #[test]
+    fn diag_overlay_paints_underline_on_range() {
+        // Render "hello world" and apply a DiagOverlay from col 6 to 11.
+        // The cells in that range must carry the UNDERLINED modifier; cells
+        // outside must not.
+        let b = Buffer::from_str("hello world");
+        let v = vp(20, 2);
+        let overlay = DiagOverlay {
+            row: 0,
+            col_start: 6,
+            col_end: 11,
+            style: Style::default().add_modifier(Modifier::UNDERLINED),
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[overlay],
+        };
+        let term = run_render(view, 20, 2);
+
+        // Cols 0-5 ("hello ") must NOT be underlined.
+        for x in 0u16..6 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert!(
+                !cell.modifier.contains(Modifier::UNDERLINED),
+                "col {x} must not be underlined (outside overlay)"
+            );
+        }
+        // Cols 6-10 ("world") must be underlined.
+        for x in 6u16..11 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert!(
+                cell.modifier.contains(Modifier::UNDERLINED),
+                "col {x} must be underlined (inside overlay)"
+            );
+        }
+        // Col 11 (past end, space) must NOT be underlined.
+        let cell = term.cell((11, 0)).unwrap();
+        assert!(
+            !cell.modifier.contains(Modifier::UNDERLINED),
+            "col 11 must not be underlined (past overlay end)"
+        );
+    }
+
+    #[test]
+    fn diag_overlay_out_of_viewport_is_ignored() {
+        // Overlay on row 5, viewport height = 3 → must not panic or paint.
+        let b = Buffer::from_str("a\nb\nc");
+        let v = vp(10, 3);
+        let overlay = DiagOverlay {
+            row: 5,
+            col_start: 0,
+            col_end: 1,
+            style: Style::default().add_modifier(Modifier::UNDERLINED),
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[overlay],
+        };
+        // Must not panic.
+        let _term = run_render(view, 10, 3);
     }
 }

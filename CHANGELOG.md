@@ -6,11 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-06
+
 ### Added
 
 - `BufferView::non_text_style` field; rows past end-of-buffer now paint `~`
   (vim's NonText marker) at the first text column. The gutter on those rows
   stays blank. Style defaults to `Style::default()` when not set.
+- `DiagOverlay` struct (`row`, `col_start`, `col_end`, `style`) for inline
+  diagnostic highlighting. Applied in a post-paint pass so it layers on top of
+  syntax and selection colours.
+- `BufferView::diag_overlays: &'a [DiagOverlay]` field. Existing
+  exhaustive-struct-init consumers must add `diag_overlays: &[]`. Pass `&[]`
+  to disable (no behaviour change).
 
 ## [0.4.0] - 2026-05-06
 
