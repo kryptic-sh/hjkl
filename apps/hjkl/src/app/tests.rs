@@ -3135,6 +3135,46 @@ fn plus_slash_argv_search_with_goto_line_searches_forward() {
 }
 
 #[test]
+fn plus_slash_argv_persists_forward_direction_for_n() {
+    // Regression: `hjkl +/keyword file` did not call set_last_search,
+    // so vim.last_search_forward stayed at its bool default (false).
+    // The next `n` then computed forward = false != false = false and
+    // jumped BACKWARD as if `?keyword<CR>` had been typed.
+    use hjkl_engine::{Input, Key};
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_n_dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "alpha").unwrap(); // 0
+        writeln!(f, "beta").unwrap(); // 1
+        writeln!(f, "main one").unwrap(); // 2 — first match
+        writeln!(f, "delta").unwrap(); // 3
+        writeln!(f, "main two").unwrap(); // 4 — `n` should jump here
+        writeln!(f, "main three").unwrap(); // 5
+    }
+    let mut app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row0, _) = app.active().editor.cursor();
+    assert_eq!(row0, 2, "+/main must land on first match (row 2)");
+    // last_search must be persisted so `n` knows the pattern.
+    assert_eq!(app.active().editor.last_search(), Some("main"));
+    // Drive `n` through the engine vim FSM and assert FORWARD jump.
+    let n_input = Input {
+        key: Key::Char('n'),
+        ..Default::default()
+    };
+    hjkl_engine::step(&mut app.active_mut().editor, n_input);
+    let (row1, _) = app.active().editor.cursor();
+    assert_eq!(
+        row1, 4,
+        "after +/main, `n` must advance FORWARD to row 4 (got row {row1}); \
+         backward would land on row 0 (no match) or stay/regress"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn search_count_cursor_on_match_stays_on_match() {
     // Regression: /<pat><CR> from a cursor that's already ON a match used
     // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds

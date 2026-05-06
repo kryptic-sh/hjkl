@@ -940,6 +940,11 @@ impl App {
                     // Reveal the cursor here so the focused window's
                     // initial top_row (read below) picks up the scroll.
                     slot.editor.ensure_cursor_in_scrolloff();
+                    // Persist direction so a subsequent `n` repeats
+                    // forward; without this, vim.last_search_forward
+                    // stays at its bool default (false) and `n` jumps
+                    // backward as if `?pat<CR>` had been typed.
+                    slot.editor.set_last_search(Some(pat), true);
                 }
                 Err(e) => {
                     eprintln!("hjkl: bad search pattern: {e}");
