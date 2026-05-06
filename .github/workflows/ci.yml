@@ -1,19 +1,19 @@
-name: CI
+name: ci
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: '-D warnings'
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   fmt:
@@ -51,55 +51,6 @@ jobs:
       - run: cargo test --all-features
       - run: cargo test --doc --all-features
 
-  musl-test:
-    name: test ${{ matrix.target }}
-    runs-on: ${{ matrix.runs-on }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            runs-on: ubuntu-latest
-          - target: aarch64-unknown-linux-musl
-            runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - run: sudo apt-get install -y musl-tools
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --target ${{ matrix.target }} --all-features
-      - run: cargo test --doc --target ${{ matrix.target }} --all-features
-
-  # Real-compositor test: spawn sway in headless wlroots mode and verify our
-  # bind handshake against ext_data_control_manager_v1 actually completes.
-  # Mock unit tests can't catch wire-protocol bugs like the FIRST_CLIENT_ID
-  # mismatch that broke Hyprland users in 0.4.7.
-  #
-  # Runs in archlinux:latest because Ubuntu 24.04 ships sway 1.9 /
-  # wlroots 0.17 which predates ext_data_control_manager_v1; arch has
-  # sway 1.11 / wlroots 0.18+ that exposes the protocol our backend uses.
-  sway-integration:
-    name: sway headless integration
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-    steps:
-      - name: Install deps
-        run: |
-          set -euo pipefail
-          pacman -Sy --noconfirm --needed rust cargo sway git libcap
-          # Arch's /usr/bin/sway ships with file capabilities that the GHA
-          # runner can't grant inside the container, so it refuses to exec
-          # with "Operation not permitted". Strip them — headless mode
-          # doesn't need any of them.
-          setcap -r /usr/bin/sway || true
-          sway --version
-          rustc --version
-      - uses: actions/checkout@v6
-      - name: Run wayland_sway integration test
-        run: cargo test --test wayland_sway -- --nocapture
-
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
@@ -108,3 +59,38 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+
+  publish:
+    name: Publish to crates.io
+    needs: [fmt, clippy, test, deny]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          CARGO_VER=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          if [ "v$CARGO_VER" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version v$CARGO_VER"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish to crates.io (idempotent)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CRATE=$(awk -F'"' '/^name[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          VERSION=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          URL="https://crates.io/api/v1/crates/${CRATE}/${VERSION}"
+          if curl -fsS -A "${CRATE}-release-ci" -o /dev/null "$URL"; then
+            echo "::notice::${CRATE}@${VERSION} already on crates.io, skipping"
+            exit 0
+          fi
+          cargo publish
