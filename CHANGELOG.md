@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-05-07
+
 ### Changed
 
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
