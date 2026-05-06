@@ -49,6 +49,22 @@ async fn wait_for_event_async(
     }
 }
 
+/// Absolute path under a tmp-style prefix that's accepted by
+/// `url::Url::from_file_path` on every platform. Unix gets `/tmp/<leaf>`,
+/// Windows gets `C:\<leaf>` (we don't actually touch the filesystem — these
+/// paths only need to be platform-absolute so the LSP initialize handshake
+/// can convert them to `file://` URIs).
+fn workspace_root(leaf: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        PathBuf::from(format!("/tmp/{leaf}"))
+    }
+    #[cfg(windows)]
+    {
+        PathBuf::from(format!(r"C:\{leaf}"))
+    }
+}
+
 /// Full sequence: initialize → didOpen (client-side) → shutdown → exit.
 ///
 /// The "driver" side acts as the mock LSP server: it responds to protocol
@@ -64,7 +80,7 @@ async fn mock_server_full_sequence() {
 
         let key = ServerKey {
             language: "rust".to_string(),
-            root: PathBuf::from("/tmp/mock-workspace"),
+            root: workspace_root("mock-workspace"),
         };
 
         // Split both ends.
@@ -121,7 +137,7 @@ async fn mock_server_full_sequence() {
         assert_eq!(server.capabilities["textDocumentSync"], 1);
 
         // ── Step 4: client sends textDocument/didOpen ────────────────────────
-        let path = PathBuf::from("/tmp/mock-workspace/src/main.rs");
+        let path = workspace_root("mock-workspace").join("src").join("main.rs");
         let uri = hjkl_lsp::uri::from_path(&path).unwrap();
         server.send_notification(
             "textDocument/didOpen",
@@ -180,7 +196,7 @@ async fn server_initialized_event_emitted() {
 
         let key = ServerKey {
             language: "typescript".to_string(),
-            root: PathBuf::from("/tmp/ts-project"),
+            root: workspace_root("ts-project"),
         };
 
         let (driver_read, mut driver_write) = tokio::io::split(driver_io);
@@ -238,7 +254,7 @@ async fn server_push_notification_forwarded() {
 
         let key = ServerKey {
             language: "go".to_string(),
-            root: PathBuf::from("/tmp/go-project"),
+            root: workspace_root("go-project"),
         };
 
         let (driver_read, mut driver_write) = tokio::io::split(driver_io);
@@ -300,7 +316,7 @@ async fn request_response_roundtrip() {
 
         let key = ServerKey {
             language: "rust".to_string(),
-            root: std::path::PathBuf::from("/tmp/rr-workspace"),
+            root: workspace_root("rr-workspace"),
         };
 
         let (driver_read, mut driver_write) = tokio::io::split(driver_io);
@@ -393,7 +409,7 @@ async fn request_with_error_returns_rpc_error() {
 
         let key = ServerKey {
             language: "python".to_string(),
-            root: std::path::PathBuf::from("/tmp/err-workspace"),
+            root: workspace_root("err-workspace"),
         };
 
         let (driver_read, mut driver_write) = tokio::io::split(driver_io);
