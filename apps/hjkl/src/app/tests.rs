@@ -3583,10 +3583,11 @@ fn goto_definition_empty_sets_status() {
 #[test]
 fn goto_definition_multi_opens_picker() {
     let mut app = App::new(None, false, None, None).unwrap();
+    // Use platform-aware URIs so Windows CI runners don't strip drive letters.
     let locs = vec![
-        make_location("file:///tmp/a.rs", 0, 0),
-        make_location("file:///tmp/b.rs", 5, 3),
-        make_location("file:///tmp/c.rs", 10, 1),
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_a.rs")), 0, 0),
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_b.rs")), 5, 3),
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_c.rs")), 10, 1),
     ];
     let result = ok_val(serde_json::to_value(locs).unwrap());
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
@@ -3599,7 +3600,8 @@ fn goto_definition_multi_opens_picker() {
 fn goto_references_always_opens_picker() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Single result — references always opens picker.
-    let locs = vec![make_location("file:///tmp/only.rs", 3, 0)];
+    // Use platform-aware URI so Windows CI runners don't strip drive letters.
+    let locs = vec![make_location(&file_url(&tmp_path("hjkl_gd_only.rs")), 3, 0)];
     let result = ok_val(serde_json::to_value(locs).unwrap());
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
     app.handle_references_response(buffer_id, (0, 0), result);
