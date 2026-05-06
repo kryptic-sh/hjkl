@@ -333,35 +333,66 @@ impl App {
                             self.pending_window_motion = true;
                             continue;
                         }
-                        // tmux-navigator: bare Ctrl-j/k/h/l navigate splits
-                        // in normal mode. Only intercept when a neighbour
-                        // exists in that direction — otherwise let the key
-                        // fall through to the engine so single-window users
-                        // keep vim semantics (Ctrl-h = h, Ctrl-l = redraw).
+                        // tmux-navigator: bare Ctrl-h/j/k/l in Normal mode.
+                        // When a hjkl neighbour exists → focus it.
+                        // When at the edge → fall through to `tmux select-pane`
+                        // if $TMUX is set; otherwise silently no-op so we don't
+                        // accidentally trigger engine bindings (Ctrl-h = BS,
+                        // Ctrl-l = redraw) while the user intends navigation.
+                        //
+                        // Ctrl-h note: many terminals deliver Ctrl-h as
+                        // KeyCode::Backspace with CONTROL modifier rather than
+                        // KeyCode::Char('h') + CONTROL. We match both forms.
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             let focused = self.focused_window();
-                            if key.code == KeyCode::Char('j')
-                                && self.layout().neighbor_below(focused).is_some()
-                            {
-                                self.focus_below();
-                                continue;
-                            }
-                            if key.code == KeyCode::Char('k')
-                                && self.layout().neighbor_above(focused).is_some()
-                            {
-                                self.focus_above();
-                                continue;
-                            }
-                            if key.code == KeyCode::Char('h')
-                                && self.layout().neighbor_left(focused).is_some()
-                            {
-                                self.focus_left();
-                                continue;
-                            }
-                            if key.code == KeyCode::Char('l')
-                                && self.layout().neighbor_right(focused).is_some()
-                            {
-                                self.focus_right();
+                            let is_ctrl_h =
+                                key.code == KeyCode::Char('h') || key.code == KeyCode::Backspace;
+                            let is_ctrl_j = key.code == KeyCode::Char('j');
+                            let is_ctrl_k = key.code == KeyCode::Char('k');
+                            let is_ctrl_l = key.code == KeyCode::Char('l');
+
+                            if is_ctrl_h || is_ctrl_j || is_ctrl_k || is_ctrl_l {
+                                let neighbour = if is_ctrl_h {
+                                    self.layout().neighbor_left(focused)
+                                } else if is_ctrl_j {
+                                    self.layout().neighbor_below(focused)
+                                } else if is_ctrl_k {
+                                    self.layout().neighbor_above(focused)
+                                } else {
+                                    self.layout().neighbor_right(focused)
+                                };
+
+                                if neighbour.is_some() {
+                                    // Neighbour exists — move focus within hjkl.
+                                    if is_ctrl_h {
+                                        self.focus_left();
+                                    } else if is_ctrl_j {
+                                        self.focus_below();
+                                    } else if is_ctrl_k {
+                                        self.focus_above();
+                                    } else {
+                                        self.focus_right();
+                                    }
+                                } else {
+                                    // At the edge — hand off to tmux when available.
+                                    if std::env::var("TMUX").is_ok() {
+                                        let flag = if is_ctrl_h {
+                                            "-L"
+                                        } else if is_ctrl_j {
+                                            "-D"
+                                        } else if is_ctrl_k {
+                                            "-U"
+                                        } else {
+                                            "-R"
+                                        };
+                                        // Ignore errors: non-zero exit (no tmux pane
+                                        // in that direction) is a silent no-op.
+                                        let _ = std::process::Command::new("tmux")
+                                            .args(["select-pane", flag])
+                                            .status();
+                                    }
+                                    // $TMUX not set → silent no-op.
+                                }
                                 continue;
                             }
                         }
