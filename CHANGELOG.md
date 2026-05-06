@@ -8,17 +8,143 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-06
+
 ### Added
 
-- `:set number` / `:set relativenumber` (and `nu` / `rnu` / `nonu` / `nornu` /
-  `nu!` / `rnu!` aliases) toggle the line-number gutter at runtime. Combined
-  `nu rnu` enables vim's hybrid mode: cursor row shows its absolute number,
-  others show the offset.
-- `:set numberwidth=N` / `:set nuw=N` (1..=20, default 4) — minimum gutter width
-  in cells, matching vim's `'numberwidth'` option.
-- `~` tilde markers paint at the first text column on every screen row past
+- **`hjkl-lsp` foundation + 5-phase Language Server Protocol integration (#38,
+  #47–#51).** New in-tree `crates/hjkl-lsp` crate ships a tower-lsp-based
+  client + per-language server lifecycle manager with full text-sync (open /
+  change / save / close) wired onto buffer edits.
+  - **Phase 2 — Diagnostics + nav (#48):** inline + signcolumn diagnostic
+    rendering, severity-aware highlighting, `]d` / `[d` motions, `:LspInfo` ex
+    command surfacing per-buffer attach state, server config, and capability
+    diagnostics.
+  - **Phase 3 — Goto + hover (#49):** `gd` / `gD` / `gi` / `gy` jump to
+    definition / declaration / implementation / type-definition, `K` shows
+    hover, `gr` / `:lreferences` opens references in the picker. Cursor reveals
+    in viewport after every cross-buffer jump (`gd` / `]d` / `[d` / `:lfirst` /
+    `:llast`).
+  - **Phase 4 — Completion (#50):** triggered + manual completion popup, kind
+    icons, snippet expansion, async resolve.
+  - **Phase 5 — Code actions, rename, format (#51):** `<leader>ca` /
+    `:LspCodeAction`, `<leader>rn` / `:LspRename`, `:LspFormat` /
+    `:LspFormatRange`, with workspace-edit application across multiple files.
+  - Bundled default server configs for common languages (rust-analyzer / pyright
+    / typescript-language-server / clangd / gopls / lua-language-server) —
+    `:LspInfo` shows which one matched the active buffer.
+  - Status-line spinner while LSP requests are in flight, sharing
+    `hjkl_ratatui::spinner` with the grammar-load indicator.
+- **Window splits — full 4-phase rollout (#40–#43).**
+  - **Phase 1 — `:sp`, `Ctrl-w j` / `Ctrl-w k`, `:close`.** Horizontal splits
+    sharing the active buffer, per-window viewport state.
+  - **Phase 2 — `:vsp`, `Ctrl-w h` / `l` / `w` / `W`, `Ctrl-h` / `Ctrl-l`.**
+    Vertical splits + cross-direction nav.
+  - **Phase 3 — Resize + equalize + maximize.** `Ctrl-w +` / `-` / `>` / `<` /
+    `=` / `_` / `|`, plus `:resize` and `:vertical resize`.
+  - **Phase 4 — `:only`, `Ctrl-w o`, swap, `:new`, `:vnew`, `:q` redirect.**
+    `:q` on the last window in a split closes the split, not the editor.
+  - **1-cell separator** painted between sibling panes (`│` / `─`, themed via
+    `theme.ui.border`) so splits no longer look like a single wall of text.
+  - **Per-window cursor + viewport state.** Two splits onto the same buffer
+    track their own cursor row/col + scroll offset independently. Syntax-span
+    computation now unions all visible viewports for the active buffer so the
+    inactive split keeps its highlights when the focused split scrolls.
+- **Tabs — Phase 1 + 2 (#44, #45).** `:tabnew`, `gt` / `gT`, `:tabnext` /
+  `:tabprev` / `:tabclose`, plus the Phase 2 set: `:tabfirst` / `:tablast` /
+  `:tabonly` / `:tabmove` / `:tabs`, `Ctrl-w T` (move current window to its own
+  tab).
+- **tmux-navigator handoff at split edges.** Bare `Ctrl-h` / `Ctrl-j` / `Ctrl-k`
+  / `Ctrl-l` in Normal mode move between hjkl windows; if there is no neighbour
+  in the requested direction and `$TMUX` is set, the keystroke falls through to
+  `tmux select-pane -L/-D/-U/-R` so users can move from an edge hjkl pane
+  straight into the surrounding tmux pane.
+- **Mouse wheel scrolls viewport (not cursor) + `editor.mouse` toggle.** Wheel
+  events now scroll the viewport with the cursor clamped inside, respecting
+  `scrolloff`. New `editor.mouse = true` config field (defaulting on) and
+  matching `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?` runtime
+  ex-commands (nvim-style); the terminal mouse capture is enabled / disabled
+  live without restart.
+- **Picker preview is now consumer-agnostic via a `PreviewHighlighter` trait.**
+  Consumers (other kryptic-sh apps) can plug in their own highlight pipeline —
+  tree-sitter, LSP semantic tokens, regex, none — without `hjkl-bonsai` ever
+  appearing in the picker crate. `hjkl-picker` re-exports `PreviewHighlighter`,
+  `PlainPreview`, `PreviewTheme`, and a self-contained `preview_pane()`
+  renderer.
+- **Picker preview now highlights injected sub-languages in markdown** (e.g.
+  ` ```rust ` fences inside `.md` previews) by routing through
+  `Highlighter::highlight_range_with_injections` with a non-blocking grammar
+  resolver: cached child grammars highlight immediately, missing ones queue an
+  async load. Regression test
+  `preview_spans_for_markdown_includes_rust_injection` guards the wiring.
+- **Global grammar-load spinner.** The status-line `loading grammar: <name>…`
+  takeover now reflects any queued grammar across the directory (not just the
+  active buffer) and collapses concurrent loads to `<first> +N`.
+- **`:set number` / `:set relativenumber` line-number gutter.** Aliases `nu` /
+  `rnu` / `nonu` / `nornu` / `nu!` / `rnu!`. Combined `nu rnu` enables vim's
+  hybrid mode: cursor row shows its absolute number, others show the offset.
+  Plus `:set numberwidth=N` / `:set nuw=N` (1..=20, default 4) for minimum
+  gutter width.
+- **`~` tilde markers** paint at the first text column on every screen row past
   end-of-buffer, matching vim's `NonText` rendering. New `non_text` theme color
   (default `#4a5266`).
+- **`+cmd` and `-c CMD` work in TUI mode** (vim/nvim parity). Previously the
+  flag was gated on `--headless`; now any unknown `+token` argv is treated as an
+  ex command and dispatched after buffers load but before raw mode begins.
+  `hjkl +vsp file1 file2` does what you'd expect.
+- **`:LspInfo`** surfaces matched server config + active-buffer attach
+  diagnostics for fast triage when a server fails to attach.
+- **LSP search-count** now compares in byte offsets so multibyte characters no
+  longer poison the `[N/M]` indicator.
+
+### Changed
+
+- **All grammar compiles run on the editor pipeline.** `hjkl_bonsai`'s
+  background loader pool is the single source for clone-and-compile work; the
+  picker, status spinner, and active-buffer set-language path all call into the
+  same async loader. Concurrent loads dedupe per language at the `hjkl-bonsai`
+  source-cache layer (`Arc<Mutex<()>>` per key) so two workers no longer race on
+  the shared Helix `QuerySourceCache` staging dir.
+- **CI collapsed into a single `ci.yml`.** The earlier 3-stage workflow (lint →
+  test → release) is replaced by one workflow gated on `tags: ['v*']`, matching
+  the org-wide canonical CI pattern.
+- **`hjkl-buffer` 0.4 → 0.5**, **`hjkl-editor` 0.4.1 → 0.4.1+3**,
+  **`hjkl-engine` 0.3.8 → 0.3.8+3**, **`hjkl-bonsai` 0.5.0 → 0.5.3+2**,
+  **`hjkl-picker` 0.4.0 → 0.4.0+5** (substring-fast-path scoring,
+  `PreviewHighlighter` trait, `preview_pane`).
+
+### Fixed
+
+- **`/<pat><CR>` no longer double-steps past the cursor's match.** When the
+  cursor was already on a match, the search post-step would jump to the next one
+  instead of staying put. Forward-direction is now persisted on `+/pat` startup
+  search too.
+- **Viewport reveals search matches.** `/<CR>` and `+/pat` startup search now
+  scroll the viewport so the matched cursor is visible, respecting `scrolloff`.
+  `viewport_height` is published in `build_slot` so engine-side reveal logic has
+  the height it needs.
+- **Engine-handled `g` / `]` / `[` motions** sync the host viewport on the same
+  tick instead of one frame later.
+- **`:w` on a path whose parent directory does not exist** now does `mkdir -p`
+  of the parent and writes through, instead of returning ENOENT.
+- **LSP buffer paths absolutized before URI conversion.** Relative paths (e.g.
+  opening hjkl with `hjkl src/main.rs`) were sent to servers as relative URIs;
+  now `std::path::absolute` is applied first. Regression test added.
+- **LSP attach picks up existing slots in `with_lsp`.** Buffers loaded before
+  the LSP subsystem registered now attach when it comes up, with clearer status
+  messages on success / skip / fail.
+- **Goto picker strips `cwd` from location paths** so `references` /
+  `definitions` show short relative paths instead of `/full/abs/path/file.rs`.
+- **`textDocument/references` requests** now include the required `context`
+  object (`includeDeclaration`); some servers rejected the request without it.
+- **tmux-navigator binds fall through cleanly when there is no neighbour** (vs.
+  eating the keystroke silently).
+- **Cross-platform LSP tests.** `goto_definition_multi_opens_picker` and
+  `goto_references_always_opens_picker` previously hardcoded `file:///tmp/a.rs`
+  literals that broke on Windows runners (no drive letter → `to_path` returned
+  None); switched to existing `tmp_path` + `file_url` helpers. URI roundtrip
+  tests now use `std::path::absolute` so relative-path inputs survive on
+  Windows.
 
 ## [0.11.5] - 2026-05-06
 
@@ -1255,7 +1381,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.11.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.12.0
 [0.11.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.5
 [0.11.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.4
 [0.11.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.11.3
