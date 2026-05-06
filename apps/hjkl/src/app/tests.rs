@@ -200,6 +200,56 @@ fn search_backward_prompt_uses_question_dir() {
     assert!(!app.active().editor.last_search_forward());
 }
 
+// ── Runtime map tests ──────────────────────────────────────────────────
+
+#[test]
+fn nmap_can_trigger_ex_command() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap x :perf<CR>");
+    let mapped = app
+        .apply_runtime_map(key(KeyCode::Char('x')))
+        .expect("mapping should resolve");
+    assert_ne!(mapped, vec![key(KeyCode::Char('x'))]);
+    for mapped_key in mapped {
+        app.handle_runtime_mapped_key(mapped_key);
+    }
+    assert!(
+        app.perf_overlay,
+        "mapped :perf<CR> should toggle perf overlay"
+    );
+}
+
+#[test]
+fn noremap_does_not_recurse() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("map b :perf<CR>");
+    app.dispatch_ex("noremap a b");
+    let mapped = app
+        .apply_runtime_map(key(KeyCode::Char('a')))
+        .expect("mapping should resolve");
+    assert_eq!(mapped, vec![key(KeyCode::Char('b'))]);
+    for mapped_key in mapped {
+        app.handle_runtime_mapped_key(mapped_key);
+    }
+    assert!(!app.perf_overlay, "noremap must not recurse into b");
+}
+
+#[test]
+fn imap_jj_enters_normal_mode() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("imap jj <Esc>");
+    app.active_mut().editor.handle_key(key(KeyCode::Char('i')));
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+    assert!(app.apply_runtime_map(key(KeyCode::Char('j'))).is_none());
+    let mapped = app
+        .apply_runtime_map(key(KeyCode::Char('j')))
+        .expect("second j should resolve");
+    for mapped_key in mapped {
+        app.handle_runtime_mapped_key(mapped_key);
+    }
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+}
+
 // ── App::new tests ──────────────────────────────────────────────────────
 
 #[test]

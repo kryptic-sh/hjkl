@@ -4,7 +4,7 @@ use hjkl_engine::{Host, Query};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{App, DiskState};
+use super::{App, DiskState, keymap};
 
 /// Parse a resize argument string into a line/column delta.
 ///
@@ -29,6 +29,36 @@ fn parse_resize_arg(arg: &str) -> Option<i32> {
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
+        let raw = cmd.trim();
+        if let Some(map_cmd) = keymap::parse_runtime_map_command(raw, self.config.editor.leader) {
+            match map_cmd {
+                keymap::RuntimeMapCommand::Add {
+                    modes,
+                    recursive,
+                    lhs,
+                    rhs,
+                } => {
+                    self.runtime_keymaps.add(&modes, lhs, rhs, recursive);
+                    self.status_message = Some("mapping added".into());
+                }
+                keymap::RuntimeMapCommand::Remove { modes, lhs } => {
+                    if self.runtime_keymaps.remove(&modes, &lhs) {
+                        self.status_message = Some("mapping removed".into());
+                    } else {
+                        self.status_message = Some("E31: No such mapping".into());
+                    }
+                }
+                keymap::RuntimeMapCommand::Clear { modes } => {
+                    self.runtime_keymaps.clear(&modes);
+                    self.status_message = Some("mappings cleared".into());
+                }
+                keymap::RuntimeMapCommand::List { modes } => {
+                    self.info_popup = Some(self.runtime_keymaps.list(&modes));
+                }
+            }
+            return;
+        }
+
         let canon = ex::canonical_command_name(cmd);
         let cmd: &str = canon.as_ref();
 

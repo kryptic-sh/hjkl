@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
@@ -125,6 +125,23 @@ impl App {
                         if self.exit_requested {
                             break;
                         }
+                        continue;
+                    }
+
+                    if let Some(mapped) = self.apply_runtime_map(key) {
+                        if mapped.len() != 1 || mapped[0] != key {
+                            for mapped_key in mapped {
+                                self.handle_runtime_mapped_key(mapped_key);
+                                if self.exit_requested {
+                                    break;
+                                }
+                            }
+                            if self.exit_requested {
+                                break;
+                            }
+                            continue;
+                        }
+                    } else {
                         continue;
                     }
 
@@ -870,5 +887,70 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn handle_runtime_mapped_key(&mut self, key: KeyEvent) {
+        self.status_message = None;
+
+        if self.info_popup.is_some() {
+            self.info_popup = None;
+            return;
+        }
+
+        if self.command_field.is_some() {
+            self.handle_command_field_key(key);
+            return;
+        }
+
+        if self.search_field.is_some() {
+            self.handle_search_field_key(key);
+            return;
+        }
+
+        if self.picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
+
+        if key.code == KeyCode::Char(':')
+            && key.modifiers == KeyModifiers::NONE
+            && self.active().editor.vim_mode() == VimMode::Normal
+        {
+            self.open_command_prompt();
+            return;
+        }
+
+        if key.modifiers == KeyModifiers::NONE && self.active().editor.vim_mode() == VimMode::Normal
+        {
+            if key.code == KeyCode::Char('/') {
+                self.open_search_prompt(SearchDir::Forward);
+                return;
+            }
+            if key.code == KeyCode::Char('?') {
+                self.open_search_prompt(SearchDir::Backward);
+                return;
+            }
+        }
+
+        self.active_mut().editor.handle_key(key);
+        self.sync_viewport_from_editor();
+
+        if self.active_mut().editor.take_dirty() {
+            let elapsed = self.active_mut().refresh_dirty_against_saved();
+            self.last_signature_us = elapsed;
+            if self.active().dirty {
+                self.active_mut().is_new_file = false;
+            }
+        }
+        let buffer_id = self.active().buffer_id;
+        if self.active_mut().editor.take_content_reset() {
+            self.syntax.reset(buffer_id);
+        }
+        let edits = self.active_mut().editor.take_content_edits();
+        if !edits.is_empty() {
+            self.syntax.apply_edits(buffer_id, &edits);
+        }
+        self.lsp_notify_change_active();
+        self.recompute_and_install();
     }
 }

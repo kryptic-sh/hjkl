@@ -17,6 +17,7 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 mod buffer_ops;
 mod event_loop;
 mod ex_dispatch;
+pub(crate) mod keymap;
 pub mod lsp_glue;
 mod picker_glue;
 mod prompt;
@@ -402,6 +403,8 @@ pub struct App {
     /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
     /// Set to `true` after `Ctrl-x`; cleared after the next key.
     pub pending_ctrl_x: bool,
+    /// Runtime vim-style key mappings added via `:map` / `:noremap` / `:imap`.
+    pub(crate) runtime_keymaps: keymap::RuntimeKeymaps,
     /// Mouse-capture state. Mirrors the terminal's
     /// EnableMouseCapture / DisableMouseCapture mode. Initialised from
     /// `config.editor.mouse`; runtime-togglable via `:set [no]mouse`.
@@ -1033,6 +1036,7 @@ impl App {
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
+            runtime_keymaps: keymap::RuntimeKeymaps::default(),
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
