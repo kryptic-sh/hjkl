@@ -210,7 +210,8 @@ jobs:
           esac
           ZIG_DIR="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}"
           mkdir -p ~/.zig
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIR}.tar.xz" \
+          curl -fsSL --retry 3 --retry-delay 5 \
+            "https://ziglang.org/download/${ZIG_VERSION}/${ZIG_DIR}.tar.xz" \
             | tar -xJ --strip-components=1 -C ~/.zig
 
       - name: Add zig to PATH
