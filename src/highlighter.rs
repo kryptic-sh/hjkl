@@ -11,6 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use tree_sitter::{ParseOptions, Parser, Query, QueryCursor, StreamingIterator as _};
 
+use crate::query_sanitize::sanitize_highlights;
 use crate::runtime::Grammar;
 
 /// Index for `@injection.language` capture.
@@ -93,8 +94,32 @@ impl Highlighter {
             .set_language(grammar.language())
             .context("failed to set tree-sitter language")?;
 
-        let query = Query::new(grammar.language(), grammar.highlights_scm())
-            .context("failed to compile highlights.scm query")?;
+        let query = match Query::new(grammar.language(), grammar.highlights_scm()) {
+            Ok(q) => q,
+            Err(first_err) => {
+                let (sanitized, report) = sanitize_highlights(grammar.highlights_scm());
+                if report.changed {
+                    match Query::new(grammar.language(), &sanitized) {
+                        Ok(q) => {
+                            tracing::warn!(
+                                grammar = grammar.name(),
+                                removed_lines = report.removed_lines,
+                                error = %first_err,
+                                "highlights.scm compile failed; using sanitized fallback"
+                            );
+                            q
+                        }
+                        Err(second_err) => {
+                            return Err(anyhow::anyhow!(
+                                "failed to compile highlights.scm query (raw: {first_err}; sanitized: {second_err})"
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(first_err).context("failed to compile highlights.scm query");
+                }
+            }
+        };
 
         let capture_names: Vec<String> = query
             .capture_names()

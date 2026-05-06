@@ -31,6 +31,7 @@
 
 pub mod comment_markers;
 pub mod highlighter;
+pub mod query_sanitize;
 pub mod runtime;
 pub mod theme;
 

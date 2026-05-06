@@ -28,6 +28,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::query_sanitize::sanitize_highlights;
+
 use super::compile::{GrammarCompiler, shared_lib_ext};
 use super::manifest::{LangSpec, ManifestMeta};
 use super::source::{QuerySourceCache, SourceCache, short_rev};
@@ -254,7 +256,23 @@ fn install_into_user_dir(
     copy_atomic(built_so, &dest)?;
 
     let highlights_dest = user_dir.join(format!("{name}.scm"));
-    copy_atomic(highlights_src, &highlights_dest)?;
+    let highlights_raw = std::fs::read_to_string(highlights_src)
+        .with_context(|| format!("read {}", highlights_src.display()))?;
+    let (highlights_sanitized, report) = sanitize_highlights(&highlights_raw);
+    if report.changed {
+        let raw_dest = user_dir.join(format!("{name}.scm.raw"));
+        write_atomic(&raw_dest, highlights_raw.as_bytes())?;
+        tracing::warn!(
+            grammar = name,
+            removed_lines = report.removed_lines,
+            "sanitized highlights query before install"
+        );
+    }
+    write_atomic(&highlights_dest, highlights_sanitized.as_bytes())?;
+
+    let sanitize_flag_dest = user_dir.join(format!("{name}.query_sanitized"));
+    let sanitize_flag = if report.changed { "true\n" } else { "false\n" };
+    write_atomic(&sanitize_flag_dest, sanitize_flag.as_bytes())?;
 
     if let Some(inj_src) = injections_src {
         let inj_dest = user_dir.join(format!("{name}.injections.scm"));
