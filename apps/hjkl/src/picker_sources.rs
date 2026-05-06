@@ -1,23 +1,187 @@
 //! App-side picker sources.
 //!
-//! `BufferSource` — lists open buffer slots, no preview.
-//! `HighlightedFileSource` — wraps `hjkl_picker::FileSource` and layers
-//!   tree-sitter syntax highlighting onto the preview via `PreviewSpans::from_byte_ranges`.
-//! `HighlightedRgSource` — same pattern over `hjkl_picker::RgSource`.
+//! `BufferSource` — lists open buffer slots.
+//! `DiagSource` — LSP diagnostics for the active buffer.
+//! `StaticListSource` — generic (label, action) list (LSP goto picker, …).
+//!
+//! Sources here are bonsai-agnostic: previews ship `(Buffer, status)` plus
+//! an optional `preview_path`. The host renderer (apps/hjkl/src/render.rs)
+//! reads the path and runs syntax highlighting through the editor's own
+//! grammar pipeline (`App::preview_spans_for`), so picker preview never
+//! triggers a tree-sitter clone+compile on the UI thread.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
-
-use crate::lang::{GrammarRequest, LanguageDirectory};
 use hjkl_buffer::Buffer;
-use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
+use hjkl_picker::{FileSource, PickerAction, PickerLogic, RequeryMode, RgSource};
 
 use crate::picker_action::AppAction;
+
+// ── FileSourceWithOpen / RgSourceWithOpen ────────────────────────────────────
+//
+// hjkl-picker's `FileSource` / `RgSource` are bonsai-agnostic and don't know
+// about `AppAction`, so their default `select` returns `PickerAction::None`.
+// These thin wrappers delegate every other method to the inner source and
+// override `select` to box the path / line into the right `AppAction`.
+
+/// File source that emits `AppAction::OpenPath` on selection.
+pub struct FileSourceWithOpen {
+    inner: FileSource,
+}
+
+impl FileSourceWithOpen {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            inner: FileSource::new(root),
+        }
+    }
+}
+
+impl PickerLogic for FileSourceWithOpen {
+    fn title(&self) -> &str {
+        self.inner.title()
+    }
+
+    fn item_count(&self) -> usize {
+        self.inner.item_count()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.inner.label(idx)
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.inner.match_text(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        self.inner.has_preview()
+    }
+
+    fn preview(&self, idx: usize) -> (Buffer, String) {
+        self.inner.preview(idx)
+    }
+
+    fn preview_path(&self, idx: usize) -> Option<PathBuf> {
+        self.inner.preview_path(idx)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self
+            .inner
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).cloned())
+        {
+            Some(p) => PickerAction::Custom(Box::new(AppAction::OpenPath(p))),
+            None => PickerAction::None,
+        }
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        self.inner.requery_mode()
+    }
+
+    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
+        self.inner.label_match_positions(idx, query, label)
+    }
+
+    fn enumerate(
+        &mut self,
+        query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        self.inner.enumerate(query, cancel)
+    }
+}
+
+/// Rg source that emits `AppAction::OpenPathAtLine` on selection.
+pub struct RgSourceWithOpen {
+    inner: RgSource,
+    root: PathBuf,
+}
+
+impl RgSourceWithOpen {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            inner: RgSource::new(root.clone()),
+            root,
+        }
+    }
+}
+
+impl PickerLogic for RgSourceWithOpen {
+    fn title(&self) -> &str {
+        self.inner.title()
+    }
+
+    fn requery_mode(&self) -> RequeryMode {
+        self.inner.requery_mode()
+    }
+
+    fn item_count(&self) -> usize {
+        self.inner.item_count()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.inner.label(idx)
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        self.inner.match_text(idx)
+    }
+
+    fn has_preview(&self) -> bool {
+        self.inner.has_preview()
+    }
+
+    fn preview(&self, idx: usize) -> (Buffer, String) {
+        self.inner.preview(idx)
+    }
+
+    fn preview_path(&self, idx: usize) -> Option<PathBuf> {
+        self.inner.preview_path(idx)
+    }
+
+    fn preview_top_row(&self, idx: usize) -> usize {
+        self.inner.preview_top_row(idx)
+    }
+
+    fn preview_match_row(&self, idx: usize) -> Option<usize> {
+        self.inner.preview_match_row(idx)
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self
+            .inner
+            .items
+            .lock()
+            .ok()
+            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
+        {
+            Some((path, line)) if !path.as_os_str().is_empty() => PickerAction::Custom(Box::new(
+                AppAction::OpenPathAtLine(self.root.join(path), line),
+            )),
+            _ => PickerAction::None,
+        }
+    }
+
+    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
+        self.inner.label_match_positions(idx, query, label)
+    }
+
+    fn enumerate(
+        &mut self,
+        query: Option<&str>,
+        cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        self.inner.enumerate(query, cancel)
+    }
+}
 
 // ── BufferSource ─────────────────────────────────────────────────────────────
 
@@ -32,7 +196,7 @@ pub struct BufferEntry {
     pub dirty: bool,
     /// Snapshot of the buffer's text content at picker-open time.
     pub content: String,
-    /// File path, used for tree-sitter language detection.
+    /// File path, used by the host for language detection in the preview.
     pub path: Option<PathBuf>,
     /// 0-based cursor row at picker-open time, used to place the preview.
     /// In window-local coordinates (relative to the snapshot start).
@@ -46,7 +210,7 @@ pub struct BufferEntry {
 /// Source for the buffer picker. Enumerates all open slots at the
 /// moment the picker is opened.
 pub struct BufferSource {
-    entries: Vec<BufferEntry>,
+    pub entries: Vec<BufferEntry>,
 }
 
 impl BufferSource {
@@ -109,7 +273,7 @@ impl PickerLogic for BufferSource {
         true
     }
 
-    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
+    fn preview(&self, idx: usize) -> (Buffer, String) {
         match self.entries.get(idx) {
             Some(e) => {
                 let mut buf = Buffer::from_str(&e.content);
@@ -117,10 +281,14 @@ impl PickerLogic for BufferSource {
                     row: e.cursor_row,
                     col: 0,
                 });
-                (buf, String::new(), PreviewSpans::default())
+                (buf, String::new())
             }
-            None => (Buffer::new(), String::new(), PreviewSpans::default()),
+            None => (Buffer::new(), String::new()),
         }
+    }
+
+    fn preview_path(&self, idx: usize) -> Option<PathBuf> {
+        self.entries.get(idx).and_then(|e| e.path.clone())
     }
 
     fn preview_top_row(&self, idx: usize) -> usize {
@@ -152,415 +320,6 @@ impl PickerLogic for BufferSource {
     ) -> Option<JoinHandle<()>> {
         // All entries already in memory — nothing to do.
         None
-    }
-}
-
-// ── HighlightedBufferSource ───────────────────────────────────────────────────
-
-/// Buffer source with tree-sitter syntax highlighting in the preview.
-///
-/// Delegates all `PickerLogic` methods to the inner `BufferSource`; overrides
-/// `preview()` to run tree-sitter and call `PreviewSpans::from_byte_ranges`.
-pub struct HighlightedBufferSource {
-    inner: BufferSource,
-    directory: Arc<LanguageDirectory>,
-    theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<String, Highlighter>>,
-}
-
-impl HighlightedBufferSource {
-    pub fn new(
-        inner: BufferSource,
-        theme: Arc<dyn Theme + Send + Sync>,
-        directory: Arc<LanguageDirectory>,
-    ) -> Self {
-        Self {
-            inner,
-            directory,
-            theme,
-            highlighters: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let bytes = content.as_bytes();
-        let flat = preview_spans(&self.directory, &self.highlighters, abs, bytes);
-        let Some(mut flat) = flat else {
-            return PreviewSpans::default();
-        };
-        CommentMarkerPass::new().apply(&mut flat, bytes);
-        let theme = Arc::clone(&self.theme);
-        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
-            .into_iter()
-            .filter_map(|span| {
-                theme
-                    .style(span.capture())
-                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
-            })
-            .collect();
-        PreviewSpans::from_byte_ranges(&ranges, bytes)
-    }
-}
-
-/// Shared helper for the three `Highlighted*Source` previews. Resolves the
-/// grammar via the directory, looks up (or builds) a per-language
-/// `Highlighter` from `cache`, and returns the flat span list.
-fn preview_spans(
-    directory: &LanguageDirectory,
-    cache: &Mutex<HashMap<String, Highlighter>>,
-    path: &Path,
-    bytes: &[u8],
-) -> Option<Vec<hjkl_bonsai::HighlightSpan>> {
-    // Picker preview runs on the UI thread (render::picker_overlay calls
-    // `refresh_preview` every frame), so the older sync `directory.for_path`
-    // would block the renderer for a multi-second clone+compile when
-    // navigating to a file with an uncached grammar. Use the async API:
-    // - Cached  → render with syntax now.
-    // - Loading → kick off the background compile (handle dropped; the
-    //   bonsai pool finishes the work regardless), render plain text this
-    //   frame; the next preview after the load completes picks up Cached.
-    // - Unknown → no grammar; plain text.
-    let grammar = match directory.request_for_path(path) {
-        GrammarRequest::Cached(g) => g,
-        GrammarRequest::Loading { .. } | GrammarRequest::Unknown => return None,
-    };
-    let name = grammar.name().to_string();
-    let mut hl_cache = cache.lock().ok()?;
-    let h = match hl_cache.entry(name) {
-        std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-        std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
-            Ok(h) => v.insert(h),
-            Err(_) => return None,
-        },
-    };
-    h.reset();
-    h.parse_initial(bytes);
-    Some(h.highlight_range(bytes, 0..bytes.len()))
-}
-
-impl PickerLogic for HighlightedBufferSource {
-    fn title(&self) -> &str {
-        self.inner.title()
-    }
-
-    fn item_count(&self) -> usize {
-        self.inner.item_count()
-    }
-
-    fn label(&self, idx: usize) -> String {
-        self.inner.label(idx)
-    }
-
-    fn match_text(&self, idx: usize) -> String {
-        self.inner.match_text(idx)
-    }
-
-    fn has_preview(&self) -> bool {
-        self.inner.has_preview()
-    }
-
-    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
-        let Some(entry) = self.inner.entries.get(idx) else {
-            return (Buffer::new(), String::new(), PreviewSpans::default());
-        };
-        let content = entry.content.clone();
-        let path = entry.path.clone();
-        let cursor_row = entry.cursor_row;
-
-        let spans = match &path {
-            Some(p) => self.highlight(p, &content),
-            None => PreviewSpans::default(),
-        };
-
-        let mut buf = Buffer::from_str(&content);
-        buf.set_cursor(hjkl_buffer::Position {
-            row: cursor_row,
-            col: 0,
-        });
-        (buf, String::new(), spans)
-    }
-
-    fn preview_top_row(&self, idx: usize) -> usize {
-        self.inner.preview_top_row(idx)
-    }
-
-    fn preview_match_row(&self, idx: usize) -> Option<usize> {
-        self.inner.preview_match_row(idx)
-    }
-
-    fn preview_line_offset(&self, idx: usize) -> usize {
-        self.inner.preview_line_offset(idx)
-    }
-
-    fn select(&self, idx: usize) -> PickerAction {
-        self.inner.select(idx)
-    }
-
-    fn enumerate(
-        &mut self,
-        query: Option<&str>,
-        cancel: Arc<AtomicBool>,
-    ) -> Option<JoinHandle<()>> {
-        self.inner.enumerate(query, cancel)
-    }
-}
-
-// ── HighlightedFileSource ─────────────────────────────────────────────────────
-
-/// File-source with tree-sitter syntax highlighting in the preview.
-///
-/// Delegates all `PickerLogic` methods to the inner `FileSource`; overrides
-/// `preview()` to run tree-sitter and call `PreviewSpans::from_byte_ranges`.
-pub struct HighlightedFileSource {
-    inner: FileSource,
-    directory: Arc<LanguageDirectory>,
-    theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<String, Highlighter>>,
-}
-
-impl HighlightedFileSource {
-    pub fn new(
-        root: PathBuf,
-        theme: Arc<dyn Theme + Send + Sync>,
-        directory: Arc<LanguageDirectory>,
-    ) -> Self {
-        Self {
-            inner: FileSource::new(root),
-            directory,
-            theme,
-            highlighters: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let bytes = content.as_bytes();
-        let Some(mut flat) = preview_spans(&self.directory, &self.highlighters, abs, bytes) else {
-            return PreviewSpans::default();
-        };
-        CommentMarkerPass::new().apply(&mut flat, bytes);
-        let theme = Arc::clone(&self.theme);
-        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
-            .into_iter()
-            .filter_map(|span| {
-                theme
-                    .style(span.capture())
-                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
-            })
-            .collect();
-        PreviewSpans::from_byte_ranges(&ranges, bytes)
-    }
-}
-
-impl PickerLogic for HighlightedFileSource {
-    fn title(&self) -> &str {
-        self.inner.title()
-    }
-
-    fn item_count(&self) -> usize {
-        self.inner.item_count()
-    }
-
-    fn label(&self, idx: usize) -> String {
-        self.inner.label(idx)
-    }
-
-    fn match_text(&self, idx: usize) -> String {
-        self.inner.match_text(idx)
-    }
-
-    fn has_preview(&self) -> bool {
-        self.inner.has_preview()
-    }
-
-    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
-        let path = match self
-            .inner
-            .items
-            .lock()
-            .ok()
-            .and_then(|g| g.get(idx).cloned())
-        {
-            Some(p) => p,
-            None => return (Buffer::new(), String::new(), PreviewSpans::default()),
-        };
-        let abs = self.inner.root.join(&path);
-        let (content, status) = hjkl_picker::load_preview(&abs);
-        if !status.is_empty() {
-            return (Buffer::from_str(&content), status, PreviewSpans::default());
-        }
-        let spans = self.highlight(&abs, &content);
-        (Buffer::from_str(&content), status, spans)
-    }
-
-    fn select(&self, idx: usize) -> PickerAction {
-        match self
-            .inner
-            .items
-            .lock()
-            .ok()
-            .and_then(|g| g.get(idx).cloned())
-        {
-            Some(p) => PickerAction::Custom(Box::new(AppAction::OpenPath(p))),
-            None => PickerAction::None,
-        }
-    }
-
-    fn requery_mode(&self) -> RequeryMode {
-        self.inner.requery_mode()
-    }
-
-    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
-        self.inner.label_match_positions(idx, query, label)
-    }
-
-    fn enumerate(
-        &mut self,
-        query: Option<&str>,
-        cancel: Arc<AtomicBool>,
-    ) -> Option<JoinHandle<()>> {
-        self.inner.enumerate(query, cancel)
-    }
-}
-
-// ── HighlightedRgSource ───────────────────────────────────────────────────────
-
-/// Grep source with tree-sitter syntax highlighting in the preview.
-///
-/// Delegates all `PickerLogic` methods to the inner `RgSource`; overrides
-/// `preview()` to run tree-sitter and call `PreviewSpans::from_byte_ranges`.
-pub struct HighlightedRgSource {
-    inner: RgSource,
-    root: PathBuf,
-    directory: Arc<LanguageDirectory>,
-    theme: Arc<dyn Theme + Send + Sync>,
-    highlighters: Mutex<HashMap<String, Highlighter>>,
-}
-
-impl HighlightedRgSource {
-    pub fn new(
-        root: PathBuf,
-        theme: Arc<dyn Theme + Send + Sync>,
-        directory: Arc<LanguageDirectory>,
-    ) -> Self {
-        Self {
-            inner: RgSource::new(root.clone()),
-            root,
-            directory,
-            theme,
-            highlighters: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn highlight(&self, abs: &Path, content: &str) -> PreviewSpans {
-        let bytes = content.as_bytes();
-        let Some(mut flat) = preview_spans(&self.directory, &self.highlighters, abs, bytes) else {
-            return PreviewSpans::default();
-        };
-        CommentMarkerPass::new().apply(&mut flat, bytes);
-        let theme = Arc::clone(&self.theme);
-        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
-            .into_iter()
-            .filter_map(|span| {
-                theme
-                    .style(span.capture())
-                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
-            })
-            .collect();
-        PreviewSpans::from_byte_ranges(&ranges, bytes)
-    }
-}
-
-impl PickerLogic for HighlightedRgSource {
-    fn title(&self) -> &str {
-        self.inner.title()
-    }
-
-    fn requery_mode(&self) -> RequeryMode {
-        self.inner.requery_mode()
-    }
-
-    fn item_count(&self) -> usize {
-        self.inner.item_count()
-    }
-
-    fn label(&self, idx: usize) -> String {
-        self.inner.label(idx)
-    }
-
-    fn match_text(&self, idx: usize) -> String {
-        self.inner.match_text(idx)
-    }
-
-    fn has_preview(&self) -> bool {
-        self.inner.has_preview()
-    }
-
-    fn preview(&self, idx: usize) -> (Buffer, String, PreviewSpans) {
-        let (path, line) = match self
-            .inner
-            .items
-            .lock()
-            .ok()
-            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
-        {
-            Some(v) => v,
-            None => return (Buffer::new(), String::new(), PreviewSpans::default()),
-        };
-        if path.as_os_str().is_empty() {
-            return (Buffer::new(), String::new(), PreviewSpans::default());
-        }
-        let abs = self.root.join(&path);
-        let (content, status) = hjkl_picker::load_preview(&abs);
-        if !status.is_empty() {
-            return (Buffer::from_str(&content), status, PreviewSpans::default());
-        }
-        let spans = self.highlight(&abs, &content);
-        let mut buf = Buffer::from_str(&content);
-        let match_row = (line as usize).saturating_sub(1);
-        buf.set_cursor(hjkl_buffer::Position {
-            row: match_row,
-            col: 0,
-        });
-        (buf, String::new(), spans)
-    }
-
-    fn preview_top_row(&self, idx: usize) -> usize {
-        self.inner.preview_top_row(idx)
-    }
-
-    fn preview_match_row(&self, idx: usize) -> Option<usize> {
-        self.inner.preview_match_row(idx)
-    }
-
-    fn preview_line_offset(&self, idx: usize) -> usize {
-        self.inner.preview_line_offset(idx)
-    }
-
-    fn select(&self, idx: usize) -> PickerAction {
-        match self
-            .inner
-            .items
-            .lock()
-            .ok()
-            .and_then(|g| g.get(idx).map(|m| (m.path.clone(), m.line)))
-        {
-            Some((path, line)) if !path.as_os_str().is_empty() => {
-                PickerAction::Custom(Box::new(AppAction::OpenPathAtLine(path, line)))
-            }
-            _ => PickerAction::None,
-        }
-    }
-
-    fn label_match_positions(&self, idx: usize, query: &str, label: &str) -> Option<Vec<usize>> {
-        self.inner.label_match_positions(idx, query, label)
-    }
-
-    fn enumerate(
-        &mut self,
-        query: Option<&str>,
-        cancel: Arc<AtomicBool>,
-    ) -> Option<JoinHandle<()>> {
-        self.inner.enumerate(query, cancel)
     }
 }
 
@@ -609,14 +368,6 @@ impl PickerLogic for DiagSource {
 
     fn has_preview(&self) -> bool {
         false
-    }
-
-    fn preview(&self, _idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
-        (
-            hjkl_buffer::Buffer::new(),
-            String::new(),
-            PreviewSpans::default(),
-        )
     }
 
     fn select(&self, idx: usize) -> PickerAction {
@@ -674,14 +425,6 @@ impl PickerLogic for StaticListSource {
 
     fn has_preview(&self) -> bool {
         false
-    }
-
-    fn preview(&self, _idx: usize) -> (hjkl_buffer::Buffer, String, PreviewSpans) {
-        (
-            hjkl_buffer::Buffer::new(),
-            String::new(),
-            PreviewSpans::default(),
-        )
     }
 
     fn select(&self, idx: usize) -> PickerAction {

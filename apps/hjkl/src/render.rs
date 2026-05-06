@@ -1245,10 +1245,36 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         (area, None)
     };
 
+    // Snapshot the preview path + buffer bytes BEFORE recomputing spans
+    // so we can drop the &mut borrow on `app.picker` and re-borrow `app`
+    // immutably for the language-aware highlight helper. Picker preview
+    // is bonsai-agnostic — sources only ship a buffer + path; the spans
+    // come from `App::preview_spans_for` which routes through the
+    // editor's grammar pipeline (async, cached).
+    let preview_inputs: Option<(Option<std::path::PathBuf>, Vec<u8>)> = if with_preview {
+        let path = p.preview_path().map(|p| p.to_path_buf());
+        let buf = p.preview_buffer();
+        let mut bytes = buf.lines().join("\n").into_bytes();
+        if !bytes.is_empty() {
+            bytes.push(b'\n');
+        }
+        Some((path, bytes))
+    } else {
+        None
+    };
+
     render_picker_input_and_list(frame, p, &app.theme.ui, left_area);
 
     if let Some(right) = preview_area {
-        picker_preview_pane(frame, p, &app.theme.ui, right);
+        let preview_spans = match preview_inputs {
+            Some((Some(path), bytes)) => app.preview_spans_for(&path, &bytes),
+            _ => hjkl_picker::PreviewSpans::default(),
+        };
+        let picker = app
+            .picker
+            .as_ref()
+            .expect("picker still set after preview-input snapshot");
+        picker_preview_pane(frame, picker, &preview_spans, &app.theme.ui, right);
     }
 }
 
@@ -1353,6 +1379,7 @@ fn render_picker_input_and_list(
 fn picker_preview_pane(
     frame: &mut Frame,
     picker: &crate::picker::Picker,
+    preview_spans: &hjkl_picker::PreviewSpans,
     theme: &crate::theme::UiTheme,
     area: Rect,
 ) {
@@ -1391,7 +1418,6 @@ fn picker_preview_pane(
         text_width: inner.width.saturating_sub(gw),
         ..hjkl_buffer::Viewport::default()
     };
-    let preview_spans = picker.preview_spans();
     let resolver = |id: u32| {
         preview_spans
             .styles

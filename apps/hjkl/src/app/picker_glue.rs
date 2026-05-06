@@ -9,6 +9,7 @@ use hjkl_engine::{BufferEdit, Editor, Host, Options};
 
 use super::{App, BufferSlot, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
+use crate::picker_sources::{FileSourceWithOpen, RgSourceWithOpen};
 use crate::syntax::BufferId;
 
 /// Window radius (in lines) around the cursor when snapshotting a buffer
@@ -38,20 +39,14 @@ impl App {
     /// Open the fuzzy file picker.
     pub(crate) fn open_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedFileSource::new(
-            cwd,
-            theme,
-            self.directory.clone(),
-        ));
+        let source = Box::new(FileSourceWithOpen::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
     }
 
     /// Open the buffer picker over the currently open slots.
     pub(crate) fn open_buffer_picker(&mut self) {
-        let inner = crate::picker::BufferSource::new(
+        let source = Box::new(crate::picker::BufferSource::new(
             &self.slots,
             |s| {
                 s.filename
@@ -65,13 +60,6 @@ impl App {
             |s| s.filename.clone(),
             |s| snapshot_buffer_window(s.editor.buffer()).1,
             |s| snapshot_buffer_window(s.editor.buffer()).2,
-        );
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedBufferSource::new(
-            inner,
-            theme,
-            self.directory.clone(),
         ));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
@@ -81,13 +69,7 @@ impl App {
     /// the query with `pattern`.
     pub(crate) fn open_grep_picker(&mut self, pattern: Option<&str>) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker::HighlightedRgSource::new(
-            cwd,
-            theme,
-            self.directory.clone(),
-        ));
+        let source = Box::new(RgSourceWithOpen::new(cwd));
         self.picker = Some(match pattern {
             Some(p) if !p.is_empty() => crate::picker::Picker::new_with_query(source, p),
             _ => crate::picker::Picker::new(source),
@@ -98,13 +80,7 @@ impl App {
     /// Open the git-log commit picker.
     pub(crate) fn open_git_log_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker_git::GitLogPicker::new(
-            cwd,
-            theme,
-            self.directory.clone(),
-        ));
+        let source = Box::new(crate::picker_git::GitLogPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
         self.pending_git = false;
@@ -171,13 +147,8 @@ impl App {
             }
         };
 
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
         let source = Box::new(crate::picker_git::GitFileHistoryPicker::new(
-            workdir,
-            rel_path,
-            theme,
-            self.directory.clone(),
+            workdir, rel_path,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
@@ -214,13 +185,7 @@ impl App {
     /// Open the git-status fuzzy picker.
     pub(crate) fn open_git_status_picker(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let theme =
-            self.theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-        let source = Box::new(crate::picker_git::GitStatusPicker::new(
-            cwd,
-            theme,
-            self.directory.clone(),
-        ));
+        let source = Box::new(crate::picker_git::GitStatusPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
         self.pending_leader = false;
         self.pending_git = false;

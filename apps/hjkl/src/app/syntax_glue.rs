@@ -1,6 +1,11 @@
 use hjkl_engine::{Host, Query};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
+use hjkl_picker::PreviewSpans;
+
+use crate::lang::GrammarRequest;
 use crate::syntax::LoadEvent;
 
 use super::App;
@@ -179,5 +184,57 @@ impl App {
         self.last_git_us = t_git.elapsed().as_micros();
         self.last_recompute_us = t_total.elapsed().as_micros();
         let _ = submitted;
+    }
+
+    /// Compute syntax highlight spans for a one-off preview snippet
+    /// (`path`, `bytes`). Used by the picker preview pane so the picker
+    /// itself stays bonsai-agnostic — sources only ship the buffer
+    /// contents and a path, this helper handles language resolution
+    /// and the actual highlighter call.
+    ///
+    /// Async-safe on the UI thread:
+    /// - **Cached** grammar → highlight immediately and return spans.
+    /// - **Loading** grammar → drop the handle (the bonsai pool keeps
+    ///   compiling) and return empty spans for this frame; the next
+    ///   call after the grammar lands picks up Cached.
+    /// - **Unknown** path → empty spans.
+    ///
+    /// The per-language `Highlighter` cache lives on `App` so a Rust
+    /// preview triggers one parser construction; subsequent Rust files
+    /// (or buffer/rg pickers in the same session) reuse it.
+    pub(crate) fn preview_spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
+        let grammar = match self.directory.request_for_path(path) {
+            GrammarRequest::Cached(g) => g,
+            GrammarRequest::Loading { .. } | GrammarRequest::Unknown => {
+                return PreviewSpans::default();
+            }
+        };
+        let name = grammar.name().to_string();
+        let mut cache = match self.preview_highlighters.lock() {
+            Ok(c) => c,
+            Err(_) => return PreviewSpans::default(),
+        };
+        let h = match cache.entry(name) {
+            std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
+                Ok(h) => v.insert(h),
+                Err(_) => return PreviewSpans::default(),
+            },
+        };
+        h.reset();
+        h.parse_initial(bytes);
+        let mut flat = h.highlight_range(bytes, 0..bytes.len());
+        drop(cache);
+        CommentMarkerPass::new().apply(&mut flat, bytes);
+        let theme = self.theme.syntax.clone();
+        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
+            .into_iter()
+            .filter_map(|span| {
+                theme
+                    .style(span.capture())
+                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
+            })
+            .collect();
+        PreviewSpans::from_byte_ranges(&ranges, bytes)
     }
 }

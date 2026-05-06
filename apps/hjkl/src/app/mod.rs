@@ -354,6 +354,14 @@ pub struct App {
     /// App-wide theme (UI chrome + syntax). Loaded once at startup from
     /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
     pub theme: crate::theme::AppTheme,
+    /// Per-language `Highlighter` cache used by the picker preview pane
+    /// (computed via [`Self::preview_spans_for`]). Centralised here so
+    /// every preview source — files, rg results, open buffers, git diff
+    /// rows — shares one parser per language for the session. The
+    /// editor's own syntax pipeline lives on `syntax`; this is for the
+    /// preview-only highlight path.
+    pub(crate) preview_highlighters:
+        std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
     /// Toggled by `:perf`. When true, render shows last-frame timings.
     pub perf_overlay: bool,
     pub last_recompute_us: u128,
@@ -1000,6 +1008,7 @@ impl App {
             syntax,
             directory,
             theme,
+            preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             perf_overlay: false,
             last_recompute_us: 0,
             last_install_us: 0,

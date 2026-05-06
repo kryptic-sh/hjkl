@@ -2,8 +2,6 @@ use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
-use crate::theme::AppTheme;
-
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -1073,10 +1071,7 @@ fn git_status_picker_title_is_git_status() {
     use crate::picker_git::GitStatusPicker;
     use hjkl_picker::PickerLogic;
     let tmp = tempfile::tempdir().unwrap();
-    let theme = AppTheme::default_dark();
-    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
-    let source = GitStatusPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
+    let source = GitStatusPicker::new(tmp.path().to_path_buf());
     assert_eq!(source.title(), "git status");
 }
 
@@ -1102,10 +1097,7 @@ fn git_log_picker_title_is_git_log() {
     use crate::picker_git::GitLogPicker;
     use hjkl_picker::PickerLogic;
     let tmp = tempfile::tempdir().unwrap();
-    let theme = AppTheme::default_dark();
-    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
-    let source = GitLogPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
+    let source = GitLogPicker::new(tmp.path().to_path_buf());
     assert_eq!(source.title(), "git log");
 }
 
@@ -1175,14 +1167,9 @@ fn git_file_history_picker_title_is_git_file_history() {
     use crate::picker_git::GitFileHistoryPicker;
     use hjkl_picker::PickerLogic;
     let tmp = tempfile::tempdir().unwrap();
-    let theme = AppTheme::default_dark();
-    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
     let source = GitFileHistoryPicker::new(
         tmp.path().to_path_buf(),
         std::path::PathBuf::from("src/main.rs"),
-        theme_arc,
-        directory,
     );
     assert_eq!(source.title(), "git file history");
 }
@@ -1195,10 +1182,7 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
     use std::sync::atomic::AtomicBool;
 
     let tmp = tempfile::tempdir().unwrap();
-    let theme = AppTheme::default_dark();
-    let theme_arc = theme.syntax.clone() as std::sync::Arc<dyn hjkl_bonsai::Theme + Send + Sync>;
-    let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new().unwrap());
-    let mut source = GitStatusPicker::new(tmp.path().to_path_buf(), theme_arc, directory);
+    let mut source = GitStatusPicker::new(tmp.path().to_path_buf());
 
     let cancel = Arc::new(AtomicBool::new(false));
     let handle = source.enumerate(None, Arc::clone(&cancel));
