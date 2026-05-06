@@ -645,6 +645,11 @@ impl App {
     fn open_lsp_locations_picker(&mut self, locs: &[lsp_types::Location], kind_label: &str) {
         use crate::picker_action::AppAction;
 
+        // Strip the editor's cwd so files inside the project show as
+        // relative paths (`apps/hjkl/src/main.rs`) instead of absolute
+        // ones. Files outside cwd keep their full path.
+        let cwd = std::env::current_dir().ok();
+
         // Build (label, action) pairs.
         let entries: Vec<(String, AppAction)> = locs
             .iter()
@@ -653,7 +658,12 @@ impl App {
                 let path = hjkl_lsp::uri::to_path(&url)?;
                 let row = loc.range.start.line;
                 let col = loc.range.start.character as usize;
-                let label = format!("{}:{}: col {}", path.display(), row + 1, col + 1);
+                let display_path = cwd
+                    .as_ref()
+                    .and_then(|c| path.strip_prefix(c).ok())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let label = format!("{display_path}:{}: col {}", row + 1, col + 1);
                 // Use OpenPathAtLine for the action — goto_line is 1-based.
                 Some((label, AppAction::OpenPathAtLine(path, row + 1)))
             })
