@@ -9,14 +9,33 @@
 //! dragging in libgit2 and matches the assumption that bonsai consumers have
 //! a developer toolchain installed.
 
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context, Result, bail};
 
 use super::manifest::{LangSpec, ManifestMeta, QuerySource};
 use super::xdg;
+
+/// Lazily-allocated per-key mutex map. Used by [`SourceCache`] and
+/// [`QuerySourceCache`] to serialise concurrent `acquire_*` calls for the
+/// same `(name, rev)` / `(label, rev)` so two threads never race on the
+/// same staging directory or git working tree. Different keys still run
+/// in parallel.
+type KeyLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
+/// Look up (or insert) the per-key mutex for `key` and return an `Arc`.
+/// The outer mutex is held only for the duration of the map lookup.
+fn key_lock(locks: &KeyLocks, key: &str) -> Arc<Mutex<()>> {
+    let mut map = locks.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(
+        map.entry(key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // SourceCache — grammar compilation trees
@@ -26,13 +45,20 @@ use super::xdg;
 #[derive(Debug, Clone)]
 pub struct SourceCache {
     base: PathBuf,
+    /// Per-key locks keyed on `<name>-<short-rev>`. Threads acquiring the
+    /// same grammar version serialise on this; distinct grammars run in
+    /// parallel.
+    locks: KeyLocks,
 }
 
 impl SourceCache {
     /// Wrap an arbitrary base directory. Sources land at
     /// `<base>/<name>-<short-rev>/`. Useful for tests.
     pub fn new(base: PathBuf) -> Self {
-        Self { base }
+        Self {
+            base,
+            locks: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     /// User-default cache rooted at `$XDG_CACHE_HOME/bonsai/grammars/`,
@@ -87,22 +113,32 @@ impl SourceCache {
     /// the (possibly nested via `subpath`) grammar directory ready for
     /// compilation.
     ///
-    /// Idempotent — a second call is a cheap directory existence check. The
-    /// clone is staged in a sibling `<name>-<rev>.tmp/` directory and moved
-    /// atomically on success so a partial clone never aliases the final path.
+    /// Thread-safe: concurrent calls for the same `(name, rev)` serialise on
+    /// a per-key mutex so only one clone runs; later callers re-check
+    /// `dest.exists()` and return the winner's result with no duplicate
+    /// work. Calls for different grammars still run in parallel.
     pub fn acquire(&self, name: &str, spec: &LangSpec) -> Result<PathBuf> {
         let dest = self.source_dir(name, spec);
         if dest.exists() {
             return Ok(grammar_root(&dest, spec));
         }
+
+        let key = format!("{name}-{}", short_rev(&spec.git_rev));
+        let lock = key_lock(&self.locks, &key);
+        let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+
+        // Recheck after acquiring the per-key lock — another thread may
+        // have completed the clone while we were waiting.
+        if dest.exists() {
+            return Ok(grammar_root(&dest, spec));
+        }
+
         std::fs::create_dir_all(&self.base)
             .with_context(|| format!("create cache base {}", self.base.display()))?;
 
-        let staging = self.base.join(format!(
-            "{name}-{}.tmp-{}",
-            short_rev(&spec.git_rev),
-            std::process::id()
-        ));
+        let staging = self
+            .base
+            .join(format!("{name}-{}.tmp", short_rev(&spec.git_rev)));
         let _ = std::fs::remove_dir_all(&staging);
 
         match clone_into(&staging, &spec.git_url, &spec.git_rev) {
@@ -150,11 +186,18 @@ fn grammar_root(clone_dir: &Path, spec: &LangSpec) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct QuerySourceCache {
     base: PathBuf,
+    /// Per-key locks keyed on `<label>-<short-rev>`. Two grammar builds
+    /// resolving queries from the same Helix / nvim-treesitter rev
+    /// serialise here; distinct revs run in parallel.
+    locks: KeyLocks,
 }
 
 impl QuerySourceCache {
     pub fn new(base: PathBuf) -> Self {
-        Self { base }
+        Self {
+            base,
+            locks: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn user_default() -> Result<Self> {
@@ -165,6 +208,11 @@ impl QuerySourceCache {
     /// Ensure the sparse clone for `source` at `rev` is present. Returns the
     /// root of the sparse checkout (the repo root — subdirectories inside are
     /// accessed by callers with the right prefix).
+    ///
+    /// Thread-safe: concurrent calls for the same `(label, rev)` serialise on
+    /// a per-key mutex so two grammar builds racing on the shared Helix /
+    /// nvim-treesitter clone never collide on the staging dir or git
+    /// working tree.
     pub fn acquire_source(&self, source: QuerySource, meta: &ManifestMeta) -> Result<PathBuf> {
         let (url, rev) = match source {
             QuerySource::Helix => (meta.helix_repo.as_str(), meta.helix_rev.as_str()),
@@ -182,14 +230,20 @@ impl QuerySourceCache {
             return Ok(dest);
         }
 
+        let key = format!("{label}-{}", short_rev(rev));
+        let lock = key_lock(&self.locks, &key);
+        let _guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+
+        // Recheck after acquiring the per-key lock — another thread may
+        // have completed the clone while we were waiting.
+        if dest.exists() {
+            return Ok(dest);
+        }
+
         std::fs::create_dir_all(&self.base)
             .with_context(|| format!("create query-source base {}", self.base.display()))?;
 
-        let staging = self.base.join(format!(
-            "{label}-{}.tmp-{}",
-            short_rev(rev),
-            std::process::id()
-        ));
+        let staging = self.base.join(format!("{label}-{}.tmp", short_rev(rev)));
         let _ = std::fs::remove_dir_all(&staging);
 
         let sparse_prefix = source.query_prefix();
