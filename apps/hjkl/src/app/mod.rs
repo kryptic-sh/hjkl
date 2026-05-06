@@ -585,6 +585,38 @@ impl App {
         }
     }
 
+    /// Move the focused window to a new tab (`Ctrl-w T`).
+    ///
+    /// Fails if the current tab has only one window (vim's "E1: at last window").
+    /// On success: the window is removed from the current tab's layout (the
+    /// previous tab gets focus on its new top leaf), and a new tab is appended
+    /// containing only the moved window.
+    pub fn move_window_to_new_tab(&mut self) -> Result<(), &'static str> {
+        let focused = self.focused_window();
+        if self.layout().leaves().len() <= 1 {
+            return Err("E1: only one window in this tab");
+        }
+        self.sync_viewport_from_editor();
+        // Remove the focused leaf from the current tab's layout. The returned
+        // value is the leaf that should receive focus in the current tab.
+        let new_focus_in_old_tab = self
+            .layout_mut()
+            .remove_leaf(focused)
+            .map_err(|_| "remove_leaf failed")?;
+        // Update the old tab's focused window to the surviving sibling.
+        self.tabs[self.active_tab].focused_window = new_focus_in_old_tab;
+
+        // Create a new tab containing only the moved window.
+        let new_tab = window::Tab {
+            layout: window::LayoutTree::Leaf(focused),
+            focused_window: focused,
+        };
+        self.tabs.push(new_tab);
+        self.active_tab = self.tabs.len() - 1;
+        self.sync_viewport_to_editor();
+        Ok(())
+    }
+
     /// Close the focused window.  Fails (with status message) when only one
     /// window remains.  On success the layout collapses and focus moves to the
     /// sibling that took over.

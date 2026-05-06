@@ -2429,3 +2429,254 @@ fn each_tab_keeps_independent_layout() {
         "tab 0 layout must be preserved after switching tabs"
     );
 }
+
+// ── Phase 2 tab tests ────────────────────────────────────────────────────────
+
+#[test]
+fn tabfirst_jumps_to_first() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 2);
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0, "tabfirst must jump to tab 0");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("tab 1/"),
+        "expected 'tab 1/N' status, got: {msg}"
+    );
+}
+
+#[test]
+fn tabfirst_noop_when_already_first() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+    // Should still produce a status message (not an error).
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("tab 1/"),
+        "no-op must still report position: {msg}"
+    );
+}
+
+#[test]
+fn tabrewind_and_tabr_are_aliases_for_tabfirst() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 2);
+    app.dispatch_ex("tabrewind");
+    assert_eq!(app.active_tab, 0);
+    app.dispatch_ex("tabnext");
+    app.dispatch_ex("tabr");
+    assert_eq!(app.active_tab, 0);
+}
+
+#[test]
+fn tablast_jumps_to_last() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // Go back to tab 0.
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+    app.dispatch_ex("tablast");
+    assert_eq!(app.active_tab, 2, "tablast must jump to the last tab");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("tab 3/3"),
+        "expected 'tab 3/3' status, got: {msg}"
+    );
+}
+
+#[test]
+fn tablast_noop_when_already_last() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    // active_tab is already 1 (last).
+    app.dispatch_ex("tablast");
+    assert_eq!(app.active_tab, 1);
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("tab 2/2"), "no-op must report position: {msg}");
+}
+
+#[test]
+fn tabonly_drops_other_tabs() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3);
+    // Stay on tab 2. Run tabonly — should reduce to 1 tab.
+    app.dispatch_ex("tabonly");
+    assert_eq!(app.tabs.len(), 1, "tabonly must close all other tabs");
+    assert_eq!(app.active_tab, 0, "active_tab must be reset to 0");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "tabonly");
+}
+
+#[test]
+fn tabonly_no_op_with_single_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabonly");
+    assert_eq!(app.tabs.len(), 1, "tabonly on single tab must stay at 1");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "tabonly", "must report success even as no-op");
+}
+
+#[test]
+fn tabo_is_alias_for_tabonly() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3);
+    app.dispatch_ex("tabo");
+    assert_eq!(app.tabs.len(), 1);
+}
+
+#[test]
+fn tabmove_no_arg_moves_to_end() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // Go to tab 0.
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+    // tabmove with no arg: move tab 0 to the end.
+    app.dispatch_ex("tabmove");
+    assert_eq!(app.active_tab, 2, "tab should now be at position 2 (end)");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "tabmove");
+}
+
+#[test]
+fn tabmove_to_position_zero() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // active is tab 2, move it to position 0.
+    app.dispatch_ex("tabmove 0");
+    assert_eq!(app.active_tab, 0, "tab should now be at position 0");
+}
+
+#[test]
+fn tabmove_relative_plus_one() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // Go to tab 0.
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+    // Move tab 0 forward by 1.
+    app.dispatch_ex("tabmove +1");
+    assert_eq!(app.active_tab, 1, "tab should now be at position 1");
+}
+
+#[test]
+fn tabmove_relative_minus_one() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 2);
+    // Move tab 2 back by 1.
+    app.dispatch_ex("tabmove -1");
+    assert_eq!(app.active_tab, 1, "tab should now be at position 1");
+}
+
+#[test]
+fn tabmove_clamps_out_of_range() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    // 2 tabs total. Try to move tab 1 to position 99.
+    app.dispatch_ex("tabmove 99");
+    assert_eq!(app.active_tab, 1, "out-of-range must clamp to last");
+    // Try to move to negative (via -99).
+    app.dispatch_ex("tabmove -99");
+    assert_eq!(app.active_tab, 0, "large negative must clamp to 0");
+}
+
+#[test]
+fn tabs_listing_marks_active_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // Active tab is 2.
+    app.dispatch_ex("tabs");
+    let popup = app.info_popup.clone().unwrap_or_default();
+    // Should contain 3 "Tab page N" entries.
+    assert!(popup.contains("Tab page 1"), "missing Tab page 1");
+    assert!(popup.contains("Tab page 2"), "missing Tab page 2");
+    assert!(popup.contains("Tab page 3"), "missing Tab page 3");
+    // The active tab (3) must have '>'; others must have ' '.
+    let lines: Vec<&str> = popup.lines().collect();
+    // Lines alternate: "Tab page N", "<marker> <name>".
+    // tab1 marker is lines[1], tab2 marker is lines[3], tab3 marker is lines[5].
+    assert!(
+        lines[1].starts_with("  ") || lines[1].starts_with(' '),
+        "tab 1 must be inactive"
+    );
+    assert!(
+        lines[5].starts_with("> "),
+        "tab 3 (active) must show '>': {:?}",
+        lines[5]
+    );
+}
+
+#[test]
+fn move_window_to_new_tab_creates_new_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Create a horizontal split so tab 0 has 2 windows.
+    app.dispatch_ex("sp");
+    assert_eq!(app.tabs[0].layout.leaves().len(), 2);
+    let focused_before = app.focused_window();
+
+    app.move_window_to_new_tab()
+        .expect("should succeed with 2 windows");
+    // A new tab should have been created.
+    assert_eq!(app.tabs.len(), 2, "must create a second tab");
+    assert_eq!(app.active_tab, 1, "must switch to the new tab");
+    // The new tab must contain only the moved window.
+    assert_eq!(app.tabs[1].layout.leaves(), vec![focused_before]);
+    assert_eq!(app.tabs[1].focused_window, focused_before);
+    // The old tab must now have only 1 window.
+    assert_eq!(app.tabs[0].layout.leaves().len(), 1);
+}
+
+#[test]
+fn move_window_to_new_tab_errors_when_only_window() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Only one window — should fail.
+    let result = app.move_window_to_new_tab();
+    assert!(result.is_err(), "must error when only one window in tab");
+    let msg = result.unwrap_err();
+    assert!(msg.contains("E1"), "expected E1 error, got: {msg}");
+    // No tab should be created.
+    assert_eq!(app.tabs.len(), 1);
+}
+
+#[test]
+fn ctrl_w_t_moves_window_to_new_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Need a split first so Ctrl-w T has something to work with.
+    app.dispatch_ex("sp");
+    assert_eq!(app.tabs.len(), 1);
+
+    // Simulate Ctrl-w T: pending_window_motion set, then 'T' dispatched.
+    // Mirror the event_loop logic directly (as done in existing tests).
+    app.pending_window_motion = true;
+    // Dispatch 'T' action manually (same logic as event_loop).
+    app.pending_window_motion = false;
+    match app.move_window_to_new_tab() {
+        Ok(()) => {
+            app.status_message = Some("moved window to new tab".into());
+        }
+        Err(msg) => {
+            app.status_message = Some(msg.to_string());
+        }
+    }
+
+    assert_eq!(app.tabs.len(), 2, "Ctrl-w T must create a new tab");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "moved window to new tab");
+}

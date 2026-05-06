@@ -250,6 +250,16 @@ impl App {
                                 KeyCode::Char('x') | KeyCode::Char('r') | KeyCode::Char('R') => {
                                     self.swap_with_sibling();
                                 }
+                                // Ctrl-w T: move focused window to a new tab.
+                                KeyCode::Char('T') => match self.move_window_to_new_tab() {
+                                    Ok(()) => {
+                                        self.status_message =
+                                            Some("moved window to new tab".into());
+                                    }
+                                    Err(msg) => {
+                                        self.status_message = Some(msg.to_string());
+                                    }
+                                },
                                 // Ctrl-w n: horizontal split with empty buffer (:new).
                                 KeyCode::Char('n') => {
                                     self.dispatch_ex("new");
@@ -356,6 +366,8 @@ impl App {
                     {
                         if let Some(prefix) = self.pending_buffer_motion.take() {
                             match (prefix, key.code) {
+                                // TODO: [N]gt count prefix (e.g. `3gt` → jump to tab 3)
+                                // is a separate effort; not wired here.
                                 ('g', KeyCode::Char('t')) => {
                                     self.dispatch_ex("tabnext");
                                     continue;

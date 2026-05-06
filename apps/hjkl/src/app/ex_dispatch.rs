@@ -328,6 +328,37 @@ impl App {
             return;
         }
 
+        // `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
+        if cmd == "tabfirst" || cmd == "tabrewind" || cmd == "tabr" {
+            self.do_tabfirst();
+            return;
+        }
+
+        // `:tablast` — jump to the last tab.
+        if cmd == "tablast" {
+            self.do_tablast();
+            return;
+        }
+
+        // `:tabonly` / `:tabo` — close all tabs except the current one.
+        if cmd == "tabonly" || cmd == "tabo" {
+            self.do_tabonly();
+            return;
+        }
+
+        // `:tabmove [N|+N|-N]` — reorder tabs.
+        if cmd == "tabmove" || cmd.starts_with("tabmove ") {
+            let arg = cmd.strip_prefix("tabmove ").map(str::trim).unwrap_or("");
+            self.do_tabmove(arg);
+            return;
+        }
+
+        // `:tabs` — show info popup listing all tabs.
+        if cmd == "tabs" {
+            self.do_tabs();
+            return;
+        }
+
         // `:resize [+|-]N` — adjust focused window height.
         // `:vertical resize [+|-]N` / `:vert res [+|-]N` — adjust width.
         let (is_resize, is_vertical) = if cmd == "resize" || cmd.starts_with("resize ") {
@@ -1095,6 +1126,122 @@ impl App {
         if !messages.is_empty() {
             self.status_message = Some(messages.join(" | "));
         }
+    }
+
+    // ─── Phase 2 Tab helpers ──────────────────────────────────────────────────
+
+    /// `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
+    fn do_tabfirst(&mut self) {
+        if self.active_tab == 0 {
+            let m = self.tabs.len();
+            self.status_message = Some(format!("tab 1/{m}"));
+            return;
+        }
+        self.sync_viewport_from_editor();
+        self.active_tab = 0;
+        self.sync_viewport_to_editor();
+        let m = self.tabs.len();
+        self.status_message = Some(format!("tab 1/{m}"));
+    }
+
+    /// `:tablast` — jump to the last tab.
+    fn do_tablast(&mut self) {
+        let last = self.tabs.len() - 1;
+        if self.active_tab == last {
+            let m = self.tabs.len();
+            self.status_message = Some(format!("tab {m}/{m}"));
+            return;
+        }
+        self.sync_viewport_from_editor();
+        self.active_tab = last;
+        self.sync_viewport_to_editor();
+        let m = self.tabs.len();
+        self.status_message = Some(format!("tab {m}/{m}"));
+    }
+
+    /// `:tabonly` / `:tabo` — close all tabs except the current one.
+    fn do_tabonly(&mut self) {
+        if self.tabs.len() <= 1 {
+            self.status_message = Some("tabonly".into());
+            return;
+        }
+        self.sync_viewport_from_editor();
+
+        // Collect window ids from all tabs except the active one and drop them.
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if i == self.active_tab {
+                continue;
+            }
+            for wid in tab.layout.leaves() {
+                self.windows[wid] = None;
+            }
+        }
+
+        // Keep only the active tab.
+        let active_tab = self.tabs[self.active_tab].clone();
+        self.tabs = vec![active_tab];
+        self.active_tab = 0;
+
+        self.sync_viewport_to_editor();
+        self.status_message = Some("tabonly".into());
+    }
+
+    /// `:tabmove [N|+N|-N]` — reorder tabs.
+    ///
+    /// No arg → move to end. `N` → absolute 0-based position. `+N`/`-N` →
+    /// relative. Out-of-range positions are clamped silently.
+    fn do_tabmove(&mut self, arg: &str) {
+        let len = self.tabs.len();
+        let target = if arg.is_empty() {
+            // No arg: move to end.
+            len - 1
+        } else if let Some(rest) = arg.strip_prefix('+') {
+            let delta: usize = rest.trim().parse().unwrap_or(0);
+            (self.active_tab + delta).min(len - 1)
+        } else if let Some(rest) = arg.strip_prefix('-') {
+            let delta: usize = rest.trim().parse().unwrap_or(0);
+            self.active_tab.saturating_sub(delta)
+        } else {
+            let pos: usize = arg.trim().parse().unwrap_or(self.active_tab);
+            pos.min(len - 1)
+        };
+
+        if target == self.active_tab {
+            self.status_message = Some("tabmove".into());
+            return;
+        }
+
+        self.sync_viewport_from_editor();
+        let tab = self.tabs.remove(self.active_tab);
+        self.tabs.insert(target, tab);
+        self.active_tab = target;
+        self.sync_viewport_to_editor();
+        self.status_message = Some("tabmove".into());
+    }
+
+    /// `:tabs` — show an info popup listing all tabs with their active buffer
+    /// name. The `>` marker indicates the active tab.
+    fn do_tabs(&mut self) {
+        let mut lines: Vec<String> = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let label = format!("Tab page {}", i + 1);
+            lines.push(label);
+            // The name of the focused window's buffer.
+            let name = if let Some(win) = self.windows[tab.focused_window].as_ref() {
+                let slot = &self.slots[win.slot];
+                slot.filename
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "[No Name]".to_string())
+            } else {
+                "[No Name]".to_string()
+            };
+            let marker = if i == self.active_tab { '>' } else { ' ' };
+            lines.push(format!("{marker} {name}"));
+        }
+        self.info_popup = Some(lines.join("\n"));
     }
 
     // ─── Tab helpers ─────────────────────────────────────────────────────────
