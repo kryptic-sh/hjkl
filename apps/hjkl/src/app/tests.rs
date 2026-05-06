@@ -2894,6 +2894,63 @@ fn lnext_jumps_to_next_diag() {
 }
 
 #[test]
+fn lsp_jump_reveals_cursor_in_viewport() {
+    // Regression: jump_cursor only sets cursor; without ensure_cursor_in_
+    // scrolloff afterwards, the viewport stays parked and the cursor lands
+    // off-screen. Plant a diag past the visible area, jump, assert the
+    // window's stored top_row scrolled.
+    use crate::app::window::WindowId;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_jump_scroll.rs");
+    app.active_mut().filename = Some(path.clone());
+
+    // 100 lines of content so a row-50 jump is well past any default
+    // viewport.
+    let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+
+    // Set the focused window's viewport height + reset scroll so we can
+    // observe whether jump scrolls.
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 20;
+        vp.top_row = 0;
+    }
+    let fw: WindowId = app.focused_window();
+    if let Some(w) = app.windows[fw].as_mut() {
+        w.top_row = 0;
+    }
+
+    // Plant a diagnostic on row 50 and jump to it.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 50, "character": 0 }, "end": { "line": 50, "character": 1 } },
+            "severity": 1,
+            "message": "deep"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+    app.lnext_severity(None);
+
+    // Cursor must be at row 50 AND the viewport must have scrolled past
+    // the original top_row=0 so the cursor is visible.
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 50);
+    let vp_top = app.active().editor.host().viewport().top_row;
+    assert!(
+        vp_top > 0,
+        "viewport top_row stayed at 0 after jump — ensure_cursor_in_scrolloff not called"
+    );
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top > 0,
+        "focused window's stored top_row stayed at 0 — sync_viewport_from_editor missed the scroll"
+    );
+}
+
+#[test]
 fn lprev_jumps_to_prev_diag_with_wrap() {
     let mut app = App::new(None, false, None, None).unwrap();
     let path = tmp_path("hjkl_lprev.rs");

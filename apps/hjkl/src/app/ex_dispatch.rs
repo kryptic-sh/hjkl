@@ -1534,6 +1534,7 @@ impl App {
             self.active_mut()
                 .editor
                 .jump_cursor(d.start_row, d.start_col);
+            self.active_mut().editor.ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
             self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
@@ -1568,6 +1569,7 @@ impl App {
             self.active_mut()
                 .editor
                 .jump_cursor(d.start_row, d.start_col);
+            self.active_mut().editor.ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
             self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
@@ -1585,6 +1587,7 @@ impl App {
                 self.active_mut()
                     .editor
                     .jump_cursor(d.start_row, d.start_col);
+                self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
                 self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
@@ -1603,6 +1606,7 @@ impl App {
                 self.active_mut()
                     .editor
                     .jump_cursor(d.start_row, d.start_col);
+                self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
                 self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));

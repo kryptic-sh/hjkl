@@ -566,6 +566,10 @@ impl App {
         }
 
         self.active_mut().editor.jump_cursor(row, col);
+        // jump_cursor only sets cursor; the engine doesn't auto-scroll on
+        // host-side jumps. Reveal the cursor before syncing the focused
+        // window's stored top_row/top_col back from the editor viewport.
+        self.active_mut().editor.ensure_cursor_in_scrolloff();
         self.sync_viewport_from_editor();
     }
 
