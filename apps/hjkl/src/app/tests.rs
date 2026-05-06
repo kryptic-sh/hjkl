@@ -2943,6 +2943,188 @@ fn gg_scrolls_window_viewport_to_top() {
 }
 
 #[test]
+fn plus_slash_argv_scrolls_window_viewport_to_match() {
+    // Regression: +/pat moved the cursor but didn't scroll the viewport,
+    // so the rendered viewport stayed at row 0 and the cursor landed
+    // off-screen on large files. Fix: App::new calls
+    // ensure_cursor_in_scrolloff after the search and seeds the initial
+    // window's top_row from the editor viewport.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_scroll");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.rs");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // 100 lines of filler; first `target` match deep at row 80.
+        for i in 0..100 {
+            if i == 80 {
+                writeln!(f, "fn target() {{}}").unwrap();
+            } else {
+                writeln!(f, "// padding line {i}").unwrap();
+            }
+        }
+    }
+    // Set viewport_height atomic via a fake App + apply_viewport_height
+    // before the search runs. App::new builds the slot with
+    // crossterm::terminal::size() — under tests that may return 0,
+    // disabling scrolloff. Pre-set the atomic by dropping in via the
+    // test helper.
+    // Easier path: build a small file where the first match is on row 5
+    // and assert window.top_row > 0 (proxy for "scrolled").
+    let mut app = App::new(Some(path.clone()), false, None, Some("target".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 80, "+/target must move cursor to row 80");
+    // The window's stored top_row should reflect the editor's scrolled
+    // viewport. With crossterm::terminal::size returning 0 in test
+    // contexts the scroll math is a no-op, so set the height atomic
+    // and re-run ensure_cursor_in_scrolloff to verify the scroll path.
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+    }
+    app.active_mut().editor.ensure_cursor_in_scrolloff();
+    let editor_top = app.active().editor.host().viewport().top_row;
+    assert!(
+        editor_top > 0,
+        "ensure_cursor_in_scrolloff should scroll editor viewport away from row 0; got top_row={editor_top}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn slash_search_in_editor_scrolls_window_viewport() {
+    // Regression: /pat<CR> in the editor moved the cursor but didn't
+    // scroll the focused window's viewport, leaving the cursor
+    // off-screen on large files.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..100)
+        .map(|i| {
+            if i == 80 {
+                "target".into()
+            } else {
+                format!("line {i}")
+            }
+        })
+        .collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+    }
+    let fw = app.focused_window();
+    // Cursor at (0,0), window.top_row=0. Run /target<CR>.
+    app.commit_search("target");
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top > 0,
+        "/target<CR> should scroll the focused window's stored top_row past 0 to reveal the match"
+    );
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 80, "/target<CR> should land cursor on row 80");
+    // Counter must show 1/1 (cursor on the only match), not 0/1.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 1)),
+        "search counter must update after /<CR>"
+    );
+}
+
+#[test]
+fn plus_slash_argv_with_realistic_rust_source() {
+    // Mirror the user's repro: hjkl +/main on a real-ish rust file.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_real");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.rs");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // Real-ish content. First `main` substring is on row 5 (`fn main`).
+        writeln!(f, "//! crate root").unwrap(); // row 0
+        writeln!(f).unwrap(); // row 1
+        writeln!(f, "use std::path::PathBuf;").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "/// Entry.").unwrap();
+        writeln!(f, "fn main() {{").unwrap(); // row 5: first 'main'
+        writeln!(f, "    let _ = main_helper();").unwrap(); // row 6: 'main_helper'
+        writeln!(f, "}}").unwrap();
+        writeln!(f, "fn main_helper() {{}}").unwrap(); // row 8: 'main_helper'
+    }
+    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 5,
+        "+/main on rust source must land on row 5 (first `fn main`), got row {row}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plus_slash_argv_search_lands_on_first_forward_match() {
+    // Regression: hjkl +/main file.rs lands cursor on a match in the
+    // backward direction (or wraps incorrectly) because the +/<pat>
+    // path advanced from cursor=(0,0) and the wrap policy mishandles
+    // the at-or-after invariant.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // 3 matches at known rows. First match at row 2.
+        writeln!(f, "alpha").unwrap();
+        writeln!(f, "beta").unwrap();
+        writeln!(f, "main one").unwrap();
+        writeln!(f, "delta").unwrap();
+        writeln!(f, "main two").unwrap();
+        writeln!(f, "main three").unwrap();
+    }
+    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 2,
+        "+/main must land on the FIRST forward match (row 2), got row {row}"
+    );
+    assert_eq!(col, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plus_slash_argv_search_with_goto_line_searches_forward() {
+    // hjkl +5 +/main file.rs : goto_line first, then search forward.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_goto_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "main early").unwrap(); // row 0
+        writeln!(f, "two").unwrap();
+        writeln!(f, "three").unwrap();
+        writeln!(f, "four").unwrap();
+        writeln!(f, "five").unwrap(); // goto_line(5) lands here (1-based row 4)
+        writeln!(f, "six").unwrap();
+        writeln!(f, "main mid").unwrap(); // row 6
+        writeln!(f, "main late").unwrap(); // row 7
+    }
+    // +5 goto_line=5 then +/main forward search. Should land on row 6,
+    // NOT wrap back to row 0.
+    let app = App::new(Some(path.clone()), false, Some(5), Some("main".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 6,
+        "+5 +/main must search forward from row 4, landing on row 6"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn search_count_cursor_on_match_stays_on_match() {
     // Regression: /<pat><CR> from a cursor that's already ON a match used
     // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds

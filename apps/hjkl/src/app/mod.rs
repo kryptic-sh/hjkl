@@ -928,6 +928,12 @@ impl App {
                 Ok(re) => {
                     slot.editor.set_search_pattern(Some(re));
                     slot.editor.search_advance_forward(false);
+                    // search_advance_forward moves the cursor without
+                    // going through vim::step's end-of-step scrolloff
+                    // hook, so the editor's viewport stays at row 0.
+                    // Reveal the cursor here so the focused window's
+                    // initial top_row (read below) picks up the scroll.
+                    slot.editor.ensure_cursor_in_scrolloff();
                 }
                 Err(e) => {
                     eprintln!("hjkl: bad search pattern: {e}");
@@ -941,11 +947,18 @@ impl App {
             None
         };
 
-        // Single window pointing at slot 0.
+        // Single window pointing at slot 0. Seed top_row / top_col from
+        // the slot's editor viewport so any pre-event-loop scroll (e.g.
+        // +/pat search-on-open) is preserved through the first tick of
+        // sync_viewport_to_editor.
+        let (initial_top_row, initial_top_col) = {
+            let vp = slot.editor.host().viewport();
+            (vp.top_row, vp.top_col)
+        };
         let initial_window = window::Window {
             slot: 0,
-            top_row: 0,
-            top_col: 0,
+            top_row: initial_top_row,
+            top_col: initial_top_col,
             last_rect: None,
         };
 

@@ -153,6 +153,13 @@ impl App {
                 } else {
                     self.active_mut().editor.search_advance_backward(true);
                 }
+                // search_advance_* moves the cursor without going through
+                // the engine's vim::step end-of-step hook, so the viewport
+                // doesn't auto-scroll. Reveal the cursor + sync the
+                // focused window's stored top_row so the next render
+                // shows the match instead of the old viewport.
+                self.active_mut().editor.ensure_cursor_in_scrolloff();
+                self.sync_viewport_from_editor();
                 self.active_mut().editor.set_last_search(Some(p), forward);
             }
             Err(e) => {
