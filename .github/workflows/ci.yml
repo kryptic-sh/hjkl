@@ -196,7 +196,7 @@ jobs:
         if: matrix.zig == 'true'
         uses: mlugg/setup-zig@v2
         with:
-          zig-version: "0.14.0"
+          zig-version: "0.15.1"
 
       - name: Install cargo-zigbuild
         if: matrix.zig == 'true'
