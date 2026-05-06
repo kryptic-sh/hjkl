@@ -27,3 +27,12 @@ huge_file_threshold = 50000
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"
+
+[lsp]
+# LSP subsystem. Disabled by default; flip to true once Phase 2+ ships diagnostics UI.
+enabled = false
+
+# Example server configuration (uncomment and copy to your user config to enable):
+# [lsp.servers.rust]
+# command = "rust-analyzer"
+# root_markers = ["Cargo.toml", ".git"]

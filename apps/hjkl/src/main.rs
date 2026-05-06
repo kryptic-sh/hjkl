@@ -285,13 +285,20 @@ fn main() -> Result<()> {
 
     // Build app state (may read file from disk) before entering alternate screen
     // so we can print errors to the normal terminal if the file is unreadable.
-    let mut app = app::App::new(
+    let base_app = app::App::new(
         args.files.first().cloned(),
         args.readonly,
         args.line,
         args.pattern,
     )?
-    .with_config(cfg);
+    .with_config(cfg.clone());
+
+    let mut app = if cfg.lsp.enabled {
+        let mgr = hjkl_lsp::LspManager::spawn(cfg.lsp.clone());
+        base_app.with_lsp(mgr)
+    } else {
+        base_app
+    };
     // Load any additional files into extra slots (argv order). Errors are
     // printed to stderr but do not abort — the editor opens with whatever
     // could be loaded.

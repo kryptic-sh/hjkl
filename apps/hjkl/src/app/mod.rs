@@ -16,6 +16,7 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 mod buffer_ops;
 mod event_loop;
 mod ex_dispatch;
+pub mod lsp_glue;
 mod picker_glue;
 mod prompt;
 mod syntax_glue;
@@ -269,6 +270,8 @@ pub struct App {
     /// Recent grammar-load failure surfaced as a transient status message.
     /// Auto-expires after `GRAMMAR_ERR_TTL` so a stale error doesn't stick.
     pub(crate) grammar_load_error: Option<GrammarLoadError>,
+    /// LSP subsystem handle. `None` when `config.lsp.enabled = false` (default).
+    pub lsp: Option<hjkl_lsp::LspManager>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -859,6 +862,7 @@ impl App {
             config: crate::config::Config::default(),
             start_screen,
             grammar_load_error: None,
+            lsp: None,
         })
     }
 
@@ -891,6 +895,12 @@ impl App {
             }
             slot.editor.apply_options(&opts);
         }
+        self
+    }
+
+    /// Attach an `LspManager` to the app. Call after `with_config`.
+    pub fn with_lsp(mut self, lsp: hjkl_lsp::LspManager) -> Self {
+        self.lsp = Some(lsp);
         self
     }
 

@@ -89,6 +89,7 @@ impl App {
         }
         let active_slot = self.focused_slot_idx();
         if self.slots.len() == 1 {
+            self.lsp_detach_buffer(active_slot);
             let old_id = self.active().buffer_id;
             self.syntax.forget(old_id);
             let new_id = self.next_buffer_id;
@@ -126,6 +127,7 @@ impl App {
             self.status_message = Some("buffer closed (replaced with [No Name])".into());
             return;
         }
+        self.lsp_detach_buffer(active_slot);
         let removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
         // Fix up all window slot pointers that reference the removed or shifted slots.
@@ -189,6 +191,8 @@ impl App {
         self.next_buffer_id += 1;
         let slot = super::build_slot(&mut self.syntax, buffer_id, Some(path), &self.config)?;
         self.slots.push(slot);
-        Ok(self.slots.len() - 1)
+        let idx = self.slots.len() - 1;
+        self.lsp_attach_buffer(idx);
+        Ok(idx)
     }
 }

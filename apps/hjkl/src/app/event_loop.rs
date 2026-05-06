@@ -21,6 +21,9 @@ impl App {
             // so the engine's scrolloff math starts from the correct baseline.
             self.sync_viewport_to_editor();
 
+            // Drain any pending LSP events (non-blocking).
+            self.drain_lsp_events();
+
             // Update host viewport dimensions from the current terminal size.
             {
                 let size = terminal.size()?;

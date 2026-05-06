@@ -26,6 +26,8 @@ pub const DEFAULTS_TOML: &str = include_str!("config.toml");
 pub struct Config {
     pub editor: EditorConfig,
     pub theme: ThemeConfig,
+    #[serde(default)]
+    pub lsp: hjkl_lsp::LspConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
