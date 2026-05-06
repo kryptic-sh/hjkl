@@ -870,6 +870,52 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── LSP request in flight ──────────────────────────────────────────────
+    // Show a spinner whenever any LSP request is pending. The event loop
+    // wakes the renderer every 120 ms (see `event_loop.rs`), so the
+    // spinner animates without user input. Hidden the moment the
+    // response arrives — `lsp_pending` empties in handle_lsp_response.
+    if !app.lsp_pending.is_empty() {
+        const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let elapsed_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let frame = FRAMES[(elapsed_ms / 100) as usize % FRAMES.len()];
+        // Pick a label based on the most-recent pending request kind so
+        // a user pressing `gr` sees "references" rather than a generic
+        // word. Picks any pending entry — typically there's just one.
+        let label = app
+            .lsp_pending
+            .values()
+            .next()
+            .map(|p| match p {
+                crate::app::LspPendingRequest::GotoDefinition { .. } => "definition",
+                crate::app::LspPendingRequest::GotoDeclaration { .. } => "declaration",
+                crate::app::LspPendingRequest::GotoTypeDefinition { .. } => "type definition",
+                crate::app::LspPendingRequest::GotoImplementation { .. } => "implementation",
+                crate::app::LspPendingRequest::GotoReferences { .. } => "references",
+                crate::app::LspPendingRequest::Hover { .. } => "hover",
+                crate::app::LspPendingRequest::Completion { .. } => "completion",
+                crate::app::LspPendingRequest::CodeAction { .. } => "code action",
+                crate::app::LspPendingRequest::Rename { .. } => "rename",
+                _ => "request",
+            })
+            .unwrap_or("request");
+        let content = format!(" {frame} LSP: {label}…");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.surface_bg)
+                    .fg(app.theme.ui.text)
+                    .add_modifier(Modifier::ITALIC),
+            )]),
+            None,
+        );
+    }
+
     // ── Grammar load error (transient, 5 s TTL) ────────────────────────────
     if let Some(err) = &app.grammar_load_error
         && !err.is_expired()
