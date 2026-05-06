@@ -873,15 +873,11 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
     // ── LSP request in flight ──────────────────────────────────────────────
     // Show a spinner whenever any LSP request is pending. The event loop
     // wakes the renderer every 120 ms (see `event_loop.rs`), so the
-    // spinner animates without user input. Hidden the moment the
-    // response arrives — `lsp_pending` empties in handle_lsp_response.
+    // shared hjkl_ratatui::spinner advances at ~8 Hz without user input.
+    // Hidden the moment the response arrives — `lsp_pending` empties in
+    // handle_lsp_response.
     if !app.lsp_pending.is_empty() {
-        const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let elapsed_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let frame = FRAMES[(elapsed_ms / 100) as usize % FRAMES.len()];
+        let frame = hjkl_ratatui::spinner::frame();
         // Pick a label based on the most-recent pending request kind so
         // a user pressing `gr` sees "references" rather than a generic
         // word. Picks any pending entry — typically there's just one.
