@@ -3034,6 +3034,16 @@ fn slash_search_in_editor_scrolls_window_viewport() {
         Some((1, 1)),
         "search counter must update after /<CR>"
     );
+    // Cursor must respect SCROLLOFF=5: cursor at row 80, height 20, so
+    // viewport top_row should be such that screen row is between
+    // [margin, height-1-margin] = [5, 14]. Specifically max_bottom=14
+    // → top = 80 - 14 = 66.
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let screen_row = 80usize.saturating_sub(stored_top);
+    assert!(
+        (5..=14).contains(&screen_row),
+        "scrolloff=5 violated: screen_row={screen_row} (top={stored_top}, cursor=80, height=20)"
+    );
 }
 
 #[test]

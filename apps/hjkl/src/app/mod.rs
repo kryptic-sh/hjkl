@@ -459,9 +459,15 @@ pub(super) fn build_slot(
     }
     let mut editor = Editor::new(buffer, host, ec_opts);
     if let Ok(size) = crossterm::terminal::size() {
+        let viewport_height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
         let vp = editor.host_mut().viewport_mut();
         vp.width = size.0;
-        vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+        vp.height = viewport_height;
+        // Publish the viewport height to the engine's atomic so any
+        // pre-event-loop scroll math (e.g. ensure_cursor_in_scrolloff
+        // after a +/pat startup search) takes the scrolloff path
+        // instead of the no-margin fallback.
+        editor.set_viewport_height(viewport_height);
     }
     // Non-blocking: returns immediately; Loading case is handled by
     // poll_grammar_loads each tick.
