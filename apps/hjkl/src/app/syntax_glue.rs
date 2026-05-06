@@ -257,3 +257,63 @@ impl hjkl_picker::PreviewHighlighter for App {
         self.preview_spans_for(path, bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Regression catcher for the picker preview injection wiring: a
+    /// markdown buffer with a fenced rust code block must produce
+    /// multiple styled spans on the rust line. If `preview_spans_for`
+    /// regresses to the non-injection `highlight_range` variant, the
+    /// rust row collapses to a single uniform span and this fails.
+    #[test]
+    #[ignore = "network + compiler: fetches markdown + rust grammars"]
+    fn preview_spans_for_markdown_includes_rust_injection() {
+        let app = App::new(None, false, None, None).unwrap();
+
+        // Force sync builds so the preview's async resolver hits Cached.
+        // Both calls block on first run; subsequent runs hit the on-disk
+        // cache instantly.
+        assert!(
+            app.directory.by_name("markdown").is_some(),
+            "markdown grammar should resolve"
+        );
+        assert!(
+            app.directory.by_name("rust").is_some(),
+            "rust grammar should resolve"
+        );
+
+        let source = b"# Title\n\n```rust\nfn main() {}\n```\n";
+        let path = PathBuf::from("test.md");
+        let spans = app.preview_spans_for(&path, source);
+
+        // Row layout of the test source:
+        //   0: # Title
+        //   1: (blank)
+        //   2: ```rust
+        //   3: fn main() {}   ← injection target
+        //   4: ```
+        const RUST_ROW: usize = 3;
+        assert!(
+            spans.by_row.len() > RUST_ROW,
+            "expected at least {} rows, got {}",
+            RUST_ROW + 1,
+            spans.by_row.len()
+        );
+        let rust_row = &spans.by_row[RUST_ROW];
+
+        // Without injection the whole `fn main() {}` slice is one uniform
+        // markdown `code_fence_content` capture (≤ 1 styled span). With
+        // rust injection we expect distinct keyword + function + punctuation
+        // spans (≥ 3 styled regions in any theme that styles those captures).
+        assert!(
+            rust_row.len() >= 3,
+            "expected ≥3 styled spans on the rust row (keyword/function/punct from injection); \
+             got {} spans: {:?}",
+            rust_row.len(),
+            rust_row
+        );
+    }
+}
