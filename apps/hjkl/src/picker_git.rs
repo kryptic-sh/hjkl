@@ -13,7 +13,7 @@ use hjkl_buffer::Buffer;
 use hjkl_picker::{PickerAction, PickerLogic, PreviewSpans, RequeryMode, load_preview};
 use ratatui::style::{Color, Style};
 
-use crate::lang::LanguageDirectory;
+use crate::lang::{GrammarRequest, LanguageDirectory};
 use crate::picker_action::AppAction;
 
 const SENTINEL_LABEL: &str = "  not a git repo";
@@ -351,12 +351,16 @@ impl GitStatusPicker {
 
     fn highlight_file(&self, abs: &std::path::Path, content: &str) -> PreviewSpans {
         let bytes = content.as_bytes();
-        // Sync `for_path` is intentional here: picker workers run on their
-        // own background threads where blocking is fine.  Migrating to the
-        // async API is out of scope for hjkl#17.
-        let grammar = match self.directory.for_path(abs) {
-            Some(g) => g,
-            None => return PreviewSpans::default(),
+        // Picker preview runs on the UI thread; using the async grammar API
+        // avoids a multi-second clone+compile blocking the renderer when a
+        // user navigates to a file with an uncached grammar. Loading kicks
+        // off the background compile and we render plain text this frame;
+        // the next refresh after the load lands picks up Cached.
+        let grammar = match self.directory.request_for_path(abs) {
+            GrammarRequest::Cached(g) => g,
+            GrammarRequest::Loading { .. } | GrammarRequest::Unknown => {
+                return PreviewSpans::default();
+            }
         };
         let name = grammar.name().to_string();
         let mut hl_cache = match self.highlighters.lock() {

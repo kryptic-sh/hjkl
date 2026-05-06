@@ -13,7 +13,7 @@ use std::thread::JoinHandle;
 
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 
-use crate::lang::LanguageDirectory;
+use crate::lang::{GrammarRequest, LanguageDirectory};
 use hjkl_buffer::Buffer;
 use hjkl_picker::{FileSource, PickerAction, PickerLogic, PreviewSpans, RequeryMode, RgSource};
 
@@ -211,10 +211,19 @@ fn preview_spans(
     path: &Path,
     bytes: &[u8],
 ) -> Option<Vec<hjkl_bonsai::HighlightSpan>> {
-    // Sync `for_path` is intentional here: picker source workers run on their
-    // own background threads where blocking is fine.  Migrating to the async
-    // API is out of scope for hjkl#17.
-    let grammar = directory.for_path(path)?;
+    // Picker preview runs on the UI thread (render::picker_overlay calls
+    // `refresh_preview` every frame), so the older sync `directory.for_path`
+    // would block the renderer for a multi-second clone+compile when
+    // navigating to a file with an uncached grammar. Use the async API:
+    // - Cached  → render with syntax now.
+    // - Loading → kick off the background compile (handle dropped; the
+    //   bonsai pool finishes the work regardless), render plain text this
+    //   frame; the next preview after the load completes picks up Cached.
+    // - Unknown → no grammar; plain text.
+    let grammar = match directory.request_for_path(path) {
+        GrammarRequest::Cached(g) => g,
+        GrammarRequest::Loading { .. } | GrammarRequest::Unknown => return None,
+    };
     let name = grammar.name().to_string();
     let mut hl_cache = cache.lock().ok()?;
     let h = match hl_cache.entry(name) {

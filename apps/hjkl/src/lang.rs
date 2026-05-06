@@ -131,13 +131,6 @@ impl LanguageDirectory {
         Some(self.cache_insert(name, grammar))
     }
 
-    /// Resolve a path to a loaded grammar via its file extension.
-    /// Pickers run on their own background threads so blocking is fine.
-    pub fn for_path(&self, path: &Path) -> Option<Arc<Grammar>> {
-        let name = self.registry.name_for_path(path)?.to_string();
-        self.by_name(&name)
-    }
-
     // ── Cache helpers ─────────────────────────────────────────────────────────
 
     fn cache_get(&self, name: &str) -> Option<Arc<Grammar>> {
@@ -163,22 +156,6 @@ impl LanguageDirectory {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    /// `for_path` triggers a clone+compile on cache miss, so it stays
-    /// `#[ignore]`-gated. Verify the no-load fast paths separately.
-    #[test]
-    #[ignore = "network + compiler: clones + builds tree-sitter-rust"]
-    fn for_path_returns_grammar_for_known_extension() {
-        let dir = LanguageDirectory::new().unwrap();
-        let g = dir.for_path(&PathBuf::from("foo.rs")).unwrap();
-        assert_eq!(g.name(), "rust");
-    }
-
-    #[test]
-    fn for_path_returns_none_for_unknown_extension() {
-        let dir = LanguageDirectory::new().unwrap();
-        assert!(dir.for_path(&PathBuf::from("foo.zzznope")).is_none());
-    }
 
     #[test]
     fn request_for_path_returns_unknown_for_unrecognized_extension() {
