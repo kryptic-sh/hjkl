@@ -1040,10 +1040,21 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
             })
             .unwrap_or("request");
         format!(" {} LSP:{label} ", hjkl_ratatui::spinner::frame())
-    } else if let Some(name) = app.pending_grammar_name_for_active() {
-        format!(" {} grammar:{name} ", hjkl_ratatui::spinner::frame())
     } else {
-        String::new()
+        // Global grammar-load indicator: any lang queued on the bonsai
+        // async pool (active buffer, preview pane, or otherwise) shows
+        // here. Multiple in-flight names collapse to first + count.
+        let names = app.directory.in_flight_names();
+        match names.len() {
+            0 => String::new(),
+            1 => format!(" {} grammar:{} ", hjkl_ratatui::spinner::frame(), names[0]),
+            n => format!(
+                " {} grammar:{} +{} ",
+                hjkl_ratatui::spinner::frame(),
+                names[0],
+                n - 1
+            ),
+        }
     };
 
     // Filename block — surface bg, with leading + trailing space.
@@ -1245,36 +1256,20 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
         (area, None)
     };
 
-    // Snapshot the preview path + buffer bytes BEFORE recomputing spans
-    // so we can drop the &mut borrow on `app.picker` and re-borrow `app`
-    // immutably for the language-aware highlight helper. Picker preview
-    // is bonsai-agnostic — sources only ship a buffer + path; the spans
-    // come from `App::preview_spans_for` which routes through the
-    // editor's grammar pipeline (async, cached).
-    let preview_inputs: Option<(Option<std::path::PathBuf>, Vec<u8>)> = if with_preview {
-        let path = p.preview_path().map(|p| p.to_path_buf());
-        let buf = p.preview_buffer();
-        let mut bytes = buf.lines().join("\n").into_bytes();
-        if !bytes.is_empty() {
-            bytes.push(b'\n');
-        }
-        Some((path, bytes))
-    } else {
-        None
-    };
-
     render_picker_input_and_list(frame, p, &app.theme.ui, left_area);
+    // p (mut borrow on app.picker) ends here; below re-borrows app immutably
+    // both as the picker handle and as the `PreviewHighlighter` impl.
 
     if let Some(right) = preview_area {
-        let preview_spans = match preview_inputs {
-            Some((Some(path), bytes)) => app.preview_spans_for(&path, &bytes),
-            _ => hjkl_picker::PreviewSpans::default(),
+        let ui = &app.theme.ui;
+        let theme = hjkl_picker::PreviewTheme {
+            border: Style::default().fg(ui.border),
+            gutter: Style::default().fg(ui.gutter),
+            non_text: Style::default().fg(ui.non_text),
+            cursor_line: cursor_line_bg(ui),
         };
-        let picker = app
-            .picker
-            .as_ref()
-            .expect("picker still set after preview-input snapshot");
-        picker_preview_pane(frame, picker, &preview_spans, &app.theme.ui, right);
+        let picker = app.picker.as_ref().expect("picker still set");
+        hjkl_picker::preview_pane(frame, picker, app, &theme, right);
     }
 }
 
@@ -1372,88 +1367,6 @@ fn render_picker_input_and_list(
         state.select(Some(picker.selected.min(label_count.saturating_sub(1))));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
-}
-
-/// Render the preview pane via `BufferView` so the gutter, line
-/// numbers, and per-row layout match the editor proper.
-fn picker_preview_pane(
-    frame: &mut Frame,
-    picker: &crate::picker::Picker,
-    preview_spans: &hjkl_picker::PreviewSpans,
-    theme: &crate::theme::UiTheme,
-    area: Rect,
-) {
-    let label = picker.preview_label().unwrap_or("(none)").to_string();
-    let status = picker.preview_status();
-    let title = if status.is_empty() {
-        format!(" preview — {label} ")
-    } else {
-        format!(" preview — {label} [{status}] ")
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border))
-        .title(title);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if !status.is_empty() {
-        // Skipped (binary / oversized / I/O error) — show the status
-        // tag in the body too for visibility on narrow terminals where
-        // the title might be clipped.
-        let para = Paragraph::new(format!("  ({status})"));
-        frame.render_widget(para, inner);
-        return;
-    }
-
-    let buf = picker.preview_buffer();
-    let line_count = buf.line_count() as usize;
-    // Picker preview always shows absolute numbers with neovim default numberwidth.
-    let gw = gutter_width(line_count.max(1), true, false, 4);
-    let viewport = hjkl_buffer::Viewport {
-        top_row: picker.preview_top_row(),
-        top_col: 0,
-        width: inner.width.saturating_sub(gw),
-        height: inner.height,
-        text_width: inner.width.saturating_sub(gw),
-        ..hjkl_buffer::Viewport::default()
-    };
-    let resolver = |id: u32| {
-        preview_spans
-            .styles
-            .get(id as usize)
-            .copied()
-            .unwrap_or_default()
-    };
-    let cursor_line_bg = if picker.preview_match_row().is_some() {
-        cursor_line_bg(theme)
-    } else {
-        Style::default()
-    };
-    let view = BufferView {
-        buffer: buf,
-        viewport: &viewport,
-        selection: None,
-        resolver: &resolver,
-        cursor_line_bg,
-        cursor_column_bg: Style::default(),
-        selection_bg: Style::default(),
-        cursor_style: Style::default(),
-        gutter: Some(Gutter {
-            width: gw,
-            style: Style::default().fg(theme.gutter),
-            line_offset: picker.preview_line_offset(),
-            ..Default::default()
-        }),
-        search_bg: Style::default(),
-        signs: &[],
-        conceals: &[],
-        spans: &preview_spans.by_row,
-        search_pattern: None,
-        non_text_style: Style::default().fg(theme.non_text),
-        diag_overlays: &[],
-    };
-    frame.render_widget(view, inner);
 }
 
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`

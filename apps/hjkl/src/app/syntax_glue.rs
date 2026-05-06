@@ -202,7 +202,7 @@ impl App {
     /// The per-language `Highlighter` cache lives on `App` so a Rust
     /// preview triggers one parser construction; subsequent Rust files
     /// (or buffer/rg pickers in the same session) reuse it.
-    pub(crate) fn preview_spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
+    pub fn preview_spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
         let grammar = match self.directory.request_for_path(path) {
             GrammarRequest::Cached(g) => g,
             GrammarRequest::Loading { .. } | GrammarRequest::Unknown => {
@@ -236,5 +236,14 @@ impl App {
             })
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)
+    }
+}
+
+/// Bridge: route `hjkl-picker`'s preview-pane highlighter through the
+/// editor's bonsai pipeline. Picker stays bonsai-agnostic — the trait
+/// impl lives consumer-side.
+impl hjkl_picker::PreviewHighlighter for App {
+    fn spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
+        self.preview_spans_for(path, bytes)
     }
 }

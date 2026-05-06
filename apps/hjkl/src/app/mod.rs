@@ -586,14 +586,6 @@ impl App {
         &mut self.slots[slot_idx]
     }
 
-    /// The name of the grammar currently being loaded for the active buffer,
-    /// if any. Used by the renderer to show the `loading grammar: <name>…`
-    /// status-line indicator.
-    pub fn pending_grammar_name_for_active(&self) -> Option<&str> {
-        let id = self.slots[self.focused_slot_idx()].buffer_id;
-        self.syntax.pending_load_name_for(id)
-    }
-
     /// Return a shared slice of all buffer slots.
     pub fn slots(&self) -> &[BufferSlot] {
         &self.slots

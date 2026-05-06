@@ -108,6 +108,14 @@ impl LanguageDirectory {
         }
     }
 
+    /// Snapshot of grammar names currently in flight on the async pool.
+    /// Order unspecified. Surfaced to the renderer so a single
+    /// status-bar spinner can reflect *any* queued lang (active buffer,
+    /// preview pane, or otherwise), not just the focused one.
+    pub fn in_flight_names(&self) -> Vec<String> {
+        self.async_loader.in_flight_names()
+    }
+
     /// Called by the consumer when a `Loading` handle resolves with
     /// `Some(Ok(lib_path))`.  Constructs the `Grammar`, caches it, returns
     /// the `Arc`.
