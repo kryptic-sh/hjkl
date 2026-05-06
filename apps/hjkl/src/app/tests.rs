@@ -3200,21 +3200,20 @@ fn goto_definition_error_sets_status() {
 
 #[test]
 fn k_dispatches_hover() {
-    // Without a real LspManager the call returns early (no panic).
+    // Without a real LspManager the call returns early with a status hint.
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/k_test.rs"));
-    // No LSP attached — lsp_hover returns early without panicking.
+    app.active_mut().filename = Some(tmp_path("k_test.rs"));
     app.lsp_hover();
-    // State unchanged.
     assert!(app.info_popup.is_none());
-    assert!(app.status_message.is_none());
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(msg.contains("LSP: not enabled"), "got: {msg}");
 }
 
 #[test]
 fn gd_dispatches_goto_definition() {
     // Without a real LspManager the call returns early (no panic).
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/gd_test.rs"));
+    app.active_mut().filename = Some(tmp_path("gd_test.rs"));
     app.lsp_goto_definition();
     // No LSP — nothing pending, no crash.
     assert!(app.lsp_pending.is_empty());

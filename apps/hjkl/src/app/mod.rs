@@ -1030,9 +1030,16 @@ impl App {
         self
     }
 
-    /// Attach an `LspManager` to the app. Call after `with_config`.
+    /// Attach an `LspManager` to the app. Call after `with_config`. Iterates
+    /// the existing slots and attaches each one whose filename matches a
+    /// known language and whose language has a configured server — fixes the
+    /// startup case where slot 0 was built before `with_lsp` was wired and
+    /// would otherwise miss its `didOpen`.
     pub fn with_lsp(mut self, lsp: hjkl_lsp::LspManager) -> Self {
         self.lsp = Some(lsp);
+        for idx in 0..self.slots.len() {
+            self.lsp_attach_buffer(idx);
+        }
         self
     }
 

@@ -326,12 +326,17 @@ impl App {
         make_pending: impl FnOnce(hjkl_lsp::BufferId, (usize, usize)) -> LspPendingRequest,
     ) {
         if self.lsp.is_none() {
+            self.status_message =
+                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
         let (params, buffer_id, origin) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
-                self.status_message = Some("LSP: buffer has no path".into());
+                self.status_message = Some(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
+                        .into(),
+                );
                 return;
             }
         };
@@ -669,12 +674,17 @@ impl App {
     /// Send a `textDocument/completion` request for the current cursor position.
     pub(crate) fn lsp_request_completion(&mut self) {
         if self.lsp.is_none() {
+            self.status_message =
+                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
         let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
-                self.status_message = Some("LSP: buffer has no path".into());
+                self.status_message = Some(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
+                        .into(),
+                );
                 return;
             }
         };
@@ -697,13 +707,18 @@ impl App {
     /// `<leader>ca` — request code actions at the cursor.
     pub(crate) fn lsp_code_actions(&mut self) {
         if self.lsp.is_none() {
+            self.status_message =
+                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => p.clone(),
             None => {
-                self.status_message = Some("LSP: buffer has no path".into());
+                self.status_message = Some(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
+                        .into(),
+                );
                 return;
             }
         };
@@ -1017,13 +1032,18 @@ impl App {
     /// Send a `textDocument/rename` request.
     pub(crate) fn lsp_rename(&mut self, new_name: String) {
         if self.lsp.is_none() {
+            self.status_message =
+                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => p.clone(),
             None => {
-                self.status_message = Some("LSP: buffer has no path".into());
+                self.status_message = Some(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
+                        .into(),
+                );
                 return;
             }
         };
@@ -1103,13 +1123,18 @@ impl App {
     /// `:LspFormat` — send a `textDocument/formatting` request.
     pub(crate) fn lsp_format(&mut self) {
         if self.lsp.is_none() {
+            self.status_message =
+                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => p.clone(),
             None => {
-                self.status_message = Some("LSP: buffer has no path".into());
+                self.status_message = Some(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
+                        .into(),
+                );
                 return;
             }
         };
