@@ -185,6 +185,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: body_start..body_end,
                         capture: mw.tail_capture.to_string(),
+                        metadata: Default::default(),
                     });
                 }
                 prev_end = Some(comment_range.end);
@@ -202,12 +203,14 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: cursor..label_start,
                         capture: mw.tail_capture.to_string(),
+                        metadata: Default::default(),
                     });
                 }
                 // Label span: char before marker through end of word.
                 extra.push(HighlightSpan {
                     byte_range: label_start..m.word_end,
                     capture: m.marker.label_capture.to_string(),
+                    metadata: Default::default(),
                 });
                 // Trail char after the word (e.g. ':').
                 let trail_end = if m.word_end < body_end {
@@ -219,6 +222,7 @@ impl CommentMarkerPass {
                     extra.push(HighlightSpan {
                         byte_range: m.word_end..trail_end,
                         capture: m.marker.label_capture.to_string(),
+                        metadata: Default::default(),
                     });
                 }
                 cursor = trail_end;
@@ -231,6 +235,7 @@ impl CommentMarkerPass {
                 extra.push(HighlightSpan {
                     byte_range: cursor..body_end,
                     capture: mw.tail_capture.to_string(),
+                    metadata: Default::default(),
                 });
             }
 

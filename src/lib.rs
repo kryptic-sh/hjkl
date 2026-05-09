@@ -29,8 +29,10 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
+pub mod builtins;
 pub mod comment_markers;
 pub mod highlighter;
+pub mod predicate;
 pub mod query_sanitize;
 pub mod runtime;
 pub mod theme;
@@ -38,5 +40,9 @@ pub mod theme;
 // Flat re-exports for the primary public API surface.
 pub use comment_markers::{CommentMarkerPass, MarkerWord, default_markers};
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
+pub use predicate::{
+    Directive, MatchContext, MatchMetadata, MetaValue, Predicate, PredicateArg, PredicateRegistry,
+    directive_fn, predicate_fn,
+};
 pub use theme::{DotFallbackTheme, Style, Theme};
 pub use tree_sitter::{InputEdit, Point};
