@@ -4504,3 +4504,93 @@ fn zero_with_empty_count_is_start_of_line() {
         "0 with no pending count must go to col 0"
     );
 }
+
+// ── Render-level :set option tests ──────────────────────────────────────────
+
+#[test]
+fn set_cursorline_flips_setting() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(
+        !app.active().editor.settings().cursorline,
+        "cursorline must default to false"
+    );
+    app.dispatch_ex("set cursorline");
+    assert!(
+        app.active().editor.settings().cursorline,
+        ":set cursorline must enable cursorline"
+    );
+    app.dispatch_ex("set nocursorline");
+    assert!(
+        !app.active().editor.settings().cursorline,
+        ":set nocursorline must disable cursorline"
+    );
+}
+
+#[test]
+fn set_cul_alias_works() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set cul");
+    assert!(
+        app.active().editor.settings().cursorline,
+        ":set cul must enable cursorline"
+    );
+}
+
+#[test]
+fn set_cursorcolumn_flips_setting() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(!app.active().editor.settings().cursorcolumn);
+    app.dispatch_ex("set cuc");
+    assert!(app.active().editor.settings().cursorcolumn);
+    app.dispatch_ex("set nocuc");
+    assert!(!app.active().editor.settings().cursorcolumn);
+}
+
+#[test]
+fn set_signcolumn_yes() {
+    use hjkl_engine::types::SignColumnMode;
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(
+        app.active().editor.settings().signcolumn,
+        SignColumnMode::Auto,
+        "signcolumn defaults to auto"
+    );
+    app.dispatch_ex("set signcolumn=yes");
+    assert_eq!(
+        app.active().editor.settings().signcolumn,
+        SignColumnMode::Yes
+    );
+}
+
+#[test]
+fn set_signcolumn_scl_alias() {
+    use hjkl_engine::types::SignColumnMode;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set scl=no");
+    assert_eq!(
+        app.active().editor.settings().signcolumn,
+        SignColumnMode::No
+    );
+}
+
+#[test]
+fn set_foldcolumn_stores_value() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.active().editor.settings().foldcolumn, 0);
+    app.dispatch_ex("set foldcolumn=4");
+    assert_eq!(app.active().editor.settings().foldcolumn, 4);
+    app.dispatch_ex("set fdc=0");
+    assert_eq!(app.active().editor.settings().foldcolumn, 0);
+}
+
+#[test]
+fn set_colorcolumn_stores_value() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.active().editor.settings().colorcolumn, "");
+    app.dispatch_ex("set cc=80");
+    assert_eq!(app.active().editor.settings().colorcolumn, "80");
+    app.dispatch_ex("set colorcolumn=80,120");
+    assert_eq!(app.active().editor.settings().colorcolumn, "80,120");
+    app.dispatch_ex("set cc=");
+    assert_eq!(app.active().editor.settings().colorcolumn, "");
+}

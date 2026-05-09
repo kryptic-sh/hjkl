@@ -80,6 +80,10 @@ pub struct UiTheme {
 
     // [cursor_line]
     pub cursor_line_bg: Color,
+    pub cursor_column_bg: Color,
+
+    // [colorcolumn]
+    pub colorcolumn_bg: Color,
 
     // [search]
     pub search_bg: Color,
@@ -122,6 +126,8 @@ impl UiTheme {
             mode_insert_bg: parse_hex(&raw.mode.insert_bg)?,
             mode_visual_bg: parse_hex(&raw.mode.visual_bg)?,
             cursor_line_bg: parse_hex(&raw.cursor_line.bg)?,
+            cursor_column_bg: parse_hex(&raw.cursor_line.column_bg)?,
+            colorcolumn_bg: parse_hex(&raw.colorcolumn.bg)?,
             search_bg: parse_hex(&raw.search.bg)?,
             search_fg: parse_hex(&raw.search.fg)?,
             picker_selection_bg: parse_hex(&raw.picker.selection_bg)?,
@@ -141,6 +147,7 @@ struct RawUiTheme {
     chrome: RawChrome,
     mode: RawMode,
     cursor_line: RawCursorLine,
+    colorcolumn: RawColorColumn,
     search: RawSearch,
     picker: RawPicker,
     form: RawForm,
@@ -170,6 +177,12 @@ struct RawMode {
 
 #[derive(Deserialize)]
 struct RawCursorLine {
+    bg: String,
+    column_bg: String,
+}
+
+#[derive(Deserialize)]
+struct RawColorColumn {
     bg: String,
 }
 

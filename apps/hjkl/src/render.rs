@@ -69,6 +69,51 @@ fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwid
     needed.max(numberwidth) as u16
 }
 
+/// Full gutter width including number column, sign column, and fold column.
+///
+/// - `sign_column` width: 1 cell when `mode=Yes` or (`mode=Auto` and any visible sign).
+/// - `fold_column` width: `foldcolumn` cells (0 = none, capped at 12).
+fn full_gutter_width(
+    line_count: usize,
+    number: bool,
+    relativenumber: bool,
+    numberwidth: usize,
+    signcolumn: hjkl_engine::types::SignColumnMode,
+    foldcolumn: u32,
+    has_visible_signs: bool,
+) -> u16 {
+    let num_w = gutter_width(line_count, number, relativenumber, numberwidth);
+    let sign_w: u16 = match signcolumn {
+        hjkl_engine::types::SignColumnMode::Yes => 1,
+        hjkl_engine::types::SignColumnMode::No => 0,
+        hjkl_engine::types::SignColumnMode::Auto => {
+            if has_visible_signs {
+                1
+            } else {
+                0
+            }
+        }
+    };
+    let fold_w = foldcolumn.min(12) as u16;
+    num_w + sign_w + fold_w
+}
+
+/// Parse a comma-separated colorcolumn string into a sorted `Vec<u16>` of
+/// 1-based column indices. Non-numeric or zero entries are silently ignored.
+fn parse_colorcolumn(cc: &str) -> Vec<u16> {
+    if cc.is_empty() {
+        return Vec::new();
+    }
+    let mut cols: Vec<u16> = cc
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u16>().ok())
+        .filter(|&n| n > 0)
+        .collect();
+    cols.sort_unstable();
+    cols.dedup();
+    cols
+}
+
 /// Bg painted across the cursor row in both the editor pane and the
 /// picker preview pane. Subtle blue-grey — visible enough to track the
 /// cursor at a glance without competing with the syntax foreground.
@@ -265,11 +310,34 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     let s = app.slots()[slot_idx].editor.settings();
     let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
-    let gw = gutter_width(
+    let (scl, fdc) = (s.signcolumn, s.foldcolumn);
+    let (cul, cuc) = (s.cursorline, s.cursorcolumn);
+    let colorcolumn = s.colorcolumn.clone();
+
+    // We need visible signs before computing gutter width for signcolumn=auto.
+    // Pre-compute a lightweight "has any visible sign" check using the last
+    // known viewport top (updated after gutter_width when focused).
+    let pre_vp_top = if is_focused {
+        app.slots()[slot_idx].editor.host().viewport().top_row
+    } else {
+        top_row
+    };
+    let pre_vp_bot = pre_vp_top + area.height as usize;
+    let has_visible_signs = app.slots()[slot_idx]
+        .diag_signs
+        .iter()
+        .chain(app.slots()[slot_idx].diag_signs_lsp.iter())
+        .chain(app.slots()[slot_idx].git_signs.iter())
+        .any(|s| s.row >= pre_vp_top && s.row < pre_vp_bot);
+
+    let gw = full_gutter_width(
         app.slots()[slot_idx].editor.buffer().line_count() as usize,
         nu,
         rnu,
         nuw,
+        scl,
+        fdc,
+        has_visible_signs,
     );
     let text_width = area.width.saturating_sub(gw);
 
@@ -294,9 +362,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         (false, true) => GutterNumbers::Relative { cursor_row },
         (true, true) => GutterNumbers::Hybrid { cursor_row },
     };
-    let gutter = if gw > 0 {
+    // Number-column width only (gutter widget doesn't know about sign/fold cells).
+    let num_gw = gutter_width(
+        app.slots()[slot_idx].editor.buffer().line_count() as usize,
+        nu,
+        rnu,
+        nuw,
+    );
+    let gutter = if num_gw > 0 {
         Some(Gutter {
-            width: gw,
+            width: num_gw,
             style: Style::default().fg(app.theme.ui.gutter),
             line_offset: 0,
             numbers,
@@ -369,18 +444,30 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // For non-focused windows, don't show cursor highlight or cursor position.
     let show_cursor = is_focused && !in_prompt;
 
+    // Resolve cursorline / cursorcolumn styles for this window.
+    let cursor_line_style = if show_cursor && cul {
+        cursor_line_bg(&app.theme.ui)
+    } else {
+        Style::default()
+    };
+    let cursor_column_style = if show_cursor && cuc {
+        Style::default().bg(app.theme.ui.cursor_column_bg)
+    } else {
+        Style::default()
+    };
+
+    // Colorcolumn indices (1-based) — rendered under syntax.
+    let cc_cols = parse_colorcolumn(&colorcolumn);
+    let cc_style = Style::default().bg(app.theme.ui.colorcolumn_bg);
+
     let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
         selection,
         resolver: &resolver,
-        cursor_line_bg: if show_cursor {
-            cursor_line_bg(&app.theme.ui)
-        } else {
-            Style::default()
-        },
-        cursor_column_bg: Style::default(),
+        cursor_line_bg: cursor_line_style,
+        cursor_column_bg: cursor_column_style,
         selection_bg: Style::default().bg(Color::Blue),
         cursor_style: Style::default(),
         gutter,
@@ -391,6 +478,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         search_pattern,
         non_text_style: Style::default().fg(app.theme.ui.non_text),
         diag_overlays: &diag_overlays,
+        colorcolumn_cols: &cc_cols,
+        colorcolumn_style: cc_style,
     };
     frame.render_widget(view, area);
 
@@ -425,15 +514,24 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     };
     let s = app.slots()[slot_idx].editor.settings();
     let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
-    let gw = gutter_width(
+    let vp = app.slots()[slot_idx].editor.host().viewport();
+    let vp_top = vp.top_row;
+    let vp_bot = vp_top + 100; // generous upper bound for sign detection
+    let has_visible_signs = app.slots()[slot_idx]
+        .diag_signs
+        .iter()
+        .chain(app.slots()[slot_idx].diag_signs_lsp.iter())
+        .chain(app.slots()[slot_idx].git_signs.iter())
+        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
+    let gw = full_gutter_width(
         app.slots()[slot_idx].editor.buffer().line_count() as usize,
         nu,
         rnu,
         nuw,
+        s.signcolumn,
+        s.foldcolumn,
+        has_visible_signs,
     );
-
-    let vp = app.slots()[slot_idx].editor.host().viewport();
-    let vp_top = vp.top_row;
 
     // Screen row: anchor_row relative to viewport top, +1 so popup appears below.
     let screen_row = popup.anchor_row.saturating_sub(vp_top) as u16 + 1;

@@ -26,6 +26,10 @@ visual_bg     = "#bb9af7"  # VISUAL / VISUAL LINE / VISUAL BLOCK — --accent
 
 [cursor_line]
 bg            = "#2a3240"  # subtle highlight under cursor row
+column_bg     = "#2a3240"  # subtle highlight down cursor column (cursorcolumn)
+
+[colorcolumn]
+bg            = "#1f2a30"  # muted teal-dark ruler background (colorcolumn)
 
 [search]
 bg            = "#ff9e64"  # match highlight bg
