@@ -294,6 +294,35 @@ pub struct Options {
     /// Width grows past this to fit the largest displayed number.
     /// Matches vim's `:set numberwidth` / `:set nuw`. Default `4`. Range 1..=20.
     pub numberwidth: usize,
+    /// Highlight the row where the cursor sits. Matches vim's `:set cursorline`.
+    /// Default `false`.
+    pub cursorline: bool,
+    /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
+    /// Default `false`.
+    pub cursorcolumn: bool,
+    /// Whether to reserve a 1-cell sign column for diagnostics and git signs.
+    /// Matches vim's `:set signcolumn`. Default [`SignColumnMode::Auto`].
+    pub signcolumn: SignColumnMode,
+    /// Number of cells reserved for a fold-marker gutter (0 = none, max 12).
+    /// Matches vim's `:set foldcolumn`. Default `0`.
+    pub foldcolumn: u32,
+    /// Comma-separated 1-based column indices for vertical rulers.
+    /// Empty string = no rulers. Matches vim's `:set colorcolumn`. Default `""`.
+    pub colorcolumn: String,
+}
+
+/// Sign-column display mode. Controls whether a 1-cell gutter is reserved
+/// for diagnostic and git signs. Matches vim's `:set signcolumn`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SignColumnMode {
+    /// Never reserve a sign column.
+    No,
+    /// Always reserve a sign column.
+    Yes,
+    /// Reserve only when at least one sign is visible (default).
+    #[default]
+    Auto,
 }
 
 /// Soft-wrap mode for the renderer + scroll math + `gj` / `gk`.
@@ -351,6 +380,11 @@ impl Default for Options {
             number: true,
             relativenumber: false,
             numberwidth: 4,
+            cursorline: false,
+            cursorcolumn: false,
+            signcolumn: SignColumnMode::Auto,
+            foldcolumn: 0,
+            colorcolumn: String::new(),
         }
     }
 }
@@ -488,6 +522,45 @@ impl Options {
                 };
                 Ok(())
             }
+            "cursorline" | "cul" => set_bool!(cursorline),
+            "cursorcolumn" | "cuc" => set_bool!(cursorcolumn),
+            "signcolumn" | "scl" => {
+                self.signcolumn = match val {
+                    OptionValue::String(ref s) => match s.as_str() {
+                        "yes" => SignColumnMode::Yes,
+                        "no" => SignColumnMode::No,
+                        "auto" => SignColumnMode::Auto,
+                        other => {
+                            return Err(EngineError::Ex(format!(
+                                "option `{name}` must be `yes`, `no`, or `auto`, got {other:?}"
+                            )));
+                        }
+                    },
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects string (yes/no/auto), got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
+            "foldcolumn" | "fdc" => {
+                self.foldcolumn = match val {
+                    OptionValue::Int(n) if (0..=12).contains(&n) => n as u32,
+                    OptionValue::Int(n) => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` must be in range 0..=12, got {n}"
+                        )));
+                    }
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects int (0-12), got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
+            "colorcolumn" | "cc" => set_string!(colorcolumn),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -517,6 +590,18 @@ impl Options {
             "number" | "nu" => OptionValue::Bool(self.number),
             "relativenumber" | "rnu" => OptionValue::Bool(self.relativenumber),
             "numberwidth" | "nuw" => OptionValue::Int(self.numberwidth as i64),
+            "cursorline" | "cul" => OptionValue::Bool(self.cursorline),
+            "cursorcolumn" | "cuc" => OptionValue::Bool(self.cursorcolumn),
+            "signcolumn" | "scl" => OptionValue::String(
+                match self.signcolumn {
+                    SignColumnMode::Yes => "yes",
+                    SignColumnMode::No => "no",
+                    SignColumnMode::Auto => "auto",
+                }
+                .to_string(),
+            ),
+            "foldcolumn" | "fdc" => OptionValue::Int(self.foldcolumn as i64),
+            "colorcolumn" | "cc" => OptionValue::String(self.colorcolumn.clone()),
             _ => return None,
         })
     }
@@ -1388,5 +1473,128 @@ mod tests {
         assert_eq!(e.to_string(), "buffer is read-only");
         let e = EngineError::OutOfBounds(Pos::new(3, 7));
         assert!(e.to_string().contains("out of bounds"));
+    }
+
+    // ── New render-level options ─────────────────────────────────────────────
+
+    #[test]
+    fn options_cursorline_roundtrip() {
+        let mut o = Options::default();
+        assert!(!o.cursorline, "cursorline defaults to false");
+        o.set_by_name("cursorline", OptionValue::Bool(true))
+            .unwrap();
+        assert!(matches!(
+            o.get_by_name("cul"),
+            Some(OptionValue::Bool(true))
+        ));
+        o.set_by_name("cul", OptionValue::Bool(false)).unwrap();
+        assert!(matches!(
+            o.get_by_name("cursorline"),
+            Some(OptionValue::Bool(false))
+        ));
+    }
+
+    #[test]
+    fn options_cursorcolumn_roundtrip() {
+        let mut o = Options::default();
+        assert!(!o.cursorcolumn, "cursorcolumn defaults to false");
+        o.set_by_name("cuc", OptionValue::Bool(true)).unwrap();
+        assert!(matches!(
+            o.get_by_name("cursorcolumn"),
+            Some(OptionValue::Bool(true))
+        ));
+    }
+
+    #[test]
+    fn options_signcolumn_roundtrip() {
+        let mut o = Options::default();
+        assert_eq!(
+            o.signcolumn,
+            SignColumnMode::Auto,
+            "signcolumn defaults to auto"
+        );
+        o.set_by_name("signcolumn", OptionValue::String("yes".into()))
+            .unwrap();
+        assert_eq!(o.signcolumn, SignColumnMode::Yes);
+        assert_eq!(
+            o.get_by_name("scl"),
+            Some(OptionValue::String("yes".into()))
+        );
+        o.set_by_name("scl", OptionValue::String("no".into()))
+            .unwrap();
+        assert_eq!(o.signcolumn, SignColumnMode::No);
+        o.set_by_name("scl", OptionValue::String("auto".into()))
+            .unwrap();
+        assert_eq!(o.signcolumn, SignColumnMode::Auto);
+    }
+
+    #[test]
+    fn options_signcolumn_rejects_invalid() {
+        let mut o = Options::default();
+        assert!(matches!(
+            o.set_by_name("signcolumn", OptionValue::String("maybe".into())),
+            Err(EngineError::Ex(_))
+        ));
+        // Type mismatch
+        assert!(matches!(
+            o.set_by_name("signcolumn", OptionValue::Bool(true)),
+            Err(EngineError::Ex(_))
+        ));
+    }
+
+    #[test]
+    fn options_foldcolumn_roundtrip() {
+        let mut o = Options::default();
+        assert_eq!(o.foldcolumn, 0, "foldcolumn defaults to 0");
+        o.set_by_name("fdc", OptionValue::Int(3)).unwrap();
+        assert_eq!(o.foldcolumn, 3);
+        assert_eq!(o.get_by_name("foldcolumn"), Some(OptionValue::Int(3)));
+    }
+
+    #[test]
+    fn options_foldcolumn_rejects_out_of_range() {
+        let mut o = Options::default();
+        assert!(matches!(
+            o.set_by_name("foldcolumn", OptionValue::Int(13)),
+            Err(EngineError::Ex(_))
+        ));
+        assert!(matches!(
+            o.set_by_name("foldcolumn", OptionValue::Int(-1)),
+            Err(EngineError::Ex(_))
+        ));
+    }
+
+    #[test]
+    fn options_colorcolumn_roundtrip() {
+        let mut o = Options::default();
+        assert_eq!(o.colorcolumn, "", "colorcolumn defaults to empty string");
+        o.set_by_name("cc", OptionValue::String("80,120".into()))
+            .unwrap();
+        assert_eq!(
+            o.get_by_name("colorcolumn"),
+            Some(OptionValue::String("80,120".into()))
+        );
+        o.set_by_name("colorcolumn", OptionValue::String(String::new()))
+            .unwrap();
+        assert_eq!(
+            o.get_by_name("cc"),
+            Some(OptionValue::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn options_cursorline_alias_cul() {
+        let mut o = Options::default();
+        // `:set cul` — bare name turns bool on
+        o.set_by_name("cul", OptionValue::Bool(true)).unwrap();
+        assert!(o.cursorline);
+        // `:set nocul` → Bool(false)
+        o.set_by_name("cul", OptionValue::Bool(false)).unwrap();
+        assert!(!o.cursorline);
+    }
+
+    #[test]
+    fn sign_column_mode_default_is_auto() {
+        assert_eq!(SignColumnMode::default(), SignColumnMode::Auto);
     }
 }

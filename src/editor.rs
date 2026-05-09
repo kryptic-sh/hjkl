@@ -791,6 +791,21 @@ pub struct Settings {
     /// Matches vim's `:set numberwidth` / `:set nuw`. Default `4`.
     /// Range 1..=20.
     pub numberwidth: usize,
+    /// Highlight the row where the cursor sits. Matches vim's `:set cursorline`.
+    /// Default `false`.
+    pub cursorline: bool,
+    /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
+    /// Default `false`.
+    pub cursorcolumn: bool,
+    /// Sign-column display mode. Matches vim's `:set signcolumn`.
+    /// Default [`crate::types::SignColumnMode::Auto`].
+    pub signcolumn: crate::types::SignColumnMode,
+    /// Number of cells reserved for a fold-marker gutter.
+    /// Matches vim's `:set foldcolumn`. Default `0`.
+    pub foldcolumn: u32,
+    /// Comma-separated 1-based column indices for vertical rulers.
+    /// Matches vim's `:set colorcolumn`. Default `""`.
+    pub colorcolumn: String,
 }
 
 impl Default for Settings {
@@ -815,6 +830,11 @@ impl Default for Settings {
             number: true,
             relativenumber: false,
             numberwidth: 4,
+            cursorline: false,
+            cursorcolumn: false,
+            signcolumn: crate::types::SignColumnMode::Auto,
+            foldcolumn: 0,
+            colorcolumn: String::new(),
         }
     }
 }
@@ -851,6 +871,11 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         number: o.number,
         relativenumber: o.relativenumber,
         numberwidth: o.numberwidth,
+        cursorline: o.cursorline,
+        cursorcolumn: o.cursorcolumn,
+        signcolumn: o.signcolumn,
+        foldcolumn: o.foldcolumn,
+        colorcolumn: o.colorcolumn.clone(),
     }
 }
 
@@ -2116,6 +2141,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.undo_break_on_motion = opts.undo_break_on_motion;
         self.set_iskeyword(opts.iskeyword.clone());
         self.settings.timeout_len = opts.timeout_len;
+        self.settings.number = opts.number;
+        self.settings.relativenumber = opts.relativenumber;
+        self.settings.numberwidth = opts.numberwidth;
+        self.settings.cursorline = opts.cursorline;
+        self.settings.cursorcolumn = opts.cursorcolumn;
+        self.settings.signcolumn = opts.signcolumn;
+        self.settings.foldcolumn = opts.foldcolumn;
+        self.settings.colorcolumn = opts.colorcolumn.clone();
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
