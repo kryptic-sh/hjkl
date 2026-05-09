@@ -6,6 +6,55 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-09
+
+### Added
+
+- Predicate/directive dispatcher giving helix + nvim-treesitter parity over
+  stock tree-sitter without forking the parser. New module `predicate` exposes
+  the `MatchContext`, `Predicate`, `Directive`, `MatchMetadata`, `MetaValue`,
+  `PredicateArg`, and `PredicateRegistry` types, plus `predicate_fn` /
+  `directive_fn` closure sugar so consumers register handlers without naming a
+  struct.
+- New module `builtins` ships parser-agnostic implementations of `contains?`,
+  `has-ancestor?`, `has-parent?` (predicates) and `set!` (literal +
+  capture-target forms), `offset!`, `trim!`, `gsub!` (directives). Builtins are
+  pre-registered by `PredicateRegistry::with_builtins`.
+- `Highlighter::with_registry(grammar, registry)` constructor for consumers that
+  want to extend the default registry. `Highlighter::new` is unchanged and uses
+  `with_builtins` internally.
+- `HighlightSpan` gains a `metadata: HashMap<String, MetaValue>` field carrying
+  per-capture metadata produced by directives. The pre-existing `byte_range` and
+  `capture` fields are unchanged.
+- `query_sanitize::extract_capture_set_directives` — pre-extracts
+  `(#set! @cap key val)` forms (which stock tree-sitter rejects at compile) into
+  `Vec<CaptureSetDirective>` keyed by pattern index, returning the rewritten
+  compilable query alongside the extracted directives. The highlighter
+  re-applies them at match-iteration time so the directive semantics are
+  preserved instead of dropped. Resolves
+  [hjkl-bonsai#4](https://github.com/kryptic-sh/hjkl-bonsai/issues/4).
+
+### Changed
+
+- `sanitize_highlights` is now a fallback path: if pre-extraction still leaves
+  an uncompilable query, the legacy strip-the-form behavior runs. The function
+  signature is unchanged.
+- Unknown predicates encountered during match iteration are no longer fatal.
+  They are logged once per name via `tracing::warn!` (deduped through a
+  `OnceLock<Mutex<HashSet>>`) and the match is still emitted. Mirrors helix and
+  nvim-treesitter's graceful-degradation behavior.
+
+### Fixed
+
+- Paren-balanced excision of `(#set! @capture ...)` forms in
+  `query_sanitize::sanitize_highlights`. The previous line-based stripper
+  removed the entire line, which silently ate a closing `)` belonging to the
+  enclosing pattern when the directive's `)` shared a line with the outer
+  group's `)` — most visibly in the resolved nvim-treesitter html highlights.
+  The new scanner tracks paren depth and string literals, excising only the
+  `(#set! @cap ...)` subexpression and leaving surrounding parens intact.
+  Resolves [hjkl-bonsai#3](https://github.com/kryptic-sh/hjkl-bonsai/issues/3).
+
 ## [0.5.4] - 2026-05-06
 
 ### Fixed
