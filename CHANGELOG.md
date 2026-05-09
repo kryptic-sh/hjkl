@@ -8,6 +8,53 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-05-10
+
+### Added
+
+- **`:Anvil install / uninstall / update / update <name>`** ex commands and the
+  `:Anvil` picker for installing language servers, formatters, and linters from
+  the bundled `anvil.toml` registry. `<XDG_DATA_HOME>/anvil/bin` is prepended to
+  `$PATH` at startup; LSP servers resolve from anvil-installed binaries with no
+  system-package install required. Closes #61.
+- **`:LspInfo` anvil state** — output now includes per-server install state
+  (`installed @ vX.Y.Z` / `not installed` / `not in registry`).
+- **`:set` render options** — parser support for `cursorline` / `cul`,
+  `cursorcolumn` / `cuc`, `signcolumn` / `scl` (yes / no / auto), `foldcolumn` /
+  `fdc` (0–12), `colorcolumn` / `cc` (comma-separated columns). Closes #34.
+- **which-key popup on idle** — pressing `<leader>` / `g` / `]` / `[` / `<C-w>`
+  and pausing for 500 ms (configurable via `[which_key] delay_ms`) shows
+  reachable bindings in a floating window. Closes #53.
+- **App-level count prefix** for `[N]gt`, `[N]gT`, `[N]<C-w>+/-/</>`. Closes
+  #46.
+- **New crates** extracted from the monorepo and auto-published from their own
+  repositories:
+  - `hjkl-xdg 0.1.0` — XDG Base Directory resolver shared by bonsai, config, and
+    anvil. Closes #19.
+  - `hjkl-keymap 0.1.0` — chord parser + mode-scoped trie + `KeyResolve` enum,
+    used by `apps/hjkl` for Normal-mode chord dispatch. Closes #11.
+  - `hjkl-anvil 0.1.1` — Mason-style installer (Github / Cargo / Npm / Pip /
+    GoInstall pipelines, atomic install + symlink, SHA-256 verify, async install
+    pool with per-key dedupe). Closes #61.
+
+### Fixed
+
+- **HTML highlighting** — bonsai's `(#set! @cap …)` sanitizer now uses
+  paren-balanced excision + pre-extraction so the html grammar resolves fully.
+  No more plain-text fallback on `.html` files. Closes #56.
+- **Windows CI test paths** — `hjkl-xdg` submodule updated to fix path handling
+  on `x86_64-pc-windows-msvc`.
+
+### Changed
+
+- Submodule cycle bumps: `hjkl-bonsai 0.6.1`, `hjkl-engine 0.5.1`,
+  `hjkl-editor 0.4.4`, `hjkl-buffer 0.6.0`, `hjkl-picker 0.5.1`,
+  `hjkl-config 0.2.1`, `hjkl-form 0.3.5`, `hjkl-ratatui 0.3.5`.
+- `hjkl-keymap` now backs Normal-mode chord dispatch in `apps/hjkl`; the legacy
+  `pending_*` prefix fields remain `#[allow(dead_code)]` pending follow-up #58.
+- `hjkl-xdg`, `hjkl-keymap`, and `hjkl-anvil` extracted to standalone submodule
+  repos and wired back via `[patch.crates-io]`.
+
 ## [0.13.0] - 2026-05-09
 
 ### Added
