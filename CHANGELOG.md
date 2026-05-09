@@ -1,0 +1,56 @@
+# Changelog
+
+All notable changes to this project will be documented in this file. The format
+is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This
+project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-05-10
+
+### Added
+
+#### Key types
+
+- `KeyEvent` — backend-agnostic key press: `code: KeyCode` + `modifiers: KeyModifiers`.
+- `KeyCode` — logical key variants: `Char(char)`, `Enter`, `Esc`, `Tab`,
+  `Backspace`, `Delete`, `Insert`, `Up`, `Down`, `Left`, `Right`, `Home`,
+  `End`, `PageUp`, `PageDown`, `F(u8)` (F1–F12).
+- `KeyModifiers` — `bitflags`-backed modifier set: `NONE`, `SHIFT`, `CTRL`,
+  `ALT`; combinable with `|`.
+- `KeyEvent::char(c)` and `KeyEvent::ctrl(c)` convenience constructors.
+
+#### Chord parser / serializer
+
+- `Chord` — ordered sequence of `KeyEvent`s forming a multi-key binding.
+- `Chord::parse(s, leader)` — parses vim-style notation:
+  - `<leader>` expands to the supplied leader char.
+  - Modifier combos: `<C-x>`, `<S-x>`, `<A-x>`, `<C-S-Tab>`, `<C-A-x>`,
+    `<S-A-x>` (M- alias accepted for A-).
+  - Named specials: `<Esc>`, `<CR>`, `<Tab>`, `<BS>`, `<Del>`, `<Insert>`,
+    `<Up>`, `<Down>`, `<Left>`, `<Right>`, `<Home>`, `<End>`, `<PageUp>`,
+    `<PageDown>`, `<F1>`–`<F12>`, `<Space>`, `<lt>`.
+  - Bare characters map to `Char(c)` with no modifiers.
+- `Chord::to_notation(leader)` — round-trips back to vim notation.
+- `ChordParseError` — `UnclosedAngle`, `UnknownSpecial`, `BadModifierTarget`
+  variants.
+
+#### Keymap dispatch
+
+- `Mode` — `Normal`, `Insert`, `Visual`, `OpPending`, `CommandLine`.
+- `Keymap<A>` — modal keymap storing per-mode tries; generic over action type.
+  - `Keymap::new(leader)` — construct with leader char.
+  - `set_leader`, `set_timeout`, `leader`, `timeout_duration` — configuration.
+  - `add(mode, chord_str, action, desc)` — parse + register a binding.
+  - `add_chord(mode, chord, binding)` — register a pre-parsed binding.
+  - `remove(mode, chord_str)` — unregister a binding; returns whether removed.
+  - `feed(mode, ev, now) -> KeyResolve<A>` — stateful per-key dispatch with
+    per-mode pending buffer.
+  - `timeout_resolve(mode) -> KeyResolve<A>` — force-resolve on timeout expiry.
+  - `pending(mode) -> &[KeyEvent]` — snapshot of in-progress chord buffer.
+  - `reset(mode)` — clear pending buffer (e.g. on mode switch).
+  - `children(mode, prefix) -> Vec<(KeyEvent, Binding<A>)>` — which-key
+    enumeration of completions reachable from a prefix chord.
+- `KeyResolve<A>` — `Pending`, `Match(Binding<A>)`, `Ambiguous`, `Unbound(Vec<KeyEvent>)`.
+- `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
+- `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
