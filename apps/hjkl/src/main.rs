@@ -8,6 +8,8 @@ mod embed;
 mod git;
 mod headless;
 mod host;
+mod keymap_actions;
+mod keymap_translate;
 mod lang;
 mod nvim_api;
 mod picker;

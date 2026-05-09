@@ -5,11 +5,14 @@ use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
 use hjkl_form::TextFieldEditor;
+use hjkl_keymap::Keymap;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
+
+use crate::keymap_actions::AppAction;
 
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
@@ -303,6 +306,8 @@ pub struct App {
     /// Counter for the next fresh `WindowId`.
     next_window_id: window::WindowId,
     /// `true` while waiting for the second key of a `Ctrl-w` chord.
+    /// Retained for compatibility with existing tests; superseded by `app_keymap`.
+    #[allow(dead_code)]
     pub pending_window_motion: bool,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
@@ -336,10 +341,14 @@ pub struct App {
     pub pending_git: bool,
     /// Set to `'c'` after `<leader>c` waiting for the next key (e.g. `a` →
     /// code actions). `None` when no LSP leader prefix is pending.
+    /// Retained for compatibility; superseded by `app_keymap`.
+    #[allow(dead_code)]
     pub pending_lsp: Option<char>,
     /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
     /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
     /// once the motion is resolved or forwarded to the engine.
+    /// Retained for compatibility with existing tests; superseded by `app_keymap`.
+    #[allow(dead_code)]
     pub pending_buffer_motion: Option<char>,
     /// Buffered digit string for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
@@ -426,6 +435,10 @@ pub struct App {
     /// When false, wheel events fall through to the terminal as
     /// synthesised arrow keys.
     pub mouse_enabled: bool,
+    /// Application-level chord dispatch. Holds Normal-mode bindings for all
+    /// leader / g / ] / [ / <C-w> sequences. Replaces the per-prefix state
+    /// machines (pending_leader, pending_git, etc.) that are now removed.
+    pub(crate) app_keymap: Keymap<AppAction>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -552,6 +565,84 @@ pub(super) fn build_slot(
     };
     slot.snapshot_saved();
     Ok(slot)
+}
+
+/// Build the Normal-mode application keymap for the given leader character.
+///
+/// Every app-handled chord binding is registered here. The resulting
+/// `Keymap<AppAction>` is stored on [`App`] and consulted by the event loop
+/// before forwarding keys to the editor engine.
+fn build_app_keymap(leader: char) -> Keymap<AppAction> {
+    use hjkl_keymap::Mode;
+    let mut km = Keymap::new(leader);
+    // Timeout matches the which-key delay default; overridden by `with_config`.
+    km.set_timeout(Duration::from_millis(500));
+
+    let bindings: &[(&str, AppAction, &str)] = &[
+        // ── File / buffer / grep pickers ──────────────────────────────────
+        ("<leader><leader>", AppAction::OpenFilePicker, "file picker"),
+        ("<leader>f", AppAction::OpenFilePicker, "file picker"),
+        ("<leader>b", AppAction::OpenBufferPicker, "buffer picker"),
+        ("<leader>/", AppAction::OpenGrepPicker, "grep picker"),
+        // ── Git sub-commands ───────────────────────────────────────────────
+        ("<leader>gs", AppAction::GitStatus, "git status"),
+        ("<leader>gl", AppAction::GitLog, "git log"),
+        ("<leader>gb", AppAction::GitBranch, "git branches"),
+        ("<leader>gB", AppAction::GitFileHistory, "git file history"),
+        ("<leader>gS", AppAction::GitStashes, "git stashes"),
+        ("<leader>gt", AppAction::GitTags, "git tags"),
+        ("<leader>gr", AppAction::GitRemotes, "git remotes"),
+        // ── LSP / diagnostics ─────────────────────────────────────────────
+        ("<leader>d", AppAction::ShowDiagAtCursor, "show diagnostic"),
+        ("<leader>ca", AppAction::LspCodeActions, "code actions"),
+        ("<leader>rn", AppAction::LspRename, "rename symbol"),
+        // ── g-prefix ──────────────────────────────────────────────────────
+        ("gt", AppAction::Tabnext, "next tab"),
+        ("gT", AppAction::Tabprev, "prev tab"),
+        ("gd", AppAction::LspGotoDef, "goto definition"),
+        ("gD", AppAction::LspGotoDecl, "goto declaration"),
+        ("gr", AppAction::LspGotoRef, "goto references"),
+        ("gi", AppAction::LspGotoImpl, "goto implementation"),
+        ("gy", AppAction::LspGotoTypeDef, "goto type def"),
+        // ── ] / [ bracket motions ─────────────────────────────────────────
+        ("]b", AppAction::BufferNext, "next buffer"),
+        ("[b", AppAction::BufferPrev, "prev buffer"),
+        ("]d", AppAction::DiagNext, "next diagnostic"),
+        ("[d", AppAction::DiagPrev, "prev diagnostic"),
+        ("]D", AppAction::DiagNextError, "next error"),
+        ("[D", AppAction::DiagPrevError, "prev error"),
+        // ── <C-w> window motions ──────────────────────────────────────────
+        ("<C-w>h", AppAction::FocusLeft, "focus left"),
+        ("<C-w>j", AppAction::FocusBelow, "focus down"),
+        ("<C-w>k", AppAction::FocusAbove, "focus up"),
+        ("<C-w>l", AppAction::FocusRight, "focus right"),
+        ("<C-w>w", AppAction::FocusNext, "focus next"),
+        ("<C-w>W", AppAction::FocusPrev, "focus prev"),
+        ("<C-w>c", AppAction::CloseFocusedWindow, "close window"),
+        ("<C-w>q", AppAction::QuitOrClose, "quit/close"),
+        ("<C-w>o", AppAction::OnlyFocusedWindow, "close others"),
+        ("<C-w>x", AppAction::SwapWithSibling, "swap with sibling"),
+        ("<C-w>r", AppAction::SwapWithSibling, "swap with sibling"),
+        ("<C-w>R", AppAction::SwapWithSibling, "swap with sibling"),
+        ("<C-w>T", AppAction::MoveWindowToNewTab, "move to new tab"),
+        ("<C-w>n", AppAction::NewSplit, "new split"),
+        ("<C-w>+", AppAction::ResizeHeight(1), "taller"),
+        ("<C-w>-", AppAction::ResizeHeight(-1), "shorter"),
+        ("<C-w>>", AppAction::ResizeWidth(1), "wider"),
+        ("<C-w><", AppAction::ResizeWidth(-1), "narrower"),
+        ("<C-w>=", AppAction::EqualizeLayout, "equalize"),
+        ("<C-w>_", AppAction::MaximizeHeight, "maximize height"),
+        ("<C-w>|", AppAction::MaximizeWidth, "maximize width"),
+    ];
+
+    for (chord_str, action, desc) in bindings {
+        if let Err(e) = km.add(Mode::Normal, chord_str, action.clone(), desc) {
+            // Should never fail with our static strings, but log rather than panic.
+            eprintln!("hjkl: keymap.add({chord_str:?}) failed: {e}");
+        }
+    }
+
+    km
 }
 
 impl App {
@@ -1004,6 +1095,7 @@ impl App {
             last_rect: None,
         };
 
+        let default_leader = crate::config::Config::default().editor.leader;
         Ok(Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
@@ -1060,6 +1152,7 @@ impl App {
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
+            app_keymap: build_app_keymap(default_leader),
         })
     }
 
@@ -1106,6 +1199,11 @@ impl App {
         self.mouse_enabled = config.editor.mouse;
         self.which_key_enabled = config.which_key.enabled;
         self.which_key_delay = std::time::Duration::from_millis(config.which_key.delay_ms);
+        // Rebuild the app keymap with the configured leader and timeout.
+        let leader = config.editor.leader;
+        let timeout = Duration::from_millis(config.which_key.delay_ms);
+        self.app_keymap = build_app_keymap(leader);
+        self.app_keymap.set_timeout(timeout);
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();
@@ -1183,18 +1281,149 @@ impl App {
 
     /// Return the `Prefix` variant matching the currently-pending prefix, or
     /// `None` when no prefix is active.
+    ///
+    /// Reads the `app_keymap`'s pending Normal-mode buffer to determine which
+    /// which-key category is currently active.
     pub fn active_which_key_prefix(&self) -> Option<crate::which_key::Prefix> {
-        if self.pending_leader || self.pending_git || self.pending_lsp.is_some() {
-            return Some(crate::which_key::Prefix::Leader);
+        use hjkl_keymap::{KeyCode, KeyEvent, KeyModifiers, Mode};
+        let pending = self.app_keymap.pending(Mode::Normal);
+        if pending.is_empty() {
+            return None;
         }
-        if self.pending_window_motion {
+        // Classify based on first key in the pending buffer.
+        let first = pending[0];
+        let leader = self.config.editor.leader;
+        // <C-w> prefix.
+        if first == (KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL)) {
             return Some(crate::which_key::Prefix::CtrlW);
         }
-        match self.pending_buffer_motion {
-            Some('g') => Some(crate::which_key::Prefix::G),
-            Some(']') => Some(crate::which_key::Prefix::BracketRight),
-            Some('[') => Some(crate::which_key::Prefix::BracketLeft),
-            _ => None,
+        // Leader prefix: the leader char with no modifiers.
+        if first == (KeyEvent::new(KeyCode::Char(leader), KeyModifiers::NONE)) {
+            return Some(crate::which_key::Prefix::Leader);
+        }
+        // g prefix.
+        if first == (KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)) {
+            return Some(crate::which_key::Prefix::G);
+        }
+        // ] prefix.
+        if first == (KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)) {
+            return Some(crate::which_key::Prefix::BracketRight);
+        }
+        // [ prefix.
+        if first == (KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)) {
+            return Some(crate::which_key::Prefix::BracketLeft);
+        }
+        None
+    }
+
+    /// Dispatch an [`AppAction`] with an optional repeat count.
+    ///
+    /// This is the single authoritative dispatch site for all chord-triggered
+    /// app actions. Count is applied where meaningful (resize, tab navigation).
+    pub fn dispatch_action(&mut self, action: AppAction, count: u32) {
+        let count = count.max(1) as usize;
+        match action {
+            AppAction::OpenFilePicker => self.open_picker(),
+            AppAction::OpenBufferPicker => self.open_buffer_picker(),
+            AppAction::OpenGrepPicker => self.open_grep_picker(None),
+            AppAction::GitStatus => self.open_git_status_picker(),
+            AppAction::GitLog => self.open_git_log_picker(),
+            AppAction::GitBranch => self.open_git_branch_picker(),
+            AppAction::GitFileHistory => self.open_git_file_history_picker(),
+            AppAction::GitStashes => self.open_git_stash_picker(),
+            AppAction::GitTags => self.open_git_tags_picker(),
+            AppAction::GitRemotes => self.open_git_remotes_picker(),
+            AppAction::ShowDiagAtCursor => self.show_diag_at_cursor(),
+            AppAction::LspCodeActions => self.lsp_code_actions(),
+            AppAction::LspRename => {
+                // Phase 5 MVP: prompt user to use :Rename <newname>.
+                self.status_message = Some("use :Rename <newname> to rename".into());
+            }
+            AppAction::LspGotoDef => self.lsp_goto_definition(),
+            AppAction::LspGotoDecl => self.lsp_goto_declaration(),
+            AppAction::LspGotoRef => self.lsp_goto_references(),
+            AppAction::LspGotoImpl => self.lsp_goto_implementation(),
+            AppAction::LspGotoTypeDef => self.lsp_goto_type_definition(),
+            AppAction::Tabnext => {
+                for _ in 0..count {
+                    self.dispatch_ex("tabnext");
+                }
+            }
+            AppAction::Tabprev => {
+                for _ in 0..count {
+                    self.dispatch_ex("tabprev");
+                }
+            }
+            AppAction::BufferNext => self.buffer_next(),
+            AppAction::BufferPrev => self.buffer_prev(),
+            AppAction::DiagNext => self.dispatch_ex("lnext"),
+            AppAction::DiagPrev => self.dispatch_ex("lprev"),
+            AppAction::DiagNextError => self.lnext_severity(Some(DiagSeverity::Error)),
+            AppAction::DiagPrevError => self.lprev_severity(Some(DiagSeverity::Error)),
+            AppAction::FocusLeft => self.focus_left(),
+            AppAction::FocusBelow => self.focus_below(),
+            AppAction::FocusAbove => self.focus_above(),
+            AppAction::FocusRight => self.focus_right(),
+            AppAction::FocusNext => self.focus_next(),
+            AppAction::FocusPrev => self.focus_previous(),
+            AppAction::CloseFocusedWindow => self.close_focused_window(),
+            AppAction::OnlyFocusedWindow => self.only_focused_window(),
+            AppAction::SwapWithSibling => self.swap_with_sibling(),
+            AppAction::MoveWindowToNewTab => match self.move_window_to_new_tab() {
+                Ok(()) => self.status_message = Some("moved window to new tab".into()),
+                Err(msg) => self.status_message = Some(msg.to_string()),
+            },
+            AppAction::NewSplit => self.dispatch_ex("new"),
+            AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
+            AppAction::ResizeWidth(delta) => self.resize_width(delta * count as i32),
+            AppAction::EqualizeLayout => self.equalize_layout(),
+            AppAction::MaximizeHeight => self.maximize_height(),
+            AppAction::MaximizeWidth => self.maximize_width(),
+            AppAction::QuitOrClose => {
+                if self.layout().leaves().len() > 1 {
+                    self.close_focused_window();
+                } else {
+                    self.exit_requested = true;
+                }
+            }
+        }
+    }
+
+    /// Feed a crossterm key event through the app-level chord keymap and
+    /// dispatch any resolved action. Returns `true` if the key was consumed
+    /// (either resolved or still pending), `false` if the keymap returned
+    /// `Unbound` and the caller should replay the events to the engine.
+    ///
+    /// Replayed events are stored in `out_replay` (never `None`-cleared).
+    pub fn dispatch_keymap(
+        &mut self,
+        km_ev: hjkl_keymap::KeyEvent,
+        count: u32,
+        out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
+    ) -> bool {
+        use hjkl_keymap::{KeyResolve, Mode};
+        let now = std::time::Instant::now();
+        match self.app_keymap.feed(Mode::Normal, km_ev, now) {
+            KeyResolve::Pending => {
+                self.note_prefix_set();
+                true // consumed, waiting
+            }
+            KeyResolve::Ambiguous => {
+                // Ambiguous: treat as Pending — timeout path in event_loop
+                // will call app_keymap.timeout_resolve.
+                self.note_prefix_set();
+                true
+            }
+            KeyResolve::Match(binding) => {
+                self.clear_prefix_state();
+                self.dispatch_action(binding.action, count);
+                true // consumed
+            }
+            KeyResolve::Unbound(events) => {
+                self.clear_prefix_state();
+                out_replay.extend(events);
+                false // not consumed — caller replays
+            }
         }
     }
 }

@@ -17,6 +17,7 @@ name = "hjkl"
 path = "src/main.rs"
 
 [dependencies]
+hjkl-keymap = "0.1"
 hjkl-lsp = "0.1"
 crossbeam-channel = "0.5"
 hjkl-buffer = "0.5"

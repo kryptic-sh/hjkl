@@ -5,12 +5,63 @@ use crossterm::{
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
+use hjkl_keymap::{KeyCode as KmKeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
 
 use super::{App, STATUS_LINE_HEIGHT, SearchDir, prompt_cursor_shape};
 use crate::render;
+
+/// Translate a crossterm `KeyEvent` to a `hjkl_keymap::KeyEvent`.
+/// Returns `None` for release events or unsupported key codes.
+fn to_km_event(key: KeyEvent) -> Option<KmKeyEvent> {
+    crate::keymap_translate::from_crossterm(&key)
+}
+
+/// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
+/// `KeyEvent`s. Each keymap event is converted back to a crossterm event
+/// and forwarded to `editor.handle_key`.
+fn replay_to_engine(app: &mut App, events: &[KmKeyEvent]) {
+    for km_ev in events {
+        let ct_ev = km_to_crossterm(km_ev);
+        app.active_mut().editor.handle_key(ct_ev);
+    }
+}
+
+/// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
+/// for replaying unbound sequences to the engine.
+fn km_to_crossterm(ev: &KmKeyEvent) -> KeyEvent {
+    let code = match ev.code {
+        KmKeyCode::Char(c) => KeyCode::Char(c),
+        KmKeyCode::Enter => KeyCode::Enter,
+        KmKeyCode::Esc => KeyCode::Esc,
+        KmKeyCode::Tab => KeyCode::Tab,
+        KmKeyCode::Backspace => KeyCode::Backspace,
+        KmKeyCode::Delete => KeyCode::Delete,
+        KmKeyCode::Insert => KeyCode::Insert,
+        KmKeyCode::Up => KeyCode::Up,
+        KmKeyCode::Down => KeyCode::Down,
+        KmKeyCode::Left => KeyCode::Left,
+        KmKeyCode::Right => KeyCode::Right,
+        KmKeyCode::Home => KeyCode::Home,
+        KmKeyCode::End => KeyCode::End,
+        KmKeyCode::PageUp => KeyCode::PageUp,
+        KmKeyCode::PageDown => KeyCode::PageDown,
+        KmKeyCode::F(n) => KeyCode::F(n),
+    };
+    let mut mods = KeyModifiers::NONE;
+    if ev.modifiers.contains(KmKeyMods::CTRL) {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if ev.modifiers.contains(KmKeyMods::SHIFT) {
+        mods |= KeyModifiers::SHIFT;
+    }
+    if ev.modifiers.contains(KmKeyMods::ALT) {
+        mods |= KeyModifiers::ALT;
+    }
+    KeyEvent::new(code, mods)
+}
 
 impl App {
     /// Main event loop. Draws every frame, routes key events through
@@ -179,236 +230,34 @@ impl App {
                         continue;
                     }
 
-                    // ── LSP chord resolution (<leader>c{a} / <leader>r{n}) ───
-                    if let Some(lsp_prefix) = self.pending_lsp.take() {
-                        if self.active().editor.vim_mode() == VimMode::Normal {
-                            self.pending_leader = false;
-                            self.clear_prefix_state();
-                            match (lsp_prefix, key.code) {
-                                ('c', KeyCode::Char('a')) => {
-                                    self.lsp_code_actions();
-                                }
-                                ('r', KeyCode::Char('n')) => {
-                                    // Phase 5 MVP: prompt user to use :Rename <newname>.
-                                    // TODO: open inline prompt pre-filled with word-at-cursor.
-                                    self.status_message =
-                                        Some("use :Rename <newname> to rename".into());
-                                }
-                                _ => {}
-                            }
-                        }
-                        continue;
-                    }
-
-                    // ── Git sub-command resolution ───────────────────────────
-                    if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
-                        self.pending_git = false;
-                        self.pending_leader = false;
-                        self.clear_prefix_state();
-                        match key.code {
-                            KeyCode::Char('s') if key.modifiers == KeyModifiers::NONE => {
-                                self.open_git_status_picker();
-                            }
-                            KeyCode::Char('l') if key.modifiers == KeyModifiers::NONE => {
-                                self.open_git_log_picker();
-                            }
-                            KeyCode::Char('b') if key.modifiers == KeyModifiers::NONE => {
-                                self.open_git_branch_picker();
-                            }
-                            // <leader>gB — file history for the current buffer.
-                            // Uppercase B (Shift+b).
-                            KeyCode::Char('B')
-                                if key.modifiers == KeyModifiers::NONE
-                                    || key.modifiers == KeyModifiers::SHIFT =>
-                            {
-                                self.open_git_file_history_picker();
-                            }
-                            // <leader>gS — stashes picker (uppercase S).
-                            KeyCode::Char('S')
-                                if key.modifiers == KeyModifiers::NONE
-                                    || key.modifiers == KeyModifiers::SHIFT =>
-                            {
-                                self.open_git_stash_picker();
-                            }
-                            // <leader>gt — tags picker.
-                            KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => {
-                                self.open_git_tags_picker();
-                            }
-                            // <leader>gr — remotes picker.
-                            KeyCode::Char('r') if key.modifiers == KeyModifiers::NONE => {
-                                self.open_git_remotes_picker();
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-
-                    // ── Leader resolution ────────────────────────────────────
-                    let leader = self.config.editor.leader;
-                    if self.pending_leader && self.active().editor.vim_mode() == VimMode::Normal {
-                        self.pending_leader = false;
-                        // A key arrived — clear the which-key popup. For sub-prefix
-                        // chaining (g → git, c → LSP) we immediately re-arm the timer.
-                        self.clear_prefix_state();
-                        if key.modifiers == KeyModifiers::NONE {
-                            match key.code {
-                                // The leader key itself + 'f' both open the file picker
-                                // (matches buffr-style "press leader twice or leader+f").
-                                KeyCode::Char(c) if c == leader => {
-                                    self.open_picker();
-                                }
-                                KeyCode::Char('f') => {
-                                    self.open_picker();
-                                }
-                                KeyCode::Char('b') => {
-                                    self.open_buffer_picker();
-                                }
-                                KeyCode::Char('/') => {
-                                    self.open_grep_picker(None);
-                                }
-                                KeyCode::Char('g') => {
-                                    // Begin git sub-command chord.
-                                    self.pending_git = true;
-                                    self.note_prefix_set();
-                                }
-                                KeyCode::Char('d') => {
-                                    // <leader>d — show diag-at-cursor in info popup.
-                                    self.show_diag_at_cursor();
-                                }
-                                KeyCode::Char('c') => {
-                                    // Begin LSP 'c' sub-command chord (<leader>ca = code actions).
-                                    self.pending_lsp = Some('c');
-                                    self.pending_leader = false;
-                                    self.note_prefix_set();
-                                }
-                                KeyCode::Char('r') => {
-                                    // Begin LSP 'r' sub-command chord (<leader>rn = rename).
-                                    self.pending_lsp = Some('r');
-                                    self.pending_leader = false;
-                                    self.note_prefix_set();
-                                }
-                                _ => {}
-                            }
-                        }
-                        continue;
-                    }
-
-                    // ── Leader prefix ────────────────────────────────────────
-                    if key.code == KeyCode::Char(leader)
-                        && key.modifiers == KeyModifiers::NONE
-                        && self.active().editor.vim_mode() == VimMode::Normal
-                    {
-                        self.pending_leader = true;
-                        self.note_prefix_set();
-                        continue;
-                    }
-
-                    // ── Ctrl-w window motion chord ───────────────────────────
+                    // ── Normal-mode app-level chord dispatch ─────────────────
                     if self.active().editor.vim_mode() == VimMode::Normal {
-                        // Second key of a Ctrl-w chord.
-                        if self.pending_window_motion {
-                            self.pending_window_motion = false;
-                            self.clear_prefix_state();
-                            // Parse buffered count (default 1).
-                            let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
-                            self.pending_count.clear();
-                            match key.code {
-                                KeyCode::Char('j') => {
-                                    self.focus_below();
-                                }
-                                KeyCode::Char('k') => {
-                                    self.focus_above();
-                                }
-                                KeyCode::Char('h') => {
-                                    self.focus_left();
-                                }
-                                KeyCode::Char('l') => {
-                                    self.focus_right();
-                                }
-                                KeyCode::Char('w') => {
-                                    self.focus_next();
-                                }
-                                KeyCode::Char('W') => {
-                                    self.focus_previous();
-                                }
-                                KeyCode::Char('c') => {
-                                    self.close_focused_window();
-                                }
-                                // Ctrl-w q: vim parity — close window when multiple,
-                                // quit app when last.
-                                KeyCode::Char('q') => {
-                                    if self.layout().leaves().len() > 1 {
-                                        self.close_focused_window();
-                                    } else {
-                                        self.exit_requested = true;
-                                    }
-                                }
-                                // Ctrl-w o: close all windows except focused (:only).
-                                KeyCode::Char('o') => {
-                                    self.only_focused_window();
-                                }
-                                // Ctrl-w x / r / R: swap focused leaf with sibling.
-                                KeyCode::Char('x') | KeyCode::Char('r') | KeyCode::Char('R') => {
-                                    self.swap_with_sibling();
-                                }
-                                // Ctrl-w T: move focused window to a new tab.
-                                KeyCode::Char('T') => match self.move_window_to_new_tab() {
-                                    Ok(()) => {
-                                        self.status_message =
-                                            Some("moved window to new tab".into());
-                                    }
-                                    Err(msg) => {
-                                        self.status_message = Some(msg.to_string());
-                                    }
-                                },
-                                // Ctrl-w n: horizontal split with empty buffer (:new).
-                                KeyCode::Char('n') => {
-                                    self.dispatch_ex("new");
-                                }
-                                // Count-aware resize keys.
-                                KeyCode::Char('+') => {
-                                    self.resize_height(count as i32);
-                                }
-                                KeyCode::Char('-') => {
-                                    self.resize_height(-(count as i32));
-                                }
-                                KeyCode::Char('>') => {
-                                    self.resize_width(count as i32);
-                                }
-                                KeyCode::Char('<') => {
-                                    self.resize_width(-(count as i32));
-                                }
-                                KeyCode::Char('=') => {
-                                    self.equalize_layout();
-                                }
-                                KeyCode::Char('_') => {
-                                    self.maximize_height();
-                                }
-                                KeyCode::Char('|') => {
-                                    self.maximize_width();
-                                }
-                                _ => {} // unknown second key — consume and ignore
-                            }
-                            continue;
-                        }
-                        // First key: Ctrl-w sets pending.
-                        if key.code == KeyCode::Char('w')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                        // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────
+                        if key.modifiers.contains(KeyModifiers::CONTROL)
+                            && (key.code == KeyCode::Char('^') || key.code == KeyCode::Char('6'))
                         {
-                            self.pending_window_motion = true;
-                            self.note_prefix_set();
+                            self.buffer_alt();
                             continue;
                         }
-                        // tmux-navigator: bare Ctrl-h/j/k/l in Normal mode.
-                        // When a hjkl neighbour exists → focus it.
-                        // When at the edge → fall through to `tmux select-pane`
-                        // if $TMUX is set; otherwise silently no-op so we don't
-                        // accidentally trigger engine bindings (Ctrl-h = BS,
-                        // Ctrl-l = redraw) while the user intends navigation.
-                        //
-                        // Ctrl-h note: many terminals deliver Ctrl-h as
-                        // KeyCode::Backspace with CONTROL modifier rather than
-                        // KeyCode::Char('h') + CONTROL. We match both forms.
+
+                        // ── Shift-H / Shift-L cycle buffers ──────────────────
+                        // Only when more than one buffer is open; with a single
+                        // slot fall through to the engine's H/L viewport motions.
+                        if self.slots.len() > 1
+                            && (key.modifiers == KeyModifiers::SHIFT
+                                || key.modifiers == KeyModifiers::NONE)
+                        {
+                            if key.code == KeyCode::Char('H') {
+                                self.buffer_prev();
+                                continue;
+                            }
+                            if key.code == KeyCode::Char('L') {
+                                self.buffer_next();
+                                continue;
+                            }
+                        }
+
+                        // ── tmux-navigator: bare Ctrl-h/j/k/l ────────────────
                         if key.modifiers.contains(KeyModifiers::CONTROL) {
                             let focused = self.focused_window();
                             let is_ctrl_h =
@@ -429,7 +278,6 @@ impl App {
                                 };
 
                                 if neighbour.is_some() {
-                                    // Neighbour exists — move focus within hjkl.
                                     if is_ctrl_h {
                                         self.focus_left();
                                     } else if is_ctrl_j {
@@ -440,7 +288,6 @@ impl App {
                                         self.focus_right();
                                     }
                                 } else {
-                                    // At the edge — hand off to tmux when available.
                                     if std::env::var("TMUX").is_ok() {
                                         let flag = if is_ctrl_h {
                                             "-L"
@@ -451,224 +298,67 @@ impl App {
                                         } else {
                                             "-R"
                                         };
-                                        // Ignore errors: non-zero exit (no tmux pane
-                                        // in that direction) is a silent no-op.
                                         let _ = std::process::Command::new("tmux")
                                             .args(["select-pane", flag])
                                             .status();
                                     }
-                                    // $TMUX not set → silent no-op.
                                 }
                                 continue;
                             }
                         }
-                    } else {
-                        // Any non-Normal mode clears the pending flag and count.
-                        self.pending_window_motion = false;
-                        self.pending_count.clear();
-                        self.clear_prefix_state();
-                    }
 
-                    // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────────
-                    if self.active().editor.vim_mode() == VimMode::Normal
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                        && (key.code == KeyCode::Char('^') || key.code == KeyCode::Char('6'))
-                    {
-                        self.buffer_alt();
-                        continue;
-                    }
-
-                    // ── Shift-H / Shift-L cycle buffers ──────────────────────
-                    // Only when more than one buffer is open; with a single
-                    // slot fall through to the engine's H/L viewport motions.
-                    if self.active().editor.vim_mode() == VimMode::Normal
-                        && self.slots.len() > 1
-                        && (key.modifiers == KeyModifiers::SHIFT
-                            || key.modifiers == KeyModifiers::NONE)
-                    {
-                        if key.code == KeyCode::Char('H') {
-                            self.buffer_prev();
-                            continue;
-                        }
-                        if key.code == KeyCode::Char('L') {
-                            self.buffer_next();
-                            continue;
-                        }
-                    }
-
-                    // ── Buffer-motion pending state ──────────────────────────
-                    if self.active().editor.vim_mode() == VimMode::Normal
-                        && key.modifiers == KeyModifiers::NONE
-                    {
-                        if let Some(prefix) = self.pending_buffer_motion.take() {
-                            self.clear_prefix_state();
-                            // Parse and consume the buffered count (default 1).
-                            let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
-                            let count_digits: String = self.pending_count.drain(..).collect();
-                            match (prefix, key.code) {
-                                // [N]gt — jump forward N tabs (wraps).
-                                ('g', KeyCode::Char('t')) => {
-                                    for _ in 0..count {
-                                        self.dispatch_ex("tabnext");
+                        // ── App-level count prefix buffering ─────────────────
+                        // Buffer digit keys so that count-aware chords (Ngt,
+                        // N<C-w>+) can consume the count. When the non-digit key
+                        // is not a chord-starter, replay digits to the engine.
+                        //
+                        // Chord-starters: any key that the app_keymap might
+                        // consume as the first key of a chord. We check
+                        // has_prefix heuristically by attempting a feed of the
+                        // raw key and rewinding if it returns Unbound immediately
+                        // without any buffered prefix — but that's complex.
+                        // Instead we keep the same explicit list as before:
+                        // digits are buffered and replayed if the next key doesn't
+                        // match a chord prefix.
+                        if key.modifiers == KeyModifiers::NONE {
+                            if let KeyCode::Char(d @ '0'..='9') = key.code {
+                                let is_zero = d == '0';
+                                if !is_zero || !self.pending_count.is_empty() {
+                                    self.pending_count.push(d);
+                                    continue;
+                                }
+                                // '0' with empty pending_count → start-of-line; fall through.
+                            } else if !self.pending_count.is_empty() {
+                                // Non-digit with buffered count.
+                                // If it could start a chord, keep count alive.
+                                // Otherwise replay digits now.
+                                let could_start_chord = match key.code {
+                                    KeyCode::Char(c) => {
+                                        // Check if this key is a first-key of any Normal binding.
+                                        use hjkl_keymap::Mode;
+                                        !self.app_keymap.pending(Mode::Normal).is_empty() || {
+                                            // Peek: does feeding this key leave Pending?
+                                            // We approximate by checking the static set of
+                                            // chord-starter chars that are first keys in our bindings.
+                                            matches!(c, 'g' | ']' | '[' | 'G')
+                                                || c == self.config.editor.leader
+                                        }
                                     }
-                                    continue;
-                                }
-                                // [N]gT — jump backward N tabs (wraps).
-                                ('g', KeyCode::Char('T')) => {
-                                    for _ in 0..count {
-                                        self.dispatch_ex("tabprev");
-                                    }
-                                    continue;
-                                }
-                                // LSP goto motions (g-prefix) — count not meaningful,
-                                // just clear it and dispatch.
-                                ('g', KeyCode::Char('d')) => {
-                                    self.lsp_goto_definition();
-                                    continue;
-                                }
-                                ('g', KeyCode::Char('D')) => {
-                                    self.lsp_goto_declaration();
-                                    continue;
-                                }
-                                ('g', KeyCode::Char('r')) => {
-                                    self.lsp_goto_references();
-                                    continue;
-                                }
-                                ('g', KeyCode::Char('i')) => {
-                                    self.lsp_goto_implementation();
-                                    continue;
-                                }
-                                ('g', KeyCode::Char('y')) => {
-                                    self.lsp_goto_type_definition();
-                                    continue;
-                                }
-                                (']', KeyCode::Char('b')) => {
-                                    self.buffer_next();
-                                    continue;
-                                }
-                                ('[', KeyCode::Char('b')) => {
-                                    self.buffer_prev();
-                                    continue;
-                                }
-                                // ]d / [d — navigate diagnostics
-                                (']', KeyCode::Char('d')) => {
-                                    self.dispatch_ex("lnext");
-                                    continue;
-                                }
-                                ('[', KeyCode::Char('d')) => {
-                                    self.dispatch_ex("lprev");
-                                    continue;
-                                }
-                                // ]D / [D — navigate error-only diagnostics
-                                (']', KeyCode::Char('D')) => {
-                                    self.lnext_severity(Some(super::DiagSeverity::Error));
-                                    continue;
-                                }
-                                ('[', KeyCode::Char('D')) => {
-                                    self.lprev_severity(Some(super::DiagSeverity::Error));
-                                    continue;
-                                }
-                                // Didn't match an app-handled combo — replay
-                                // buffered digits + prefix char + current key
-                                // to the engine in order, so e.g. `5gg` works.
-                                _ => {
-                                    for d in count_digits.chars() {
+                                    _ => false,
+                                };
+                                if !could_start_chord {
+                                    let digits: String = self.pending_count.drain(..).collect();
+                                    for d in digits.chars() {
                                         self.active_mut().editor.handle_key(KeyEvent::new(
                                             KeyCode::Char(d),
                                             KeyModifiers::NONE,
                                         ));
                                     }
-                                    self.active_mut().editor.handle_key(KeyEvent::new(
-                                        KeyCode::Char(prefix),
-                                        KeyModifiers::NONE,
-                                    ));
-                                    self.active_mut().editor.handle_key(key);
-                                    self.sync_viewport_from_editor();
-                                    continue;
                                 }
                             }
-                        }
-                    } else {
-                        // Any non-Normal mode clears pending motions and count.
-                        self.pending_buffer_motion = None;
-                        self.pending_count.clear();
-                        self.pending_git = false;
-                        self.pending_leader = false;
-                        self.clear_prefix_state();
-                    }
-
-                    // ── LSP hover (`K`) in Normal mode ───────────────────────
-                    // TODO: Ctrl-w K (split-then-hover) deferred; popup hover works.
-                    if key.code == KeyCode::Char('K')
-                        && (key.modifiers == KeyModifiers::NONE
-                            || key.modifiers == KeyModifiers::SHIFT)
-                        && self.active().editor.vim_mode() == VimMode::Normal
-                    {
-                        self.lsp_hover();
-                        continue;
-                    }
-
-                    // ── Intercept `:` in Normal mode ─────────────────────────
-                    if key.code == KeyCode::Char(':')
-                        && key.modifiers == KeyModifiers::NONE
-                        && self.active().editor.vim_mode() == VimMode::Normal
-                    {
-                        self.open_command_prompt();
-                        continue;
-                    }
-
-                    // ── Intercept `/` and `?` in Normal mode ─────────────────
-                    if key.modifiers == KeyModifiers::NONE
-                        && self.active().editor.vim_mode() == VimMode::Normal
-                    {
-                        if key.code == KeyCode::Char('/') {
-                            self.open_search_prompt(SearchDir::Forward);
-                            continue;
-                        }
-                        if key.code == KeyCode::Char('?') {
-                            self.open_search_prompt(SearchDir::Backward);
-                            continue;
-                        }
-                    }
-
-                    // ── App-level count prefix buffering ─────────────────────
-                    // In Normal mode with no chord prefix pending, buffer
-                    // incoming digit keys so that `[N]gt`, `[N]gT`, and
-                    // `[N]<C-w>+/-/>/<` can consume the count.  When the next
-                    // non-digit key is not a chord-starter and not app-handled,
-                    // all buffered digits are replayed to the engine in order so
-                    // `5j`, `10w`, etc. still work.
-                    //
-                    // Rules (vim-compatible):
-                    //   • `1`–`9` start a count when pending_count is empty.
-                    //   • `0`–`9` extend a non-empty pending_count.
-                    //   • `0` with empty pending_count = start-of-line motion
-                    //     → fall through to the engine (not buffered).
-                    //   • Chord-starters (`g`, `]`, `[`) do NOT trigger digit
-                    //     replay; they keep the count alive for the second key.
-                    if self.active().editor.vim_mode() == VimMode::Normal
-                        && key.modifiers == KeyModifiers::NONE
-                        && !self.pending_window_motion
-                        && self.pending_buffer_motion.is_none()
-                    {
-                        if let KeyCode::Char(d @ '0'..='9') = key.code {
-                            let is_zero = d == '0';
-                            if !is_zero || !self.pending_count.is_empty() {
-                                // Buffer the digit; do NOT fall through to the engine.
-                                self.pending_count.push(d);
-                                continue;
-                            }
-                            // '0' with empty pending_count → start-of-line; fall through.
-                        } else if !self.pending_count.is_empty() {
-                            // Non-digit key with buffered count.  If it is a chord-starter
-                            // (`g`, `]`, `[`) keep the count alive — the second key will
-                            // consume it.  Otherwise replay digits to the engine now so
-                            // the engine's own count parser sees them (e.g. `5j`).
-                            let is_chord_starter = matches!(
-                                key.code,
-                                KeyCode::Char('g') | KeyCode::Char(']') | KeyCode::Char('[')
-                            );
-                            if !is_chord_starter {
+                        } else {
+                            // Modifier key — flush count digits if any.
+                            if !self.pending_count.is_empty() {
                                 let digits: String = self.pending_count.drain(..).collect();
                                 for d in digits.chars() {
                                     self.active_mut().editor.handle_key(KeyEvent::new(
@@ -676,27 +366,96 @@ impl App {
                                         KeyModifiers::NONE,
                                     ));
                                 }
-                                // Current key falls through to normal handling below.
                             }
-                            // If is_chord_starter: count stays in pending_count;
-                            // the pending_buffer_motion setter below activates.
                         }
-                    }
 
-                    // ── Set pending buffer-motion prefix ─────────────────────
-                    if self.active().editor.vim_mode() == VimMode::Normal
-                        && key.modifiers == KeyModifiers::NONE
-                        && matches!(
-                            key.code,
-                            KeyCode::Char('g') | KeyCode::Char(']') | KeyCode::Char('[')
-                        )
-                        && let KeyCode::Char(c) = key.code
-                    {
-                        self.pending_buffer_motion = Some(c);
-                        self.note_prefix_set();
-                        // Fall through: also forward the key to the engine
-                        // so its own `g`-pending state is updated correctly
-                        // (the engine handles gj/gk/gg/G etc).
+                        // ── LSP hover (`K`) ───────────────────────────────────
+                        if key.code == KeyCode::Char('K')
+                            && (key.modifiers == KeyModifiers::NONE
+                                || key.modifiers == KeyModifiers::SHIFT)
+                        {
+                            self.lsp_hover();
+                            continue;
+                        }
+
+                        // ── Intercept `:` ─────────────────────────────────────
+                        if key.code == KeyCode::Char(':') && key.modifiers == KeyModifiers::NONE {
+                            self.open_command_prompt();
+                            continue;
+                        }
+
+                        // ── Intercept `/` and `?` ─────────────────────────────
+                        if key.modifiers == KeyModifiers::NONE {
+                            if key.code == KeyCode::Char('/') {
+                                self.open_search_prompt(SearchDir::Forward);
+                                continue;
+                            }
+                            if key.code == KeyCode::Char('?') {
+                                self.open_search_prompt(SearchDir::Backward);
+                                continue;
+                            }
+                        }
+
+                        // ── Escape: cancel any pending prefix ─────────────────
+                        if key.code == KeyCode::Esc {
+                            self.app_keymap.reset(hjkl_keymap::Mode::Normal);
+                            self.pending_count.clear();
+                            self.clear_prefix_state();
+                            // Fall through to engine so it can exit visual mode etc.
+                        }
+
+                        // ── Route through app keymap ───────────────────────────
+                        // Translate and feed the key. If Pending/Ambiguous/Match:
+                        // consumed. If Unbound: replay buffered count digits +
+                        // unbound events to the engine.
+                        if let Some(km_ev) = to_km_event(key) {
+                            let count = self.pending_count.parse::<u32>().unwrap_or(1).max(1);
+                            let mut replay: Vec<KmKeyEvent> = Vec::new();
+                            let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
+                            if consumed {
+                                // Chord is Pending, Ambiguous, or was Matched.
+                                // Clear count only on Match (clear_prefix_state is called there).
+                                // For Pending/Ambiguous we leave count alive.
+                                continue;
+                            }
+                            // Unbound: flush buffered count digits to engine first.
+                            if !self.pending_count.is_empty() {
+                                let digits: String = self.pending_count.drain(..).collect();
+                                for d in digits.chars() {
+                                    self.active_mut().editor.handle_key(KeyEvent::new(
+                                        KeyCode::Char(d),
+                                        KeyModifiers::NONE,
+                                    ));
+                                }
+                            }
+                            // Replay the unbound events to the engine.
+                            replay_to_engine(self, &replay);
+                            self.sync_viewport_from_editor();
+                            if self.active_mut().editor.take_dirty() {
+                                let elapsed = self.active_mut().refresh_dirty_against_saved();
+                                self.last_signature_us = elapsed;
+                                if self.active().dirty {
+                                    self.active_mut().is_new_file = false;
+                                }
+                            }
+                            let buffer_id = self.active().buffer_id;
+                            if self.active_mut().editor.take_content_reset() {
+                                self.syntax.reset(buffer_id);
+                            }
+                            let edits = self.active_mut().editor.take_content_edits();
+                            if !edits.is_empty() {
+                                self.syntax.apply_edits(buffer_id, &edits);
+                            }
+                            self.lsp_notify_change_active();
+                            self.recompute_and_install();
+                            continue;
+                        }
+                        // Key couldn't be translated (unsupported code) — fall through to engine.
+                    } else {
+                        // Non-Normal mode: reset any pending Normal-mode chord state.
+                        self.app_keymap.reset(hjkl_keymap::Mode::Normal);
+                        self.pending_count.clear();
+                        self.clear_prefix_state();
                     }
 
                     // ── Insert-mode completion key handling ──────────────────
@@ -932,18 +691,6 @@ impl App {
                         if self.completion.is_some() {
                             self.dismiss_completion();
                         }
-                    }
-
-                    // ── Escape in Normal mode: cancel any pending prefix ─────
-                    if key.code == KeyCode::Esc
-                        && self.active().editor.vim_mode() == VimMode::Normal
-                    {
-                        self.pending_leader = false;
-                        self.pending_git = false;
-                        self.pending_lsp = None;
-                        self.pending_window_motion = false;
-                        self.pending_buffer_motion = None;
-                        self.clear_prefix_state();
                     }
 
                     // ── Normal editor key handling ───────────────────────────
