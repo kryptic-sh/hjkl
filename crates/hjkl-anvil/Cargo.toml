@@ -12,10 +12,11 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 
 # The `sync` feature is dev-only; it gates the `sync-anvil` xtask binary and
-# pulls in reqwest/zip/serde_json which are not needed by downstream consumers.
+# pulls in serde_json which is not needed by downstream consumers.
+# reqwest and zip are now always included (needed by the install pipeline at runtime).
 [features]
 default = []
-sync = ["dep:anyhow", "dep:clap", "dep:reqwest", "dep:zip", "dep:serde_json"]
+sync = ["dep:anyhow", "dep:clap", "dep:serde_json"]
 
 [[bin]]
 name = "sync-anvil"
@@ -27,12 +28,18 @@ hjkl-xdg = "0.1"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 thiserror = "2"
-# sync-feature deps (not pulled for normal consumers)
+# install-pipeline deps (always present — needed at runtime by downstream consumers)
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+hex = "0.4"
+crossbeam-channel = "0.5"
+# sync-feature deps (xtask-only)
 anyhow = { version = "1", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
-reqwest = { version = "0.12", optional = true, features = ["blocking", "rustls-tls"], default-features = false }
 serde_json = { version = "1", optional = true }
-zip = { version = "2", optional = true, default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -35,10 +35,14 @@
 //! }
 //! ```
 
+pub mod installer;
+pub mod job;
 pub mod manifest;
 pub mod registry;
 pub mod store;
 
+pub use installer::{Install, InstallError, InstallStatus, install_blocking};
+pub use job::{InstallHandle, InstallPool};
 pub use manifest::{
     CargoMethod, GithubMethod, GoMethod, InstallMethod, Manifest, ManifestError, ManifestMeta,
     NpmMethod, PipMethod, ScriptMethod, ToolCategory, ToolSpec,
