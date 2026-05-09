@@ -6,6 +6,35 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-10
+
+### Added
+
+- Five new fields on `Options` (`src/types.rs`) and `Settings`
+  (`src/editor.rs`):
+  - `cursorline: bool` (default `false`, alias `cul`) — highlight the line the
+    cursor is on.
+  - `cursorcolumn: bool` (default `false`, alias `cuc`) — highlight the column
+    the cursor is on.
+  - `signcolumn: SignColumnMode` (default `Auto`, alias `scl`) — controls sign
+    column visibility; variants: `No`, `Yes`, `Auto`.
+  - `foldcolumn: u32` (default `0`, clamped `0..=12`, alias `fdc`) — width of
+    the fold column.
+  - `colorcolumn: String` (default `""`, alias `cc`) — comma-separated list of
+    absolute column numbers to highlight.
+- New public enum `SignColumnMode` with variants `No`, `Yes`, `Auto`; derives
+  `serde::Serialize` / `Deserialize` when the `serde` feature is enabled.
+- `set_by_name` and `get_by_name` honour every new alias and reject malformed
+  values with `EngineError::Ex`.
+
+### Changed
+
+- Version bumped to **0.5.0** (minor) because adding public fields to
+  non-`#[non_exhaustive]` structs (`Options`, `Settings`) is a breaking change
+  for any downstream crate that constructs those structs with a literal struct
+  expression. All existing field positions are preserved; only additive changes
+  were made.
+
 ## [0.4.1] - 2026-05-06
 
 ### Added
@@ -136,7 +165,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.4.1
 [0.4.0]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.4.0
 [0.3.8]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.3.8
