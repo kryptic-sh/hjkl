@@ -1001,6 +1001,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-anvil"
+version = "0.1.0"
+dependencies = [
+ "hjkl-xdg",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
 name = "hjkl-bonsai"
 version = "0.6.0"
 dependencies = [

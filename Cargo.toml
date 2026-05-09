@@ -14,6 +14,7 @@ readme = "README.md"
 
 [patch.crates-io]
 hjkl-xdg = { path = "crates/hjkl-xdg" }
+hjkl-anvil = { path = "crates/hjkl-anvil" }
 hjkl-buffer = { path = "crates/hjkl-buffer" }
 hjkl-clipboard = { path = "crates/hjkl-clipboard" }
 hjkl-editor = { path = "crates/hjkl-editor" }
