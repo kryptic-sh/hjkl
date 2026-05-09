@@ -8,6 +8,39 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-09
+
+### Added
+
+- **Tree-sitter predicate/directive extension layer.** Bumps `hjkl-bonsai` to
+  `0.6.0`, which ships a parser-agnostic dispatcher matching helix and
+  nvim-treesitter behavior on top of stock tree-sitter. The
+  `(#set! @capture key val)` form used by nvim-treesitter html highlights — and
+  by other capture-targeted directives — is now honored end-to-end via
+  pre-extraction + replay; `HighlightSpan` carries the resulting metadata
+  through to consumers. Unknown predicates degrade gracefully (warn-once, match
+  still emitted) instead of dropping the highlight. Resolves #56.
+- **File-backed tracing output.** `tracing` now writes to
+  `$XDG_DATA_HOME/hjkl/logs/hjkl.log` in addition to stderr, so post-mortem
+  debugging of grammar / LSP / picker issues no longer requires re-running with
+  the terminal captured.
+- **Runtime keymaps.** `hjkl-config` keymap definitions are now applied at
+  runtime through the app, allowing user-level keymap overrides to take effect
+  without recompiling.
+
+### Fixed
+
+- HTML files no longer render plain text. The bonsai sanitizer's line-based
+  `(#set! @cap …)` stripper used to consume a closing `)` belonging to the
+  enclosing pattern when the directive's `)` shared a line with the outer
+  group's `)`, leaving the resolved query unbalanced and tree-sitter erroring on
+  a downstream pattern. Bonsai's paren-balanced excision (then full
+  pre-extraction in 0.6.0) replaces the workaround. See bonsai#3 / bonsai#4.
+- Web rails: normalized sibling rails, removed install gaps, unified install
+  styles in the marketing site.
+- Cleaned up clippy warnings introduced by the runtime keymap work in
+  `apps/hjkl`.
+
 ## [0.12.2] - 2026-05-06
 
 ### Changed

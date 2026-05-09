@@ -24,7 +24,7 @@ hjkl-splash = { version = "0.2", features = ["ratatui"] }
 hjkl-engine = "0.4"
 hjkl-editor = "0.4"
 hjkl-ratatui = "0.3"
-hjkl-bonsai = "0.5"
+hjkl-bonsai = "0.6"
 hjkl-clipboard = "0.5"
 hjkl-form = "0.3"
 hjkl-picker = "0.5"
