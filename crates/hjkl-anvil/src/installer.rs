@@ -1,10 +1,10 @@
-//! Install pipeline for Github and Cargo tool methods.
+//! Install pipeline for Github, Cargo, Npm, Pip, and GoInstall tool methods.
 //!
 //! # Design
 //!
-//! The public surface is built around the [`Install`] trait so that step 5
-//! (Npm, Pip, GoInstall, Script) just adds new impl structs without touching
-//! this file.
+//! The public surface is built around the [`Install`] trait so that adding new
+//! install backends is a matter of implementing a new struct without touching
+//! the dispatcher logic.
 //!
 //! The [`GithubInstaller`] uses an internal `install_github_inner` function
 //! that accepts a `download` closure.  Production code passes a real
@@ -12,11 +12,20 @@
 //! directly.  This keeps network-free testing possible without any mocking
 //! framework.
 //!
+//! Cargo, Npm, Pip, and GoInstall all share two helpers:
+//!
+//! - [`run_subprocess`] — run a `Command`, stream stderr line-by-line, return
+//!   `Err` on non-zero exit.
+//! - [`finalize_install`] — atomic symlink + `.rev` sidecar + `Done` status.
+//!
 //! # Security
 //!
 //! Every tar/zip entry path is validated by [`safe_join`] before extraction.
 //! Parent-dir components (`..`), root prefixes, and absolute paths are all
 //! rejected with [`InstallError::PathEscape`].
+//!
+//! Script installs are intentionally **not** implemented here — they require a
+//! security review before execution (sandboxing, hash pinning, etc.).
 
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -109,9 +118,11 @@ pub fn install_blocking(
     match &spec.method {
         InstallMethod::Github(_) => GithubInstaller.install(name, spec, progress),
         InstallMethod::Cargo(_) => CargoInstaller.install(name, spec, progress),
-        InstallMethod::Npm(_) => Err(InstallError::UnsupportedMethod("npm")),
-        InstallMethod::Pip(_) => Err(InstallError::UnsupportedMethod("pip")),
-        InstallMethod::GoInstall(_) => Err(InstallError::UnsupportedMethod("goinstall")),
+        InstallMethod::Npm(_) => NpmInstaller.install(name, spec, progress),
+        InstallMethod::Pip(_) => PipInstaller.install(name, spec, progress),
+        InstallMethod::GoInstall(_) => GoInstaller.install(name, spec, progress),
+        // Script requires a security review (sandboxing, hash pinning) before
+        // execution — intentionally left unsupported.
         InstallMethod::Script(_) => Err(InstallError::UnsupportedMethod("script")),
     }
 }
@@ -508,6 +519,75 @@ fn extract_archive(
     Ok(())
 }
 
+// ── Shared subprocess / finalize helpers ──────────────────────────────────────
+
+/// Run `cmd`, stream each stderr line as an `Installing` status update
+/// (truncated to 200 chars), and return `Err(Subprocess)` on non-zero exit.
+///
+/// `cmd_label` is only used in the error message.
+fn run_subprocess(
+    cmd: &mut Command,
+    cmd_label: &str,
+    progress: &dyn Fn(InstallStatus),
+) -> Result<(), InstallError> {
+    let output = cmd.output().map_err(|e| InstallError::Subprocess {
+        cmd: cmd_label.to_string(),
+        stderr: e.to_string(),
+    })?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines() {
+        let truncated = if line.len() > 200 { &line[..200] } else { line };
+        progress(InstallStatus::Installing);
+        let _ = truncated; // callers may capture via the closure if needed
+    }
+
+    if !output.status.success() {
+        return Err(InstallError::Subprocess {
+            cmd: cmd_label.to_string(),
+            stderr: stderr.into_owned(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Shared finishing sequence used by Cargo, Npm, Pip, and GoInstall:
+///
+/// 1. Atomic symlink `<bin_dir>/<spec.bin>` → `bin_path_in_pkg`.
+/// 2. Write `.rev` sidecar with `version` and `sha` (empty sha for these
+///    methods).
+/// 3. Emit `Done { bin_path }`.
+///
+/// Returns the absolute path of the binary inside the package directory.
+fn finalize_install(
+    name: &str,
+    spec: &ToolSpec,
+    bin_path_in_pkg: &Path,
+    sha: &str,
+    progress: &dyn Fn(InstallStatus),
+) -> Result<PathBuf, InstallError> {
+    // 1. Symlink into bin/.
+    let bin_dir = store::bin_dir()?;
+    std::fs::create_dir_all(&bin_dir)?;
+    let link = bin_dir.join(&spec.bin);
+    atomic_symlink(&link, bin_path_in_pkg)?;
+
+    // 2. Write .rev sidecar.
+    let rev = RevSidecar {
+        version: spec.version.clone(),
+        sha256: sha.to_string(),
+    };
+    store::write_rev(name, &rev)?;
+
+    // 3. Done.
+    let bin_path = bin_path_in_pkg.to_path_buf();
+    progress(InstallStatus::Done {
+        bin_path: bin_path.clone(),
+    });
+    Ok(bin_path)
+}
+
 // ── Cargo installer ───────────────────────────────────────────────────────────
 
 pub struct CargoInstaller;
@@ -555,23 +635,8 @@ impl Install for CargoInstaller {
             return Err(InstallError::BinNotFound(spec.bin.clone()));
         }
 
-        // 3. Symlink into bin/.
-        let bin_dir = store::bin_dir()?;
-        std::fs::create_dir_all(&bin_dir)?;
-        let link = bin_dir.join(&spec.bin);
-        atomic_symlink(&link, &bin_path)?;
-
-        // 4. Write .rev sidecar (no sha256 for cargo).
-        let rev = RevSidecar {
-            version: spec.version.clone(),
-            sha256: String::new(),
-        };
-        store::write_rev(name, &rev)?;
-
-        progress(InstallStatus::Done {
-            bin_path: bin_path.clone(),
-        });
-        Ok(bin_path)
+        // 3. Symlink, .rev, Done.
+        finalize_install(name, spec, &bin_path, "", progress)
     }
 }
 
@@ -594,31 +659,186 @@ fn run_cargo_install(
     if locked {
         cmd.arg("--locked");
     }
+    let label = format!(
+        "cargo install {crate_name} --version {version}{}",
+        if locked { " --locked" } else { "" }
+    );
+    run_subprocess(&mut cmd, &label, progress)
+}
 
-    let output = cmd.output().map_err(|e| InstallError::Subprocess {
-        cmd: "cargo install".to_string(),
-        stderr: e.to_string(),
-    })?;
+// ── Npm installer ─────────────────────────────────────────────────────────────
 
-    // Emit each stderr line as an Installing update (truncated to 200 chars).
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    for line in stderr.lines() {
-        let line = if line.len() > 200 { &line[..200] } else { line };
+pub struct NpmInstaller;
+
+/// Build the argv list for `npm install --prefix <prefix> <pkg>@<version> ...`
+/// (exported for unit testing).
+pub fn build_npm_argv(pkg: &str, version: &str, prefix: &Path) -> Vec<String> {
+    vec![
+        "install".to_string(),
+        "--prefix".to_string(),
+        prefix.display().to_string(),
+        format!("{pkg}@{version}"),
+        "--no-audit".to_string(),
+        "--no-fund".to_string(),
+        "--silent".to_string(),
+    ]
+}
+
+impl Install for NpmInstaller {
+    fn install(
+        &self,
+        name: &str,
+        spec: &ToolSpec,
+        progress: &dyn Fn(InstallStatus),
+    ) -> Result<PathBuf, InstallError> {
+        let InstallMethod::Npm(ref npm) = spec.method else {
+            return Err(InstallError::UnsupportedMethod("not an npm method"));
+        };
+
+        // 1. Prepare package directory.
+        let pkg_dir = store::package_dir(name)?;
+        let node_modules_bin = pkg_dir.join("node_modules").join(".bin");
+        std::fs::create_dir_all(&node_modules_bin)?;
+
         progress(InstallStatus::Installing);
-        let _ = line; // stored in progress closure by caller if needed
-    }
 
-    if !output.status.success() {
-        return Err(InstallError::Subprocess {
-            cmd: format!(
-                "cargo install {crate_name} --version {version}{}",
-                if locked { " --locked" } else { "" }
-            ),
-            stderr: stderr.into_owned(),
-        });
-    }
+        // 2. Run npm install.
+        // build_npm_argv returns ["install", "--prefix", ...] — pass all args
+        // to the `npm` command directly.
+        let argv = build_npm_argv(&npm.package, &spec.version, &pkg_dir);
+        let mut cmd = Command::new("npm");
+        for arg in &argv {
+            cmd.arg(arg);
+        }
+        run_subprocess(
+            &mut cmd,
+            &format!("npm install {}@{}", npm.package, spec.version),
+            progress,
+        )?;
 
-    Ok(())
+        // 3. Verify bin exists.
+        let bin_in_pkg = node_modules_bin.join(&spec.bin);
+        if !bin_in_pkg.exists() {
+            return Err(InstallError::BinNotFound(spec.bin.clone()));
+        }
+
+        // 4. Symlink, .rev, Done.
+        finalize_install(name, spec, &bin_in_pkg, "", progress)
+    }
+}
+
+// ── Pip installer ─────────────────────────────────────────────────────────────
+
+pub struct PipInstaller;
+
+/// Build the argv list for pip install inside a venv (exported for unit testing).
+pub fn build_pip_argv(pkg: &str, version: &str) -> Vec<String> {
+    vec![
+        "install".to_string(),
+        "--upgrade".to_string(),
+        format!("{pkg}=={version}"),
+    ]
+}
+
+impl Install for PipInstaller {
+    fn install(
+        &self,
+        name: &str,
+        spec: &ToolSpec,
+        progress: &dyn Fn(InstallStatus),
+    ) -> Result<PathBuf, InstallError> {
+        let InstallMethod::Pip(ref pip) = spec.method else {
+            return Err(InstallError::UnsupportedMethod("not a pip method"));
+        };
+
+        let pkg_dir = store::package_dir(name)?;
+        let venv_dir = pkg_dir.join("venv");
+        std::fs::create_dir_all(&pkg_dir)?;
+
+        progress(InstallStatus::Installing);
+
+        // 1. Create venv with python3.
+        let mut venv_cmd = Command::new("python3");
+        venv_cmd.args(["-m", "venv"]).arg(&venv_dir);
+        run_subprocess(
+            &mut venv_cmd,
+            &format!("python3 -m venv {}", venv_dir.display()),
+            progress,
+        )?;
+
+        // 2. pip install inside the venv.
+        let pip_bin = venv_dir.join("bin").join("pip");
+        let pip_argv = build_pip_argv(&pip.package, &spec.version);
+        let mut pip_cmd = Command::new(&pip_bin);
+        for arg in &pip_argv {
+            pip_cmd.arg(arg);
+        }
+        run_subprocess(
+            &mut pip_cmd,
+            &format!("pip install {}=={}", pip.package, spec.version),
+            progress,
+        )?;
+
+        // 3. Verify bin exists.
+        let bin_in_venv = venv_dir.join("bin").join(&spec.bin);
+        if !bin_in_venv.exists() {
+            return Err(InstallError::BinNotFound(spec.bin.clone()));
+        }
+
+        // 4. Symlink, .rev, Done.
+        finalize_install(name, spec, &bin_in_venv, "", progress)
+    }
+}
+
+// ── Go installer ──────────────────────────────────────────────────────────────
+
+pub struct GoInstaller;
+
+/// Build the `go install <module>@<version>` argv (exported for unit testing).
+pub fn build_go_argv(module: &str, version: &str) -> Vec<String> {
+    vec!["install".to_string(), format!("{module}@{version}")]
+}
+
+impl Install for GoInstaller {
+    fn install(
+        &self,
+        name: &str,
+        spec: &ToolSpec,
+        progress: &dyn Fn(InstallStatus),
+    ) -> Result<PathBuf, InstallError> {
+        let InstallMethod::GoInstall(ref go) = spec.method else {
+            return Err(InstallError::UnsupportedMethod("not a goinstall method"));
+        };
+
+        // 1. Prepare isolated GOBIN directory.
+        let pkg_dir = store::package_dir(name)?;
+        let gobin_dir = pkg_dir.join("bin");
+        std::fs::create_dir_all(&gobin_dir)?;
+
+        progress(InstallStatus::Installing);
+
+        // 2. Run `go install <module>@<version>` with GOBIN overridden.
+        let argv = build_go_argv(&go.module, &spec.version);
+        let mut cmd = Command::new("go");
+        for arg in &argv {
+            cmd.arg(arg);
+        }
+        cmd.env("GOBIN", &gobin_dir);
+        run_subprocess(
+            &mut cmd,
+            &format!("go install {}@{}", go.module, spec.version),
+            progress,
+        )?;
+
+        // 3. Verify bin exists.
+        let bin_in_pkg = gobin_dir.join(&spec.bin);
+        if !bin_in_pkg.exists() {
+            return Err(InstallError::BinNotFound(spec.bin.clone()));
+        }
+
+        // 4. Symlink, .rev, Done.
+        finalize_install(name, spec, &bin_in_pkg, "", progress)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -975,19 +1195,21 @@ mod tests {
     // ── unsupported methods ───────────────────────────────────────────────────
 
     #[test]
-    fn install_blocking_npm_returns_unsupported() {
-        use crate::manifest::NpmMethod;
+    fn install_blocking_script_returns_unsupported() {
+        use crate::manifest::ScriptMethod;
         let spec = ToolSpec {
             category: ToolCategory::Lsp,
             description: "test".to_string(),
             version: "1.0".to_string(),
             bin: "bin".to_string(),
-            method: InstallMethod::Npm(NpmMethod {
-                package: "pkg".to_string(),
+            method: InstallMethod::Script(ScriptMethod {
+                url: "https://example.com/install.tar.gz".to_string(),
+                sha256: "deadbeef".to_string(),
+                exec: "./install.sh".to_string(),
             }),
         };
         let err = install_blocking("tool", &spec, &|_| {}).unwrap_err();
-        assert!(matches!(err, InstallError::UnsupportedMethod("npm")));
+        assert!(matches!(err, InstallError::UnsupportedMethod("script")));
     }
 
     // ── cargo spec sha computation check ─────────────────────────────────────
@@ -1003,4 +1225,161 @@ mod tests {
         };
         assert_eq!(rev.sha256, "");
     }
+
+    // ── argv construction (unit tests — no subprocess) ────────────────────────
+
+    #[test]
+    fn npm_argv_contains_pkg_at_version() {
+        let prefix = PathBuf::from("/tmp/pkg");
+        let argv = build_npm_argv("pyright", "1.1.395", &prefix);
+        // First arg is the subcommand.
+        assert_eq!(argv[0], "install");
+        // Package@version must appear verbatim.
+        assert!(
+            argv.contains(&"pyright@1.1.395".to_string()),
+            "expected pyright@1.1.395 in argv, got: {argv:?}"
+        );
+        // --prefix and its value must both be present.
+        let prefix_idx = argv
+            .iter()
+            .position(|a| a == "--prefix")
+            .expect("--prefix missing");
+        assert_eq!(argv[prefix_idx + 1], prefix.display().to_string());
+        // Noise-reduction flags.
+        assert!(argv.contains(&"--no-audit".to_string()));
+        assert!(argv.contains(&"--no-fund".to_string()));
+        assert!(argv.contains(&"--silent".to_string()));
+    }
+
+    #[test]
+    fn pip_argv_uses_double_equals_pinning() {
+        let argv = build_pip_argv("black", "24.0.0");
+        assert_eq!(argv[0], "install");
+        assert!(
+            argv.contains(&"black==24.0.0".to_string()),
+            "expected black==24.0.0 in argv, got: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn go_argv_uses_at_version() {
+        let argv = build_go_argv("golang.org/x/tools/gopls", "v0.17.1");
+        assert_eq!(argv[0], "install");
+        assert!(
+            argv.contains(&"golang.org/x/tools/gopls@v0.17.1".to_string()),
+            "expected golang.org/x/tools/gopls@v0.17.1 in argv, got: {argv:?}"
+        );
+    }
+
+    // ── finalize_install helper integration tests ─────────────────────────────
+    //
+    // These tests exercise atomic_symlink + write_rev via finalize_install
+    // using a real tempdir, without needing any package manager on PATH.
+
+    fn make_cargo_spec(bin: &str) -> ToolSpec {
+        use crate::manifest::{CargoMethod, ToolCategory};
+        ToolSpec {
+            category: ToolCategory::Lsp,
+            description: "test".to_string(),
+            version: "0.9.3".to_string(),
+            bin: bin.to_string(),
+            method: InstallMethod::Cargo(CargoMethod {
+                crate_name: bin.to_string(),
+            }),
+        }
+    }
+
+    /// finalize_install creates the symlink and the .rev sidecar.
+    #[test]
+    #[ignore = "requires serialized env: run with --test-threads=1 --include-ignored"]
+    fn finalize_install_creates_symlink_and_rev() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let _cache_dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data_dir.path());
+        }
+
+        // Create a fake binary inside a fake package dir.
+        let pkg_dir = data_dir.path().join("anvil").join("packages").join("taplo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let fake_bin = pkg_dir.join("bin").join("taplo");
+        std::fs::create_dir_all(fake_bin.parent().unwrap()).unwrap();
+        std::fs::write(&fake_bin, b"#!/bin/sh\necho hi\n").unwrap();
+
+        let spec = make_cargo_spec("taplo");
+        let statuses: std::sync::Mutex<Vec<InstallStatus>> = std::sync::Mutex::new(Vec::new());
+
+        let result = finalize_install("taplo", &spec, &fake_bin, "", &|s| {
+            statuses.lock().unwrap().push(s.clone());
+        });
+
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        let bin_path = result.expect("finalize_install must succeed");
+        assert_eq!(bin_path, fake_bin);
+
+        // Symlink must exist in bin/.
+        let link = data_dir.path().join("anvil").join("bin").join("taplo");
+        assert!(link.exists(), "symlink must exist at {}", link.display());
+
+        // .rev sidecar must contain the version.
+        let rev_path = pkg_dir.join(".rev");
+        let rev_content = std::fs::read_to_string(&rev_path).unwrap();
+        assert!(
+            rev_content.starts_with("0.9.3:"),
+            "rev must start with version, got: {rev_content:?}"
+        );
+
+        // Done status must have been emitted.
+        let statuses = statuses.into_inner().unwrap();
+        assert!(
+            statuses
+                .iter()
+                .any(|s| matches!(s, InstallStatus::Done { .. })),
+            "Done status missing"
+        );
+    }
+
+    /// finalize_install overwrites a stale symlink atomically.
+    #[test]
+    #[ignore = "requires serialized env: run with --test-threads=1 --include-ignored"]
+    fn finalize_install_overwrites_stale_symlink() {
+        let data_dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", data_dir.path());
+        }
+
+        // Bin dir with a stale symlink pointing nowhere.
+        let bin_dir = data_dir.path().join("anvil").join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let stale_link = bin_dir.join("taplo");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/nonexistent/old/taplo", &stale_link).unwrap();
+
+        // Fresh fake binary.
+        let pkg_dir = data_dir.path().join("anvil").join("packages").join("taplo");
+        let fake_bin = pkg_dir.join("bin").join("taplo");
+        std::fs::create_dir_all(fake_bin.parent().unwrap()).unwrap();
+        std::fs::write(&fake_bin, b"#!/bin/sh\necho hi\n").unwrap();
+
+        let spec = make_cargo_spec("taplo");
+        let result = finalize_install("taplo", &spec, &fake_bin, "", &|_| {});
+
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        result.expect("finalize_install must succeed over stale link");
+
+        // Symlink must now resolve to the new binary.
+        let resolved = std::fs::read_link(&stale_link).unwrap();
+        assert_eq!(resolved, fake_bin);
+    }
+
+    // NOTE: End-to-end installs of real packages are exercised manually.
+    // To test NpmInstaller:   :Anvil install pyright   (needs npm on $PATH)
+    // To test PipInstaller:   :Anvil install black     (needs python3 on $PATH)
+    // To test GoInstaller:    :Anvil install gopls     (needs go on $PATH)
 }
