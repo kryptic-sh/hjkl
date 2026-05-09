@@ -34,6 +34,12 @@ mouse = true
 # Theme name. Currently only "dark" is bundled.
 name = "dark"
 
+[which_key]
+# Show a popup listing available bindings when a prefix key is held
+# without follow-up for delay_ms milliseconds.
+enabled = true
+delay_ms = 500
+
 [lsp]
 # LSP subsystem. Set `enabled = true` in your user config (~/.config/hjkl/config.toml)
 # to opt in. Default off so installs without language servers don't pay the spawn

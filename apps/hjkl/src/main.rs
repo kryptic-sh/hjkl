@@ -18,6 +18,7 @@ mod render;
 mod start_screen;
 mod syntax;
 mod theme;
+mod which_key;
 
 use anyhow::Result;
 use clap::Parser;

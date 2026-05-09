@@ -408,6 +408,16 @@ pub struct App {
     /// Tracks the first key of the `<C-x><C-o>` omni-completion chord.
     /// Set to `true` after `Ctrl-x`; cleared after the next key.
     pub pending_ctrl_x: bool,
+    /// Monotonic instant at which the current prefix was set.
+    /// `None` when no prefix is pending.
+    pub pending_prefix_at: Option<std::time::Instant>,
+    /// `true` when the which-key idle timeout has expired and the popup
+    /// should be rendered.
+    pub which_key_active: bool,
+    /// Whether the which-key feature is enabled (from config).
+    pub which_key_enabled: bool,
+    /// Idle delay before the which-key popup appears (from config).
+    pub which_key_delay: std::time::Duration,
     /// Runtime vim-style key mappings added via `:map` / `:noremap` / `:imap`.
     pub(crate) runtime_keymaps: keymap::RuntimeKeymaps,
     /// Mouse-capture state. Mirrors the terminal's
@@ -1042,6 +1052,10 @@ impl App {
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,
+            pending_prefix_at: None,
+            which_key_active: false,
+            which_key_enabled: true,
+            which_key_delay: std::time::Duration::from_millis(500),
             runtime_keymaps: keymap::RuntimeKeymaps::default(),
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
@@ -1090,6 +1104,8 @@ impl App {
 
     pub fn with_config(mut self, config: crate::config::Config) -> Self {
         self.mouse_enabled = config.editor.mouse;
+        self.which_key_enabled = config.which_key.enabled;
+        self.which_key_delay = std::time::Duration::from_millis(config.which_key.delay_ms);
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();
@@ -1148,5 +1164,37 @@ impl App {
     pub fn dismiss_completion(&mut self) {
         self.completion = None;
         self.pending_ctrl_x = false;
+    }
+
+    /// Call whenever a prefix key is first set (pending_leader, pending_window_motion,
+    /// or pending_buffer_motion transition from "no prefix" to "prefix active").
+    /// Records the timestamp used to drive the which-key idle timeout.
+    pub fn note_prefix_set(&mut self) {
+        self.pending_prefix_at = Some(std::time::Instant::now());
+        self.which_key_active = false;
+    }
+
+    /// Call whenever a prefix is resolved or cleared (second key arrived,
+    /// Escape pressed, mode change, etc.). Resets all which-key state.
+    pub fn clear_prefix_state(&mut self) {
+        self.pending_prefix_at = None;
+        self.which_key_active = false;
+    }
+
+    /// Return the `Prefix` variant matching the currently-pending prefix, or
+    /// `None` when no prefix is active.
+    pub fn active_which_key_prefix(&self) -> Option<crate::which_key::Prefix> {
+        if self.pending_leader || self.pending_git || self.pending_lsp.is_some() {
+            return Some(crate::which_key::Prefix::Leader);
+        }
+        if self.pending_window_motion {
+            return Some(crate::which_key::Prefix::CtrlW);
+        }
+        match self.pending_buffer_motion {
+            Some('g') => Some(crate::which_key::Prefix::G),
+            Some(']') => Some(crate::which_key::Prefix::BracketRight),
+            Some('[') => Some(crate::which_key::Prefix::BracketLeft),
+            _ => None,
+        }
     }
 }

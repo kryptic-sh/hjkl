@@ -64,10 +64,39 @@ impl App {
                 self.recompute_and_install();
             }
 
-            // Wait for the next event with a 120 ms ceiling so the splash
-            // animation can repaint without input. The splash itself reads
-            // the wall clock — we just need a redraw cadence here.
-            if !event::poll(Duration::from_millis(120))? {
+            // Compute the poll timeout: normally 120 ms (splash animation cadence),
+            // but shortened to the remaining which-key deadline when a prefix is pending.
+            let poll_timeout = {
+                let base = Duration::from_millis(120);
+                if self.which_key_enabled && !self.which_key_active {
+                    if let Some(prefix_at) = self.pending_prefix_at {
+                        let deadline = prefix_at + self.which_key_delay;
+                        let now = std::time::Instant::now();
+                        let remaining = deadline.saturating_duration_since(now);
+                        base.min(remaining)
+                    } else {
+                        base
+                    }
+                } else {
+                    base
+                }
+            };
+
+            // Wait for the next event with the computed ceiling.
+            if !event::poll(poll_timeout)? {
+                // No event arrived. Check if the which-key deadline has now passed.
+                if !self.which_key_active && self.active_which_key_prefix().is_some() {
+                    let now = std::time::Instant::now();
+                    if crate::which_key::should_show(
+                        self.pending_prefix_at,
+                        self.which_key_delay,
+                        self.which_key_enabled,
+                        now,
+                    ) {
+                        self.which_key_active = true;
+                        // Fall through to redraw (loop continues).
+                    }
+                }
                 continue;
             }
             match event::read()? {
@@ -94,6 +123,11 @@ impl App {
                     }
 
                     self.status_message = None;
+
+                    // Any keypress clears the which-key popup immediately. The
+                    // prefix resolution branches below call note_prefix_set() again
+                    // when chaining into a sub-prefix, which re-arms the timer.
+                    self.which_key_active = false;
 
                     // ── Info popup dismissal ──────────────────────────────────
                     if self.info_popup.is_some() {
@@ -149,6 +183,7 @@ impl App {
                     if let Some(lsp_prefix) = self.pending_lsp.take() {
                         if self.active().editor.vim_mode() == VimMode::Normal {
                             self.pending_leader = false;
+                            self.clear_prefix_state();
                             match (lsp_prefix, key.code) {
                                 ('c', KeyCode::Char('a')) => {
                                     self.lsp_code_actions();
@@ -169,6 +204,7 @@ impl App {
                     if self.pending_git && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_git = false;
                         self.pending_leader = false;
+                        self.clear_prefix_state();
                         match key.code {
                             KeyCode::Char('s') if key.modifiers == KeyModifiers::NONE => {
                                 self.open_git_status_picker();
@@ -211,6 +247,9 @@ impl App {
                     let leader = self.config.editor.leader;
                     if self.pending_leader && self.active().editor.vim_mode() == VimMode::Normal {
                         self.pending_leader = false;
+                        // A key arrived — clear the which-key popup. For sub-prefix
+                        // chaining (g → git, c → LSP) we immediately re-arm the timer.
+                        self.clear_prefix_state();
                         if key.modifiers == KeyModifiers::NONE {
                             match key.code {
                                 // The leader key itself + 'f' both open the file picker
@@ -230,6 +269,7 @@ impl App {
                                 KeyCode::Char('g') => {
                                     // Begin git sub-command chord.
                                     self.pending_git = true;
+                                    self.note_prefix_set();
                                 }
                                 KeyCode::Char('d') => {
                                     // <leader>d — show diag-at-cursor in info popup.
@@ -239,11 +279,13 @@ impl App {
                                     // Begin LSP 'c' sub-command chord (<leader>ca = code actions).
                                     self.pending_lsp = Some('c');
                                     self.pending_leader = false;
+                                    self.note_prefix_set();
                                 }
                                 KeyCode::Char('r') => {
                                     // Begin LSP 'r' sub-command chord (<leader>rn = rename).
                                     self.pending_lsp = Some('r');
                                     self.pending_leader = false;
+                                    self.note_prefix_set();
                                 }
                                 _ => {}
                             }
@@ -257,6 +299,7 @@ impl App {
                         && self.active().editor.vim_mode() == VimMode::Normal
                     {
                         self.pending_leader = true;
+                        self.note_prefix_set();
                         continue;
                     }
 
@@ -265,6 +308,7 @@ impl App {
                         // Second key of a Ctrl-w chord.
                         if self.pending_window_motion {
                             self.pending_window_motion = false;
+                            self.clear_prefix_state();
                             // Parse buffered count (default 1).
                             let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
                             self.pending_count.clear();
@@ -352,6 +396,7 @@ impl App {
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                         {
                             self.pending_window_motion = true;
+                            self.note_prefix_set();
                             continue;
                         }
                         // tmux-navigator: bare Ctrl-h/j/k/l in Normal mode.
@@ -421,6 +466,7 @@ impl App {
                         // Any non-Normal mode clears the pending flag and count.
                         self.pending_window_motion = false;
                         self.pending_count.clear();
+                        self.clear_prefix_state();
                     }
 
                     // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────────
@@ -455,6 +501,7 @@ impl App {
                         && key.modifiers == KeyModifiers::NONE
                     {
                         if let Some(prefix) = self.pending_buffer_motion.take() {
+                            self.clear_prefix_state();
                             // Parse and consume the buffered count (default 1).
                             let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
                             let count_digits: String = self.pending_count.drain(..).collect();
@@ -547,6 +594,7 @@ impl App {
                         self.pending_count.clear();
                         self.pending_git = false;
                         self.pending_leader = false;
+                        self.clear_prefix_state();
                     }
 
                     // ── LSP hover (`K`) in Normal mode ───────────────────────
@@ -645,6 +693,7 @@ impl App {
                         && let KeyCode::Char(c) = key.code
                     {
                         self.pending_buffer_motion = Some(c);
+                        self.note_prefix_set();
                         // Fall through: also forward the key to the engine
                         // so its own `g`-pending state is updated correctly
                         // (the engine handles gj/gk/gg/G etc).
@@ -883,6 +932,18 @@ impl App {
                         if self.completion.is_some() {
                             self.dismiss_completion();
                         }
+                    }
+
+                    // ── Escape in Normal mode: cancel any pending prefix ─────
+                    if key.code == KeyCode::Esc
+                        && self.active().editor.vim_mode() == VimMode::Normal
+                    {
+                        self.pending_leader = false;
+                        self.pending_git = false;
+                        self.pending_lsp = None;
+                        self.pending_window_motion = false;
+                        self.pending_buffer_motion = None;
+                        self.clear_prefix_state();
                     }
 
                     // ── Normal editor key handling ───────────────────────────

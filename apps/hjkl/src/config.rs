@@ -28,6 +28,27 @@ pub struct Config {
     pub theme: ThemeConfig,
     #[serde(default)]
     pub lsp: hjkl_lsp::LspConfig,
+    #[serde(default)]
+    pub which_key: WhichKeyConfig,
+}
+
+/// Configuration for the which-key popup.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhichKeyConfig {
+    /// Whether the which-key popup is enabled.
+    pub enabled: bool,
+    /// Idle delay in milliseconds before the popup appears.
+    pub delay_ms: u64,
+}
+
+impl Default for WhichKeyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            delay_ms: 500,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
