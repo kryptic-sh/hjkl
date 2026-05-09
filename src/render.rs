@@ -124,6 +124,13 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// syntax and selection colours without a second layout traversal.
     /// Pass `&[]` to disable. Added in 0.5.0.
     pub diag_overlays: &'a [DiagOverlay],
+    /// 1-based column indices for vertical rulers (vim's `colorcolumn`).
+    /// The renderer paints `colorcolumn_style` on those text-area cells
+    /// beneath syntax highlights. Pass `&[]` to disable.
+    pub colorcolumn_cols: &'a [u16],
+    /// Background style applied to cells at a `colorcolumn` position.
+    /// Ignored when `colorcolumn_cols` is empty.
+    pub colorcolumn_style: Style,
 }
 
 /// Controls what numbers are rendered in the gutter.
@@ -360,6 +367,29 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let y = text_area.y + sy;
                 if let Some(cell) = term_buf.cell_mut((x, y)) {
                     cell.set_style(cell.style().patch(self.cursor_column_bg));
+                }
+            }
+        }
+
+        // Colorcolumn pass: paint vertical ruler(s) under syntax.
+        // Applied only in Wrap::None mode; skips indices that are
+        // scrolled out of the visible horizontal window.
+        if matches!(wrap_mode, Wrap::None) && !self.colorcolumn_cols.is_empty() {
+            for &col_1based in self.colorcolumn_cols {
+                let col = col_1based as usize; // convert to 0-based
+                if col == 0 || col < top_col + 1 {
+                    continue; // out of visible range (scrolled past left edge)
+                }
+                let screen_col = col - 1 - top_col; // 0-based screen offset
+                if screen_col >= text_area.width as usize {
+                    continue; // out of visible range (past right edge)
+                }
+                let x = text_area.x + screen_col as u16;
+                for sy in 0..screen_row {
+                    let y = text_area.y + sy;
+                    if let Some(cell) = term_buf.cell_mut((x, y)) {
+                        cell.set_style(cell.style().patch(self.colorcolumn_style));
+                    }
                 }
             }
         }
@@ -836,6 +866,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -866,6 +898,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -897,6 +931,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -936,6 +972,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -969,6 +1007,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -1008,6 +1048,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -1052,6 +1094,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1088,6 +1132,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1127,6 +1173,8 @@ mod tests {
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1167,6 +1215,8 @@ mod tests {
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1213,6 +1263,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "E");
@@ -1248,6 +1300,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -1281,6 +1335,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -1314,6 +1370,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -1343,6 +1401,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -1372,6 +1432,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         }
     }
 
@@ -1565,6 +1627,8 @@ mod tests {
             search_pattern,
             non_text_style: Style::default(),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         }
     }
 
@@ -1734,6 +1798,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -1793,6 +1859,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
             diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -1846,6 +1914,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[overlay],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         let term = run_render(view, 20, 2);
 
@@ -1901,6 +1971,8 @@ mod tests {
             search_pattern: None,
             non_text_style: Style::default(),
             diag_overlays: &[overlay],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
