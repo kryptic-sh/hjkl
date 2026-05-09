@@ -1006,6 +1006,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "hjkl-xdg",
  "libloading",
  "ratatui",
  "serde",
@@ -1057,7 +1058,7 @@ dependencies = [
 name = "hjkl-config"
 version = "0.2.0"
 dependencies = [
- "dirs",
+ "hjkl-xdg",
  "serde",
  "tempfile",
  "thiserror 2.0.18",
@@ -1149,6 +1150,15 @@ name = "hjkl-splash"
 version = "0.2.0"
 dependencies = [
  "ratatui",
+]
+
+[[package]]
+name = "hjkl-xdg"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

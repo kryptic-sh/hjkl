@@ -13,6 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [patch.crates-io]
+hjkl-xdg = { path = "crates/hjkl-xdg" }
 hjkl-buffer = { path = "crates/hjkl-buffer" }
 hjkl-clipboard = { path = "crates/hjkl-clipboard" }
 hjkl-editor = { path = "crates/hjkl-editor" }
