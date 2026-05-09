@@ -6,9 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-10
+
 ### Changed
 
-- Replaced inlined XDG resolver with `hjkl-xdg` dep.
+- Replaced inlined XDG resolver in `src/runtime/xdg.rs` with `hjkl-xdg = "0.1"`
+  dep. `xdg::data_home()` and `xdg::cache_home()` retain the same callable shape
+  via `pub use`.
 
 ## [0.6.0] - 2026-05-09
 
@@ -340,7 +344,9 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.1
+[0.6.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.0
 [0.5.4]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.2
