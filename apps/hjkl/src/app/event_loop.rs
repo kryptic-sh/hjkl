@@ -265,6 +265,9 @@ impl App {
                         // Second key of a Ctrl-w chord.
                         if self.pending_window_motion {
                             self.pending_window_motion = false;
+                            // Parse buffered count (default 1).
+                            let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
+                            self.pending_count.clear();
                             match key.code {
                                 KeyCode::Char('j') => {
                                     self.focus_below();
@@ -318,17 +321,18 @@ impl App {
                                 KeyCode::Char('n') => {
                                     self.dispatch_ex("new");
                                 }
+                                // Count-aware resize keys.
                                 KeyCode::Char('+') => {
-                                    self.resize_height(1);
+                                    self.resize_height(count as i32);
                                 }
                                 KeyCode::Char('-') => {
-                                    self.resize_height(-1);
+                                    self.resize_height(-(count as i32));
                                 }
                                 KeyCode::Char('>') => {
-                                    self.resize_width(1);
+                                    self.resize_width(count as i32);
                                 }
                                 KeyCode::Char('<') => {
-                                    self.resize_width(-1);
+                                    self.resize_width(-(count as i32));
                                 }
                                 KeyCode::Char('=') => {
                                     self.equalize_layout();
@@ -414,8 +418,9 @@ impl App {
                             }
                         }
                     } else {
-                        // Any non-Normal mode clears the pending flag.
+                        // Any non-Normal mode clears the pending flag and count.
                         self.pending_window_motion = false;
+                        self.pending_count.clear();
                     }
 
                     // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────────
@@ -450,18 +455,26 @@ impl App {
                         && key.modifiers == KeyModifiers::NONE
                     {
                         if let Some(prefix) = self.pending_buffer_motion.take() {
+                            // Parse and consume the buffered count (default 1).
+                            let count = self.pending_count.parse::<usize>().unwrap_or(1).max(1);
+                            let count_digits: String = self.pending_count.drain(..).collect();
                             match (prefix, key.code) {
-                                // TODO: [N]gt count prefix (e.g. `3gt` → jump to tab 3)
-                                // is a separate effort; not wired here.
+                                // [N]gt — jump forward N tabs (wraps).
                                 ('g', KeyCode::Char('t')) => {
-                                    self.dispatch_ex("tabnext");
+                                    for _ in 0..count {
+                                        self.dispatch_ex("tabnext");
+                                    }
                                     continue;
                                 }
+                                // [N]gT — jump backward N tabs (wraps).
                                 ('g', KeyCode::Char('T')) => {
-                                    self.dispatch_ex("tabprev");
+                                    for _ in 0..count {
+                                        self.dispatch_ex("tabprev");
+                                    }
                                     continue;
                                 }
-                                // LSP goto motions (g-prefix)
+                                // LSP goto motions (g-prefix) — count not meaningful,
+                                // just clear it and dispatch.
                                 ('g', KeyCode::Char('d')) => {
                                     self.lsp_goto_definition();
                                     continue;
@@ -508,14 +521,20 @@ impl App {
                                     self.lprev_severity(Some(super::DiagSeverity::Error));
                                     continue;
                                 }
-                                // Didn't match — forward only the current key;
-                                // drop the pending prefix (g/]/[ alone has no
-                                // other mapped meaning in our engine yet).
-                                // Engine-handled motions like gg/gj/gk/G need
-                                // the viewport synced back so the focused
-                                // window's stored top_row picks up the
-                                // engine's auto-scroll.
+                                // Didn't match an app-handled combo — replay
+                                // buffered digits + prefix char + current key
+                                // to the engine in order, so e.g. `5gg` works.
                                 _ => {
+                                    for d in count_digits.chars() {
+                                        self.active_mut().editor.handle_key(KeyEvent::new(
+                                            KeyCode::Char(d),
+                                            KeyModifiers::NONE,
+                                        ));
+                                    }
+                                    self.active_mut().editor.handle_key(KeyEvent::new(
+                                        KeyCode::Char(prefix),
+                                        KeyModifiers::NONE,
+                                    ));
                                     self.active_mut().editor.handle_key(key);
                                     self.sync_viewport_from_editor();
                                     continue;
@@ -523,8 +542,9 @@ impl App {
                             }
                         }
                     } else {
-                        // Any non-Normal key clears pending motions.
+                        // Any non-Normal mode clears pending motions and count.
                         self.pending_buffer_motion = None;
+                        self.pending_count.clear();
                         self.pending_git = false;
                         self.pending_leader = false;
                     }
@@ -560,6 +580,58 @@ impl App {
                         if key.code == KeyCode::Char('?') {
                             self.open_search_prompt(SearchDir::Backward);
                             continue;
+                        }
+                    }
+
+                    // ── App-level count prefix buffering ─────────────────────
+                    // In Normal mode with no chord prefix pending, buffer
+                    // incoming digit keys so that `[N]gt`, `[N]gT`, and
+                    // `[N]<C-w>+/-/>/<` can consume the count.  When the next
+                    // non-digit key is not a chord-starter and not app-handled,
+                    // all buffered digits are replayed to the engine in order so
+                    // `5j`, `10w`, etc. still work.
+                    //
+                    // Rules (vim-compatible):
+                    //   • `1`–`9` start a count when pending_count is empty.
+                    //   • `0`–`9` extend a non-empty pending_count.
+                    //   • `0` with empty pending_count = start-of-line motion
+                    //     → fall through to the engine (not buffered).
+                    //   • Chord-starters (`g`, `]`, `[`) do NOT trigger digit
+                    //     replay; they keep the count alive for the second key.
+                    if self.active().editor.vim_mode() == VimMode::Normal
+                        && key.modifiers == KeyModifiers::NONE
+                        && !self.pending_window_motion
+                        && self.pending_buffer_motion.is_none()
+                    {
+                        if let KeyCode::Char(d @ '0'..='9') = key.code {
+                            let is_zero = d == '0';
+                            if !is_zero || !self.pending_count.is_empty() {
+                                // Buffer the digit; do NOT fall through to the engine.
+                                self.pending_count.push(d);
+                                continue;
+                            }
+                            // '0' with empty pending_count → start-of-line; fall through.
+                        } else if !self.pending_count.is_empty() {
+                            // Non-digit key with buffered count.  If it is a chord-starter
+                            // (`g`, `]`, `[`) keep the count alive — the second key will
+                            // consume it.  Otherwise replay digits to the engine now so
+                            // the engine's own count parser sees them (e.g. `5j`).
+                            let is_chord_starter = matches!(
+                                key.code,
+                                KeyCode::Char('g') | KeyCode::Char(']') | KeyCode::Char('[')
+                            );
+                            if !is_chord_starter {
+                                let digits: String = self.pending_count.drain(..).collect();
+                                for d in digits.chars() {
+                                    self.active_mut().editor.handle_key(KeyEvent::new(
+                                        KeyCode::Char(d),
+                                        KeyModifiers::NONE,
+                                    ));
+                                }
+                                // Current key falls through to normal handling below.
+                            }
+                            // If is_chord_starter: count stays in pending_count;
+                            // the pending_buffer_motion setter below activates.
                         }
                     }
 

@@ -341,6 +341,11 @@ pub struct App {
     /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
     /// once the motion is resolved or forwarded to the engine.
     pub pending_buffer_motion: Option<char>,
+    /// Buffered digit string for an app-level count prefix (e.g. `5` in
+    /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
+    /// Digits are replayed to the engine when the non-digit key is
+    /// engine-handled, or consumed when the key is app-handled.
+    pub pending_count: String,
     /// Direction of the active `search_field`.
     pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal.
@@ -1011,6 +1016,7 @@ impl App {
             pending_git: false,
             pending_lsp: None,
             pending_buffer_motion: None,
+            pending_count: String::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,

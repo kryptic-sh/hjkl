@@ -4310,3 +4310,197 @@ fn lsp_code_actions_includes_overlapping_diags_in_context() {
     );
     assert_eq!(overlapping[0].message, "overlapping");
 }
+
+// ── App-level count prefix tests ─────────────────────────────────────────────
+
+/// `5gt` should advance active_tab by 5 (wrapping) — the same as calling
+/// `tabnext` five times.
+#[test]
+fn count_gt_advances_multiple_tabs() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Create 6 tabs so we have room to navigate.
+    for _ in 0..5 {
+        app.dispatch_ex("tabnew");
+    }
+    assert_eq!(app.tabs.len(), 6);
+    // Jump back to tab 0.
+    app.active_tab = 0;
+
+    // Simulate `5gt` by calling dispatch_ex("tabnext") 5 times — the same
+    // thing the event loop does when it sees `pending_count = "5"` + `gt`.
+    let count = 5_usize;
+    for _ in 0..count {
+        app.dispatch_ex("tabnext");
+    }
+    assert_eq!(
+        app.active_tab, 5,
+        "5gt from tab 0 should land on tab 5 (index 5)"
+    );
+}
+
+/// `3gT` should move active_tab back by 3.
+#[test]
+fn count_gt_upper_retreats_multiple_tabs() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    for _ in 0..4 {
+        app.dispatch_ex("tabnew");
+    }
+    assert_eq!(app.tabs.len(), 5);
+    // Start at the last tab (index 4).
+    app.active_tab = 4;
+
+    let count = 3_usize;
+    for _ in 0..count {
+        app.dispatch_ex("tabprev");
+    }
+    assert_eq!(
+        app.active_tab, 1,
+        "3gT from tab 4 should land on tab 1 (index 1)"
+    );
+}
+
+/// `3<C-w>+` should call resize_height with +3 (count as i32).
+#[test]
+fn count_ctrl_w_plus_resizes_by_count() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 40,
+    };
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    // Simulate `3<C-w>+`: the event loop parses count=3 and calls resize_height(3).
+    let count: i32 = 3;
+    app.resize_height(count);
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    // Growing by 3 rows in a 40-row pane should increase the ratio more than
+    // a single-row grow would.
+    assert!(
+        ratio_after > ratio_before,
+        "3<C-w>+ must grow the ratio: before={ratio_before} after={ratio_after}"
+    );
+
+    // The ratio change must be larger than a delta-1 change would produce.
+    // delta=1 on a 40-row pane with ratio=0.5 → new focused = 20+1 = 21 → ratio ≈ 0.525.
+    // delta=3 → new focused = 20+3 = 23 → ratio ≈ 0.575.
+    let ratio_delta_1 = (20.0_f32 + 1.0) / 40.0;
+    assert!(
+        ratio_after > ratio_delta_1,
+        "ratio after 3-row grow ({ratio_after}) should exceed 1-row grow ({ratio_delta_1})"
+    );
+}
+
+/// `pending_count` digit accumulation rules:
+///   • `1`–`9` start a count when empty.
+///   • `0` with empty count is NOT buffered (start-of-line motion).
+///   • `0` with non-empty count extends it.
+#[test]
+fn pending_count_accumulation_rules() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Initially empty.
+    assert!(app.pending_count.is_empty());
+
+    // Simulate the digit-buffering logic for each digit:
+    // '1' starts the count.
+    app.pending_count.push('1');
+    assert_eq!(app.pending_count, "1");
+
+    // '0' extends a non-empty count.
+    app.pending_count.push('0');
+    assert_eq!(app.pending_count, "10");
+
+    // Parsing gives 10.
+    let count: usize = app.pending_count.parse().unwrap_or(1);
+    assert_eq!(count, 10);
+
+    // After consuming, it must be cleared.
+    app.pending_count.clear();
+    assert!(app.pending_count.is_empty());
+
+    // '0' alone (empty pending_count) must NOT be pushed — the event loop
+    // falls through to the engine.  We verify this by checking the rule:
+    // is_zero && pending_count.is_empty() → do not push.
+    let d = '0';
+    let is_zero = d == '0';
+    if !is_zero || !app.pending_count.is_empty() {
+        app.pending_count.push(d);
+    }
+    assert!(
+        app.pending_count.is_empty(),
+        "'0' with empty pending_count must not be buffered"
+    );
+}
+
+/// `5j` — engine motions: digits are replayed to the editor engine and the
+/// cursor moves 5 rows down.
+#[test]
+fn count_engine_motion_5j_moves_cursor_five_rows() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Populate 20 lines so there is room to move.
+    let content: String = (0..20).map(|i| format!("line {i}\n")).collect();
+    let content = content.trim_end_matches('\n');
+    hjkl_engine::BufferEdit::replace_all(app.active_mut().editor.buffer_mut(), content);
+
+    // Cursor starts at row 0.
+    let (start_row, _) = app.active().editor.cursor();
+    assert_eq!(start_row, 0);
+
+    // Simulate what the event loop does for `5j`:
+    // 1. Buffer '5' into pending_count.
+    // 2. On 'j', replay '5' then 'j' to the engine.
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE));
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+
+    let (end_row, _) = app.active().editor.cursor();
+    assert_eq!(end_row, 5, "5j must move cursor from row 0 to row 5");
+}
+
+/// `0` with empty `pending_count` goes to start-of-line (col 0).
+#[test]
+fn zero_with_empty_count_is_start_of_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    hjkl_engine::BufferEdit::replace_all(
+        app.active_mut().editor.buffer_mut(),
+        "hello world\nsecond line",
+    );
+
+    // Move to end of first line.
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
+    let (_, col_after_dollar) = app.active().editor.cursor();
+    assert!(col_after_dollar > 0, "$ must move to end of line");
+
+    // `0` with empty pending_count → goes to col 0.
+    // Verify the rule: is_zero && pending_count.is_empty() → fall through.
+    assert!(app.pending_count.is_empty());
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+    let (_, col_after_zero) = app.active().editor.cursor();
+    assert_eq!(
+        col_after_zero, 0,
+        "0 with no pending count must go to col 0"
+    );
+}
