@@ -6,6 +6,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced inlined XDG resolver with `hjkl-xdg` dep.
+
 ## [0.6.0] - 2026-05-09
 
 ### Added
