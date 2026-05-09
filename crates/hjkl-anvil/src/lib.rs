@@ -5,6 +5,19 @@
 //! formatters, linters, and debug adapters — using the same XDG path
 //! conventions and compile-time embedded catalog pattern.
 //!
+//! # Features
+//!
+//! ## `sync` (dev-only)
+//!
+//! Enables the `sync-anvil` xtask binary that regenerates `anvil.toml` from
+//! the upstream `mason-org/mason-registry` JSON artifact. Not needed by
+//! downstream consumers — it pulls in `reqwest`, `zip`, and `serde_json`.
+//!
+//! Maintainers run:
+//! ```text
+//! cargo run -p hjkl-anvil --features sync --bin sync-anvil -- --pin <tag>
+//! ```
+//!
 //! # Quick start
 //!
 //! ```rust
