@@ -106,6 +106,70 @@ impl App {
         true
     }
 
+    /// Poll in-flight anvil install handles each tick and fan status events
+    /// into `status_message` and `anvil_log`.
+    ///
+    /// Returns `true` when at least one event arrived and a redraw is useful.
+    pub(crate) fn poll_anvil_jobs(&mut self) -> bool {
+        use hjkl_anvil::InstallStatus;
+
+        let mut redraw = false;
+        let mut to_remove: Vec<String> = Vec::new();
+
+        for (name, handle) in self.anvil_handles.iter() {
+            while let Some(status) = handle.try_recv() {
+                redraw = true;
+                let log_line = format_anvil_status(&status);
+                self.anvil_log
+                    .entry(name.clone())
+                    .or_default()
+                    .push(log_line);
+
+                match &status {
+                    InstallStatus::Done { .. } => {
+                        self.status_message = Some(format!("anvil: installed {name}"));
+                        to_remove.push(name.clone());
+                    }
+                    InstallStatus::Failed(reason) => {
+                        self.status_message =
+                            Some(format!("anvil: {name} failed \u{2014} {reason}"));
+                        to_remove.push(name.clone());
+                    }
+                    InstallStatus::Downloading {
+                        bytes_downloaded,
+                        total,
+                    } => {
+                        let pct = match total {
+                            Some(t) if *t > 0 => {
+                                format!("{}%", (bytes_downloaded * 100) / t)
+                            }
+                            _ => format!("{bytes_downloaded} bytes"),
+                        };
+                        self.status_message = Some(format!("anvil: {name} downloading {pct}"));
+                    }
+                    InstallStatus::Verifying => {
+                        self.status_message = Some(format!("anvil: {name} verifying"));
+                    }
+                    InstallStatus::Extracting => {
+                        self.status_message = Some(format!("anvil: {name} extracting"));
+                    }
+                    InstallStatus::Installing => {
+                        self.status_message = Some(format!("anvil: {name} installing"));
+                    }
+                    InstallStatus::Queued => {
+                        // No toast for the queued state — it's transient.
+                    }
+                }
+            }
+        }
+
+        for name in to_remove {
+            self.anvil_handles.remove(&name);
+        }
+
+        redraw
+    }
+
     /// Submit a new viewport-scoped parse on the syntax worker and install
     /// whatever the worker has produced since the last frame.
     pub(crate) fn recompute_and_install(&mut self) {
@@ -275,6 +339,29 @@ impl App {
 impl hjkl_picker::PreviewHighlighter for App {
     fn spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
         self.preview_spans_for(path, bytes)
+    }
+}
+
+/// Format an [`hjkl_anvil::InstallStatus`] as a human-readable log line.
+fn format_anvil_status(status: &hjkl_anvil::InstallStatus) -> String {
+    use hjkl_anvil::InstallStatus;
+    match status {
+        InstallStatus::Queued => "queued".into(),
+        InstallStatus::Downloading {
+            bytes_downloaded,
+            total,
+        } => match total {
+            Some(t) if *t > 0 => format!(
+                "downloading {}% ({bytes_downloaded}/{t} bytes)",
+                (bytes_downloaded * 100) / t
+            ),
+            _ => format!("downloading {bytes_downloaded} bytes"),
+        },
+        InstallStatus::Verifying => "verifying checksum".into(),
+        InstallStatus::Extracting => "extracting archive".into(),
+        InstallStatus::Installing => "installing binary".into(),
+        InstallStatus::Done { bin_path } => format!("done → {}", bin_path.display()),
+        InstallStatus::Failed(reason) => format!("failed: {reason}"),
     }
 }
 

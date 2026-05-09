@@ -4594,3 +4594,86 @@ fn set_colorcolumn_stores_value() {
     app.dispatch_ex("set cc=");
     assert_eq!(app.active().editor.settings().colorcolumn, "");
 }
+
+// ── :Anvil ex command tests ───────────────────────────────────────────────────
+
+#[test]
+fn anvil_install_unknown_tool_sets_error_message() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("Anvil install definitely-not-a-real-tool-xyz");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("unknown tool"),
+        "expected 'unknown tool' in status message, got: {msg:?}"
+    );
+}
+
+#[test]
+fn anvil_uninstall_not_installed_graceful() {
+    // Uninstalling a tool that has no package dir must not panic.
+    // It should set a success or no-op status message.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // rust-analyzer is in the registry but not installed in CI.
+    app.dispatch_ex("Anvil uninstall rust-analyzer");
+    // Either "removed" or "failed to resolve" — should not panic.
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        !msg.is_empty(),
+        "expected some status message after anvil uninstall"
+    );
+}
+
+#[test]
+fn anvil_update_all_with_zero_installed_tools() {
+    // :Anvil update with no installed tools should reach the sweep-started toast.
+    // In CI the XDG store is empty so read_rev returns None for all tools,
+    // which means anvil_update_all skips all names and sets the sweep message.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("Anvil update");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("update sweep started"),
+        "expected 'update sweep started', got: {msg:?}"
+    );
+}
+
+#[test]
+fn anvil_picker_source_builds_from_registry() {
+    use crate::picker_sources::{AnvilPickerSource, AnvilState};
+
+    let registry = hjkl_anvil::Registry::embedded().expect("embedded registry must load");
+    let source = AnvilPickerSource::from_registry(&registry);
+
+    // The embedded catalog has at least one tool (rust-analyzer).
+    assert!(!source.items.is_empty(), "picker source must have items");
+
+    // In CI nothing is installed, so every item should be Available.
+    for item in &source.items {
+        // State should be Available (no .rev files in CI).
+        // We can't assert Available specifically in all environments, but
+        // we can assert the item fields are consistent.
+        let label = item.label();
+        assert!(
+            label.contains(&item.name),
+            "label must contain tool name; got: {label:?}"
+        );
+        assert!(
+            matches!(
+                item.state,
+                AnvilState::Available | AnvilState::Installed { .. } | AnvilState::Outdated { .. }
+            ),
+            "state must be one of the three variants"
+        );
+    }
+}
+
+#[test]
+fn anvil_bad_subcommand_shows_usage() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("Anvil badsubcommand something else");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("usage"),
+        "expected usage hint in status message, got: {msg:?}"
+    );
+}

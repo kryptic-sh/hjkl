@@ -439,6 +439,15 @@ pub struct App {
     /// leader / g / ] / [ / <C-w> sequences. Replaces the per-prefix state
     /// machines (pending_leader, pending_git, etc.) that are now removed.
     pub(crate) app_keymap: Keymap<AppAction>,
+    /// Background install worker pool shared across all `:Anvil install` calls.
+    pub anvil_pool: hjkl_anvil::InstallPool,
+    /// In-flight install handles keyed by tool name.
+    pub anvil_handles: HashMap<String, hjkl_anvil::InstallHandle>,
+    /// Per-tool install log lines accumulated from status messages.
+    pub anvil_log: HashMap<String, Vec<String>>,
+    /// Embedded anvil tool registry (built once at startup from the baked-in
+    /// `anvil.toml`; `None` only when the embedded catalog fails to parse).
+    pub anvil_registry: Option<hjkl_anvil::Registry>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1153,6 +1162,10 @@ impl App {
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
             app_keymap: build_app_keymap(default_leader),
+            anvil_pool: hjkl_anvil::InstallPool::new(),
+            anvil_handles: HashMap::new(),
+            anvil_log: HashMap::new(),
+            anvil_registry: hjkl_anvil::Registry::embedded().ok(),
         })
     }
 

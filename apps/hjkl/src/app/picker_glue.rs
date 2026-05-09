@@ -263,7 +263,36 @@ impl App {
                     self.status_message = Some("E: code action index out of range".into());
                 }
             }
+            AppAction::AnvilInstall(name) => {
+                self.anvil_install(&name.clone());
+            }
+            AppAction::AnvilUninstall(name) => {
+                self.anvil_uninstall(&name.clone());
+            }
+            AppAction::AnvilUpdate(name) => {
+                self.anvil_update(&name.clone());
+            }
+            AppAction::AnvilNoOp(_name) => {
+                // Tool already installed — no-op from picker <CR>.
+                // TODO: could show the install log popup here.
+            }
         }
+    }
+
+    /// Open the anvil tool picker.
+    pub(crate) fn open_anvil_picker(&mut self) {
+        let registry = match self.anvil_registry.as_ref() {
+            Some(r) => r,
+            None => {
+                self.status_message = Some("anvil: registry not available".into());
+                return;
+            }
+        };
+        let source = Box::new(crate::picker_sources::AnvilPickerSource::from_registry(
+            registry,
+        ));
+        self.picker = Some(crate::picker::Picker::new(source));
+        self.pending_leader = false;
     }
 
     pub(crate) fn do_checkout_branch(&mut self, name: &str) {

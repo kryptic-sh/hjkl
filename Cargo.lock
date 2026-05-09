@@ -1031,6 +1031,7 @@ dependencies = [
  "crossterm",
  "ec4rs",
  "git2",
+ "hjkl-anvil",
  "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-clipboard",

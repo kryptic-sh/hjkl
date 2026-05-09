@@ -222,7 +222,40 @@ fn parse_args() -> Result<Args> {
     Ok(args)
 }
 
+/// Prepend the anvil `bin/` directory to `$PATH` so any tool installed via
+/// `:Anvil install <name>` is visible to LSP spawners and shell invocations.
+///
+/// # Safety
+///
+/// `set_var` is `unsafe` in Rust 2024 because it is not thread-safe. This
+/// function is called at the very top of `main`, strictly before any threads
+/// are spawned (tracing subscriber, LSP manager, etc.), so the invariant is
+/// upheld here.
+fn prepend_anvil_path() {
+    let Ok(bin_dir) = hjkl_anvil::store::bin_dir() else {
+        return; // no $HOME — give up silently
+    };
+    if !bin_dir.exists() {
+        let _ = std::fs::create_dir_all(&bin_dir);
+    }
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries = std::env::split_paths(&existing).collect::<Vec<_>>();
+    // Deduplicate: remove any stale prepend from a previous hjkl session.
+    entries.retain(|p| p != &bin_dir);
+    entries.insert(0, bin_dir);
+    if let Ok(joined) = std::env::join_paths(&entries) {
+        // SAFETY: single-threaded at this call site — no threads have been
+        // spawned yet. The OS process environment is mutable without risk.
+        unsafe {
+            std::env::set_var("PATH", joined);
+        }
+    }
+}
+
 fn main() -> Result<()> {
+    // Prepend the anvil bin dir to PATH before any threads (tracing, LSP) start.
+    prepend_anvil_path();
+
     init_tracing();
 
     let args = parse_args()?;

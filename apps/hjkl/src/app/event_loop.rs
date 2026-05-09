@@ -115,6 +115,9 @@ impl App {
                 self.recompute_and_install();
             }
 
+            // Poll any in-flight anvil install jobs and surface status toasts.
+            let _ = self.poll_anvil_jobs();
+
             // Compute the poll timeout: normally 120 ms (splash animation cadence),
             // but shortened to the remaining which-key deadline when a prefix is pending.
             let poll_timeout = {

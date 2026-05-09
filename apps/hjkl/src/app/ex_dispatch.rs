@@ -532,6 +532,22 @@ impl App {
                 self.show_lsp_info();
                 return;
             }
+            _ if raw.starts_with("Anvil") => {
+                let rest = raw["Anvil".len()..].trim();
+                let args: Vec<&str> = rest.split_whitespace().collect();
+                match args.as_slice() {
+                    [] => self.open_anvil_picker(),
+                    ["install", name] => self.anvil_install(name),
+                    ["uninstall", name] => self.anvil_uninstall(name),
+                    ["update"] => self.anvil_update_all(),
+                    ["update", name] => self.anvil_update(name),
+                    _ => {
+                        self.status_message =
+                            Some("usage: :Anvil [install|uninstall|update] [name]".into());
+                    }
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -1822,7 +1838,117 @@ impl App {
             }
         }
 
+        // Anvil section: show anvil status for each configured server's binary.
+        lines.push(String::new());
+        lines.push("Anvil tool status:".into());
+        if let Some(registry) = self.anvil_registry.as_ref() {
+            let mut found_any = false;
+            for (lang, cfg) in &self.config.lsp.servers {
+                let server_bin = &cfg.command;
+                // Look up the binary name in the registry.
+                if let Some(spec) = registry.get(server_bin) {
+                    found_any = true;
+                    match hjkl_anvil::store::read_rev(server_bin) {
+                        Ok(Some(rev)) => {
+                            lines.push(format!(
+                                "  {lang} / {server_bin} (anvil: installed {})",
+                                rev.version
+                            ));
+                        }
+                        Ok(None) => {
+                            lines.push(format!(
+                                "  {lang} / {server_bin} (anvil: not installed, available {})",
+                                spec.version
+                            ));
+                        }
+                        Err(_) => {
+                            lines.push(format!("  {lang} / {server_bin} (anvil: store error)"));
+                        }
+                    }
+                } else {
+                    lines.push(format!("  {lang} / {server_bin} (anvil: not in registry)"));
+                }
+            }
+            if !found_any {
+                lines.push("  (no LSP servers configured)".into());
+            }
+        } else {
+            lines.push("  (registry not available)".into());
+        }
+
         self.info_popup = Some(lines.join("\n"));
+    }
+
+    /// `:Anvil install <name>` — queue a background install job.
+    pub(crate) fn anvil_install(&mut self, name: &str) {
+        let Some(registry) = self.anvil_registry.as_ref() else {
+            self.status_message = Some("anvil: registry not available".into());
+            return;
+        };
+        let Some(spec) = registry.get(name) else {
+            self.status_message = Some(format!("anvil: unknown tool `{name}`"));
+            return;
+        };
+        let spec = spec.clone();
+        let handle = self.anvil_pool.install(name.to_string(), spec);
+        self.anvil_handles.insert(name.to_string(), handle);
+        self.status_message = Some(format!("anvil: installing {name}\u{2026}"));
+    }
+
+    /// `:Anvil uninstall <name>` — remove the tool's package dir and bin symlink.
+    pub(crate) fn anvil_uninstall(&mut self, name: &str) {
+        let pkg_dir = hjkl_anvil::store::package_dir(name);
+        let bin_dir = hjkl_anvil::store::bin_dir();
+        match (pkg_dir, bin_dir) {
+            (Ok(pkg), Ok(bin)) => {
+                let _ = std::fs::remove_dir_all(&pkg);
+                // Remove the bin symlink (name comes from spec.bin, not the tool key).
+                if let Some(spec) = self.anvil_registry.as_ref().and_then(|r| r.get(name)) {
+                    let link = bin.join(&spec.bin);
+                    let _ = std::fs::remove_file(&link);
+                }
+                self.status_message = Some(format!("anvil: removed {name}"));
+            }
+            _ => {
+                self.status_message = Some(format!("anvil: failed to resolve paths for {name}"));
+            }
+        }
+    }
+
+    /// `:Anvil update <name>` — reinstall if the on-disk `.rev` doesn't match
+    /// the registry's pinned version.
+    pub(crate) fn anvil_update(&mut self, name: &str) {
+        let Some(registry) = self.anvil_registry.as_ref() else {
+            self.status_message = Some("anvil: registry not available".into());
+            return;
+        };
+        let Some(spec) = registry.get(name) else {
+            self.status_message = Some(format!("anvil: unknown tool `{name}`"));
+            return;
+        };
+        let spec_version = spec.version.clone();
+        let installed = hjkl_anvil::store::read_rev(name).ok().flatten();
+        let needs_update = installed.map(|r| r.version != spec_version).unwrap_or(true);
+        if !needs_update {
+            self.status_message = Some(format!("anvil: {name} already up to date"));
+            return;
+        }
+        self.anvil_install(name);
+    }
+
+    /// `:Anvil update` (no args) — update every installed-but-outdated tool.
+    pub(crate) fn anvil_update_all(&mut self) {
+        let Some(registry) = self.anvil_registry.as_ref() else {
+            self.status_message = Some("anvil: registry not available".into());
+            return;
+        };
+        let names: Vec<String> = registry.names().map(String::from).collect();
+        for name in &names {
+            if let Ok(Some(_)) = hjkl_anvil::store::read_rev(name) {
+                self.anvil_update(name);
+            }
+        }
+        self.status_message = Some("anvil: update sweep started".into());
     }
 }
 

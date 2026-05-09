@@ -446,8 +446,151 @@ impl PickerLogic for StaticListSource {
                     AppAction::StashPop(i) => Box::new(AppAction::StashPop(*i)),
                     AppAction::StashDrop(i) => Box::new(AppAction::StashDrop(*i)),
                     AppAction::ApplyCodeAction(i) => Box::new(AppAction::ApplyCodeAction(*i)),
+                    AppAction::AnvilInstall(s) => Box::new(AppAction::AnvilInstall(s.clone())),
+                    AppAction::AnvilUninstall(s) => Box::new(AppAction::AnvilUninstall(s.clone())),
+                    AppAction::AnvilUpdate(s) => Box::new(AppAction::AnvilUpdate(s.clone())),
+                    AppAction::AnvilNoOp(s) => Box::new(AppAction::AnvilNoOp(s.clone())),
                 };
                 PickerAction::Custom(boxed)
+            }
+            None => PickerAction::None,
+        }
+    }
+
+    fn enumerate(
+        &mut self,
+        _query: Option<&str>,
+        _cancel: Arc<AtomicBool>,
+    ) -> Option<JoinHandle<()>> {
+        None
+    }
+}
+
+// ── AnvilPickerSource ─────────────────────────────────────────────────────────
+
+/// Install-state of a single anvil tool.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum AnvilState {
+    /// Tool is installed at the given version string.
+    Installed { version: String },
+    /// Tool is installed but the registry has a newer version.
+    Outdated {
+        installed_version: String,
+        available_version: String,
+    },
+    /// Tool is in the registry but not installed.
+    Available,
+}
+
+/// One row in the anvil picker.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct AnvilPickerItem {
+    pub name: String,
+    pub category: hjkl_anvil::ToolCategory,
+    pub description: String,
+    pub state: AnvilState,
+    pub registry_version: String,
+}
+
+impl AnvilPickerItem {
+    /// Build the display label for this row.
+    pub fn label(&self) -> String {
+        let state_col = match &self.state {
+            AnvilState::Installed { version } => format!("[installed @ {version}]"),
+            AnvilState::Outdated {
+                available_version, ..
+            } => format!("[outdated \u{2192} {available_version}]"),
+            AnvilState::Available => "[available]".to_string(),
+        };
+        let cat = format!("{:?}", self.category).to_lowercase();
+        format!(
+            "{:<30} {:<20} {:<12} \u{2014} {}",
+            state_col, self.name, cat, self.description
+        )
+    }
+}
+
+/// Picker source listing all tools in the embedded anvil registry.
+pub struct AnvilPickerSource {
+    pub items: Vec<AnvilPickerItem>,
+}
+
+impl AnvilPickerSource {
+    /// Build the source from a registry and the on-disk `.rev` state.
+    pub fn from_registry(registry: &hjkl_anvil::Registry) -> Self {
+        let items = registry
+            .names()
+            .filter_map(|name| {
+                let spec = registry.get(name)?;
+                let rev = hjkl_anvil::store::read_rev(name).ok().flatten();
+                let state = match rev {
+                    None => AnvilState::Available,
+                    Some(r) => {
+                        if r.version == spec.version {
+                            AnvilState::Installed {
+                                version: r.version.clone(),
+                            }
+                        } else {
+                            AnvilState::Outdated {
+                                installed_version: r.version.clone(),
+                                available_version: spec.version.clone(),
+                            }
+                        }
+                    }
+                };
+                Some(AnvilPickerItem {
+                    name: name.to_string(),
+                    category: spec.category,
+                    description: spec.description.clone(),
+                    state,
+                    registry_version: spec.version.clone(),
+                })
+            })
+            .collect();
+        Self { items }
+    }
+}
+
+impl PickerLogic for AnvilPickerSource {
+    fn title(&self) -> &str {
+        "anvil tools"
+    }
+
+    fn item_count(&self) -> usize {
+        self.items.len()
+    }
+
+    fn label(&self, idx: usize) -> String {
+        self.items.get(idx).map(|i| i.label()).unwrap_or_default()
+    }
+
+    fn match_text(&self, idx: usize) -> String {
+        // Match on name + category + description so the user can type any of them.
+        self.items
+            .get(idx)
+            .map(|i| {
+                let cat = format!("{:?}", i.category).to_lowercase();
+                format!("{} {} {}", i.name, cat, i.description)
+            })
+            .unwrap_or_default()
+    }
+
+    fn has_preview(&self) -> bool {
+        false
+    }
+
+    fn select(&self, idx: usize) -> PickerAction {
+        match self.items.get(idx) {
+            Some(item) => {
+                let action = match &item.state {
+                    AnvilState::Available | AnvilState::Outdated { .. } => {
+                        AppAction::AnvilInstall(item.name.clone())
+                    }
+                    AnvilState::Installed { .. } => AppAction::AnvilNoOp(item.name.clone()),
+                };
+                PickerAction::Custom(Box::new(action))
             }
             None => PickerAction::None,
         }
