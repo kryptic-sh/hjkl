@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-10
+
+### Added
+
+- `BufferView` gains `colorcolumn_cols: &'a [u16]` (sorted, deduplicated 1-based
+  column indices to highlight) and `colorcolumn_style: Style` (background style
+  applied to those cells).
+- Renderer paints those columns under syntax in a new pass between the
+  cursorcolumn pass and the diagnostic overlay. `Wrap::None` only.
+
+### Changed
+
+- **Breaking**: `BufferView` is a `pub struct` without `#[non_exhaustive]`;
+  adding required fields breaks any downstream that builds it via literal struct
+  expression. Pass `colorcolumn_cols: &[]` and
+  `colorcolumn_style: Style::default()` to keep prior behaviour.
+
 ## [0.5.0] - 2026-05-06
 
 ### Added
@@ -86,7 +103,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.4.0
 [0.3.5]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.3.5
