@@ -576,6 +576,12 @@ impl VimState {
         }
     }
 
+    /// `true` when an in-flight chord is awaiting more keys. Inverse of
+    /// `matches!(self.pending, Pending::None)`.
+    pub(crate) fn is_chord_pending(&self) -> bool {
+        !matches!(self.pending, Pending::None)
+    }
+
     /// Return a single char representing the pending operator, if any.
     /// Used by host apps (status line "showcmd" area) to display e.g.
     /// `d`, `y`, `c` while waiting for a motion.
@@ -9790,5 +9796,20 @@ mod tests {
         assert_eq!(e.buffer().lines()[0], "{");
         assert_eq!(e.buffer().lines()[1], "}");
         assert_eq!(e.cursor().0, 1, "cursor should be on the '}}' line");
+    }
+
+    #[test]
+    fn is_chord_pending_tracks_replace_state() {
+        let mut e = editor_with("abc\n");
+        assert!(!e.is_chord_pending());
+        // Press `r` — engine enters Pending::Replace.
+        e.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(e.is_chord_pending(), "engine should be pending after r");
+        // Press a char to complete — pending clears.
+        e.handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(
+            !e.is_chord_pending(),
+            "engine pending should clear after replace"
+        );
     }
 }

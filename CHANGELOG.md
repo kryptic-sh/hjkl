@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-12
+
+### Added
+
+- `Editor::is_chord_pending() -> bool` — true while the engine is in any
+  multi-key pending state (Replace / Find / OpFind / G / OpG / Op / OpTextObj /
+  VisualTextObj / Z / SetMark / GotoMarkLine / GotoMarkChar / SelectRegister /
+  RecordMacroTarget / PlayMacroTarget). Hosts use this to bypass their own chord
+  dispatch and forward keys directly to the engine so in-flight commands like
+  `r<x>` / `f<x>` / `m<a>` aren't interrupted.
+
 ## [0.5.1] - 2026-05-10
 
 ### Changed
@@ -171,7 +182,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.4.1

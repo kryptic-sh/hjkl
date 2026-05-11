@@ -1270,6 +1270,19 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.vim.pending_op_char()
     }
 
+    /// `true` when the engine is in any pending chord state — waiting for
+    /// the next key to complete a command (e.g. `r<char>` replace,
+    /// `f<char>` find, `m<a>` set-mark, `'<a>` goto-mark, operator-pending
+    /// after `d` / `c` / `y`, `g`-prefix continuation, `z`-prefix continuation,
+    /// register selection `"<reg>`, macro recording target, etc).
+    ///
+    /// Hosts use this to bypass their own chord dispatch (keymap tries, etc.)
+    /// and forward keys directly to the engine so in-flight commands can
+    /// complete without the host eating their continuation keys.
+    pub fn is_chord_pending(&self) -> bool {
+        self.vim.is_chord_pending()
+    }
+
     /// Read-only view of the jump-back list (positions pushed on "big"
     /// motions). Newest entry is at the back — `Ctrl-o` pops from there.
     #[allow(clippy::type_complexity)]
