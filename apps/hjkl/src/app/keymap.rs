@@ -1,8 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Input, Key, VimMode};
-use std::collections::BTreeMap;
-
-use super::App;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum MapMode {
@@ -14,173 +10,106 @@ pub(crate) enum MapMode {
     Terminal,
 }
 
+/// A side-table record of one user-registered runtime map, kept for `:map`
+/// listing. The trie owns the actual dispatch; this struct only tracks what
+/// was registered so `:map` (list) can enumerate user maps without leaking
+/// built-in bindings.
 #[derive(Debug, Clone)]
-struct Mapping {
-    lhs: Vec<Input>,
-    rhs: Vec<Input>,
-    recursive: bool,
+pub(crate) struct UserKeymapRecord {
+    pub mode: MapMode,
+    pub lhs: Vec<Input>,
+    pub rhs: Vec<Input>,
+    pub recursive: bool,
 }
 
-#[derive(Debug, Default, Clone)]
-pub(crate) struct RuntimeKeymaps {
-    maps: BTreeMap<MapMode, Vec<Mapping>>,
-    pending: Vec<Input>,
-    pending_mode: Option<MapMode>,
-}
-
-impl RuntimeKeymaps {
-    fn mappings_mut(&mut self, mode: MapMode) -> &mut Vec<Mapping> {
-        self.maps.entry(mode).or_default()
-    }
-
-    fn mappings(&self, mode: MapMode) -> &[Mapping] {
-        self.maps.get(&mode).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    fn clear_pending(&mut self) {
-        self.pending.clear();
-        self.pending_mode = None;
-    }
-
-    pub(crate) fn add(
-        &mut self,
-        modes: &[MapMode],
-        lhs: Vec<Input>,
-        rhs: Vec<Input>,
-        recursive: bool,
-    ) {
-        for &mode in modes {
-            let list = self.mappings_mut(mode);
-            list.retain(|m| m.lhs != lhs);
-            list.push(Mapping {
-                lhs: lhs.clone(),
-                rhs: rhs.clone(),
-                recursive,
-            });
-        }
-    }
-
-    pub(crate) fn remove(&mut self, modes: &[MapMode], lhs: &[Input]) -> bool {
-        let mut removed = false;
-        for &mode in modes {
-            if let Some(list) = self.maps.get_mut(&mode) {
-                let before = list.len();
-                list.retain(|m| m.lhs.as_slice() != lhs);
-                removed |= list.len() != before;
-            }
-        }
-        removed
-    }
-
-    pub(crate) fn clear(&mut self, modes: &[MapMode]) {
-        for &mode in modes {
-            self.maps.remove(&mode);
-        }
-        self.clear_pending();
-    }
-
-    pub(crate) fn list(&self, modes: &[MapMode]) -> String {
-        let mut lines = Vec::new();
-        for &mode in modes {
-            let label = match mode {
-                MapMode::Normal => "normal",
-                MapMode::Visual => "visual",
-                MapMode::Insert => "insert",
-                MapMode::OperatorPending => "operator-pending",
-                MapMode::CommandLine => "command-line",
-                MapMode::Terminal => "terminal",
-            };
-            lines.push(format!("[{label}]"));
-            let mut entries: Vec<&Mapping> = self.mappings(mode).iter().collect();
-            entries.sort_by(|a, b| {
-                a.lhs
-                    .len()
-                    .cmp(&b.lhs.len())
-                    .then_with(|| a.rhs.len().cmp(&b.rhs.len()))
-            });
-            if entries.is_empty() {
-                lines.push("  (none)".into());
-                continue;
-            }
-            for mapping in entries {
-                lines.push(format!(
-                    "  {} {} {}",
-                    if mapping.recursive { "map" } else { "noremap" },
-                    display_keys(&mapping.lhs),
-                    display_keys(&mapping.rhs)
-                ));
-            }
-        }
-        lines.join("\n")
-    }
-
-    pub(crate) fn translate(&mut self, mode: Option<MapMode>, input: Input) -> Option<Vec<Input>> {
-        let Some(mode) = mode else {
-            self.clear_pending();
-            return Some(vec![input]);
+/// Render a list of user maps filtered to `modes` as a displayable string.
+pub(crate) fn format_user_map_list(records: &[UserKeymapRecord], modes: &[MapMode]) -> String {
+    let mut lines = Vec::new();
+    for &mode in modes {
+        let label = match mode {
+            MapMode::Normal => "normal",
+            MapMode::Visual => "visual",
+            MapMode::Insert => "insert",
+            MapMode::OperatorPending => "operator-pending",
+            MapMode::CommandLine => "command-line",
+            MapMode::Terminal => "terminal",
         };
-
-        if self.pending_mode != Some(mode) {
-            self.clear_pending();
-            self.pending_mode = Some(mode);
+        lines.push(format!("[{label}]"));
+        let mut entries: Vec<&UserKeymapRecord> =
+            records.iter().filter(|r| r.mode == mode).collect();
+        entries.sort_by(|a, b| {
+            a.lhs
+                .len()
+                .cmp(&b.lhs.len())
+                .then_with(|| a.rhs.len().cmp(&b.rhs.len()))
+        });
+        if entries.is_empty() {
+            lines.push("  (none)".into());
+            continue;
         }
-
-        self.pending.push(input);
-        let mut out = Vec::new();
-        let mut guard = 0usize;
-
-        loop {
-            guard += 1;
-            if guard > 1024 {
-                out.append(&mut self.pending);
-                break;
-            }
-
-            if self.pending.is_empty() {
-                break;
-            }
-
-            if let Some(mapping) = self.find_exact(mode) {
-                let lhs_len = mapping.lhs.len();
-                self.pending.drain(..lhs_len);
-                if mapping.recursive {
-                    for rhs in mapping.rhs.into_iter().rev() {
-                        self.pending.insert(0, rhs);
-                    }
-                } else {
-                    out.extend(mapping.rhs);
-                }
-                continue;
-            }
-
-            if self.has_prefix(mode) {
-                return None;
-            }
-
-            out.push(self.pending.remove(0));
+        for r in entries {
+            lines.push(format!(
+                "  {} {} {}",
+                if r.recursive { "map" } else { "noremap" },
+                display_keys(&r.lhs),
+                display_keys(&r.rhs)
+            ));
         }
-
-        Some(out)
     }
+    lines.join("\n")
+}
 
-    fn find_exact(&self, mode: MapMode) -> Option<Mapping> {
-        let mut best: Option<Mapping> = None;
-        for mapping in self.mappings(mode) {
-            if mapping.lhs == self.pending
-                && best
-                    .as_ref()
-                    .is_none_or(|cur| mapping.lhs.len() >= cur.lhs.len())
-            {
-                best = Some(mapping.clone());
-            }
-        }
-        best
+/// Translate an `hjkl_engine::Input` to an `hjkl_keymap::KeyEvent`.
+///
+/// `Key::Null` has no clean equivalent; it maps to `KeyCode::Char('\0')` so
+/// dispatch is consistent and nothing special happens for it.
+pub(crate) fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
+    use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    let code = match input.key {
+        Key::Char(c) => KmCode::Char(c),
+        Key::Backspace => KmCode::Backspace,
+        Key::Enter => KmCode::Enter,
+        Key::Left => KmCode::Left,
+        Key::Right => KmCode::Right,
+        Key::Up => KmCode::Up,
+        Key::Down => KmCode::Down,
+        Key::Tab => KmCode::Tab,
+        Key::Delete => KmCode::Delete,
+        Key::Home => KmCode::Home,
+        Key::End => KmCode::End,
+        Key::PageUp => KmCode::PageUp,
+        Key::PageDown => KmCode::PageDown,
+        Key::Esc => KmCode::Esc,
+        Key::Null => KmCode::Char('\0'),
+    };
+    let mut modifiers = KmMods::NONE;
+    if input.ctrl {
+        modifiers |= KmMods::CTRL;
     }
+    if input.alt {
+        modifiers |= KmMods::ALT;
+    }
+    if input.shift {
+        modifiers |= KmMods::SHIFT;
+    }
+    KmEvent::new(code, modifiers)
+}
 
-    fn has_prefix(&self, mode: MapMode) -> bool {
-        self.mappings(mode)
-            .iter()
-            .any(|mapping| mapping.lhs.starts_with(&self.pending))
+/// Map a [`MapMode`] to an `hjkl_keymap::Mode`.
+///
+/// Returns `None` for [`MapMode::Terminal`] — the keymap crate has no
+/// Terminal variant. Terminal-mode runtime maps are silently skipped with a
+/// status message at the call site.
+///
+/// TODO(#59): add a Terminal variant to hjkl-keymap and wire it here.
+pub(crate) fn map_mode_to_km_mode(mode: MapMode) -> Option<hjkl_keymap::Mode> {
+    match mode {
+        MapMode::Normal => Some(hjkl_keymap::Mode::Normal),
+        MapMode::Visual => Some(hjkl_keymap::Mode::Visual),
+        MapMode::Insert => Some(hjkl_keymap::Mode::Insert),
+        MapMode::OperatorPending => Some(hjkl_keymap::Mode::OpPending),
+        MapMode::CommandLine => Some(hjkl_keymap::Mode::CommandLine),
+        MapMode::Terminal => None,
     }
 }
 
@@ -190,43 +119,6 @@ pub(crate) fn map_mode_for_vim(mode: VimMode) -> Option<MapMode> {
         VimMode::Insert => Some(MapMode::Insert),
         VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => Some(MapMode::Visual),
     }
-}
-
-pub(crate) fn key_event_to_input(key: KeyEvent) -> Input {
-    key.into()
-}
-
-pub(crate) fn input_to_key_event(input: Input) -> KeyEvent {
-    let code = match input.key {
-        Key::Char(c) => KeyCode::Char(c),
-        Key::Backspace => KeyCode::Backspace,
-        Key::Enter => KeyCode::Enter,
-        Key::Left => KeyCode::Left,
-        Key::Right => KeyCode::Right,
-        Key::Up => KeyCode::Up,
-        Key::Down => KeyCode::Down,
-        Key::Tab => KeyCode::Tab,
-        Key::Delete => KeyCode::Delete,
-        Key::Home => KeyCode::Home,
-        Key::End => KeyCode::End,
-        Key::PageUp => KeyCode::PageUp,
-        Key::PageDown => KeyCode::PageDown,
-        Key::Esc => KeyCode::Esc,
-        Key::Null => KeyCode::Null,
-    };
-
-    let mut modifiers = KeyModifiers::NONE;
-    if input.ctrl {
-        modifiers |= KeyModifiers::CONTROL;
-    }
-    if input.alt {
-        modifiers |= KeyModifiers::ALT;
-    }
-    if input.shift {
-        modifiers |= KeyModifiers::SHIFT;
-    }
-
-    KeyEvent::new(code, modifiers)
 }
 
 pub(crate) fn parse_key_sequence(text: &str, leader: char) -> Vec<Input> {
@@ -415,19 +307,6 @@ fn display_keys(keys: &[Input]) -> String {
     out
 }
 
-impl App {
-    pub(crate) fn runtime_map_mode(&self) -> Option<MapMode> {
-        map_mode_for_vim(self.active().editor.vim_mode())
-    }
-
-    pub(crate) fn apply_runtime_map(&mut self, key: KeyEvent) -> Option<Vec<KeyEvent>> {
-        let input = key_event_to_input(key);
-        let mode = self.runtime_map_mode();
-        let expanded = self.runtime_keymaps.translate(mode, input)?;
-        Some(expanded.into_iter().map(input_to_key_event).collect())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,20 +335,28 @@ mod tests {
     }
 
     #[test]
-    fn recursive_mapping_expands_rhs_again() {
-        let mut km = RuntimeKeymaps::default();
-        km.add(&[MapMode::Normal], vec![ch('a')], vec![ch('b')], true);
-        km.add(&[MapMode::Normal], vec![ch('b')], vec![ch('c')], true);
-        let out = km.translate(Some(MapMode::Normal), ch('a')).unwrap();
-        assert_eq!(out, vec![ch('c')]);
+    fn input_to_km_event_char() {
+        use hjkl_keymap::{KeyCode, KeyModifiers};
+        let ev = input_to_km_event(ch('x'));
+        assert_eq!(ev.code, KeyCode::Char('x'));
+        assert_eq!(ev.modifiers, KeyModifiers::NONE);
     }
 
     #[test]
-    fn noremap_keeps_rhs_literal() {
-        let mut km = RuntimeKeymaps::default();
-        km.add(&[MapMode::Normal], vec![ch('a')], vec![ch('b')], false);
-        km.add(&[MapMode::Normal], vec![ch('b')], vec![ch('c')], true);
-        let out = km.translate(Some(MapMode::Normal), ch('a')).unwrap();
-        assert_eq!(out, vec![ch('b')]);
+    fn input_to_km_event_ctrl() {
+        use hjkl_keymap::{KeyCode, KeyModifiers};
+        let input = Input {
+            key: Key::Char('w'),
+            ctrl: true,
+            ..Input::default()
+        };
+        let ev = input_to_km_event(input);
+        assert_eq!(ev.code, KeyCode::Char('w'));
+        assert!(ev.modifiers.contains(KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn map_mode_to_km_mode_terminal_is_none() {
+        assert!(map_mode_to_km_mode(MapMode::Terminal).is_none());
     }
 }

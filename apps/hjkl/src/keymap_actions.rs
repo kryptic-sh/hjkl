@@ -71,4 +71,15 @@ pub enum AppAction {
 
     // ── App lifecycle ─────────────────────────────────────────────────
     QuitOrClose,
+
+    // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
+    /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches
+    /// the LHS, the dispatcher unrolls `keys` according to `recursive`:
+    ///   - `recursive = true`  → feed each key back through `dispatch_keymap_in_mode`
+    ///     (the RHS can trigger further chord bindings).
+    ///   - `recursive = false` → replay each key straight to the engine.
+    Replay {
+        keys: Vec<hjkl_keymap::KeyEvent>,
+        recursive: bool,
+    },
 }

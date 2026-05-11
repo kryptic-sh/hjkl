@@ -94,6 +94,40 @@ pub fn backtab_event() -> KeyEvent {
     KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)
 }
 
+/// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
+/// for replaying unbound sequences or user maps to the engine.
+pub fn to_crossterm(ev: &KeyEvent) -> CtKeyEvent {
+    let code = match ev.code {
+        KeyCode::Char(c) => CtKeyCode::Char(c),
+        KeyCode::Enter => CtKeyCode::Enter,
+        KeyCode::Esc => CtKeyCode::Esc,
+        KeyCode::Tab => CtKeyCode::Tab,
+        KeyCode::Backspace => CtKeyCode::Backspace,
+        KeyCode::Delete => CtKeyCode::Delete,
+        KeyCode::Insert => CtKeyCode::Insert,
+        KeyCode::Up => CtKeyCode::Up,
+        KeyCode::Down => CtKeyCode::Down,
+        KeyCode::Left => CtKeyCode::Left,
+        KeyCode::Right => CtKeyCode::Right,
+        KeyCode::Home => CtKeyCode::Home,
+        KeyCode::End => CtKeyCode::End,
+        KeyCode::PageUp => CtKeyCode::PageUp,
+        KeyCode::PageDown => CtKeyCode::PageDown,
+        KeyCode::F(n) => CtKeyCode::F(n),
+    };
+    let mut mods = CtKeyMods::NONE;
+    if ev.modifiers.contains(KeyModifiers::CTRL) {
+        mods |= CtKeyMods::CONTROL;
+    }
+    if ev.modifiers.contains(KeyModifiers::SHIFT) {
+        mods |= CtKeyMods::SHIFT;
+    }
+    if ev.modifiers.contains(KeyModifiers::ALT) {
+        mods |= CtKeyMods::ALT;
+    }
+    CtKeyEvent::new(code, mods)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

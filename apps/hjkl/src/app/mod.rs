@@ -427,8 +427,10 @@ pub struct App {
     pub which_key_enabled: bool,
     /// Idle delay before the which-key popup appears (from config).
     pub which_key_delay: std::time::Duration,
-    /// Runtime vim-style key mappings added via `:map` / `:noremap` / `:imap`.
-    pub(crate) runtime_keymaps: keymap::RuntimeKeymaps,
+    /// Side-table of user-registered runtime key maps (for `:map` listing).
+    /// The trie `app_keymap` owns the actual dispatch; this records what was
+    /// registered so listing commands don't expose built-in bindings.
+    pub(crate) user_keymap_records: Vec<keymap::UserKeymapRecord>,
     /// Mouse-capture state. Mirrors the terminal's
     /// EnableMouseCapture / DisableMouseCapture mode. Initialised from
     /// `config.editor.mouse`; runtime-togglable via `:set [no]mouse`.
@@ -1157,7 +1159,7 @@ impl App {
             which_key_active: false,
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
-            runtime_keymaps: keymap::RuntimeKeymaps::default(),
+            user_keymap_records: Vec::new(),
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
@@ -1399,6 +1401,47 @@ impl App {
                     self.exit_requested = true;
                 }
             }
+            AppAction::Replay { keys, recursive } => {
+                if recursive {
+                    // Re-feed each key through the chord FSM. The queue is
+                    // processed FIFO so we use a VecDeque.
+                    use std::collections::VecDeque;
+                    const MAX_STEPS: usize = 1024;
+                    let mut queue: VecDeque<hjkl_keymap::KeyEvent> = keys.into();
+                    let mut steps = 0usize;
+                    while let Some(ev) = queue.pop_front() {
+                        steps += 1;
+                        if steps > MAX_STEPS {
+                            self.status_message =
+                                Some("E223: recursive mapping (1024-step limit)".into());
+                            break;
+                        }
+                        let mode = current_km_mode(self);
+                        let Some(mode) = mode else {
+                            continue;
+                        };
+                        let mut sub_replay = Vec::new();
+                        let consumed = self.dispatch_keymap_in_mode(ev, 1, &mut sub_replay, mode);
+                        if !consumed && sub_replay.len() <= 1 {
+                            self.replay_km_events_to_engine(&sub_replay);
+                        }
+                    }
+                } else {
+                    // Non-recursive: bypass the trie and go straight to the engine.
+                    for ev in keys {
+                        self.replay_km_events_to_engine(std::slice::from_ref(&ev));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replay a slice of `hjkl_keymap::KeyEvent`s straight to the engine,
+    /// converting each one to a crossterm `KeyEvent` via the shared translator.
+    pub(crate) fn replay_km_events_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
+        for km_ev in events {
+            let ct_ev = crate::keymap_translate::to_crossterm(km_ev);
+            self.active_mut().editor.handle_key(ct_ev);
         }
     }
 
@@ -1408,35 +1451,57 @@ impl App {
     /// `Unbound` and the caller should replay the events to the engine.
     ///
     /// Replayed events are stored in `out_replay` (never `None`-cleared).
+    ///
+    /// This is a thin shim over [`dispatch_keymap_in_mode`] fixed to Normal mode.
     pub fn dispatch_keymap(
         &mut self,
         km_ev: hjkl_keymap::KeyEvent,
         count: u32,
         out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
     ) -> bool {
-        use hjkl_keymap::{KeyResolve, Mode};
+        self.dispatch_keymap_in_mode(km_ev, count, out_replay, hjkl_keymap::Mode::Normal)
+    }
+
+    /// Mode-generalized chord dispatch. Feed `km_ev` into the trie for `mode`
+    /// and dispatch any resolved action.
+    ///
+    /// Returns `true` if consumed (Pending / Ambiguous / Match),
+    /// `false` if Unbound (events stored in `out_replay`).
+    pub fn dispatch_keymap_in_mode(
+        &mut self,
+        km_ev: hjkl_keymap::KeyEvent,
+        count: u32,
+        out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
+        mode: hjkl_keymap::Mode,
+    ) -> bool {
+        use hjkl_keymap::KeyResolve;
         let now = std::time::Instant::now();
-        match self.app_keymap.feed(Mode::Normal, km_ev, now) {
+        match self.app_keymap.feed(mode, km_ev, now) {
             KeyResolve::Pending => {
                 self.note_prefix_set();
-                true // consumed, waiting
+                true
             }
             KeyResolve::Ambiguous => {
-                // Ambiguous: treat as Pending — timeout path in event_loop
-                // will call app_keymap.timeout_resolve.
                 self.note_prefix_set();
                 true
             }
             KeyResolve::Match(binding) => {
                 self.clear_prefix_state();
                 self.dispatch_action(binding.action, count);
-                true // consumed
+                true
             }
             KeyResolve::Unbound(events) => {
                 self.clear_prefix_state();
                 out_replay.extend(events);
-                false // not consumed — caller replays
+                false
             }
         }
     }
+}
+
+/// Return the current `hjkl_keymap::Mode` based on the active editor's vim mode.
+/// Returns `None` for modes with no keymap equivalent (currently none, but
+/// Terminal mode would be `None` if ever added here).
+pub(crate) fn current_km_mode(app: &App) -> Option<hjkl_keymap::Mode> {
+    keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active().editor.vim_mode())?)
 }
