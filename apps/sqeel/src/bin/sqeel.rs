@@ -12,15 +12,26 @@ use sqeel_core::{
     state::{QueryRequest, ResultsPane, ResultsTab, SchemaLoadRequest},
 };
 
-const SAMPLE_QUERY: &str = "CREATE TABLE IF NOT EXISTS users (
+const SAMPLE_QUERY: &str = "-- TODO: backfill display_name for legacy users
+-- NOTE: emails are validated at the app layer, not here
+-- INFO
+-- WARN: schema may change before v1
+CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
-    email TEXT NOT NULL,
-    display_name TEXT NOT NULL
+    email TEXT NOT NULL,        -- FIXME
+    display_name TEXT NOT NULL  -- FIX truncation on long names
 );
 
+/* TODO: seed more users for fuzz testing.
+   This block spans multiple lines on purpose. */
 INSERT INTO users (email, display_name) VALUES ('alice@example.com', 'Alice');
 INSERT INTO users (email, display_name) VALUES ('bob@example.com', 'Bob');
 
+-- WARN: results pane is read-only
+-- continuation inherits the WARN tint above
+-- another continuation
+
+-- XTODO: word-boundary check — must NOT highlight
 SELECT * FROM users;
 ";
 
