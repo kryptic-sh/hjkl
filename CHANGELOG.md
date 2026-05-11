@@ -10,6 +10,12 @@ patch bumps.
 
 ### Changed
 
+- Cursor-line and cursor-column highlights are now opt-in (`cursorline = false`,
+  `cursorcolumn = false` by default in `~/.config/sqeel/config.toml` under
+  `[editor]`). Enable via TOML or at runtime via `:set cursorline` /
+  `:set cursorcolumn` (aliases `:set cul` / `:set cuc`). Previously both were
+  always-on. The cursor-column highlight now uses a dedicated theme slot
+  (`sql_cursor_column_bg`) distinct from the cursor-line slot.
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
   post-step CI noise.
 
