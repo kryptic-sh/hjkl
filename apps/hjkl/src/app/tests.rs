@@ -4771,14 +4771,13 @@ fn anvil_bad_subcommand_shows_usage() {
 }
 
 #[test]
-fn unbound_chord_tail_does_not_leak_to_engine() {
+fn unbound_chord_tail_trie_returns_multi_key_replay() {
     // <leader>x: leader is bound (as a prefix), but <leader>x is not.
-    // The trie returns Unbound([<leader>, x]). Old procedural code
-    // silently consumed unmapped chord tails; the new dispatch path must
-    // preserve that — otherwise `x` reaches the engine and deletes a char.
+    // The trie returns Unbound([<leader>, x]) with replay.len() > 1.
+    // The event_loop now always forwards multi-key Unbound replays to the
+    // engine (so gg/gj/etc work). This test verifies the trie shape only.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abcdef");
-    let before = app.active().editor.buffer().as_string();
 
     let leader = app.config.editor.leader;
     let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
@@ -4795,9 +4794,7 @@ fn unbound_chord_tail_does_not_leak_to_engine() {
     assert!(consumed1, "leader should be consumed as Pending prefix");
 
     // Second key: 'x' — unmapped. The dispatch returns consumed=false
-    // and replay=[leader, x]. The caller (event_loop) must silently
-    // consume the multi-key replay; we simulate that here by NOT calling
-    // replay_to_engine when replay.len() > 1.
+    // and replay=[leader, x] (both keys buffered by the trie).
     replay.clear();
     let consumed2 = app.dispatch_keymap(
         hjkl_keymap::KeyEvent::new(
@@ -4813,13 +4810,107 @@ fn unbound_chord_tail_does_not_leak_to_engine() {
         "replay should contain both keys, got {} keys",
         replay.len()
     );
+    // Note: event_loop now forwards multi-key replays to the engine.
+    // <leader>x with leader=space → space (move-right) + x (delete-char).
+    // This is vim-compatible; users can `:nmap <leader> <Nop>` to stop.
+}
 
-    // The fixed event_loop silently drops multi-key replays (replay.len() > 1).
-    // We do the same here: do NOT forward replay to the engine.
-    // The buffer must remain unchanged.
-    let after = app.active().editor.buffer().as_string();
+// ── Dispatch-path tests (engine-pending bypass + always-forward Unbound) ──
+
+/// Feed a crossterm key through the same dispatch path used by the event_loop:
+/// engine-pending bypass first, then trie, then engine forwarding.
+fn drive_key(app: &mut App, ct_key: KeyEvent) {
+    // Engine pending bypass: if the engine is mid-chord, skip the trie.
+    if app.active().editor.is_chord_pending() {
+        app.active_mut().editor.handle_key(ct_key);
+        app.sync_viewport_from_editor();
+        return;
+    }
+    // Try the keymap trie.
+    let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
+        // Untranslatable key — forward direct to engine.
+        app.active_mut().editor.handle_key(ct_key);
+        app.sync_viewport_from_editor();
+        return;
+    };
+    let mut replay = Vec::new();
+    let consumed = app.dispatch_keymap(km_ev, 1, &mut replay);
+    if consumed {
+        return;
+    }
+    // Unbound: forward all replay keys (including multi-key) to the engine.
+    for ev in &replay {
+        let back = crate::keymap_translate::to_crossterm(ev);
+        app.active_mut().editor.handle_key(back);
+    }
+    app.sync_viewport_from_editor();
+}
+
+#[test]
+fn gg_via_dispatch_jumps_to_top() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(30, 0);
+    assert_eq!(app.active().editor.cursor().0, 30);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('g')));
+
     assert_eq!(
-        before, after,
-        "buffer must be unchanged — `x` should not have reached the engine"
+        app.active().editor.cursor().0,
+        0,
+        "gg through dispatch path must move cursor to top"
+    );
+}
+
+#[test]
+fn r_space_replaces_char_with_space() {
+    // r<space> in Normal mode: r enters replace-pending, space arrives,
+    // engine replaces the char under cursor with a space.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc");
+    app.active_mut().editor.jump_cursor(0, 1); // on 'b'
+
+    drive_key(&mut app, key(KeyCode::Char('r')));
+    // Engine should now be in replace-pending.
+    assert!(app.active().editor.is_chord_pending());
+    drive_key(&mut app, key(KeyCode::Char(' ')));
+
+    let line = app.active().editor.buffer().as_string();
+    assert_eq!(
+        line, "a c",
+        "r<space> must replace 'b' with ' ', got {line:?}"
+    );
+}
+
+#[test]
+fn f_with_leader_char_finds_it() {
+    // f<space> when leader=space: f-pending state should swallow the
+    // space char into the find-target slot, not let the trie eat it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a b c");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(app.active().editor.is_chord_pending());
+    drive_key(&mut app, key(KeyCode::Char(' ')));
+
+    // Cursor should now be on the first space (column 1).
+    assert_eq!(app.active().editor.cursor(), (0, 1));
+}
+
+#[test]
+fn gj_via_dispatch_moves_down_display_line() {
+    // gj is a display-line motion (same as j on non-wrapped lines).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2");
+    app.active_mut().editor.jump_cursor(0, 0);
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.active().editor.cursor().0,
+        1,
+        "gj must move down one row"
     );
 }

@@ -414,10 +414,17 @@ impl App {
                         }
 
                         // ── Route through app keymap ───────────────────────────
+                        // Engine has an in-flight pending chord (r<x>, f<x>,
+                        // m<a>, op-pending, g-pending, register-select, macro-
+                        // record, etc.) — bypass the keymap trie so the engine
+                        // can complete its command without us eating its
+                        // continuation key. (Fixes gg/gj/r<space>/f<space>/etc.)
+                        let engine_pending = self.active().editor.is_chord_pending();
+
                         // Translate and feed the key. If Pending/Ambiguous/Match:
                         // consumed. If Unbound: replay buffered count digits +
                         // unbound events to the engine.
-                        if let Some(km_ev) = to_km_event(key) {
+                        if !engine_pending && let Some(km_ev) = to_km_event(key) {
                             let count = self.pending_count.parse::<u32>().unwrap_or(1).max(1);
                             let mut replay: Vec<KmKeyEvent> = Vec::new();
                             let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
@@ -438,16 +445,13 @@ impl App {
                                 }
                             }
                             // Replay the unbound events to the engine.
-                            // Multi-key replay = trie consumed a chord prefix
-                            // then hit an unmapped tail (e.g. `<leader>x`,
-                            // `<C-w>z`). Old procedural code silently
-                            // consumed those via `_ => {}` arms; do the same
-                            // so unmapped chord tails don't leak stray
-                            // motions/edits to the engine. Single-key replay
-                            // is a regular unmapped keypress and goes through.
-                            if replay.len() <= 1 {
-                                replay_to_engine(self, &replay);
-                            }
+                            // Multi-key replay = trie consumed a chord prefix then
+                            // hit an unmapped tail (e.g. `gg` with g-prefix bindings,
+                            // `<leader>x`). Always forward so `gg`/`gj`/etc reach the
+                            // engine. Side effect: unmapped chord tails like <leader>x
+                            // leak to the engine (space=move-right, x=delete-char) —
+                            // vim-compatible; users can `:nmap <leader> <Nop>` to stop.
+                            replay_to_engine(self, &replay);
                             self.sync_viewport_from_editor();
                             if self.active_mut().editor.take_dirty() {
                                 let elapsed = self.active_mut().refresh_dirty_against_saved();
