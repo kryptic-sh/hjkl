@@ -431,6 +431,11 @@ pub struct App {
     /// The trie `app_keymap` owns the actual dispatch; this records what was
     /// registered so listing commands don't expose built-in bindings.
     pub(crate) user_keymap_records: Vec<keymap::UserKeymapRecord>,
+    /// Active recursion depth of `AppAction::Replay { recursive: true }`
+    /// dispatches. Used to bail out of cyclic user maps (`:nmap a a`) before
+    /// stack overflow. The per-Replay-frame `steps` counter only catches
+    /// horizontal cycles; this catches vertical (re-entrant) cycles too.
+    pub(crate) replay_depth: usize,
     /// Mouse-capture state. Mirrors the terminal's
     /// EnableMouseCapture / DisableMouseCapture mode. Initialised from
     /// `config.editor.mouse`; runtime-togglable via `:set [no]mouse`.
@@ -1160,6 +1165,7 @@ impl App {
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),
+            replay_depth: 0,
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
@@ -1405,8 +1411,21 @@ impl App {
                 if recursive {
                     // Re-feed each key through the chord FSM. The queue is
                     // processed FIFO so we use a VecDeque.
+                    //
+                    // Two guards against runaway recursion:
+                    //   - `steps` caps the queue iteration count per frame —
+                    //     catches horizontal cycles (`:nmap a bbbbb…` etc).
+                    //   - `replay_depth` caps re-entrant dispatch_action stack
+                    //     depth — catches vertical cycles (`:nmap a a`) which
+                    //     would otherwise stack-overflow.
                     use std::collections::VecDeque;
                     const MAX_STEPS: usize = 1024;
+                    const MAX_DEPTH: usize = 1024;
+                    if self.replay_depth >= MAX_DEPTH {
+                        self.status_message = Some("E223: recursive mapping (depth limit)".into());
+                        return;
+                    }
+                    self.replay_depth += 1;
                     let mut queue: VecDeque<hjkl_keymap::KeyEvent> = keys.into();
                     let mut steps = 0usize;
                     while let Some(ev) = queue.pop_front() {
@@ -1426,6 +1445,7 @@ impl App {
                             self.replay_km_events_to_engine(&sub_replay);
                         }
                     }
+                    self.replay_depth -= 1;
                 } else {
                     // Non-recursive: bypass the trie and go straight to the engine.
                     for ev in keys {

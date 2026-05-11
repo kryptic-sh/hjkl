@@ -303,6 +303,32 @@ fn list_user_maps_excludes_builtin_chords() {
 }
 
 #[test]
+fn cyclic_recursive_map_bails_without_stack_overflow() {
+    // `:nmap a a` is a vertical cycle: feeding 'a' matches Replay{[a]},
+    // which dispatches feed('a') again, ad infinitum. The replay_depth
+    // guard must catch this before the call stack overflows. We assert
+    // that dispatch completes (no SIGSEGV) and an E223 status appears.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap a a");
+
+    use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods, Mode};
+    let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
+    let mut replay = Vec::new();
+    let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
+    assert!(consumed, "nmap a should match and consume");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("E223"),
+        "expected E223 recursive-mapping error, got: {msg:?}"
+    );
+    // replay_depth must unwind back to 0 after the bail.
+    assert_eq!(
+        app.replay_depth, 0,
+        "replay_depth must return to 0 after cycle bail"
+    );
+}
+
+#[test]
 fn unmap_removes_from_trie() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("nmap a b");
