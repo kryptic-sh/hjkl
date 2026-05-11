@@ -19,7 +19,15 @@ pub fn from_crossterm(ev: &CtKeyEvent) -> Option<KeyEvent> {
     }
 
     let code = ct_code_to_keymap(ev.code)?;
-    let modifiers = ct_mods_to_keymap(ev.modifiers);
+    let mut modifiers = ct_mods_to_keymap(ev.modifiers);
+    // SHIFT for plain Char events is redundant — the case is already in the
+    // char (vim convention). Some terminals (kitty, foot, wezterm w/ kitty
+    // keyboard protocol) deliver `'B' + SHIFT`; others deliver `'B' + NONE`.
+    // Normalize so bindings registered as `ch('B')` match either delivery.
+    // SHIFT remains distinguishing for non-Char codes (Tab → Shift-Tab, etc.)
+    if matches!(code, KeyCode::Char(_)) {
+        modifiers.remove(KeyModifiers::SHIFT);
+    }
     Some(KeyEvent::new(code, modifiers))
 }
 
@@ -84,4 +92,61 @@ fn ct_mods_to_keymap(mods: CtKeyMods) -> KeyModifiers {
 #[allow(dead_code)]
 pub fn backtab_event() -> KeyEvent {
     KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode as CK, KeyEvent as CKE, KeyEventKind, KeyModifiers as CM};
+
+    fn ct_key(code: CK, mods: CM) -> CKE {
+        CKE::new(code, mods)
+    }
+
+    #[test]
+    fn shift_stripped_for_uppercase_char() {
+        // Kitty-style: 'B' + SHIFT.
+        let ev = from_crossterm(&ct_key(CK::Char('B'), CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn shift_stripped_for_shifted_symbol() {
+        // '<' (shift-comma on US layout) sometimes arrives with SHIFT.
+        let ev = from_crossterm(&ct_key(CK::Char('<'), CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn ctrl_preserved_with_char() {
+        let ev = from_crossterm(&ct_key(CK::Char('w'), CM::CONTROL)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn ctrl_shift_with_char_keeps_only_ctrl() {
+        // Edge case: Ctrl-Shift-A on kitty arrives as Char('A') + CTRL|SHIFT.
+        // We strip SHIFT (case encodes it) but keep CTRL.
+        let ev = from_crossterm(&ct_key(CK::Char('A'), CM::CONTROL | CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Char('A'), KeyModifiers::CTRL));
+    }
+
+    #[test]
+    fn shift_preserved_for_tab() {
+        let ev = from_crossterm(&ct_key(CK::Tab, CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn shift_preserved_for_f_key() {
+        let ev = from_crossterm(&ct_key(CK::F(5), CM::SHIFT)).unwrap();
+        assert_eq!(ev, KeyEvent::new(KeyCode::F(5), KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn release_returns_none() {
+        let mut k = ct_key(CK::Char('a'), CM::NONE);
+        k.kind = KeyEventKind::Release;
+        assert!(from_crossterm(&k).is_none());
+    }
 }

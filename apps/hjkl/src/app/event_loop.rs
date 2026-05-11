@@ -432,7 +432,16 @@ impl App {
                                 }
                             }
                             // Replay the unbound events to the engine.
-                            replay_to_engine(self, &replay);
+                            // Multi-key replay = trie consumed a chord prefix
+                            // then hit an unmapped tail (e.g. `<leader>x`,
+                            // `<C-w>z`). Old procedural code silently
+                            // consumed those via `_ => {}` arms; do the same
+                            // so unmapped chord tails don't leak stray
+                            // motions/edits to the engine. Single-key replay
+                            // is a regular unmapped keypress and goes through.
+                            if replay.len() <= 1 {
+                                replay_to_engine(self, &replay);
+                            }
                             self.sync_viewport_from_editor();
                             if self.active_mut().editor.take_dirty() {
                                 let elapsed = self.active_mut().refresh_dirty_against_saved();

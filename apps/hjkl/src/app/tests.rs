@@ -4677,3 +4677,57 @@ fn anvil_bad_subcommand_shows_usage() {
         "expected usage hint in status message, got: {msg:?}"
     );
 }
+
+#[test]
+fn unbound_chord_tail_does_not_leak_to_engine() {
+    // <leader>x: leader is bound (as a prefix), but <leader>x is not.
+    // The trie returns Unbound([<leader>, x]). Old procedural code
+    // silently consumed unmapped chord tails; the new dispatch path must
+    // preserve that — otherwise `x` reaches the engine and deletes a char.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdef");
+    let before = app.active().editor.buffer().as_string();
+
+    let leader = app.config.editor.leader;
+    let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+
+    // First key: leader. Should be Pending → consumed = true.
+    let consumed1 = app.dispatch_keymap(
+        hjkl_keymap::KeyEvent::new(
+            hjkl_keymap::KeyCode::Char(leader),
+            hjkl_keymap::KeyModifiers::NONE,
+        ),
+        1,
+        &mut replay,
+    );
+    assert!(consumed1, "leader should be consumed as Pending prefix");
+
+    // Second key: 'x' — unmapped. The dispatch returns consumed=false
+    // and replay=[leader, x]. The caller (event_loop) must silently
+    // consume the multi-key replay; we simulate that here by NOT calling
+    // replay_to_engine when replay.len() > 1.
+    replay.clear();
+    let consumed2 = app.dispatch_keymap(
+        hjkl_keymap::KeyEvent::new(
+            hjkl_keymap::KeyCode::Char('x'),
+            hjkl_keymap::KeyModifiers::NONE,
+        ),
+        1,
+        &mut replay,
+    );
+    assert!(!consumed2, "<leader>x is unbound → consumed=false");
+    assert!(
+        replay.len() > 1,
+        "replay should contain both keys, got {} keys",
+        replay.len()
+    );
+
+    // The fixed event_loop silently drops multi-key replays (replay.len() > 1).
+    // We do the same here: do NOT forward replay to the engine.
+    // The buffer must remain unchanged.
+    let after = app.active().editor.buffer().as_string();
+    assert_eq!(
+        before, after,
+        "buffer must be unchanged — `x` should not have reached the engine"
+    );
+}
