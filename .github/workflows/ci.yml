@@ -66,6 +66,16 @@ jobs:
         run: cargo build --workspace --examples --all-features
         # `--examples` is a no-op until examples land; harmless before then.
 
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
   build:
     name: Build ${{ matrix.target }}
     needs: [test]
