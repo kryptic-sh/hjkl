@@ -5365,7 +5365,7 @@ fn adjust_number<H: crate::types::Host>(
     true
 }
 
-fn replace_char<H: crate::types::Host>(
+pub(crate) fn replace_char<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     count: usize,

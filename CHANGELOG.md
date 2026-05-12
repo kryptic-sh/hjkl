@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-05-12
+
+### Added
+
+- `Editor::replace_char_at(ch, count)` — controller entry point for hjkl-vim's
+  pending-state reducer. Cursor, undo, and count semantics match vim's `r<x>`:
+  one undo snapshot, cursor lands on the last replaced char, stops at line end.
+  Thin wrapper over the internal `replace_char` free fn, which is now
+  `pub(crate)`.
+
 ## [0.5.4] - 2026-05-12
 
 ### Fixed
@@ -208,7 +218,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.1...v0.5.2

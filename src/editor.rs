@@ -2827,6 +2827,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// Returns true if the key was consumed by the editor.
+    /// Replace the char under the cursor with `ch`, `count` times. Matches
+    /// vim `r<x>` semantics: cursor ends on the last replaced char, undo
+    /// snapshot taken once at start. Promoted to public surface in 0.5.5
+    /// so hjkl-vim's pending-state reducer can dispatch `Replace` without
+    /// re-entering the FSM.
+    pub fn replace_char_at(&mut self, ch: char, count: usize) {
+        vim::replace_char(self, ch, count);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
@@ -4321,5 +4330,35 @@ mod tests {
         for w in edits.windows(2) {
             assert!(w[0].start_byte <= w[1].start_byte);
         }
+    }
+
+    #[test]
+    fn replace_char_at_replaces_single_char_under_cursor() {
+        // Matches vim's `rx` semantics: replace char under cursor.
+        let mut e = fresh_editor("abc");
+        e.jump_cursor(0, 1); // cursor on 'b'
+        e.replace_char_at('X', 1);
+        let got = e.content();
+        let got = got.trim_end_matches('\n');
+        assert_eq!(
+            got, "aXc",
+            "replace_char_at(X, 1) must replace 'b' with 'X'"
+        );
+        // Cursor stays on the replaced char.
+        assert_eq!(e.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn replace_char_at_count_replaces_multiple_chars() {
+        // `3rx` in vim replaces 3 chars starting at cursor.
+        let mut e = fresh_editor("abcde");
+        e.jump_cursor(0, 0);
+        e.replace_char_at('Z', 3);
+        let got = e.content();
+        let got = got.trim_end_matches('\n');
+        assert_eq!(
+            got, "ZZZde",
+            "replace_char_at(Z, 3) must replace first 3 chars"
+        );
     }
 }
