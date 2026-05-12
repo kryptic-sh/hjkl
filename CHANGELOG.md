@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-05-13
+
+### Fixed
+
+- `sqeel-tui` 0.4.5 was tagged but never published — fresh CI dep resolution
+  picked up `hjkl-form` 0.3.5 / `hjkl-editor` 0.4.4 which silently caret-minor
+  bumped to `hjkl-engine` 0.5, breaking the type contract. `sqeel-tui` 0.4.6
+  pins the hjkl-stack to `hjkl-engine = "=0.3.8"`, `hjkl-editor = "=0.4.1"`,
+  `hjkl-buffer = "=0.3.5"`, `hjkl-form = "=0.3.3"`, `hjkl-picker = "=0.4.0"`.
+  Bump these together when migrating to hjkl-engine 0.5.
+
 ## [0.4.7] - 2026-05-13
 
 ### Added
@@ -284,7 +295,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.8
 [0.4.7]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.7
 [0.4.6]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.6
 [0.4.5]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.5
