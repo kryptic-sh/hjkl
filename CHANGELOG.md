@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-12
+
+### Added
+
+- `Keymap::pop(mode) -> Option<KeyEvent>` — removes and returns the last key
+  from the pending chord buffer for the given mode. Returns `None` when the
+  buffer is already empty. Used by which-key callers to implement
+  Backspace-as-navigate-up: the user backs out of a chord prefix one key at a
+  time without resetting the whole buffer.
+
 ## [0.1.2] - 2026-05-12
 
 ### Added
@@ -75,7 +85,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
 - `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.3
 [0.1.2]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.0
