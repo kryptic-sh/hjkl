@@ -6,7 +6,9 @@
 
 use std::time::{Duration, Instant};
 
-use hjkl_keymap::{Chord, KeyEvent, Mode};
+use hjkl_keymap::{Chord, KeyEvent};
+
+use crate::app::keymap::HjklMode;
 
 /// A single binding entry shown in the which-key popup.
 pub struct Entry {
@@ -31,8 +33,8 @@ pub fn format_key(ev: KeyEvent, leader: char) -> String {
 /// Includes both terminal bindings (with their own description) and
 /// prefix-only entries (submenu nodes — rendered with description `"…"`).
 pub fn entries_for(
-    km: &hjkl_keymap::Keymap<crate::keymap_actions::AppAction>,
-    mode: Mode,
+    km: &hjkl_keymap::Keymap<crate::keymap_actions::AppAction, HjklMode>,
+    mode: HjklMode,
     prefix: &[KeyEvent],
     leader: char,
 ) -> Vec<Entry> {

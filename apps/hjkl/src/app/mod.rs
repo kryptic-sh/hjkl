@@ -427,7 +427,7 @@ pub struct App {
     pub mouse_enabled: bool,
     /// Application-level chord dispatch. Holds Normal-mode bindings for all
     /// leader / g / ] / [ / <C-w> sequences.
-    pub(crate) app_keymap: Keymap<AppAction>,
+    pub(crate) app_keymap: Keymap<AppAction, keymap::HjklMode>,
     /// Background install worker pool shared across all `:Anvil install` calls.
     pub anvil_pool: hjkl_anvil::InstallPool,
     /// In-flight install handles keyed by tool name.
@@ -568,10 +568,10 @@ pub(super) fn build_slot(
 /// Build the Normal-mode application keymap for the given leader character.
 ///
 /// Every app-handled chord binding is registered here. The resulting
-/// `Keymap<AppAction>` is stored on [`App`] and consulted by the event loop
+/// `Keymap<AppAction, keymap::HjklMode>` is stored on [`App`] and consulted by the event loop
 /// before forwarding keys to the editor engine.
-fn build_app_keymap(leader: char) -> Keymap<AppAction> {
-    use hjkl_keymap::Mode;
+fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
+    use keymap::HjklMode as Mode;
     let mut km = Keymap::new(leader);
     // Timeout matches the which-key delay default; overridden by `with_config`.
     km.set_timeout(Duration::from_millis(500));
@@ -1283,8 +1283,7 @@ impl App {
     /// The caller uses this to drive `which_key::entries_for` directly —
     /// the static `Prefix` enum is no longer needed.
     pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
-        use hjkl_keymap::Mode;
-        self.app_keymap.pending(Mode::Normal).to_vec()
+        self.app_keymap.pending(keymap::HjklMode::Normal).to_vec()
     }
 
     /// Dispatch an [`AppAction`] with an optional repeat count.
@@ -1429,7 +1428,7 @@ impl App {
         count: u32,
         out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
     ) -> bool {
-        self.dispatch_keymap_in_mode(km_ev, count, out_replay, hjkl_keymap::Mode::Normal)
+        self.dispatch_keymap_in_mode(km_ev, count, out_replay, keymap::HjklMode::Normal)
     }
 
     /// Mode-generalized chord dispatch. Feed `km_ev` into the trie for `mode`
@@ -1442,7 +1441,7 @@ impl App {
         km_ev: hjkl_keymap::KeyEvent,
         count: u32,
         out_replay: &mut Vec<hjkl_keymap::KeyEvent>,
-        mode: hjkl_keymap::Mode,
+        mode: keymap::HjklMode,
     ) -> bool {
         use hjkl_keymap::KeyResolve;
         let now = std::time::Instant::now();
@@ -1482,7 +1481,7 @@ impl App {
     ///   needed so the which-key popup stays visible past the timeout).
     pub fn resolve_chord_timeout(
         &mut self,
-        mode: hjkl_keymap::Mode,
+        mode: keymap::HjklMode,
     ) -> Option<Vec<hjkl_keymap::KeyEvent>> {
         use hjkl_keymap::KeyResolve;
         if self.app_keymap.pending(mode).is_empty() {
@@ -1509,9 +1508,9 @@ impl App {
     }
 }
 
-/// Return the current `hjkl_keymap::Mode` based on the active editor's vim mode.
+/// Return the current `HjklMode` based on the active editor's vim mode.
 /// Returns `None` for modes with no keymap equivalent (currently none, but
 /// Terminal mode would be `None` if ever added here).
-pub(crate) fn current_km_mode(app: &App) -> Option<hjkl_keymap::Mode> {
+pub(crate) fn current_km_mode(app: &App) -> Option<keymap::HjklMode> {
     keymap::map_mode_to_km_mode(keymap::map_mode_for_vim(app.active().editor.vim_mode())?)
 }

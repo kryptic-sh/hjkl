@@ -1607,8 +1607,12 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     }
 
     let leader = app.config.editor.leader;
-    let entries =
-        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &pending, leader);
+    let entries = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &pending,
+        leader,
+    );
     if entries.is_empty() {
         return;
     }

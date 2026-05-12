@@ -133,7 +133,7 @@ impl App {
                     }
                     if !self
                         .app_keymap
-                        .pending(hjkl_keymap::Mode::Normal)
+                        .pending(crate::app::keymap::HjklMode::Normal)
                         .is_empty()
                     {
                         let deadline = prefix_at + self.app_keymap.timeout_duration();
@@ -165,10 +165,11 @@ impl App {
                 if let Some(prefix_at) = self.pending_prefix_at
                     && !self
                         .app_keymap
-                        .pending(hjkl_keymap::Mode::Normal)
+                        .pending(crate::app::keymap::HjklMode::Normal)
                         .is_empty()
                     && now >= prefix_at + self.app_keymap.timeout_duration()
-                    && let Some(replay) = self.resolve_chord_timeout(hjkl_keymap::Mode::Normal)
+                    && let Some(replay) =
+                        self.resolve_chord_timeout(crate::app::keymap::HjklMode::Normal)
                 {
                     self.which_key_active = false;
                     if !replay.is_empty() {
@@ -386,7 +387,7 @@ impl App {
                                 let could_start_chord = match key.code {
                                     KeyCode::Char(c) => {
                                         // Check if this key is a first-key of any Normal binding.
-                                        use hjkl_keymap::Mode;
+                                        use crate::app::keymap::HjklMode as Mode;
                                         !self.app_keymap.pending(Mode::Normal).is_empty() || {
                                             // Peek: does feeding this key leave Pending?
                                             // We approximate by checking the static set of
@@ -449,7 +450,7 @@ impl App {
 
                         // ── Escape: cancel any pending prefix ─────────────────
                         if key.code == KeyCode::Esc {
-                            self.app_keymap.reset(hjkl_keymap::Mode::Normal);
+                            self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
                             self.pending_count.clear();
                             self.clear_prefix_state();
                             self.which_key_sticky = false;
@@ -463,15 +464,15 @@ impl App {
                         {
                             let pending_non_empty = !self
                                 .app_keymap
-                                .pending(hjkl_keymap::Mode::Normal)
+                                .pending(crate::app::keymap::HjklMode::Normal)
                                 .is_empty();
                             if pending_non_empty {
-                                self.app_keymap.pop(hjkl_keymap::Mode::Normal);
+                                self.app_keymap.pop(crate::app::keymap::HjklMode::Normal);
                                 // If pop emptied the buffer, enter sticky so the popup
                                 // stays showing root entries until the user types something.
                                 if self
                                     .app_keymap
-                                    .pending(hjkl_keymap::Mode::Normal)
+                                    .pending(crate::app::keymap::HjklMode::Normal)
                                     .is_empty()
                                 {
                                     self.which_key_sticky = true;
@@ -554,7 +555,7 @@ impl App {
                         // Key couldn't be translated (unsupported code) — fall through to engine.
                     } else {
                         // Non-Normal mode: reset any pending Normal-mode chord state.
-                        self.app_keymap.reset(hjkl_keymap::Mode::Normal);
+                        self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
                         self.pending_count.clear();
                         self.clear_prefix_state();
                     }
