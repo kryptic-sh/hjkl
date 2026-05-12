@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-05-13
+
 ### Changed
 
 - LSP client (`sqeel-core::lsp`) ported to the shared `hjkl-lsp` crate. The
@@ -23,6 +25,13 @@ patch bumps.
   (`sql_cursor_column_bg`) distinct from the cursor-line slot.
 - Pinned `mlugg/setup-zig` to zig 0.15.1 to skip `build.zig.zon` lookup and fix
   post-step CI noise.
+- Submodule bumps: `sqeel-core` 0.4.1 → 0.4.2 (hjkl-lsp adapter port).
+
+### Fixed
+
+- CI: `cargo-deny` job now checks out submodules — previously it skipped them
+  and broke on workspace member resolution when new submodule-resident deps
+  landed.
 
 ## [0.4.5] - 2026-05-07
 
@@ -255,7 +264,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.6
 [0.4.5]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.5
 [0.4.4]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.4
 [0.4.2]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.2
