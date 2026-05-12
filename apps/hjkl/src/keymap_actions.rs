@@ -93,6 +93,12 @@ pub enum AppAction {
     BeginPendingAfterG {
         count: u32,
     },
+    /// Begin a `z<x>` pending state. The app stores
+    /// `Some(hjkl_vim::PendingState::AfterZ { count })` and routes the next key
+    /// through `hjkl_vim::step` instead of the trie or engine FSM.
+    BeginPendingAfterZ {
+        count: u32,
+    },
 
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches

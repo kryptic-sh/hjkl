@@ -688,6 +688,17 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // `z<x>` — bare z-prefix chord, migrated to hjkl-vim's
+    // PendingState::AfterZ reducer. Bound in Normal and Visual only.
+    // Operator-pending z (`zf{motion}`) and the engine's internal
+    // `Pending::Z` still go through the engine FSM for non-visual `zf`.
+    let after_z_action = AppAction::BeginPendingAfterZ { count: 1 };
+    for mode in [Mode::Normal, Mode::Visual] {
+        if let Err(e) = km.add(mode, "z", after_z_action.clone(), "z-prefix chord") {
+            eprintln!("hjkl: keymap.add(z) failed: {e}");
+        }
+    }
+
     km
 }
 
@@ -1447,6 +1458,18 @@ impl App {
                 };
                 self.pending_count.clear();
                 self.pending_state = Some(hjkl_vim::PendingState::AfterG { count: n });
+            }
+            AppAction::BeginPendingAfterZ {
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::AfterZ { count: n });
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {

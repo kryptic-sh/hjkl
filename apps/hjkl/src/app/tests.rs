@@ -4890,6 +4890,12 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.after_z(ch, count);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -5727,4 +5733,139 @@ fn pending_replace_esc_cancels_without_mutation() {
 
     let content = app.active().editor.buffer().as_string();
     assert_eq!(content, "abc", "buffer must be unchanged after cancel");
+}
+
+// ── Phase 2b-iii: Z-chord integration tests ─────────────────────────────
+
+#[test]
+fn zz_centers_cursor() {
+    // `zz` in Normal mode: sets viewport_pinned, no crash.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(10, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    assert!(
+        app.pending_state.is_some(),
+        "z must set AfterZ pending state"
+    );
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    assert!(
+        app.pending_state.is_none(),
+        "second key must commit and clear pending state"
+    );
+    // Cursor must not have moved (zz scrolls, doesn't jump).
+    assert_eq!(
+        app.active().editor.cursor().0,
+        10,
+        "zz must not move the cursor row"
+    );
+}
+
+#[test]
+fn zt_scrolls_top() {
+    // `zt` commits without error and clears pending state.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(10, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    drive_key(&mut app, key(KeyCode::Char('t')));
+
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state cleared after zt commit"
+    );
+    // Cursor must not have moved (zt scrolls, doesn't jump).
+    assert_eq!(
+        app.active().editor.cursor().0,
+        10,
+        "zt must not move the cursor row"
+    );
+}
+
+#[test]
+fn zo_opens_fold() {
+    // `zo` opens a closed fold at cursor.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc\nd");
+    app.active_mut().editor.buffer_mut().add_fold(1, 2, true);
+    app.active_mut().editor.jump_cursor(1, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    drive_key(&mut app, key(KeyCode::Char('o')));
+
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state cleared after zo commit"
+    );
+    let folds = app.active().editor.buffer().folds();
+    assert!(!folds[0].closed, "zo must open the fold at cursor");
+}
+
+#[test]
+fn zm_closes_all_folds() {
+    // `zM` closes all open folds.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc\nd\ne\nf");
+    app.active_mut().editor.buffer_mut().add_fold(0, 1, false);
+    app.active_mut().editor.buffer_mut().add_fold(4, 5, false);
+
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    drive_key(&mut app, key(KeyCode::Char('M')));
+
+    let folds = app.active().editor.buffer().folds();
+    assert!(folds.iter().all(|f| f.closed), "zM must close all folds");
+}
+
+#[test]
+fn z_then_esc_cancels() {
+    // `z` then Esc: pending state cancelled, no engine mutation.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    assert!(
+        app.pending_state.is_some(),
+        "z must set AfterZ pending state"
+    );
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must cancel AfterZ pending state"
+    );
+    // Cursor unmoved.
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 0),
+        "cursor must not move on cancel"
+    );
+}
+
+#[test]
+fn zf_in_visual_creates_fold() {
+    // `zf` in Visual mode (via drive_key) creates a fold over the selection.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc\nd\ne");
+    // Enter visual-line mode spanning rows 1..=3 via engine keys.
+    app.active_mut().editor.jump_cursor(1, 0);
+    // Feed `V` then `2j` via drive_key to set visual-line selection.
+    drive_key(&mut app, key(KeyCode::Char('V')));
+    drive_key(&mut app, key(KeyCode::Char('j')));
+    drive_key(&mut app, key(KeyCode::Char('j')));
+    // Now trigger z → f.
+    drive_key(&mut app, key(KeyCode::Char('z')));
+    drive_key(&mut app, key(KeyCode::Char('f')));
+
+    let folds = app.active().editor.buffer().folds();
+    assert_eq!(folds.len(), 1, "zf in visual must create exactly one fold");
+    assert_eq!(
+        folds[0].start_row, 1,
+        "fold must start at visual anchor row"
+    );
+    assert_eq!(folds[0].end_row, 3, "fold must end at cursor row");
+    assert!(folds[0].closed, "fold must be closed");
 }

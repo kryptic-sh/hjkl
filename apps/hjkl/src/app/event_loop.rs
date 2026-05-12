@@ -415,7 +415,7 @@ impl App {
                                             // Peek: does feeding this key leave Pending?
                                             // We approximate by checking the static set of
                                             // chord-starter chars that are first keys in our bindings.
-                                            matches!(c, 'g' | ']' | '[' | 'G')
+                                            matches!(c, 'g' | 'z' | ']' | '[' | 'G')
                                                 || c == self.config.editor.leader
                                         }
                                     }
@@ -635,6 +635,30 @@ impl App {
                                             self.active_mut().editor.after_g(ch, count);
                                             self.sync_viewport_from_editor();
                                             // after_g may set Pending::Op (gU/gu/g~/gq);
+                                            // is_chord_pending() bypass on the NEXT key
+                                            // ensures the engine's op-pending arm fires.
+                                            if self.active_mut().editor.take_dirty() {
+                                                let elapsed =
+                                                    self.active_mut().refresh_dirty_against_saved();
+                                                self.last_signature_us = elapsed;
+                                                if self.active().dirty {
+                                                    self.active_mut().is_new_file = false;
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord {
+                                            ch,
+                                            count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            // All z-chords delegate directly to the engine.
+                                            // after_z reads ed.vim.mode internally so the
+                                            // visual-selection zf path works without extra
+                                            // host logic.
+                                            self.active_mut().editor.after_z(ch, count);
+                                            self.sync_viewport_from_editor();
+                                            // after_z may set Pending::Op (zf in Normal);
                                             // is_chord_pending() bypass on the NEXT key
                                             // ensures the engine's op-pending arm fires.
                                             if self.active_mut().editor.take_dirty() {
