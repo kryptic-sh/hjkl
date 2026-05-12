@@ -72,6 +72,14 @@ pub enum AppAction {
     // ── App lifecycle ─────────────────────────────────────────────────
     QuitOrClose,
 
+    // ── Pending-state chords (hjkl-vim reducer) ───────────────────────
+    /// `r<x>` — begin Replace pending state with the given count.
+    /// The app stores `Some(hjkl_vim::PendingState::Replace { count })` and
+    /// routes the next key through `hjkl_vim::step` instead of the trie.
+    BeginPendingReplace {
+        count: u32,
+    },
+
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches
     /// the LHS, the dispatcher unrolls `keys` according to `recursive`:

@@ -440,6 +440,11 @@ pub struct App {
     /// Embedded anvil tool registry (built once at startup from the baked-in
     /// `anvil.toml`; `None` only when the embedded catalog fails to parse).
     pub anvil_registry: Option<hjkl_anvil::Registry>,
+    /// App-level pending chord state. `Some` while a second-key chord (e.g.
+    /// `r<x>`) is in flight and being driven by `hjkl_vim::step`. Cleared
+    /// when the reducer emits `Commit` or `Cancel`. When `Some`, the event
+    /// loop routes the next key through `hjkl_vim::step` instead of the trie.
+    pub(crate) pending_state: Option<hjkl_vim::PendingState>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -640,6 +645,16 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         if let Err(e) = km.add(Mode::Normal, chord_str, action.clone(), desc) {
             // Should never fail with our static strings, but log rather than panic.
             eprintln!("hjkl: keymap.add({chord_str:?}) failed: {e}");
+        }
+    }
+
+    // ── pending-state chords ───────────────────────────────────────────────
+    // `r<x>` — begin Replace pending state. Bound in both Normal and Visual so
+    // the trie intercepts `r` before the engine FSM sees it.
+    let replace_action = AppAction::BeginPendingReplace { count: 1 };
+    for mode in [Mode::Normal, Mode::Visual] {
+        if let Err(e) = km.add(mode, "r", replace_action.clone(), "replace char") {
+            eprintln!("hjkl: keymap.add(r) failed: {e}");
         }
     }
 
@@ -1156,6 +1171,7 @@ impl App {
             anvil_handles: HashMap::new(),
             anvil_log: HashMap::new(),
             anvil_registry: hjkl_anvil::Registry::embedded().ok(),
+            pending_state: None,
         })
     }
 
@@ -1359,6 +1375,18 @@ impl App {
                 } else {
                     self.exit_requested = true;
                 }
+            }
+            AppAction::BeginPendingReplace {
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::Replace { count: n });
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {

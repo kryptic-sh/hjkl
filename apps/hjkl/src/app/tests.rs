@@ -4794,8 +4794,43 @@ fn unbound_chord_tail_trie_returns_multi_key_replay() {
 // ── Dispatch-path tests (engine-pending bypass + always-forward Unbound) ──
 
 /// Feed a crossterm key through the same dispatch path used by the event_loop:
-/// engine-pending bypass first, then trie, then engine forwarding.
+/// app pending-state reducer first, then engine-pending bypass, then trie,
+/// then engine forwarding.
 fn drive_key(app: &mut App, ct_key: KeyEvent) {
+    // App-level pending-state reducer (hjkl-vim): takes priority over everything.
+    if let Some(state) = app.pending_state {
+        use hjkl_vim::{Key as VimKey, Outcome};
+        let vim_key = match ct_key.code {
+            KeyCode::Char(c) => Some(VimKey::Char(c)),
+            KeyCode::Esc => Some(VimKey::Esc),
+            KeyCode::Enter => Some(VimKey::Enter),
+            KeyCode::Backspace => Some(VimKey::Backspace),
+            KeyCode::Tab => Some(VimKey::Tab),
+            _ => None,
+        };
+        if let Some(vk) = vim_key {
+            match hjkl_vim::step(state, vk) {
+                Outcome::Wait(new_state) => {
+                    app.pending_state = Some(new_state);
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar { ch, count }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.replace_char_at(ch, count);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Cancel => {
+                    app.pending_state = None;
+                    return;
+                }
+                Outcome::Forward => {
+                    // Fall through with state intact.
+                }
+            }
+        }
+        // Unrecognised key variant — fall through.
+    }
     // Engine pending bypass: if the engine is mid-chord, skip the trie.
     if app.active().editor.is_chord_pending() {
         app.active_mut().editor.handle_key(ct_key);
@@ -4842,16 +4877,29 @@ fn gg_via_dispatch_jumps_to_top() {
 
 #[test]
 fn r_space_replaces_char_with_space() {
-    // r<space> in Normal mode: r enters replace-pending, space arrives,
-    // engine replaces the char under cursor with a space.
+    // r<space> in Normal mode: `r` is now intercepted by the app keymap trie
+    // and sets app-level pending state (hjkl-vim reducer). The engine is NOT
+    // in chord-pending after `r`; the app holds the state. The second key
+    // (`<space>`) is fed through hjkl_vim::step → Commit → replace_char_at.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "abc");
     app.active_mut().editor.jump_cursor(0, 1); // on 'b'
 
     drive_key(&mut app, key(KeyCode::Char('r')));
-    // Engine should now be in replace-pending.
-    assert!(app.active().editor.is_chord_pending());
+    // App-level pending state is set; engine is NOT chord-pending.
+    assert!(
+        app.pending_state.is_some(),
+        "r must set app pending_state to Replace"
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be in chord-pending after app-intercepted r"
+    );
     drive_key(&mut app, key(KeyCode::Char(' ')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state cleared after commit"
+    );
 
     let line = app.active().editor.buffer().as_string();
     assert_eq!(
@@ -5286,4 +5334,57 @@ fn which_key_non_backspace_key_clears_sticky() {
     app.which_key_sticky = false;
 
     assert!(!app.which_key_sticky, "any non-backspace key clears sticky");
+}
+
+// ── hjkl-vim pending-state reducer integration (chunk 2a) ───────────────────
+
+#[test]
+fn pending_replace_with_count_replaces_five_chars() {
+    // User types `5`, `r`, `X`: first 5 chars under cursor become `X`.
+    // `5` is buffered as pending_count; `r` triggers BeginPendingReplace
+    // (which reads pending_count → count=5); `X` commits via hjkl_vim::step.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdefgh");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    // Buffer the count digit `5` (simulates the event loop accumulating digits).
+    app.pending_count = "5".to_string();
+    // `r` → matched by trie → BeginPendingReplace reads pending_count (5).
+    drive_key(&mut app, key(KeyCode::Char('r')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::Replace { count: 5 })
+        ),
+        "pending_state must be Replace {{ count: 5 }}, got {:?}",
+        app.pending_state
+    );
+    // `X` → hjkl_vim::step → Commit(ReplaceChar { ch: 'X', count: 5 }).
+    drive_key(&mut app, key(KeyCode::Char('X')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must clear after commit"
+    );
+
+    let content = app.active().editor.buffer().as_string();
+    assert_eq!(
+        content, "XXXXXfgh",
+        "5rX must replace first 5 chars with X, got {content:?}"
+    );
+}
+
+#[test]
+fn pending_replace_esc_cancels_without_mutation() {
+    // `r` then `Esc`: pending state cancelled, buffer unchanged.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('r')));
+    assert!(app.pending_state.is_some());
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(app.pending_state.is_none(), "Esc must cancel pending state");
+
+    let content = app.active().editor.buffer().as_string();
+    assert_eq!(content, "abc", "buffer must be unchanged after cancel");
 }

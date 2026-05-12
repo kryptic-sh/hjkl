@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- Phase 2 chunk 2a (#68): `hjkl-vim` now exports `PendingState`, `Outcome`,
+  `Key`, `step`, and `EngineCmd` (v0.2.0). The `r<x>` replace chord is
+  intercepted by the app keymap trie (`BeginPendingReplace`) and driven by
+  `hjkl_vim::step` — the engine's `Pending::Replace` arm is now unreachable from
+  the umbrella but left intact. `Editor::replace_char_at` promoted to public in
+  `hjkl-engine` v0.5.5 as the controller entry point.
+
 ## [0.14.4] - 2026-05-12
 
 ### Changed

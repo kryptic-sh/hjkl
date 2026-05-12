@@ -516,12 +516,66 @@ impl App {
                             self.which_key_sticky = false;
                         }
 
+                        // ── hjkl-vim pending-state reducer ────────────────────
+                        // App-level pending chord (r<x>, …) is driven by the
+                        // hjkl-vim reducer. When `pending_state` is `Some`, feed
+                        // the next key there BEFORE the keymap trie or engine.
+                        if let Some(state) = self.pending_state {
+                            use hjkl_vim::{Key as VimKey, Outcome};
+                            let vim_key = match key.code {
+                                KeyCode::Char(c) => Some(VimKey::Char(c)),
+                                KeyCode::Esc => Some(VimKey::Esc),
+                                KeyCode::Enter => Some(VimKey::Enter),
+                                KeyCode::Backspace => Some(VimKey::Backspace),
+                                KeyCode::Tab => Some(VimKey::Tab),
+                                _ => None,
+                            };
+                            match vim_key {
+                                None => {
+                                    // Unrecognised key — forward without consuming state.
+                                    // (Outcome::Forward path)
+                                }
+                                Some(vk) => {
+                                    match hjkl_vim::step(state, vk) {
+                                        Outcome::Wait(new_state) => {
+                                            self.pending_state = Some(new_state);
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar {
+                                            ch,
+                                            count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.replace_char_at(ch, count);
+                                            self.sync_viewport_from_editor();
+                                            if self.active_mut().editor.take_dirty() {
+                                                let elapsed =
+                                                    self.active_mut().refresh_dirty_against_saved();
+                                                self.last_signature_us = elapsed;
+                                                if self.active().dirty {
+                                                    self.active_mut().is_new_file = false;
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        Outcome::Cancel => {
+                                            self.pending_state = None;
+                                            continue;
+                                        }
+                                        Outcome::Forward => {
+                                            // State stays alive; fall through to normal routing.
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // ── Route through app keymap ───────────────────────────
-                        // Engine has an in-flight pending chord (r<x>, f<x>,
+                        // Engine has an in-flight pending chord (f<x>,
                         // m<a>, op-pending, g-pending, register-select, macro-
                         // record, etc.) — bypass the keymap trie so the engine
                         // can complete its command without us eating its
-                        // continuation key. (Fixes gg/gj/r<space>/f<space>/etc.)
+                        // continuation key. (Fixes gg/gj/f<space>/etc.)
                         let engine_pending = self.active().editor.is_chord_pending();
 
                         // Translate and feed the key. If Pending/Ambiguous/Match:
