@@ -402,6 +402,10 @@ pub struct App {
     /// `true` when the which-key idle timeout has expired and the popup
     /// should be rendered.
     pub which_key_active: bool,
+    /// `true` when the which-key popup is sticky-visible after a Backspace
+    /// emptied the chord buffer. Stays open showing root entries until any
+    /// non-Backspace key is pressed.
+    pub(crate) which_key_sticky: bool,
     /// Whether the which-key feature is enabled (from config).
     pub which_key_enabled: bool,
     /// Idle delay before the which-key popup appears (from config).
@@ -1135,6 +1139,7 @@ impl App {
             pending_ctrl_x: false,
             pending_prefix_at: None,
             which_key_active: false,
+            which_key_sticky: false,
             which_key_enabled: true,
             which_key_delay: std::time::Duration::from_millis(500),
             user_keymap_records: Vec::new(),

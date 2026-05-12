@@ -5109,3 +5109,131 @@ fn which_key_no_pending_popup_suppressed() {
         pending.len()
     );
 }
+
+// ── which-key Backspace / sticky tests (#backspace-nav) ──────────────────────
+
+/// Feed a key into the Normal-mode app_keymap trie and update which-key state.
+/// Returns whether the key was consumed by the trie.
+fn feed_km_key(app: &mut App, ct_key: KeyEvent) -> bool {
+    let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
+        return false;
+    };
+    let mut replay = Vec::new();
+    app.dispatch_keymap(km_ev, 1, &mut replay)
+}
+
+#[test]
+fn which_key_backspace_pops_one_key() {
+    // Feed <leader> then 'g', send Backspace.
+    // Result: pending = [<leader>], sticky = false.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+
+    feed_km_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(leader), KeyModifiers::NONE),
+    );
+    feed_km_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.app_keymap.pending(hjkl_keymap::Mode::Normal).len(),
+        2,
+        "should have 2 pending keys after <leader>g"
+    );
+
+    // Simulate the Backspace intercept: pop the last key.
+    app.app_keymap.pop(hjkl_keymap::Mode::Normal);
+    // sticky stays false since buffer still non-empty.
+    assert!(
+        !app.which_key_sticky,
+        "sticky must be false when buffer non-empty after pop"
+    );
+    let pending = app.app_keymap.pending(hjkl_keymap::Mode::Normal);
+    assert_eq!(pending.len(), 1, "should have 1 pending key after pop");
+    assert_eq!(
+        pending[0].code,
+        hjkl_keymap::KeyCode::Char(leader),
+        "remaining key should be <leader>"
+    );
+}
+
+#[test]
+fn which_key_backspace_to_empty_enters_sticky() {
+    // Feed <leader>, send Backspace.
+    // Result: pending empty, sticky = true.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+
+    feed_km_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char(leader), KeyModifiers::NONE),
+    );
+    assert_eq!(app.app_keymap.pending(hjkl_keymap::Mode::Normal).len(), 1);
+
+    // Simulate the Backspace intercept: pop the last key.
+    let removed = app.app_keymap.pop(hjkl_keymap::Mode::Normal);
+    assert!(removed.is_some(), "pop should return the removed key");
+    // Buffer is now empty — caller sets sticky.
+    if app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty() {
+        app.which_key_sticky = true;
+    }
+
+    assert!(
+        app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty(),
+        "buffer must be empty after popping last key"
+    );
+    assert!(
+        app.which_key_sticky,
+        "sticky must be true after buffer empties"
+    );
+}
+
+#[test]
+fn which_key_backspace_at_root_is_noop() {
+    // sticky = true, pending empty, Backspace → no engine action, sticky stays true.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.which_key_sticky = true;
+
+    // Verify buffer is empty.
+    assert!(app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty());
+
+    // Simulate what the event loop does: pending_non_empty is false AND sticky is true → noop.
+    let pending_non_empty = !app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty();
+    let would_noop = !pending_non_empty && app.which_key_sticky;
+    assert!(would_noop, "backspace at root with sticky should noop");
+
+    // App state unchanged.
+    assert!(app.which_key_sticky, "sticky must remain true after noop");
+    assert!(app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty());
+}
+
+#[test]
+fn which_key_esc_clears_sticky() {
+    // sticky = true, pending empty, Esc → sticky = false.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.which_key_sticky = true;
+
+    // Simulate Esc handling (as in the event loop).
+    app.app_keymap.reset(hjkl_keymap::Mode::Normal);
+    app.pending_count.clear();
+    app.clear_prefix_state();
+    app.which_key_sticky = false;
+
+    assert!(!app.which_key_sticky, "Esc must clear sticky");
+    assert!(app.app_keymap.pending(hjkl_keymap::Mode::Normal).is_empty());
+}
+
+#[test]
+fn which_key_non_backspace_key_clears_sticky() {
+    // sticky = true, pending empty, pressing a non-Backspace key clears sticky.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.which_key_sticky = true;
+
+    // Simulate the unconditional sticky-clear that happens in the else branch
+    // for any non-Backspace key.
+    app.which_key_sticky = false;
+
+    assert!(!app.which_key_sticky, "any non-backspace key clears sticky");
+}

@@ -1602,7 +1602,7 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         return;
     }
     let pending = app.active_which_key_prefix();
-    if pending.is_empty() {
+    if pending.is_empty() && !app.which_key_sticky {
         return;
     }
 
@@ -1646,7 +1646,11 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 
     frame.render_widget(Clear, area);
 
-    let header_label = hjkl_keymap::Chord(pending.clone()).to_notation(leader);
+    let header_label = if pending.is_empty() {
+        "root".to_string()
+    } else {
+        hjkl_keymap::Chord(pending.clone()).to_notation(leader)
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ui.border_active))

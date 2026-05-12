@@ -452,7 +452,44 @@ impl App {
                             self.app_keymap.reset(hjkl_keymap::Mode::Normal);
                             self.pending_count.clear();
                             self.clear_prefix_state();
+                            self.which_key_sticky = false;
                             // Fall through to engine so it can exit visual mode etc.
+                        }
+
+                        // ── which-key Backspace (chord navigate-up) ─────────────────
+                        if key.code == KeyCode::Backspace
+                            && key.modifiers == KeyModifiers::NONE
+                            && self.active().editor.vim_mode() == VimMode::Normal
+                        {
+                            let pending_non_empty = !self
+                                .app_keymap
+                                .pending(hjkl_keymap::Mode::Normal)
+                                .is_empty();
+                            if pending_non_empty {
+                                self.app_keymap.pop(hjkl_keymap::Mode::Normal);
+                                // If pop emptied the buffer, enter sticky so the popup
+                                // stays showing root entries until the user types something.
+                                if self
+                                    .app_keymap
+                                    .pending(hjkl_keymap::Mode::Normal)
+                                    .is_empty()
+                                {
+                                    self.which_key_sticky = true;
+                                }
+                                // Re-arm the which-key timer and force-show the popup.
+                                self.note_prefix_set();
+                                self.which_key_active = true;
+                                continue;
+                            }
+                            if self.which_key_sticky {
+                                // At root in sticky mode — noop per spec.
+                                continue;
+                            }
+                            // No chord, no sticky → fall through to engine
+                            // (backspace = move left in vim Normal mode).
+                        } else {
+                            // Any non-Backspace key clears sticky which-key.
+                            self.which_key_sticky = false;
                         }
 
                         // ── Route through app keymap ───────────────────────────
