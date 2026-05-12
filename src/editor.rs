@@ -2844,6 +2844,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::replace_char(self, ch, count);
     }
 
+    /// Apply vim's `f<x>` / `F<x>` / `t<x>` / `T<x>` motion. Moves the cursor
+    /// to the `count`-th occurrence of `ch` on the current line, respecting
+    /// `forward` (direction) and `till` (stop one char before target).
+    /// Records `last_find` so `;` / `,` repeat work.
+    ///
+    /// No-op if the target char isn't on the current line within range.
+    /// Cursor / scroll / sticky-col semantics match `f<x>` via `execute_motion`.
+    pub fn find_char(&mut self, ch: char, forward: bool, till: bool, count: usize) {
+        vim::apply_find_char(self, ch, forward, till, count.max(1));
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
@@ -4367,6 +4378,19 @@ mod tests {
         assert_eq!(
             got, "ZZZde",
             "replace_char_at(Z, 3) must replace first 3 chars"
+        );
+    }
+
+    #[test]
+    fn find_char_method_moves_to_target() {
+        // buffer "abcabc", cursor (0,0), f<c> → cursor (0,2).
+        let mut e = fresh_editor("abcabc");
+        e.jump_cursor(0, 0);
+        e.find_char('c', true, false, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 2),
+            "find_char('c', forward=true, till=false, count=1) must land on 'c' at col 2"
         );
     }
 }

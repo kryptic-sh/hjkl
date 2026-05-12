@@ -2474,7 +2474,7 @@ fn parse_motion(input: &Input) -> Option<Motion> {
 
 // ─── Motion execution ──────────────────────────────────────────────────────
 
-fn execute_motion<H: crate::types::Host>(
+pub(crate) fn execute_motion<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     motion: Motion,
     count: usize,
@@ -3290,9 +3290,24 @@ fn handle_find_target<H: crate::types::Host>(
         return true;
     };
     let count = take_count(&mut ed.vim);
+    apply_find_char(ed, ch, forward, till, count.max(1));
+    true
+}
+
+/// Public(crate) entry point for bare `f<x>` / `F<x>` / `t<x>` / `T<x>`.
+/// Applies the motion and records `last_find` for `;` / `,` repeat.
+/// Called by `Editor::find_char` (the public controller API) so the
+/// hjkl-vim pending-state reducer can dispatch `FindChar` without
+/// re-entering the FSM.
+pub(crate) fn apply_find_char<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    forward: bool,
+    till: bool,
+    count: usize,
+) {
     execute_motion(ed, Motion::Find { ch, forward, till }, count.max(1));
     ed.vim.last_find = Some((ch, forward, till));
-    true
 }
 
 fn handle_op_find_target<H: crate::types::Host>(

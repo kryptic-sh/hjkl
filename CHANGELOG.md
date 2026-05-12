@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-05-13
+
+### Added
+
+- `Editor::find_char(ch, forward, till, count)` — public controller entry point
+  for bare `f<x>` / `F<x>` / `t<x>` / `T<x>` motions. Applies the motion via
+  `execute_motion` and records `last_find` so `;` / `,` repeat work. Enables
+  hjkl-vim's `PendingState::Find` reducer to dispatch `FindChar` without
+  re-entering the engine FSM.
+
 ## [0.5.8] - 2026-05-13
 
 ### Fixed
@@ -297,7 +307,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.9...HEAD
+[0.5.9]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...v0.5.6
