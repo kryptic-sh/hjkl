@@ -752,6 +752,16 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
             hjkl_vim::MotionKind::FirstNonBlankUp,
             "prev line first non-blank",
         ),
+        ("w", hjkl_vim::MotionKind::WordForward, "word forward"),
+        (
+            "W",
+            hjkl_vim::MotionKind::BigWordForward,
+            "BIG word forward",
+        ),
+        ("b", hjkl_vim::MotionKind::WordBackward, "word back"),
+        ("B", hjkl_vim::MotionKind::BigWordBackward, "BIG word back"),
+        ("e", hjkl_vim::MotionKind::WordEnd, "word end"),
+        ("E", hjkl_vim::MotionKind::BigWordEnd, "BIG word end"),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [

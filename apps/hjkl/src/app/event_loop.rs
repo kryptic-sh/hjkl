@@ -450,6 +450,12 @@ impl App {
                                                     | '+'
                                                     | '-'
                                                     | ' '
+                                                    | 'w'
+                                                    | 'W'
+                                                    | 'b'
+                                                    | 'B'
+                                                    | 'e'
+                                                    | 'E'
                                             ) || c == self.config.editor.leader
                                         }
                                     }
