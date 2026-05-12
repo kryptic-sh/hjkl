@@ -305,10 +305,6 @@ pub struct App {
     pub active_tab: usize,
     /// Counter for the next fresh `WindowId`.
     next_window_id: window::WindowId,
-    /// `true` while waiting for the second key of a `Ctrl-w` chord.
-    /// Retained for compatibility with existing tests; superseded by `app_keymap`.
-    #[allow(dead_code)]
-    pub pending_window_motion: bool,
     /// Monotonic counter for fresh `BufferId`s. Slot 0 takes id 0; new
     /// slots created via `:e <new-path>` or replacements after `:bd` on
     /// the last slot consume the next value.
@@ -333,23 +329,6 @@ pub struct App {
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
     pub picker: Option<crate::picker::Picker>,
-    /// `true` after the user pressed `<Space>` in normal mode and we're
-    /// waiting for the next key to resolve the leader sequence.
-    pub pending_leader: bool,
-    /// `true` after the user typed `<leader>g` — waiting for the next key
-    /// to resolve the git sub-command (e.g. `s` → git status picker).
-    pub pending_git: bool,
-    /// Set to `'c'` after `<leader>c` waiting for the next key (e.g. `a` →
-    /// code actions). `None` when no LSP leader prefix is pending.
-    /// Retained for compatibility; superseded by `app_keymap`.
-    #[allow(dead_code)]
-    pub pending_lsp: Option<char>,
-    /// Pending buffer-motion prefix key in normal mode. Set to `'g'`
-    /// after pressing `g`, `']'` after `]`, `'['` after `[`. Cleared
-    /// once the motion is resolved or forwarded to the engine.
-    /// Retained for compatibility with existing tests; superseded by `app_keymap`.
-    #[allow(dead_code)]
-    pub pending_buffer_motion: Option<char>,
     /// Buffered digit string for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -443,8 +422,7 @@ pub struct App {
     /// synthesised arrow keys.
     pub mouse_enabled: bool,
     /// Application-level chord dispatch. Holds Normal-mode bindings for all
-    /// leader / g / ] / [ / <C-w> sequences. Replaces the per-prefix state
-    /// machines (pending_leader, pending_git, etc.) that are now removed.
+    /// leader / g / ] / [ / <C-w> sequences.
     pub(crate) app_keymap: Keymap<AppAction>,
     /// Background install worker pool shared across all `:Anvil install` calls.
     pub anvil_pool: hjkl_anvil::InstallPool,
@@ -1121,7 +1099,6 @@ impl App {
             }],
             active_tab: 0,
             next_window_id: 1,
-            pending_window_motion: false,
             next_buffer_id: 1,
             prev_active: None,
             exit_requested: false,
@@ -1130,10 +1107,6 @@ impl App {
             command_field: None,
             search_field: None,
             picker: None,
-            pending_leader: false,
-            pending_git: false,
-            pending_lsp: None,
-            pending_buffer_motion: None,
             pending_count: String::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
@@ -1285,8 +1258,7 @@ impl App {
         self.pending_ctrl_x = false;
     }
 
-    /// Call whenever a prefix key is first set (pending_leader, pending_window_motion,
-    /// or pending_buffer_motion transition from "no prefix" to "prefix active").
+    /// Call whenever a chord prefix first enters the `app_keymap` pending buffer.
     /// Records the timestamp used to drive the which-key idle timeout.
     pub fn note_prefix_set(&mut self) {
         self.pending_prefix_at = Some(std::time::Instant::now());
@@ -1515,6 +1487,37 @@ impl App {
                 out_replay.extend(events);
                 false
             }
+        }
+    }
+
+    /// Force-resolve a pending chord buffer after the keymap timeout has
+    /// elapsed. Called from the event loop's poll-timeout branch when a chord
+    /// is pending (typically `Ambiguous`: e.g. both `g` and `gd` bound — the
+    /// shorter binding fires after `timeoutlen`).
+    ///
+    /// Returns `Some(events)` to be replayed to the engine for `Unbound`,
+    /// `Some(empty)` after a `Match` (already dispatched), or `None` when no
+    /// chord was pending.
+    pub fn resolve_chord_timeout(
+        &mut self,
+        mode: hjkl_keymap::Mode,
+    ) -> Option<Vec<hjkl_keymap::KeyEvent>> {
+        use hjkl_keymap::KeyResolve;
+        if self.app_keymap.pending(mode).is_empty() {
+            return None;
+        }
+        match self.app_keymap.timeout_resolve(mode) {
+            KeyResolve::Match(binding) => {
+                self.clear_prefix_state();
+                self.dispatch_action(binding.action, 1);
+                Some(Vec::new())
+            }
+            KeyResolve::Unbound(events) => {
+                self.clear_prefix_state();
+                Some(events)
+            }
+            // timeout_resolve only returns Match or Unbound; defensive fallthrough.
+            _ => None,
         }
     }
 }

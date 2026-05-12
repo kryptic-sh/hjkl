@@ -1194,18 +1194,14 @@ fn config_load_from_disk_validation_failure_surfaces() {
 // ── Git status picker smoke tests ──────────────────────────────────────
 
 #[test]
-fn open_git_status_picker_sets_picker_and_clears_pending() {
+fn open_git_status_picker_sets_picker() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_status_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_status_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -1220,18 +1216,14 @@ fn git_status_picker_title_is_git_status() {
 // ── Git log picker smoke tests ─────────────────────────────────────────
 
 #[test]
-fn git_log_picker_opens_and_clears_pending() {
+fn git_log_picker_opens() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_log_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_log_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -1246,18 +1238,14 @@ fn git_log_picker_title_is_git_log() {
 // ── Git branch picker smoke tests ──────────────────────────────────────
 
 #[test]
-fn git_branch_picker_opens_and_clears_pending() {
+fn git_branch_picker_opens() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_branch_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_branch_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -1272,30 +1260,21 @@ fn git_branch_picker_title_is_git_branches() {
 // ── Git file history picker smoke tests ───────────────────────────────────
 
 #[test]
-fn git_file_history_picker_opens_and_clears_pending() {
+fn git_file_history_picker_opens() {
     let path = std::env::temp_dir().join("hjkl_gB_smoke.txt");
     std::fs::write(&path, "content\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     // Buffer has a path — picker opens (it may show sentinel if not a repo).
     app.open_git_file_history_picker();
-    // pending flags must always be cleared.
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
     let _ = std::fs::remove_file(&path);
 }
 
 #[test]
-fn git_file_history_picker_no_path_sets_status_and_clears_pending() {
+fn git_file_history_picker_no_path_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.active().filename.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_file_history_picker();
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
     assert!(app.picker.is_none(), "picker must not open without a path");
     let msg = app.status_message.clone().unwrap_or_default();
     assert!(
@@ -1350,18 +1329,14 @@ fn git_status_picker_no_repo_scan_produces_sentinel_or_empty() {
 // ── Git stash picker smoke tests ──────────────────────────────────────────
 
 #[test]
-fn git_stash_picker_opens_and_clears_pending() {
+fn git_stash_picker_opens() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_stash_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_stash_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -1377,33 +1352,22 @@ fn git_stash_picker_title_is_git_stashes() {
 fn git_stash_picker_shift_s_chord_dispatches() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    // Simulate <leader>g chord state then press S.
-    app.pending_leader = true;
-    app.pending_git = true;
-    // Directly call the open function (event_loop routes S here).
     app.open_git_stash_picker();
     assert!(app.picker.is_some(), "S chord must open the stash picker");
-    assert!(!app.pending_leader);
-    assert!(!app.pending_git);
-    // Title must match.
     assert_eq!(app.picker.as_ref().unwrap().title(), "git stashes");
 }
 
 // ── Git tags picker smoke tests ───────────────────────────────────────────
 
 #[test]
-fn git_tags_picker_opens_and_clears_pending() {
+fn git_tags_picker_opens() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_tags_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_tags_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -1445,18 +1409,14 @@ fn git_tags_picker_no_repo_produces_sentinel() {
 // ── Git remotes picker smoke tests ────────────────────────────────────────
 
 #[test]
-fn git_remotes_picker_opens_and_clears_pending() {
+fn git_remotes_picker_opens() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none());
-    app.pending_leader = true;
-    app.pending_git = true;
     app.open_git_remotes_picker();
     assert!(
         app.picker.is_some(),
         "picker should be open after open_git_remotes_picker"
     );
-    assert!(!app.pending_leader, "pending_leader must be cleared");
-    assert!(!app.pending_git, "pending_git must be cleared");
 }
 
 #[test]
@@ -2201,9 +2161,8 @@ fn maximize_height_collapses_siblings() {
 
 #[test]
 fn ctrl_w_plus_grows_focused() {
-    // Full keyboard path: simulate Ctrl-w then '+' through the pending_window_motion
-    // machinery by calling the public App methods directly (event_loop integration
-    // is hard to test without a terminal; the key dispatch calls resize_height(1)).
+    // Ctrl-w '+' resolves through the keymap trie to AppAction::ResizeHeight(1);
+    // exercise the underlying resize_height(1) call here without a real terminal.
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("sp");
     let rect = ratatui::layout::Rect {
@@ -2530,27 +2489,13 @@ fn tabclose_last_tab_errors() {
 
 #[test]
 fn gt_switches_tab() {
-    // Full keyboard path: g then t via pending_buffer_motion → tabnext.
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("tabnew");
     assert_eq!(app.tabs.len(), 2);
-    // Go back to tab 0.
     app.dispatch_ex("tabprev");
     assert_eq!(app.active_tab, 0);
-    // Simulate the 'g' prefix being set, then dispatch 't'.
-    app.pending_buffer_motion = Some('g');
-    let key = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('t'),
-        crossterm::event::KeyModifiers::NONE,
-    );
-    // The event_loop dispatches tabnext when pending_buffer_motion=Some('g') + 't'.
-    // Replicate that logic here directly.
-    if let Some(prefix) = app.pending_buffer_motion.take()
-        && prefix == 'g'
-        && key.code == crossterm::event::KeyCode::Char('t')
-    {
-        app.dispatch_ex("tabnext");
-    }
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('t')));
     assert_eq!(app.active_tab, 1, "gt must advance to the next tab");
 }
 
@@ -2560,18 +2505,11 @@ fn gt_switches_tab_backward() {
     app.dispatch_ex("tabnew");
     assert_eq!(app.tabs.len(), 2);
     assert_eq!(app.active_tab, 1);
-    // Simulate gT → tabprev.
-    app.pending_buffer_motion = Some('g');
-    let key = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('T'),
-        crossterm::event::KeyModifiers::NONE,
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::SHIFT),
     );
-    if let Some(prefix) = app.pending_buffer_motion.take()
-        && prefix == 'g'
-        && key.code == crossterm::event::KeyCode::Char('T')
-    {
-        app.dispatch_ex("tabprev");
-    }
     assert_eq!(app.active_tab, 0, "gT must switch to the previous tab");
 }
 
@@ -2827,27 +2765,16 @@ fn move_window_to_new_tab_errors_when_only_window() {
 #[test]
 fn ctrl_w_t_moves_window_to_new_tab() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // Need a split first so Ctrl-w T has something to work with.
     app.dispatch_ex("sp");
     assert_eq!(app.tabs.len(), 1);
 
-    // Simulate Ctrl-w T: pending_window_motion set, then 'T' dispatched.
-    // Mirror the event_loop logic directly (as done in existing tests).
-    app.pending_window_motion = true;
-    // Dispatch 'T' action manually (same logic as event_loop).
-    app.pending_window_motion = false;
-    match app.move_window_to_new_tab() {
-        Ok(()) => {
-            app.status_message = Some("moved window to new tab".into());
-        }
-        Err(msg) => {
-            app.status_message = Some(msg.to_string());
-        }
-    }
+    drive_key(&mut app, ctrl_key('w'));
+    drive_key(
+        &mut app,
+        crossterm::event::KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::SHIFT),
+    );
 
     assert_eq!(app.tabs.len(), 2, "Ctrl-w T must create a new tab");
-    let msg = app.status_message.clone().unwrap_or_default();
-    assert_eq!(msg, "moved window to new tab");
 }
 
 // ── LSP diagnostics tests ────────────────────────────────────────────────
@@ -3065,10 +2992,10 @@ fn lnext_jumps_to_next_diag() {
 #[test]
 fn gg_scrolls_window_viewport_to_top() {
     // Regression: gg moved cursor to (0,0) and the engine called
-    // ensure_cursor_in_scrolloff, but the host's `_ =>` branch in the
-    // pending_buffer_motion match forwarded the key to the engine
-    // WITHOUT calling sync_viewport_from_editor — so the focused
-    // window's stored top_row stayed at the old position.
+    // ensure_cursor_in_scrolloff, but the host's keymap-Unbound branch
+    // forwarded the key to the engine WITHOUT calling
+    // sync_viewport_from_editor — so the focused window's stored
+    // top_row stayed at the old position.
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
@@ -3098,8 +3025,8 @@ fn gg_scrolls_window_viewport_to_top() {
     app.active_mut()
         .editor
         .handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
-    // The fix added in event_loop.rs's `_ =>` arm of pending_buffer_motion:
-    // sync the editor's auto-scrolled viewport back to the focused window.
+    // The Unbound replay path in event_loop.rs syncs the editor's
+    // auto-scrolled viewport back to the focused window.
     app.sync_viewport_from_editor();
 
     let (row, _col) = app.active().editor.cursor();
@@ -4955,5 +4882,102 @@ fn gj_via_dispatch_moves_down_display_line() {
         app.active().editor.cursor().0,
         1,
         "gj must move down one row"
+    );
+}
+
+// ── Ambiguous → timeout_resolve tests (#60) ─────────────────────────────
+
+#[test]
+fn ambiguous_chord_resolves_to_shorter_on_timeout() {
+    // Bind both `q` (terminal) and `qd` (deeper). Pressing `q` returns
+    // Ambiguous; resolve_chord_timeout must fire the shorter `q` binding.
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    use hjkl_keymap::Mode;
+    app.app_keymap
+        .add(Mode::Normal, "q", AppAction::OpenFilePicker, "file picker")
+        .unwrap();
+    app.app_keymap
+        .add(
+            Mode::Normal,
+            "qd",
+            AppAction::OpenBufferPicker,
+            "buffer picker",
+        )
+        .unwrap();
+
+    let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+    let consumed = app.dispatch_keymap(
+        hjkl_keymap::KeyEvent::new(
+            hjkl_keymap::KeyCode::Char('q'),
+            hjkl_keymap::KeyModifiers::NONE,
+        ),
+        1,
+        &mut replay,
+    );
+    assert!(consumed, "q should be consumed (Ambiguous)");
+    assert!(app.picker.is_none(), "no picker yet — waiting for timeout");
+
+    let out = app
+        .resolve_chord_timeout(hjkl_keymap::Mode::Normal)
+        .expect("chord was pending");
+    assert!(out.is_empty(), "Match should leave nothing to replay");
+    assert!(
+        app.picker.is_some(),
+        "shorter binding (file picker) must fire on timeout"
+    );
+}
+
+#[test]
+fn ambiguous_chord_fires_longer_on_fast_second_key() {
+    // Same bindings as above. Pressing `q` then `d` quickly resolves to
+    // the longer `qd` binding via the normal feed path.
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    use hjkl_keymap::Mode;
+    app.app_keymap
+        .add(Mode::Normal, "q", AppAction::OpenFilePicker, "file picker")
+        .unwrap();
+    app.app_keymap
+        .add(
+            Mode::Normal,
+            "qd",
+            AppAction::OpenBufferPicker,
+            "buffer picker",
+        )
+        .unwrap();
+
+    let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+    app.dispatch_keymap(
+        hjkl_keymap::KeyEvent::new(
+            hjkl_keymap::KeyCode::Char('q'),
+            hjkl_keymap::KeyModifiers::NONE,
+        ),
+        1,
+        &mut replay,
+    );
+    app.dispatch_keymap(
+        hjkl_keymap::KeyEvent::new(
+            hjkl_keymap::KeyCode::Char('d'),
+            hjkl_keymap::KeyModifiers::NONE,
+        ),
+        1,
+        &mut replay,
+    );
+    assert!(app.picker.is_some(), "qd must fire buffer picker");
+    assert_eq!(
+        app.picker.as_ref().unwrap().title(),
+        "buffers",
+        "buffer picker title expected"
+    );
+}
+
+#[test]
+fn resolve_chord_timeout_returns_none_when_no_chord_pending() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(
+        app.resolve_chord_timeout(hjkl_keymap::Mode::Normal)
+            .is_none(),
+        "no pending chord → None"
     );
 }

@@ -41,7 +41,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(FileSourceWithOpen::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
     }
 
     /// Open the buffer picker over the currently open slots.
@@ -62,7 +61,6 @@ impl App {
             |s| snapshot_buffer_window(s.editor.buffer()).2,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
     }
 
     /// Open the ripgrep content-search picker, optionally prepopulating
@@ -74,7 +72,6 @@ impl App {
             Some(p) if !p.is_empty() => crate::picker::Picker::new_with_query(source, p),
             _ => crate::picker::Picker::new(source),
         });
-        self.pending_leader = false;
     }
 
     /// Open the git-log commit picker.
@@ -82,8 +79,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitLogPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git-branch picker.
@@ -91,8 +86,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitBranchPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git file-history picker for the current buffer's path.
@@ -101,8 +94,6 @@ impl App {
             Some(p) => p,
             None => {
                 self.status_message = Some("git: current buffer has no path".into());
-                self.pending_leader = false;
-                self.pending_git = false;
                 return;
             }
         };
@@ -120,8 +111,6 @@ impl App {
             Ok(r) => r,
             Err(_) => {
                 self.status_message = Some("git: not in a git repo".into());
-                self.pending_leader = false;
-                self.pending_git = false;
                 return;
             }
         };
@@ -130,8 +119,6 @@ impl App {
             Some(w) => w.to_path_buf(),
             None => {
                 self.status_message = Some("git: bare repo — no workdir".into());
-                self.pending_leader = false;
-                self.pending_git = false;
                 return;
             }
         };
@@ -141,8 +128,6 @@ impl App {
             Err(_) => {
                 self.status_message =
                     Some("git: current buffer is outside the repo workdir".into());
-                self.pending_leader = false;
-                self.pending_git = false;
                 return;
             }
         };
@@ -151,8 +136,6 @@ impl App {
             workdir, rel_path,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git-tags picker.
@@ -160,8 +143,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitTagsPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git-remotes picker.
@@ -169,8 +150,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitRemotesPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git-stash picker.
@@ -178,8 +157,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitStashPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     /// Open the git-status fuzzy picker.
@@ -187,8 +164,6 @@ impl App {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let source = Box::new(crate::picker_git::GitStatusPicker::new(cwd));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
-        self.pending_git = false;
     }
 
     pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -292,7 +267,6 @@ impl App {
             registry,
         ));
         self.picker = Some(crate::picker::Picker::new(source));
-        self.pending_leader = false;
     }
 
     pub(crate) fn do_checkout_branch(&mut self, name: &str) {

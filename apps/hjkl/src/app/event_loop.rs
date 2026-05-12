@@ -119,36 +119,78 @@ impl App {
             let _ = self.poll_anvil_jobs();
 
             // Compute the poll timeout: normally 120 ms (splash animation cadence),
-            // but shortened to the remaining which-key deadline when a prefix is pending.
+            // but shortened to the soonest of (a) which-key popup deadline,
+            // (b) chord-timeout deadline (Ambiguous → timeout_resolve), whichever
+            // applies.
             let poll_timeout = {
                 let base = Duration::from_millis(120);
-                if self.which_key_enabled && !self.which_key_active {
-                    if let Some(prefix_at) = self.pending_prefix_at {
+                let now = std::time::Instant::now();
+                let mut t = base;
+                if let Some(prefix_at) = self.pending_prefix_at {
+                    if self.which_key_enabled && !self.which_key_active {
                         let deadline = prefix_at + self.which_key_delay;
-                        let now = std::time::Instant::now();
-                        let remaining = deadline.saturating_duration_since(now);
-                        base.min(remaining)
-                    } else {
-                        base
+                        t = t.min(deadline.saturating_duration_since(now));
                     }
-                } else {
-                    base
+                    if !self
+                        .app_keymap
+                        .pending(hjkl_keymap::Mode::Normal)
+                        .is_empty()
+                    {
+                        let deadline = prefix_at + self.app_keymap.timeout_duration();
+                        t = t.min(deadline.saturating_duration_since(now));
+                    }
                 }
+                t
             };
 
             // Wait for the next event with the computed ceiling.
             if !event::poll(poll_timeout)? {
+                let now = std::time::Instant::now();
                 // No event arrived. Check if the which-key deadline has now passed.
-                if !self.which_key_active && self.active_which_key_prefix().is_some() {
-                    let now = std::time::Instant::now();
-                    if crate::which_key::should_show(
+                if !self.which_key_active
+                    && self.active_which_key_prefix().is_some()
+                    && crate::which_key::should_show(
                         self.pending_prefix_at,
                         self.which_key_delay,
                         self.which_key_enabled,
                         now,
-                    ) {
-                        self.which_key_active = true;
-                        // Fall through to redraw (loop continues).
+                    )
+                {
+                    self.which_key_active = true;
+                    // Fall through to redraw (loop continues).
+                }
+                // Check if the chord-timeout deadline has now passed. When the
+                // pending chord has both a terminal match and longer extensions
+                // (Ambiguous), this fires the shorter binding after `timeoutlen`.
+                if let Some(prefix_at) = self.pending_prefix_at
+                    && !self
+                        .app_keymap
+                        .pending(hjkl_keymap::Mode::Normal)
+                        .is_empty()
+                    && now >= prefix_at + self.app_keymap.timeout_duration()
+                    && let Some(replay) = self.resolve_chord_timeout(hjkl_keymap::Mode::Normal)
+                {
+                    self.which_key_active = false;
+                    if !replay.is_empty() {
+                        replay_to_engine(self, &replay);
+                        self.sync_viewport_from_editor();
+                        if self.active_mut().editor.take_dirty() {
+                            let elapsed = self.active_mut().refresh_dirty_against_saved();
+                            self.last_signature_us = elapsed;
+                            if self.active().dirty {
+                                self.active_mut().is_new_file = false;
+                            }
+                        }
+                        let buffer_id = self.active().buffer_id;
+                        if self.active_mut().editor.take_content_reset() {
+                            self.syntax.reset(buffer_id);
+                        }
+                        let edits = self.active_mut().editor.take_content_edits();
+                        if !edits.is_empty() {
+                            self.syntax.apply_edits(buffer_id, &edits);
+                        }
+                        self.lsp_notify_change_active();
+                        self.recompute_and_install();
                     }
                 }
                 continue;
