@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-05-13
+
+### Added
+
+- `Editor::apply_op_motion(op, motion_key, total_count)` — public controller
+  entry point: applies operator over the motion identified by `motion_key` (a
+  raw char, e.g. `'w'`, `'$'`). Engine resolves via `parse_motion`, applies the
+  same vim quirks as `handle_after_op` (`cw` → `ce`, `FindRepeat` resolution,
+  `last_find` / `last_change` update). No-op on unknown motion keys.
+- `Editor::apply_op_double(op, total_count)` — public controller entry point:
+  applies a doubled-letter line op (`dd` / `yy` / `cc` / `>>` / `<<`). Delegates
+  to `execute_line_op` and records `last_change`.
+- `Editor::enter_op_text_obj(op, count1, inner)` — sets `Pending::OpTextObj` so
+  the engine FSM handles the next bracket/word key for text-object completion.
+- `Editor::enter_op_g(op, count1)` — sets `Pending::OpG` so the engine FSM
+  handles the next `g`-second char.
+- `Editor::enter_op_find(op, count1, forward, till)` — sets `Pending::OpFind` so
+  the engine FSM handles the find-target character.
+- `pub(crate)` helpers `apply_op_motion_key`, `apply_op_double`,
+  `enter_op_text_obj`, `enter_op_g`, `enter_op_find` in `vim.rs` — shared
+  implementations called by both the new controller methods and (via
+  refactoring) `handle_after_op`.
+
+All five methods are promoted to the public surface in 0.5.12 so `hjkl-vim`'s
+`PendingState::AfterOp` reducer can dispatch its `EngineCmd` variants without
+re-entering the engine FSM.
+
 ## [0.5.11] - 2026-05-13
 
 ### Added
@@ -331,7 +358,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.11...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...HEAD
+[0.5.12]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.8...v0.5.9
