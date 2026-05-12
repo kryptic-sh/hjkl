@@ -2191,7 +2191,9 @@ fn handle_goto_mark<H: crate::types::Host>(
         '.' => ed.vim.last_edit_pos,
         // Special auto-marks: `[` / `]` — last yank / change / paste bounds
         // (vim `:h '[` / `:h ']`). Stored by the operator and paste paths.
-        '[' | ']' => ed.mark(c),
+        // `<` / `>` — last visual selection start / end (vim `:h '<` /
+        // `:h '>`). Stored by the visual-exit hook (0.5.3).
+        '[' | ']' | '<' | '>' => ed.mark(c),
         _ => None,
     };
     let Some((row, col)) = target else {
@@ -7614,6 +7616,32 @@ mod tests {
         run_keys(&mut e, "<C-v>");
         run_keys(&mut e, "<Esc>");
         assert_eq!(e.vim_mode(), VimMode::Normal);
+    }
+
+    #[test]
+    fn backtick_lt_jumps_to_visual_start_mark() {
+        // `` `< `` jumps the cursor to the start of the last visual selection.
+        // Regression: pre-0.5.7, handle_goto_mark didn't recognise `<` / `>`
+        // as targets even though set_mark stored them correctly.
+        let mut e = editor_with("foo bar baz\n");
+        run_keys(&mut e, "v");
+        run_keys(&mut e, "w"); // cursor advances to col 4
+        run_keys(&mut e, "<Esc>"); // sets `<` = (0,0), `>` = (0,4)
+        assert_eq!(e.cursor(), (0, 4));
+        // `<lt>` is the helper's literal-`<` escape (see run_keys docstring).
+        run_keys(&mut e, "`<lt>");
+        assert_eq!(e.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn backtick_gt_jumps_to_visual_end_mark() {
+        let mut e = editor_with("foo bar baz\n");
+        run_keys(&mut e, "v");
+        run_keys(&mut e, "w"); // cursor at col 4
+        run_keys(&mut e, "<Esc>");
+        run_keys(&mut e, "0"); // cursor at col 0
+        run_keys(&mut e, "`>");
+        assert_eq!(e.cursor(), (0, 4));
     }
 
     #[test]

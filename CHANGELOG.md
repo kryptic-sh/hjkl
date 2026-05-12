@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-05-13
+
+### Fixed
+
+- `` `< `` / `` `> `` (and `'<` / `'>` linewise variants) now resolve correctly
+  through `handle_goto_mark`. Pre-0.5.7 the marks were set by the visual-exit
+  hook added in 0.5.3 but the goto-mark dispatcher didn't list `<` / `>` in its
+  target match, so `` `< `` silently no-op'd. Surfaced by the oracle tier-2
+  marks corpus. Bracket marks `[` / `]` were already wired through; this commit
+  closes the same gap for visual marks.
+
 ## [0.5.6] - 2026-05-13
 
 ### Added
@@ -242,7 +253,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.4
