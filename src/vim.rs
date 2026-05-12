@@ -927,13 +927,54 @@ pub fn step<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, inpu
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         )
     {
-        // Set the `<` / `>` marks to the start / end of the last selection so
-        // ex commands like `:'<,'>sort` resolve their range. `<` is the lower
-        // (row, col), `>` is the higher — matches vim semantics.
-        let (lo, hi) = if snap.anchor <= snap.cursor {
-            (snap.anchor, snap.cursor)
-        } else {
-            (snap.cursor, snap.anchor)
+        // Set the `<` / `>` marks so ex commands like `:'<,'>sort` resolve
+        // their range. Per `:h v_:` the mark positions depend on the visual
+        // submode:
+        //
+        // * Visual (charwise): position-ordered. `<` = lower (row, col),
+        //   `>` = higher. Tuple comparison works because the selection is
+        //   contiguous text.
+        // * VisualLine: `<` snaps to (top_row, 0), `>` snaps to
+        //   (bot_row, last_col_of_that_line). Vim treats linewise
+        //   selections as full lines so the column components are
+        //   normalised to line edges.
+        // * VisualBlock: corners. `<` = (min_row, min_col),
+        //   `>` = (max_row, max_col) computed independently — the cursor
+        //   may sit on any corner so tuple ordering would mis-place the
+        //   columns when the selection grew leftward.
+        let (lo, hi) = match snap.mode {
+            Mode::Visual => {
+                if snap.anchor <= snap.cursor {
+                    (snap.anchor, snap.cursor)
+                } else {
+                    (snap.cursor, snap.anchor)
+                }
+            }
+            Mode::VisualLine => {
+                let r_lo = snap.anchor.0.min(snap.cursor.0);
+                let r_hi = snap.anchor.0.max(snap.cursor.0);
+                let last_col = ed
+                    .buffer()
+                    .lines()
+                    .get(r_hi)
+                    .map(|l| l.chars().count().saturating_sub(1))
+                    .unwrap_or(0);
+                ((r_lo, 0), (r_hi, last_col))
+            }
+            Mode::VisualBlock => {
+                let (r1, c1) = snap.anchor;
+                let (r2, c2) = snap.cursor;
+                ((r1.min(r2), c1.min(c2)), (r1.max(r2), c1.max(c2)))
+            }
+            _ => {
+                // Defensive: pre_visual_snapshot only stores visual modes,
+                // so this arm is unreachable in practice.
+                if snap.anchor <= snap.cursor {
+                    (snap.anchor, snap.cursor)
+                } else {
+                    (snap.cursor, snap.anchor)
+                }
+            }
         };
         ed.set_mark('<', lo);
         ed.set_mark('>', hi);
@@ -7519,6 +7560,39 @@ mod tests {
         let gt = e.mark('>').unwrap();
         assert_eq!(lt.0, 2);
         assert_eq!(gt.0, 3);
+    }
+
+    #[test]
+    fn visualline_exit_marks_snap_to_line_edges() {
+        // VisualLine: `<` snaps to col 0, `>` snaps to last col of bot row.
+        let mut e = editor_with("aaaaa\nbbbbb\ncc");
+        run_keys(&mut e, "lll"); // cursor at row 0, col 3
+        run_keys(&mut e, "V");
+        run_keys(&mut e, "j"); // VisualLine over rows 0..=1
+        run_keys(&mut e, "<Esc>");
+        let lt = e.mark('<').unwrap();
+        let gt = e.mark('>').unwrap();
+        assert_eq!(lt, (0, 0), "'< should snap to (top_row, 0)");
+        // Row 1 is "bbbbb" — last col is 4.
+        assert_eq!(gt, (1, 4), "'> should snap to (bot_row, last_col)");
+    }
+
+    #[test]
+    fn visualblock_exit_marks_use_block_corners() {
+        // VisualBlock with cursor moving left + down. Corners are not
+        // tuple-ordered: top-left is (anchor_row, cursor_col), bottom-right
+        // is (cursor_row, anchor_col). `<` must be top-left, `>` bottom-right.
+        let mut e = editor_with("aaaaa\nbbbbb\nccccc");
+        run_keys(&mut e, "llll"); // row 0, col 4
+        run_keys(&mut e, "<C-v>");
+        run_keys(&mut e, "j"); // row 1, col 4
+        run_keys(&mut e, "hh"); // row 1, col 2
+        run_keys(&mut e, "<Esc>");
+        let lt = e.mark('<').unwrap();
+        let gt = e.mark('>').unwrap();
+        // anchor=(0,4), cursor=(1,2) → corners are (0,2) and (1,4).
+        assert_eq!(lt, (0, 2), "'< should be top-left corner");
+        assert_eq!(gt, (1, 4), "'> should be bottom-right corner");
     }
 
     #[test]
