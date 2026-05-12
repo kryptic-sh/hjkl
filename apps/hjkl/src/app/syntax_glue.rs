@@ -287,6 +287,21 @@ impl App {
     /// preview triggers one parser construction; subsequent Rust files
     /// (or buffer/rg pickers in the same session) reuse it.
     pub fn preview_spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
+        self.preview_spans_for_range(path, bytes, 0..bytes.len())
+    }
+
+    /// Viewport-clipped variant of [`Self::preview_spans_for`]. The parent
+    /// parse still runs over the full `bytes` (tree-sitter has no partial-
+    /// parse API for a fresh tree), but the injection scan + child highlights
+    /// are restricted to `byte_range`. For markdown — the only common grammar
+    /// with high injection density — this is the difference between paying
+    /// for every fence in the file vs. only the fences on screen.
+    pub fn preview_spans_for_range(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        byte_range: std::ops::Range<usize>,
+    ) -> PreviewSpans {
         let grammar = match self.directory.request_for_path(path) {
             GrammarRequest::Cached(g) => g,
             GrammarRequest::Loading { .. } | GrammarRequest::Unknown => {
@@ -317,7 +332,7 @@ impl App {
             GrammarRequest::Cached(g) => Some(g),
             GrammarRequest::Loading { .. } | GrammarRequest::Unknown => None,
         };
-        let mut flat = h.highlight_range_with_injections(bytes, 0..bytes.len(), resolve);
+        let mut flat = h.highlight_range_with_injections(bytes, byte_range, resolve);
         drop(cache);
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = self.theme.syntax.clone();
@@ -333,12 +348,52 @@ impl App {
     }
 }
 
+/// Number of off-screen rows above/below the visible window to include in the
+/// highlighter's byte range. Gives the injection query a buffer so a fenced
+/// code block whose opening backtick is just above the viewport (with content
+/// still on screen) still resolves its child grammar.
+const VIEWPORT_SLACK_ROWS: usize = 50;
+
+/// Find the byte offset where row `target_row` begins (row 0 = byte 0). For
+/// `target_row` past the end, returns `bytes.len()`.
+fn byte_offset_of_row(bytes: &[u8], target_row: usize) -> usize {
+    if target_row == 0 {
+        return 0;
+    }
+    let mut row = 0usize;
+    for (i, b) in bytes.iter().enumerate() {
+        if *b == b'\n' {
+            row += 1;
+            if row == target_row {
+                return i + 1;
+            }
+        }
+    }
+    bytes.len()
+}
+
 /// Bridge: route `hjkl-picker`'s preview-pane highlighter through the
 /// editor's bonsai pipeline. Picker stays bonsai-agnostic — the trait
 /// impl lives consumer-side.
 impl hjkl_picker::PreviewHighlighter for App {
     fn spans_for(&self, path: &Path, bytes: &[u8]) -> PreviewSpans {
         self.preview_spans_for(path, bytes)
+    }
+
+    fn spans_for_viewport(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        top_row: usize,
+        height: usize,
+    ) -> PreviewSpans {
+        let start_row = top_row.saturating_sub(VIEWPORT_SLACK_ROWS);
+        let end_row = top_row
+            .saturating_add(height)
+            .saturating_add(VIEWPORT_SLACK_ROWS);
+        let start = byte_offset_of_row(bytes, start_row);
+        let end = byte_offset_of_row(bytes, end_row);
+        self.preview_spans_for_range(path, bytes, start..end)
     }
 }
 

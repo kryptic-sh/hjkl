@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-bonsai"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1205,7 +1205,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
