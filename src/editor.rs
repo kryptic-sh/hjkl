@@ -4883,4 +4883,68 @@ mod tests {
             "BigWordEnd count=2 lands on end of second WORD"
         );
     }
+
+    // ── apply_motion controller tests (Phase 3c) — line-anchor motions ────────
+
+    #[test]
+    fn apply_motion_line_start_lands_at_col_zero() {
+        // "  foo bar  \n": `0` from col 5 → col 0 unconditionally.
+        let mut e = fresh_editor("  foo bar  \n");
+        e.jump_cursor(0, 5);
+        e.apply_motion(hjkl_vim::MotionKind::LineStart, 1);
+        assert_eq!(e.cursor(), (0, 0), "LineStart lands at col 0");
+    }
+
+    #[test]
+    fn apply_motion_line_start_from_beginning_stays_at_col_zero() {
+        // Already at col 0 — motion is a no-op but must not panic.
+        let mut e = fresh_editor("  foo bar  \n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineStart, 1);
+        assert_eq!(e.cursor(), (0, 0), "LineStart from col 0 stays at col 0");
+    }
+
+    #[test]
+    fn apply_motion_first_non_blank_lands_on_first_non_blank() {
+        // "  foo bar  \n": `^` from col 0 → col 2 ('f').
+        let mut e = fresh_editor("  foo bar  \n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 2),
+            "FirstNonBlank lands on first non-blank char"
+        );
+    }
+
+    #[test]
+    fn apply_motion_first_non_blank_on_blank_line_lands_at_zero() {
+        // "   \n": all whitespace — `^` must land at col 0.
+        let mut e = fresh_editor("   \n");
+        e.jump_cursor(0, 2);
+        e.apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "FirstNonBlank on blank line stays at col 0"
+        );
+    }
+
+    #[test]
+    fn apply_motion_line_end_lands_on_last_char() {
+        // "  foo bar  \n": last char is the second space at col 10.
+        let mut e = fresh_editor("  foo bar  \n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineEnd, 1);
+        assert_eq!(e.cursor(), (0, 10), "LineEnd lands on last char of line");
+    }
+
+    #[test]
+    fn apply_motion_line_end_on_empty_line_stays_at_zero() {
+        // "\n": empty line — `$` must stay at col 0.
+        let mut e = fresh_editor("\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineEnd, 1);
+        assert_eq!(e.cursor(), (0, 0), "LineEnd on empty line stays at col 0");
+    }
 }

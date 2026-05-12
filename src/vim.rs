@@ -2574,6 +2574,22 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
         hjkl_vim::MotionKind::BigWordEnd => {
             execute_motion(ed, Motion::BigWordEnd, count);
         }
+        hjkl_vim::MotionKind::LineStart => {
+            // `0` / `<Home>`: first column of the current line.
+            // count is ignored — matches vim `0` semantics.
+            execute_motion(ed, Motion::LineStart, 1);
+        }
+        hjkl_vim::MotionKind::FirstNonBlank => {
+            // `^`: first non-blank column on the current line.
+            // count is ignored — matches vim `^` semantics.
+            execute_motion(ed, Motion::FirstNonBlank, 1);
+        }
+        hjkl_vim::MotionKind::LineEnd => {
+            // `$` / `<End>`: last character on the current line.
+            // count is ignored at the keymap-path level (vim `N$` moves
+            // down N-1 lines then lands at line-end; not yet wired).
+            execute_motion(ed, Motion::LineEnd, 1);
+        }
         _ => {
             // Future MotionKind variants added by later phases are silently
             // ignored here — callers must bump hjkl-engine when consuming new
