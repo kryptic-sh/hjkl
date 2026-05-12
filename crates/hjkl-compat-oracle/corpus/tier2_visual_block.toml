@@ -1,0 +1,56 @@
+# Tier 2 visual-block corpus — 5 cases covering <C-v> blockwise operations.
+#
+# All buffers are ASCII-only ("foo\nbar\nbaz\n" gives consistent 3-char rows).
+# Cursor positions: 0-based (row, col).
+# Note: `<C-v>` is the ctrl-v key (enters visual-block mode).
+
+# ─── Blockwise delete ────────────────────────────────────────────────────────
+
+# `<C-v>jld` deletes a 2-row, 2-col block starting at (0,0).
+# "foo\nbar\n" — block covers cols 0-1 of rows 0-1 → removes "fo" and "ba".
+[[cases]]
+name = "visual_block_jl_d_delete_block"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jld"
+expected_buffer = "o\nr\nbaz\n"
+expected_cursor = [0, 0]
+
+# ─── Blockwise toggle case ────────────────────────────────────────────────────
+
+# `<C-v>jl~` toggles case of a 2-row, 2-col block.
+[[cases]]
+name = "visual_block_jl_tilde_togglecase"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jl~"
+expected_buffer = "FOo\nBAr\nbaz\n"
+expected_cursor = [0, 0]
+
+# ─── Blockwise insert ────────────────────────────────────────────────────────
+
+# `<C-v>jI<text><Esc>` prepends text to each row of the block.
+# After Esc, each row in the block starts with the inserted text.
+[[cases]]
+name = "visual_block_j_I_insert_before_block"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jIXX<Esc>"
+expected_buffer = "XXfoo\nXXbar\nbaz\n"
+expected_cursor = [0, 0]
+
+# ─── Blockwise append ────────────────────────────────────────────────────────
+
+# `<C-v>jA<text><Esc>` appends text after col of cursor on each row.
+# Block at col 0 with `A` appends after col 0 (i.e. after the first char).
+[[cases]]
+name = "visual_block_j_A_append_after_block"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 2]
+keys = "<C-v>jA!<Esc>"
+expected_buffer = "foo!\nbar!\nbaz\n"
+expected_cursor = [0, 2]
+
+# Blockwise change (`<C-v>jlc<text><Esc>`) has a known cursor divergence —
+# moved to known_divergences.toml. Buffer result is correct; only cursor
+# post-change position differs (hjkl → col 0, nvim → col 1).

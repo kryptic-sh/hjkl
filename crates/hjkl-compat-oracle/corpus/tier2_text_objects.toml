@@ -1,0 +1,88 @@
+# Tier 2 text-objects corpus — 8 cases covering paragraph, sentence, single-quote,
+# and square-bracket text objects that are absent from Tier 1.
+#
+# All buffers are ASCII-only.
+# Cursor positions: 0-based (row, col).
+
+# ─── Paragraph text objects ──────────────────────────────────────────────────
+
+# `dap` deletes around paragraph (includes surrounding blank line).
+# Buffer: "alpha beta\n\ngamma\n" — cursor on line 0.
+# Around-paragraph eats the content + the separating blank line.
+[[cases]]
+name = "textobj_dap_delete_around_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "dap"
+expected_buffer = "gamma\n"
+expected_cursor = [0, 0]
+
+# `dip` deletes inside paragraph (only the content, not the blank line).
+[[cases]]
+name = "textobj_dip_delete_inside_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "dip"
+expected_buffer = "\ngamma\n"
+expected_cursor = [0, 0]
+
+# ─── Sentence text objects ────────────────────────────────────────────────────
+
+# `das` deletes around sentence (sentence + trailing whitespace).
+# "First. Second. Third.\n" — cursor on "Second"; das removes "Second. " (with space).
+[[cases]]
+name = "textobj_das_delete_around_sentence"
+initial_buffer = "First. Second. Third.\n"
+initial_cursor = [0, 7]
+keys = "das"
+expected_buffer = "First. Third.\n"
+expected_cursor = [0, 7]
+
+# `dis` deletes inside sentence (sentence only, no trailing space).
+[[cases]]
+name = "textobj_dis_delete_inside_sentence"
+initial_buffer = "First. Second. Third.\n"
+initial_cursor = [0, 7]
+keys = "dis"
+expected_buffer = "First.  Third.\n"
+expected_cursor = [0, 7]
+
+# ─── Single-quote text objects ────────────────────────────────────────────────
+
+# `da'` deletes around single-quoted string (including the quotes).
+[[cases]]
+name = "textobj_da_singlequote"
+initial_buffer = "foo 'bar baz' qux\n"
+initial_cursor = [0, 6]
+keys = "da'"
+expected_buffer = "foo qux\n"
+expected_cursor = [0, 4]
+
+# `di'` deletes inside single-quoted string (leaves quotes in place).
+[[cases]]
+name = "textobj_di_singlequote"
+initial_buffer = "foo 'bar baz' qux\n"
+initial_cursor = [0, 6]
+keys = "di'"
+expected_buffer = "foo '' qux\n"
+expected_cursor = [0, 5]
+
+# ─── Square-bracket text objects ─────────────────────────────────────────────
+
+# `da[` deletes around square brackets (including the brackets).
+[[cases]]
+name = "textobj_da_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "da["
+expected_buffer = "x  y\n"
+expected_cursor = [0, 2]
+
+# `di[` deletes inside square brackets (leaves brackets in place).
+[[cases]]
+name = "textobj_di_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "di["
+expected_buffer = "x [] y\n"
+expected_cursor = [0, 3]
