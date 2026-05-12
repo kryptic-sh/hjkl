@@ -274,15 +274,21 @@ pub fn move_top<B: Cursor + Query>(buf: &mut B) {
 /// content-bearing line, matching vim's behaviour.
 pub fn move_bottom<B: Cursor + Query>(buf: &mut B, count: usize) {
     let raw_last = read_row_count(buf).saturating_sub(1);
-    let target = if count == 0 {
-        // Skip a single trailing empty row produced by a trailing `\n`.
+    // Compute the last *content* row: skip a single trailing empty row
+    // produced by a trailing `\n`. Applies to both the bare-G case
+    // (count == 0) and the counted case (`100G`) so they stay in sync.
+    // Pre-0.5.8, counted `G` used `(count-1).min(raw_last)` without the
+    // clamp, landing on the phantom row after a trailing newline.
+    let last_content =
         if raw_last > 0 && read_line(buf, raw_last).map(str::is_empty).unwrap_or(false) {
             raw_last - 1
         } else {
             raw_last
-        }
+        };
+    let target = if count == 0 {
+        last_content
     } else {
-        (count - 1).min(raw_last)
+        (count - 1).min(last_content)
     };
     write_cursor(buf, Position::new(target, 0));
     move_first_non_blank(buf);

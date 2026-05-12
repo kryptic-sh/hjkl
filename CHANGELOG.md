@@ -6,6 +6,50 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-05-13
+
+### Fixed
+
+- **Dot mark (`'.` / `` `. ``) records change-start, not post-insert cursor.**
+  `Editor::mutate_edit` now captures the pre-edit cursor before applying the
+  buffer edit and stores that in `vim.last_edit_pos`. Pre-0.5.8 the post-edit
+  cursor was stored, causing `` `. `` after `iX<Esc>` to land one column past
+  the insert start instead of on the change start. Matches vim's `:h '.` rule
+  "the position where the last change was made". Fixes oracle case
+  `mark_dot_jump_to_last_edit` (kryptic-sh/hjkl#83).
+
+- **`100G` clamps to last content row on trailing-newline buffers.**
+  `motions::move_bottom` now applies the same trailing-empty-row skip for
+  counted `G` as for bare `G`. Pre-0.5.8 `(count-1).min(raw_last)` ignored the
+  phantom row, landing on row 3 instead of row 2 for a 3-line buffer with a
+  trailing newline. Fixes oracle case `count_100G_clamps_to_last_line`
+  (kryptic-sh/hjkl#83).
+
+- **`gi` moves to the last-insert position and enters insert mode.** Added a new
+  field `VimState::last_insert_pos` that captures the pre-step-back cursor on
+  every insert-mode exit (Esc). Added a `gi` arm in `handle_after_g` that jumps
+  to `last_insert_pos` then calls `begin_insert`. Pre-0.5.8 `gi` was silently
+  swallowed by the `g`-prefix handler and had no effect. Fixes oracle case
+  `gi_resume_last_insert` (kryptic-sh/hjkl#83).
+
+- **Visual-block `c<text><Esc>` cursor lands on last inserted char.** Introduced
+  a new `InsertReason::BlockChange` variant (distinct from `BlockEdge` used by
+  `I`/`A`) so `finish_insert_session` can advance the block-start-row cursor to
+  `col + ins_chars` (pre-step-back) after block replication. The Esc step-back
+  then places the cursor at `col + ins_chars - 1`, matching nvim. Pre-0.5.8 the
+  cursor stayed at the block-start column. `I` and `A` retain their original
+  cursor-at-col behaviour. Fixes oracle case `visual_block_jl_c_change_block`
+  (kryptic-sh/hjkl#83).
+
+- **`"_` (black-hole) register discards deletes without touching unnamed.**
+  `handle_select_register` now accepts `'_'` as a valid register character.
+  `Registers::record_delete` and `Registers::record_yank` short-circuit
+  immediately when `target == Some('_')`, leaving `"`, `"0`, and the `"1`–`"9`
+  ring untouched. Pre-0.5.8 `"_dw` fell through to the unnamed register (because
+  `_` was not in the accepted set), corrupting the last yank and causing `p` to
+  paste the deleted text instead of the prior yank. Fixes oracle case
+  `register_blackhole_d` (kryptic-sh/hjkl#83).
+
 ## [0.5.7] - 2026-05-13
 
 ### Fixed
@@ -253,7 +297,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...v0.5.5

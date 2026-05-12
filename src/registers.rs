@@ -44,8 +44,14 @@ pub struct Registers {
 
 impl Registers {
     /// Record a yank operation. Writes to `"`, `"0`, and (if
-    /// `target` is set) the named slot.
+    /// `target` is set) the named slot. When `target` is `'_'`
+    /// (black-hole register) all writes are suppressed — vim discards
+    /// the text without touching any register.
     pub fn record_yank(&mut self, text: String, linewise: bool, target: Option<char>) {
+        // Black-hole register: discard the text entirely.
+        if target == Some('_') {
+            return;
+        }
         let slot = Slot::new(text, linewise);
         self.unnamed = slot.clone();
         self.yank_zero = slot.clone();
@@ -57,9 +63,14 @@ impl Registers {
     /// Record a delete / change. Writes to `"`, rotates the
     /// `"1`–`"9` ring, and (if `target` is set) the named slot.
     /// Empty deletes are dropped — vim doesn't pollute the ring
-    /// with no-ops.
+    /// with no-ops. When `target` is `'_'` (black-hole register) all
+    /// writes are suppressed, preserving the previous register state.
     pub fn record_delete(&mut self, text: String, linewise: bool, target: Option<char>) {
         if text.is_empty() {
+            return;
+        }
+        // Black-hole register: discard the text entirely.
+        if target == Some('_') {
             return;
         }
         let slot = Slot::new(text, linewise);

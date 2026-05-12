@@ -385,6 +385,10 @@ pub struct VimState {
     /// Position of the most recent buffer mutation. Surfaced via
     /// the `'.` / `` `. `` marks for quick "back to last edit".
     pub(super) last_edit_pos: Option<(usize, usize)>,
+    /// Position where the cursor was when insert mode last exited (Esc).
+    /// Used by `gi` to return to the exact (row, col) where the user
+    /// last typed, matching vim's `:h gi`.
+    pub(super) last_insert_pos: Option<(usize, usize)>,
     /// Bounded ring of recent edit positions (newest at the back).
     /// `g;` walks toward older entries, `g,` toward newer ones. Capped
     /// at [`CHANGE_LIST_MAX`].
@@ -499,6 +503,11 @@ enum InsertReason {
     /// every row in `top..=bot`. `col` is the start column for `I`, the
     /// one-past-block-end column for `A`.
     BlockEdge { top: usize, bot: usize, col: usize },
+    /// `c` from VisualBlock: block content deleted, then user types
+    /// replacement text replicated across all block rows on Esc. Cursor
+    /// advances to the last typed char after replication (unlike BlockEdge
+    /// which leaves cursor at the insertion column).
+    BlockChange { top: usize, bot: usize, col: usize },
     /// `R` — Replace mode. Each typed char overwrites the cell under
     /// the cursor instead of inserting; at end-of-line the session
     /// falls through to insert (same as vim).
@@ -1051,6 +1060,10 @@ fn step_insert<H: crate::types::Host>(
         // column so the next vertical motion lands where the user
         // actually sees the cursor — not one cell to the right.
         let col = ed.cursor().1;
+        // Record the pre-step-back cursor as the `gi` target. vim's `gi`
+        // re-enters insert at this position (the cell the cursor occupied
+        // when insert mode was active), matching vim's `:h gi` / `'^` mark.
+        ed.vim.last_insert_pos = Some(ed.cursor());
         if col > 0 {
             crate::motions::move_left(&mut ed.buffer, 1);
             ed.push_buffer_cursor_to_textarea();
@@ -1571,26 +1584,53 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             });
         }
     }
-    if let InsertReason::BlockEdge { top, bot, col } = session.reason {
-        if !inserted.is_empty() && top < bot && !ed.vim.replaying {
-            use hjkl_buffer::{Edit, Position};
-            for r in (top + 1)..=bot {
-                let line_len = buf_line_chars(&ed.buffer, r);
-                if col > line_len {
-                    // Pad short rows with spaces up to the block edge
-                    // column so the inserted text lands at `col`.
-                    let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
-                    ed.mutate_edit(Edit::InsertStr {
-                        at: Position::new(r, line_len),
-                        text: pad,
-                    });
-                }
+    // Helper: replicate `inserted` text across block rows top+1..=bot at `col`,
+    // padding short rows to reach `col` first. Returns without touching the
+    // cursor — callers position the cursor afterward according to their needs.
+    fn replicate_block_text<H: crate::types::Host>(
+        ed: &mut Editor<hjkl_buffer::Buffer, H>,
+        inserted: &str,
+        top: usize,
+        bot: usize,
+        col: usize,
+    ) {
+        use hjkl_buffer::{Edit, Position};
+        for r in (top + 1)..=bot {
+            let line_len = buf_line_chars(&ed.buffer, r);
+            if col > line_len {
+                let pad: String = std::iter::repeat_n(' ', col - line_len).collect();
                 ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(r, col),
-                    text: inserted.clone(),
+                    at: Position::new(r, line_len),
+                    text: pad,
                 });
             }
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(r, col),
+                text: inserted.to_string(),
+            });
+        }
+    }
+
+    if let InsertReason::BlockEdge { top, bot, col } = session.reason {
+        // `I` / `A` from VisualBlock: replicate text across rows; cursor
+        // stays at the block-start column (vim leaves cursor there).
+        if !inserted.is_empty() && top < bot && !ed.vim.replaying {
+            replicate_block_text(ed, &inserted, top, bot, col);
             buf_set_cursor_rc(&mut ed.buffer, top, col);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        return;
+    }
+    if let InsertReason::BlockChange { top, bot, col } = session.reason {
+        // `c` from VisualBlock: replicate text across rows; cursor advances
+        // to `col + ins_chars` (pre-step-back) so the Esc step-back lands
+        // on the last typed char (col + ins_chars - 1), matching nvim.
+        if !inserted.is_empty() && top < bot && !ed.vim.replaying {
+            replicate_block_text(ed, &inserted, top, bot, col);
+            let ins_chars = inserted.chars().count();
+            let line_len = buf_line_chars(&ed.buffer, top);
+            let target_col = (col + ins_chars).min(line_len);
+            buf_set_cursor_rc(&mut ed.buffer, top, target_col);
             ed.push_buffer_cursor_to_textarea();
         }
         return;
@@ -1636,6 +1676,7 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         }
         InsertReason::ReplayOnly => {}
         InsertReason::BlockEdge { .. } => unreachable!("handled above"),
+        InsertReason::BlockChange { .. } => unreachable!("handled above"),
         InsertReason::Replace => {
             // Record overstrike sessions as DeleteToEol-style — replay
             // re-types each character but doesn't try to restore prior
@@ -2092,7 +2133,7 @@ fn handle_select_register<H: crate::types::Host>(
     input: Input,
 ) -> bool {
     if let Key::Char(c) = input.key
-        && (c.is_ascii_alphanumeric() || matches!(c, '"' | '+' | '*'))
+        && (c.is_ascii_alphanumeric() || matches!(c, '"' | '+' | '*' | '_'))
     {
         ed.vim.pending_register = Some(c);
     }
@@ -3097,6 +3138,16 @@ fn handle_after_g<H: crate::types::Host>(
             // `sqls`. The cursor stays put here — the host moves it
             // once it has the target location.
             ed.pending_lsp = Some(crate::editor::LspIntent::GotoDefinition);
+        }
+        // `gi` — go to last-insert position and re-enter insert mode.
+        // Matches vim's `:h gi`: moves to the `'^` mark position (the
+        // cursor where insert mode was last active, before Esc step-back)
+        // and enters insert mode there.
+        Key::Char('i') => {
+            if let Some((row, col)) = ed.vim.last_insert_pos {
+                ed.jump_cursor(row, col);
+            }
+            begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
         }
         // `g;` / `g,` — walk the change list. `g;` toward older
         // entries, `g,` toward newer.
@@ -4336,7 +4387,7 @@ fn apply_block_operator<H: crate::types::Host>(
             begin_insert_noundo(
                 ed,
                 1,
-                InsertReason::BlockEdge {
+                InsertReason::BlockChange {
                     top,
                     bot,
                     col: left,
@@ -10180,6 +10231,113 @@ mod tests {
             e.vim_mode(),
             crate::VimMode::Visual,
             "should be in Visual mode"
+        );
+    }
+
+    // ── Vim-compat divergence regression tests (kryptic-sh/hjkl#83) ──────────
+
+    /// Bug 1: `` `. `` after `iX<Esc>` should land at the *start* of the
+    /// insert (col 0), not one past the last inserted char. vim's `:h '.`
+    /// says the mark is the position where the last change was made.
+    #[test]
+    fn mark_dot_jump_to_last_edit_pre_edit_cursor() {
+        // "hello\nworld\n", cursor (0,0). `iX<Esc>` inserts "X" at col 0;
+        // dot mark should land on col 0 (change start), not col 1 (post-insert).
+        let mut e = editor_with("hello\nworld\n");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "iX<Esc>j`.");
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "dot mark should jump to the change-start (col 0), not post-insert col"
+        );
+    }
+
+    /// Bug 2: `100G` on a buffer with a trailing newline should clamp to the
+    /// last content row, not land on the phantom empty row after the `\n`.
+    #[test]
+    fn count_100g_clamps_to_last_content_row() {
+        // "foo\nbar\nbaz\n" has 4 rows in the buffer (row 3 is the phantom
+        // empty row after the trailing \n). `100G` should land on row 2.
+        let mut e = editor_with("foo\nbar\nbaz\n");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "100G");
+        assert_eq!(
+            e.cursor(),
+            (2, 0),
+            "100G on trailing-newline buffer must clamp to row 2 (last content row)"
+        );
+    }
+
+    /// Bug 3: `gi` should return to the row *and* column where insert mode
+    /// was last active (the pre-step-back position), then enter insert.
+    #[test]
+    fn gi_resumes_last_insert_position() {
+        // "world\nhello\n", cursor (0,0).
+        // `iHi<Esc>` inserts "Hi" at (0,0); Esc steps back to (0,1).
+        // `j` moves to row 1. `gi` should jump back to (0,2) — the position
+        // that was live during insert — and enter insert. `<Esc>` then steps
+        // back to (0,1), leaving the cursor at (0,1) in Normal mode.
+        let mut e = editor_with("world\nhello\n");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "iHi<Esc>jgi<Esc>");
+        assert_eq!(
+            e.vim_mode(),
+            crate::VimMode::Normal,
+            "should be in Normal mode after gi<Esc>"
+        );
+        assert_eq!(
+            e.cursor(),
+            (0, 1),
+            "gi<Esc> cursor should be at (0,1) — the insert row, step-back col"
+        );
+    }
+
+    /// Bug 4: `<C-v>jlc<text><Esc>` — after blockwise change the cursor
+    /// should sit on the last char of the inserted text (`col 1` for "ZZ"),
+    /// not at the block start (`col 0`). Buffer result must still be correct.
+    #[test]
+    fn visual_block_change_cursor_on_last_inserted_char() {
+        // "foo\nbar\nbaz\n", cursor (0,0). Block covers rows 0-1, cols 0-1.
+        // `cZZ` replaces cols 0-1 on each row with "ZZ". Buffer becomes
+        // "ZZo\nZZr\nbaz\n". Cursor should be at (0,1) — last char of "ZZ".
+        let mut e = editor_with("foo\nbar\nbaz\n");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "<C-v>jlcZZ<Esc>");
+        let lines = e.buffer().lines().to_vec();
+        assert_eq!(lines[0], "ZZo", "row 0 should be 'ZZo'");
+        assert_eq!(lines[1], "ZZr", "row 1 should be 'ZZr'");
+        assert_eq!(
+            e.cursor(),
+            (0, 1),
+            "cursor should be on last char of inserted 'ZZ' (col 1)"
+        );
+    }
+
+    /// Bug 5: `"_dw` (black-hole delete) must not overwrite the unnamed
+    /// register. After `yiw` the unnamed register holds "foo". A subsequent
+    /// `"_dw` discards "bar " into the void, leaving "foo" intact. `b p`
+    /// then pastes "foo" to produce "ffoooo baz\n".
+    #[test]
+    fn register_blackhole_delete_preserves_unnamed_register() {
+        // "foo bar baz\n", cursor (0,0).
+        // `yiw` — yank "foo" into " and "0.
+        // `w`   — cursor to (0,4) = 'b'.
+        // `"_dw` — black-hole delete "bar "; unnamed must still be "foo".
+        // `b`   — back to (0,0).
+        // `p`   — paste "foo" after 'f' → "ffoooo baz\n".
+        let mut e = editor_with("foo bar baz\n");
+        e.jump_cursor(0, 0);
+        run_keys(&mut e, "yiww\"_dwbp");
+        let lines = e.buffer().lines().to_vec();
+        assert_eq!(
+            lines[0], "ffoooo baz",
+            "black-hole delete must not corrupt unnamed register"
+        );
+        assert_eq!(
+            e.cursor(),
+            (0, 3),
+            "cursor should be on last pasted char (col 3)"
         );
     }
 }

@@ -1604,6 +1604,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         let pre_row = buf_cursor_row(&self.buffer);
         let pre_rows = buf_row_count(&self.buffer);
+        // Capture the pre-edit cursor for the dot mark (`'.` / `` `. ``).
+        // Vim's `:h '.` says "the position where the last change was made",
+        // meaning the change-start, not the post-insert cursor. We snap it
+        // here before `apply_buffer_edit` moves the cursor.
+        let (pre_edit_row, pre_edit_col) = buf_cursor_rc(&self.buffer);
         // Map the underlying buffer edit to a SPEC EditOp for
         // change-log emission before consuming it. Coarse — see
         // change_log field doc on the struct.
@@ -1633,7 +1638,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             start_row: lo,
             end_row: hi,
         });
-        self.vim.last_edit_pos = Some((pos_row, pos_col));
+        // Dot mark records the PRE-edit position (change start), matching
+        // vim's `:h '.` semantics. Previously this stored the post-edit
+        // cursor, which diverged from nvim on `iX<Esc>j`.
+        self.vim.last_edit_pos = Some((pre_edit_row, pre_edit_col));
         // Append to the change-list ring (skip when the cursor sits on
         // the same cell as the last entry — back-to-back keystrokes on
         // one column shouldn't pollute the ring). A new edit while
