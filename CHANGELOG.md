@@ -8,6 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- Phase 2c of the vim FSM extraction (#62) — bare op-pending (`d` / `y` / `c` /
+  `>` / `<`), `OpFind` / `OpTextObj` / `OpG` sub-states, chord-init case-ops
+  (`gu` / `gU` / `g~` / `gq`), and register prefix (`"<reg>`) all migrated from
+  the engine FSM to the `hjkl-vim` reducer. The reducer now owns the entire
+  op-pending state machine for user keystrokes; engine `Pending::Op*` arms
+  remain only for macro-replay defensive coverage.
+- Bumped `hjkl-vim` 0.5 → 0.11 across chunks 2c-i..vi:
+  - 0.6 — `OperatorKind` + `PendingState::AfterOp` (chunk 2c-i).
+  - 0.7 — `PendingState::OpFind` + `EngineCmd::ApplyOpFind` (chunk 2c-ii).
+  - 0.8 — `PendingState::OpTextObj` + `EngineCmd::ApplyOpTextObj` (chunk
+    2c-iii).
+  - 0.9 — `PendingState::OpG` + `EngineCmd::ApplyOpG` (chunk 2c-iv).
+  - 0.10 — `OperatorKind::{Uppercase, Lowercase, ToggleCase, Reflow}` for
+    chord-init case-op bridge (chunk 2c-v).
+  - 0.11 — `PendingState::SelectRegister` + `EngineCmd::SetPendingRegister`
+    (chunk 2c-vi).
+- Bumped `hjkl-engine` 0.5.8 → 0.6.0 across chunks 2c-i..vii:
+  - 0.5.12..0.5.17 — `Editor::apply_op_motion` / `apply_op_double` /
+    `apply_op_find` / `apply_op_text_obj` / `apply_op_g` /
+    `set_pending_register` controller entry points.
+  - 0.6.0 (breaking) — removed transitional `enter_op_text_obj` / `enter_op_g` /
+    `enter_op_find` controllers, now superseded by the matching `apply_op_*`
+    methods (chunk 2c-vii).
+- Bumped `hjkl-form` 0.3.5 → 0.3.6, `hjkl-editor` 0.4.4 → 0.4.5, and
+  `hjkl-ratatui` 0.3.5 → 0.3.6 — caret bumps to `hjkl-engine ^0.6`, no API
+  changes.
+
 ## [0.14.6] - 2026-05-13
 
 ### Changed
