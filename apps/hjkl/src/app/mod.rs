@@ -603,13 +603,11 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("<leader>ca", AppAction::LspCodeActions, "code actions"),
         ("<leader>rn", AppAction::LspRename, "rename symbol"),
         // ── g-prefix ──────────────────────────────────────────────────────
-        ("gt", AppAction::Tabnext, "next tab"),
-        ("gT", AppAction::Tabprev, "prev tab"),
-        ("gd", AppAction::LspGotoDef, "goto definition"),
-        ("gD", AppAction::LspGotoDecl, "goto declaration"),
-        ("gr", AppAction::LspGotoRef, "goto references"),
-        ("gi", AppAction::LspGotoImpl, "goto implementation"),
-        ("gy", AppAction::LspGotoTypeDef, "goto type def"),
+        // NOTE: bare `g` is bound separately below as BeginPendingAfterG.
+        // The app-level g-chord actions (gt, gd, etc.) are dispatched from
+        // the AfterGChord arm in event_loop.rs rather than the trie, so
+        // that a bare `g` can immediately set pending state without waiting
+        // for the trie timeout (Ambiguous resolution).
         // ── ] / [ bracket motions ─────────────────────────────────────────
         ("]b", AppAction::BufferNext, "next buffer"),
         ("[b", AppAction::BufferPrev, "prev buffer"),
@@ -676,6 +674,17 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
             if let Err(e) = km.add(mode, key, action.clone(), desc) {
                 eprintln!("hjkl: keymap.add({key}) failed: {e}");
             }
+        }
+    }
+
+    // `g<x>` — bare g-prefix chord, migrated to hjkl-vim's
+    // PendingState::AfterG reducer. Bound in Normal and Visual only.
+    // Operator-pending g (`dgU`, etc.) and the engine's internal
+    // `Pending::G` / `Pending::OpG` still go through the engine FSM.
+    let after_g_action = AppAction::BeginPendingAfterG { count: 1 };
+    for mode in [Mode::Normal, Mode::Visual] {
+        if let Err(e) = km.add(mode, "g", after_g_action.clone(), "g-prefix chord") {
+            eprintln!("hjkl: keymap.add(g) failed: {e}");
         }
     }
 
@@ -1426,6 +1435,18 @@ impl App {
                     forward,
                     till,
                 });
+            }
+            AppAction::BeginPendingAfterG {
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::AfterG { count: n });
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {

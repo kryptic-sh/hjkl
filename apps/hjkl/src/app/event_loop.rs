@@ -571,6 +571,82 @@ impl App {
                                             self.sync_viewport_from_editor();
                                             continue;
                                         }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord {
+                                            ch,
+                                            count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            // App-level g-prefix actions (formerly
+                                            // trie-bound as gt/gd/etc.) are dispatched
+                                            // here before falling through to the engine.
+                                            match ch {
+                                                't' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::Tabnext,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'T' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::Tabprev,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'd' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::LspGotoDef,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'D' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::LspGotoDecl,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'r' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::LspGotoRef,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'i' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::LspGotoImpl,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                'y' => {
+                                                    self.dispatch_action(
+                                                        crate::keymap_actions::AppAction::LspGotoTypeDef,
+                                                        count as u32,
+                                                    );
+                                                    continue;
+                                                }
+                                                _ => {}
+                                            }
+                                            // All other g-chords: delegate to engine.
+                                            self.active_mut().editor.after_g(ch, count);
+                                            self.sync_viewport_from_editor();
+                                            // after_g may set Pending::Op (gU/gu/g~/gq);
+                                            // is_chord_pending() bypass on the NEXT key
+                                            // ensures the engine's op-pending arm fires.
+                                            if self.active_mut().editor.take_dirty() {
+                                                let elapsed =
+                                                    self.active_mut().refresh_dirty_against_saved();
+                                                self.last_signature_us = elapsed;
+                                                if self.active().dirty {
+                                                    self.active_mut().is_new_file = false;
+                                                }
+                                            }
+                                            continue;
+                                        }
                                         Outcome::Cancel => {
                                             self.pending_state = None;
                                             continue;

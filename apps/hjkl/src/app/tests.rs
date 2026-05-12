@@ -4831,6 +4831,65 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord { ch, count }) => {
+                    app.pending_state = None;
+                    // App-level g actions (gt, gd, gi, etc.) take priority.
+                    match ch {
+                        't' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::Tabnext,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'T' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::Tabprev,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'd' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::LspGotoDef,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'D' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::LspGotoDecl,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'r' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::LspGotoRef,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'i' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::LspGotoImpl,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        'y' => {
+                            app.dispatch_action(
+                                crate::keymap_actions::AppAction::LspGotoTypeDef,
+                                count as u32,
+                            );
+                            return;
+                        }
+                        _ => {}
+                    }
+                    app.active_mut().editor.after_g(ch, count);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -5084,6 +5143,139 @@ fn gj_via_dispatch_moves_down_display_line() {
         app.active().editor.cursor().0,
         1,
         "gj must move down one row"
+    );
+}
+
+// ── Phase 2b-ii: bare g<x> through hjkl-vim AfterG reducer ──────────────
+
+#[test]
+fn gg_jumps_top() {
+    // gg from row 30 → row 0.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(30, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "g must set pending_state=AfterG, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(app.pending_state.is_none(), "pending cleared after gg");
+    assert_eq!(app.active().editor.cursor().0, 0, "gg must jump to row 0");
+}
+
+#[test]
+fn gg_with_count_5_jumps_line_5() {
+    // 5gg → row 4 (0-indexed).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    app.pending_count = "5".into();
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { count: 5 })
+        ),
+        "pending_state must carry count=5, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert_eq!(app.active().editor.cursor().0, 4, "5gg must land on row 4");
+}
+
+#[test]
+fn gv_restores_last_visual() {
+    // Enter visual, move, exit, then gv re-enters visual mode.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\n");
+    // Enter visual and select a few chars.
+    app.active_mut().editor.handle_key(key(KeyCode::Char('v')));
+    app.active_mut().editor.handle_key(key(KeyCode::Char('l')));
+    app.active_mut().editor.handle_key(key(KeyCode::Char('l')));
+    // Exit visual.
+    app.active_mut().editor.handle_key(key(KeyCode::Esc));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "should be Normal after Esc"
+    );
+    // gv via AfterG reducer.
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('v')));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Visual,
+        "gv must re-enter Visual mode"
+    );
+}
+
+#[test]
+fn gj_screen_down() {
+    // gj moves cursor down one display row.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\n");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.active().editor.cursor().0,
+        1,
+        "gj must move down to row 1"
+    );
+}
+
+#[test]
+fn gu_then_w_lowercases_word() {
+    // gu<motion> operator: after gU sets Pending::Op the engine must be
+    // chord-pending so the next key (w) applies as a motion.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "HELLO world\n");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('u')));
+    // After gu the engine should be chord-pending (Pending::Op).
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "after gu the engine must be in chord-pending for the motion"
+    );
+    // Feed 'w' directly to engine (is_chord_pending bypass).
+    app.active_mut().editor.handle_key(key(KeyCode::Char('w')));
+    let content = app.active().editor.buffer().as_string();
+    assert!(
+        content.starts_with("hello"),
+        "gu+w must lowercase the word; got {content:?}"
+    );
+}
+
+#[test]
+fn g_then_esc_cancels() {
+    // g<Esc> clears pending without any cursor movement.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc\n");
+    app.active_mut().editor.jump_cursor(0, 1);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(app.pending_state.is_some(), "g must set pending_state");
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must clear g pending_state"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 1),
+        "cursor must not move on g<Esc>"
     );
 }
 
