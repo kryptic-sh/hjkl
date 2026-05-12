@@ -107,4 +107,28 @@ impl<A: Clone> TrieNode<A> {
             None => vec![],
         }
     }
+
+    /// Iterate over **all** direct children reachable from `prefix` —
+    /// both terminal nodes (with a bound action) and pure-prefix nodes
+    /// (no action but with deeper children).
+    ///
+    /// Returns `(key_event, Option<&Binding>)` where `None` signals a
+    /// prefix-only entry (a submenu with no action of its own).
+    pub(crate) fn all_children_of<'a>(
+        &'a self,
+        prefix: &[KeyEvent],
+    ) -> Vec<(&'a KeyEvent, Option<&'a Binding<A>>)> {
+        if prefix.is_empty() {
+            return self
+                .children
+                .iter()
+                .filter(|(_, node)| node.action.is_some() || !node.children.is_empty())
+                .map(|(k, node)| (k, node.action.as_ref()))
+                .collect();
+        }
+        match self.children.get(&prefix[0]) {
+            Some(child) => child.all_children_of(&prefix[1..]),
+            None => vec![],
+        }
+    }
 }

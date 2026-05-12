@@ -156,6 +156,22 @@ impl<A: Clone> Keymap<A> {
             .collect()
     }
 
+    /// Return **all** direct children reachable from `prefix` in `mode` —
+    /// both terminal bindings and pure-prefix (submenu) entries.
+    ///
+    /// Terminal entries carry `Some(Binding)`; prefix-only entries carry `None`.
+    /// Callers (e.g. which-key) should render prefix-only entries with a
+    /// synthetic description such as `"…"`.
+    pub fn children_all(&self, mode: Mode, prefix: &Chord) -> Vec<(KeyEvent, Option<Binding<A>>)> {
+        let Some(tree) = self.trees.get(&mode) else {
+            return vec![];
+        };
+        tree.all_children_of(&prefix.0)
+            .into_iter()
+            .map(|(k, b)| (*k, b.cloned()))
+            .collect()
+    }
+
     // ── Stateful feed ─────────────────────────────────────────────────────
 
     /// Feed a single key event for `mode` and return what happened.
