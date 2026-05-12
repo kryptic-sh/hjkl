@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-05-13
+
+### Added
+
+- `Editor::after_g(ch, count)` — public controller entry point for the bare
+  `g<x>` chord. Delegates to the new `pub(crate) apply_after_g` helper that
+  contains the full `handle_after_g` dispatch table (`gg`, `ge`, `gE`, `g_`,
+  `gM`, `gv`, `gj`, `gk`, `gU`, `gu`, `g~`, `gq`, `gJ`, `gd`, `gi`, `g;`, `g,`,
+  `g*`, `g#`). Enables hjkl-vim's `PendingState::AfterG` reducer to dispatch
+  `AfterGChord` without re-entering the engine FSM.
+
 ## [0.5.9] - 2026-05-13
 
 ### Added
@@ -307,7 +318,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.9...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.10...HEAD
+[0.5.10]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...v0.5.7
