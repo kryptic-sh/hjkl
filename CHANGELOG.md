@@ -23,6 +23,11 @@ patch bumps.
   `hjkl_vim::step` — the engine's `Pending::Replace` arm is now unreachable from
   the umbrella but left intact. `Editor::replace_char_at` promoted to public in
   `hjkl-engine` v0.5.5 as the controller entry point.
+- `hjkl-engine` v0.5.6 (#81): vim special marks `[` / `]` (last yank / change /
+  paste bounds). After any `y<motion>`, `d<motion>`, `c<motion>`, `p`, or `P`,
+  `` `[ `` jumps to the first affected char and `` `] `` to the last. Mode-aware
+  positioning (linewise, charwise, blockwise). Enables the `` `[v`] `` re-select
+  idiom. Backtick mark jumps now work in Visual modes.
 
 ## [0.14.4] - 2026-05-12
 
