@@ -64,8 +64,8 @@ fn km_to_crossterm(ev: &KmKeyEvent) -> KeyEvent {
 }
 
 /// Map a [`hjkl_vim::OperatorKind`] (reducer-side) to a
-/// [`hjkl_engine::Operator`] (engine-side). The five Normal-mode
-/// operators are a strict subset of the engine's full operator set.
+/// [`hjkl_engine::Operator`] (engine-side). All nine reducer-side operators
+/// have a corresponding engine variant.
 fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
     match k {
         hjkl_vim::OperatorKind::Delete => hjkl_engine::Operator::Delete,
@@ -73,6 +73,10 @@ fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
         hjkl_vim::OperatorKind::Change => hjkl_engine::Operator::Change,
         hjkl_vim::OperatorKind::Indent => hjkl_engine::Operator::Indent,
         hjkl_vim::OperatorKind::Outdent => hjkl_engine::Operator::Outdent,
+        hjkl_vim::OperatorKind::Uppercase => hjkl_engine::Operator::Uppercase,
+        hjkl_vim::OperatorKind::Lowercase => hjkl_engine::Operator::Lowercase,
+        hjkl_vim::OperatorKind::ToggleCase => hjkl_engine::Operator::ToggleCase,
+        hjkl_vim::OperatorKind::Reflow => hjkl_engine::Operator::Reflow,
     }
 }
 
@@ -646,12 +650,30 @@ impl App {
                                                 }
                                                 _ => {}
                                             }
+                                            // Chord-init case-ops: intercept u/U/~/q and
+                                            // set reducer AfterOp instead of calling
+                                            // after_g (which would set engine Pending::Op).
+                                            // This keeps the full gU/gu/g~/gq op-pending
+                                            // path inside the reducer from here on.
+                                            let case_op_kind = match ch {
+                                                'u' => Some(hjkl_vim::OperatorKind::Lowercase),
+                                                'U' => Some(hjkl_vim::OperatorKind::Uppercase),
+                                                '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
+                                                'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                                                _ => None,
+                                            };
+                                            if let Some(op) = case_op_kind {
+                                                self.pending_state =
+                                                    Some(hjkl_vim::PendingState::AfterOp {
+                                                        op,
+                                                        count1: count,
+                                                        inner_count: 0,
+                                                    });
+                                                continue;
+                                            }
                                             // All other g-chords: delegate to engine.
                                             self.active_mut().editor.after_g(ch, count);
                                             self.sync_viewport_from_editor();
-                                            // after_g may set Pending::Op (gU/gu/g~/gq);
-                                            // is_chord_pending() bypass on the NEXT key
-                                            // ensures the engine's op-pending arm fires.
                                             if self.active_mut().editor.take_dirty() {
                                                 let elapsed =
                                                     self.active_mut().refresh_dirty_against_saved();

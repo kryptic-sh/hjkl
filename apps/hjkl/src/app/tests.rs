@@ -13,6 +13,10 @@ fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
         hjkl_vim::OperatorKind::Change => hjkl_engine::Operator::Change,
         hjkl_vim::OperatorKind::Indent => hjkl_engine::Operator::Indent,
         hjkl_vim::OperatorKind::Outdent => hjkl_engine::Operator::Outdent,
+        hjkl_vim::OperatorKind::Uppercase => hjkl_engine::Operator::Uppercase,
+        hjkl_vim::OperatorKind::Lowercase => hjkl_engine::Operator::Lowercase,
+        hjkl_vim::OperatorKind::ToggleCase => hjkl_engine::Operator::ToggleCase,
+        hjkl_vim::OperatorKind::Reflow => hjkl_engine::Operator::Reflow,
     }
 }
 fn ctrl_key(c: char) -> KeyEvent {
@@ -4896,6 +4900,23 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                         }
                         _ => {}
                     }
+                    // Chord-init case-ops: intercept u/U/~/q and set
+                    // reducer AfterOp instead of calling after_g.
+                    let case_op_kind = match ch {
+                        'u' => Some(hjkl_vim::OperatorKind::Lowercase),
+                        'U' => Some(hjkl_vim::OperatorKind::Uppercase),
+                        '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
+                        'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                        _ => None,
+                    };
+                    if let Some(op) = case_op_kind {
+                        app.pending_state = Some(hjkl_vim::PendingState::AfterOp {
+                            op,
+                            count1: count,
+                            inner_count: 0,
+                        });
+                        return;
+                    }
                     app.active_mut().editor.after_g(ch, count);
                     app.sync_viewport_from_editor();
                     return;
@@ -5320,21 +5341,34 @@ fn gj_screen_down() {
 
 #[test]
 fn gu_then_w_lowercases_word() {
-    // gu<motion> operator: after gU sets Pending::Op the engine must be
-    // chord-pending so the next key (w) applies as a motion.
+    // gu<motion> operator: after 2c-v, gu sets reducer AfterOp(Lowercase)
+    // instead of engine Pending::Op. The 'w' key flows through the reducer
+    // (ApplyOpMotion) and calls apply_op_motion on the engine.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "HELLO world\n");
     app.active_mut().editor.jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(&mut app, key(KeyCode::Char('u')));
-    // After gu the engine should be chord-pending (Pending::Op).
+    // After gu the reducer owns the pending, not the engine FSM.
     assert!(
-        app.active().editor.is_chord_pending(),
-        "after gu the engine must be in chord-pending for the motion"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Lowercase,
+                ..
+            })
+        ),
+        "gu must set reducer AfterOp(Lowercase), got {:?}",
+        app.pending_state
     );
-    // Feed 'w' directly to engine (is_chord_pending bypass).
-    app.active_mut().editor.handle_key(key(KeyCode::Char('w')));
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after gu (reducer owns it)"
+    );
+    // Feed 'w' through the event loop (reducer dispatches ApplyOpMotion).
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none(), "pending must clear after guw");
     let content = app.active().editor.buffer().as_string();
     assert!(
         content.starts_with("hello"),
@@ -5479,13 +5513,12 @@ fn dap_deletes_paragraph_via_reducer() {
 }
 
 #[test]
-fn guiw_uppercases_word_via_engine_fsm() {
-    // `gUiw` — g → AfterG (reducer), U → after_g('U') → engine sets
-    // Pending::Op(Uppercase). The 'i' key then goes to the ENGINE FSM
-    // (is_chord_pending bypass), which sets Pending::OpTextObj (engine-owned).
-    // The 'w' char completes the engine's OpTextObj arm via handle_text_object.
-    // This verifies the chord-init op path (gU/gu/g~ + i/a + textobj) still
-    // works through the engine FSM, NOT through the reducer OpTextObj state.
+fn guiw_uppercases_word_via_reducer() {
+    // `gUiw` — g → AfterG (reducer), U → reducer AfterOp(Uppercase) (2c-v
+    // intercept; engine NOT set to chord-pending). 'i' → reducer OpTextObj
+    // (inner:true). 'w' → ApplyOpTextObj → apply_op_text_obj on engine.
+    // Verifies gU + i/a + textobj flows fully through the reducer, NOT the
+    // engine FSM.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
     app.active_mut().editor.jump_cursor(0, 0);
@@ -5499,27 +5532,46 @@ fn guiw_uppercases_word_via_engine_fsm() {
         "g must set AfterG"
     );
 
-    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    // U → 2c-v intercept sets AfterOp(Uppercase) in reducer; engine stays idle.
     drive_key(&mut app, key(KeyCode::Char('U')));
-    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
     assert!(
-        app.active().editor.is_chord_pending(),
-        "gU must leave engine in Op(Uppercase) chord-pending"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "gU must set reducer AfterOp(Uppercase), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
-    // 'i' → engine FSM processes Op-pending + 'i' → sets Pending::OpTextObj (engine).
+    // 'i' → reducer AfterOp → Wait(OpTextObj{inner:true}).
     drive_key(&mut app, key(KeyCode::Char('i')));
     assert!(
-        app.pending_state.is_none(),
-        "i after gU must NOT set reducer OpTextObj (engine owns it)"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpTextObj {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                inner: true,
+                ..
+            })
+        ),
+        "i after gU must set reducer OpTextObj(inner:true), got {:?}",
+        app.pending_state
     );
     assert!(
-        app.active().editor.is_chord_pending(),
-        "engine must remain chord-pending waiting for text-object char"
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending (reducer owns text-obj)"
     );
 
-    // 'w' → engine FSM: handle_text_object → uppercase inner word.
+    // 'w' → reducer OpTextObj → Commit(ApplyOpTextObj) → apply_op_text_obj.
     drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none(), "pending must clear after gUiw");
     assert!(!app.active().editor.is_chord_pending());
 
     let line = app
@@ -6614,13 +6666,11 @@ fn cfx_changes_to_x_via_reducer() {
 }
 
 #[test]
-fn gufx_uppercases_via_engine_fsm() {
-    // `gUfx` — g → AfterG (reducer), U → after_g('U') → engine sets
-    // Pending::Op(Uppercase). The 'f' key then goes to the ENGINE FSM
-    // (is_chord_pending bypass), which sets Pending::OpFind (engine-owned).
-    // The 'x' char completes the engine's OpFind arm via handle_op_find_target.
-    // This verifies the chord-init op path (gU/gu/g~ + f/F/t/T) still works
-    // through the engine FSM, NOT through the reducer OpFind state.
+fn gufx_uppercases_via_reducer() {
+    // `gUfx` — g → AfterG (reducer), U → reducer AfterOp(Uppercase) (2c-v
+    // intercept). 'f' → reducer OpFind(forward:true, till:false). 'x' →
+    // Commit(ApplyOpFind) → apply_op_find on engine.
+    // Verifies gU + f/F/t/T + target flows fully through the reducer.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
     app.active_mut().editor.jump_cursor(0, 0);
@@ -6634,27 +6684,47 @@ fn gufx_uppercases_via_engine_fsm() {
         "g must set AfterG"
     );
 
-    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    // U → 2c-v intercept: reducer AfterOp(Uppercase); engine stays idle.
     drive_key(&mut app, key(KeyCode::Char('U')));
-    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
     assert!(
-        app.active().editor.is_chord_pending(),
-        "gU must leave engine in Op(Uppercase) chord-pending"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "gU must set reducer AfterOp(Uppercase), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
-    // 'f' → engine FSM processes Op-pending + 'f' → sets Pending::OpFind (engine).
+    // 'f' → reducer AfterOp → Wait(OpFind{forward:true, till:false}).
     drive_key(&mut app, key(KeyCode::Char('f')));
     assert!(
-        app.pending_state.is_none(),
-        "f after gU must NOT set reducer OpFind (engine owns it)"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpFind {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                forward: true,
+                till: false,
+                ..
+            })
+        ),
+        "f after gU must set reducer OpFind(forward:true), got {:?}",
+        app.pending_state
     );
     assert!(
-        app.active().editor.is_chord_pending(),
-        "engine must remain chord-pending waiting for find-target"
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending (reducer owns find)"
     );
 
-    // 'x' → engine FSM: handle_op_find_target → uppercase through to 'x'.
+    // 'x' → reducer OpFind → Commit(ApplyOpFind) → apply_op_find.
     drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(app.pending_state.is_none(), "pending must clear after gUfx");
     assert!(!app.active().editor.is_chord_pending());
 
     let line = app
@@ -6728,11 +6798,11 @@ fn y_dollar_yanks_to_eol() {
 }
 
 #[test]
-fn guw_still_works_via_engine_fsm() {
-    // `gUw` — g → AfterG (via reducer), U → after_g('U') → engine sets
-    // Pending::Op(Uppercase); w → engine handles motion. Verifies the
-    // chord-initiated path (gu/gU/g~) still goes through engine FSM, NOT
-    // through the AfterOp reducer.
+fn g_uw_uppercases_word_via_reducer() {
+    // `gUw` — g → AfterG (reducer), U → AfterOp(Uppercase) (2c-v intercept;
+    // engine NOT set to chord-pending). 'w' → ApplyOpMotion(Uppercase,'w') →
+    // apply_op_motion on engine.
+    // Verifies the chord-initiated gUw path now flows fully through the reducer.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
     app.active_mut().editor.jump_cursor(0, 0);
@@ -6746,15 +6816,26 @@ fn guw_still_works_via_engine_fsm() {
         "g must set AfterG pending, got {:?}",
         app.pending_state
     );
-    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    // U → 2c-v intercept: reducer AfterOp(Uppercase); engine stays idle.
     drive_key(&mut app, key(KeyCode::Char('U')));
-    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
     assert!(
-        app.active().editor.is_chord_pending(),
-        "gU must leave engine in Op(Uppercase) chord-pending"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "gU must set reducer AfterOp(Uppercase), got {:?}",
+        app.pending_state
     );
-    // w → engine applies Uppercase over WordFwd motion.
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending (reducer owns op-pending)"
+    );
+    // w → reducer dispatches ApplyOpMotion(Uppercase,'w') → apply_op_motion.
     drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none(), "pending must clear after gUw");
     assert!(!app.active().editor.is_chord_pending());
 
     let line = app
@@ -6869,12 +6950,11 @@ fn dg_then_esc_cancels_via_reducer() {
 }
 
 #[test]
-fn g_uppercase_gg_uppercases_to_top_via_engine_fsm() {
-    // `gUgg` — chord-init op path (engine FSM Pending::OpG).
-    // g → AfterG (reducer), U → after_g('U') → engine sets Pending::Op(Uppercase).
-    // g → engine FSM (is_chord_pending bypass) → sets Pending::OpG (engine-owned).
-    // g → engine FSM: handle_op_after_g → uppercase to file-top (gg = FileTop).
-    // Verifies engine Pending::OpG path still works after 2c-iv.
+fn g_ugg_uppercases_to_top_via_reducer() {
+    // `gUgg` — g → AfterG (reducer), U → AfterOp(Uppercase) (2c-v intercept),
+    // g → reducer OpG (AfterOp 'g' branch), g → Commit(ApplyOpG{'g'}) →
+    // apply_op_g(Uppercase, 'g') → uppercase to file-top (FileTop motion).
+    // Verifies the full gUgg path now flows through the reducer OpG sub-state.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld\nfoo");
     app.active_mut().editor.jump_cursor(2, 0); // cursor on "foo".
@@ -6888,24 +6968,45 @@ fn g_uppercase_gg_uppercases_to_top_via_engine_fsm() {
         "g must set AfterG"
     );
 
-    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    // U → 2c-v intercept: reducer AfterOp(Uppercase); engine stays idle.
     drive_key(&mut app, key(KeyCode::Char('U')));
-    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
     assert!(
-        app.active().editor.is_chord_pending(),
-        "gU must leave engine in Op(Uppercase) chord-pending"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "gU must set reducer AfterOp(Uppercase), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after 2c-v gU intercept"
     );
 
-    // g → engine FSM: Op(Uppercase) + 'g' → engine sets Pending::OpG (engine-owned).
+    // g → reducer AfterOp → Wait(OpG{Uppercase}).
     drive_key(&mut app, key(KeyCode::Char('g')));
-    assert!(app.pending_state.is_none(), "reducer must stay clear");
     assert!(
-        app.active().editor.is_chord_pending(),
-        "engine must be in OpG chord-pending waiting for second 'g'"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpG {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "g after gU must set reducer OpG(Uppercase), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending (reducer owns OpG)"
     );
 
-    // g → engine FSM: handle_op_after_g → Motion::FileTop → uppercase all to top.
+    // g → reducer OpG → Commit(ApplyOpG{Uppercase,'g'}) → apply_op_g → FileTop.
     drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(app.pending_state.is_none(), "pending must clear after gUgg");
     assert!(
         !app.active().editor.is_chord_pending(),
         "engine chord must complete"
@@ -6916,5 +7017,250 @@ fn g_uppercase_gg_uppercases_to_top_via_engine_fsm() {
     assert!(
         lines.iter().all(|l| l.chars().all(|c| !c.is_lowercase())),
         "gUgg must uppercase all lines to top, got {lines:?}"
+    );
+}
+
+// ── Phase 2c-v: chord-init reducer bridge integration tests ──────────────────
+
+#[test]
+fn g_uu_uppercases_line_via_reducer() {
+    // `gUU` — doubled form: g → AfterG, U → AfterOp(Uppercase), U →
+    // ApplyOpDouble(Uppercase, 1) → apply_op_double → uppercase current line.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "gUU");
+
+    assert!(app.pending_state.is_none(), "pending must clear after gUU");
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "HELLO WORLD",
+        "gUU must uppercase entire line, got {line:?}"
+    );
+}
+
+#[test]
+fn guu_lowercases_line_via_reducer() {
+    // `guu` — doubled form: g → AfterG, u → AfterOp(Lowercase), u →
+    // ApplyOpDouble(Lowercase, 1) → apply_op_double → lowercase current line.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "HELLO WORLD");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "guu");
+
+    assert!(app.pending_state.is_none(), "pending must clear after guu");
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "hello world",
+        "guu must lowercase entire line, got {line:?}"
+    );
+}
+
+#[test]
+fn g_tilde_tilde_toggles_line_via_reducer() {
+    // `g~~` — doubled form: g → AfterG, ~ → AfterOp(ToggleCase), ~ →
+    // ApplyOpDouble(ToggleCase, 1) → apply_op_double → toggle case of current line.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "Hello World");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "g~~");
+
+    assert!(app.pending_state.is_none(), "pending must clear after g~~");
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "hELLO wORLD",
+        "g~~ must toggle case of entire line, got {line:?}"
+    );
+}
+
+#[test]
+fn gqq_reflows_line_via_reducer() {
+    // `gqq` — doubled form: g → AfterG, q → AfterOp(Reflow), q →
+    // ApplyOpDouble(Reflow, 1) → apply_op_double → reflow current line.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "gqq");
+
+    // Reflow with default textwidth (79+) on a short line leaves it as-is.
+    assert!(app.pending_state.is_none(), "pending must clear after gqq");
+    assert!(!app.active().editor.is_chord_pending());
+    // Line should still exist and not be empty.
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !line.is_empty(),
+        "gqq must not delete short line, got {line:?}"
+    );
+}
+
+#[test]
+fn two_g_uw_uppercases_two_words_via_reducer() {
+    // `2gUw` — count carry: 2 is the count_prefix passed into AfterG, then
+    // AfterOp(Uppercase, count1:2), then w → ApplyOpMotion(Uppercase,'w', total:2).
+    // Engine uppercases 2 words forward.
+    //
+    // Note: the test helper drive_key does not replicate the event_loop's
+    // count-buffering (pending_count). We directly seed AfterG{count:2} to
+    // test the count-carry path without plumbing the full event loop.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world foo");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    // Directly seed AfterG with count=2 (simulates 2g in the real event loop).
+    app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 2 });
+
+    // U → 2c-v intercept: AfterOp(Uppercase, count1:2).
+    drive_key(&mut app, key(KeyCode::Char('U')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                count1: 2,
+                ..
+            })
+        ),
+        "2gU must set AfterOp(Uppercase, count1:2), got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none(), "pending must clear after 2gUw");
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    // 2gUw should uppercase 2 words from cursor: "HELLO WORLD foo".
+    assert!(
+        line.starts_with("HELLO WORLD"),
+        "2gUw must uppercase first 2 words, got {line:?}"
+    );
+}
+
+#[test]
+fn engine_pending_none_after_g_u_in_reducer_path() {
+    // After 2c-v: `gU` must set reducer AfterOp(Uppercase) and leave engine
+    // Pending as None (not Pending::Op). This is the key invariant of 2c-v.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    drive_key(&mut app, key(KeyCode::Char('U')));
+
+    // Reducer holds AfterOp(Uppercase).
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Uppercase,
+                ..
+            })
+        ),
+        "gU must set reducer AfterOp(Uppercase), got {:?}",
+        app.pending_state
+    );
+    // Engine must NOT be in any chord-pending state.
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine Pending must be None after 2c-v gU intercept"
+    );
+}
+
+#[test]
+fn visual_g_u_uppercases_selection() {
+    // In Visual mode, gU applies directly to the selection via engine FSM.
+    // This test verifies that our 2c-v intercept does NOT affect visual-mode
+    // gU (which executes inline, not through op-pending).
+    //
+    // In the real event loop for visual mode: 'g' is intercepted by the trie
+    // (BeginPendingAfterG) which sets pending_state=AfterG, then 'U' is NOT
+    // handled by the Normal-mode pending_state block (vim_mode=Visual), so it
+    // falls through directly to the engine. The engine in visual mode applies
+    // Uppercase to the selection when it sees 'g' (Pending::G) then 'U'.
+    //
+    // In this test we simulate via direct engine handle_key calls (as in the
+    // real event loop's visual mode path where trie handles 'g' out-of-band
+    // and 'U' reaches the engine directly).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    // Enter visual mode and select "hello" (5 chars).
+    app.active_mut().editor.handle_key(key(KeyCode::Char('v')));
+    for _ in 0..4 {
+        app.active_mut().editor.handle_key(key(KeyCode::Char('l')));
+    }
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Visual,
+        "must be in Visual mode"
+    );
+
+    // In visual mode: 'g' goes through engine FSM (pending_state not in visual path),
+    // engine sets Pending::G. Then 'U' → engine Pending::G + 'U' → Uppercase selection.
+    app.active_mut().editor.handle_key(key(KeyCode::Char('g')));
+    app.active_mut().editor.handle_key(key(KeyCode::Char('U')));
+
+    // Should be back in Normal mode after visual-mode gU.
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "gU in visual must return to Normal mode"
+    );
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        line.starts_with("HELLO"),
+        "visual gU must uppercase selection 'hello', got {line:?}"
     );
 }
