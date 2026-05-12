@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-05-13
+
+### Added
+
+- `Editor::apply_op_text_obj(op, ch, inner, total_count)` — public controller
+  entry point: applies operator over a text-object range (`diw` / `daw` / `di"`
+  etc.). Maps `ch` to a `TextObject` per the standard vim table, calls
+  `apply_op_with_text_object`, and updates `last_change` when `op` is Change
+  (dot-repeat). Unknown `ch` values are silently ignored (no-op). `total_count`
+  is accepted for API symmetry with `apply_op_motion` / `apply_op_find` but is
+  currently unused — text objects don't repeat in vim's current grammar.
+- `pub(crate) fn apply_op_text_obj_inner` in `vim.rs` — shared implementation
+  called by both `Editor::apply_op_text_obj` (reducer path) and
+  `handle_text_object` (engine FSM chord-init path), eliminating logic
+  duplication. Returns `false` on unknown `ch` so the FSM can decide how to
+  handle it.
+
 ## [0.5.14] - 2026-05-13
 
 ### Added
@@ -384,7 +401,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...HEAD
+[0.5.15]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.11...v0.5.12

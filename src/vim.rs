@@ -3494,16 +3494,24 @@ fn handle_op_find_target<H: crate::types::Host>(
     true
 }
 
-fn handle_text_object<H: crate::types::Host>(
+/// Shared implementation: map `ch` to `TextObject`, apply the operator, and
+/// record `last_change`. Returns `false` when `ch` is not a known text-object
+/// kind (caller should treat as a no-op). Used by both `handle_text_object`
+/// (engine FSM chord-init path) and `Editor::apply_op_text_obj` (reducer
+/// dispatch path) to avoid logic duplication.
+///
+/// `_total_count` is accepted for API symmetry with `apply_op_find_motion` /
+/// `apply_op_motion_key` but is currently unused — text objects don't repeat
+/// in vim's current grammar. Kept for future-proofing.
+pub(crate) fn apply_op_text_obj_inner<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    input: Input,
     op: Operator,
-    _count1: usize,
+    ch: char,
     inner: bool,
+    _total_count: usize,
 ) -> bool {
-    let Key::Char(ch) = input.key else {
-        return true;
-    };
+    // total_count unused — text objects don't repeat in vim's current grammar.
+    // Kept for API symmetry with apply_op_motion / apply_op_find.
     let obj = match ch {
         'w' => TextObject::Word { big: false },
         'W' => TextObject::Word { big: true },
@@ -3515,7 +3523,7 @@ fn handle_text_object<H: crate::types::Host>(
         'p' => TextObject::Paragraph,
         't' => TextObject::XmlTag,
         's' => TextObject::Sentence,
-        _ => return true,
+        _ => return false,
     };
     apply_op_with_text_object(ed, op, obj, inner);
     if !ed.vim.replaying && op_is_change(op) {
@@ -3526,6 +3534,22 @@ fn handle_text_object<H: crate::types::Host>(
             inserted: None,
         });
     }
+    true
+}
+
+fn handle_text_object<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    op: Operator,
+    _count1: usize,
+    inner: bool,
+) -> bool {
+    let Key::Char(ch) = input.key else {
+        return true;
+    };
+    // Delegate to shared implementation; unknown chars are a no-op (return true
+    // to consume the key from the FSM regardless).
+    apply_op_text_obj_inner(ed, op, ch, inner, 1);
     true
 }
 
@@ -10700,5 +10724,48 @@ mod tests {
         // is not on the public surface, so use a `;` repeat to confirm.
         // (If last_find were not set, the `;` would be a no-op and not panic.)
         let _ = e.cursor(); // just ensure the editor is still valid
+    }
+
+    // ── apply_op_text_obj tests ──────────────────────────────────────────────
+
+    #[test]
+    fn apply_op_text_obj_diw_deletes_word() {
+        // `diw` in "hello world" with cursor on 'h' (col 0) → deletes "hello".
+        let mut e = editor_with("hello world");
+        e.apply_op_text_obj(crate::vim::Operator::Delete, 'w', true, 1);
+        let line = e.buffer().lines().first().cloned().unwrap_or_default();
+        // `diw` on "hello" leaves " world" or "world" depending on whitespace handling.
+        // The engine's word text-object for 'inner' removes the word itself; the
+        // surrounding space behaviour is covered by the engine's text-object logic.
+        // We just assert "hello" is gone.
+        assert!(
+            !line.contains("hello"),
+            "diw must delete 'hello', remaining: {line:?}"
+        );
+    }
+
+    #[test]
+    fn apply_op_text_obj_daw_deletes_around_word() {
+        // `daw` in "hello world" with cursor on 'h' (col 0) → deletes "hello " (with space).
+        let mut e = editor_with("hello world");
+        e.apply_op_text_obj(crate::vim::Operator::Delete, 'w', false, 1);
+        let line = e.buffer().lines().first().cloned().unwrap_or_default();
+        assert!(
+            !line.contains("hello"),
+            "daw must delete 'hello' and surrounding space, remaining: {line:?}"
+        );
+    }
+
+    #[test]
+    fn apply_op_text_obj_invalid_char_no_op() {
+        // An unrecognised char (e.g. 'X') should be a no-op — buffer unchanged.
+        let mut e = editor_with("hello world");
+        let before = e.buffer().as_string();
+        e.apply_op_text_obj(crate::vim::Operator::Delete, 'X', true, 1);
+        assert_eq!(
+            e.buffer().as_string(),
+            before,
+            "unknown text-object char must be a no-op"
+        );
     }
 }

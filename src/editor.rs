@@ -2974,6 +2974,31 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_find_motion(self, op, ch, forward, till, total_count);
     }
 
+    /// Apply an operator over a text-object range (`diw` / `daw` / `di"` etc.).
+    /// Maps `ch` to a `TextObject` per the standard vim table, calls
+    /// `apply_op_with_text_object`, and records `last_change` when `op` is
+    /// Change (dot-repeat). Unknown `ch` values are silently ignored (no-op),
+    /// matching the engine FSM's behaviour on unrecognised text-object chars.
+    ///
+    /// `total_count` is accepted for API symmetry with `apply_op_motion` /
+    /// `apply_op_find` but is currently unused — text objects don't repeat in
+    /// vim's current grammar. Kept for future-proofing.
+    ///
+    /// Promoted to the public surface in 0.5.15 so the hjkl-vim
+    /// `PendingState::OpTextObj` reducer can dispatch `ApplyOpTextObj` without
+    /// re-entering the engine FSM. `handle_text_object` (chord-init op path)
+    /// delegates to the shared `apply_op_text_obj_inner` helper to avoid logic
+    /// duplication.
+    pub fn apply_op_text_obj(
+        &mut self,
+        op: crate::vim::Operator,
+        ch: char,
+        inner: bool,
+        total_count: usize,
+    ) {
+        vim::apply_op_text_obj_inner(self, op, ch, inner, total_count);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
