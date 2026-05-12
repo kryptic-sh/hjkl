@@ -41,6 +41,8 @@ impl Chord {
     /// - `<F1>`–`<F12>`
     /// - `<Space>` → `Char(' ')`
     /// - `<lt>` → `Char('<')`
+    /// - `<gt>` → `Char('>')` (cosmetic symmetry with `<lt>`; bare `>` also
+    ///   works since `>` isn't tag-significant outside a closing context)
     /// - Bare characters → `Char(c)` with no modifiers
     pub fn parse(s: &str, leader: char) -> Result<Self, ChordParseError> {
         let mut events = Vec::new();
@@ -114,6 +116,9 @@ fn parse_angle_tag(tag: &str, leader: char) -> Result<KeyEvent, ChordParseError>
         }
         "lt" => {
             return Ok(KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE));
+        }
+        "gt" => {
+            return Ok(KeyEvent::new(KeyCode::Char('>'), KeyModifiers::NONE));
         }
         "cr" | "enter" | "return" => {
             return Ok(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -348,6 +353,39 @@ mod tests {
         assert_eq!(
             chord.0[1],
             KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)
+        );
+    }
+
+    #[test]
+    fn parse_lt_gt_escapes() {
+        // <lt> → literal '<' (must escape because bare '<' starts a tag)
+        let chord = Chord::parse("<C-w><lt>", ' ').unwrap();
+        assert_eq!(
+            chord.0,
+            vec![
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL),
+                KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE),
+            ]
+        );
+
+        // <gt> → literal '>' (symmetry; bare '>' also works outside a tag)
+        let chord = Chord::parse("<C-w><gt>", ' ').unwrap();
+        assert_eq!(
+            chord.0,
+            vec![
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL),
+                KeyEvent::new(KeyCode::Char('>'), KeyModifiers::NONE),
+            ]
+        );
+
+        // Bare '>' still parses as Char('>') for backward-compat.
+        let chord = Chord::parse("<C-w>>", ' ').unwrap();
+        assert_eq!(
+            chord.0,
+            vec![
+                KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL),
+                KeyEvent::new(KeyCode::Char('>'), KeyModifiers::NONE),
+            ]
         );
     }
 

@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-12
+
+### Added
+
+- `<gt>` chord-notation escape for literal `>` — cosmetic symmetry with the
+  existing `<lt>` escape. Bare `>` continues to parse as `Char('>')`.
+
 ## [0.1.0] - 2026-05-10
 
 ### Added
@@ -54,3 +61,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `KeyResolve<A>` — `Pending`, `Match(Binding<A>)`, `Ambiguous`, `Unbound(Vec<KeyEvent>)`.
 - `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
 - `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
+
+[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.1
+[0.1.0]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.0
