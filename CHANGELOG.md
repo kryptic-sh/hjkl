@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-05-13
+
+### Added
+
+- Re-export `Operator` at crate root (`pub use vim::Operator`). The five
+  controller methods added in 0.5.12 (`apply_op_motion`, `apply_op_double`,
+  `enter_op_text_obj`, `enter_op_g`, `enter_op_find`) take `Operator` as a
+  parameter, but 0.5.12 failed to re-export the type, making those methods
+  unusable from downstream crates. This patch makes `hjkl_engine::Operator` a
+  proper public API surface.
+
 ## [0.5.12] - 2026-05-13
 
 ### Added
@@ -358,7 +369,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...HEAD
+[0.5.13]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.10...v0.5.11
 [0.5.10]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.9...v0.5.10

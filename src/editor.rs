@@ -2891,7 +2891,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `ApplyOpMotion` without
     /// re-entering the engine FSM.
-    pub fn apply_op_motion(&mut self, op: vim::Operator, motion_key: char, total_count: usize) {
+    pub fn apply_op_motion(
+        &mut self,
+        op: crate::vim::Operator,
+        motion_key: char,
+        total_count: usize,
+    ) {
         vim::apply_op_motion_key(self, op, motion_key, total_count);
     }
 
@@ -2901,7 +2906,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `ApplyOpDouble` without
     /// re-entering the engine FSM.
-    pub fn apply_op_double(&mut self, op: vim::Operator, total_count: usize) {
+    pub fn apply_op_double(&mut self, op: crate::vim::Operator, total_count: usize) {
         vim::apply_op_double(self, op, total_count);
     }
 
@@ -2913,7 +2918,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `EnterOpTextObj` without
     /// re-entering the engine FSM.
-    pub fn enter_op_text_obj(&mut self, op: vim::Operator, count1: usize, inner: bool) {
+    pub fn enter_op_text_obj(&mut self, op: crate::vim::Operator, count1: usize, inner: bool) {
         vim::enter_op_text_obj(self, op, count1, inner);
     }
 
@@ -2923,7 +2928,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `EnterOpG` without
     /// re-entering the engine FSM.
-    pub fn enter_op_g(&mut self, op: vim::Operator, count1: usize) {
+    pub fn enter_op_g(&mut self, op: crate::vim::Operator, count1: usize) {
         vim::enter_op_g(self, op, count1);
     }
 
@@ -2933,7 +2938,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `EnterOpFind` without
     /// re-entering the engine FSM.
-    pub fn enter_op_find(&mut self, op: vim::Operator, count1: usize, forward: bool, till: bool) {
+    pub fn enter_op_find(
+        &mut self,
+        op: crate::vim::Operator,
+        count1: usize,
+        forward: bool,
+        till: bool,
+    ) {
         vim::enter_op_find(self, op, count1, forward, till);
     }
 
