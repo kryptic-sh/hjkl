@@ -6,7 +6,17 @@
 # The substitute ex-command cases that formerly lived here have graduated to
 # corpus/nvim_api_tier.toml — they pass via `hjkl --nvim-api` and are now
 # asserted by the `nvim_api_tier_passes` test.
-#
-# This file currently tracks no active divergences.
 
-cases = []
+# `.` dot-mark position after `i<text><Esc>`: hjkl stores the POST-insert
+# cursor (one past the last inserted char), nvim stores the position WHERE
+# the change started. Vim's `:h '.'` says "the position where the last
+# change was made"; hjkl matches the cursor convention at the time
+# `last_edit_pos` is recorded (in `Editor::record_mutate_edit`). Fix would
+# require capturing pre-edit cursor and recording it instead.
+[[cases]]
+name = "mark_dot_jump_to_last_edit"
+initial_buffer = "hello\nworld\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>j`."
+expected_buffer = "Xhello\nworld\n"
+expected_cursor = [0, 0]

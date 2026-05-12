@@ -466,3 +466,133 @@ initial_cursor = [0, 5]
 keys = "a world<Esc>u"
 expected_buffer = "hello\n"
 expected_cursor = [0, 4]
+
+# ─── Basic single-char ops ──────────────────────────────────────────────────
+
+# x deletes char under cursor.
+[[cases]]
+name = "delete_x_single_char"
+initial_buffer = "hello\n"
+initial_cursor = [0, 1]
+keys = "x"
+expected_buffer = "hllo\n"
+expected_cursor = [0, 1]
+
+# X deletes char before cursor.
+[[cases]]
+name = "delete_X_char_before"
+initial_buffer = "hello\n"
+initial_cursor = [0, 3]
+keys = "X"
+expected_buffer = "helo\n"
+expected_cursor = [0, 2]
+
+# r<x> replaces char under cursor.
+[[cases]]
+name = "replace_r_single_char"
+initial_buffer = "hello\n"
+initial_cursor = [0, 1]
+keys = "rX"
+expected_buffer = "hXllo\n"
+expected_cursor = [0, 1]
+
+# ~ toggles case of char under cursor and advances right.
+[[cases]]
+name = "case_tilde_toggle_char"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "~"
+expected_buffer = "Abc\n"
+expected_cursor = [0, 1]
+
+# J joins next line with single space separator.
+[[cases]]
+name = "join_J_with_space"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 3]
+
+# p pastes unnamed register after cursor (charwise yank → charwise paste).
+[[cases]]
+name = "paste_p_charwise_after_yiw"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "yiwlp"
+expected_buffer = "fofooo bar\n"
+expected_cursor = [0, 4]
+
+# P pastes unnamed register before cursor.
+[[cases]]
+name = "paste_P_charwise_before_yiw"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 4]
+keys = "yiwP"
+expected_buffer = "foo barbar\n"
+expected_cursor = [0, 6]
+
+# ─── Word variants (big-word, find-back, repeat) ────────────────────────────
+
+# W skips to next WORD (whitespace-delimited, ignores punctuation).
+[[cases]]
+name = "motion_W_big_word_forward"
+initial_buffer = "foo-bar baz\n"
+initial_cursor = [0, 0]
+keys = "W"
+expected_buffer = "foo-bar baz\n"
+expected_cursor = [0, 8]
+
+# B reverses to previous WORD.
+[[cases]]
+name = "motion_B_big_word_back"
+initial_buffer = "foo-bar baz\n"
+initial_cursor = [0, 8]
+keys = "B"
+expected_buffer = "foo-bar baz\n"
+expected_cursor = [0, 0]
+
+# E lands on end of WORD.
+[[cases]]
+name = "motion_E_big_word_end"
+initial_buffer = "foo-bar baz\n"
+initial_cursor = [0, 0]
+keys = "E"
+expected_buffer = "foo-bar baz\n"
+expected_cursor = [0, 6]
+
+# F finds char backward on line.
+[[cases]]
+name = "motion_F_find_backward"
+initial_buffer = "hello\n"
+initial_cursor = [0, 4]
+keys = "Fl"
+expected_buffer = "hello\n"
+expected_cursor = [0, 2]
+
+# T lands just-after char backward on line.
+[[cases]]
+name = "motion_T_till_backward"
+initial_buffer = "hello\n"
+initial_cursor = [0, 4]
+keys = "Tl"
+expected_buffer = "hello\n"
+expected_cursor = [0, 3]
+
+# ; repeats last f/t in same direction.
+[[cases]]
+name = "motion_semicolon_repeats_find"
+initial_buffer = "abcabc\n"
+initial_cursor = [0, 0]
+keys = "fa;"
+expected_buffer = "abcabc\n"
+expected_cursor = [0, 3]
+
+# , repeats last f/t in reverse direction.
+[[cases]]
+name = "motion_comma_reverses_find"
+initial_buffer = "abcabc\n"
+initial_cursor = [0, 0]
+keys = "fa;,"
+expected_buffer = "abcabc\n"
+expected_cursor = [0, 0]

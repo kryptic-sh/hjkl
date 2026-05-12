@@ -1,0 +1,77 @@
+# Tier 2 search + extended find corpus — ~8 cases covering `/` / `?` /
+# `n` / `N` / `*` / `#` (search) plus find-backward variants beyond tier1's
+# `f` / `t`.
+#
+# All buffers are ASCII-only.
+
+# `/foo<CR>` lands on first match.
+[[cases]]
+name = "search_slash_forward_first_match"
+initial_buffer = "alpha foo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>"
+expected_buffer = "alpha foo bar\nfoo baz\n"
+expected_cursor = [0, 6]
+
+# `/foo<CR>n` lands on second match.
+[[cases]]
+name = "search_n_repeats_forward"
+initial_buffer = "alpha foo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>n"
+expected_buffer = "alpha foo bar\nfoo baz\n"
+expected_cursor = [1, 0]
+
+# `/foo<CR>nN` returns to first match.
+[[cases]]
+name = "search_capital_n_reverses"
+initial_buffer = "alpha foo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>nN"
+expected_buffer = "alpha foo bar\nfoo baz\n"
+expected_cursor = [0, 6]
+
+# `?foo<CR>` searches backward.
+[[cases]]
+name = "search_question_backward"
+initial_buffer = "alpha foo bar\nfoo baz\n"
+initial_cursor = [1, 6]
+keys = "?foo<CR>"
+expected_buffer = "alpha foo bar\nfoo baz\n"
+expected_cursor = [1, 0]
+
+# `*` jumps to next occurrence of word at cursor.
+[[cases]]
+name = "search_star_word_forward"
+initial_buffer = "foo bar foo baz\n"
+initial_cursor = [0, 0]
+keys = "*"
+expected_buffer = "foo bar foo baz\n"
+expected_cursor = [0, 8]
+
+# `#` jumps to previous occurrence of word at cursor.
+[[cases]]
+name = "search_hash_word_backward"
+initial_buffer = "foo bar foo baz\n"
+initial_cursor = [0, 8]
+keys = "#"
+expected_buffer = "foo bar foo baz\n"
+expected_cursor = [0, 0]
+
+# `F` finds char backward on line.
+[[cases]]
+name = "find_F_backward"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 6]
+keys = "Fo"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 4]
+
+# `T` lands just-after char backward on line.
+[[cases]]
+name = "find_T_till_backward"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 6]
+keys = "To"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 5]

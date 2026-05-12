@@ -1,0 +1,51 @@
+# Tier 2 substitute corpus — `:s/pat/repl/flags` cases driven via the
+# nvim-api subprocess (NOT in-process key replay). Mirrors the
+# `nvim_api_tier.toml` runner pattern — requires `cargo build -p hjkl`
+# beforehand.
+#
+# All buffers are ASCII-only.
+
+# `:s/foo/bar/g` replaces all matches on current line.
+[[cases]]
+name = "subst_g_flag_all_on_line"
+initial_buffer = "foo foo foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/g<CR>"
+expected_buffer = "bar bar bar\n"
+expected_cursor = [0, 0]
+
+# `:%s/foo/bar/g` global over whole buffer.
+[[cases]]
+name = "subst_percent_g_global"
+initial_buffer = "foo\nfoo foo\n"
+initial_cursor = [0, 0]
+keys = ":%s/foo/bar/g<CR>"
+expected_buffer = "bar\nbar bar\n"
+expected_cursor = [1, 0]
+
+# `:s/FOO/bar/i` case-insensitive match.
+[[cases]]
+name = "subst_i_case_insensitive"
+initial_buffer = "FOO bar\n"
+initial_cursor = [0, 0]
+keys = ":s/FOO/bar/i<CR>"
+expected_buffer = "bar bar\n"
+expected_cursor = [0, 0]
+
+# `:s/foo/BAR/` single match, no flags.
+[[cases]]
+name = "subst_basic_single_match"
+initial_buffer = "foo foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/BAR/<CR>"
+expected_buffer = "BAR foo\n"
+expected_cursor = [0, 0]
+
+# `:s/xyz/bar/` no match — buffer unchanged.
+[[cases]]
+name = "subst_no_match_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":s/xyz/bar/<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]

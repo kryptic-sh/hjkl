@@ -1,0 +1,42 @@
+# Tier 2 paragraph + word motion corpus — `{` / `}` / `(` / `)` plus
+# `W` / `B` / `E` / `ge` / `gE`. The `W`/`B`/`E` big-word forms are already
+# in tier1; this file focuses on `ge`/`gE` end-back variants and
+# paragraph/sentence boundaries.
+#
+# All buffers are ASCII-only.
+
+# `}` jumps to next blank line (paragraph end).
+[[cases]]
+name = "paragraph_close_brace_forward"
+initial_buffer = "alpha\nbeta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "}"
+expected_buffer = "alpha\nbeta\n\ngamma\n"
+expected_cursor = [2, 0]
+
+# `{` jumps back to prev blank line (paragraph start).
+[[cases]]
+name = "paragraph_open_brace_back"
+initial_buffer = "alpha\n\nbeta\ngamma\n"
+initial_cursor = [3, 0]
+keys = "{"
+expected_buffer = "alpha\n\nbeta\ngamma\n"
+expected_cursor = [1, 0]
+
+# `ge` jumps to end of previous word.
+[[cases]]
+name = "word_ge_end_back"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 8]
+keys = "ge"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 6]
+
+# `gE` jumps to end of previous WORD.
+[[cases]]
+name = "word_gE_big_end_back"
+initial_buffer = "foo-bar baz\n"
+initial_cursor = [0, 8]
+keys = "gE"
+expected_buffer = "foo-bar baz\n"
+expected_cursor = [0, 6]

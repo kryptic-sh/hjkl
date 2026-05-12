@@ -1,0 +1,53 @@
+# Tier 2 case + join corpus — `gu` / `gU` / `g~` operators on text objects,
+# `J` / `gJ` line joins.
+#
+# Indent operators (`>>` / `<<` / `>iB`) are excluded — they depend on
+# shiftwidth / expandtab settings that diverge between hjkl defaults and
+# nvim defaults; engine unit tests cover those.
+#
+# All buffers are ASCII-only.
+
+# `guiw` lowercases word.
+[[cases]]
+name = "case_gu_iw_lowercases_word"
+initial_buffer = "FOO bar\n"
+initial_cursor = [0, 0]
+keys = "guiw"
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 0]
+
+# `gUiw` uppercases word.
+[[cases]]
+name = "case_gU_iw_uppercases_word"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "gUiw"
+expected_buffer = "FOO bar\n"
+expected_cursor = [0, 0]
+
+# `g~iw` toggles case of word.
+[[cases]]
+name = "case_g_tilde_iw_toggles_word"
+initial_buffer = "Foo bar\n"
+initial_cursor = [0, 0]
+keys = "g~iw"
+expected_buffer = "fOO bar\n"
+expected_cursor = [0, 0]
+
+# `J` joins next line with space separator.
+[[cases]]
+name = "join_J_with_space"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 3]
+
+# `gJ` joins next line without space.
+[[cases]]
+name = "join_gJ_no_space"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "gJ"
+expected_buffer = "foobar\n"
+expected_cursor = [0, 3]

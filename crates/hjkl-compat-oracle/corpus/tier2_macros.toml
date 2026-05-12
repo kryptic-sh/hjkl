@@ -1,0 +1,48 @@
+# Tier 2 macros corpus — ~6 cases covering `q<reg>...q` record + `@<reg>`
+# playback, count-driven playback, `@@` repeat-last.
+#
+# All buffers are ASCII-only.
+
+# Record `dw` into register a, then play once.
+[[cases]]
+name = "macro_record_dw_play_at"
+initial_buffer = "foo bar baz qux\n"
+initial_cursor = [0, 0]
+keys = "qadwq@a"
+expected_buffer = "baz qux\n"
+expected_cursor = [0, 0]
+
+# Record insert `iX<Esc>`, then play to insert another X.
+[[cases]]
+name = "macro_record_insert_play"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "qaiX<Esc>q@a"
+expected_buffer = "XXabc\n"
+
+# `5@a` plays macro 5 times.
+[[cases]]
+name = "macro_count_5at_deletes_5_words"
+initial_buffer = "a b c d e f g h\n"
+initial_cursor = [0, 0]
+keys = "qadwq5@a"
+expected_buffer = "g h\n"
+expected_cursor = [0, 0]
+
+# `@@` repeats last-played macro.
+[[cases]]
+name = "macro_at_at_repeats_last"
+initial_buffer = "a b c d e\n"
+initial_cursor = [0, 0]
+keys = "qadwq@a@@"
+expected_buffer = "d e\n"
+expected_cursor = [0, 0]
+
+# `@z` with empty register z is a no-op.
+[[cases]]
+name = "macro_empty_register_noop"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "@z"
+expected_buffer = "hello\n"
+expected_cursor = [0, 0]

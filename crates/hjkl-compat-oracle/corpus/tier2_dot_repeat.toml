@@ -1,0 +1,70 @@
+# Tier 2 dot-repeat corpus — ~8 cases covering `.` repeat after each operator
+# class.
+#
+# All buffers are ASCII-only.
+
+# `dw` then `.` (without moving) deletes next word from current cursor.
+[[cases]]
+name = "dot_repeat_dw_deletes_next_word"
+initial_buffer = "foo bar baz qux\n"
+initial_cursor = [0, 0]
+keys = "dw."
+expected_buffer = "baz qux\n"
+expected_cursor = [0, 0]
+
+# `cw foo<Esc>` then `.` changes another word to "foo".
+[[cases]]
+name = "dot_repeat_cw_with_text"
+initial_buffer = "abc def\n"
+initial_cursor = [0, 0]
+keys = "cwfoo<Esc>w."
+expected_buffer = "foo foo\n"
+expected_cursor = [0, 6]
+
+# `x` then `.` deletes next char.
+[[cases]]
+name = "dot_repeat_x_deletes_next_char"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "x."
+expected_buffer = "llo\n"
+expected_cursor = [0, 0]
+
+# `rX` then `.` replaces next char with X.
+[[cases]]
+name = "dot_repeat_r_replace"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "rXl."
+expected_buffer = "XXc\n"
+expected_cursor = [0, 1]
+
+# `yyp` then `.` pastes again (line dup).
+[[cases]]
+name = "dot_repeat_yyp_paste_again"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "yyp."
+expected_buffer = "foo\nfoo\nfoo\nbar\n"
+expected_cursor = [2, 0]
+
+# `o<text><Esc>.` excluded — hjkl's insert-exit cursor lands one past vim's
+# (same divergence as `.` dot-mark; see known_divergences.toml).
+
+# `dd` then `.` deletes next line.
+[[cases]]
+name = "dot_repeat_dd_delete_next_line"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "dd."
+expected_buffer = "gamma\n"
+expected_cursor = [0, 0]
+
+# `~` then `.` toggles next char's case again.
+[[cases]]
+name = "dot_repeat_tilde_toggle"
+initial_buffer = "ABCD\n"
+initial_cursor = [0, 0]
+keys = "~."
+expected_buffer = "abCD\n"
+expected_cursor = [0, 2]

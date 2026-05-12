@@ -1,0 +1,97 @@
+# Tier 2 marks corpus — ~10 cases covering user marks (m/'/`), visual marks
+# (`<` / `>`), bracket marks (`[` / `]`), and the dot mark (`.`).
+#
+# All buffers are ASCII-only.
+# Cursor positions are 0-based [row, col].
+# Notation: `<lt>` is the literal `<` key (vim convention) because the harness
+# parses `<...>` as special-key notation. `>` is fine bare.
+
+# ─── User marks ─────────────────────────────────────────────────────────────
+
+# `ma` then move, `'a` jumps back to row of mark (col = first non-blank).
+[[cases]]
+name = "mark_set_a_then_apostrophe_jump"
+initial_buffer = "  foo bar\n  baz qux\n"
+initial_cursor = [0, 4]
+keys = "maj'a"
+expected_buffer = "  foo bar\n  baz qux\n"
+expected_cursor = [0, 2]
+
+# `ma` then move, `` `a `` jumps back to exact (row, col).
+[[cases]]
+name = "mark_set_a_then_backtick_jump"
+initial_buffer = "hello world\ngoodbye\n"
+initial_cursor = [0, 4]
+keys = "maj`a"
+expected_buffer = "hello world\ngoodbye\n"
+expected_cursor = [0, 4]
+
+# ─── Visual marks `<` / `>` ─────────────────────────────────────────────────
+
+# After `vw<Esc>`, `` `< `` lands at selection start.
+[[cases]]
+name = "mark_lt_after_v_motion_exit_jump_start"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "vw<Esc>`<lt>"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 0]
+
+# After `vw<Esc>`, `` `> `` lands at selection end.
+[[cases]]
+name = "mark_gt_after_v_motion_exit_jump_end"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "vw<Esc>`>"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 4]
+
+# After `Vj<Esc>`, `'<` lands at start-of-first-line (linewise normalization).
+[[cases]]
+name = "mark_lt_after_V_linewise_exit_apostrophe"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 2]
+keys = "Vj<Esc>'<lt>"
+expected_buffer = "foo\nbar\nbaz\n"
+expected_cursor = [0, 0]
+
+# ─── Bracket marks `[` / `]` ────────────────────────────────────────────────
+
+# After `yiw` on "foo", `` `[ `` returns to first char of yanked word.
+[[cases]]
+name = "mark_lbr_after_yiw_jump_lbr"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 1]
+keys = "yiwj`["
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 0]
+
+# After `yiw` on "foo", `` `] `` returns to last char of yanked word.
+[[cases]]
+name = "mark_rbr_after_yiw_jump_rbr"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 1]
+keys = "yiwj`]"
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 2]
+
+# After `cw foo<Esc>` on "abc", `` `] `` lands on last typed char.
+[[cases]]
+name = "mark_rbr_after_cw_typed_text"
+initial_buffer = "abc bar\n"
+initial_cursor = [0, 0]
+keys = "cwfoo<Esc>j`]"
+expected_buffer = "foo bar\n"
+expected_cursor = [0, 2]
+
+# After `yyp` linewise paste, `` `[ `` returns to start of pasted line.
+[[cases]]
+name = "mark_lbr_after_p_linewise_jump_lbr"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "yypk`["
+expected_buffer = "foo\nfoo\n"
+expected_cursor = [1, 0]
+
+# Note: dot-mark `.` after insert has a known divergence (hjkl uses post-edit
+# cursor, vim uses change-start). See `known_divergences.toml`.

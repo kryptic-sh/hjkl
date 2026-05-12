@@ -1,0 +1,73 @@
+# Tier 2 visual corpus — ~12 cases covering `v` / `V` / `<C-v>` selection
+# modes paired with operators (`d` / `y` / `c` / `~` / `>`), the `o` anchor
+# swap, and `gv` re-select.
+#
+# All buffers are ASCII-only.
+
+# `vwd` deletes a word charwise (covers the same range as `dw`).
+[[cases]]
+name = "visual_v_w_d_deletes_word"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "vwd"
+expected_buffer = "ar baz\n"
+expected_cursor = [0, 0]
+
+# `Vjd` deletes 2 lines linewise.
+[[cases]]
+name = "visual_V_j_d_deletes_two_lines"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "Vjd"
+expected_buffer = "gamma\n"
+expected_cursor = [0, 0]
+
+# `Vjy` yanks 2 lines (linewise) — unnamed register holds "alpha\nbeta\n".
+[[cases]]
+name = "visual_V_j_y_yanks_linewise"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "Vjy"
+expected_buffer = "alpha\nbeta\ngamma\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "alpha\nbeta\n"]
+
+# `vwc` changes a word charwise; insert mode opens for replacement text.
+[[cases]]
+name = "visual_v_w_c_then_text"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "vwcXY<Esc>"
+expected_buffer = "XYar baz\n"
+expected_cursor = [0, 1]
+
+# `Vjc` linewise change — replaces 2 lines with typed text, single line out.
+[[cases]]
+name = "visual_V_j_c_linewise_change"
+initial_buffer = "alpha\nbeta\ngamma\n"
+initial_cursor = [0, 0]
+keys = "VjcZ<Esc>"
+expected_buffer = "Z\ngamma\n"
+expected_cursor = [0, 0]
+
+# `vw~` toggles case of selected chars.
+[[cases]]
+name = "visual_v_w_tilde_toggles_case"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "vw~"
+expected_buffer = "FOO Bar\n"
+expected_cursor = [0, 0]
+
+# Visual `>` indent excluded — depends on shiftwidth/expandtab settings that
+# differ between hjkl defaults and nvim defaults. Test in engine unit tests.
+
+# `gv` re-selects the most recent visual region after exiting.
+[[cases]]
+name = "visual_gv_reselects_last_region"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "vw<Esc>gv"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 4]
+expected_mode = "visual"
