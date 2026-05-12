@@ -927,6 +927,16 @@ pub fn step<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>, inpu
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock
         )
     {
+        // Set the `<` / `>` marks to the start / end of the last selection so
+        // ex commands like `:'<,'>sort` resolve their range. `<` is the lower
+        // (row, col), `>` is the higher — matches vim semantics.
+        let (lo, hi) = if snap.anchor <= snap.cursor {
+            (snap.anchor, snap.cursor)
+        } else {
+            (snap.cursor, snap.anchor)
+        };
+        ed.set_mark('<', lo);
+        ed.set_mark('>', hi);
         ed.vim.last_visual = Some(snap);
     }
     // Ctrl-o in insert mode queues a single normal-mode command; once
@@ -7478,6 +7488,37 @@ mod tests {
         run_keys(&mut e, "<C-v>");
         run_keys(&mut e, "<Esc>");
         assert_eq!(e.vim_mode(), VimMode::Normal);
+    }
+
+    #[test]
+    fn visual_exit_sets_lt_gt_marks() {
+        // Vim sets `<` to the start and `>` to the end of the last visual
+        // selection on every visual exit. Required for :'<,'> ex ranges.
+        let mut e = editor_with("aaa\nbbb\nccc\nddd");
+        // V<j><Esc> → selects rows 0..=1 in line-wise visual.
+        run_keys(&mut e, "V");
+        run_keys(&mut e, "j");
+        run_keys(&mut e, "<Esc>");
+        let lt = e.mark('<').expect("'<' mark must be set on visual exit");
+        let gt = e.mark('>').expect("'>' mark must be set on visual exit");
+        assert_eq!(lt.0, 0, "'< row should be the lower bound");
+        assert_eq!(gt.0, 1, "'> row should be the upper bound");
+    }
+
+    #[test]
+    fn visual_exit_marks_use_lower_higher_order() {
+        // Selecting upward (cursor < anchor) must still produce `<` = lower,
+        // `>` = higher — vim's marks are position-ordered, not selection-
+        // ordered.
+        let mut e = editor_with("aaa\nbbb\nccc\nddd");
+        run_keys(&mut e, "jjj"); // cursor at row 3
+        run_keys(&mut e, "V");
+        run_keys(&mut e, "k"); // anchor row 3, cursor row 2
+        run_keys(&mut e, "<Esc>");
+        let lt = e.mark('<').unwrap();
+        let gt = e.mark('>').unwrap();
+        assert_eq!(lt.0, 2);
+        assert_eq!(gt.0, 3);
     }
 
     #[test]
