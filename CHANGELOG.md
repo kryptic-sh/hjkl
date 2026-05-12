@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-05-13
+
 ### Fixed
 
 - Bumped `hjkl-engine` to 0.5.8: 5 vim-compat divergences fixed and their oracle
@@ -23,6 +25,11 @@ patch bumps.
     (`visual_block_jl_c_change_block`).
   - `"_` (black-hole) register discards deletes without touching unnamed
     register (`register_blackhole_d`).
+- `hjkl-engine` 0.5.7 fix: `` `< `` / `` `> `` (and `'<` / `'>` linewise
+  variants) now resolve correctly through `handle_goto_mark`. The marks were set
+  by the visual-exit hook (0.5.3) but the goto-mark dispatcher didn't list `<` /
+  `>` in its target match, so `` `< `` silently no-op'd. Surfaced by the oracle
+  tier-2 marks corpus.
 
 ### Changed
 
@@ -44,6 +51,13 @@ patch bumps.
   `` `[ `` jumps to the first affected char and `` `] `` to the last. Mode-aware
   positioning (linewise, charwise, blockwise). Enables the `` `[v`] `` re-select
   idiom. Backtick mark jumps now work in Visual modes.
+- Oracle (`hjkl-compat-oracle`) tier-2 corpus expansion (#82): 5 → 16 test
+  functions, ~120 cases covering marks, visual mode, dot-repeat, search,
+  substitute, macros, case/join, paragraph/word, text objects, visual block, and
+  registers/increment/insert shortcuts. Acts as a regression net for the
+  upcoming `#62` FSM extraction and `#80` ex-extraction refactors. Tier-1
+  backfilled with 13 basic cases (`x`, `X`, `r`, `~`, `J`, `p`, `P`, `W`, `B`,
+  `E`, `F`, `T`, `;`, `,`).
 
 ## [0.14.4] - 2026-05-12
 
@@ -1681,7 +1695,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.5...HEAD
+[0.14.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.5
 [0.14.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.4
 [0.14.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.3
 [0.14.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.2
