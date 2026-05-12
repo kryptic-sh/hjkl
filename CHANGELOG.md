@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-12
+
+### Performance
+
+- `Highlighter` now caches child highlighters across
+  `highlight_range_with_injections` and `highlight_with_injections` calls. Keys
+  are `(language_name, content_range_start, content_range_end)` with a content
+  hash for drift detection: if the source slice at a given range changes, the
+  entry is evicted and rebuilt; if it is unchanged the parse tree and highlight
+  query are reused at zero parse cost. Stale entries (code blocks that have been
+  deleted or scrolled out of view) are evicted after each call. For a markdown
+  file with N fenced code blocks, this reduces child parse cost from O(N ×
+  frames) to O(N) after the first render frame. Resolves
+  [hjkl#65](https://github.com/kryptic-sh/hjkl/issues/65).
+
 ## [0.6.1] - 2026-05-10
 
 ### Changed
@@ -344,7 +359,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.0
 [0.5.4]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.5.4
