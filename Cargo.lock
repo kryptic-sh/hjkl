@@ -1044,6 +1044,7 @@ dependencies = [
  "hjkl-picker",
  "hjkl-ratatui",
  "hjkl-splash",
+ "hjkl-vim",
  "ignore",
  "lsp-types",
  "nvim-rs",
@@ -1232,6 +1233,10 @@ version = "0.2.0"
 dependencies = [
  "ratatui",
 ]
+
+[[package]]
+name = "hjkl-vim"
+version = "0.1.0"
 
 [[package]]
 name = "hjkl-xdg"

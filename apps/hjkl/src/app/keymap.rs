@@ -95,19 +95,12 @@ pub(crate) fn input_to_km_event(input: Input) -> hjkl_keymap::KeyEvent {
     KmEvent::new(code, modifiers)
 }
 
-/// Editor modes used by the hjkl umbrella's keymap dispatch. Mirrors the vim
-/// FSM. Once `hjkl-vim` is extracted (kryptic-sh/hjkl#62), this enum moves
-/// there and the umbrella imports `hjkl_vim::Mode` instead. `hjkl-keymap` is
-/// now generic over the mode discriminator, so any `Copy + Eq + Hash + Debug`
-/// type works.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub enum HjklMode {
-    Normal,
-    Insert,
-    Visual,
-    OpPending,
-    CommandLine,
-}
+/// Editor modes used by the hjkl umbrella's keymap dispatch. Defined in
+/// `hjkl-vim`; re-exported here under the legacy alias so existing
+/// `crate::app::keymap::HjklMode` references continue to resolve unchanged.
+/// `hjkl-keymap` is generic over the mode discriminator — any
+/// `Copy + Eq + Hash + Debug` type satisfies the blanket `Mode` impl.
+pub use hjkl_vim::Mode as HjklMode;
 
 /// Map a [`MapMode`] to an [`HjklMode`].
 ///

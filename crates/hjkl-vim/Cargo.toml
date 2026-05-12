@@ -1,0 +1,13 @@
+[package]
+name = "hjkl-vim"
+description = "Vim modal state types and grammar primitives for the hjkl editor stack. Pre-1.0 churn."
+keywords = ["vim", "modal", "editor", "fsm"]
+categories = ["text-editors"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl-vim"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
