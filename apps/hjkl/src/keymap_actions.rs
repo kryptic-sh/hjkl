@@ -113,6 +113,21 @@ pub enum AppAction {
     /// by the second key) is passed to `Editor::set_pending_register`.
     BeginPendingSelectRegister,
 
+    // ── Cursor motions (Phase 3a — hjkl-vim keymap path) ──────────────
+    /// Engine-level cursor motion executed via the hjkl-vim keymap path.
+    ///
+    /// Bypasses the engine FSM — the host calls `Editor::apply_motion(kind,
+    /// count)` directly. `count` is the action-default multiplier; the
+    /// dispatch arm combines it with any buffered `pending_count` prefix.
+    ///
+    /// The engine FSM arms for the same keys are kept intact for macro-replay
+    /// defensive coverage (macros re-feed raw keys through the FSM). This
+    /// variant becomes authoritative for user input.
+    Motion {
+        kind: hjkl_vim::MotionKind,
+        count: u32,
+    },
+
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches
     /// the LHS, the dispatcher unrolls `keys` according to `recursive`:

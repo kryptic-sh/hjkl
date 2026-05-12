@@ -732,6 +732,40 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         eprintln!("hjkl: keymap.add(\\\") failed: {e}");
     }
 
+    // ── Phase 3a: char + line motions via hjkl-vim keymap path ───────────
+    // Bound in Normal, Visual, VisualLine, and VisualBlock. Engine FSM arms
+    // for these keys are kept intact for macro-replay defensive coverage.
+    for (chord, kind, desc) in [
+        ("h", hjkl_vim::MotionKind::CharLeft, "char left"),
+        ("<BS>", hjkl_vim::MotionKind::CharLeft, "char left"),
+        ("l", hjkl_vim::MotionKind::CharRight, "char right"),
+        ("<Space>", hjkl_vim::MotionKind::CharRight, "char right"),
+        ("j", hjkl_vim::MotionKind::LineDown, "line down"),
+        ("k", hjkl_vim::MotionKind::LineUp, "line up"),
+        (
+            "+",
+            hjkl_vim::MotionKind::FirstNonBlankDown,
+            "next line first non-blank",
+        ),
+        (
+            "-",
+            hjkl_vim::MotionKind::FirstNonBlankUp,
+            "prev line first non-blank",
+        ),
+    ] {
+        let action = AppAction::Motion { kind, count: 1 };
+        for mode in [
+            Mode::Normal,
+            Mode::Visual,
+            Mode::VisualLine,
+            Mode::VisualBlock,
+        ] {
+            if let Err(e) = km.add(mode, chord, action.clone(), desc) {
+                eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
+            }
+        }
+    }
+
     km
 }
 
@@ -1527,6 +1561,19 @@ impl App {
                 // buffered count (it's not meaningful for register selection).
                 self.pending_count.clear();
                 self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
+            }
+            AppAction::Motion {
+                kind,
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.active_mut().editor.apply_motion(kind, n);
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {

@@ -432,12 +432,30 @@ impl App {
                                             // Peek: does feeding this key leave Pending?
                                             // We approximate by checking the static set of
                                             // chord-starter chars that are first keys in our bindings.
+                                            // Phase 3a: h/j/k/l/+/-/<Space> are now keymap-bound
+                                            // motions; keep count alive so 5j/3k etc. work.
                                             matches!(
                                                 c,
-                                                'g' | 'z' | ']' | '[' | 'G' | 'd' | 'y' | 'c'
+                                                'g' | 'z'
+                                                    | ']'
+                                                    | '['
+                                                    | 'G'
+                                                    | 'd'
+                                                    | 'y'
+                                                    | 'c'
+                                                    | 'h'
+                                                    | 'j'
+                                                    | 'k'
+                                                    | 'l'
+                                                    | '+'
+                                                    | '-'
+                                                    | ' '
                                             ) || c == self.config.editor.leader
                                         }
                                     }
+                                    // Phase 3a: <BS> is now a keymap-bound motion (CharLeft);
+                                    // keep count alive so count+<BS> reaches dispatch_action.
+                                    KeyCode::Backspace => true,
                                     _ => false,
                                 };
                                 if !could_start_chord {
