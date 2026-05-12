@@ -8,6 +8,58 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-05-12
+
+### Added
+
+- Which-key Backspace navigation. Backspace inside an active chord pops the last
+  key from the buffer, surfacing the parent level in the popup. When the last
+  key is popped the popup enters sticky mode showing root-level entries until
+  the user types something else. Esc dismisses and clears chord + sticky state.
+- New `App::which_key_sticky` field; cleared on Esc and any non-Backspace
+  keypress.
+
+### Changed
+
+- Which-key popup content now reads from `Keymap::children_all` (#57). The five
+  static descriptor tables (`LEADER_ENTRIES`, `G_ENTRIES`,
+  `BRACKET_RIGHT_ENTRIES`, `BRACKET_LEFT_ENTRIES`, `CTRL_W_ENTRIES`) and the
+  `Prefix` enum are deleted. Runtime `:nmap` entries auto-surface in the popup
+  with zero changes to `which_key.rs`. Sub-prefix collapse (e.g. `<leader>g`
+  showing the top-level Leader table) is fixed.
+- `App::active_which_key_prefix` returns the raw pending buffer
+  (`Vec<KeyEvent>`) instead of collapsing to a `Prefix` enum.
+- Header label derived from `Chord(pending).to_notation(leader)`; sticky
+  empty-buffer state renders as `"root"`.
+
+### Fixed
+
+- Which-key popup no longer disappears the instant chord-timeout fires on a
+  leader prefix. Pure-prefix buffers (e.g. `<leader>` alone with no terminal
+  binding at that depth) now keep the buffer alive past the timeout instead of
+  being drained. Requires `hjkl-keymap` 0.1.4.
+
+### Refactor
+
+- Retired the five dead `pending_*` prefix fields on `App` (`pending_leader`,
+  `pending_git`, `pending_lsp`, `pending_buffer_motion`,
+  `pending_window_motion`) — vestigial after #11 + #59 with
+  `#[allow(dead_code)]`. Migrated 7+ tests from inlined event-loop logic to real
+  dispatch via `drive_key`. Removed 26 vestigial `self.pending_* = false` writes
+  across 11 `open_*_picker` methods. Closes #58.
+- `Ambiguous` chord state now resolves to the shorter binding when `timeoutlen`
+  elapses (#60). Wired `App::resolve_chord_timeout` into the event-loop
+  poll-timeout branch; widened poll deadline calc to include the chord-timeout
+  alongside the which-key deadline. Three regression tests: shorter-binding
+  fires on timeout, longer-binding fires on fast second key, no-pending returns
+  None.
+
+### Dependencies
+
+- `hjkl-keymap` 0.1.1 → 0.1.4. Adds `Keymap::children_all` (which-key children
+  with prefix-only submenus), `Keymap::pop` (chord backspace navigation), and
+  fixes `timeout_resolve` to not drain pure-prefix buffers.
+
 ## [0.14.1] - 2026-05-12
 
 ### Fixed
@@ -1524,7 +1576,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.2
 [0.14.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.1
 [0.14.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.0
 [0.13.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.13.0
