@@ -197,6 +197,11 @@ impl App {
                     InstallStatus::Queued => {
                         // No toast for the queued state — it's transient.
                     }
+                    InstallStatus::TofuRecorded { triple, .. } => {
+                        self.status_message = Some(format!(
+                            "anvil: {name} TOFU hash recorded for {triple}"
+                        ));
+                    }
                 }
             }
         }
@@ -452,6 +457,9 @@ fn format_anvil_status(status: &hjkl_anvil::InstallStatus) -> String {
         InstallStatus::Installing => "installing binary".into(),
         InstallStatus::Done { bin_path } => format!("done → {}", bin_path.display()),
         InstallStatus::Failed(reason) => format!("failed: {reason}"),
+        InstallStatus::TofuRecorded { triple, sha256 } => {
+            format!("tofu recorded for {triple}: {}", &sha256[..8])
+        }
     }
 }
 

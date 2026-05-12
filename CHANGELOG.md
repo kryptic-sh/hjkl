@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped `hjkl-anvil` dependency to `0.2` (TOFU checksum verification). GitHub
+  tool installs (rust-analyzer, lua-language-server) no longer fail on
+  placeholder zero SHAs; the first download's hash is recorded and enforced on
+  subsequent installs.
+
 ### Added
 
 - Phase 2 chunk 2a (#68): `hjkl-vim` now exports `PendingState`, `Outcome`,
