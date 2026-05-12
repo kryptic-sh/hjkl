@@ -2507,6 +2507,63 @@ pub(crate) fn execute_motion<H: crate::types::Host>(
     ed.sync_buffer_from_textarea();
 }
 
+// ─── Keymap-layer motion controller ────────────────────────────────────────
+
+/// Execute a `hjkl_vim::MotionKind` cursor motion. Called by the host's
+/// `Editor::apply_motion` controller method — the keymap dispatch path for
+/// Phase 3a of kryptic-sh/hjkl#69.
+///
+/// Maps each variant to the same internal primitives used by the engine FSM
+/// so cursor, sticky column, scroll, and sync semantics are identical.
+pub(crate) fn apply_motion_kind<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    kind: hjkl_vim::MotionKind,
+    count: usize,
+) {
+    let count = count.max(1);
+    match kind {
+        hjkl_vim::MotionKind::CharLeft => {
+            execute_motion(ed, Motion::Left, count);
+        }
+        hjkl_vim::MotionKind::CharRight => {
+            execute_motion(ed, Motion::Right, count);
+        }
+        hjkl_vim::MotionKind::LineDown => {
+            execute_motion(ed, Motion::Down, count);
+        }
+        hjkl_vim::MotionKind::LineUp => {
+            execute_motion(ed, Motion::Up, count);
+        }
+        hjkl_vim::MotionKind::FirstNonBlankDown => {
+            // `+`: move down `count` lines then land on first non-blank.
+            // Not a big-jump (no jump-list entry), sticky col set to the
+            // landed column (first non-blank). Mirrors scroll_cursor_rows
+            // semantics but goes through the fold-aware buffer motion path.
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_down(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
+            crate::motions::move_first_non_blank(&mut ed.buffer);
+            ed.push_buffer_cursor_to_textarea();
+            ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+            ed.sync_buffer_from_textarea();
+        }
+        hjkl_vim::MotionKind::FirstNonBlankUp => {
+            // `-`: move up `count` lines then land on first non-blank.
+            // Same pattern as FirstNonBlankDown, direction reversed.
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_up(&mut ed.buffer, &folds, count, &mut ed.sticky_col);
+            crate::motions::move_first_non_blank(&mut ed.buffer);
+            ed.push_buffer_cursor_to_textarea();
+            ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+            ed.sync_buffer_from_textarea();
+        }
+        _ => {
+            // Future MotionKind variants added by later phases are silently
+            // ignored here — callers must bump hjkl-engine when consuming new
+            // variants. This arm satisfies the `#[non_exhaustive]` contract.
+        }
+    }
+}
+
 /// Restore the cursor to the sticky column after vertical motions and
 /// sync the sticky column to the current column after horizontal ones.
 /// `pre_col` is the cursor column captured *before* the motion — used

@@ -2983,6 +2983,25 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_g_inner(self, op, ch, total_count);
     }
 
+    /// Execute a named cursor motion `kind` repeated `count` times.
+    ///
+    /// Maps the keymap-layer `hjkl_vim::MotionKind` to the engine's internal
+    /// motion primitives, bypassing the engine FSM. Identical cursor semantics
+    /// to the FSM path — sticky column, scroll sync, and big-jump tracking are
+    /// all applied via `vim::execute_motion` (for Down/Up) or the same helpers
+    /// used by the FSM arms.
+    ///
+    /// Introduced in 0.6.1 as the host entry point for Phase 3a of
+    /// kryptic-sh/hjkl#69: the app keymap dispatches `AppAction::Motion` and
+    /// calls this method rather than re-entering the engine FSM.
+    ///
+    /// Engine FSM arms for `h`/`j`/`k`/`l`/`<BS>`/`<Space>`/`+`/`-` remain
+    /// intact for macro-replay coverage (macros re-feed raw keys through the
+    /// FSM). This method is the keymap / controller path only.
+    pub fn apply_motion(&mut self, kind: hjkl_vim::MotionKind, count: usize) {
+        vim::apply_motion_kind(self, kind, count);
+    }
+
     /// Set `vim.pending_register` to `Some(reg)` if `reg` is a valid register
     /// selector (`a`–`z`, `A`–`Z`, `0`–`9`, `"`, `+`, `*`, `_`). Invalid
     /// chars are silently ignored (no-op), matching the engine FSM's
@@ -4610,5 +4629,120 @@ mod tests {
         // not applicable here; WordAtCursor forward moves to next match).
         // At minimum: no panic and mode stays Normal.
         assert_eq!(e.vim_mode(), VimMode::Normal, "g* must stay in Normal mode");
+    }
+
+    // ── apply_motion controller tests (Phase 3a) ────────────────────────────
+
+    #[test]
+    fn apply_motion_char_left_moves_cursor() {
+        let mut e = fresh_editor("hello\n");
+        e.jump_cursor(0, 3);
+        e.apply_motion(hjkl_vim::MotionKind::CharLeft, 1);
+        assert_eq!(e.cursor(), (0, 2), "CharLeft moves one col left");
+    }
+
+    #[test]
+    fn apply_motion_char_left_clamps_at_col_zero() {
+        let mut e = fresh_editor("hello\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::CharLeft, 1);
+        assert_eq!(e.cursor(), (0, 0), "CharLeft at col 0 must not wrap");
+    }
+
+    #[test]
+    fn apply_motion_char_left_with_count() {
+        let mut e = fresh_editor("hello\n");
+        e.jump_cursor(0, 4);
+        e.apply_motion(hjkl_vim::MotionKind::CharLeft, 3);
+        assert_eq!(e.cursor(), (0, 1), "CharLeft count=3 moves three cols left");
+    }
+
+    #[test]
+    fn apply_motion_char_right_moves_cursor() {
+        let mut e = fresh_editor("hello\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::CharRight, 1);
+        assert_eq!(e.cursor(), (0, 1), "CharRight moves one col right");
+    }
+
+    #[test]
+    fn apply_motion_char_right_clamps_at_last_char() {
+        let mut e = fresh_editor("hello\n");
+        // "hello" has chars at 0..=4; normal mode clamps at 4.
+        e.jump_cursor(0, 4);
+        e.apply_motion(hjkl_vim::MotionKind::CharRight, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 4),
+            "CharRight at end must not go past last char"
+        );
+    }
+
+    #[test]
+    fn apply_motion_line_down_moves_cursor() {
+        let mut e = fresh_editor("line0\nline1\nline2\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineDown, 1);
+        assert_eq!(e.cursor().0, 1, "LineDown moves one row down");
+    }
+
+    #[test]
+    fn apply_motion_line_down_with_count() {
+        let mut e = fresh_editor("line0\nline1\nline2\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineDown, 2);
+        assert_eq!(e.cursor().0, 2, "LineDown count=2 moves two rows down");
+    }
+
+    #[test]
+    fn apply_motion_line_up_moves_cursor() {
+        let mut e = fresh_editor("line0\nline1\nline2\n");
+        e.jump_cursor(2, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineUp, 1);
+        assert_eq!(e.cursor().0, 1, "LineUp moves one row up");
+    }
+
+    #[test]
+    fn apply_motion_line_up_clamps_at_top() {
+        let mut e = fresh_editor("line0\nline1\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::LineUp, 1);
+        assert_eq!(e.cursor().0, 0, "LineUp at top must not go negative");
+    }
+
+    #[test]
+    fn apply_motion_first_non_blank_down_moves_and_lands_on_non_blank() {
+        // Line 0: "  hello" (indent 2), line 1: "  world" (indent 2).
+        let mut e = fresh_editor("  hello\n  world\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::FirstNonBlankDown, 1);
+        assert_eq!(e.cursor().0, 1, "FirstNonBlankDown must move to next row");
+        assert_eq!(
+            e.cursor().1,
+            2,
+            "FirstNonBlankDown must land on first non-blank col"
+        );
+    }
+
+    #[test]
+    fn apply_motion_first_non_blank_up_moves_and_lands_on_non_blank() {
+        let mut e = fresh_editor("  hello\n  world\n");
+        e.jump_cursor(1, 4);
+        e.apply_motion(hjkl_vim::MotionKind::FirstNonBlankUp, 1);
+        assert_eq!(e.cursor().0, 0, "FirstNonBlankUp must move to prev row");
+        assert_eq!(
+            e.cursor().1,
+            2,
+            "FirstNonBlankUp must land on first non-blank col"
+        );
+    }
+
+    #[test]
+    fn apply_motion_count_zero_treated_as_one() {
+        // count=0 must be normalised to 1 (count.max(1) in apply_motion_kind).
+        let mut e = fresh_editor("hello\n");
+        e.jump_cursor(0, 3);
+        e.apply_motion(hjkl_vim::MotionKind::CharLeft, 0);
+        assert_eq!(e.cursor(), (0, 2), "count=0 treated as 1 for CharLeft");
     }
 }

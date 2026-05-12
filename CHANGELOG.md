@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-13
+
+### Added
+
+- `Editor::apply_motion(kind: hjkl_vim::MotionKind, count: usize)` — public
+  controller entry point for the keymap-layer motion path (Phase 3a of
+  kryptic-sh/hjkl#69). Maps the 6 `MotionKind` variants introduced in hjkl-vim
+  0.12.0 to the engine's internal motion primitives via a new
+  `pub(crate) fn apply_motion_kind` helper in `vim.rs`. Cursor, sticky column,
+  scroll, and sync semantics are identical to the engine FSM path. Engine FSM
+  arms for `h`/`j`/`k`/`l`/`<BS>`/`<Space>`/`+`/`-` are kept intact for
+  macro-replay defensive coverage.
+- `hjkl-vim = "0.12"` added to `[dependencies]` in `Cargo.toml`; the workspace
+  `[patch.crates-io]` resolves it to the local submodule path.
+
 ## [0.6.0] - 2026-05-13
 
 ### Removed (breaking)
@@ -449,6 +464,7 @@ re-entering the engine FSM.
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
 [Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...HEAD
+[0.6.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.17...v0.6.0
 [0.5.17]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...v0.5.16
