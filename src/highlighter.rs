@@ -5,6 +5,7 @@
 //! shared library outlives any tree the parser produces).
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -89,6 +90,122 @@ impl Syntax {
 /// call instead of the streaming callback form).
 const DEFAULT_PARSE_TIMEOUT_MICROS: u64 = 0;
 
+// ---------------------------------------------------------------------------
+// Child-highlighter cache
+// ---------------------------------------------------------------------------
+
+/// FNV-1a-inspired fast hash of a byte slice.  Standard library's
+/// `DefaultHasher` is good enough — all we need is collision resistance across
+/// typical code-block content, not cryptographic security.
+fn hash_bytes(b: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    b.hash(&mut h);
+    h.finish()
+}
+
+/// One cached child highlighter, together with the content hash that was used
+/// to build the parse tree so we can detect content drift even when the byte
+/// range is identical (e.g. the user replaces one code block with another of
+/// the same length).
+struct CachedChild {
+    highlighter: Highlighter,
+    /// FNV hash of the slice that was last parsed.
+    source_hash: u64,
+}
+
+/// Cache of child `Highlighter` instances, keyed by
+/// `(language_name, content_range_start, content_range_end)`.
+///
+/// Eviction policy: after each `highlight_range_with_injections` / `highlight_with_injections`
+/// call the cache is pruned to only the keys that appeared in the *current*
+/// injection set.  This keeps memory bounded as the user scrolls or edits.
+#[derive(Default)]
+struct ChildCache {
+    map: HashMap<(String, usize, usize), CachedChild>,
+}
+
+impl ChildCache {
+    /// Return the cached child for `(lang, start, end)` *if* its stored hash
+    /// matches `content_hash`.  On a hash miss the entry is evicted so the
+    /// caller can rebuild and re-insert.
+    fn get_if_fresh(
+        &mut self,
+        lang: &str,
+        start: usize,
+        end: usize,
+        content_hash: u64,
+    ) -> Option<&mut Highlighter> {
+        let key = (lang.to_string(), start, end);
+        // Check freshness without holding a mutable borrow across the remove path.
+        let fresh = self.map.get(&key).map(|c| c.source_hash == content_hash);
+        match fresh {
+            Some(true) => Some(&mut self.map.get_mut(&key).unwrap().highlighter),
+            Some(false) => {
+                // Content drifted — evict so we rebuild.
+                self.map.remove(&key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Insert a freshly built `Highlighter` for `(lang, start, end)`.
+    fn insert(
+        &mut self,
+        lang: String,
+        start: usize,
+        end: usize,
+        hl: Highlighter,
+        content_hash: u64,
+    ) {
+        self.map.insert(
+            (lang, start, end),
+            CachedChild {
+                highlighter: hl,
+                source_hash: content_hash,
+            },
+        );
+    }
+
+    /// Remove every entry whose key is not in `keep`.  Called once per render
+    /// pass with the set of injections that were actually used, so stale
+    /// entries (code blocks that were deleted/scrolled away) don't accumulate.
+    fn evict_stale(&mut self, keep: &[(String, usize, usize)]) {
+        self.map.retain(|k, _| keep.iter().any(|kk| kk == k));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parse counter (test instrumentation — compiled in all modes but hidden)
+// ---------------------------------------------------------------------------
+
+/// Thread-local counter incremented on every `parse_initial` call. Useful for
+/// integration tests that assert the child-highlighter cache avoids redundant
+/// parses. Not part of the public stable API.
+#[doc(hidden)]
+pub mod parse_counter {
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Increment the thread-local parse counter. Called from `parse_initial`.
+    pub(super) fn increment() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Read the current counter value.
+    pub fn get() -> u64 {
+        COUNT.with(|c| c.get())
+    }
+
+    /// Reset the counter to zero.
+    pub fn reset() {
+        COUNT.with(|c| c.set(0));
+    }
+}
+
 /// Stateful syntax highlighter for a single language.
 ///
 /// Owns a `Parser`, a compiled `Query`, and a reference-counted handle on the
@@ -108,6 +225,10 @@ pub struct Highlighter {
     /// `(#set! @cap key val)` directives pre-extracted before query compilation
     /// (stock tree-sitter rejects them at compile time).  Keyed by pattern index.
     pre_extracted: Vec<CaptureSetDirective>,
+    /// Cached child highlighters used by `highlight_range_with_injections` /
+    /// `highlight_with_injections`. Avoids rebuilding a parser + re-parsing every
+    /// injected code block on every render frame. See [`ChildCache`].
+    child_cache: ChildCache,
     /// Held to keep the dlopen-ed shared library alive. Field order matters
     /// (parse trees reference data inside `_grammar`'s `Library`); placing
     /// `_grammar` last guarantees it drops after `tree` and `query`.
@@ -169,6 +290,7 @@ impl Highlighter {
             parse_timeout_micros: DEFAULT_PARSE_TIMEOUT_MICROS,
             registry,
             pre_extracted,
+            child_cache: ChildCache::default(),
             _grammar: grammar,
         })
     }
@@ -234,6 +356,8 @@ impl Highlighter {
     /// Parse `source` from scratch with the parser timeout disabled. Used on
     /// initial load and after `reset()`.
     pub fn parse_initial(&mut self, source: &[u8]) {
+        parse_counter::increment();
+
         let result = self.parser.parse(source, None);
         if let Some(t) = result {
             self.tree = Some(t);
@@ -579,8 +703,14 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // For each injection, spin up a child Highlighter and collect spans
-        // translated to parent-buffer coordinates.
+        // Build the set of cache keys used this call so we can evict stale entries.
+        let cache_keys: Vec<(String, usize, usize)> = injections
+            .iter()
+            .map(|(lang, r)| (lang.clone(), r.start, r.end))
+            .collect();
+
+        // For each injection, reuse a cached child Highlighter when the content
+        // is unchanged, and fall back to a fresh parse otherwise.
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         // Track which byte ranges have child coverage for the merge step.
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
@@ -589,14 +719,41 @@ impl Highlighter {
             let Some(child_grammar) = resolve(lang_name) else {
                 continue;
             };
-            let Ok(mut child_hl) = Highlighter::new(child_grammar) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
-            child_hl.parse_initial(slice);
-            let child_raw = child_hl.highlight_range(slice, 0..slice.len());
-
+            let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+
+            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
+                lang_name,
+                content_range.start,
+                content_range.end,
+                content_hash,
+            ) {
+                // Cache hit: skip grammar instantiation + re-parse.
+                tracing::trace!(
+                    lang = %lang_name,
+                    range = ?content_range,
+                    "child-hl cache hit"
+                );
+                child_hl.highlight_range(slice, 0..slice.len())
+            } else {
+                // Cache miss: build a new child highlighter and parse.
+                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                    continue;
+                };
+                new_hl.parse_initial(slice);
+                let spans = new_hl.highlight_range(slice, 0..slice.len());
+                // Store into cache for future calls.
+                self.child_cache.insert(
+                    lang_name.clone(),
+                    content_range.start,
+                    content_range.end,
+                    new_hl,
+                    content_hash,
+                );
+                spans
+            };
+
             for span in child_raw {
                 child_spans.push(HighlightSpan {
                     byte_range: (span.byte_range.start + offset)..(span.byte_range.end + offset),
@@ -606,6 +763,9 @@ impl Highlighter {
             }
             injected_ranges.push(content_range.clone());
         }
+
+        // Evict child entries that were not used in this call.
+        self.child_cache.evict_stale(&cache_keys);
 
         // Merge: keep parent spans that do NOT fall entirely within an injected range.
         // Spans that partially overlap are kept (rare edge case — see doc comment).
@@ -732,8 +892,14 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // For each injection, spin up a child Highlighter and collect spans
-        // translated and clipped to the viewport.
+        // Build the set of cache keys used this call so we can evict stale entries.
+        let cache_keys: Vec<(String, usize, usize)> = injections
+            .iter()
+            .map(|(lang, r)| (lang.clone(), r.start, r.end))
+            .collect();
+
+        // For each injection, reuse a cached child Highlighter when the content
+        // is unchanged, and fall back to a fresh parse otherwise.
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
@@ -741,14 +907,41 @@ impl Highlighter {
             let Some(child_grammar) = resolve(lang_name) else {
                 continue;
             };
-            let Ok(mut child_hl) = Highlighter::new(child_grammar) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
-            child_hl.parse_initial(slice);
-            let child_raw = child_hl.highlight_range(slice, 0..slice.len());
-
+            let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+
+            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
+                lang_name,
+                content_range.start,
+                content_range.end,
+                content_hash,
+            ) {
+                // Cache hit: skip grammar instantiation + re-parse.
+                tracing::trace!(
+                    lang = %lang_name,
+                    range = ?content_range,
+                    "child-hl cache hit"
+                );
+                child_hl.highlight_range(slice, 0..slice.len())
+            } else {
+                // Cache miss: build a new child highlighter and parse.
+                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                    continue;
+                };
+                new_hl.parse_initial(slice);
+                let spans = new_hl.highlight_range(slice, 0..slice.len());
+                // Store into cache for future calls.
+                self.child_cache.insert(
+                    lang_name.clone(),
+                    content_range.start,
+                    content_range.end,
+                    new_hl,
+                    content_hash,
+                );
+                spans
+            };
+
             for span in child_raw {
                 let abs_start = span.byte_range.start + offset;
                 let abs_end = span.byte_range.end + offset;
@@ -766,6 +959,9 @@ impl Highlighter {
             }
             injected_ranges.push(content_range.clone());
         }
+
+        // Evict child entries that were not used in this call.
+        self.child_cache.evict_stale(&cache_keys);
 
         // Merge: keep parent spans not entirely inside an injected range.
         let mut merged: Vec<HighlightSpan> = parent_spans

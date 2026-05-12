@@ -39,6 +39,7 @@ pub mod theme;
 
 // Flat re-exports for the primary public API surface.
 pub use comment_markers::{CommentMarkerPass, MarkerWord, default_markers};
+pub use highlighter::parse_counter;
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use predicate::{
     Directive, MatchContext, MatchMetadata, MetaValue, Predicate, PredicateArg, PredicateRegistry,

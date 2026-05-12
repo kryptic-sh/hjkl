@@ -147,6 +147,64 @@ fn markdown_null_resolver_yields_only_markdown_spans() {
     );
 }
 
+/// Child-highlighter cache test: a markdown buffer with 3 fenced Rust blocks
+/// called 10 times should only trigger ≤ 3 child `parse_initial` calls (one
+/// per unique block), not 30 (one per block per frame).
+///
+/// The parent markdown parse counts are excluded by resetting the counter
+/// *after* the first highlight call, which seeds the parent tree; subsequent
+/// calls should not re-parse children whose content is unchanged.
+#[test]
+#[ignore = "network + compiler: fetches markdown + rust grammars"]
+fn child_cache_avoids_repeated_parses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (registry, meta) = registry_and_meta();
+    let loader = make_loader(&tmp);
+
+    let markdown_grammar = load_grammar("markdown", &loader, &registry, &meta);
+    let rust_grammar = load_grammar("rust", &loader, &registry, &meta);
+
+    // Three distinct fenced Rust blocks so we can distinguish per-block
+    // caching from trivial no-op behaviour.
+    let source: &[u8] = b"# Doc\n\n\
+        ```rust\nfn one() {}\n```\n\n\
+        Some prose.\n\n\
+        ```rust\nfn two() { let x = 1; }\n```\n\n\
+        More prose.\n\n\
+        ```rust\nfn three() -> u32 { 42 }\n```\n";
+
+    let mut highlighter = Highlighter::new(markdown_grammar).unwrap();
+    let resolver = |name: &str| -> Option<Arc<Grammar>> {
+        if name == "rust" {
+            Some(rust_grammar.clone())
+        } else {
+            None
+        }
+    };
+
+    // First call: seeds the parent tree + parses all 3 child blocks.
+    hjkl_bonsai::parse_counter::reset();
+    highlighter.highlight_range_with_injections(source, 0..source.len(), resolver);
+    let after_first = hjkl_bonsai::parse_counter::get();
+    // Sanity: first call must have parsed the 3 child blocks (the parent
+    // parse_initial runs before this, which we reset, so we only count from here).
+    assert!(
+        after_first >= 3,
+        "expected ≥ 3 parses on first call (one per block); got {after_first}"
+    );
+
+    // Calls 2–10: content unchanged → zero additional child parses.
+    hjkl_bonsai::parse_counter::reset();
+    for _ in 0..9 {
+        highlighter.highlight_range_with_injections(source, 0..source.len(), resolver);
+    }
+    let cached_parses = hjkl_bonsai::parse_counter::get();
+    assert!(
+        cached_parses <= 3,
+        "expected ≤ 3 child parses across 9 repeat calls (cache should hit); got {cached_parses}"
+    );
+}
+
 /// `highlight_with_injections` on a grammar that has no `injections.scm`
 /// (e.g. the rust grammar itself) should behave identically to `highlight`.
 #[test]
