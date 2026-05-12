@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-12
+
+### Added
+
+- Visual-exit now sets the `'<` and `'>` marks to the start and end (in position
+  order, not selection order) of the last visual selection. Required for
+  ex-range commands like `:'<,'>sort` to resolve their range. Applies to Visual,
+  VisualLine, and VisualBlock modes.
+
 ## [0.5.2] - 2026-05-12
 
 ### Added
@@ -182,7 +191,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.4.1...v0.5.0
