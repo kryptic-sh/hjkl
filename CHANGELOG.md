@@ -8,6 +8,59 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-05-12
+
+### Added
+
+- Visual-mode `:` now prefills the command prompt with `'<,'>` and exits visual
+  so range-aware ex commands apply to the selection. Pair this with hjkl-engine
+  0.5.3's `<` / `>` mark hook for `:'<,'>sort`, `:'<,'>s/old/new/`,
+  `:'<,'>w >>file`, `:'<,'>!fmt`, `:'<,'>d`, and any other `:[range]` command on
+  `V<motion>:` / `v<motion>:` / `<C-v>:` flows.
+- `App::open_command_prompt_with(prefill)` helper.
+
+### Changed
+
+- Local `HjklMode` enum in `apps/hjkl/src/app/keymap.rs` replaces the
+  hjkl-keymap concrete `Mode` enum. `Keymap<AppAction>` field types are now
+  `Keymap<AppAction, HjklMode>`. Moves to `hjkl-vim` when issue #62 lands.
+  Required by hjkl-keymap 0.2.0's generic-Mode refactor.
+
+### Performance
+
+- Markdown preview no longer hitches on the file picker. Two fixes:
+  - `App::spans_for_viewport` clips the highlighter's `byte_range` to the
+    viewport (with 50-row slack for off-screen injection context). Parent parse
+    still runs over full bytes (no partial-parse API for a fresh tree) but
+    injection scan + child highlights stay bounded.
+  - hjkl-bonsai 0.6.2 caches child highlighters in `Highlighter` keyed by
+    `(lang, content_range)` with content-hash drift detection.
+- Fast buffer switching latency cut substantially. Three fixes:
+  - `SyntaxLayer::preview_render` now reuses a cached `Highlighter` per grammar
+    (calling `reset()` between calls) instead of constructing a fresh one via
+    `Highlighter::new` every switch. Skips dlopen-related setup and query
+    compilation; the bonsai child-cache survives across calls.
+  - Dropped the 5 ms `wait_result` in `recompute_and_install`'s viewport-only
+    resubmit path. Worker spans arrive on a subsequent tick instead.
+  - New `GitSignsWorker` (apps/hjkl/src/git_worker.rs) spawns a background
+    thread that runs `git2::Diff` + `is_untracked` off the UI thread. Coalesce
+    policy: latest-wins per `buffer_id`. `App::poll_git_signs` drains results
+    each tick.
+
+### Dependencies
+
+- `hjkl-keymap` 0.1.1 → 0.2.0 (breaking — concrete `Mode` enum removed, replaced
+  with `Mode` trait; `Keymap<A, M>` generic over mode discriminator). Plus
+  `Keymap::children_all`, `Keymap::pop`, and the `timeout_resolve` pure-prefix
+  fix that all landed in the 0.1.2 / 0.1.3 / 0.1.4 patches.
+- `hjkl-picker` 0.5.1 → 0.5.2 (adds `PreviewHighlighter::spans_for_viewport`
+  trait method).
+- `hjkl-bonsai` 0.6.1 → 0.6.2 (caches child highlighters across injection
+  passes).
+- `hjkl-engine` 0.5.2 → 0.5.4 (visual-exit hook sets `'<` / `'>` marks with
+  mode-aware position semantics: charwise tuple-ordered, linewise snaps to line
+  edges, blockwise uses independent min/max corners).
+
 ## [0.14.2] - 2026-05-12
 
 ### Added
@@ -1576,7 +1629,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.3
 [0.14.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.2
 [0.14.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.1
 [0.14.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.0
