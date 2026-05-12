@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-05-12
+
+### Fixed
+
+- Visual-exit `<` / `>` mark positions are now mode-aware:
+  - **Visual** (charwise): position-ordered tuple comparison (unchanged).
+  - **VisualLine**: snaps `<` to `(top_row, 0)` and `>` to `(bot_row, last_col)`
+    — matches vim's `:h v_:` rule that linewise selections normalise column
+    components to line edges.
+  - **VisualBlock**: corners computed independently — `<` =
+    `(min_row, min_col)`, `>` = `(max_row, max_col)`. Previously used tuple
+    ordering, which mis-placed columns when the cursor moved left of the anchor
+    (e.g. block growing leftward).
+- Doesn't affect ex-range commands like `:'<,'>sort` (which only read the row
+  component) but does fix `` ` < `` / `` ` > `` jumps and any consumer reading
+  the marks as block corners.
+
 ## [0.5.3] - 2026-05-12
 
 ### Added
@@ -191,7 +208,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.0...v0.5.1
