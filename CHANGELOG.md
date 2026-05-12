@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-05-12
+
+### Changed
+
+- Phase 1 of the vim FSM extraction (#62) — new `hjkl-vim` crate at v0.1.0
+  holding the `Mode` discriminator (`Normal`, `Insert`, `Visual`, `VisualLine`,
+  `VisualBlock`, `OpPending`, `CommandLine`). Pure plumbing — behavior
+  identical. `apps/hjkl::keymap::HjklMode` is now a
+  `pub use hjkl_vim::Mode as HjklMode` alias so existing imports keep resolving.
+  Subsequent phases (#68–#72) will move the FSM itself out of `hjkl-engine` into
+  this crate.
+- `hjkl-vim` lives in a standalone submodule repo
+  ([kryptic-sh/hjkl-vim](https://github.com/kryptic-sh/hjkl-vim)) with the
+  canonical `ci.yml` + tag-driven publish pipeline.
+
 ## [0.14.3] - 2026-05-12
 
 ### Added
@@ -1629,7 +1644,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.4
 [0.14.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.3
 [0.14.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.2
 [0.14.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.1
