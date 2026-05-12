@@ -4946,18 +4946,20 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
-                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpFind {
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpFind {
                     op,
-                    count1,
+                    ch,
                     forward,
                     till,
+                    total_count,
                 }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.enter_op_find(
+                    app.active_mut().editor.apply_op_find(
                         op_kind_to_operator(op),
-                        count1,
+                        ch,
                         forward,
                         till,
+                        total_count,
                     );
                     app.sync_viewport_from_editor();
                     return;
@@ -6158,24 +6160,52 @@ fn dgg_deletes_to_top() {
 }
 
 #[test]
-fn dfx_deletes_to_x() {
-    // `dfx` — d → AfterOp, f → EnterOpFind(forward, not-till), x → engine handles find.
+fn dfx_deletes_to_x_via_reducer() {
+    // `dfx` via reducer path (Phase 2c-ii):
+    //   `d` → AfterOp, `f` → Wait(OpFind{forward,!till}), `x` → ApplyOpFind.
+    // After Phase 2c-ii, the reducer holds state through 'x'; engine is NOT
+    // chord-pending at any point in this flow.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello x world");
     app.active_mut().editor.jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Delete,
+                ..
+            })
+        ),
+        "d must set AfterOp(Delete), got {:?}",
+        app.pending_state
+    );
+
     drive_key(&mut app, key(KeyCode::Char('f')));
     assert!(
-        app.active().editor.is_chord_pending(),
-        "after df, engine must be in OpFind chord-pending state"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpFind {
+                op: hjkl_vim::OperatorKind::Delete,
+                forward: true,
+                till: false,
+                ..
+            })
+        ),
+        "df must transition to OpFind(forward, !till), got {:?}",
+        app.pending_state
     );
     assert!(
-        app.pending_state.is_none(),
-        "reducer pending must be cleared"
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be in chord-pending after reducer-owned df"
     );
 
     drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending must clear after ApplyOpFind commit"
+    );
     assert!(!app.active().editor.is_chord_pending());
 
     // "hello x" (inclusive) should be deleted.
@@ -6188,6 +6218,218 @@ fn dfx_deletes_to_x() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(line, " world", "dfx must delete 'hello x', got {line:?}");
+}
+
+// ── Phase 2c-ii: OpFind reducer integration tests ─────────────────────────
+
+#[test]
+fn dtx_stops_before_x_via_reducer() {
+    // `dtx` — d → AfterOp, t → Wait(OpFind{forward,till}), x → ApplyOpFind.
+    // Deletes up to but not including 'x'.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello x world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "dtx");
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "x world",
+        "dtx must delete 'hello ' leaving 'x world', got {line:?}"
+    );
+}
+
+#[test]
+fn two_d_3fx_total_count_6() {
+    // `2d3fx`: count1=2, inner_count=3 → total=6. In "xaxbxcxdxexf" from col 0,
+    // the 6th 'x' is at col 10 (0-indexed: x@0,x@2,x@4,x@6,x@8,x@10).
+    // dfx with count=6 deletes from col 0 through col 10 inclusive.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "xaxbxcxdxexf");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    app.pending_count = "2".into();
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp { count1: 2, .. })
+        ),
+        "count1 must be 2 after pending_count+d, got {:?}",
+        app.pending_state
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('3')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp { inner_count: 3, .. })
+        ),
+        "inner_count must accumulate to 3, got {:?}",
+        app.pending_state
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpFind {
+                total_count: 6,
+                forward: true,
+                till: false,
+                ..
+            })
+        ),
+        "OpFind total_count must be 6 (2*3), got {:?}",
+        app.pending_state
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, "f", "2d3fx must delete through 6th 'x', got {line:?}");
+}
+
+#[test]
+fn df_then_esc_cancels_via_reducer() {
+    // `df<Esc>` — OpFind on Esc → Cancel; buffer unchanged.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello x world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpFind { .. })
+        ),
+        "df must set OpFind, got {:?}",
+        app.pending_state
+    );
+
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must cancel OpFind pending"
+    );
+
+    // Buffer unchanged.
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "hello x world",
+        "buffer must be unchanged after df<Esc>"
+    );
+}
+
+#[test]
+fn cfx_changes_to_x_via_reducer() {
+    // `cfx` — c → AfterOp, f → OpFind{Change,forward,!till}, x → ApplyOpFind.
+    // Change+Find (cf<x>) stays as Change+Find; no cw→ce style quirk applies.
+    // After cfx the editor enters Insert mode.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello x world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "cfx");
+    assert!(app.pending_state.is_none());
+
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Insert,
+        "cfx must enter Insert mode"
+    );
+    // "hello x" was deleted; buffer should have " world" remaining.
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, " world", "cfx must delete 'hello x', got {line:?}");
+}
+
+#[test]
+fn gufx_uppercases_via_engine_fsm() {
+    // `gUfx` — g → AfterG (reducer), U → after_g('U') → engine sets
+    // Pending::Op(Uppercase). The 'f' key then goes to the ENGINE FSM
+    // (is_chord_pending bypass), which sets Pending::OpFind (engine-owned).
+    // The 'x' char completes the engine's OpFind arm via handle_op_find_target.
+    // This verifies the chord-init op path (gU/gu/g~ + f/F/t/T) still works
+    // through the engine FSM, NOT through the reducer OpFind state.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello x world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "g must set AfterG"
+    );
+
+    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    drive_key(&mut app, key(KeyCode::Char('U')));
+    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "gU must leave engine in Op(Uppercase) chord-pending"
+    );
+
+    // 'f' → engine FSM processes Op-pending + 'f' → sets Pending::OpFind (engine).
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(
+        app.pending_state.is_none(),
+        "f after gU must NOT set reducer OpFind (engine owns it)"
+    );
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "engine must remain chord-pending waiting for find-target"
+    );
+
+    // 'x' → engine FSM: handle_op_find_target → uppercase through to 'x'.
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "HELLO X world",
+        "gUfx must uppercase 'hello x', got {line:?}"
+    );
 }
 
 #[test]
