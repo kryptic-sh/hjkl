@@ -1541,7 +1541,14 @@ impl App {
                     //     would otherwise stack-overflow.
                     use std::collections::VecDeque;
                     const MAX_STEPS: usize = 1024;
-                    const MAX_DEPTH: usize = 1024;
+                    // Vertical recursion depth cap. Sized to fit comfortably
+                    // within macOS's 512 KB per-thread stack default (cargo
+                    // nextest spawns tests on non-main threads): each frame
+                    // of this arm carries a VecDeque, sub_replay Vec, and the
+                    // recursive call into dispatch_action. 128 frames is far
+                    // beyond any realistic nested-map depth and leaves plenty
+                    // of stack headroom on all platforms.
+                    const MAX_DEPTH: usize = 128;
                     if self.replay_depth >= MAX_DEPTH {
                         self.status_message = Some("E223: recursive mapping (depth limit)".into());
                         return;

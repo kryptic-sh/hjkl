@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-05-13
+
+### Fixed
+
+- `:nmap` cyclic-recursion guard (`MAX_DEPTH` in `dispatch_action`'s `Replay`
+  arm) lowered from 1024 to 128 to fit comfortably within macOS's 512 KB
+  per-thread stack default. Previously
+  `cyclic_recursive_map_bails_without_stack_overflow` intermittently SIGABRT'd
+  on macOS CI before the depth guard fired. 128 is still far beyond any
+  realistic nested-map depth.
+
 ### Changed
 
 - Phase 2c of the vim FSM extraction (#62) — bare op-pending (`d` / `y` / `c` /
@@ -1754,7 +1765,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.7...HEAD
+[0.14.7]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.7
 [0.14.6]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.6
 [0.14.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.5
 [0.14.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.4
