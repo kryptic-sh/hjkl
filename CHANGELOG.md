@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-05-13
+
+### Fixed
+
+- `sqeel-tui` 0.4.6 added partial hjkl-stack pins to fix the engine-version
+  conflict but missed `hjkl-ratatui`. v0.4.7 adds `hjkl-ratatui = "=0.3.3"` so
+  the full pin set lands and fresh CI builds resolve to a single `hjkl-engine`
+  0.3.8 in the graph.
+
 ## [0.4.8] - 2026-05-13
 
 ### Fixed
@@ -295,7 +304,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.9
 [0.4.8]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.8
 [0.4.7]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.7
 [0.4.6]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.6
