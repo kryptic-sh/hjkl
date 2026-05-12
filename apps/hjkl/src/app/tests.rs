@@ -4928,12 +4928,18 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
-                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpTextObj { op, count1, inner }) => {
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpTextObj {
+                    op,
+                    ch,
+                    inner,
+                    total_count,
+                }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.enter_op_text_obj(
+                    app.active_mut().editor.apply_op_text_obj(
                         op_kind_to_operator(op),
-                        count1,
+                        ch,
                         inner,
+                        total_count,
                     );
                     app.sync_viewport_from_editor();
                     return;
@@ -5329,6 +5335,200 @@ fn gu_then_w_lowercases_word() {
     assert!(
         content.starts_with("hello"),
         "gu+w must lowercase the word; got {content:?}"
+    );
+}
+
+// ── Phase 2c-iii: OpTextObj reducer integration tests ────────────────────────
+
+#[test]
+fn diw_deletes_word_via_reducer() {
+    // `diw` — d → AfterOp, i → Wait(OpTextObj{inner:true}), w → ApplyOpTextObj.
+    // Reducer owns the full sequence; engine is not chord-pending.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('i')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpTextObj {
+                op: hjkl_vim::OperatorKind::Delete,
+                inner: true,
+                ..
+            })
+        ),
+        "di must set OpTextObj(inner:true), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after reducer-owned di"
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !line.contains("hello"),
+        "diw must delete 'hello', remaining: {line:?}"
+    );
+}
+
+#[test]
+fn daw_deletes_around_word_via_reducer() {
+    // `daw` — d → AfterOp, a → Wait(OpTextObj{inner:false}), w → ApplyOpTextObj.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpTextObj {
+                op: hjkl_vim::OperatorKind::Delete,
+                inner: false,
+                ..
+            })
+        ),
+        "da must set OpTextObj(inner:false), got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after reducer-owned da"
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !line.contains("hello"),
+        "daw must delete 'hello' and surrounding space, remaining: {line:?}"
+    );
+}
+
+#[test]
+fn di_quote_deletes_quoted_string() {
+    // `di"` — deletes content inside double-quotes.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, r#"say "hello" now"#);
+    // Position inside the quotes (on 'h').
+    app.active_mut().editor.jump_cursor(0, 5);
+
+    drive_chars(&mut app, r#"di""#);
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !line.contains("hello"),
+        r#"di" must delete text inside quotes, remaining: {line:?}"#
+    );
+    // The quote delimiters should remain.
+    assert!(
+        line.contains('"'),
+        r#"di" must leave the quote delimiters, remaining: {line:?}"#
+    );
+}
+
+#[test]
+fn dap_deletes_paragraph_via_reducer() {
+    // `dap` — delete around paragraph (first paragraph including trailing blank).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\n\nfoo bar");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "dap");
+    assert!(app.pending_state.is_none());
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        !lines.contains(&"hello world".to_string()),
+        "dap must delete first paragraph, got {lines:?}"
+    );
+}
+
+#[test]
+fn guiw_uppercases_word_via_engine_fsm() {
+    // `gUiw` — g → AfterG (reducer), U → after_g('U') → engine sets
+    // Pending::Op(Uppercase). The 'i' key then goes to the ENGINE FSM
+    // (is_chord_pending bypass), which sets Pending::OpTextObj (engine-owned).
+    // The 'w' char completes the engine's OpTextObj arm via handle_text_object.
+    // This verifies the chord-init op path (gU/gu/g~ + i/a + textobj) still
+    // works through the engine FSM, NOT through the reducer OpTextObj state.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "g must set AfterG"
+    );
+
+    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    drive_key(&mut app, key(KeyCode::Char('U')));
+    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "gU must leave engine in Op(Uppercase) chord-pending"
+    );
+
+    // 'i' → engine FSM processes Op-pending + 'i' → sets Pending::OpTextObj (engine).
+    drive_key(&mut app, key(KeyCode::Char('i')));
+    assert!(
+        app.pending_state.is_none(),
+        "i after gU must NOT set reducer OpTextObj (engine owns it)"
+    );
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "engine must remain chord-pending waiting for text-object char"
+    );
+
+    // 'w' → engine FSM: handle_text_object → uppercase inner word.
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "HELLO world",
+        "gUiw must uppercase inner word 'hello', got {line:?}"
     );
 }
 
@@ -6098,30 +6298,40 @@ fn cw_changes_to_word_end() {
 
 #[test]
 fn dip_text_object_via_reducer() {
-    // `dip` — d → AfterOp, i → EnterOpTextObj(inner=true), p → engine handles
-    // paragraph text-object. Engine's OpTextObj arm processes the 'p' char.
+    // `dip` — d → AfterOp, i → Wait(OpTextObj{inner:true}), p → ApplyOpTextObj.
+    // After Phase 2c-iii, the reducer owns the full sequence; engine is NOT
+    // chord-pending at any point after 'i'.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n\nfoo bar");
     app.active_mut().editor.jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     drive_key(&mut app, key(KeyCode::Char('i')));
-    // After EnterOpTextObj, engine is in Pending::OpTextObj → is_chord_pending().
+    // Reducer now owns state: OpTextObj. Engine must NOT be chord-pending.
     assert!(
-        app.active().editor.is_chord_pending(),
-        "after di, engine must be in OpTextObj chord-pending state"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpTextObj {
+                op: hjkl_vim::OperatorKind::Delete,
+                inner: true,
+                ..
+            })
+        ),
+        "after di, reducer must hold OpTextObj(Delete,inner=true), got {:?}",
+        app.pending_state
     );
-    assert!(
-        app.pending_state.is_none(),
-        "reducer pending must be cleared"
-    );
-
-    // Next key 'p' goes to engine FSM (is_chord_pending bypass).
-    drive_key(&mut app, key(KeyCode::Char('p')));
     assert!(
         !app.active().editor.is_chord_pending(),
-        "engine must exit pending"
+        "engine must NOT be chord-pending after reducer-owned di"
     );
+
+    // 'p' → reducer commits ApplyOpTextObj → engine::apply_op_text_obj.
+    drive_key(&mut app, key(KeyCode::Char('p')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending must clear after ApplyOpTextObj commit"
+    );
+    assert!(!app.active().editor.is_chord_pending());
 
     // First paragraph (lines 0..0) should be deleted; remaining: empty line + "foo bar".
     let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
