@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::keymap_actions::AppAction;
 
+use crate::git_worker::GitSignsWorker;
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
 
@@ -341,6 +342,8 @@ pub struct App {
     /// Tree-sitter syntax highlighting layer. Owns the worker thread + the
     /// active theme. Multiplexed by BufferId.
     syntax: SyntaxLayer,
+    /// Background worker for git diff-sign computation.
+    git_worker: GitSignsWorker,
     /// Shared grammar resolver. `Arc` so the syntax layer and every picker
     /// source point at the same in-memory `Grammar` cache (one dlopen +
     /// query parse per language, app-wide).
@@ -1115,6 +1118,7 @@ impl App {
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
+            git_worker: GitSignsWorker::new(),
             directory,
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),

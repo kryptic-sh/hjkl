@@ -5,22 +5,29 @@ use std::time::{Duration, Instant};
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_picker::PreviewSpans;
 
+use crate::git_worker::GitJob;
 use crate::lang::GrammarRequest;
 use crate::syntax::LoadEvent;
 
 use super::App;
 
 impl App {
-    /// Recompute git diff signs from the current buffer content (vs
-    /// the HEAD blob) when `dirty_gen` has advanced since the last rebuild.
+    /// Queue a git diff-sign refresh for the current buffer (throttled).
+    /// Non-blocking: submits a job to the background worker.
     pub(crate) fn refresh_git_signs(&mut self) {
         self.refresh_git_signs_inner(false);
     }
 
+    /// Queue a git diff-sign refresh for the current buffer, bypassing
+    /// the 250 ms throttle. The result still arrives asynchronously.
     pub(crate) fn refresh_git_signs_force(&mut self) {
         self.refresh_git_signs_inner(true);
     }
 
+    /// Shared submission logic.
+    ///
+    /// Checks dirty_gen + throttle, then snapshots buffer content and
+    /// submits a [`GitJob`] to the background worker. Returns immediately.
     pub(crate) fn refresh_git_signs_inner(&mut self, force: bool) {
         const REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(250);
         let huge_file_lines = self.config.editor.huge_file_threshold;
@@ -51,13 +58,44 @@ impl App {
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
-        let git_signs = crate::git::signs_for_bytes(&path, &bytes);
-        let is_untracked = crate::git::is_untracked(&path);
-        let slot = self.active_mut();
-        slot.git_signs = git_signs;
-        slot.is_untracked = is_untracked;
-        slot.last_git_dirty_gen = Some(dg);
-        slot.last_git_refresh_at = now;
+        let buffer_id = self.active().buffer_id;
+        self.active_mut().last_git_refresh_at = now;
+
+        self.git_worker.submit(GitJob {
+            buffer_id,
+            path,
+            bytes,
+            dirty_gen: dg,
+        });
+    }
+
+    /// Drain completed git-sign results from the worker and install them
+    /// onto their target slots. Called once per event-loop tick.
+    ///
+    /// Returns `true` when at least one result was installed and a redraw
+    /// is needed.
+    pub(crate) fn poll_git_signs(&mut self) -> bool {
+        let mut redraw = false;
+        while let Some(result) = self.git_worker.try_recv() {
+            // Find the slot with this buffer_id (may have been deleted; drop).
+            if let Some(slot) = self
+                .slots
+                .iter_mut()
+                .find(|s| s.buffer_id == result.buffer_id)
+            {
+                // Stale check: only install if no newer dirty_gen has overtaken.
+                if slot
+                    .last_git_dirty_gen
+                    .is_none_or(|dg| dg <= result.dirty_gen)
+                {
+                    slot.git_signs = result.signs;
+                    slot.is_untracked = result.is_untracked;
+                    slot.last_git_dirty_gen = Some(result.dirty_gen);
+                    redraw = true;
+                }
+            }
+        }
+        redraw
     }
 
     /// Poll in-flight async grammar loads and wire any that completed into
@@ -241,17 +279,14 @@ impl App {
             }
         }
 
+        // Non-blocking drain. Previously a viewport-only resubmit waited
+        // up to 5ms on the worker; with the bonsai 0.6.2 child-highlighter
+        // cache + preview-highlighter cache on the layer, the initial paint
+        // is cheap enough that letting the worker spans arrive on a
+        // subsequent tick avoids the per-switch hitch.
         let t_install = Instant::now();
-        let drained = if submitted {
-            let viewport_only = prev_dirty_gen == Some(dg);
-            if viewport_only {
-                self.syntax.wait_result(Duration::from_millis(5))
-            } else {
-                self.syntax.take_result()
-            }
-        } else {
-            self.syntax.take_result()
-        };
+        let drained = self.syntax.take_result();
+        let _ = prev_dirty_gen;
         if let Some(out) = drained {
             self.active_mut()
                 .editor

@@ -6,6 +6,7 @@ mod config;
 mod editorconfig;
 mod embed;
 mod git;
+mod git_worker;
 mod headless;
 mod host;
 mod keymap_actions;

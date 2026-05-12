@@ -115,6 +115,11 @@ impl App {
                 self.recompute_and_install();
             }
 
+            // Install any git diff-sign results that arrived from the worker.
+            // Redraw request is implicit: if signs changed the next frame picks
+            // them up; we don't force a dedicated redraw here to avoid a busy loop.
+            let _ = self.poll_git_signs();
+
             // Poll any in-flight anvil install jobs and surface status toasts.
             let _ = self.poll_anvil_jobs();
 

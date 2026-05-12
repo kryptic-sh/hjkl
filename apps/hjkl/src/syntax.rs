@@ -574,6 +574,13 @@ pub struct SyntaxLayer {
     /// In-flight async grammar loads.  Polled each tick via
     /// `poll_pending_loads`.
     pending_loads: Vec<PendingLoad>,
+    /// Per-grammar synchronous `Highlighter` cache used by [`Self::preview_render`].
+    /// Avoids the `Highlighter::new` cost on every buffer switch — that
+    /// constructor does dlopen-related setup and query compilation.
+    /// Interior-mutability so `preview_render` stays `&self` and can be
+    /// called while the active buffer is borrowed elsewhere.
+    /// Keyed by grammar name.
+    preview_highlighters: Mutex<HashMap<String, Highlighter>>,
     /// Last perf breakdown received via `take_result`. Surfaced to the
     /// `:perf` overlay; updated on every successful drain.
     pub last_perf: PerfBreakdown,
@@ -592,6 +599,7 @@ impl SyntaxLayer {
             worker,
             clients: HashMap::new(),
             pending_loads: Vec::new(),
+            preview_highlighters: Mutex::new(HashMap::new()),
             last_perf: PerfBreakdown::default(),
         }
     }
@@ -770,9 +778,28 @@ impl SyntaxLayer {
         }
         let local_row_count = vp_end_row - vp_top;
 
-        let mut h = Highlighter::new(grammar).ok()?;
+        // Reuse a cached Highlighter for this grammar to skip the
+        // grammar/query setup cost on every switch. `reset()` drops the
+        // retained parse tree; the next `highlight_with_injections` call
+        // re-parses the fresh viewport bytes. The bonsai child-highlighter
+        // cache (added in 0.6.2) survives across calls and helps when the
+        // user bounces between the same buffers.
+        let grammar_name = grammar.name().to_string();
+        let mut cache = self.preview_highlighters.lock().ok()?;
+        let h = match cache.entry(grammar_name) {
+            std::collections::hash_map::Entry::Occupied(o) => {
+                let h = o.into_mut();
+                h.reset();
+                h
+            }
+            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
+                Ok(h) => v.insert(h),
+                Err(_) => return None,
+            },
+        };
         let mut flat_spans =
             h.highlight_with_injections(bytes, |name| self.directory.by_name(name));
+        drop(cache);
 
         // Overlay TODO/FIXME/NOTE/WARN marker spans.
         let marker_pass = CommentMarkerPass::new();
