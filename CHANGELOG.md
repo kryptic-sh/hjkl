@@ -8,6 +8,32 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-05-13
+
+### Changed
+
+- Phase 3b of the vim FSM extraction (#62, tracking #69) — word motions (`w` /
+  `W` / `b` / `B` / `e` / `E`) now route through the `hjkl-vim` keymap path. The
+  host dispatches `AppAction::Motion { kind, count }` and calls
+  `Editor::apply_motion` instead of re-entering the engine FSM. Engine FSM arms
+  for these keys are intentionally kept so the macro- replay path (`@<reg>`)
+  continues to resolve them. `ge` / `gE` were already covered by the G-chord
+  migration in Phase 2b-ii.
+- Bumped `hjkl-vim` 0.12 → 0.13 — adds 6 word-motion `MotionKind` variants
+  (`WordForward` / `BigWordForward` / `WordBackward` / `BigWordBackward` /
+  `WordEnd` / `BigWordEnd`).
+- Bumped `hjkl-engine` 0.6.1 → 0.6.2 — `apply_motion` now handles the 6 new
+  word-motion variants by reusing the same `execute_motion` primitives
+  (`Motion::WordFwd` / `BigWordFwd` / `WordBack` / `BigWordBack` / `WordEnd` /
+  `BigWordEnd`) the FSM arms call.
+
+### Added
+
+- 6 entries in the Phase 3a motion binding loop (`apps/hjkl/src/app/mod.rs`) for
+  `w` / `W` / `b` / `B` / `e` / `E` across Normal / Visual / VisualLine /
+  VisualBlock. Count-prefix buffering (`5w` etc.) preserved by extending the
+  `could_start_chord` matches in `event_loop.rs`.
+
 ## [0.14.8] - 2026-05-13
 
 ### Changed
@@ -1793,7 +1819,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.8...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.9...HEAD
+[0.14.9]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.9
 [0.14.8]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.8
 [0.14.7]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.7
 [0.14.6]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.6
