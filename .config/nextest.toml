@@ -1,0 +1,23 @@
+# cargo-nextest config.
+#
+# nextest runs each test in its own process, in parallel. `hjkl-clipboard`'s
+# X11/Wayland backend tests don't survive that: they serialize themselves
+# with an in-process `static TEST_LOCK: Mutex<()>` and bind a mock display
+# at a fixed name (`DISPLAY=:98` for X11, a fixed socket for Wayland). The
+# Mutex only serializes threads *within one test binary* — under nextest
+# each test is its own process, so the lock is per-process and useless, and
+# parallel processes collide on the same mock display (symptom:
+# "MockManager received wrong payload bytes", spurious unwrap panics).
+# `cargo test`'s single-binary thread pool happened to honour the Mutex.
+#
+# Pin the clipboard backend tests into a single-threaded test group so at
+# most one runs at a time — same effective serialization the Mutex gave
+# under `cargo test`. The other ~1790 workspace tests stay fully parallel.
+# Proper fix (follow-up): give each test a unique display name.
+
+[test-groups]
+clipboard-display = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(hjkl-clipboard)'
+test-group = 'clipboard-display'
