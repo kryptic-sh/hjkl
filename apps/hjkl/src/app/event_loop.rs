@@ -148,7 +148,7 @@ impl App {
                 let now = std::time::Instant::now();
                 // No event arrived. Check if the which-key deadline has now passed.
                 if !self.which_key_active
-                    && self.active_which_key_prefix().is_some()
+                    && !self.active_which_key_prefix().is_empty()
                     && crate::which_key::should_show(
                         self.pending_prefix_at,
                         self.which_key_delay,

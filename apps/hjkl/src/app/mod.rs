@@ -1272,41 +1272,14 @@ impl App {
         self.which_key_active = false;
     }
 
-    /// Return the `Prefix` variant matching the currently-pending prefix, or
-    /// `None` when no prefix is active.
+    /// Return the currently-pending chord buffer for Normal mode, or an empty
+    /// `Vec` when no prefix is active.
     ///
-    /// Reads the `app_keymap`'s pending Normal-mode buffer to determine which
-    /// which-key category is currently active.
-    pub fn active_which_key_prefix(&self) -> Option<crate::which_key::Prefix> {
-        use hjkl_keymap::{KeyCode, KeyEvent, KeyModifiers, Mode};
-        let pending = self.app_keymap.pending(Mode::Normal);
-        if pending.is_empty() {
-            return None;
-        }
-        // Classify based on first key in the pending buffer.
-        let first = pending[0];
-        let leader = self.config.editor.leader;
-        // <C-w> prefix.
-        if first == (KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CTRL)) {
-            return Some(crate::which_key::Prefix::CtrlW);
-        }
-        // Leader prefix: the leader char with no modifiers.
-        if first == (KeyEvent::new(KeyCode::Char(leader), KeyModifiers::NONE)) {
-            return Some(crate::which_key::Prefix::Leader);
-        }
-        // g prefix.
-        if first == (KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE)) {
-            return Some(crate::which_key::Prefix::G);
-        }
-        // ] prefix.
-        if first == (KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)) {
-            return Some(crate::which_key::Prefix::BracketRight);
-        }
-        // [ prefix.
-        if first == (KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)) {
-            return Some(crate::which_key::Prefix::BracketLeft);
-        }
-        None
+    /// The caller uses this to drive `which_key::entries_for` directly —
+    /// the static `Prefix` enum is no longer needed.
+    pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
+        use hjkl_keymap::Mode;
+        self.app_keymap.pending(Mode::Normal).to_vec()
     }
 
     /// Dispatch an [`AppAction`] with an optional repeat count.

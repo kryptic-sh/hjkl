@@ -1601,12 +1601,14 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     if !app.which_key_active {
         return;
     }
-    let prefix = match app.active_which_key_prefix() {
-        Some(p) => p,
-        None => return,
-    };
+    let pending = app.active_which_key_prefix();
+    if pending.is_empty() {
+        return;
+    }
 
-    let entries = crate::which_key::entries(prefix);
+    let leader = app.config.editor.leader;
+    let entries =
+        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &pending, leader);
     if entries.is_empty() {
         return;
     }
@@ -1644,7 +1646,7 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 
     frame.render_widget(Clear, area);
 
-    let header_label = crate::which_key::label(prefix);
+    let header_label = hjkl_keymap::Chord(pending.clone()).to_notation(leader);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ui.border_active))
@@ -1652,7 +1654,7 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Build lines: first line is a header note, then one line per row of entries.
+    // Build lines: one line per row of entries.
     let key_style = Style::default()
         .fg(ui.border_active)
         .add_modifier(Modifier::BOLD);
@@ -1669,13 +1671,13 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         for col in 0..cols {
             let idx = row * cols + col;
             if let Some(entry) = collected.get(idx) {
-                let key_str = entry.key;
-                let desc_str = entry.desc;
+                let key_str = &entry.key;
+                let desc_str = &entry.desc;
                 let entry_str = format!("{key_str} {desc_str}");
                 // Pad to col_width.
                 let padded_len = col_width as usize;
                 let padding = " ".repeat(padded_len.saturating_sub(entry_str.len()));
-                spans.push(Span::styled(key_str.to_string(), key_style));
+                spans.push(Span::styled(key_str.clone(), key_style));
                 spans.push(Span::styled(format!(" {desc_str}{padding}"), desc_style));
             }
         }

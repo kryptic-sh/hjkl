@@ -4981,3 +4981,131 @@ fn resolve_chord_timeout_returns_none_when_no_chord_pending() {
         "no pending chord → None"
     );
 }
+
+// ── which-key entries_for tests (#57) ───────────────────────────────────────
+
+/// Helper: build the km prefix from a vim-notation string.
+fn km_prefix(app: &App, notation: &str) -> Vec<hjkl_keymap::KeyEvent> {
+    let leader = app.config.editor.leader;
+    hjkl_keymap::Chord::parse(notation, leader)
+        .expect("test chord must parse")
+        .0
+}
+
+#[test]
+fn which_key_leader_submenu_shows_direct_leader_children() {
+    // After pressing <leader>, entries_for must return the direct children of
+    // <leader> — single-key entries like "f", "b", "/" and the "g" submenu.
+    // Deep entries like "gs", "gl" must NOT appear (they are under <leader>g).
+    let app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+    let prefix = km_prefix(&app, "<leader>");
+    let entries =
+        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &prefix, leader);
+
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+
+    // Direct children that must be present.
+    assert!(keys.contains(&"f"), "missing f (file picker)");
+    assert!(keys.contains(&"b"), "missing b (buffer picker)");
+    assert!(keys.contains(&"/"), "missing / (grep picker)");
+    assert!(keys.contains(&"g"), "missing g (git submenu)");
+
+    // Deep entries that must NOT leak into the top-level listing.
+    assert!(
+        !keys.contains(&"gs"),
+        "gs must not appear at <leader> level"
+    );
+    assert!(
+        !keys.contains(&"gl"),
+        "gl must not appear at <leader> level"
+    );
+    assert!(
+        !keys.contains(&"gb"),
+        "gb must not appear at <leader> level"
+    );
+}
+
+#[test]
+fn which_key_leader_g_shows_git_actions() {
+    // After pressing <leader>g, entries_for must list the git sub-actions.
+    let app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+    let prefix = km_prefix(&app, "<leader>g");
+    let entries =
+        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &prefix, leader);
+
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+
+    assert!(keys.contains(&"s"), "missing s (git status)");
+    assert!(keys.contains(&"l"), "missing l (git log)");
+    assert!(keys.contains(&"b"), "missing b (git branches)");
+    assert!(keys.contains(&"S"), "missing S (git stashes)");
+    assert!(keys.contains(&"t"), "missing t (git tags)");
+    assert!(keys.contains(&"r"), "missing r (git remotes)");
+}
+
+#[test]
+fn which_key_ctrl_w_shows_window_motions() {
+    // After pressing <C-w>, entries_for must include window-motion keys.
+    let app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+    let prefix = km_prefix(&app, "<C-w>");
+    let entries =
+        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &prefix, leader);
+
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+
+    assert!(keys.contains(&"h"), "missing h (focus left)");
+    assert!(keys.contains(&"j"), "missing j (focus down)");
+    assert!(keys.contains(&"k"), "missing k (focus up)");
+    assert!(keys.contains(&"l"), "missing l (focus right)");
+    // `>` and `<` are rendered via vim notation: `>` is bare, `<` becomes `<lt>`.
+    assert!(keys.contains(&">"), "missing > (wider)");
+    assert!(keys.contains(&"<lt>"), "missing <lt> (narrower)");
+}
+
+#[test]
+fn which_key_runtime_nmap_appears_in_entries() {
+    // A binding added at runtime via app_keymap.add must surface in entries_for.
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+
+    // Register <leader>z → OpenFilePicker at runtime (simulates :nmap).
+    app.app_keymap
+        .add(
+            hjkl_keymap::Mode::Normal,
+            "<leader>z",
+            AppAction::OpenFilePicker,
+            "runtime file picker",
+        )
+        .unwrap();
+
+    let prefix = km_prefix(&app, "<leader>");
+    let entries =
+        crate::which_key::entries_for(&app.app_keymap, hjkl_keymap::Mode::Normal, &prefix, leader);
+
+    let found = entries.iter().find(|e| e.key == "z");
+    assert!(found.is_some(), "runtime <leader>z must appear in entries");
+    assert_eq!(
+        found.unwrap().desc,
+        "runtime file picker",
+        "description must match the registered binding"
+    );
+}
+
+#[test]
+fn which_key_no_pending_popup_suppressed() {
+    // When no prefix is pending, active_which_key_prefix returns an empty Vec.
+    // The render path checks pending.is_empty() and skips the popup.
+    // This test verifies that active_which_key_prefix is empty on a fresh app
+    // (no keys fed yet), matching the popup-suppression guard in render.rs.
+    let app = App::new(None, false, None, None).unwrap();
+    let pending = app.active_which_key_prefix();
+    assert!(
+        pending.is_empty(),
+        "fresh app must have no pending prefix, got {} events",
+        pending.len()
+    );
+}
