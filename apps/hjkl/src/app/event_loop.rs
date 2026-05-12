@@ -287,6 +287,24 @@ impl App {
                         // is silently consumed per normal policy.)
                     }
 
+                    // ── Visual-mode `:` → command prompt prefilled with '<,'> ─
+                    if key.code == KeyCode::Char(':')
+                        && key.modifiers == KeyModifiers::NONE
+                        && matches!(
+                            self.active().editor.vim_mode(),
+                            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+                        )
+                    {
+                        // Exit visual mode by feeding Esc to the engine. The
+                        // visual-exit hook in hjkl-engine sets the `<` / `>`
+                        // marks so :'<,'> resolves.
+                        self.active_mut()
+                            .editor
+                            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        self.open_command_prompt_with("'<,'>");
+                        continue;
+                    }
+
                     // ── Normal-mode app-level chord dispatch ─────────────────
                     if self.active().editor.vim_mode() == VimMode::Normal {
                         // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────

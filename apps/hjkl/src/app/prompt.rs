@@ -10,6 +10,24 @@ impl App {
         self.command_field = Some(field);
     }
 
+    /// Open the command prompt with `prefill` pre-typed and the cursor at end.
+    /// Used by the visual-mode `:` interceptor to seed `'<,'>` so the user
+    /// can append a range-aware command like `sort`.
+    pub(crate) fn open_command_prompt_with(&mut self, prefill: &str) {
+        let mut field = TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        for c in prefill.chars() {
+            let input = EngineInput {
+                key: EngineKey::Char(c),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            };
+            field.handle_input(input);
+        }
+        self.command_field = Some(field);
+    }
+
     pub(crate) fn handle_command_field_key(&mut self, key: crossterm::event::KeyEvent) {
         let input: EngineInput = key.into();
         let field = match self.command_field.as_mut() {
