@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-05-13
+
+### Added
+
+- `Editor::set_pending_register(reg: char)` — public controller entry point:
+  validates `reg` against `[a-zA-Z0-9"+*_]` and sets `vim.pending_register` if
+  valid; invalid chars are silently ignored (no-op), matching the engine FSM
+  behaviour. Allows the hjkl-vim `PendingState::SelectRegister` reducer to
+  dispatch `EngineCmd::SetPendingRegister` without re-entering the engine FSM.
+- `handle_select_register` now delegates to `Editor::set_pending_register` to
+  eliminate validation logic duplication (mirrors the extraction pattern
+  established by `apply_op_find_motion` / `apply_op_text_obj_inner` in
+  0.5.14–0.5.15). The engine FSM path (`Pending::SelectRegister`) stays intact
+  for macro-replay defensive coverage.
+
 ## [0.5.16] - 2026-05-13
 
 ### Added
@@ -418,7 +433,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.17...HEAD
+[0.5.17]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...v0.5.14

@@ -3024,6 +3024,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_g_inner(self, op, ch, total_count);
     }
 
+    /// Set `vim.pending_register` to `Some(reg)` if `reg` is a valid register
+    /// selector (`a`–`z`, `A`–`Z`, `0`–`9`, `"`, `+`, `*`, `_`). Invalid
+    /// chars are silently ignored (no-op), matching the engine FSM's
+    /// `handle_select_register` behaviour.
+    ///
+    /// Promoted to the public surface in 0.5.17 so the hjkl-vim
+    /// `PendingState::SelectRegister` reducer can dispatch `SetPendingRegister`
+    /// without re-entering the engine FSM. `handle_select_register` (engine FSM
+    /// path for macro-replay / defensive coverage) delegates here to avoid
+    /// logic duplication.
+    pub fn set_pending_register(&mut self, reg: char) {
+        if reg.is_ascii_alphanumeric() || matches!(reg, '"' | '+' | '*' | '_') {
+            self.vim.pending_register = Some(reg);
+        }
+        // Invalid chars silently no-op (matches engine FSM behavior).
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);

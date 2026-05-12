@@ -2128,14 +2128,14 @@ fn handle_set_mark<H: crate::types::Host>(
 /// `"reg` — store the register selector for the next y / d / c / p.
 /// Accepts `a`–`z`, `A`–`Z`, `0`–`9`, `"`, and the system-clipboard
 /// selectors `+` / `*`. Anything else cancels silently.
+/// Delegates to `Editor::set_pending_register` to avoid duplicating
+/// validation logic (mirrors the extraction pattern from 0.5.14–0.5.16).
 fn handle_select_register<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     input: Input,
 ) -> bool {
-    if let Key::Char(c) = input.key
-        && (c.is_ascii_alphanumeric() || matches!(c, '"' | '+' | '*' | '_'))
-    {
-        ed.vim.pending_register = Some(c);
+    if let Key::Char(c) = input.key {
+        ed.set_pending_register(c);
     }
     true
 }
@@ -10841,5 +10841,57 @@ mod tests {
         let lines: Vec<_> = e.buffer().lines().to_vec();
         // dgj deletes current line plus the line below it.
         assert_eq!(lines, vec!["line3"], "dgj must delete current+next line");
+    }
+
+    // ── set_pending_register unit tests ─────────────────────────────────────
+
+    fn blank_editor() -> Editor {
+        Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        )
+    }
+
+    #[test]
+    fn set_pending_register_valid_letter_sets_field() {
+        let mut e = blank_editor();
+        assert!(e.vim.pending_register.is_none());
+        e.set_pending_register('a');
+        assert_eq!(e.vim.pending_register, Some('a'));
+    }
+
+    #[test]
+    fn set_pending_register_invalid_char_no_op() {
+        let mut e = blank_editor();
+        e.set_pending_register('!');
+        assert!(
+            e.vim.pending_register.is_none(),
+            "invalid register char must not set pending_register"
+        );
+    }
+
+    #[test]
+    fn set_pending_register_special_plus_sets_field() {
+        // '+' is the system clipboard register.
+        let mut e = blank_editor();
+        e.set_pending_register('+');
+        assert_eq!(e.vim.pending_register, Some('+'));
+    }
+
+    #[test]
+    fn set_pending_register_star_sets_field() {
+        // '*' is the primary clipboard register.
+        let mut e = blank_editor();
+        e.set_pending_register('*');
+        assert_eq!(e.vim.pending_register, Some('*'));
+    }
+
+    #[test]
+    fn set_pending_register_underscore_sets_field() {
+        // '_' is the black-hole register.
+        let mut e = blank_editor();
+        e.set_pending_register('_');
+        assert_eq!(e.vim.pending_register, Some('_'));
     }
 }
