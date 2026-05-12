@@ -2855,6 +2855,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_find_char(self, ch, forward, till, count.max(1));
     }
 
+    /// Apply the g-chord effect for `g<ch>` with a pre-captured `count`.
+    /// Mirrors the full `handle_after_g` dispatch table — `gg`, `gj`, `gk`,
+    /// `gv`, `gU` / `gu` / `g~` (→ operator-pending), `gi`, `g*`, `g#`, etc.
+    ///
+    /// Promoted to public surface in 0.5.10 so hjkl-vim's
+    /// `PendingState::AfterG` reducer can dispatch `AfterGChord` without
+    /// re-entering the engine FSM.
+    pub fn after_g(&mut self, ch: char, count: usize) {
+        vim::apply_after_g(self, ch, count);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
@@ -4392,5 +4403,78 @@ mod tests {
             (0, 2),
             "find_char('c', forward=true, till=false, count=1) must land on 'c' at col 2"
         );
+    }
+
+    // ── after_g unit tests (Phase 2b-ii) ────────────────────────────────────
+
+    #[test]
+    fn after_g_gg_jumps_to_top() {
+        let content: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        let mut e = fresh_editor(&content);
+        e.jump_cursor(15, 0);
+        e.after_g('g', 1);
+        assert_eq!(e.cursor().0, 0, "gg must move cursor to row 0");
+    }
+
+    #[test]
+    fn after_g_gg_with_count_jumps_line() {
+        // 5gg → row 4 (0-indexed).
+        let content: String = (0..20).map(|i| format!("line {i}\n")).collect();
+        let mut e = fresh_editor(&content);
+        e.jump_cursor(0, 0);
+        e.after_g('g', 5);
+        assert_eq!(e.cursor().0, 4, "5gg must land on row 4");
+    }
+
+    #[test]
+    fn after_g_gv_restores_last_visual() {
+        // Enter visual, move right, exit, then gv re-enters.
+        let mut e = fresh_editor("hello world\n");
+        // Enter char-visual at col 0, move to col 3, then exit.
+        e.handle_key(key(KeyCode::Char('v')));
+        e.handle_key(key(KeyCode::Char('l')));
+        e.handle_key(key(KeyCode::Char('l')));
+        e.handle_key(key(KeyCode::Char('l')));
+        e.handle_key(key(KeyCode::Esc));
+        assert_eq!(e.vim_mode(), VimMode::Normal, "should be Normal after Esc");
+        // gv via after_g.
+        e.after_g('v', 1);
+        assert_eq!(
+            e.vim_mode(),
+            VimMode::Visual,
+            "gv must re-enter Visual mode"
+        );
+    }
+
+    #[test]
+    fn after_g_gj_moves_down() {
+        let mut e = fresh_editor("line0\nline1\nline2\n");
+        e.jump_cursor(0, 0);
+        e.after_g('j', 1);
+        assert_eq!(e.cursor().0, 1, "gj must move down one display row");
+    }
+
+    #[test]
+    fn after_g_gu_sets_operator_pending() {
+        // gU enters operator-pending with Uppercase op; next key applies it.
+        let mut e = fresh_editor("hello\n");
+        e.after_g('U', 1);
+        // The engine should now be chord-pending (Pending::Op set).
+        assert!(
+            e.is_chord_pending(),
+            "gU must set engine chord-pending (Pending::Op)"
+        );
+    }
+
+    #[test]
+    fn after_g_g_star_searches_forward_non_whole_word() {
+        // g* on word "foo" in "foobar" should find the match.
+        let mut e = fresh_editor("foo foobar\n");
+        e.jump_cursor(0, 0); // cursor on 'f' of "foo"
+        e.after_g('*', 1);
+        // After g* the cursor should have moved (ScreenDown motion is
+        // not applicable here; WordAtCursor forward moves to next match).
+        // At minimum: no panic and mode stays Normal.
+        assert_eq!(e.vim_mode(), VimMode::Normal, "g* must stay in Normal mode");
     }
 }

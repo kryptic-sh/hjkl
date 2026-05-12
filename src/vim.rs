@@ -3044,8 +3044,25 @@ fn handle_after_g<H: crate::types::Host>(
     input: Input,
 ) -> bool {
     let count = take_count(&mut ed.vim);
-    match input.key {
-        Key::Char('g') => {
+    // Extract the char and delegate to the shared apply_after_g body.
+    // Non-char keys (ctrl sequences etc.) are silently ignored.
+    if let Key::Char(ch) = input.key {
+        apply_after_g(ed, ch, count);
+    }
+    true
+}
+
+/// Public(crate) entry point for bare `g<x>`. Applies the g-chord effect
+/// given the char `ch` and pre-captured `count`. Called by `Editor::after_g`
+/// (the public controller API) so the hjkl-vim pending-state reducer can
+/// dispatch `AfterGChord` without re-entering the FSM.
+pub(crate) fn apply_after_g<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    count: usize,
+) {
+    match ch {
+        'g' => {
             // gg — top / jump to line count.
             let pre = ed.cursor();
             if count > 1 {
@@ -3058,14 +3075,14 @@ fn handle_after_g<H: crate::types::Host>(
                 push_jump(ed, pre);
             }
         }
-        Key::Char('e') => execute_motion(ed, Motion::WordEndBack, count),
-        Key::Char('E') => execute_motion(ed, Motion::BigWordEndBack, count),
+        'e' => execute_motion(ed, Motion::WordEndBack, count),
+        'E' => execute_motion(ed, Motion::BigWordEndBack, count),
         // `g_` — last non-blank on the line.
-        Key::Char('_') => execute_motion(ed, Motion::LastNonBlank, count),
+        '_' => execute_motion(ed, Motion::LastNonBlank, count),
         // `gM` — middle char column of the current line.
-        Key::Char('M') => execute_motion(ed, Motion::LineMiddle, count),
+        'M' => execute_motion(ed, Motion::LineMiddle, count),
         // `gv` — re-enter the last visual selection.
-        Key::Char('v') => {
+        'v' => {
             if let Some(snap) = ed.vim.last_visual {
                 match snap.mode {
                     Mode::Visual => {
@@ -3089,30 +3106,30 @@ fn handle_after_g<H: crate::types::Host>(
         // `gj` / `gk` — display-line down / up. Walks one screen
         // segment at a time under `:set wrap`; falls back to `j`/`k`
         // when wrap is off (Buffer::move_screen_* handles the branch).
-        Key::Char('j') => execute_motion(ed, Motion::ScreenDown, count),
-        Key::Char('k') => execute_motion(ed, Motion::ScreenUp, count),
+        'j' => execute_motion(ed, Motion::ScreenDown, count),
+        'k' => execute_motion(ed, Motion::ScreenUp, count),
         // Case operators: `gU` / `gu` / `g~`. Enter operator-pending
         // so the next input is treated as the motion / text object /
         // shorthand double (`gUU`, `guu`, `g~~`).
-        Key::Char('U') => {
+        'U' => {
             ed.vim.pending = Pending::Op {
                 op: Operator::Uppercase,
                 count1: count,
             };
         }
-        Key::Char('u') => {
+        'u' => {
             ed.vim.pending = Pending::Op {
                 op: Operator::Lowercase,
                 count1: count,
             };
         }
-        Key::Char('~') => {
+        '~' => {
             ed.vim.pending = Pending::Op {
                 op: Operator::ToggleCase,
                 count1: count,
             };
         }
-        Key::Char('q') => {
+        'q' => {
             // `gq{motion}` — text reflow operator. Subsequent motion
             // / textobj rides the same operator pipeline.
             ed.vim.pending = Pending::Op {
@@ -3120,7 +3137,7 @@ fn handle_after_g<H: crate::types::Host>(
                 count1: count,
             };
         }
-        Key::Char('J') => {
+        'J' => {
             // `gJ` — join line below without inserting a space.
             for _ in 0..count.max(1) {
                 ed.push_undo();
@@ -3132,7 +3149,7 @@ fn handle_after_g<H: crate::types::Host>(
                 });
             }
         }
-        Key::Char('d') => {
+        'd' => {
             // `gd` — goto definition. hjkl-engine doesn't run an LSP
             // itself; raise an intent the host drains and routes to
             // `sqls`. The cursor stays put here — the host moves it
@@ -3143,7 +3160,7 @@ fn handle_after_g<H: crate::types::Host>(
         // Matches vim's `:h gi`: moves to the `'^` mark position (the
         // cursor where insert mode was last active, before Esc step-back)
         // and enters insert mode there.
-        Key::Char('i') => {
+        'i' => {
             if let Some((row, col)) = ed.vim.last_insert_pos {
                 ed.jump_cursor(row, col);
             }
@@ -3151,12 +3168,12 @@ fn handle_after_g<H: crate::types::Host>(
         }
         // `g;` / `g,` — walk the change list. `g;` toward older
         // entries, `g,` toward newer.
-        Key::Char(';') => walk_change_list(ed, -1, count.max(1)),
-        Key::Char(',') => walk_change_list(ed, 1, count.max(1)),
+        ';' => walk_change_list(ed, -1, count.max(1)),
+        ',' => walk_change_list(ed, 1, count.max(1)),
         // `g*` / `g#` — like `*` / `#` but match substrings (no `\b`
         // boundary anchors), so the cursor on `foo` finds it inside
         // `foobar` too.
-        Key::Char('*') => execute_motion(
+        '*' => execute_motion(
             ed,
             Motion::WordAtCursor {
                 forward: true,
@@ -3164,7 +3181,7 @@ fn handle_after_g<H: crate::types::Host>(
             },
             count,
         ),
-        Key::Char('#') => execute_motion(
+        '#' => execute_motion(
             ed,
             Motion::WordAtCursor {
                 forward: false,
@@ -3174,7 +3191,6 @@ fn handle_after_g<H: crate::types::Host>(
         ),
         _ => {}
     }
-    true
 }
 
 fn handle_after_z<H: crate::types::Host>(
