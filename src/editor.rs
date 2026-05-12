@@ -2999,6 +2999,31 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_text_obj_inner(self, op, ch, inner, total_count);
     }
 
+    /// Apply an operator over a g-chord motion or case-op linewise form
+    /// (`dgg` / `dge` / `dgE` / `dgj` / `dgk` / `gUgU` etc.).
+    ///
+    /// - If `op` is Uppercase/Lowercase/ToggleCase and `ch` matches the op's
+    ///   letter (`U`/`u`/`~`), executes the line op (linewise form).
+    /// - Otherwise maps `ch` to a motion:
+    ///   - `'g'` → `Motion::FileTop` (gg)
+    ///   - `'e'` → `Motion::WordEndBack` (ge)
+    ///   - `'E'` → `Motion::BigWordEndBack` (gE)
+    ///   - `'j'` → `Motion::ScreenDown` (gj)
+    ///   - `'k'` → `Motion::ScreenUp` (gk)
+    ///   - unknown → no-op (silently ignored, matching engine FSM behaviour)
+    /// - Updates `last_change` for dot-repeat when `op` is a change operator.
+    ///
+    /// `total_count` is the already-folded product of prefix and inner counts.
+    ///
+    /// Promoted to the public surface in 0.5.16 so the hjkl-vim
+    /// `PendingState::OpG` reducer can dispatch `ApplyOpG` without
+    /// re-entering the engine FSM. `handle_op_after_g` (chord-init op path)
+    /// delegates to the shared `apply_op_g_inner` helper to avoid logic
+    /// duplication.
+    pub fn apply_op_g(&mut self, op: crate::vim::Operator, ch: char, total_count: usize) {
+        vim::apply_op_g_inner(self, op, ch, total_count);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);

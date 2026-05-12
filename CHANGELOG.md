@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-05-13
+
+### Added
+
+- `Editor::apply_op_g(op, ch, total_count)` — public controller entry point:
+  applies operator over a g-chord motion or case-op linewise form (`dgg` / `dge`
+  / `dgE` / `dgj` / `dgk` / `gUgU` etc.). If `op` is
+  Uppercase/Lowercase/ToggleCase and `ch` matches the op's letter (`U`/`u`/`~`),
+  executes the linewise case-op. Otherwise maps `ch` to a motion (`g`→`FileTop`,
+  `e`→`WordEndBack`, `E`→`BigWordEndBack`, `j`→`ScreenDown`, `k`→`ScreenUp`);
+  unknown chars are silently ignored (no-op). Updates `last_change` for
+  dot-repeat when `op` is a change operator.
+- `pub(crate) fn apply_op_g_inner` in `vim.rs` — shared implementation called by
+  both `Editor::apply_op_g` (reducer path) and `handle_op_after_g` (engine FSM
+  chord-init path), eliminating logic duplication. Mirrors the extraction
+  pattern established by `apply_op_text_obj_inner` in 0.5.15.
+
 ## [0.5.15] - 2026-05-13
 
 ### Added
@@ -401,7 +418,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...HEAD
+[0.5.16]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...v0.5.13
