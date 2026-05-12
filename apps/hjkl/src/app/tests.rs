@@ -1898,6 +1898,49 @@ fn vnew_creates_empty_buffer_in_left_split() {
 }
 
 #[test]
+fn ctrl_w_lt_resize_width_negative_registers() {
+    // Regression: the binding string `<C-w><` failed to parse because the
+    // trailing bare `<` was interpreted as an unclosed tag. Fix is to use
+    // the `<lt>` escape. Verify that the chord registers via app_keymap and
+    // resolves to AppAction::ResizeWidth(-1).
+    use hjkl_keymap::{
+        Chord, KeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods, KeyResolve, Mode,
+    };
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    let ctrl_w = KmKeyEvent::new(KeyCode::Char('w'), KmKeyMods::CTRL);
+    let lt = KmKeyEvent::new(KeyCode::Char('<'), KmKeyMods::NONE);
+    let chord = Chord(vec![ctrl_w, lt]);
+
+    // children() must show `<` reachable from `<C-w>` prefix.
+    let kids = app.app_keymap.children(Mode::Normal, &Chord(vec![ctrl_w]));
+    assert!(
+        kids.iter().any(|(k, _)| *k == lt),
+        "<C-w><lt> binding must register; kids: {kids:?}"
+    );
+
+    // Drive the chord and assert it matches ResizeWidth(-1).
+    let r1 = app
+        .app_keymap
+        .feed(Mode::Normal, ctrl_w, std::time::Instant::now());
+    assert!(matches!(r1, KeyResolve::Pending | KeyResolve::Ambiguous));
+    let r2 = app
+        .app_keymap
+        .feed(Mode::Normal, lt, std::time::Instant::now());
+    match r2 {
+        KeyResolve::Match(binding) => {
+            assert!(matches!(
+                binding.action,
+                crate::keymap_actions::AppAction::ResizeWidth(-1)
+            ));
+        }
+        other => panic!("expected Match(ResizeWidth(-1)), got {other:?}"),
+    }
+    // Silence unused warning if Chord is exported but not used in current build flags.
+    let _ = chord;
+}
+
+#[test]
 fn ctrl_w_h_focuses_left() {
     let mut app = App::new(None, false, None, None).unwrap();
     // After :vsp, focus is on the new left window.

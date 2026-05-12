@@ -645,7 +645,7 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction> {
         ("<C-w>+", AppAction::ResizeHeight(1), "taller"),
         ("<C-w>-", AppAction::ResizeHeight(-1), "shorter"),
         ("<C-w>>", AppAction::ResizeWidth(1), "wider"),
-        ("<C-w><", AppAction::ResizeWidth(-1), "narrower"),
+        ("<C-w><lt>", AppAction::ResizeWidth(-1), "narrower"),
         ("<C-w>=", AppAction::EqualizeLayout, "equalize"),
         ("<C-w>_", AppAction::MaximizeHeight, "maximize height"),
         ("<C-w>|", AppAction::MaximizeWidth, "maximize width"),
