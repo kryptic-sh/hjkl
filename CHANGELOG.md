@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-12
+
+### Fixed
+
+- `Keymap::timeout_resolve` now leaves the pending buffer in place when the
+  buffer is a pure prefix (no terminal binding at the current depth but deeper
+  bindings exist). Previously it drained the buffer in this case, causing
+  which-key popups to disappear the instant the chord-timeout fired on a leader
+  prefix. Three documented outcomes: terminal match → `Match` (drain), pure
+  prefix → `Unbound(empty)` (no drain), dead-end → `Unbound` with drained
+  events.
+
 ## [0.1.3] - 2026-05-12
 
 ### Added
@@ -85,7 +97,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
 - `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.4
 [0.1.3]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.3
 [0.1.2]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.1
