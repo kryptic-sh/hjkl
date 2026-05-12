@@ -8,6 +8,52 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-05-12
+
+### Fixed
+
+- SHIFT-modifier normalization at the crossterm → keymap boundary. Char events
+  arriving with `+SHIFT` (kitty, foot, wezterm w/ kitty keyboard protocol) now
+  match bindings registered as `ch('B')` (mods=NONE). Affects `<leader>gB`,
+  `<leader>gS`, `<C-w>W`, `<C-w>T`, `<C-w>R`, `]D`, `[D`, `K`.
+- Engine-pending bypass — keymap trie skips itself while the engine is in any
+  multi-key pending state (`r<x>` Replace, `f<x>`/`t<x>` Find, `m<a>` SetMark,
+  operator-pending, etc.), so the engine's in-flight commands complete without
+  the trie eating their continuation key. Requires `hjkl-engine` 0.5.2.
+- Multi-key Unbound replay forwards to engine — `gg` / `gj` / `gk` / `G` / `gE`
+  / `ge` now reach the engine through the chord dispatch path (previously
+  silently dropped after the trie's `g`-prefix consumed the first key).
+- Cycle guard on recursive maps — `:nmap a a` and similar vertical cycles now
+  bail with `E223: recursive mapping (depth limit)` instead of overflowing the
+  call stack. Per-frame step counter still catches horizontal cycles.
+- `<C-w><` (resize-width-narrower) binding now registers — was silently failing
+  to parse due to an unescaped trailing `<`. Use `<lt>` escape.
+
+### Changed
+
+- Merged `RuntimeKeymaps` into the `app_keymap` trie via
+  `AppAction::Replay { keys, recursive }` (#59). User `:map` / `:nmap` / `:imap`
+  etc. commands now register on the same trie as built-ins.
+  `user_keymap_records` side-table backs `:map` listing so built-in chords don't
+  leak into user listings. Removed: `RuntimeKeymaps`, `apply_runtime_map`,
+  `handle_runtime_mapped_key`, `App::runtime_keymaps`.
+- Mode-generalized chord dispatch — `dispatch_keymap_in_mode` feeds the active
+  vim mode so user maps in Insert / Visual / OpPending / CommandLine work.
+  Terminal-mode runtime maps are silently dropped pending a Terminal variant in
+  the keymap crate.
+- `<C-w>>` binding switched to `<C-w><gt>` for cosmetic symmetry with
+  `<C-w><lt>`. Behavior unchanged.
+
+### Architecture
+
+- Filed #62 (extract `hjkl-vim` grammar layer; engine becomes pure controller)
+  and #63 (engine multi-selection primitives) as long-running design issues.
+
+### Dependencies
+
+- `hjkl-engine` 0.5.1 → 0.5.2 (adds `Editor::is_chord_pending()`)
+- `hjkl-keymap` 0.1.0 → 0.1.1 (adds `<gt>` notation escape)
+
 ## [0.14.0] - 2026-05-10
 
 ### Added
@@ -1478,7 +1524,10 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.1
+[0.14.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.0
+[0.13.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.13.0
 [0.12.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.12.2
 [0.12.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.12.1
 [0.12.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.12.0
