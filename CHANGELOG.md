@@ -10,6 +10,11 @@ patch bumps.
 
 ### Changed
 
+- LSP client (`sqeel-core::lsp`) ported to the shared `hjkl-lsp` crate. The
+  hand-rolled codec / server-lifecycle / text-sync plumbing (796 LOC) is now a
+  253-LOC adapter over `hjkl_lsp::LspManager`. Public surface unchanged —
+  `LspClient`, `LspWriter`, `LspEvent`, `Diagnostic`, `write_sqls_config` keep
+  the same signatures, so `sqeel-tui` consumers are untouched. (#12)
 - Cursor-line and cursor-column highlights are now opt-in (`cursorline = false`,
   `cursorcolumn = false` by default in `~/.config/sqeel/config.toml` under
   `[editor]`). Enable via TOML or at runtime via `:set cursorline` /
