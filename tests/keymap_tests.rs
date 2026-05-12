@@ -188,6 +188,35 @@ fn children_lists_gd_gt() {
     assert!(codes.contains(&'T'), "missing gT");
 }
 
+// ── Keymap::pop ───────────────────────────────────────────────────────────────
+
+#[test]
+fn pop_removes_last_key() {
+    let mut km: Keymap<&str> = Keymap::new(' ');
+    km.add(Mode::Normal, "<leader>gs", "git_status", "git status")
+        .unwrap();
+
+    let now = Instant::now();
+    // Feed leader then 'g' — buffer has two keys.
+    km.feed(Mode::Normal, char_ev(' '), now);
+    km.feed(Mode::Normal, char_ev('g'), now);
+    assert_eq!(km.pending(Mode::Normal).len(), 2);
+
+    // Pop should remove 'g' and return it.
+    let removed = km.pop(Mode::Normal);
+    assert_eq!(removed, Some(char_ev('g')));
+    assert_eq!(km.pending(Mode::Normal).len(), 1);
+    assert_eq!(km.pending(Mode::Normal)[0], char_ev(' '));
+}
+
+#[test]
+fn pop_returns_none_on_empty_buffer() {
+    let mut km: Keymap<&str> = Keymap::new(' ');
+    // No keys fed — buffer is empty.
+    let result = km.pop(Mode::Normal);
+    assert_eq!(result, None);
+}
+
 // ── Mode isolation ────────────────────────────────────────────────────────────
 
 #[test]

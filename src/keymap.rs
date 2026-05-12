@@ -279,4 +279,13 @@ impl<A: Clone> Keymap<A> {
             state.buffer.clear();
         }
     }
+
+    /// Pop the last key from the pending buffer for `mode`.
+    /// Returns the removed key, or `None` if the buffer was empty.
+    ///
+    /// Used by callers (e.g. which-key popup) to implement Backspace-as-navigate:
+    /// the user backs out of a chord prefix one key at a time.
+    pub fn pop(&mut self, mode: Mode) -> Option<KeyEvent> {
+        self.state.get_mut(&mode)?.buffer.pop()
+    }
 }
