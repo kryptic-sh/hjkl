@@ -5,6 +5,16 @@ use std::time::Duration;
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
+
+fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
+    match k {
+        hjkl_vim::OperatorKind::Delete => hjkl_engine::Operator::Delete,
+        hjkl_vim::OperatorKind::Yank => hjkl_engine::Operator::Yank,
+        hjkl_vim::OperatorKind::Change => hjkl_engine::Operator::Change,
+        hjkl_vim::OperatorKind::Indent => hjkl_engine::Operator::Indent,
+        hjkl_vim::OperatorKind::Outdent => hjkl_engine::Operator::Outdent,
+    }
+}
 fn ctrl_key(c: char) -> KeyEvent {
     KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
 }
@@ -4896,6 +4906,62 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
+                    op,
+                    motion_key,
+                    total_count,
+                }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.apply_op_motion(
+                        op_kind_to_operator(op),
+                        motion_key,
+                        total_count,
+                    );
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
+                    app.pending_state = None;
+                    app.active_mut()
+                        .editor
+                        .apply_op_double(op_kind_to_operator(op), total_count);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpTextObj { op, count1, inner }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.enter_op_text_obj(
+                        op_kind_to_operator(op),
+                        count1,
+                        inner,
+                    );
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpG { op, count1 }) => {
+                    app.pending_state = None;
+                    app.active_mut()
+                        .editor
+                        .enter_op_g(op_kind_to_operator(op), count1);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpFind {
+                    op,
+                    count1,
+                    forward,
+                    till,
+                }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.enter_op_find(
+                        op_kind_to_operator(op),
+                        count1,
+                        forward,
+                        till,
+                    );
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -5868,4 +5934,358 @@ fn zf_in_visual_creates_fold() {
     );
     assert_eq!(folds[0].end_row, 3, "fold must end at cursor row");
     assert!(folds[0].closed, "fold must be closed");
+}
+
+// ── Phase 2c-i: AfterOp integration tests ────────────────────────────────────
+
+/// Helper: drive a sequence of chars through drive_key.
+fn drive_chars(app: &mut App, s: &str) {
+    for c in s.chars() {
+        drive_key(app, key(KeyCode::Char(c)));
+    }
+}
+
+#[test]
+fn dw_deletes_word_via_reducer() {
+    // `dw` via reducer path: `d` → BeginPendingAfterOp(Delete),
+    //                        `w` → ApplyOpMotion(Delete, 'w', 1).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Delete,
+                count1: 1,
+                inner_count: 0,
+            })
+        ),
+        "d must set AfterOp(Delete) pending, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending must clear after commit"
+    );
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, "world", "dw must delete 'hello ', got {line:?}");
+}
+
+#[test]
+fn dd_deletes_line_via_reducer() {
+    // `dd` via reducer: `d` → AfterOp, `d` → ApplyOpDouble.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "dd");
+    assert!(app.pending_state.is_none());
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines, vec!["line2", "line3"], "dd must delete line1");
+}
+
+#[test]
+fn d3w_deletes_three_words_via_reducer() {
+    // `d3w`: `d` → AfterOp(count1=1), `3` → Wait(inner_count=3), `w` →
+    //        ApplyOpMotion(Delete, 'w', total=3).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "one two three four");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('3')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp { inner_count: 3, .. })
+        ),
+        "after d3, inner_count must be 3, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(app.pending_state.is_none());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "four",
+        "d3w must delete 'one two three ', got {line:?}"
+    );
+}
+
+#[test]
+fn two_dd_deletes_two_lines_via_reducer() {
+    // `2dd`: count1=2 buffered via pending_count, `d` → AfterOp(count1=2),
+    //        `d` → ApplyOpDouble(total=2).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.pending_count = "2".into();
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp { count1: 2, .. })
+        ),
+        "count1 must be 2, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(app.pending_state.is_none());
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["line3"],
+        "2dd must delete two lines, got {lines:?}"
+    );
+}
+
+#[test]
+fn cw_changes_to_word_end() {
+    // `cw` — Change + 'w' motion. The cw→ce quirk must be applied so that
+    // only "hello" is consumed, not "hello " (trailing space preserved).
+    // After cw, editor enters Insert mode.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_chars(&mut app, "cw");
+    assert!(app.pending_state.is_none());
+
+    // Must be in Insert mode (change enters insert).
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Insert,
+        "cw must enter Insert mode"
+    );
+    // The space before "world" should still be present as the first char.
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        line.starts_with(' ') || line == " world",
+        "cw quirk: trailing space must be preserved, got {line:?}"
+    );
+}
+
+#[test]
+fn dip_text_object_via_reducer() {
+    // `dip` — d → AfterOp, i → EnterOpTextObj(inner=true), p → engine handles
+    // paragraph text-object. Engine's OpTextObj arm processes the 'p' char.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\n\nfoo bar");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('i')));
+    // After EnterOpTextObj, engine is in Pending::OpTextObj → is_chord_pending().
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "after di, engine must be in OpTextObj chord-pending state"
+    );
+    assert!(
+        app.pending_state.is_none(),
+        "reducer pending must be cleared"
+    );
+
+    // Next key 'p' goes to engine FSM (is_chord_pending bypass).
+    drive_key(&mut app, key(KeyCode::Char('p')));
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must exit pending"
+    );
+
+    // First paragraph (lines 0..0) should be deleted; remaining: empty line + "foo bar".
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        !lines.contains(&"hello world".to_string()),
+        "dip must delete first paragraph, got {lines:?}"
+    );
+}
+
+#[test]
+fn dgg_deletes_to_top() {
+    // `dgg` — d → AfterOp, g → EnterOpG, g → engine handles dgg (delete to top).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(2, 0); // start on line3.
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    // Engine is now in Pending::OpG.
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "after dg, engine must be in OpG chord-pending state"
+    );
+    assert!(
+        app.pending_state.is_none(),
+        "reducer pending must be cleared"
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    // dgg should delete lines 0..=2 (all three lines).
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        lines.is_empty() || lines == vec![""],
+        "dgg from line3 must delete all lines, got {lines:?}"
+    );
+}
+
+#[test]
+fn dfx_deletes_to_x() {
+    // `dfx` — d → AfterOp, f → EnterOpFind(forward, not-till), x → engine handles find.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello x world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "after df, engine must be in OpFind chord-pending state"
+    );
+    assert!(
+        app.pending_state.is_none(),
+        "reducer pending must be cleared"
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(!app.active().editor.is_chord_pending());
+
+    // "hello x" (inclusive) should be deleted.
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, " world", "dfx must delete 'hello x', got {line:?}");
+}
+
+#[test]
+fn d_then_esc_cancels() {
+    // `d` + Esc: pending state cancelled, buffer unchanged.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(app.pending_state.is_some(), "d must set pending state");
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(app.pending_state.is_none(), "Esc must cancel pending");
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, "hello", "buffer must be unchanged after cancel");
+}
+
+#[test]
+fn y_dollar_yanks_to_eol() {
+    // `y$`: yank to end-of-line. Buffer unchanged, cursor stays.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Yank,
+                ..
+            })
+        ),
+        "y must set AfterOp(Yank)"
+    );
+    drive_key(&mut app, key(KeyCode::Char('$')));
+    assert!(app.pending_state.is_none(), "pending must clear after y$");
+
+    // Buffer unchanged (yank is non-destructive).
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(line, "hello world", "y$ must not modify buffer");
+}
+
+#[test]
+fn guw_still_works_via_engine_fsm() {
+    // `gUw` — g → AfterG (via reducer), U → after_g('U') → engine sets
+    // Pending::Op(Uppercase); w → engine handles motion. Verifies the
+    // chord-initiated path (gu/gU/g~) still goes through engine FSM, NOT
+    // through the AfterOp reducer.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "g must set AfterG pending, got {:?}",
+        app.pending_state
+    );
+    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    drive_key(&mut app, key(KeyCode::Char('U')));
+    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "gU must leave engine in Op(Uppercase) chord-pending"
+    );
+    // w → engine applies Uppercase over WordFwd motion.
+    drive_key(&mut app, key(KeyCode::Char('w')));
+    assert!(!app.active().editor.is_chord_pending());
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "HELLO world",
+        "gUw must uppercase first word, got {line:?}"
+    );
 }

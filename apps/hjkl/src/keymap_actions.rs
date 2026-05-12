@@ -99,6 +99,14 @@ pub enum AppAction {
     BeginPendingAfterZ {
         count: u32,
     },
+    /// Begin an op-pending state for `d` / `y` / `c` / `>` / `<` from Normal
+    /// mode. The app stores `Some(hjkl_vim::PendingState::AfterOp { op, count1,
+    /// inner_count: 0 })` and routes the next key through `hjkl_vim::step`.
+    /// `count1` is the prefix count buffered before the operator key.
+    BeginPendingAfterOp {
+        op: hjkl_vim::OperatorKind,
+        count1: u32,
+    },
 
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches

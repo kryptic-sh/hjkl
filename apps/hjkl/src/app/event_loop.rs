@@ -63,6 +63,19 @@ fn km_to_crossterm(ev: &KmKeyEvent) -> KeyEvent {
     KeyEvent::new(code, mods)
 }
 
+/// Map a [`hjkl_vim::OperatorKind`] (reducer-side) to a
+/// [`hjkl_engine::Operator`] (engine-side). The five Normal-mode
+/// operators are a strict subset of the engine's full operator set.
+fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
+    match k {
+        hjkl_vim::OperatorKind::Delete => hjkl_engine::Operator::Delete,
+        hjkl_vim::OperatorKind::Yank => hjkl_engine::Operator::Yank,
+        hjkl_vim::OperatorKind::Change => hjkl_engine::Operator::Change,
+        hjkl_vim::OperatorKind::Indent => hjkl_engine::Operator::Indent,
+        hjkl_vim::OperatorKind::Outdent => hjkl_engine::Operator::Outdent,
+    }
+}
+
 impl App {
     /// Main event loop. Draws every frame, routes key events through
     /// the vim FSM, handles resize, exits on Ctrl-C.
@@ -415,8 +428,10 @@ impl App {
                                             // Peek: does feeding this key leave Pending?
                                             // We approximate by checking the static set of
                                             // chord-starter chars that are first keys in our bindings.
-                                            matches!(c, 'g' | 'z' | ']' | '[' | 'G')
-                                                || c == self.config.editor.leader
+                                            matches!(
+                                                c,
+                                                'g' | 'z' | ']' | '[' | 'G' | 'd' | 'y' | 'c'
+                                            ) || c == self.config.editor.leader
                                         }
                                     }
                                     _ => false,
@@ -669,6 +684,120 @@ impl App {
                                                     self.active_mut().is_new_file = false;
                                                 }
                                             }
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
+                                            op,
+                                            motion_key,
+                                            total_count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.apply_op_motion(
+                                                op_kind_to_operator(op),
+                                                motion_key,
+                                                total_count,
+                                            );
+                                            self.sync_viewport_from_editor();
+                                            if self.active_mut().editor.take_dirty() {
+                                                let elapsed =
+                                                    self.active_mut().refresh_dirty_against_saved();
+                                                self.last_signature_us = elapsed;
+                                                if self.active().dirty {
+                                                    self.active_mut().is_new_file = false;
+                                                }
+                                            }
+                                            let buffer_id = self.active().buffer_id;
+                                            if self.active_mut().editor.take_content_reset() {
+                                                self.syntax.reset(buffer_id);
+                                            }
+                                            let edits =
+                                                self.active_mut().editor.take_content_edits();
+                                            if !edits.is_empty() {
+                                                self.syntax.apply_edits(buffer_id, &edits);
+                                            }
+                                            self.lsp_notify_change_active();
+                                            self.recompute_and_install();
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble {
+                                            op,
+                                            total_count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.apply_op_double(
+                                                op_kind_to_operator(op),
+                                                total_count,
+                                            );
+                                            self.sync_viewport_from_editor();
+                                            if self.active_mut().editor.take_dirty() {
+                                                let elapsed =
+                                                    self.active_mut().refresh_dirty_against_saved();
+                                                self.last_signature_us = elapsed;
+                                                if self.active().dirty {
+                                                    self.active_mut().is_new_file = false;
+                                                }
+                                            }
+                                            let buffer_id = self.active().buffer_id;
+                                            if self.active_mut().editor.take_content_reset() {
+                                                self.syntax.reset(buffer_id);
+                                            }
+                                            let edits =
+                                                self.active_mut().editor.take_content_edits();
+                                            if !edits.is_empty() {
+                                                self.syntax.apply_edits(buffer_id, &edits);
+                                            }
+                                            self.lsp_notify_change_active();
+                                            self.recompute_and_install();
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::EnterOpTextObj {
+                                            op,
+                                            count1,
+                                            inner,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.enter_op_text_obj(
+                                                op_kind_to_operator(op),
+                                                count1,
+                                                inner,
+                                            );
+                                            // Engine is now in Pending::OpTextObj.
+                                            // is_chord_pending() bypass on the NEXT key ensures
+                                            // the engine FSM handles the bracket/word char.
+                                            self.sync_viewport_from_editor();
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::EnterOpG {
+                                            op,
+                                            count1,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut()
+                                                .editor
+                                                .enter_op_g(op_kind_to_operator(op), count1);
+                                            // Engine is now in Pending::OpG.
+                                            // is_chord_pending() bypass ensures engine
+                                            // handles the g-second char.
+                                            self.sync_viewport_from_editor();
+                                            continue;
+                                        }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::EnterOpFind {
+                                            op,
+                                            count1,
+                                            forward,
+                                            till,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.enter_op_find(
+                                                op_kind_to_operator(op),
+                                                count1,
+                                                forward,
+                                                till,
+                                            );
+                                            // Engine is now in Pending::OpFind.
+                                            // is_chord_pending() bypass ensures engine
+                                            // handles the find-target char.
+                                            self.sync_viewport_from_editor();
                                             continue;
                                         }
                                         Outcome::Cancel => {

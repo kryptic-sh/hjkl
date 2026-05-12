@@ -699,6 +699,26 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // `d` / `y` / `c` / `>` / `<` — bare op-pending entry from Normal mode,
+    // migrated to hjkl-vim's PendingState::AfterOp reducer. Bound in Normal
+    // mode only. Visual-mode `d`/`y`/`c`/`>`/`<` execute inline through the
+    // engine FSM and are NOT intercepted here.
+    //
+    // The `>` and `<` chars need quoting in the chord string per hjkl-keymap
+    // notation (`<gt>` and `<lt>`).
+    for (key, op, desc) in [
+        ("d", hjkl_vim::OperatorKind::Delete, "delete operator"),
+        ("y", hjkl_vim::OperatorKind::Yank, "yank operator"),
+        ("c", hjkl_vim::OperatorKind::Change, "change operator"),
+        ("<gt>", hjkl_vim::OperatorKind::Indent, "indent operator"),
+        ("<lt>", hjkl_vim::OperatorKind::Outdent, "outdent operator"),
+    ] {
+        let action = AppAction::BeginPendingAfterOp { op, count1: 1 };
+        if let Err(e) = km.add(Mode::Normal, key, action, desc) {
+            eprintln!("hjkl: keymap.add({key}) failed: {e}");
+        }
+    }
+
     km
 }
 
@@ -1470,6 +1490,23 @@ impl App {
                 };
                 self.pending_count.clear();
                 self.pending_state = Some(hjkl_vim::PendingState::AfterZ { count: n });
+            }
+            AppAction::BeginPendingAfterOp {
+                op,
+                count1: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
+                    op,
+                    count1: n,
+                    inner_count: 0,
+                });
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {
