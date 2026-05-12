@@ -198,9 +198,8 @@ impl App {
                         // No toast for the queued state — it's transient.
                     }
                     InstallStatus::TofuRecorded { triple, .. } => {
-                        self.status_message = Some(format!(
-                            "anvil: {name} TOFU hash recorded for {triple}"
-                        ));
+                        self.status_message =
+                            Some(format!("anvil: {name} TOFU hash recorded for {triple}"));
                     }
                 }
             }
