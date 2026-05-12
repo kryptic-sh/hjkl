@@ -2878,6 +2878,65 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_after_z(self, ch, count);
     }
 
+    /// Apply an operator over a single-key motion. `op` is the engine `Operator`
+    /// and `motion_key` is the raw character (e.g. `'w'`, `'$'`, `'G'`). The
+    /// engine resolves the char to a [`vim::Motion`] via `parse_motion`, applies
+    /// the vim quirks (`cw` → `ce`, `cW` → `cE`, `FindRepeat` → stored find),
+    /// then calls `apply_op_with_motion`. `total_count` is already the product of
+    /// the prefix count and any inner count accumulated by the reducer.
+    ///
+    /// No-op when `motion_key` does not map to a known motion (engine silently
+    /// cancels the operator, matching vim's behaviour on unknown motions).
+    ///
+    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
+    /// `PendingState::AfterOp` reducer can dispatch `ApplyOpMotion` without
+    /// re-entering the engine FSM.
+    pub fn apply_op_motion(&mut self, op: vim::Operator, motion_key: char, total_count: usize) {
+        vim::apply_op_motion_key(self, op, motion_key, total_count);
+    }
+
+    /// Apply a doubled-letter line op (`dd` / `yy` / `cc` / `>>` / `<<`).
+    /// `total_count` is the product of prefix count and inner count.
+    ///
+    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
+    /// `PendingState::AfterOp` reducer can dispatch `ApplyOpDouble` without
+    /// re-entering the engine FSM.
+    pub fn apply_op_double(&mut self, op: vim::Operator, total_count: usize) {
+        vim::apply_op_double(self, op, total_count);
+    }
+
+    /// Set `Pending::OpTextObj { op, count1, inner }` — i.e. the engine is now
+    /// waiting for the text-object character (`w`, `(`, `"`, `p`, `t`, `s`).
+    /// The next key is routed through the engine FSM (via `is_chord_pending()`
+    /// bypass in the host) which handles `OpTextObj`.
+    ///
+    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
+    /// `PendingState::AfterOp` reducer can dispatch `EnterOpTextObj` without
+    /// re-entering the engine FSM.
+    pub fn enter_op_text_obj(&mut self, op: vim::Operator, count1: usize, inner: bool) {
+        vim::enter_op_text_obj(self, op, count1, inner);
+    }
+
+    /// Set `Pending::OpG { op, count1 }` — engine waiting for the `g`-second
+    /// char (`g` for `dgg`, etc.). The next key is routed through the engine FSM.
+    ///
+    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
+    /// `PendingState::AfterOp` reducer can dispatch `EnterOpG` without
+    /// re-entering the engine FSM.
+    pub fn enter_op_g(&mut self, op: vim::Operator, count1: usize) {
+        vim::enter_op_g(self, op, count1);
+    }
+
+    /// Set `Pending::OpFind { op, count1, forward, till }` — engine waiting for
+    /// the find-target character. The next key is routed through the engine FSM.
+    ///
+    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
+    /// `PendingState::AfterOp` reducer can dispatch `EnterOpFind` without
+    /// re-entering the engine FSM.
+    pub fn enter_op_find(&mut self, op: vim::Operator, count1: usize, forward: bool, till: bool) {
+        vim::enter_op_find(self, op, count1, forward, till);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);

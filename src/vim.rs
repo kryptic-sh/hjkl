@@ -2862,6 +2862,115 @@ fn regex_escape(s: &str) -> String {
 
 // ─── Operator application ──────────────────────────────────────────────────
 
+/// Public(crate) entry: apply operator over the motion identified by a raw
+/// char key. Called by `Editor::apply_op_motion` (the public controller API)
+/// so the hjkl-vim pending-state reducer can dispatch `ApplyOpMotion` without
+/// re-entering the FSM.
+///
+/// Applies the same vim quirks as `handle_after_op`:
+/// - `cw` / `cW` → `ce` / `cE`
+/// - `FindRepeat` → resolves against `last_find`
+/// - Updates `last_find` and `last_change` per existing conventions.
+///
+/// No-op when `motion_key` does not produce a known motion.
+pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    motion_key: char,
+    total_count: usize,
+) {
+    let input = Input {
+        key: Key::Char(motion_key),
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
+    let Some(motion) = parse_motion(&input) else {
+        return;
+    };
+    let motion = match motion {
+        Motion::FindRepeat { reverse } => match ed.vim.last_find {
+            Some((ch, forward, till)) => Motion::Find {
+                ch,
+                forward: if reverse { !forward } else { forward },
+                till,
+            },
+            None => return,
+        },
+        // Vim quirk: `cw` / `cW` → `ce` / `cE`.
+        Motion::WordFwd if op == Operator::Change => Motion::WordEnd,
+        Motion::BigWordFwd if op == Operator::Change => Motion::BigWordEnd,
+        m => m,
+    };
+    apply_op_with_motion(ed, op, &motion, total_count);
+    if let Motion::Find { ch, forward, till } = &motion {
+        ed.vim.last_find = Some((*ch, *forward, *till));
+    }
+    if !ed.vim.replaying && op_is_change(op) {
+        ed.vim.last_change = Some(LastChange::OpMotion {
+            op,
+            motion,
+            count: total_count,
+            inserted: None,
+        });
+    }
+}
+
+/// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`).
+/// Called by `Editor::apply_op_double` (the public controller API).
+pub(crate) fn apply_op_double<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    total_count: usize,
+) {
+    execute_line_op(ed, op, total_count);
+    if !ed.vim.replaying {
+        ed.vim.last_change = Some(LastChange::LineOp {
+            op,
+            count: total_count,
+            inserted: None,
+        });
+    }
+}
+
+/// Public(crate) entry: set `Pending::OpTextObj { op, count1, inner }`.
+/// Called by `Editor::enter_op_text_obj` (the public controller API).
+pub(crate) fn enter_op_text_obj<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    count1: usize,
+    inner: bool,
+) {
+    ed.vim.pending = Pending::OpTextObj { op, count1, inner };
+}
+
+/// Public(crate) entry: set `Pending::OpG { op, count1 }`.
+/// Called by `Editor::enter_op_g` (the public controller API).
+pub(crate) fn enter_op_g<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    count1: usize,
+) {
+    ed.vim.pending = Pending::OpG { op, count1 };
+}
+
+/// Public(crate) entry: set `Pending::OpFind { op, count1, forward, till }`.
+/// Called by `Editor::enter_op_find` (the public controller API).
+pub(crate) fn enter_op_find<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    count1: usize,
+    forward: bool,
+    till: bool,
+) {
+    ed.vim.pending = Pending::OpFind {
+        op,
+        count1,
+        forward,
+        till,
+    };
+}
+
 fn handle_after_op<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     input: Input,
@@ -10447,5 +10556,94 @@ mod tests {
         assert_eq!(folds[0].start_row, 1);
         assert_eq!(folds[0].end_row, 3);
         assert!(folds[0].closed);
+    }
+
+    // ── apply_op_motion_key / apply_op_double / enter_op_* unit tests ─────────
+
+    #[test]
+    fn apply_op_motion_dw_deletes_word() {
+        // "hello world" — dw should delete "hello ".
+        let mut e = editor_with("hello world");
+        e.apply_op_motion(crate::vim::Operator::Delete, 'w', 1);
+        assert_eq!(
+            e.buffer().lines().first().cloned().unwrap_or_default(),
+            "world"
+        );
+    }
+
+    #[test]
+    fn apply_op_motion_cw_quirk_leaves_trailing_space() {
+        // "hello world" — cw uses ce quirk: deletes "hello" not "hello ".
+        let mut e = editor_with("hello world");
+        e.apply_op_motion(crate::vim::Operator::Change, 'w', 1);
+        // After ce, cursor is at 0; mode enters Insert. Line should be " world"
+        // (trailing space from original gap preserved).
+        let line = e.buffer().lines().first().cloned().unwrap_or_default();
+        assert!(
+            line.starts_with(' ') || line == " world",
+            "cw quirk: got {line:?}"
+        );
+        assert_eq!(e.vim_mode(), VimMode::Insert);
+    }
+
+    #[test]
+    fn apply_op_double_dd_deletes_line() {
+        let mut e = editor_with("line1\nline2\nline3");
+        // dd on first line.
+        e.apply_op_double(crate::vim::Operator::Delete, 1);
+        let lines: Vec<_> = e.buffer().lines().to_vec();
+        assert_eq!(lines, vec!["line2", "line3"], "dd should delete line1");
+    }
+
+    #[test]
+    fn apply_op_double_yy_does_not_modify_buffer() {
+        let mut e = editor_with("hello");
+        e.apply_op_double(crate::vim::Operator::Yank, 1);
+        assert_eq!(
+            e.buffer().lines().first().cloned().unwrap_or_default(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn enter_op_text_obj_sets_pending() {
+        let mut e = editor_with("hello world");
+        e.enter_op_text_obj(crate::vim::Operator::Delete, 1, true);
+        assert!(e.is_chord_pending(), "OpTextObj should set chord pending");
+    }
+
+    #[test]
+    fn enter_op_g_sets_pending() {
+        let mut e = editor_with("hello world");
+        e.enter_op_g(crate::vim::Operator::Delete, 1);
+        assert!(e.is_chord_pending(), "OpG should set chord pending");
+    }
+
+    #[test]
+    fn enter_op_find_sets_pending() {
+        let mut e = editor_with("hello world");
+        e.enter_op_find(crate::vim::Operator::Delete, 1, true, false);
+        assert!(e.is_chord_pending(), "OpFind should set chord pending");
+    }
+
+    #[test]
+    fn apply_op_double_dd_count2_deletes_two_lines() {
+        let mut e = editor_with("line1\nline2\nline3");
+        e.apply_op_double(crate::vim::Operator::Delete, 2);
+        let lines: Vec<_> = e.buffer().lines().to_vec();
+        assert_eq!(lines, vec!["line3"], "2dd should delete two lines");
+    }
+
+    #[test]
+    fn apply_op_motion_unknown_key_is_noop() {
+        // A key that parse_motion returns None for — should be a no-op.
+        let mut e = editor_with("hello");
+        let before = e.cursor();
+        e.apply_op_motion(crate::vim::Operator::Delete, 'X', 1); // 'X' is not a motion
+        assert_eq!(e.cursor(), before);
+        assert_eq!(
+            e.buffer().lines().first().cloned().unwrap_or_default(),
+            "hello"
+        );
     }
 }
