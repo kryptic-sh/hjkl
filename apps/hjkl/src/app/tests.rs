@@ -4820,6 +4820,17 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
+                    ch,
+                    forward,
+                    till,
+                    count,
+                }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.find_char(ch, forward, till, count);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -4912,16 +4923,153 @@ fn r_space_replaces_char_with_space() {
 fn f_with_leader_char_finds_it() {
     // f<space> when leader=space: f-pending state should swallow the
     // space char into the find-target slot, not let the trie eat it.
+    // Since 2b-i, `f` is intercepted by the app trie → app pending_state;
+    // the engine is NOT in chord-pending after `f`.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "a b c");
     app.active_mut().editor.jump_cursor(0, 0);
 
     drive_key(&mut app, key(KeyCode::Char('f')));
-    assert!(app.active().editor.is_chord_pending());
+    // App-level pending state is set; engine is NOT chord-pending.
+    assert!(
+        app.pending_state.is_some(),
+        "f must set app pending_state to Find"
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be in chord-pending after app-intercepted f"
+    );
     drive_key(&mut app, key(KeyCode::Char(' ')));
 
     // Cursor should now be on the first space (column 1).
     assert_eq!(app.active().editor.cursor(), (0, 1));
+}
+
+// ── Phase 2b-i: bare f/F/t/T through hjkl-vim reducer ────────────────────
+
+#[test]
+fn fx_finds_x_forward() {
+    // `fx` in "abc x def" from col 0 → cursor on 'x' (col 4).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc x def");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(
+        app.pending_state.is_some(),
+        "f must set app pending_state to Find"
+    );
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state cleared after commit"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 4),
+        "fx must land on 'x' at col 4"
+    );
+}
+
+#[test]
+fn fx_finds_x_backward() {
+    // `Fx` in "abc x def" from end → cursor on 'x' (col 4).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc x def");
+    app.active_mut().editor.jump_cursor(0, 8); // on 'f'
+
+    drive_key(&mut app, key(KeyCode::Char('F')));
+    assert!(
+        app.pending_state.is_some(),
+        "F must set app pending_state to Find"
+    );
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state cleared after commit"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 4),
+        "Fx must land on 'x' at col 4"
+    );
+}
+
+#[test]
+fn tx_lands_before_x() {
+    // `tx` in "abc x def" from col 0 → stops one before 'x' (col 3, the space).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc x def");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('t')));
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 3),
+        "tx must stop one before 'x' at col 3"
+    );
+}
+
+#[test]
+fn tx_backward_lands_after_x() {
+    // `Tx` in "abc x def" from end → stops one after 'x' (col 5, the space).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc x def");
+    app.active_mut().editor.jump_cursor(0, 8); // on 'f'
+
+    drive_key(&mut app, key(KeyCode::Char('T')));
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 5),
+        "Tx must stop one after 'x' at col 5"
+    );
+}
+
+#[test]
+fn fx_with_count_3() {
+    // `3fx` in "xaxbxc" from col 0 → 3rd 'x' at col 4.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "xaxbxc");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    // Buffer count via pending_count (mimicking the event_loop digit path).
+    app.pending_count = "3".into();
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    // dispatch_keymap reads pending_count when BeginPendingFind fires.
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::Find { count: 3, .. })
+        ),
+        "pending_state must carry count=3, got {:?}",
+        app.pending_state
+    );
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 4),
+        "3fx must land on 3rd 'x' at col 4"
+    );
+}
+
+#[test]
+fn fx_then_esc_cancels() {
+    // `f<Esc>` clears pending without moving cursor.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc x def");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    assert!(app.pending_state.is_some());
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must clear find pending_state"
+    );
+    // Cursor unchanged.
+    assert_eq!(app.active().editor.cursor(), (0, 0));
 }
 
 #[test]

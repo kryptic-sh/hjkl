@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- Phase 2b-i: bare `f<x>` / `F<x>` / `t<x>` / `T<x>` find chords migrated from
+  the engine FSM to hjkl-vim's `PendingState::Find` reducer. The app intercepts
+  these keys in Normal and Visual modes via the keymap trie; the engine's
+  `Pending::Find` arm stays intact (defensive, unreachable from the umbrella for
+  bare finds) for the operator-pending `OpFind` path which migrates in chunk 2c.
+- Bumped `hjkl-vim` to 0.3 (`PendingState::Find` + `EngineCmd::FindChar`).
+- Bumped `hjkl-engine` to 0.5.9 (`Editor::find_char` controller entry).
+
 ## [0.14.5] - 2026-05-13
 
 ### Fixed

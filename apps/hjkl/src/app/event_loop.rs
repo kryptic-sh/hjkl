@@ -558,6 +558,19 @@ impl App {
                                             }
                                             continue;
                                         }
+                                        Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
+                                            ch,
+                                            forward,
+                                            till,
+                                            count,
+                                        }) => {
+                                            self.pending_state = None;
+                                            self.active_mut()
+                                                .editor
+                                                .find_char(ch, forward, till, count);
+                                            self.sync_viewport_from_editor();
+                                            continue;
+                                        }
                                         Outcome::Cancel => {
                                             self.pending_state = None;
                                             continue;

@@ -79,6 +79,14 @@ pub enum AppAction {
     BeginPendingReplace {
         count: u32,
     },
+    /// Begin a Find pending state for `f<x>` / `F<x>` / `t<x>` / `T<x>`.
+    /// `forward` = true for f/t, false for F/T.
+    /// `till` = true for t/T (stop one char before target), false for f/F.
+    BeginPendingFind {
+        forward: bool,
+        till: bool,
+        count: u32,
+    },
 
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches

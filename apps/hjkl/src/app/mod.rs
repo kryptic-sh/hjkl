@@ -658,6 +658,27 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // `f<x>` / `F<x>` / `t<x>` / `T<x>` — bare find chords, migrated to
+    // hjkl-vim's PendingState::Find reducer. Bound in Normal and Visual only.
+    // Operator-pending find (`df<x>`, etc.) still goes through the engine FSM.
+    for (key, forward, till, desc) in [
+        ("f", true, false, "find char forward"),
+        ("F", false, false, "find char backward"),
+        ("t", true, true, "till char forward"),
+        ("T", false, true, "till char backward"),
+    ] {
+        let action = AppAction::BeginPendingFind {
+            forward,
+            till,
+            count: 1,
+        };
+        for mode in [Mode::Normal, Mode::Visual] {
+            if let Err(e) = km.add(mode, key, action.clone(), desc) {
+                eprintln!("hjkl: keymap.add({key}) failed: {e}");
+            }
+        }
+    }
+
     km
 }
 
@@ -1387,6 +1408,24 @@ impl App {
                 };
                 self.pending_count.clear();
                 self.pending_state = Some(hjkl_vim::PendingState::Replace { count: n });
+            }
+            AppAction::BeginPendingFind {
+                forward,
+                till,
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action count.
+                let n = if self.pending_count.is_empty() {
+                    action_count as usize
+                } else {
+                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
+                };
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::Find {
+                    count: n,
+                    forward,
+                    till,
+                });
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {
