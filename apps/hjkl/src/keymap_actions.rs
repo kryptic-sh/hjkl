@@ -107,6 +107,11 @@ pub enum AppAction {
         op: hjkl_vim::OperatorKind,
         count1: u32,
     },
+    /// Begin a `"<reg>` register-prefix chord in Normal mode. The app stores
+    /// `Some(hjkl_vim::PendingState::SelectRegister)` and routes the next key
+    /// through `hjkl_vim::step`. The register char (no fields here — captured
+    /// by the second key) is passed to `Editor::set_pending_register`.
+    BeginPendingSelectRegister,
 
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches

@@ -4995,6 +4995,11 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.set_pending_register(reg);
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -7262,5 +7267,190 @@ fn visual_g_u_uppercases_selection() {
     assert!(
         line.starts_with("HELLO"),
         "visual gU must uppercase selection 'hello', got {line:?}"
+    );
+}
+
+// ── Phase 2c-vi: SelectRegister reducer integration tests ─────────────────
+
+/// `"add` — delete line into register a; verify register a contains the line.
+#[test]
+fn quote_a_then_dd_deletes_into_register_a() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\nline two");
+    // Move cursor to first line (already there after seed).
+    assert_eq!(app.active().editor.cursor().0, 0);
+
+    // `"a` sets pending register to 'a' via reducer, then `dd` deletes the line.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('d')));
+
+    // Register 'a' must contain the deleted line text.
+    let slot = app.active().editor.registers().read('a');
+    assert!(slot.is_some(), "register 'a' should be set after \"add");
+    let text = &slot.unwrap().text;
+    assert!(
+        text.contains("hello world"),
+        "register 'a' should contain 'hello world', got {text:?}"
+    );
+    // Buffer should only have the second line.
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines, vec!["line two"], "\"add must delete first line");
+}
+
+/// `"ayy` → move → `"ap` round-trips through register a.
+#[test]
+fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "first line\nsecond line");
+
+    // `"ayy` — yank first line into register a.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    drive_key(&mut app, key(KeyCode::Char('y')));
+
+    // Verify register a has the yanked text.
+    let slot = app.active().editor.registers().read('a');
+    assert!(slot.is_some(), "register 'a' must be set after \"ayy");
+    let text = slot.unwrap().text.clone();
+    assert!(
+        text.contains("first line"),
+        "register 'a' should contain 'first line', got {text:?}"
+    );
+
+    // Move down one line.
+    drive_key(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(
+        app.active().editor.cursor().0,
+        1,
+        "cursor must be on line 1"
+    );
+
+    // `"ap` — paste from register a.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    drive_key(&mut app, key(KeyCode::Char('p')));
+
+    // Buffer should now have "first line" duplicated after line two.
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert!(lines.len() >= 3, "paste must add a line, got {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("first line")),
+        "pasted content must contain 'first line', got {lines:?}"
+    );
+}
+
+/// `"_dd` — delete into black-hole; unnamed register must not change.
+#[test]
+fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "keep me\ndelete me\nkeep too");
+
+    // Yank first line into unnamed to establish a baseline.
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    let baseline = app
+        .active()
+        .editor
+        .registers()
+        .read('"')
+        .map(|s| s.text.clone())
+        .unwrap_or_default();
+
+    // Move to second line.
+    drive_key(&mut app, key(KeyCode::Char('j')));
+
+    // `"_dd` — delete into black-hole register.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    drive_key(&mut app, key(KeyCode::Char('_')));
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('d')));
+
+    // Unnamed register must still match the baseline yank.
+    let after = app
+        .active()
+        .editor
+        .registers()
+        .read('"')
+        .map(|s| s.text.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        baseline, after,
+        "\"_dd must not overwrite the unnamed register"
+    );
+    // Line was deleted from the buffer.
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        !lines.iter().any(|l| l.contains("delete me")),
+        "\"_dd must still delete the line from the buffer, got {lines:?}"
+    );
+}
+
+/// Esc after `"` must clear the pending reducer state without setting any register.
+#[test]
+fn quote_then_esc_cancels() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+
+    // `"` enters SelectRegister pending state.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    assert!(
+        app.pending_state.is_some(),
+        "\" must set app pending_state to SelectRegister"
+    );
+
+    // Esc cancels.
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must clear pending_state after \""
+    );
+}
+
+/// `"!` — invalid register char; pending_register must not be set and the
+/// next operation uses the unnamed register.
+#[test]
+fn quote_invalid_char_no_register_set() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\nsecond");
+
+    // Yank baseline into unnamed.
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    drive_key(&mut app, key(KeyCode::Char('y')));
+    let baseline_unnamed = app
+        .active()
+        .editor
+        .registers()
+        .read('"')
+        .map(|s| s.text.clone())
+        .unwrap_or_default();
+
+    // `"!dd` — '!' is not a valid register selector; engine ignores it.
+    // After cancel the reducer clears without setting pending_register.
+    drive_key(&mut app, key(KeyCode::Char('"')));
+    drive_key(&mut app, key(KeyCode::Char('!')));
+    // Reducer cancels on invalid key — pending_state cleared.
+    assert!(
+        app.pending_state.is_none(),
+        "invalid register char must cancel pending_state"
+    );
+
+    // No register named '!' exists.
+    let slot = app.active().editor.registers().read('!');
+    assert!(slot.is_none(), "register '!' must not exist");
+
+    // Unnamed register unchanged.
+    let after = app
+        .active()
+        .editor
+        .registers()
+        .read('"')
+        .map(|s| s.text.clone())
+        .unwrap_or_default();
+    assert_eq!(
+        baseline_unnamed, after,
+        "unnamed register must be unchanged after \"!"
     );
 }

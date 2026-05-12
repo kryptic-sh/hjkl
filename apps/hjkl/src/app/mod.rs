@@ -719,6 +719,19 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // `"<reg>` — register-prefix chord in Normal mode only. Visual-mode `"`
+    // is not intercepted here; the engine FSM handles any Visual-mode `"`
+    // input directly (there is no visual-register-select path in the engine).
+    // Bound Normal-only, matching how vim treats `"` in Normal vs Visual mode.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "\"",
+        AppAction::BeginPendingSelectRegister,
+        "register-prefix chord",
+    ) {
+        eprintln!("hjkl: keymap.add(\\\") failed: {e}");
+    }
+
     km
 }
 
@@ -1507,6 +1520,13 @@ impl App {
                     count1: n,
                     inner_count: 0,
                 });
+            }
+            AppAction::BeginPendingSelectRegister => {
+                // `"<reg>` register-prefix chord. No count is consumed — the
+                // register char is captured by the second key. Discard any
+                // buffered count (it's not meaningful for register selection).
+                self.pending_count.clear();
+                self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {

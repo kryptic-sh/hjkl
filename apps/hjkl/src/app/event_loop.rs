@@ -877,6 +877,13 @@ impl App {
                                             self.recompute_and_install();
                                             continue;
                                         }
+                                        Outcome::Commit(
+                                            hjkl_vim::EngineCmd::SetPendingRegister { reg },
+                                        ) => {
+                                            self.pending_state = None;
+                                            self.active_mut().editor.set_pending_register(reg);
+                                            continue;
+                                        }
                                         Outcome::Cancel => {
                                             self.pending_state = None;
                                             continue;
