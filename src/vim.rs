@@ -426,6 +426,12 @@ pub struct VimState {
     /// selector. The next typed char names the register; its contents
     /// are inserted inline at the cursor and the flag clears.
     pub(super) insert_pending_register: bool,
+    /// Stashed start position for the `[` mark on a Change operation.
+    /// Set to `top` before the cut in `run_operator_over_range` (Change
+    /// arm); consumed by `finish_insert_session` on Esc-from-insert
+    /// when the reason is `AfterChange`. Mirrors vim's `:h '[` / `:h ']`
+    /// rule that `[` = start of change, `]` = last typed char on exit.
+    pub(super) change_mark_start: Option<(usize, usize)>,
     /// Bounded history of committed `/` / `?` search patterns. Newest
     /// entries are at the back; capped at [`SEARCH_HISTORY_MAX`] to
     /// avoid unbounded growth on long sessions.
@@ -1612,6 +1618,16 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             {
                 *ins = Some(inserted);
             }
+            // Vim `:h '[` / `:h ']`: on change, `[` = start of the
+            // changed range (stashed before the cut), `]` = the cursor
+            // at Esc time (last inserted char, before the step-back).
+            // When nothing was typed cursor still sits at the change
+            // start, satisfying vim's "both at start" parity for `c<m><Esc>`.
+            if let Some(start) = ed.vim.change_mark_start.take() {
+                let end = ed.cursor();
+                ed.set_mark('[', start);
+                ed.set_mark(']', end);
+            }
         }
         InsertReason::DeleteToEol => {
             ed.vim.last_change = Some(LastChange::DeleteToEol {
@@ -1995,6 +2011,18 @@ fn step_normal<H: crate::types::Host>(
     // Mark set / jump entries. `m` arms the set-mark pending state;
     // `'` and `` ` `` arm the goto states (linewise vs charwise). The
     // mark letter is consumed on the next keystroke.
+    // In visual modes, `` ` `` also arms GotoMarkChar so the cursor can
+    // extend the selection to a mark position (e.g. `` `[v`] `` idiom).
+    if !input.ctrl
+        && matches!(
+            ed.vim.mode,
+            Mode::Normal | Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        )
+        && input.key == Key::Char('`')
+    {
+        ed.vim.pending = Pending::GotoMarkChar;
+        return true;
+    }
     if !input.ctrl && ed.vim.mode == Mode::Normal {
         match input.key {
             Key::Char('m') => {
@@ -2006,6 +2034,7 @@ fn step_normal<H: crate::types::Host>(
                 return true;
             }
             Key::Char('`') => {
+                // Already handled above for all visual modes + normal.
                 ed.vim.pending = Pending::GotoMarkChar;
                 return true;
             }
@@ -2160,6 +2189,9 @@ fn handle_goto_mark<H: crate::types::Host>(
         'a'..='z' | 'A'..='Z' => ed.mark(c),
         '\'' | '`' => ed.vim.jump_back.last().copied(),
         '.' => ed.vim.last_edit_pos,
+        // Special auto-marks: `[` / `]` — last yank / change / paste bounds
+        // (vim `:h '[` / `:h ']`). Stored by the operator and paste paths.
+        '[' | ']' => ed.mark(c),
         _ => None,
     };
     let Some((row, col)) = target else {
@@ -3660,6 +3692,19 @@ fn run_operator_over_range<H: crate::types::Host>(
                 ed.record_yank_to_host(text.clone());
                 ed.record_yank(text, matches!(kind, MotionKind::Linewise));
             }
+            // Vim `:h '[` / `:h ']`: after a yank `[` = first yanked char,
+            // `]` = last yanked char. Mode-aware: linewise snaps to line
+            // edges; charwise uses the actual inclusive endpoint.
+            let rbr = match kind {
+                MotionKind::Linewise => {
+                    let last_col = buf_line_chars(&ed.buffer, bot.0).saturating_sub(1);
+                    (bot.0, last_col)
+                }
+                MotionKind::Inclusive => (bot.0, bot.1),
+                MotionKind::Exclusive => (bot.0, bot.1.saturating_sub(1)),
+            };
+            ed.set_mark('[', top);
+            ed.set_mark(']', rbr);
             buf_set_cursor_rc(&mut ed.buffer, top.0, top.1);
             ed.push_buffer_cursor_to_textarea();
         }
@@ -3674,8 +3719,19 @@ fn run_operator_over_range<H: crate::types::Host>(
                 clamp_cursor_to_normal_mode(ed);
             }
             ed.vim.mode = Mode::Normal;
+            // Vim `:h '[` / `:h ']`: after a delete both marks park at
+            // the cursor position where the deletion collapsed (the join
+            // point). Set after the cut and clamp so the position is final.
+            let pos = ed.cursor();
+            ed.set_mark('[', pos);
+            ed.set_mark(']', pos);
         }
         Operator::Change => {
+            // Vim `:h '[`: `[` is set to the start of the changed range
+            // before the cut. `]` is deferred to insert-exit (AfterChange
+            // path in finish_insert_session) where the cursor sits on the
+            // last inserted char.
+            ed.vim.change_mark_start = Some(top);
             ed.push_undo();
             cut_vim_range(ed, top, bot, kind);
             begin_insert_noundo(ed, 1, InsertReason::AfterChange);
@@ -3923,6 +3979,11 @@ fn execute_line_op<H: crate::types::Host>(
                 ed.record_yank_to_host(text.clone());
                 ed.record_yank(text, true);
             }
+            // Vim `:h '[` / `:h ']`: yy/Nyy — linewise yank; `[` =
+            // (top_row, 0), `]` = (bot_row, last_col).
+            let last_col = buf_line_chars(&ed.buffer, end_row).saturating_sub(1);
+            ed.set_mark('[', (row, 0));
+            ed.set_mark(']', (end_row, last_col));
             buf_set_cursor_rc(&mut ed.buffer, row, col);
             ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
@@ -3960,12 +4021,19 @@ fn execute_line_op<H: crate::types::Host>(
             move_first_non_whitespace(ed);
             ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
+            // Vim `:h '[` / `:h ']`: dd/Ndd — both marks park at the
+            // post-delete cursor position (the join point).
+            let pos = ed.cursor();
+            ed.set_mark('[', pos);
+            ed.set_mark(']', pos);
         }
         Operator::Change => {
             // `cc` / `3cc`: wipe contents of the covered lines but leave
             // a single blank line so insert-mode opens on it. Done as two
             // edits: drop rows past the first, then clear row `row`.
             use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
+            // Vim `:h '[`: stash change start for `]` deferral on insert-exit.
+            ed.vim.change_mark_start = Some((row, 0));
             ed.push_undo();
             ed.sync_buffer_content_from_textarea();
             // Read the cut payload first so yank reflects every line.
@@ -5490,6 +5558,10 @@ fn do_paste<H: crate::types::Host>(
             (s.text.clone(), s.linewise)
         }
     };
+    // Vim `:h '[` / `:h ']`: after paste `[` = first inserted char of
+    // the final paste, `]` = last inserted char of the final paste.
+    // We track (lo, hi) across iterations; the last value wins.
+    let mut paste_mark: Option<((usize, usize), (usize, usize))> = None;
     for _ in 0..count {
         ed.sync_buffer_content_from_textarea();
         let yank = yank.clone();
@@ -5519,6 +5591,11 @@ fn do_paste<H: crate::types::Host>(
             buf_set_cursor_rc(&mut ed.buffer, target_row, 0);
             crate::motions::move_first_non_blank(&mut ed.buffer);
             ed.push_buffer_cursor_to_textarea();
+            // Linewise: `[` = (target_row, 0), `]` = (bot_row, last_col).
+            let payload_lines = text.lines().count().max(1);
+            let bot_row = target_row + payload_lines - 1;
+            let bot_last_col = buf_line_chars(&ed.buffer, bot_row).saturating_sub(1);
+            paste_mark = Some(((target_row, 0), (bot_row, bot_last_col)));
         } else {
             // Charwise paste. `P` inserts at cursor (shifting cell
             // right); `p` inserts after cursor (advance one cell
@@ -5538,7 +5615,15 @@ fn do_paste<H: crate::types::Host>(
             // text (do_insert_str leaves it one past the end).
             crate::motions::move_left(&mut ed.buffer, 1);
             ed.push_buffer_cursor_to_textarea();
+            // Charwise: `[` = insert start, `]` = cursor (last pasted char).
+            let lo = (at.row, at.col);
+            let hi = ed.cursor();
+            paste_mark = Some((lo, hi));
         }
+    }
+    if let Some((lo, hi)) = paste_mark {
+        ed.set_mark('[', lo);
+        ed.set_mark(']', hi);
     }
     // Any paste re-anchors the sticky column to the new cursor position.
     ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
@@ -9925,6 +10010,148 @@ mod tests {
         assert!(
             !e.is_chord_pending(),
             "engine pending should clear after replace"
+        );
+    }
+
+    // ─── Special marks `[` / `]` (vim `:h '[` / `:h ']`) ────────────────────
+
+    #[test]
+    fn yiw_sets_lbr_rbr_marks_around_word() {
+        // `yiw` on "hello" — charwise exclusive range. `[` = col 0,
+        // `]` = col 4 (last char of "hello").
+        let mut e = editor_with("hello world");
+        run_keys(&mut e, "yiw");
+        let lo = e.mark('[').expect("'[' must be set after yiw");
+        let hi = e.mark(']').expect("']' must be set after yiw");
+        assert_eq!(lo, (0, 0), "'[ should be first char of yanked word");
+        assert_eq!(hi, (0, 4), "'] should be last char of yanked word");
+    }
+
+    #[test]
+    fn yj_linewise_sets_marks_at_line_edges() {
+        // `yj` yanks 2 lines linewise. `[` = (0, 0), `]` = (1, last_col).
+        // "bbbbb" is 5 chars — last_col = 4.
+        let mut e = editor_with("aaaaa\nbbbbb\nccc");
+        run_keys(&mut e, "yj");
+        let lo = e.mark('[').expect("'[' must be set after yj");
+        let hi = e.mark(']').expect("']' must be set after yj");
+        assert_eq!(lo, (0, 0), "'[ snaps to (top_row, 0) for linewise yank");
+        assert_eq!(
+            hi,
+            (1, 4),
+            "'] snaps to (bot_row, last_col) for linewise yank"
+        );
+    }
+
+    #[test]
+    fn dd_sets_lbr_rbr_marks_to_cursor() {
+        // `dd` on the first of two lines — post-delete cursor is row 0.
+        // Both marks must park there (vim `:h '[` delete rule).
+        let mut e = editor_with("aaa\nbbb");
+        run_keys(&mut e, "dd");
+        let lo = e.mark('[').expect("'[' must be set after dd");
+        let hi = e.mark(']').expect("']' must be set after dd");
+        assert_eq!(lo, hi, "after delete both marks are at the same position");
+        assert_eq!(lo.0, 0, "post-delete cursor row should be 0");
+    }
+
+    #[test]
+    fn dw_sets_lbr_rbr_marks_to_cursor() {
+        // `dw` on "hello world" — deletes "hello ". Post-delete cursor
+        // stays at col 0. Both marks land there.
+        let mut e = editor_with("hello world");
+        run_keys(&mut e, "dw");
+        let lo = e.mark('[').expect("'[' must be set after dw");
+        let hi = e.mark(']').expect("']' must be set after dw");
+        assert_eq!(lo, hi, "after delete both marks are at the same position");
+        assert_eq!(lo, (0, 0), "post-dw cursor is at col 0");
+    }
+
+    #[test]
+    fn cw_then_esc_sets_lbr_at_start_rbr_at_inserted_text_end() {
+        // `cw` on "hello world" → deletes "hello", enters insert, types
+        // "foo", then Esc. `[` = start of change = (0,0). `]` = last
+        // typed char = (0,2) ("foo" spans cols 0-2; cursor is at col 2
+        // during finish_insert_session, before the Esc step-back).
+        let mut e = editor_with("hello world");
+        run_keys(&mut e, "cwfoo<Esc>");
+        let lo = e.mark('[').expect("'[' must be set after cw");
+        let hi = e.mark(']').expect("']' must be set after cw");
+        assert_eq!(lo, (0, 0), "'[ should be start of change");
+        // "foo" is 3 chars; cursor was at col 3 (past end) at finish_insert_session
+        // before step-back. `]` = col 3 (the position during finish).
+        assert_eq!(hi.0, 0, "'] should be on row 0");
+        assert!(hi.1 >= 2, "'] should be at or past last char of 'foo'");
+    }
+
+    #[test]
+    fn cw_with_no_insertion_sets_marks_at_change_start() {
+        // `cw<Esc>` with no chars typed. Both marks land at the change
+        // start (cursor parks at col 0 after cut).
+        let mut e = editor_with("hello world");
+        run_keys(&mut e, "cw<Esc>");
+        let lo = e.mark('[').expect("'[' must be set after cw<Esc>");
+        let hi = e.mark(']').expect("']' must be set after cw<Esc>");
+        assert_eq!(lo.0, 0, "'[ should be on row 0");
+        assert_eq!(hi.0, 0, "'] should be on row 0");
+        // Both marks at the same position when nothing was typed.
+        assert_eq!(lo, hi, "marks coincide when insert is empty");
+    }
+
+    #[test]
+    fn p_charwise_sets_marks_around_pasted_text() {
+        // `yiw` yanks "abc", then `p` pastes after the cursor.
+        // `[` = first pasted char position, `]` = last pasted char.
+        let mut e = editor_with("abc xyz");
+        run_keys(&mut e, "yiw"); // yank "abc" (exclusive, last yanked = col 2)
+        run_keys(&mut e, "p"); // paste after cursor (at col 1, the 'b')
+        let lo = e.mark('[').expect("'[' set after charwise paste");
+        let hi = e.mark(']').expect("']' set after charwise paste");
+        assert!(lo <= hi, "'[ must not exceed ']'");
+        // The pasted text is "abc" (3 chars). Marks bracket exactly 3 cols.
+        assert_eq!(
+            hi.1.wrapping_sub(lo.1),
+            2,
+            "'] - '[ should span 2 cols for a 3-char paste"
+        );
+    }
+
+    #[test]
+    fn p_linewise_sets_marks_at_line_edges() {
+        // Yank 2 lines linewise (`yj`), paste below (`p`).
+        // `[` = (target_row, 0), `]` = (target_row+1, last_col_of_second_line).
+        let mut e = editor_with("aaa\nbbb\nccc");
+        run_keys(&mut e, "yj"); // yank rows 0-1 linewise
+        run_keys(&mut e, "j"); // cursor to row 1
+        run_keys(&mut e, "p"); // paste below row 1
+        let lo = e.mark('[').expect("'[' set after linewise paste");
+        let hi = e.mark(']').expect("']' set after linewise paste");
+        assert_eq!(lo.1, 0, "'[ col must be 0 for linewise paste");
+        assert!(hi.0 > lo.0, "'] row must be below '[ row for 2-line paste");
+        assert_eq!(hi.0 - lo.0, 1, "exactly 1 row gap for a 2-line payload");
+    }
+
+    #[test]
+    fn backtick_lbr_v_backtick_rbr_reselects_yanked_text() {
+        // Vim idiom: after `yiw`, `` `[v`] `` re-selects exactly the
+        // yanked word in charwise visual. The marks must bracket the
+        // yanked text end-to-end for this idiom to work.
+        let mut e = editor_with("hello world");
+        run_keys(&mut e, "yiw"); // yank "hello"
+        // Jump to `[`, enter visual, jump to `]`.
+        // run_keys uses backtick as a plain char in goto-mark-char path.
+        run_keys(&mut e, "`[v`]");
+        // Cursor should now be on col 4 (last char of "hello").
+        assert_eq!(
+            e.cursor(),
+            (0, 4),
+            "visual `[v`] should land on last yanked char"
+        );
+        // The mode should be Visual (selection active).
+        assert_eq!(
+            e.vim_mode(),
+            crate::VimMode::Visual,
+            "should be in Visual mode"
         );
     }
 }

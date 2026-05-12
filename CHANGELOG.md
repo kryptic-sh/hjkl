@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-05-13
+
+### Added
+
+- Special marks `[` and `]` tracking last yank / change / paste bounds (vim
+  `:h '[` / `:h ']`):
+  - **Yank** (`y<motion>`, `yy`): `[` = first yanked char, `]` = last yanked
+    char. Mode-aware: linewise snaps `[` to `(top_row, 0)` and `]` to
+    `(bot_row, last_col)`; inclusive motions use `bot` directly; exclusive
+    motions use `bot.col.saturating_sub(1)`.
+  - **Delete** (`d<motion>`, `dd`): both `[` and `]` park at the post-delete
+    cursor position (the join point where the deletion collapsed), matching
+    vim's "both at cursor" rule.
+  - **Change** (`c<motion>`, `cc`): `[` = start of changed range (set before the
+    cut); `]` = cursor position when insert mode exits via Esc. If no text is
+    typed, both marks coincide at the change start.
+  - **Paste** (`p` / `P`): `[` = first inserted char, `]` = last inserted char.
+    Linewise paste snaps to line edges; charwise uses the actual insertion
+    bounds. When `count > 1`, marks reflect the final paste's bounds.
+- `` `[ `` / `` `] `` backtick jumps now resolve `[` and `]` in
+  `handle_goto_mark`.
+- Backtick mark jumps (`` ` ``) are now accepted in Visual, VisualLine, and
+  VisualBlock modes so the `` `[v`] `` re-select idiom works end-to-end.
+
 ## [0.5.5] - 2026-05-12
 
 ### Added
@@ -218,7 +242,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-engine/releases/tag/v0.5.3
