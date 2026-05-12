@@ -262,3 +262,58 @@ fn ctrl_w_chord_resolves() {
 
     assert!(matches!(r, KeyResolve::Match(b) if b.action == "focus_left"));
 }
+
+// ── timeout_resolve semantics ──────────────────────────────────────────────────
+
+#[test]
+fn timeout_resolve_keeps_buffer_when_pure_prefix() {
+    // Buffer = "<leader>" (prefix-only — only "<leader>g" is bound).
+    // timeout_resolve must NOT drain: user is mid-chord.
+    let mut km: Keymap<&str> = Keymap::new(' ');
+    km.add(Mode::Normal, "<leader>g", "git", "git submenu")
+        .unwrap();
+
+    let now = Instant::now();
+    let leader = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+    km.feed(Mode::Normal, leader, now);
+    assert_eq!(km.pending(Mode::Normal).len(), 1);
+
+    let r = km.timeout_resolve(Mode::Normal);
+    assert!(
+        matches!(r, KeyResolve::Unbound(ref v) if v.is_empty()),
+        "pure-prefix timeout_resolve must return Unbound(empty), got {r:?}"
+    );
+    assert_eq!(
+        km.pending(Mode::Normal).len(),
+        1,
+        "buffer must be preserved for pure-prefix state"
+    );
+}
+
+#[test]
+fn timeout_resolve_fires_ambiguous_shorter_binding() {
+    // Buffer = "g" where both "g" (terminal) and "gd" (deeper) are bound.
+    // timeout_resolve must fire the shorter "g" binding.
+    let mut km: Keymap<&str> = Keymap::new(' ');
+    km.add(Mode::Normal, "g", "g_action", "g").unwrap();
+    km.add(Mode::Normal, "gd", "gd_action", "gd").unwrap();
+
+    let now = Instant::now();
+    km.feed(Mode::Normal, char_ev('g'), now);
+    assert_eq!(km.pending(Mode::Normal).len(), 1);
+
+    let r = km.timeout_resolve(Mode::Normal);
+    assert!(
+        matches!(r, KeyResolve::Match(ref b) if b.action == "g_action"),
+        "ambiguous timeout_resolve must fire the terminal binding, got {r:?}"
+    );
+    assert!(km.pending(Mode::Normal).is_empty(), "buffer must be drained");
+}
+
+#[test]
+fn timeout_resolve_empty_buffer_returns_unbound_empty() {
+    let mut km: Keymap<&str> = Keymap::new(' ');
+    km.add(Mode::Normal, "<leader>g", "git", "git").unwrap();
+    let r = km.timeout_resolve(Mode::Normal);
+    assert!(matches!(r, KeyResolve::Unbound(ref v) if v.is_empty()));
+}
