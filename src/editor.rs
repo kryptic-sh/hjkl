@@ -2938,6 +2938,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Promoted to the public surface in 0.5.12 so the hjkl-vim
     /// `PendingState::AfterOp` reducer can dispatch `EnterOpFind` without
     /// re-entering the engine FSM.
+    ///
+    /// Still used by the chord-init op path (gu/gU/g~/gq + f/F/t/T via engine
+    /// FSM). The reducer path uses `apply_op_find` instead.
     pub fn enter_op_find(
         &mut self,
         op: crate::vim::Operator,
@@ -2946,6 +2949,29 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         till: bool,
     ) {
         vim::enter_op_find(self, op, count1, forward, till);
+    }
+
+    /// Apply an operator over a find motion (`df<x>` / `dF<x>` / `dt<x>` /
+    /// `dT<x>`). Builds `Motion::Find { ch, forward, till }`, applies it via
+    /// `apply_op_with_motion`, records `last_find` for `;` / `,` repeat, and
+    /// updates `last_change` when `op` is Change (for dot-repeat).
+    ///
+    /// `total_count` is the product of prefix count and any inner count
+    /// accumulated by the reducer — already folded at transition time.
+    ///
+    /// Promoted to the public surface in 0.5.14 so the hjkl-vim
+    /// `PendingState::OpFind` reducer can dispatch `ApplyOpFind` without
+    /// re-entering the engine FSM. `handle_op_find_target` (used by the
+    /// chord-init op path) delegates here to avoid logic duplication.
+    pub fn apply_op_find(
+        &mut self,
+        op: crate::vim::Operator,
+        ch: char,
+        forward: bool,
+        till: bool,
+        total_count: usize,
+    ) {
+        vim::apply_op_find_motion(self, op, ch, forward, till, total_count);
     }
 
     #[cfg(feature = "crossterm")]

@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-05-13
+
+### Added
+
+- `Editor::apply_op_find(op, ch, forward, till, total_count)` — public
+  controller entry point: applies operator over a find motion (`df<x>` / `dF<x>`
+  / `dt<x>` / `dT<x>`). Builds `Motion::Find { ch, forward, till }`, applies via
+  `apply_op_with_motion`, records `last_find` for `;` / `,` repeat, and updates
+  `last_change` when `op` is Change (dot-repeat). `total_count` is the
+  already-folded product of prefix and inner counts.
+- `pub(crate) fn apply_op_find_motion` in `vim.rs` — shared implementation
+  called by both `Editor::apply_op_find` (reducer path) and
+  `handle_op_find_target` (engine FSM chord-init path), eliminating logic
+  duplication.
+
 ## [0.5.13] - 2026-05-13
 
 ### Added
@@ -369,7 +384,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...HEAD
+[0.5.14]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.13...v0.5.14
 [0.5.13]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.12...v0.5.13
 [0.5.12]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.11...v0.5.12
 [0.5.11]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.10...v0.5.11
