@@ -3197,18 +3197,36 @@ fn handle_after_z<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     input: Input,
 ) -> bool {
+    let count = take_count(&mut ed.vim);
+    // Extract the char and delegate to the shared apply_after_z body.
+    // Non-char keys (ctrl sequences etc.) are silently ignored.
+    if let Key::Char(ch) = input.key {
+        apply_after_z(ed, ch, count);
+    }
+    true
+}
+
+/// Public(crate) entry point for bare `z<x>`. Applies the z-chord effect
+/// given the char `ch` and pre-captured `count`. Called by `Editor::after_z`
+/// (the public controller API) so the hjkl-vim pending-state reducer can
+/// dispatch `AfterZChord` without re-entering the engine FSM.
+pub(crate) fn apply_after_z<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    count: usize,
+) {
     use crate::editor::CursorScrollTarget;
     let row = ed.cursor().0;
-    match input.key {
-        Key::Char('z') => {
+    match ch {
+        'z' => {
             ed.scroll_cursor_to(CursorScrollTarget::Center);
             ed.vim.viewport_pinned = true;
         }
-        Key::Char('t') => {
+        't' => {
             ed.scroll_cursor_to(CursorScrollTarget::Top);
             ed.vim.viewport_pinned = true;
         }
-        Key::Char('b') => {
+        'b' => {
             ed.scroll_cursor_to(CursorScrollTarget::Bottom);
             ed.vim.viewport_pinned = true;
         }
@@ -3216,28 +3234,28 @@ fn handle_after_z<H: crate::types::Host>(
         // whole buffer for `R` / `M`). Routed through
         // [`Editor::apply_fold_op`] (0.0.38 Patch C-δ.4) so the host
         // can observe / veto each op via [`Editor::take_fold_ops`].
-        Key::Char('o') => {
+        'o' => {
             ed.apply_fold_op(crate::types::FoldOp::OpenAt(row));
         }
-        Key::Char('c') => {
+        'c' => {
             ed.apply_fold_op(crate::types::FoldOp::CloseAt(row));
         }
-        Key::Char('a') => {
+        'a' => {
             ed.apply_fold_op(crate::types::FoldOp::ToggleAt(row));
         }
-        Key::Char('R') => {
+        'R' => {
             ed.apply_fold_op(crate::types::FoldOp::OpenAll);
         }
-        Key::Char('M') => {
+        'M' => {
             ed.apply_fold_op(crate::types::FoldOp::CloseAll);
         }
-        Key::Char('E') => {
+        'E' => {
             ed.apply_fold_op(crate::types::FoldOp::ClearAll);
         }
-        Key::Char('d') => {
+        'd' => {
             ed.apply_fold_op(crate::types::FoldOp::RemoveAt(row));
         }
-        Key::Char('f') => {
+        'f' => {
             if matches!(
                 ed.vim.mode,
                 Mode::Visual | Mode::VisualLine | Mode::VisualBlock
@@ -3263,7 +3281,6 @@ fn handle_after_z<H: crate::types::Host>(
                 // operator pipeline. `Operator::Fold` reuses every
                 // motion / text-object / `g`-prefix branch the other
                 // operators get.
-                let count = take_count(&mut ed.vim);
                 ed.vim.pending = Pending::Op {
                     op: Operator::Fold,
                     count1: count,
@@ -3272,7 +3289,6 @@ fn handle_after_z<H: crate::types::Host>(
         }
         _ => {}
     }
-    true
 }
 
 fn handle_replace<H: crate::types::Host>(
@@ -10370,5 +10386,66 @@ mod tests {
             (0, 3),
             "cursor should be on last pasted char (col 3)"
         );
+    }
+
+    // ── after_z controller API (Phase 2b-iii) ───────────────────────────────
+
+    #[test]
+    fn after_z_zz_sets_viewport_pinned() {
+        let mut e = editor_with("a\nb\nc\nd\ne");
+        e.jump_cursor(2, 0);
+        e.after_z('z', 1);
+        assert!(e.vim.viewport_pinned, "zz must set viewport_pinned");
+    }
+
+    #[test]
+    fn after_z_zo_opens_fold_at_cursor() {
+        let mut e = editor_with("a\nb\nc\nd");
+        e.buffer_mut().add_fold(1, 2, true);
+        e.jump_cursor(1, 0);
+        e.after_z('o', 1);
+        assert!(
+            !e.buffer().folds()[0].closed,
+            "zo must open the fold at the cursor row"
+        );
+    }
+
+    #[test]
+    fn after_z_zm_closes_all_folds() {
+        let mut e = editor_with("a\nb\nc\nd\ne\nf");
+        e.buffer_mut().add_fold(0, 1, false);
+        e.buffer_mut().add_fold(4, 5, false);
+        e.after_z('M', 1);
+        assert!(
+            e.buffer().folds().iter().all(|f| f.closed),
+            "zM must close all folds"
+        );
+    }
+
+    #[test]
+    fn after_z_zd_removes_fold_at_cursor() {
+        let mut e = editor_with("a\nb\nc\nd");
+        e.buffer_mut().add_fold(1, 2, true);
+        e.jump_cursor(1, 0);
+        e.after_z('d', 1);
+        assert!(
+            e.buffer().folds().is_empty(),
+            "zd must remove the fold at the cursor row"
+        );
+    }
+
+    #[test]
+    fn after_z_zf_in_visual_creates_fold() {
+        let mut e = editor_with("a\nb\nc\nd\ne");
+        // Enter visual mode spanning rows 1..=3.
+        e.jump_cursor(1, 0);
+        run_keys(&mut e, "V2j");
+        // Now call after_z('f') — reads visual mode + anchors internally.
+        e.after_z('f', 1);
+        let folds = e.buffer().folds();
+        assert_eq!(folds.len(), 1, "zf in visual must create exactly one fold");
+        assert_eq!(folds[0].start_row, 1);
+        assert_eq!(folds[0].end_row, 3);
+        assert!(folds[0].closed);
     }
 }

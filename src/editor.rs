@@ -2866,6 +2866,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_after_g(self, ch, count);
     }
 
+    /// Apply the z-chord effect for `z<ch>` with a pre-captured `count`.
+    /// Mirrors the full `handle_after_z` dispatch table — `zz` / `zt` / `zb`
+    /// (scroll-cursor), `zo` / `zc` / `za` / `zR` / `zM` / `zE` / `zd`
+    /// (fold ops), and `zf` (fold-add over visual selection or → op-pending).
+    ///
+    /// Promoted to public surface in 0.5.11 so hjkl-vim's
+    /// `PendingState::AfterZ` reducer can dispatch `AfterZChord` without
+    /// re-entering the engine FSM.
+    pub fn after_z(&mut self, ch: char, count: usize) {
+        vim::apply_after_z(self, ch, count);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
