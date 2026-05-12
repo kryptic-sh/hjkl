@@ -6,70 +6,10 @@
 # The substitute ex-command cases that formerly lived here have graduated to
 # corpus/nvim_api_tier.toml — they pass via `hjkl --nvim-api` and are now
 # asserted by the `nvim_api_tier_passes` test.
+#
+# All 5 cases that were parked here (mark_dot_jump_to_last_edit,
+# register_blackhole_d, gi_resume_last_insert, count_100G_clamps_to_last_line,
+# visual_block_jl_c_change_block) were fixed in hjkl-engine 0.5.8 and
+# re-promoted to their tier-2 corpus files (kryptic-sh/hjkl#83).
 
-# `.` dot-mark position after `i<text><Esc>`: hjkl stores the POST-insert
-# cursor (one past the last inserted char), nvim stores the position WHERE
-# the change started. Vim's `:h '.'` says "the position where the last
-# change was made"; hjkl matches the cursor convention at the time
-# `last_edit_pos` is recorded (in `Editor::record_mutate_edit`). Fix would
-# require capturing pre-edit cursor and recording it instead.
-[[cases]]
-name = "mark_dot_jump_to_last_edit"
-initial_buffer = "hello\nworld\n"
-initial_cursor = [0, 0]
-keys = "iX<Esc>j`."
-expected_buffer = "Xhello\nworld\n"
-expected_cursor = [0, 0]
-
-# `"_dw` (black-hole delete) + `p`: hjkl and nvim agree on the buffer content
-# after "_ delete (unnamed register is preserved) but disagree on the exact
-# paste position when `b` is used to reposition before `p`. This reflects a
-# subtle word-boundary difference in cursor placement after black-hole delete.
-# hjkl produces "fbar oo baz\n", nvim produces "ffoooo baz\n".
-[[cases]]
-name = "register_blackhole_d"
-initial_buffer = "foo bar baz\n"
-initial_cursor = [0, 0]
-keys = "yiww\"_dwbp"
-expected_buffer = "ffoooo baz\n"
-expected_cursor = [0, 3]
-
-# `gi` moves to the last-insert position and enters insert mode. hjkl records
-# the last-insert row incorrectly after `j` navigation — it stays on the
-# current row instead of returning to the row where the last insert occurred.
-# nvim correctly returns to the original insert row.
-[[cases]]
-name = "gi_resume_last_insert"
-initial_buffer = "world\nhello\n"
-initial_cursor = [0, 0]
-keys = "iHi<Esc>jgi<Esc>"
-expected_buffer = "Hiworld\nhello\n"
-expected_cursor = [0, 1]
-expected_mode = "normal"
-
-# `100G` on a buffer ending with `\n`: hjkl lands on row 3 (a phantom row
-# after the trailing newline) instead of row 2 (last content row). nvim
-# treats the trailing newline as a line terminator and clamps G to the last
-# content row. The `motion_G_file_bottom` case in tier1 already covers the
-# unadorned `G`; this case demonstrates the same bug via a large count.
-[[cases]]
-name = "count_100G_clamps_to_last_line"
-initial_buffer = "foo\nbar\nbaz\n"
-initial_cursor = [0, 0]
-keys = "100G"
-expected_buffer = "foo\nbar\nbaz\n"
-expected_cursor = [2, 0]
-
-# `<C-v>jlc<text><Esc>` blockwise change: after replacing the block with
-# typed text, nvim leaves the cursor on the last char of the inserted text
-# (col 1 when "ZZ" is typed), while hjkl leaves it at the block start (col 0).
-# Both engines produce the correct buffer ("ZZo\nZZr\nbaz\n"). Only the
-# post-change cursor position diverges. Fix would require the visual-block
-# change handler to advance the cursor by len(typed_text)-1 after insertion.
-[[cases]]
-name = "visual_block_jl_c_change_block"
-initial_buffer = "foo\nbar\nbaz\n"
-initial_cursor = [0, 0]
-keys = "<C-v>jlcZZ<Esc>"
-expected_buffer = "ZZo\nZZr\nbaz\n"
-expected_cursor = [0, 1]
+cases = []

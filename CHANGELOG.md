@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- Bumped `hjkl-engine` to 0.5.8: 5 vim-compat divergences fixed and their oracle
+  cases re-promoted from `known_divergences.toml` to active tier-2 corpus files
+  (kryptic-sh/hjkl#83):
+  - Dot mark `'.`/`` `. `` records change-start position, not post-insert cursor
+    (`mark_dot_jump_to_last_edit`).
+  - `100G` clamps to last content row on trailing-newline buffers
+    (`count_100G_clamps_to_last_line`).
+  - `gi` moves to last-insert position and enters insert mode
+    (`gi_resume_last_insert`).
+  - Visual-block `c<text><Esc>` cursor lands on last inserted char
+    (`visual_block_jl_c_change_block`).
+  - `"_` (black-hole) register discards deletes without touching unnamed
+    register (`register_blackhole_d`).
+
 ### Changed
 
 - Bumped `hjkl-anvil` dependency to `0.2` (TOFU checksum verification). GitHub

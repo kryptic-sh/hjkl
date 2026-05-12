@@ -93,5 +93,14 @@ keys = "yypk`["
 expected_buffer = "foo\nfoo\n"
 expected_cursor = [1, 0]
 
-# Note: dot-mark `.` after insert has a known divergence (hjkl uses post-edit
-# cursor, vim uses change-start). See `known_divergences.toml`.
+# ─── Dot mark ───────────────────────────────────────────────────────────────
+
+# `` `. `` after `iX<Esc>` lands at the change start (col 0), matching vim's
+# `:h '.` rule "position where the last change was made".
+[[cases]]
+name = "mark_dot_jump_to_last_edit"
+initial_buffer = "hello\nworld\n"
+initial_cursor = [0, 0]
+keys = "iX<Esc>j`."
+expected_buffer = "Xhello\nworld\n"
+expected_cursor = [0, 0]

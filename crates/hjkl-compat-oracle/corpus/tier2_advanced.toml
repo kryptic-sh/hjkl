@@ -18,8 +18,15 @@ keys = "yiwwdw\"0p"
 expected_buffer = "foo bfooaz\n"
 expected_cursor = [0, 7]
 
-# `"_` (black-hole) register case has a known divergence between hjkl and nvim
-# in the paste position after "_ delete. Moved to known_divergences.toml.
+# `"_dw` (black-hole delete) + `p`: unnamed register is preserved so the yank
+# of "foo" survives the delete and `p` pastes it correctly.
+[[cases]]
+name = "register_blackhole_d"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "yiww\"_dwbp"
+expected_buffer = "ffoooo baz\n"
+expected_cursor = [0, 3]
 
 # ─── Increment / decrement ────────────────────────────────────────────────────
 
@@ -63,9 +70,16 @@ keys = "i<C-u><Esc>"
 expected_buffer = "o world\n"
 expected_cursor = [0, 0]
 
-# `gi` re-enter insert has a known divergence: hjkl stays on the current row
-# after `jgi` instead of returning to the last-insert row. Moved to
-# known_divergences.toml.
+# `gi` re-enters insert at the exact (row, col) where insert mode was last
+# active, matching vim's `:h gi` / `'^` mark semantics.
+[[cases]]
+name = "gi_resume_last_insert"
+initial_buffer = "world\nhello\n"
+initial_cursor = [0, 0]
+keys = "iHi<Esc>jgi<Esc>"
+expected_buffer = "Hiworld\nhello\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
 
 # ─── Counted operators ────────────────────────────────────────────────────────
 
@@ -88,6 +102,12 @@ keys = "5j"
 expected_buffer = "a\nb\nc\nd\ne\nf\n"
 expected_cursor = [5, 0]
 
-# `100G` clamping has a known divergence: hjkl lands on row 3 (phantom row
-# after trailing newline) instead of row 2 (last content row). Moved to
-# known_divergences.toml.
+# `100G` on a buffer with a trailing newline clamps to the last content row
+# (row 2), not the phantom empty row (row 3).
+[[cases]]
+name = "count_100G_clamps_to_last_line"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "100G"
+expected_buffer = "foo\nbar\nbaz\n"
+expected_cursor = [2, 0]

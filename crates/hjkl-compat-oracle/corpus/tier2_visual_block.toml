@@ -51,6 +51,14 @@ keys = "<C-v>jA!<Esc>"
 expected_buffer = "foo!\nbar!\nbaz\n"
 expected_cursor = [0, 2]
 
-# Blockwise change (`<C-v>jlc<text><Esc>`) has a known cursor divergence —
-# moved to known_divergences.toml. Buffer result is correct; only cursor
-# post-change position differs (hjkl → col 0, nvim → col 1).
+# ─── Blockwise change ────────────────────────────────────────────────────────
+
+# `<C-v>jlc<text><Esc>` — cursor lands on the last char of the inserted text
+# after block-change exits insert mode (col 1 for "ZZ"). Buffer correct too.
+[[cases]]
+name = "visual_block_jl_c_change_block"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jlcZZ<Esc>"
+expected_buffer = "ZZo\nZZr\nbaz\n"
+expected_cursor = [0, 1]
