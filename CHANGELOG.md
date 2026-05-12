@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-05-13
+
 ### Added
 
 - `sqls` auto-install via `hjkl-anvil` with PATH-aware detection. On startup
@@ -19,6 +21,12 @@ patch bumps.
   hjkl convention. `:LspInfo` reports whether the active binary came from
   `$PATH` or `hjkl-anvil`. Set `lsp_auto_install = false` to silence the prompt
   (banner only). (#13, #14)
+
+### Changed
+
+- Submodule bumps: `sqeel-config` 0.2.1 → 0.2.2 (cursor opts + lsp_auto_install
+  config knobs); `sqeel-tui` 0.4.4 → 0.4.5 (anvil + modal + comment markers +
+  cursor opts).
 
 ## [0.4.6] - 2026-05-13
 
@@ -276,7 +284,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.7
 [0.4.6]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.6
 [0.4.5]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.5
 [0.4.4]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.4
