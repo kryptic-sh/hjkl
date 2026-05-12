@@ -2933,44 +2933,6 @@ pub(crate) fn apply_op_double<H: crate::types::Host>(
     }
 }
 
-/// Public(crate) entry: set `Pending::OpTextObj { op, count1, inner }`.
-/// Called by `Editor::enter_op_text_obj` (the public controller API).
-pub(crate) fn enter_op_text_obj<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    op: Operator,
-    count1: usize,
-    inner: bool,
-) {
-    ed.vim.pending = Pending::OpTextObj { op, count1, inner };
-}
-
-/// Public(crate) entry: set `Pending::OpG { op, count1 }`.
-/// Called by `Editor::enter_op_g` (the public controller API).
-pub(crate) fn enter_op_g<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    op: Operator,
-    count1: usize,
-) {
-    ed.vim.pending = Pending::OpG { op, count1 };
-}
-
-/// Public(crate) entry: set `Pending::OpFind { op, count1, forward, till }`.
-/// Called by `Editor::enter_op_find` (the public controller API).
-pub(crate) fn enter_op_find<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    op: Operator,
-    count1: usize,
-    forward: bool,
-    till: bool,
-) {
-    ed.vim.pending = Pending::OpFind {
-        op,
-        count1,
-        forward,
-        till,
-    };
-}
-
 fn handle_after_op<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     input: Input,
@@ -10662,27 +10624,6 @@ mod tests {
             e.buffer().lines().first().cloned().unwrap_or_default(),
             "hello"
         );
-    }
-
-    #[test]
-    fn enter_op_text_obj_sets_pending() {
-        let mut e = editor_with("hello world");
-        e.enter_op_text_obj(crate::vim::Operator::Delete, 1, true);
-        assert!(e.is_chord_pending(), "OpTextObj should set chord pending");
-    }
-
-    #[test]
-    fn enter_op_g_sets_pending() {
-        let mut e = editor_with("hello world");
-        e.enter_op_g(crate::vim::Operator::Delete, 1);
-        assert!(e.is_chord_pending(), "OpG should set chord pending");
-    }
-
-    #[test]
-    fn enter_op_find_sets_pending() {
-        let mut e = editor_with("hello world");
-        e.enter_op_find(crate::vim::Operator::Delete, 1, true, false);
-        assert!(e.is_chord_pending(), "OpFind should set chord pending");
     }
 
     #[test]

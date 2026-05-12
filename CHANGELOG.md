@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-13
+
+### Removed (breaking)
+
+- `Editor::enter_op_text_obj`, `Editor::enter_op_g`, `Editor::enter_op_find` —
+  transitional controller methods added in 0.5.12 so the hjkl-vim
+  `PendingState::AfterOp` reducer could ask the engine to set its op-pending
+  sub-state. After Phase 2c-ii/iii/iv of kryptic-sh/hjkl#62, the reducer owns
+  the full op-pending FSM via `PendingState::OpFind` / `OpTextObj` / `OpG`
+  internal transitions and commits `ApplyOpFind` / `ApplyOpTextObj` / `ApplyOpG`
+  directly — these enter-helpers are dead from the app side. The internal
+  `vim::enter_op_*` `pub(crate)` helpers were removed alongside. Engine FSM
+  macro-replay paths set `Pending::Op*` fields directly without going through
+  these helpers, so replay is unaffected.
+
 ## [0.5.17] - 2026-05-13
 
 ### Added
@@ -433,7 +448,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.17...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.17...v0.6.0
 [0.5.17]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...v0.5.17
 [0.5.16]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.14...v0.5.15

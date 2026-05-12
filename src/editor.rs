@@ -2910,47 +2910,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_double(self, op, total_count);
     }
 
-    /// Set `Pending::OpTextObj { op, count1, inner }` — i.e. the engine is now
-    /// waiting for the text-object character (`w`, `(`, `"`, `p`, `t`, `s`).
-    /// The next key is routed through the engine FSM (via `is_chord_pending()`
-    /// bypass in the host) which handles `OpTextObj`.
-    ///
-    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
-    /// `PendingState::AfterOp` reducer can dispatch `EnterOpTextObj` without
-    /// re-entering the engine FSM.
-    pub fn enter_op_text_obj(&mut self, op: crate::vim::Operator, count1: usize, inner: bool) {
-        vim::enter_op_text_obj(self, op, count1, inner);
-    }
-
-    /// Set `Pending::OpG { op, count1 }` — engine waiting for the `g`-second
-    /// char (`g` for `dgg`, etc.). The next key is routed through the engine FSM.
-    ///
-    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
-    /// `PendingState::AfterOp` reducer can dispatch `EnterOpG` without
-    /// re-entering the engine FSM.
-    pub fn enter_op_g(&mut self, op: crate::vim::Operator, count1: usize) {
-        vim::enter_op_g(self, op, count1);
-    }
-
-    /// Set `Pending::OpFind { op, count1, forward, till }` — engine waiting for
-    /// the find-target character. The next key is routed through the engine FSM.
-    ///
-    /// Promoted to the public surface in 0.5.12 so the hjkl-vim
-    /// `PendingState::AfterOp` reducer can dispatch `EnterOpFind` without
-    /// re-entering the engine FSM.
-    ///
-    /// Still used by the chord-init op path (gu/gU/g~/gq + f/F/t/T via engine
-    /// FSM). The reducer path uses `apply_op_find` instead.
-    pub fn enter_op_find(
-        &mut self,
-        op: crate::vim::Operator,
-        count1: usize,
-        forward: bool,
-        till: bool,
-    ) {
-        vim::enter_op_find(self, op, count1, forward, till);
-    }
-
     /// Apply an operator over a find motion (`df<x>` / `dF<x>` / `dt<x>` /
     /// `dT<x>`). Builds `Motion::Find { ch, forward, till }`, applies it via
     /// `apply_op_with_motion`, records `last_find` for `;` / `,` repeat, and
