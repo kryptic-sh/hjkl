@@ -8,15 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-05-13
+
+### Changed
+
+- Phase 2b of the vim FSM extraction (#62): the three bare second-char chord
+  families — find (`f`/`F`/`t`/`T`), g-prefix, and z-prefix — are now driven by
+  the `hjkl-vim` reducer instead of the engine FSM. User-visible behavior
+  unchanged; chord dispatch now lives in the host's pending-state loop and calls
+  controller methods on `Editor` (`find_char`, `after_g`, `after_z`). Engine
+  `Pending::Find` / `Pending::G` / `Pending::Z` arms remain intact for the
+  operator-pending variants (`OpFind`, `OpG`) which migrate in chunk 2c.
+- Bumped `hjkl-vim` to 0.5 across the three chunks:
+  - 0.3 — `PendingState::Find` + `EngineCmd::FindChar` (chunk 2b-i).
+  - 0.4 — `PendingState::AfterG` + `EngineCmd::AfterGChord` (chunk 2b-ii).
+  - 0.5 — `PendingState::AfterZ` + `EngineCmd::AfterZChord` (chunk 2b-iii).
+- Bumped `hjkl-engine` to 0.5.11 across the three chunks:
+  - 0.5.9 — `Editor::find_char` controller entry.
+  - 0.5.10 — `Editor::after_g` controller entry.
+  - 0.5.11 — `Editor::after_z` controller entry.
+
 ### Added
 
-- Phase 2b-i: bare `f<x>` / `F<x>` / `t<x>` / `T<x>` find chords migrated from
-  the engine FSM to hjkl-vim's `PendingState::Find` reducer. The app intercepts
-  these keys in Normal and Visual modes via the keymap trie; the engine's
-  `Pending::Find` arm stays intact (defensive, unreachable from the umbrella for
-  bare finds) for the operator-pending `OpFind` path which migrates in chunk 2c.
-- Bumped `hjkl-vim` to 0.3 (`PendingState::Find` + `EngineCmd::FindChar`).
-- Bumped `hjkl-engine` to 0.5.9 (`Editor::find_char` controller entry).
+- New `AppAction` variants `BeginPendingFind`, `BeginPendingAfterG`,
+  `BeginPendingAfterZ` route the app's `f`/`g`/`z` bindings (Normal + Visual)
+  through the hjkl-vim reducer.
+- Phase 2b-ii pulled 7 overlapping `g*` prefix entries (`gt`, `gd`, `gD`, `gr`,
+  `gi`, `gy`, …) out of the static keymap trie to resolve the bare-`g`
+  ambiguity; their dispatch now flows through the `AfterGChord` arm. No
+  user-visible change.
 
 ## [0.14.5] - 2026-05-13
 
@@ -1705,7 +1725,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.6...HEAD
+[0.14.6]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.6
 [0.14.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.5
 [0.14.4]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.4
 [0.14.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.3
