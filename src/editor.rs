@@ -4745,4 +4745,142 @@ mod tests {
         e.apply_motion(hjkl_vim::MotionKind::CharLeft, 0);
         assert_eq!(e.cursor(), (0, 2), "count=0 treated as 1 for CharLeft");
     }
+
+    // ── apply_motion controller tests (Phase 3b) — word motions ─────────────
+
+    #[test]
+    fn apply_motion_word_forward_moves_to_next_word() {
+        // "hello world\n": 'w' from col 0 lands on 'w' of "world" at col 6.
+        let mut e = fresh_editor("hello world\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::WordForward, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 6),
+            "WordForward moves to start of next word"
+        );
+    }
+
+    #[test]
+    fn apply_motion_word_forward_with_count() {
+        // "one two three\n": 2w from col 0 → start of "three" at col 8.
+        let mut e = fresh_editor("one two three\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::WordForward, 2);
+        assert_eq!(e.cursor(), (0, 8), "WordForward count=2 skips two words");
+    }
+
+    #[test]
+    fn apply_motion_big_word_forward_moves_to_next_big_word() {
+        // "foo.bar baz\n": W from col 0 skips entire "foo.bar" (one WORD) to 'b' at col 8.
+        let mut e = fresh_editor("foo.bar baz\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordForward, 1);
+        assert_eq!(e.cursor(), (0, 8), "BigWordForward skips the whole WORD");
+    }
+
+    #[test]
+    fn apply_motion_big_word_forward_with_count() {
+        // "aa bb cc\n": 2W from col 0 → start of "cc" at col 6.
+        let mut e = fresh_editor("aa bb cc\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordForward, 2);
+        assert_eq!(e.cursor(), (0, 6), "BigWordForward count=2 skips two WORDs");
+    }
+
+    #[test]
+    fn apply_motion_word_backward_moves_to_prev_word() {
+        // "hello world\n": 'b' from col 6 ('w') lands back at col 0 ('h').
+        let mut e = fresh_editor("hello world\n");
+        e.jump_cursor(0, 6);
+        e.apply_motion(hjkl_vim::MotionKind::WordBackward, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "WordBackward moves to start of prev word"
+        );
+    }
+
+    #[test]
+    fn apply_motion_word_backward_with_count() {
+        // "one two three\n": 2b from col 8 ('t' of "three") → col 0 ('o' of "one").
+        let mut e = fresh_editor("one two three\n");
+        e.jump_cursor(0, 8);
+        e.apply_motion(hjkl_vim::MotionKind::WordBackward, 2);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "WordBackward count=2 skips two words back"
+        );
+    }
+
+    #[test]
+    fn apply_motion_big_word_backward_moves_to_prev_big_word() {
+        // "foo.bar baz\n": B from col 8 ('b' of "baz") → col 0 (start of "foo.bar" WORD).
+        let mut e = fresh_editor("foo.bar baz\n");
+        e.jump_cursor(0, 8);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordBackward, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "BigWordBackward jumps to start of prev WORD"
+        );
+    }
+
+    #[test]
+    fn apply_motion_big_word_backward_with_count() {
+        // "aa bb cc\n": 2B from col 6 ('c') → col 0 ('a').
+        let mut e = fresh_editor("aa bb cc\n");
+        e.jump_cursor(0, 6);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordBackward, 2);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "BigWordBackward count=2 skips two WORDs back"
+        );
+    }
+
+    #[test]
+    fn apply_motion_word_end_moves_to_end_of_word() {
+        // "hello world\n": 'e' from col 0 lands on 'o' of "hello" at col 4.
+        let mut e = fresh_editor("hello world\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::WordEnd, 1);
+        assert_eq!(e.cursor(), (0, 4), "WordEnd moves to end of current word");
+    }
+
+    #[test]
+    fn apply_motion_word_end_with_count() {
+        // "one two three\n": 2e from col 0 → end of "two" at col 6.
+        let mut e = fresh_editor("one two three\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::WordEnd, 2);
+        assert_eq!(
+            e.cursor(),
+            (0, 6),
+            "WordEnd count=2 lands on end of second word"
+        );
+    }
+
+    #[test]
+    fn apply_motion_big_word_end_moves_to_end_of_big_word() {
+        // "foo.bar baz\n": E from col 0 → end of "foo.bar" WORD at col 6.
+        let mut e = fresh_editor("foo.bar baz\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordEnd, 1);
+        assert_eq!(e.cursor(), (0, 6), "BigWordEnd lands on end of WORD");
+    }
+
+    #[test]
+    fn apply_motion_big_word_end_with_count() {
+        // "aa bb cc\n": 2E from col 0 → end of "bb" at col 4.
+        let mut e = fresh_editor("aa bb cc\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::BigWordEnd, 2);
+        assert_eq!(
+            e.cursor(),
+            (0, 4),
+            "BigWordEnd count=2 lands on end of second WORD"
+        );
+    }
 }

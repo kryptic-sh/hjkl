@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-13
+
+### Added
+
+- `apply_motion_kind` extended with 6 new `MotionKind` arms (Phase 3b of
+  kryptic-sh/hjkl#69): `WordForward` (`w`), `BigWordForward` (`W`),
+  `WordBackward` (`b`), `BigWordBackward` (`B`), `WordEnd` (`e`), `BigWordEnd`
+  (`E`). Each routes through `execute_motion` to the existing `Motion::WordFwd`
+  / `Motion::BigWordFwd` / `Motion::WordBack` / `Motion::BigWordBack` /
+  `Motion::WordEnd` / `Motion::BigWordEnd` primitives so cursor, sticky column,
+  scroll, and sync semantics are identical to the engine FSM path. Engine FSM
+  arms for `w`/`W`/`b`/`B`/`e`/`E` are kept intact for macro-replay defensive
+  coverage.
+- Bumped `hjkl-vim` dependency from `"0.12"` to `"0.13"` in `Cargo.toml`.
+- 12 controller-level tests in `crates/hjkl-engine/src/editor.rs` covering each
+  of the 6 new variants with count=1 and count>1.
+
 ## [0.6.1] - 2026-05-13
 
 ### Added
@@ -463,7 +480,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.17...v0.6.0
 [0.5.17]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.5.16...v0.5.17

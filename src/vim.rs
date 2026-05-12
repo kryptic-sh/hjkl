@@ -2556,6 +2556,24 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
             ed.sync_buffer_from_textarea();
         }
+        hjkl_vim::MotionKind::WordForward => {
+            execute_motion(ed, Motion::WordFwd, count);
+        }
+        hjkl_vim::MotionKind::BigWordForward => {
+            execute_motion(ed, Motion::BigWordFwd, count);
+        }
+        hjkl_vim::MotionKind::WordBackward => {
+            execute_motion(ed, Motion::WordBack, count);
+        }
+        hjkl_vim::MotionKind::BigWordBackward => {
+            execute_motion(ed, Motion::BigWordBack, count);
+        }
+        hjkl_vim::MotionKind::WordEnd => {
+            execute_motion(ed, Motion::WordEnd, count);
+        }
+        hjkl_vim::MotionKind::BigWordEnd => {
+            execute_motion(ed, Motion::BigWordEnd, count);
+        }
         _ => {
             // Future MotionKind variants added by later phases are silently
             // ignored here — callers must bump hjkl-engine when consuming new
