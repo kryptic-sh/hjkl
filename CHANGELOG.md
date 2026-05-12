@@ -8,6 +8,34 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-05-13
+
+### Changed
+
+- Phase 3a of the vim FSM extraction (#62, tracking #69) — char + line motions
+  (`h` / `l` / `<BS>` / `<Space>` / `j` / `k` / `+` / `-`) now route through the
+  `hjkl-vim` keymap path. The host dispatches
+  `AppAction::Motion { kind, count }` and calls `Editor::apply_motion` instead
+  of re-entering the engine FSM. Engine FSM arms for these keys are
+  intentionally kept so the macro- replay path (`@<reg>`) continues to resolve
+  them.
+- Bumped `hjkl-vim` 0.11 → 0.12 — adds `MotionKind` enum carrying the keymap-
+  layer motion identity (`CharLeft` / `CharRight` / `LineDown` / `LineUp` /
+  `FirstNonBlankDown` / `FirstNonBlankUp`). Marked `#[non_exhaustive]` so Phases
+  3b–3g can extend without breaking downstream match arms.
+- Bumped `hjkl-engine` 0.6.0 → 0.6.1 — adds `Editor::apply_motion(kind, count)`
+  controller method backed by an internal `apply_motion_kind` helper that reuses
+  the same motion primitives as the FSM. Cursor, sticky column, scroll, and sync
+  semantics are identical between the two paths.
+
+### Added
+
+- New `AppAction::Motion { kind: MotionKind, count: u32 }` variant in
+  `apps/hjkl/src/keymap_actions.rs`. Bound across Normal / Visual / VisualLine /
+  VisualBlock for the 8 Phase 3a motions. Count-prefix buffering (`5j` etc.) is
+  preserved by extending the `could_start_chord` set in `event_loop.rs` to cover
+  the newly keymap-bound keys.
+
 ## [0.14.7] - 2026-05-13
 
 ### Fixed
@@ -1765,7 +1793,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.8...HEAD
+[0.14.8]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.8
 [0.14.7]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.7
 [0.14.6]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.6
 [0.14.5]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.5
