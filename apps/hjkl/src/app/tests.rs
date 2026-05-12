@@ -4944,11 +4944,15 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
-                Outcome::Commit(hjkl_vim::EngineCmd::EnterOpG { op, count1 }) => {
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpG {
+                    op,
+                    ch,
+                    total_count,
+                }) => {
                     app.pending_state = None;
                     app.active_mut()
                         .editor
-                        .enter_op_g(op_kind_to_operator(op), count1);
+                        .apply_op_g(op_kind_to_operator(op), ch, total_count);
                     app.sync_viewport_from_editor();
                     return;
                 }
@@ -6343,24 +6347,49 @@ fn dip_text_object_via_reducer() {
 
 #[test]
 fn dgg_deletes_to_top() {
-    // `dgg` — d → AfterOp, g → EnterOpG, g → engine handles dgg (delete to top).
+    // `dgg` — d → AfterOp, g → Wait(OpG) [reducer owns state], g → ApplyOpG.
+    // Phase 2c-iv: engine is NOT in chord-pending after `dg`; reducer holds
+    // PendingState::OpG and dispatches the second 'g' as ApplyOpG.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
     app.active_mut().editor.jump_cursor(2, 0); // start on line3.
 
     drive_key(&mut app, key(KeyCode::Char('d')));
-    drive_key(&mut app, key(KeyCode::Char('g')));
-    // Engine is now in Pending::OpG.
     assert!(
-        app.active().editor.is_chord_pending(),
-        "after dg, engine must be in OpG chord-pending state"
-    );
-    assert!(
-        app.pending_state.is_none(),
-        "reducer pending must be cleared"
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterOp {
+                op: hjkl_vim::OperatorKind::Delete,
+                ..
+            })
+        ),
+        "d must set AfterOp(Delete), got {:?}",
+        app.pending_state
     );
 
     drive_key(&mut app, key(KeyCode::Char('g')));
+    // Reducer transitions to OpG — engine is NOT chord-pending (reducer owns state).
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::OpG {
+                op: hjkl_vim::OperatorKind::Delete,
+                total_count: 1,
+            })
+        ),
+        "after dg, reducer must be in OpG state, got {:?}",
+        app.pending_state
+    );
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine must NOT be chord-pending after dg (reducer owns OpG)"
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending must clear after ApplyOpG commit"
+    );
     // dgg should delete lines 0..=2 (all three lines).
     let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
     assert!(
@@ -6739,5 +6768,153 @@ fn guw_still_works_via_engine_fsm() {
     assert_eq!(
         line, "HELLO world",
         "gUw must uppercase first word, got {line:?}"
+    );
+}
+
+// ── Phase 2c-iv OpG integration tests ────────────────────────────────────────
+
+#[test]
+fn dgg_deletes_to_top_via_reducer() {
+    // `dgg` full round-trip via reducer OpG path.
+    // d → AfterOp, g → Wait(OpG), g → Commit(ApplyOpG{'g'}) → delete to top.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "aaa\nbbb\nccc");
+    app.active_mut().editor.jump_cursor(2, 0); // cursor on "ccc".
+
+    drive_chars(&mut app, "dgg");
+    assert!(app.pending_state.is_none(), "pending must clear after dgg");
+    assert!(!app.active().editor.is_chord_pending());
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        lines.is_empty() || lines == vec![""],
+        "dgg from last line must delete all content, got {lines:?}"
+    );
+}
+
+#[test]
+fn dge_deletes_word_end_back_via_reducer() {
+    // `dge` round-trip: d → AfterOp, g → Wait(OpG), e → Commit(ApplyOpG{'e'}).
+    // engine::apply_op_g with 'e' → Motion::WordEndBack. With cursor at col 0
+    // there's nothing behind, so just verify reducer state machine and no panic.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    assert!(app.pending_state.is_some(), "d sets AfterOp");
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(app.pending_state, Some(hjkl_vim::PendingState::OpG { .. })),
+        "g transitions to OpG, got {:?}",
+        app.pending_state
+    );
+
+    drive_key(&mut app, key(KeyCode::Char('e')));
+    // Reducer commits ApplyOpG; engine applies WordEndBack. No panic expected.
+    assert!(app.pending_state.is_none(), "pending clears after dge");
+    assert!(!app.active().editor.is_chord_pending());
+}
+
+#[test]
+fn dgj_deletes_screen_down_via_reducer() {
+    // `dgj` round-trip: d → AfterOp, g → Wait(OpG), j → Commit(ApplyOpG{'j'}).
+    // engine::apply_op_g with 'j' → Motion::ScreenDown.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(0, 0); // cursor on line1.
+
+    drive_chars(&mut app, "dgj");
+    assert!(app.pending_state.is_none(), "pending clears after dgj");
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    // dgj deletes current line + screen-line below (same as next line here).
+    assert_eq!(
+        lines,
+        vec!["line3"],
+        "dgj must delete line1+line2, got {lines:?}"
+    );
+}
+
+#[test]
+fn dg_then_esc_cancels_via_reducer() {
+    // `dg<Esc>` — OpG reducer cancels on Esc; buffer unchanged.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "unchanged");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    drive_key(&mut app, key(KeyCode::Char('d')));
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(app.pending_state, Some(hjkl_vim::PendingState::OpG { .. })),
+        "must be in OpG state before Esc"
+    );
+
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(app.pending_state.is_none(), "Esc must cancel OpG");
+
+    let line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        line, "unchanged",
+        "buffer must be unchanged after cancel, got {line:?}"
+    );
+}
+
+#[test]
+fn g_uppercase_gg_uppercases_to_top_via_engine_fsm() {
+    // `gUgg` — chord-init op path (engine FSM Pending::OpG).
+    // g → AfterG (reducer), U → after_g('U') → engine sets Pending::Op(Uppercase).
+    // g → engine FSM (is_chord_pending bypass) → sets Pending::OpG (engine-owned).
+    // g → engine FSM: handle_op_after_g → uppercase to file-top (gg = FileTop).
+    // Verifies engine Pending::OpG path still works after 2c-iv.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld\nfoo");
+    app.active_mut().editor.jump_cursor(2, 0); // cursor on "foo".
+
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "g must set AfterG"
+    );
+
+    // U → reducer commits AfterGChord('U') → engine sets Pending::Op(Uppercase).
+    drive_key(&mut app, key(KeyCode::Char('U')));
+    assert!(app.pending_state.is_none(), "gU must clear reducer pending");
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "gU must leave engine in Op(Uppercase) chord-pending"
+    );
+
+    // g → engine FSM: Op(Uppercase) + 'g' → engine sets Pending::OpG (engine-owned).
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(app.pending_state.is_none(), "reducer must stay clear");
+    assert!(
+        app.active().editor.is_chord_pending(),
+        "engine must be in OpG chord-pending waiting for second 'g'"
+    );
+
+    // g → engine FSM: handle_op_after_g → Motion::FileTop → uppercase all to top.
+    drive_key(&mut app, key(KeyCode::Char('g')));
+    assert!(
+        !app.active().editor.is_chord_pending(),
+        "engine chord must complete"
+    );
+
+    // All three lines should be uppercased.
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert!(
+        lines.iter().all(|l| l.chars().all(|c| !c.is_lowercase())),
+        "gUgg must uppercase all lines to top, got {lines:?}"
     );
 }
