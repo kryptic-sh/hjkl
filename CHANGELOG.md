@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-12
+
+### Added
+
+- `Keymap::children_all(mode, prefix) -> Vec<(KeyEvent, Option<Binding<A>>)>` —
+  returns both terminal bindings AND prefix-only submenu nodes for the immediate
+  children of a chord prefix. `None` binding indicates a prefix-only entry (a
+  submenu with no terminal action of its own). Complements existing `children()`
+  which returns terminals only. Designed for which-key popups that need to show
+  submenu indicators.
+
 ## [0.1.1] - 2026-05-12
 
 ### Added
@@ -19,10 +30,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 #### Key types
 
-- `KeyEvent` — backend-agnostic key press: `code: KeyCode` + `modifiers: KeyModifiers`.
+- `KeyEvent` — backend-agnostic key press: `code: KeyCode` +
+  `modifiers: KeyModifiers`.
 - `KeyCode` — logical key variants: `Char(char)`, `Enter`, `Esc`, `Tab`,
-  `Backspace`, `Delete`, `Insert`, `Up`, `Down`, `Left`, `Right`, `Home`,
-  `End`, `PageUp`, `PageDown`, `F(u8)` (F1–F12).
+  `Backspace`, `Delete`, `Insert`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`,
+  `PageUp`, `PageDown`, `F(u8)` (F1–F12).
 - `KeyModifiers` — `bitflags`-backed modifier set: `NONE`, `SHIFT`, `CTRL`,
   `ALT`; combinable with `|`.
 - `KeyEvent::char(c)` and `KeyEvent::ctrl(c)` convenience constructors.
@@ -58,10 +70,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
   - `reset(mode)` — clear pending buffer (e.g. on mode switch).
   - `children(mode, prefix) -> Vec<(KeyEvent, Binding<A>)>` — which-key
     enumeration of completions reachable from a prefix chord.
-- `KeyResolve<A>` — `Pending`, `Match(Binding<A>)`, `Ambiguous`, `Unbound(Vec<KeyEvent>)`.
+- `KeyResolve<A>` — `Pending`, `Match(Binding<A>)`, `Ambiguous`,
+  `Unbound(Vec<KeyEvent>)`.
 - `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
 - `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.0
