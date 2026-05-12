@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-05-13
+
+### Changed
+
+- **Engine-0.5 migration across the sqeel stack.** Bumps all three submodule
+  pointers in lockstep so the dependency graph holds exactly one `hjkl-engine`
+  major:
+  - `sqeel-config` 0.2.2 → 0.2.3 (hjkl-engine 0.3 → 0.5).
+  - `sqeel-core` 0.4.2 → 0.4.3 (hjkl-engine 0.3 → 0.5, hjkl-bonsai 0.5 → 0.6).
+  - `sqeel-tui` 0.4.7 → 0.4.8 (drops engine-0.3 lockdown pins; full hjkl stack
+    on engine-0.5-compatible versions).
+- Resolves the caret-minor rot that forced exact pins in v0.4.9 and was keeping
+  dependabot bumps perma-red.
+
 ## [0.4.9] - 2026-05-13
 
 ### Fixed
@@ -304,7 +318,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.10...HEAD
+[0.4.10]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.10
 [0.4.9]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.9
 [0.4.8]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.8
 [0.4.7]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.7
