@@ -1473,9 +1473,13 @@ impl App {
     /// is pending (typically `Ambiguous`: e.g. both `g` and `gd` bound — the
     /// shorter binding fires after `timeoutlen`).
     ///
-    /// Returns `Some(events)` to be replayed to the engine for `Unbound`,
-    /// `Some(empty)` after a `Match` (already dispatched), or `None` when no
-    /// chord was pending.
+    /// Returns:
+    /// - `Some(events)` to be replayed to the engine for `Unbound` with
+    ///   drained events (real dead-end case).
+    /// - `Some(empty)` after a `Match` (the action was already dispatched).
+    /// - `None` when the buffer was empty OR when the buffer is a pure prefix
+    ///   (user is mid-chord and `timeout_resolve` left the buffer in place —
+    ///   needed so the which-key popup stays visible past the timeout).
     pub fn resolve_chord_timeout(
         &mut self,
         mode: hjkl_keymap::Mode,
@@ -1489,6 +1493,11 @@ impl App {
                 self.clear_prefix_state();
                 self.dispatch_action(binding.action, 1);
                 Some(Vec::new())
+            }
+            KeyResolve::Unbound(events) if events.is_empty() => {
+                // Pure-prefix: timeout_resolve was a no-op. Keep prefix state
+                // alive so the which-key popup stays visible.
+                None
             }
             KeyResolve::Unbound(events) => {
                 self.clear_prefix_state();
