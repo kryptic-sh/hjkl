@@ -3108,6 +3108,84 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::case_range_bridge(self, start, end, kind, op);
     }
 
+    // ─── Phase 4e: pub block-shape range-mutation primitives (hjkl#70) ──────
+    //
+    // Rectangular VisualBlock operations. `top_row`/`bot_row` are inclusive
+    // line indices; `left_col`/`right_col` are inclusive char-column bounds.
+    // Ragged-edge handling (short lines not reaching `right_col`) matches the
+    // engine FSM's `apply_block_operator` path — short lines lose only the
+    // chars that exist.
+    //
+    // `register` is the target register; `'"'` selects the unnamed register.
+
+    /// Delete a rectangular VisualBlock selection. `top_row` / `bot_row` are
+    /// inclusive line bounds; `left_col` / `right_col` are inclusive column
+    /// bounds at the visual (display) column level. Ragged-edge handling
+    /// matches engine FSM's VisualBlock op behavior — short lines that don't
+    /// reach `right_col` lose only the chars that exist.
+    ///
+    /// `register` honors the user's pending register selection.
+    ///
+    /// Promoted in 0.6.X for Phase 4e block-op grammar migration.
+    pub fn delete_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        vim::delete_block_bridge(self, top_row, bot_row, left_col, right_col, register);
+    }
+
+    /// Yank a rectangular VisualBlock selection into `register` without
+    /// mutating the buffer. `'"'` selects the unnamed register.
+    ///
+    /// Promoted in 0.6.X for Phase 4e block-op grammar migration.
+    pub fn yank_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        vim::yank_block_bridge(self, top_row, bot_row, left_col, right_col, register);
+    }
+
+    /// Delete a rectangular VisualBlock selection and enter Insert mode (`c`
+    /// operator). The deleted text is stashed in `register`. Mode is Insert
+    /// on return; the caller must not issue further normal-mode ops until the
+    /// insert session ends.
+    ///
+    /// Promoted in 0.6.X for Phase 4e block-op grammar migration.
+    pub fn change_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        left_col: usize,
+        right_col: usize,
+        register: char,
+    ) {
+        vim::change_block_bridge(self, top_row, bot_row, left_col, right_col, register);
+    }
+
+    /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
+    /// Column bounds are ignored — vim's block indent is always linewise.
+    /// `count == 0` is a no-op.
+    ///
+    /// Promoted in 0.6.X for Phase 4e block-op grammar migration.
+    pub fn indent_block(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        _left_col: usize,
+        _right_col: usize,
+        count: i32,
+    ) {
+        vim::indent_block_bridge(self, top_row, bot_row, count);
+    }
+
     // ─── Phase 4b: pub text-object resolution (hjkl#70) ─────────────────────
     //
     // Pure functions — no cursor mutation, no mode change, no register write.

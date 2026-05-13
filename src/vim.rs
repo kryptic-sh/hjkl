@@ -4320,6 +4320,116 @@ pub(crate) fn case_range_bridge<H: crate::types::Host>(
     apply_case_op_to_selection(ed, op, top, bot, kind);
 }
 
+// ─── Phase 4e pub block-shape range-mutation bridges ───────────────────────
+//
+// These are `pub(crate)` entry points called by the four new pub methods on
+// `Editor` (`delete_block`, `yank_block`, `change_block`, `indent_block`).
+// They set `pending_register` from the caller-supplied char then delegate to
+// `apply_block_operator` (after temporarily installing the 4-corner block as
+// the engine's virtual VisualBlock selection). The editor's VisualBlock state
+// fields (`block_anchor`, `block_vcol`) are overwritten, the op fires, then
+// the fields are restored to their pre-call values. This ensures the engine's
+// register / undo / mode semantics are exercised without requiring the caller
+// to already be in VisualBlock mode.
+//
+// `indent_block` is a separate helper — it does not use `apply_block_operator`
+// because indent/outdent are always linewise for blocks (vim behaviour).
+
+/// Delete a rectangular VisualBlock selection. `top_row`/`bot_row` are
+/// inclusive line bounds; `left_col`/`right_col` are inclusive char-column
+/// bounds. Short lines that don't reach `right_col` lose only the chars
+/// that exist (ragged-edge, matching engine FSM). `register` is honoured;
+/// `'"'` selects the unnamed register.
+pub(crate) fn delete_block_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top_row: usize,
+    bot_row: usize,
+    left_col: usize,
+    right_col: usize,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    let saved_anchor = ed.vim.block_anchor;
+    let saved_vcol = ed.vim.block_vcol;
+    ed.vim.block_anchor = (top_row, left_col);
+    ed.vim.block_vcol = right_col;
+    // Compute clamped col before the mutable borrow for buf_set_cursor_rc.
+    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
+    // Place cursor at bot_row / right_col so block_bounds resolves correctly.
+    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    apply_block_operator(ed, Operator::Delete);
+    // Restore — block_anchor/vcol are only meaningful in VisualBlock mode;
+    // after the op we're in Normal so restoring is a no-op for the user but
+    // keeps state coherent if the caller inspects fields.
+    ed.vim.block_anchor = saved_anchor;
+    ed.vim.block_vcol = saved_vcol;
+}
+
+/// Yank a rectangular VisualBlock selection into `register`.
+pub(crate) fn yank_block_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top_row: usize,
+    bot_row: usize,
+    left_col: usize,
+    right_col: usize,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    let saved_anchor = ed.vim.block_anchor;
+    let saved_vcol = ed.vim.block_vcol;
+    ed.vim.block_anchor = (top_row, left_col);
+    ed.vim.block_vcol = right_col;
+    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
+    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    apply_block_operator(ed, Operator::Yank);
+    ed.vim.block_anchor = saved_anchor;
+    ed.vim.block_vcol = saved_vcol;
+}
+
+/// Delete a rectangular VisualBlock selection and enter Insert mode (`c`).
+/// The deleted text is stashed in `register`. Mode is Insert on return.
+pub(crate) fn change_block_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top_row: usize,
+    bot_row: usize,
+    left_col: usize,
+    right_col: usize,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    let saved_anchor = ed.vim.block_anchor;
+    let saved_vcol = ed.vim.block_vcol;
+    ed.vim.block_anchor = (top_row, left_col);
+    ed.vim.block_vcol = right_col;
+    let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
+    buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
+    apply_block_operator(ed, Operator::Change);
+    ed.vim.block_anchor = saved_anchor;
+    ed.vim.block_vcol = saved_vcol;
+}
+
+/// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
+/// Column bounds are ignored — vim's block indent is always linewise.
+/// `count == 0` is a no-op.
+pub(crate) fn indent_block_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top_row: usize,
+    bot_row: usize,
+    count: i32,
+) {
+    if count == 0 {
+        return;
+    }
+    ed.push_undo();
+    let abs = count.unsigned_abs() as usize;
+    if count > 0 {
+        indent_rows(ed, top_row, bot_row, abs);
+    } else {
+        outdent_rows(ed, top_row, bot_row, abs);
+    }
+    ed.vim.mode = Mode::Normal;
+}
+
 // ─── Phase 4b pub text-object resolution bridges ───────────────────────────
 //
 // These are `pub(crate)` entry points called by the four new pub methods on
