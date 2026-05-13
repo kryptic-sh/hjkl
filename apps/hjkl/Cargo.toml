@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 hjkl-anvil = "0.2"
 hjkl-keymap = "0.2"
-hjkl-vim = "0.14"
+hjkl-vim = "0.15"
 hjkl-lsp = "0.1"
 crossbeam-channel = "0.5"
 hjkl-buffer = "0.6"

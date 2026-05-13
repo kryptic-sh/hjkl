@@ -768,6 +768,8 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("^", hjkl_vim::MotionKind::FirstNonBlank, "first non-blank"),
         ("$", hjkl_vim::MotionKind::LineEnd, "line end"),
         ("<End>", hjkl_vim::MotionKind::LineEnd, "line end"),
+        // Phase 3d: doc-level motion.
+        ("G", hjkl_vim::MotionKind::GotoLine, "goto line"),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [
