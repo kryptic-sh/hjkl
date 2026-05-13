@@ -112,6 +112,21 @@ pub enum AppAction {
     /// through `hjkl_vim::step`. The register char (no fields here — captured
     /// by the second key) is passed to `Editor::set_pending_register`.
     BeginPendingSelectRegister,
+    /// Begin a `m<x>` mark-set chord in Normal mode. The app stores
+    /// `Some(hjkl_vim::PendingState::SetMark)` and routes the next key
+    /// through `hjkl_vim::step`. The mark char is captured by the second key
+    /// and passed to `Editor::set_mark_at_cursor`.
+    BeginPendingSetMark,
+    /// Begin a `'<x>` mark-goto-line chord in Normal mode. The app stores
+    /// `Some(hjkl_vim::PendingState::GotoMarkLine)` and routes the next key
+    /// through `hjkl_vim::step`. The mark char is captured by the second key
+    /// and passed to `Editor::goto_mark_line`.
+    BeginPendingGotoMarkLine,
+    /// Begin a `` `<x> `` mark-goto-char chord in Normal and Visual modes.
+    /// The app stores `Some(hjkl_vim::PendingState::GotoMarkChar)` and routes
+    /// the next key through `hjkl_vim::step`. The mark char is captured by the
+    /// second key and passed to `Editor::goto_mark_char`.
+    BeginPendingGotoMarkChar,
 
     // ── Cursor motions (Phase 3a — hjkl-vim keymap path) ──────────────
     /// Engine-level cursor motion executed via the hjkl-vim keymap path.

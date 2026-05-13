@@ -4997,6 +4997,23 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.active_mut().editor.set_pending_register(reg);
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::SetMark { ch }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.set_mark_at_cursor(ch);
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.goto_mark_line(ch);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.goto_mark_char(ch);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -8573,4 +8590,137 @@ fn visual_block_y_yanks_rectangle_to_register() {
 
     assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Normal);
     assert_window_synced_to_engine(&app);
+}
+
+// ── Phase 5a: mark chord pending states integration tests ─────────────────
+
+/// `ma` then move, then `'a` — linewise mark jump round-trip.
+#[test]
+fn m_a_then_apostrophe_a_jumps_back_to_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "first line\n  second line\nthird line");
+    // Jump to row 2, col 3 and set mark 'a'.
+    app.active_mut().editor.jump_cursor(2, 3);
+    drive_key(&mut app, key(KeyCode::Char('m')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must clear after ma"
+    );
+    // Move away to row 0.
+    app.active_mut().editor.jump_cursor(0, 0);
+    // `'a` — linewise jump back to row 2, first non-blank.
+    drive_key(&mut app, key(KeyCode::Char('\'')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must clear after 'a"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        2,
+        "'a must jump back to mark row"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+/// `ma` then move, then `` `a `` — charwise mark jump round-trip.
+#[test]
+fn m_a_then_backtick_a_jumps_back_to_pos() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "first line\nsecond line\nthird line");
+    // Jump to exact pos (1, 4) and set mark 'a'.
+    app.active_mut().editor.jump_cursor(1, 4);
+    drive_key(&mut app, key(KeyCode::Char('m')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    // Move away.
+    app.active_mut().editor.jump_cursor(0, 0);
+    // `` `a `` — charwise jump back.
+    drive_key(&mut app, key(KeyCode::Char('`')));
+    drive_key(&mut app, key(KeyCode::Char('a')));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must clear after `a"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (1, 4),
+        "`a must jump to exact mark position"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+/// `m` then `<Esc>` — Esc must cancel the SetMark chord without moving cursor.
+#[test]
+fn m_then_esc_cancels() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 3);
+    drive_key(&mut app, key(KeyCode::Char('m')));
+    assert!(
+        app.pending_state.is_some(),
+        "m must enter SetMark pending state"
+    );
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must cancel SetMark pending state"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 3),
+        "cursor must not move after m<Esc>"
+    );
+}
+
+/// `'` then `<Esc>` — Esc must cancel the GotoMarkLine chord.
+#[test]
+fn apostrophe_then_esc_cancels() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 2);
+    drive_key(&mut app, key(KeyCode::Char('\'')));
+    assert!(
+        app.pending_state.is_some(),
+        "' must enter GotoMarkLine pending state"
+    );
+    drive_key(&mut app, key(KeyCode::Esc));
+    assert!(
+        app.pending_state.is_none(),
+        "Esc must cancel GotoMarkLine pending state"
+    );
+    assert_eq!(
+        app.active().editor.cursor(),
+        (0, 2),
+        "cursor must not move after '<Esc>"
+    );
+}
+
+/// `` ` `` in Visual mode jumps charwise and keeps visual mode active.
+#[test]
+fn backtick_in_visual_jumps_pos() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "first line\nsecond line\nthird line");
+    // Set mark 'b' at (2, 2) in Normal mode.
+    app.active_mut().editor.jump_cursor(2, 2);
+    drive_key(&mut app, key(KeyCode::Char('m')));
+    drive_key(&mut app, key(KeyCode::Char('b')));
+    // Enter Visual mode at (0, 0).
+    app.active_mut().editor.jump_cursor(0, 0);
+    drive_key(&mut app, key(KeyCode::Char('v')));
+    assert_eq!(app.active().editor.vim_mode(), hjkl_engine::VimMode::Visual);
+    // `` `b `` in Visual mode — must jump to (2, 2) via BeginPendingGotoMarkChar.
+    // In Visual mode, route_chord_key dispatches non-Normal trie, which has
+    // the `` ` `` binding from build_app_keymap.
+    app.route_chord_key(ck('`'));
+    app.route_chord_key(ck('b'));
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must clear after `b in Visual mode"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        2,
+        "`b in Visual mode must jump to mark row"
+    );
 }

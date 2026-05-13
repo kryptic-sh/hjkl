@@ -767,6 +767,48 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         eprintln!("hjkl: keymap.add(\\\") failed: {e}");
     }
 
+    // `m<x>` — mark-set chord. Normal mode only (vim's `m` is not meaningful
+    // in Visual mode). The engine FSM arms for `m` in Normal mode are kept
+    // intact for macro-replay defensive coverage (deletion in Phase 6).
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "m",
+        AppAction::BeginPendingSetMark,
+        "set mark chord",
+    ) {
+        eprintln!("hjkl: keymap.add(m) failed: {e}");
+    }
+
+    // `'<x>` — mark-goto-line chord. Normal mode only.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "'",
+        AppAction::BeginPendingGotoMarkLine,
+        "goto mark linewise chord",
+    ) {
+        eprintln!("hjkl: keymap.add(') failed: {e}");
+    }
+
+    // `` `<x> `` — mark-goto-char chord. Normal + all three Visual modes.
+    // In Visual mode, `` ` `` jumps the cursor to a mark charwise while keeping
+    // the selection active (matches engine's pre-existing vim.rs:2058-2066
+    // behaviour). The engine FSM arms for `` ` `` are kept for macro-replay.
+    for mode in [
+        Mode::Normal,
+        Mode::Visual,
+        Mode::VisualLine,
+        Mode::VisualBlock,
+    ] {
+        if let Err(e) = km.add(
+            mode,
+            "`",
+            AppAction::BeginPendingGotoMarkChar,
+            "goto mark charwise chord",
+        ) {
+            eprintln!("hjkl: keymap.add(`) failed: {e}");
+        }
+    }
+
     // ── Phase 3a: char + line motions via hjkl-vim keymap path ───────────
     // Bound in Normal, Visual, VisualLine, and VisualBlock. Engine FSM arms
     // for these keys are kept intact for macro-replay defensive coverage.
@@ -1670,6 +1712,22 @@ impl App {
                 self.pending_count.reset();
                 self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
             }
+            AppAction::BeginPendingSetMark => {
+                // `m<x>` mark-set chord. No count consumed — char captured by
+                // second key. Discard any buffered count (not meaningful here).
+                self.pending_count.reset();
+                self.pending_state = Some(hjkl_vim::PendingState::SetMark);
+            }
+            AppAction::BeginPendingGotoMarkLine => {
+                // `'<x>` mark-goto-line chord. No count consumed.
+                self.pending_count.reset();
+                self.pending_state = Some(hjkl_vim::PendingState::GotoMarkLine);
+            }
+            AppAction::BeginPendingGotoMarkChar => {
+                // `` `<x> `` mark-goto-char chord. No count consumed.
+                self.pending_count.reset();
+                self.pending_state = Some(hjkl_vim::PendingState::GotoMarkChar);
+            }
             AppAction::Motion {
                 kind,
                 count: action_count,
@@ -2259,6 +2317,24 @@ impl App {
                     Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
                         self.pending_state = None;
                         self.active_mut().editor.set_pending_register(reg);
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::SetMark { ch }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.set_mark_at_cursor(ch);
+                        // No sync needed — set_mark_at_cursor does not move cursor.
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.goto_mark_line(ch);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.goto_mark_char(ch);
+                        self.sync_after_engine_mutation();
                         return true;
                     }
                     Outcome::Cancel => {
