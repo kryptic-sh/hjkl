@@ -8174,6 +8174,190 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
     assert_window_synced_to_engine(&app);
 }
 
+// ── Phase 4e: visual-mode operator dispatch via keymap + range-mutation ──────
+//
+// These tests verify that `d` / `y` / `c` in Visual / VisualLine mode are
+// consumed by the app keymap (dispatching `AppAction::VisualOp`) and produce
+// the correct buffer / mode state via the range-mutation primitives.
+
+fn ck(c: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+}
+
+#[test]
+fn visual_d_deletes_selection_via_keymap() {
+    // Enter Visual, select 5 chars ("hello"), d → " world" remains.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Enter Visual mode via engine FSM.
+    app.active_mut().editor.handle_key(ck('v'));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Visual,
+        "must be in Visual after v"
+    );
+
+    // Extend right 4: cursor on col 4, anchor at col 0 → "hello" selected.
+    for _ in 0..4 {
+        let consumed = app.route_chord_key(ck('l'));
+        assert!(consumed, "l in Visual must be consumed by keymap");
+    }
+
+    // Dispatch d via keymap.
+    let consumed = app.route_chord_key(ck('d'));
+    assert!(
+        consumed,
+        "d in Visual must be consumed by keymap (VisualOp)"
+    );
+
+    // Buffer should have " world" (the chars after the deleted selection).
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec![" world"],
+        "vd must delete selected chars; got {lines:?}"
+    );
+
+    // Must have returned to Normal mode.
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must exit Visual mode after d"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn visual_y_yanks_selection_via_keymap() {
+    // Enter Visual, select "hello", y → unnamed register has "hello", buffer unchanged.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.active_mut().editor.handle_key(ck('v'));
+
+    // Extend right 4: covers "hello".
+    for _ in 0..4 {
+        app.route_chord_key(ck('l'));
+    }
+
+    // Dispatch y via keymap.
+    let consumed = app.route_chord_key(ck('y'));
+    assert!(
+        consumed,
+        "y in Visual must be consumed by keymap (VisualOp)"
+    );
+
+    // Buffer must be unchanged.
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["hello world"],
+        "vy must not modify the buffer; got {lines:?}"
+    );
+
+    // Unnamed register must contain the yanked text.
+    let reg = app.active().editor.yank();
+    assert!(
+        reg.contains("hello"),
+        "unnamed register must contain 'hello' after vy; got {reg:?}"
+    );
+
+    // Must have returned to Normal mode.
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must exit Visual mode after y"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn visual_line_d_deletes_line_via_keymap() {
+    // Enter VisualLine (V), d → first line deleted.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "first line\nsecond line");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Enter VisualLine via engine FSM (Shift-V).
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualLine,
+        "must be in VisualLine after V"
+    );
+
+    // Dispatch d via keymap.
+    let consumed = app.route_chord_key(ck('d'));
+    assert!(
+        consumed,
+        "d in VisualLine must be consumed by keymap (VisualOp)"
+    );
+
+    // First line should be gone.
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["second line"],
+        "Vd must delete first line; got {lines:?}"
+    );
+
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must exit VisualLine mode after d"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn visual_c_enters_insert_mode_via_keymap() {
+    // Enter Visual, select "hello", c → Insert mode, selection deleted.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.active_mut().editor.handle_key(ck('v'));
+
+    // Extend right 4: covers "hello".
+    for _ in 0..4 {
+        app.route_chord_key(ck('l'));
+    }
+
+    // Dispatch c via keymap.
+    let consumed = app.route_chord_key(ck('c'));
+    assert!(
+        consumed,
+        "c in Visual must be consumed by keymap (VisualOp)"
+    );
+
+    // Must be in Insert mode.
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Insert,
+        "vc must enter Insert mode; got {:?}",
+        app.active().editor.vim_mode()
+    );
+
+    // Buffer should have "hello" deleted, leaving " world".
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec![" world"],
+        "vc must delete selected chars; got {lines:?}"
+    );
+
+    assert_window_synced_to_engine(&app);
+}
+
 #[test]
 fn gg_full_sequence_in_normal_mode_via_keymap() {
     // Sanity-check coverage for the previously-working Normal path.
