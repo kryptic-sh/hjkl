@@ -330,11 +330,11 @@ pub struct App {
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
     pub picker: Option<crate::picker::Picker>,
-    /// Buffered digit string for an app-level count prefix (e.g. `5` in
+    /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
     /// engine-handled, or consumed when the key is app-handled.
-    pub pending_count: String,
+    pub pending_count: hjkl_vim::CountAccumulator,
     /// Direction of the active `search_field`.
     pub search_dir: SearchDir,
     /// Last cursor shape we emitted to the terminal.
@@ -1280,7 +1280,7 @@ impl App {
             command_field: None,
             search_field: None,
             picker: None,
-            pending_count: String::new(),
+            pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
             syntax,
@@ -1531,12 +1531,7 @@ impl App {
                 count: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::Replace { count: n });
             }
             AppAction::BeginPendingFind {
@@ -1545,12 +1540,7 @@ impl App {
                 count: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::Find {
                     count: n,
                     forward,
@@ -1561,24 +1551,14 @@ impl App {
                 count: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::AfterG { count: n });
             }
             AppAction::BeginPendingAfterZ {
                 count: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::AfterZ { count: n });
             }
             AppAction::BeginPendingAfterOp {
@@ -1586,12 +1566,7 @@ impl App {
                 count1: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
                     op,
                     count1: n,
@@ -1602,7 +1577,7 @@ impl App {
                 // `"<reg>` register-prefix chord. No count is consumed — the
                 // register char is captured by the second key. Discard any
                 // buffered count (it's not meaningful for register selection).
-                self.pending_count.clear();
+                self.pending_count.reset();
                 self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
             }
             AppAction::Motion {
@@ -1610,12 +1585,7 @@ impl App {
                 count: action_count,
             } => {
                 // Use buffered count-prefix if present, otherwise the action count.
-                let n = if self.pending_count.is_empty() {
-                    action_count as usize
-                } else {
-                    self.pending_count.parse::<usize>().unwrap_or(1).max(1)
-                };
-                self.pending_count.clear();
+                let n = self.pending_count.take_or(action_count) as usize;
                 self.active_mut().editor.apply_motion(kind, n);
             }
             AppAction::Replay { keys, recursive } => {

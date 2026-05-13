@@ -4501,29 +4501,26 @@ fn pending_count_accumulation_rules() {
 
     // Simulate the digit-buffering logic for each digit:
     // '1' starts the count.
-    app.pending_count.push('1');
-    assert_eq!(app.pending_count, "1");
+    assert!(app.pending_count.try_accumulate('1'));
+    assert_eq!(app.pending_count.peek(), 1);
 
     // '0' extends a non-empty count.
-    app.pending_count.push('0');
-    assert_eq!(app.pending_count, "10");
+    assert!(app.pending_count.try_accumulate('0'));
+    assert_eq!(app.pending_count.peek(), 10);
 
-    // Parsing gives 10.
-    let count: usize = app.pending_count.parse().unwrap_or(1);
+    // take_or gives 10.
+    let count: usize = app.pending_count.take_or(1) as usize;
     assert_eq!(count, 10);
 
     // After consuming, it must be cleared.
-    app.pending_count.clear();
     assert!(app.pending_count.is_empty());
 
-    // '0' alone (empty pending_count) must NOT be pushed — the event loop
-    // falls through to the engine.  We verify this by checking the rule:
-    // is_zero && pending_count.is_empty() → do not push.
-    let d = '0';
-    let is_zero = d == '0';
-    if !is_zero || !app.pending_count.is_empty() {
-        app.pending_count.push(d);
-    }
+    // '0' alone (empty pending_count) must NOT be accumulated — the event loop
+    // falls through to the engine.  try_accumulate returns false for this case.
+    assert!(
+        !app.pending_count.try_accumulate('0'),
+        "'0' with empty pending_count must not be accumulated"
+    );
     assert!(
         app.pending_count.is_empty(),
         "'0' with empty pending_count must not be buffered"
@@ -5204,7 +5201,7 @@ fn fx_with_count_3() {
     app.active_mut().editor.jump_cursor(0, 0);
 
     // Buffer count via pending_count (mimicking the event_loop digit path).
-    app.pending_count = "3".into();
+    app.pending_count.try_accumulate('3');
     drive_key(&mut app, key(KeyCode::Char('f')));
     // dispatch_keymap reads pending_count when BeginPendingFind fires.
     assert!(
@@ -5288,7 +5285,7 @@ fn gg_with_count_5_jumps_line_5() {
     seed_buffer(&mut app, &lines.join("\n"));
     app.active_mut().editor.jump_cursor(0, 0);
 
-    app.pending_count = "5".into();
+    app.pending_count.try_accumulate('5');
     drive_key(&mut app, key(KeyCode::Char('g')));
     assert!(
         matches!(
@@ -5986,7 +5983,7 @@ fn which_key_esc_clears_sticky() {
 
     // Simulate Esc handling (as in the event loop).
     app.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-    app.pending_count.clear();
+    app.pending_count.reset();
     app.clear_prefix_state();
     app.which_key_sticky = false;
 
@@ -6023,7 +6020,7 @@ fn pending_replace_with_count_replaces_five_chars() {
     app.active_mut().editor.jump_cursor(0, 0);
 
     // Buffer the count digit `5` (simulates the event loop accumulating digits).
-    app.pending_count = "5".to_string();
+    app.pending_count.try_accumulate('5');
     // `r` → matched by trie → BeginPendingReplace reads pending_count (5).
     drive_key(&mut app, key(KeyCode::Char('r')));
     assert!(
@@ -6302,7 +6299,7 @@ fn two_dd_deletes_two_lines_via_reducer() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "line1\nline2\nline3");
     app.active_mut().editor.jump_cursor(0, 0);
-    app.pending_count = "2".into();
+    app.pending_count.try_accumulate('2');
 
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(
@@ -6552,7 +6549,7 @@ fn two_d_3fx_total_count_6() {
     seed_buffer(&mut app, "xaxbxcxdxexf");
     app.active_mut().editor.jump_cursor(0, 0);
 
-    app.pending_count = "2".into();
+    app.pending_count.try_accumulate('2');
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(
         matches!(

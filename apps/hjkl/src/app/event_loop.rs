@@ -414,9 +414,9 @@ impl App {
                         // match a chord prefix.
                         if key.modifiers == KeyModifiers::NONE {
                             if let KeyCode::Char(d @ '0'..='9') = key.code {
-                                let is_zero = d == '0';
-                                if !is_zero || !self.pending_count.is_empty() {
-                                    self.pending_count.push(d);
+                                // try_accumulate returns false for '0' with empty buffer
+                                // (vim's LineStart quirk); in that case fall through to keymap.
+                                if self.pending_count.try_accumulate(d) {
                                     continue;
                                 }
                                 // '0' with empty pending_count → start-of-line; fall through.
@@ -480,7 +480,7 @@ impl App {
                                     _ => false,
                                 };
                                 if !could_start_chord {
-                                    let digits: String = self.pending_count.drain(..).collect();
+                                    let digits = self.pending_count.drain_as_digits();
                                     for d in digits.chars() {
                                         self.active_mut().editor.handle_key(KeyEvent::new(
                                             KeyCode::Char(d),
@@ -501,7 +501,7 @@ impl App {
                             let is_ctrl_char = key.modifiers == KeyModifiers::CONTROL
                                 && matches!(key.code, KeyCode::Char(_));
                             if !is_ctrl_char && !self.pending_count.is_empty() {
-                                let digits: String = self.pending_count.drain(..).collect();
+                                let digits = self.pending_count.drain_as_digits();
                                 for d in digits.chars() {
                                     self.active_mut().editor.handle_key(KeyEvent::new(
                                         KeyCode::Char(d),
@@ -541,7 +541,7 @@ impl App {
                         // ── Escape: cancel any pending prefix ─────────────────
                         if key.code == KeyCode::Esc {
                             self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-                            self.pending_count.clear();
+                            self.pending_count.reset();
                             self.clear_prefix_state();
                             self.which_key_sticky = false;
                             // Fall through to engine so it can exit visual mode etc.
@@ -956,7 +956,7 @@ impl App {
                         // consumed. If Unbound: replay buffered count digits +
                         // unbound events to the engine.
                         if !engine_pending && let Some(km_ev) = to_km_event(key) {
-                            let count = self.pending_count.parse::<u32>().unwrap_or(1).max(1);
+                            let count = self.pending_count.peek().max(1);
                             let mut replay: Vec<KmKeyEvent> = Vec::new();
                             let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
                             if consumed {
@@ -967,7 +967,7 @@ impl App {
                             }
                             // Unbound: flush buffered count digits to engine first.
                             if !self.pending_count.is_empty() {
-                                let digits: String = self.pending_count.drain(..).collect();
+                                let digits = self.pending_count.drain_as_digits();
                                 for d in digits.chars() {
                                     self.active_mut().editor.handle_key(KeyEvent::new(
                                         KeyCode::Char(d),
@@ -1007,7 +1007,7 @@ impl App {
                     } else {
                         // Non-Normal mode: reset any pending Normal-mode chord state.
                         self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
-                        self.pending_count.clear();
+                        self.pending_count.reset();
                         self.clear_prefix_state();
                     }
 
