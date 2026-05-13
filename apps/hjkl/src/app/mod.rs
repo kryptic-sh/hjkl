@@ -736,9 +736,11 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
     // `d` / `y` / `c` / `>` / `<` bound in HjklMode::Visual (covers Visual,
     // VisualLine, and VisualBlock per the mode-collapse in keymap.rs:125).
     //
-    // VisualBlock ops fall back to the engine FSM in the dispatch arm because
-    // block-shape range-mutation requires the internal `apply_block_operator`
-    // path, which is not exposed as a public primitive (Phase 4e gap).
+    // All three modes (Visual, VisualLine, VisualBlock) route through the
+    // public range-mutation primitives. Phase 4e follow-ups closed the gaps:
+    //   - pending_register() getter exposed (Visual register honors "a prefix)
+    //   - run_operator_over_range linewise guard fixed (VisualLine single-row)
+    //   - delete_block/yank_block/change_block/indent_block exposed (VisualBlock)
     for (key, op, desc) in [
         ("d", hjkl_vim::OperatorKind::Delete, "delete selection"),
         ("y", hjkl_vim::OperatorKind::Yank, "yank selection"),
@@ -1686,28 +1688,68 @@ impl App {
                 // must match the visual mode so the range-mutation primitives apply
                 // the correct inclusion semantics.
                 //
-                // VisualBlock falls back to the engine FSM because block-shape
-                // range-mutation requires the internal `apply_block_operator` path,
-                // not exposed as a public primitive (Phase 4e gap). Feed `d`/`y`/
-                // etc. directly to the engine for VisualBlock.
+                // Phase 4e follow-ups: all three visual modes now route through the
+                // public range-mutation primitives rather than falling back to the
+                // engine FSM:
+                //   - Visual: pending_register now read from engine getter (gap fixed)
+                //   - VisualLine: guard fix in run_operator_over_range allows single-
+                //     row linewise, so FSM fallback for d/y/c is removed
+                //   - VisualBlock: delete_block / yank_block / change_block / indent_block
+                //     now exposed (gap fixed), FSM fallback removed
                 use hjkl_engine::{MotionKind, VimMode};
                 let vim_mode = self.active().editor.vim_mode();
+                // Read the user's pending register selection BEFORE the match so all
+                // three mode arms can use it. pending_register() does not clear the
+                // selection — the engine clears it when the next operator fires.
+                let register = self.active().editor.pending_register().unwrap_or('"');
                 match vim_mode {
                     VimMode::VisualBlock => {
-                        // Fallback: let engine FSM handle block ops directly.
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        let key_char = match op {
-                            hjkl_vim::OperatorKind::Delete => 'd',
-                            hjkl_vim::OperatorKind::Yank => 'y',
-                            hjkl_vim::OperatorKind::Change => 'c',
-                            hjkl_vim::OperatorKind::Indent => '>',
-                            hjkl_vim::OperatorKind::Outdent => '<',
-                            _ => return,
+                        // Rectangular selection — use block-shape primitives.
+                        let Some((top_row, bot_row, left_col, right_col)) =
+                            self.active().editor.block_highlight()
+                        else {
+                            return;
                         };
-                        self.active_mut().editor.handle_key(CtKeyEvent::new(
-                            KeyCode::Char(key_char),
-                            KeyModifiers::NONE,
-                        ));
+                        match op {
+                            hjkl_vim::OperatorKind::Delete => {
+                                self.active_mut()
+                                    .editor
+                                    .delete_block(top_row, bot_row, left_col, right_col, register);
+                            }
+                            hjkl_vim::OperatorKind::Yank => {
+                                self.active_mut()
+                                    .editor
+                                    .yank_block(top_row, bot_row, left_col, right_col, register);
+                            }
+                            hjkl_vim::OperatorKind::Change => {
+                                self.active_mut()
+                                    .editor
+                                    .change_block(top_row, bot_row, left_col, right_col, register);
+                                // change_block enters Insert (BlockChange reason);
+                                // no Esc needed.
+                                return;
+                            }
+                            hjkl_vim::OperatorKind::Indent => {
+                                self.active_mut()
+                                    .editor
+                                    .indent_block(top_row, bot_row, left_col, right_col, n as i32);
+                            }
+                            hjkl_vim::OperatorKind::Outdent => {
+                                self.active_mut().editor.indent_block(
+                                    top_row,
+                                    bot_row,
+                                    left_col,
+                                    right_col,
+                                    -(n as i32),
+                                );
+                            }
+                            _ => return,
+                        }
+                        // Exit visual mode after the op (except Change above).
+                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        self.active_mut()
+                            .editor
+                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
                     }
                     VimMode::Visual => {
                         // Charwise visual selection — inclusive on both ends.
@@ -1715,9 +1757,6 @@ impl App {
                             return;
                         };
                         let kind = MotionKind::Inclusive;
-                        // Default register `"`. TODO: read engine pending_register
-                        // once a public getter is exposed (Phase 4e-prep gap).
-                        let register = '"';
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
                                 self.active_mut()
@@ -1758,39 +1797,44 @@ impl App {
                     }
                     VimMode::VisualLine => {
                         // Linewise visual selection — full rows.
-                        //
-                        // delete/yank/change fall back to the engine FSM rather than
-                        // the range-mutation bridge. The bridge routes through
-                        // `run_operator_over_range` which bails when `top == bot`
-                        // (single-row selection), making it a no-op. The engine FSM
-                        // calls `cut_vim_range` directly and handles the single-row
-                        // case correctly. Indent/Outdent use `indent_range_bridge`
-                        // which is not affected by the `top == bot` guard.
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        // Option (a): pass (top_row, 0) and (bot_row, usize::MAX)
+                        // with MotionKind::Linewise. The engine's run_operator_over_range
+                        // handles Linewise semantics; read_vim_range / cut_vim_range
+                        // snap to full line boundaries regardless of the col values.
+                        // The Phase 4e guard fix allows single-row (top==bot) Linewise
+                        // ranges, so this path works for both single and multi-line.
+                        let Some((top_row, bot_row)) = self.active().editor.line_highlight() else {
+                            return;
+                        };
+                        let kind = MotionKind::Linewise;
                         match op {
-                            hjkl_vim::OperatorKind::Delete
-                            | hjkl_vim::OperatorKind::Yank
-                            | hjkl_vim::OperatorKind::Change => {
-                                let key_char = match op {
-                                    hjkl_vim::OperatorKind::Delete => 'd',
-                                    hjkl_vim::OperatorKind::Yank => 'y',
-                                    _ => 'c',
-                                };
-                                self.active_mut().editor.handle_key(CtKeyEvent::new(
-                                    KeyCode::Char(key_char),
-                                    KeyModifiers::NONE,
-                                ));
-                                // Engine FSM transitions mode internally; for Change
-                                // it enters Insert, for Delete/Yank it returns Normal.
-                                // No further Esc needed.
+                            hjkl_vim::OperatorKind::Delete => {
+                                self.active_mut().editor.delete_range(
+                                    (top_row, 0),
+                                    (bot_row, usize::MAX),
+                                    kind,
+                                    register,
+                                );
+                            }
+                            hjkl_vim::OperatorKind::Yank => {
+                                self.active_mut().editor.yank_range(
+                                    (top_row, 0),
+                                    (bot_row, usize::MAX),
+                                    kind,
+                                    register,
+                                );
+                            }
+                            hjkl_vim::OperatorKind::Change => {
+                                self.active_mut().editor.change_range(
+                                    (top_row, 0),
+                                    (bot_row, usize::MAX),
+                                    kind,
+                                    register,
+                                );
+                                // change_range enters Insert mode.
                                 return;
                             }
                             hjkl_vim::OperatorKind::Indent => {
-                                let Some((top_row, bot_row)) =
-                                    self.active().editor.line_highlight()
-                                else {
-                                    return;
-                                };
                                 self.active_mut().editor.indent_range(
                                     (top_row, 0),
                                     (bot_row, 0),
@@ -1799,11 +1843,6 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::Outdent => {
-                                let Some((top_row, bot_row)) =
-                                    self.active().editor.line_highlight()
-                                else {
-                                    return;
-                                };
                                 self.active_mut().editor.indent_range(
                                     (top_row, 0),
                                     (bot_row, 0),
@@ -1813,8 +1852,8 @@ impl App {
                             }
                             _ => return,
                         }
-                        // Exit visual mode after indent/outdent (engine FSM path
-                        // above returns early so this only fires for indent/outdent).
+                        // Exit visual mode after the op (except Change above).
+                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         self.active_mut()
                             .editor
                             .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
