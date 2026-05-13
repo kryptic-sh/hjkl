@@ -2535,6 +2535,31 @@ fn execute_motion_with_block_vcol<H: crate::types::Host>(
 ///
 /// Maps each variant to the same internal primitives used by the engine FSM
 /// so cursor, sticky column, scroll, and sync semantics are identical.
+///
+/// # Visual-mode post-motion sync audit (2026-05-13)
+///
+/// The FSM's `step_normal` motion path (lines ~1997-2006) does exactly two
+/// things after `execute_motion` that are conditional on visual mode:
+///
+/// 1. **VisualBlock `block_vcol` sync** — `update_block_vcol(ed, &motion)` is
+///    called when `mode == Mode::VisualBlock`.  This is replicated here via
+///    `execute_motion_with_block_vcol` for every motion variant below.
+///
+/// 2. **`last_find` update** — `if let Motion::Find { .. } = motion { … }`
+///    appears after the motion call in the FSM, but `parse_motion` (the only
+///    FSM code path that reaches that block) **never** returns `Motion::Find`.
+///    `Find` is dispatched through `Pending::Find → handle_find_target →
+///    apply_find_char`, which writes `last_find` itself.  The post-motion
+///    `last_find` line in the FSM is therefore **dead code**.  The keymap
+///    path writes `last_find` in `apply_find_char` (called from
+///    `Editor::find_char`), so no gap exists here.
+///
+/// No VisualLine-specific or Visual-specific post-motion work exists in the
+/// FSM: anchors (`visual_anchor`, `visual_line_anchor`, `block_anchor`) are
+/// only written on mode-entry or `o`-swap, never on motion.  The `<`/`>`
+/// mark update in `step()` fires only on visual→normal transition, not after
+/// each motion.  There are **no further sync gaps** beyond the `block_vcol`
+/// fix already applied above.
 pub(crate) fn apply_motion_kind<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     kind: hjkl_vim::MotionKind,
