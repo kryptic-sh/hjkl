@@ -2983,6 +2983,118 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::apply_op_g_inner(self, op, ch, total_count);
     }
 
+    // ─── Phase 4a: pub range-mutation primitives (hjkl#70) ──────────────────
+    //
+    // These do not consume input — the caller (hjkl-vim's visual-mode operator
+    // path, chunk 4e) has already resolved the range from the visual selection
+    // before calling in. Normal-mode op dispatch continues to use
+    // `apply_op_motion` / `apply_op_double` / `apply_op_find` / `apply_op_text_obj`.
+
+    /// Delete the region `[start, end)` and stash the removed text in
+    /// `register`. `'"'` selects the unnamed register (vim default); `'a'`–`'z'`
+    /// select named registers.
+    ///
+    /// Pure range-mutation primitive — does not consume input. Called by
+    /// hjkl-vim's visual-mode operator path which has already resolved the range
+    /// from the visual selection.
+    ///
+    /// Promoted to the public surface in 0.6.7 for Phase 4 visual-mode op
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn delete_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: crate::vim::MotionKind,
+        register: char,
+    ) {
+        vim::delete_range_bridge(self, start, end, kind, register);
+    }
+
+    /// Yank (copy) the region `[start, end)` into `register` without mutating
+    /// the buffer. `'"'` selects the unnamed register; `'0'` the yank-only
+    /// register; `'a'`–`'z'` select named registers.
+    ///
+    /// Pure range-mutation primitive — does not consume input. Called by
+    /// hjkl-vim's visual-mode operator path which has already resolved the range
+    /// from the visual selection.
+    ///
+    /// Promoted to the public surface in 0.6.7 for Phase 4 visual-mode op
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn yank_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: crate::vim::MotionKind,
+        register: char,
+    ) {
+        vim::yank_range_bridge(self, start, end, kind, register);
+    }
+
+    /// Delete the region `[start, end)` and transition to Insert mode (vim `c`
+    /// operator). The deleted text is stashed in `register`. On return the
+    /// editor is in Insert mode; the caller must not issue further normal-mode
+    /// ops until the insert session ends.
+    ///
+    /// Pure range-mutation primitive — does not consume input. Called by
+    /// hjkl-vim's visual-mode operator path which has already resolved the range
+    /// from the visual selection.
+    ///
+    /// Promoted to the public surface in 0.6.7 for Phase 4 visual-mode op
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn change_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: crate::vim::MotionKind,
+        register: char,
+    ) {
+        vim::change_range_bridge(self, start, end, kind, register);
+    }
+
+    /// Indent (`count > 0`) or outdent (`count < 0`) the row span
+    /// `[start.0, end.0]`. Column components are ignored — indent is always
+    /// linewise. `shiftwidth` overrides the editor's configured shiftwidth for
+    /// this call; pass `0` to use the current editor setting. `count == 0` is a
+    /// no-op.
+    ///
+    /// Pure range-mutation primitive — does not consume input. Called by
+    /// hjkl-vim's visual-mode operator path which has already resolved the range
+    /// from the visual selection.
+    ///
+    /// Promoted to the public surface in 0.6.7 for Phase 4 visual-mode op
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn indent_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        count: i32,
+        shiftwidth: u32,
+    ) {
+        vim::indent_range_bridge(self, start, end, count, shiftwidth);
+    }
+
+    /// Apply a case transformation (`Operator::Uppercase` /
+    /// `Operator::Lowercase` / `Operator::ToggleCase`) to the region
+    /// `[start, end)`. Other `Operator` variants are silently ignored (no-op).
+    /// Yanks registers are left untouched — vim's case operators do not write
+    /// to registers.
+    ///
+    /// Pure range-mutation primitive — does not consume input. Called by
+    /// hjkl-vim's visual-mode operator path which has already resolved the range
+    /// from the visual selection.
+    ///
+    /// Promoted to the public surface in 0.6.7 for Phase 4 visual-mode op
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn case_range(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        kind: crate::vim::MotionKind,
+        op: crate::vim::Operator,
+    ) {
+        vim::case_range_bridge(self, start, end, kind, op);
+    }
+
     /// Execute a named cursor motion `kind` repeated `count` times.
     ///
     /// Maps the keymap-layer `hjkl_vim::MotionKind` to the engine's internal

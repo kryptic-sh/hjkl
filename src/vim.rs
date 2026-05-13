@@ -4207,6 +4207,116 @@ fn run_operator_over_range<H: crate::types::Host>(
     }
 }
 
+// ─── Phase 4a pub range-mutation bridges ───────────────────────────────────
+//
+// These are `pub(crate)` entry points called by the five new pub methods on
+// `Editor` (`delete_range`, `yank_range`, `change_range`, `indent_range`,
+// `case_range`). They set `pending_register` from the caller-supplied char
+// before delegating to the existing internal helpers so register semantics
+// (unnamed `"`, named `"a`–`"z`, delete ring) are honoured exactly as in the
+// FSM path.
+//
+// Do NOT call `run_operator_over_range` for Indent/Outdent or the three case
+// operators — those share the FSM path but have dedicated parameter shapes
+// (signed count, Operator-as-CaseOp) that map more cleanly to their own
+// helpers.
+
+/// Delete the range `[start, end)` (interpretation determined by `kind`) and
+/// stash the deleted text in `register`. `'"'` is the unnamed register.
+pub(crate) fn delete_range_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: MotionKind,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    run_operator_over_range(ed, Operator::Delete, start, end, kind);
+}
+
+/// Yank (copy) the range `[start, end)` into `register` without mutating the
+/// buffer. `'"'` is the unnamed register.
+pub(crate) fn yank_range_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: MotionKind,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    run_operator_over_range(ed, Operator::Yank, start, end, kind);
+}
+
+/// Delete the range `[start, end)` and enter Insert mode (vim `c` operator).
+/// The deleted text is stashed in `register`. Mode transitions to Insert on
+/// return; the caller must not issue further normal-mode ops until the insert
+/// session ends.
+pub(crate) fn change_range_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: MotionKind,
+    register: char,
+) {
+    ed.vim.pending_register = Some(register);
+    run_operator_over_range(ed, Operator::Change, start, end, kind);
+}
+
+/// Indent (`count > 0`) or outdent (`count < 0`) the row span `[start.0,
+/// end.0]`. `shiftwidth` overrides the editor's `settings().shiftwidth` for
+/// this call; pass `0` to use the editor setting. The column parts of `start`
+/// / `end` are ignored — indent is always linewise.
+pub(crate) fn indent_range_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    count: i32,
+    shiftwidth: u32,
+) {
+    if count == 0 {
+        return;
+    }
+    let (top_row, bot_row) = if start.0 <= end.0 {
+        (start.0, end.0)
+    } else {
+        (end.0, start.0)
+    };
+    // Temporarily override shiftwidth when the caller provides one.
+    let original_sw = ed.settings().shiftwidth;
+    if shiftwidth > 0 {
+        ed.settings_mut().shiftwidth = shiftwidth as usize;
+    }
+    ed.push_undo();
+    let abs_count = count.unsigned_abs() as usize;
+    if count > 0 {
+        indent_rows(ed, top_row, bot_row, abs_count);
+    } else {
+        outdent_rows(ed, top_row, bot_row, abs_count);
+    }
+    if shiftwidth > 0 {
+        ed.settings_mut().shiftwidth = original_sw;
+    }
+    ed.vim.mode = Mode::Normal;
+}
+
+/// Apply a case transformation (`Uppercase` / `Lowercase` / `ToggleCase`) to
+/// the range `[start, end)`. Only the three case `Operator` variants are valid;
+/// other variants are silently ignored (no-op).
+pub(crate) fn case_range_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: MotionKind,
+    op: Operator,
+) {
+    match op {
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {}
+        _ => return,
+    }
+    let (top, bot) = order(start, end);
+    apply_case_op_to_selection(ed, op, top, bot, kind);
+}
+
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
 /// Splits on blank-line boundaries so paragraph structure is
 /// preserved. Each paragraph's words are joined with single spaces
