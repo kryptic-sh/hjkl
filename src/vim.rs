@@ -4115,7 +4115,10 @@ fn run_operator_over_range<H: crate::types::Host>(
     kind: MotionKind,
 ) {
     let (top, bot) = order(start, end);
-    if top == bot {
+    // Charwise empty range (same position) — nothing to act on. For Linewise
+    // the range `top == bot` means "operate on this one line" which is
+    // perfectly valid (e.g. `Vd` on a single-line VisualLine selection).
+    if top == bot && !matches!(kind, MotionKind::Linewise) {
         return;
     }
 
@@ -11197,14 +11200,24 @@ mod tests {
 
     #[test]
     fn apply_op_g_dgg_deletes_to_top() {
-        // `dgg` in 3-line buffer with cursor on line 2 → deletes lines 0..=1.
+        // `dgg` in 3-line buffer with cursor on row 1 → deletes rows 0..=1,
+        // leaving only "line3".
+        //
+        // Before the Phase 4e linewise guard fix, `run_operator_over_range`
+        // bailed unconditionally when `top == bot`. This test was originally
+        // written using `apply_op_motion(Delete, 'j', 1)` to "move" the
+        // cursor (which actually deleted rows 0..=1 via `dj`, leaving only
+        // "line3"), then called `dgg` from row 0 → `top == bot == (0,0)` →
+        // old guard bailed → buffer stayed `["line3"]`. The assertion passed
+        // for the wrong reason. Now we use `jump_cursor` to position without
+        // deleting, and the guard is conditioned on non-Linewise so `dgg`
+        // from row 1 deletes rows 0..=1 correctly.
         let mut e = editor_with("line1\nline2\nline3");
-        // Move cursor to row 1 (line2).
-        e.apply_op_motion(crate::vim::Operator::Delete, 'j', 1);
-        // Now on line2; dgg deletes line2..line1 (to file top, inclusive).
-        // cursor is on row 1; FileTop goes to row 0, so op covers rows 0-1.
+        // Position cursor on row 1 without deleting anything.
+        e.jump_cursor(1, 0);
+        // dgg: Delete from current row to FileTop (row 0). Motion is Linewise,
+        // so rows 0..=1 are deleted. "line3" remains.
         e.apply_op_g(crate::vim::Operator::Delete, 'g', 1);
-        // After deleting to top from row 1, only "line3" should remain.
         let lines: Vec<_> = e.buffer().lines().to_vec();
         assert_eq!(lines, vec!["line3"], "dgg must delete to file top");
     }
