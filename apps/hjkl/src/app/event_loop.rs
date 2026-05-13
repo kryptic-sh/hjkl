@@ -514,15 +514,7 @@ impl App {
                                         }) => {
                                             self.pending_state = None;
                                             self.active_mut().editor.replace_char_at(ch, count);
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
@@ -535,7 +527,7 @@ impl App {
                                             self.active_mut()
                                                 .editor
                                                 .find_char(ch, forward, till, count);
-                                            self.sync_viewport_from_editor();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord {
@@ -621,15 +613,7 @@ impl App {
                                             }
                                             // All other g-chords: delegate to engine.
                                             self.active_mut().editor.after_g(ch, count);
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord {
@@ -642,18 +626,10 @@ impl App {
                                             // visual-selection zf path works without extra
                                             // host logic.
                                             self.active_mut().editor.after_z(ch, count);
-                                            self.sync_viewport_from_editor();
                                             // after_z may set Pending::Op (zf in Normal);
                                             // is_chord_pending() bypass on the NEXT key
                                             // ensures the engine's op-pending arm fires.
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
@@ -667,26 +643,7 @@ impl App {
                                                 motion_key,
                                                 total_count,
                                             );
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
-                                            let buffer_id = self.active().buffer_id;
-                                            if self.active_mut().editor.take_content_reset() {
-                                                self.syntax.reset(buffer_id);
-                                            }
-                                            let edits =
-                                                self.active_mut().editor.take_content_edits();
-                                            if !edits.is_empty() {
-                                                self.syntax.apply_edits(buffer_id, &edits);
-                                            }
-                                            self.lsp_notify_change_active();
-                                            self.recompute_and_install();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble {
@@ -698,26 +655,7 @@ impl App {
                                                 op_kind_to_operator(op),
                                                 total_count,
                                             );
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
-                                            let buffer_id = self.active().buffer_id;
-                                            if self.active_mut().editor.take_content_reset() {
-                                                self.syntax.reset(buffer_id);
-                                            }
-                                            let edits =
-                                                self.active_mut().editor.take_content_edits();
-                                            if !edits.is_empty() {
-                                                self.syntax.apply_edits(buffer_id, &edits);
-                                            }
-                                            self.lsp_notify_change_active();
-                                            self.recompute_and_install();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpTextObj {
@@ -733,26 +671,7 @@ impl App {
                                                 inner,
                                                 total_count,
                                             );
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
-                                            let buffer_id = self.active().buffer_id;
-                                            if self.active_mut().editor.take_content_reset() {
-                                                self.syntax.reset(buffer_id);
-                                            }
-                                            let edits =
-                                                self.active_mut().editor.take_content_edits();
-                                            if !edits.is_empty() {
-                                                self.syntax.apply_edits(buffer_id, &edits);
-                                            }
-                                            self.lsp_notify_change_active();
-                                            self.recompute_and_install();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpG {
@@ -766,26 +685,7 @@ impl App {
                                                 ch,
                                                 total_count,
                                             );
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
-                                            let buffer_id = self.active().buffer_id;
-                                            if self.active_mut().editor.take_content_reset() {
-                                                self.syntax.reset(buffer_id);
-                                            }
-                                            let edits =
-                                                self.active_mut().editor.take_content_edits();
-                                            if !edits.is_empty() {
-                                                self.syntax.apply_edits(buffer_id, &edits);
-                                            }
-                                            self.lsp_notify_change_active();
-                                            self.recompute_and_install();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpFind {
@@ -803,26 +703,7 @@ impl App {
                                                 till,
                                                 total_count,
                                             );
-                                            self.sync_viewport_from_editor();
-                                            if self.active_mut().editor.take_dirty() {
-                                                let elapsed =
-                                                    self.active_mut().refresh_dirty_against_saved();
-                                                self.last_signature_us = elapsed;
-                                                if self.active().dirty {
-                                                    self.active_mut().is_new_file = false;
-                                                }
-                                            }
-                                            let buffer_id = self.active().buffer_id;
-                                            if self.active_mut().editor.take_content_reset() {
-                                                self.syntax.reset(buffer_id);
-                                            }
-                                            let edits =
-                                                self.active_mut().editor.take_content_edits();
-                                            if !edits.is_empty() {
-                                                self.syntax.apply_edits(buffer_id, &edits);
-                                            }
-                                            self.lsp_notify_change_active();
-                                            self.recompute_and_install();
+                                            self.sync_after_engine_mutation();
                                             continue;
                                         }
                                         Outcome::Commit(

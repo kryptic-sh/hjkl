@@ -7640,6 +7640,62 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
 }
 
 #[test]
+fn gg_via_pending_state_scrolls_viewport_to_top() {
+    // Bug: AfterGChord Outcome arm hand-rolled a partial sync block that
+    // didn't call ensure_cursor_in_scrolloff. gg from a deep cursor jumped
+    // the engine cursor to line 0 but viewport top_row stayed at the deep
+    // position, leaving the cursor above the viewport.
+    //
+    // Shortcut: rather than driving the full event loop (build PendingState,
+    // call hjkl_vim::step, dispatch the AfterGChord arm), we call
+    // editor.after_g + sync_after_engine_mutation directly — the same two
+    // calls the fixed AfterGChord arm makes. The reducer step is a pure
+    // function tested in hjkl-vim already; what we care about here is the
+    // post-dispatch sync path.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..50).map(|i| format!("line{i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    // Place cursor + viewport deep into the buffer.
+    app.active_mut().editor.jump_cursor(40, 0);
+    app.active_mut().editor.set_viewport_height(10);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 10;
+        vp.top_row = 35;
+    }
+    app.sync_viewport_from_editor();
+    let fw = app.focused_window();
+    assert_eq!(
+        app.windows[fw].as_ref().unwrap().top_row,
+        35,
+        "precondition: window top_row at 35"
+    );
+
+    // Press g — enters AfterG pending state via keymap.
+    let km_g = km_char('g');
+    app.dispatch_normal_keymap_with_sync(km_g);
+    assert!(
+        app.pending_state.is_some(),
+        "after first g, pending_state must be Some(AfterG)"
+    );
+
+    // Invoke the AfterGChord arm body directly (editor.after_g + canonical sync).
+    // This is the exact code path the fixed arm executes for gg.
+    app.active_mut().editor.after_g('g', 1);
+    app.sync_after_engine_mutation();
+    app.pending_state = None;
+
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(win.cursor_row, 0, "gg must move cursor to row 0");
+    assert_eq!(
+        win.top_row, 0,
+        "gg must scroll viewport top_row to 0; got top_row={}",
+        win.top_row
+    );
+}
+
+#[test]
 fn count_prefix_motion_via_keymap_updates_window_cursor() {
     // Exercises the count-prefix path: accumulate '5' in pending_count, then
     // dispatch `j`. The method peeks the count (5) and passes it to dispatch_keymap.
