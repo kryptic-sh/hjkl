@@ -678,22 +678,35 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
     }
 
     // `g<x>` — bare g-prefix chord, migrated to hjkl-vim's
-    // PendingState::AfterG reducer. Bound in Normal and Visual only.
-    // Operator-pending g (`dgU`, etc.) and the engine's internal
-    // `Pending::G` / `Pending::OpG` still go through the engine FSM.
+    // PendingState::AfterG reducer. Bound in Normal + all three visual
+    // modes so `gg` (and other g-chords) work consistently in
+    // visual/visual-line/visual-block. Operator-pending g (`dgU`, etc.)
+    // and the engine's internal `Pending::G` / `Pending::OpG` still go
+    // through the engine FSM.
     let after_g_action = AppAction::BeginPendingAfterG { count: 1 };
-    for mode in [Mode::Normal, Mode::Visual] {
+    for mode in [
+        Mode::Normal,
+        Mode::Visual,
+        Mode::VisualLine,
+        Mode::VisualBlock,
+    ] {
         if let Err(e) = km.add(mode, "g", after_g_action.clone(), "g-prefix chord") {
             eprintln!("hjkl: keymap.add(g) failed: {e}");
         }
     }
 
     // `z<x>` — bare z-prefix chord, migrated to hjkl-vim's
-    // PendingState::AfterZ reducer. Bound in Normal and Visual only.
-    // Operator-pending z (`zf{motion}`) and the engine's internal
-    // `Pending::Z` still go through the engine FSM for non-visual `zf`.
+    // PendingState::AfterZ reducer. Bound in Normal + all three visual
+    // modes for parity with `g`. Operator-pending z (`zf{motion}`) and
+    // the engine's internal `Pending::Z` still go through the engine
+    // FSM for non-visual `zf`.
     let after_z_action = AppAction::BeginPendingAfterZ { count: 1 };
-    for mode in [Mode::Normal, Mode::Visual] {
+    for mode in [
+        Mode::Normal,
+        Mode::Visual,
+        Mode::VisualLine,
+        Mode::VisualBlock,
+    ] {
         if let Err(e) = km.add(mode, "z", after_z_action.clone(), "z-prefix chord") {
             eprintln!("hjkl: keymap.add(z) failed: {e}");
         }

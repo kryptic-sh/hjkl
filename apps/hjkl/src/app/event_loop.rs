@@ -272,6 +272,252 @@ impl App {
                         continue;
                     }
 
+                    // ── hjkl-vim pending-state reducer ────────────────────
+                    // Ordering: (a) visual-mode `:` intercept above,
+                    // (b) this reducer — fires in ALL modes when pending_state
+                    // is Some so the second key of a chord (e.g. `gg` in Visual)
+                    // reaches its commit arm instead of re-entering the keymap,
+                    // (c) Normal-mode gate below, (d) Non-Normal/engine fallthrough.
+                    // App-level pending chord (r<x>, …) is driven by the
+                    // hjkl-vim reducer. When `pending_state` is `Some`, feed
+                    // the next key there BEFORE the keymap trie or engine.
+                    if let Some(state) = self.pending_state {
+                        use hjkl_vim::{Key as VimKey, Outcome};
+                        let vim_key = match key.code {
+                            KeyCode::Char(c) => Some(VimKey::Char(c)),
+                            KeyCode::Esc => Some(VimKey::Esc),
+                            KeyCode::Enter => Some(VimKey::Enter),
+                            KeyCode::Backspace => Some(VimKey::Backspace),
+                            KeyCode::Tab => Some(VimKey::Tab),
+                            _ => None,
+                        };
+                        match vim_key {
+                            None => {
+                                // Unrecognised key — forward without consuming state.
+                                // (Outcome::Forward path)
+                            }
+                            Some(vk) => {
+                                match hjkl_vim::step(state, vk) {
+                                    Outcome::Wait(new_state) => {
+                                        self.pending_state = Some(new_state);
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar {
+                                        ch,
+                                        count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.replace_char_at(ch, count);
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
+                                        ch,
+                                        forward,
+                                        till,
+                                        count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut()
+                                            .editor
+                                            .find_char(ch, forward, till, count);
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord {
+                                        ch,
+                                        count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        // App-level g-prefix actions (formerly
+                                        // trie-bound as gt/gd/etc.) are dispatched
+                                        // here before falling through to the engine.
+                                        match ch {
+                                            't' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::Tabnext,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'T' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::Tabprev,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'd' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::LspGotoDef,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'D' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::LspGotoDecl,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'r' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::LspGotoRef,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'i' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::LspGotoImpl,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            'y' => {
+                                                self.dispatch_action(
+                                                    crate::keymap_actions::AppAction::LspGotoTypeDef,
+                                                    count as u32,
+                                                );
+                                                continue;
+                                            }
+                                            _ => {}
+                                        }
+                                        // Chord-init case-ops: intercept u/U/~/q and
+                                        // set reducer AfterOp instead of calling
+                                        // after_g (which would set engine Pending::Op).
+                                        // This keeps the full gU/gu/g~/gq op-pending
+                                        // path inside the reducer from here on.
+                                        let case_op_kind = match ch {
+                                            'u' => Some(hjkl_vim::OperatorKind::Lowercase),
+                                            'U' => Some(hjkl_vim::OperatorKind::Uppercase),
+                                            '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
+                                            'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                                            _ => None,
+                                        };
+                                        if let Some(op) = case_op_kind {
+                                            self.pending_state =
+                                                Some(hjkl_vim::PendingState::AfterOp {
+                                                    op,
+                                                    count1: count,
+                                                    inner_count: 0,
+                                                });
+                                            continue;
+                                        }
+                                        // All other g-chords: delegate to engine.
+                                        self.active_mut().editor.after_g(ch, count);
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord {
+                                        ch,
+                                        count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        // All z-chords delegate directly to the engine.
+                                        // after_z reads ed.vim.mode internally so the
+                                        // visual-selection zf path works without extra
+                                        // host logic.
+                                        self.active_mut().editor.after_z(ch, count);
+                                        // after_z may set Pending::Op (zf in Normal);
+                                        // is_chord_pending() bypass on the NEXT key
+                                        // ensures the engine's op-pending arm fires.
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
+                                        op,
+                                        motion_key,
+                                        total_count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.apply_op_motion(
+                                            op_kind_to_operator(op),
+                                            motion_key,
+                                            total_count,
+                                        );
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble {
+                                        op,
+                                        total_count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut()
+                                            .editor
+                                            .apply_op_double(op_kind_to_operator(op), total_count);
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpTextObj {
+                                        op,
+                                        ch,
+                                        inner,
+                                        total_count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.apply_op_text_obj(
+                                            op_kind_to_operator(op),
+                                            ch,
+                                            inner,
+                                            total_count,
+                                        );
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpG {
+                                        op,
+                                        ch,
+                                        total_count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.apply_op_g(
+                                            op_kind_to_operator(op),
+                                            ch,
+                                            total_count,
+                                        );
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpFind {
+                                        op,
+                                        ch,
+                                        forward,
+                                        till,
+                                        total_count,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.apply_op_find(
+                                            op_kind_to_operator(op),
+                                            ch,
+                                            forward,
+                                            till,
+                                            total_count,
+                                        );
+                                        self.sync_after_engine_mutation();
+                                        continue;
+                                    }
+                                    Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister {
+                                        reg,
+                                    }) => {
+                                        self.pending_state = None;
+                                        self.active_mut().editor.set_pending_register(reg);
+                                        continue;
+                                    }
+                                    Outcome::Cancel => {
+                                        self.pending_state = None;
+                                        continue;
+                                    }
+                                    Outcome::Forward => {
+                                        // State stays alive; fall through to normal routing.
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // ── Normal-mode app-level chord dispatch ─────────────────
                     if self.active().editor.vim_mode() == VimMode::Normal {
                         // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────
@@ -481,248 +727,6 @@ impl App {
                         } else {
                             // Any non-Backspace key clears sticky which-key.
                             self.which_key_sticky = false;
-                        }
-
-                        // ── hjkl-vim pending-state reducer ────────────────────
-                        // App-level pending chord (r<x>, …) is driven by the
-                        // hjkl-vim reducer. When `pending_state` is `Some`, feed
-                        // the next key there BEFORE the keymap trie or engine.
-                        if let Some(state) = self.pending_state {
-                            use hjkl_vim::{Key as VimKey, Outcome};
-                            let vim_key = match key.code {
-                                KeyCode::Char(c) => Some(VimKey::Char(c)),
-                                KeyCode::Esc => Some(VimKey::Esc),
-                                KeyCode::Enter => Some(VimKey::Enter),
-                                KeyCode::Backspace => Some(VimKey::Backspace),
-                                KeyCode::Tab => Some(VimKey::Tab),
-                                _ => None,
-                            };
-                            match vim_key {
-                                None => {
-                                    // Unrecognised key — forward without consuming state.
-                                    // (Outcome::Forward path)
-                                }
-                                Some(vk) => {
-                                    match hjkl_vim::step(state, vk) {
-                                        Outcome::Wait(new_state) => {
-                                            self.pending_state = Some(new_state);
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar {
-                                            ch,
-                                            count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.replace_char_at(ch, count);
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
-                                            ch,
-                                            forward,
-                                            till,
-                                            count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut()
-                                                .editor
-                                                .find_char(ch, forward, till, count);
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord {
-                                            ch,
-                                            count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            // App-level g-prefix actions (formerly
-                                            // trie-bound as gt/gd/etc.) are dispatched
-                                            // here before falling through to the engine.
-                                            match ch {
-                                                't' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::Tabnext,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'T' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::Tabprev,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'd' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::LspGotoDef,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'D' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::LspGotoDecl,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'r' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::LspGotoRef,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'i' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::LspGotoImpl,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                'y' => {
-                                                    self.dispatch_action(
-                                                        crate::keymap_actions::AppAction::LspGotoTypeDef,
-                                                        count as u32,
-                                                    );
-                                                    continue;
-                                                }
-                                                _ => {}
-                                            }
-                                            // Chord-init case-ops: intercept u/U/~/q and
-                                            // set reducer AfterOp instead of calling
-                                            // after_g (which would set engine Pending::Op).
-                                            // This keeps the full gU/gu/g~/gq op-pending
-                                            // path inside the reducer from here on.
-                                            let case_op_kind = match ch {
-                                                'u' => Some(hjkl_vim::OperatorKind::Lowercase),
-                                                'U' => Some(hjkl_vim::OperatorKind::Uppercase),
-                                                '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
-                                                'q' => Some(hjkl_vim::OperatorKind::Reflow),
-                                                _ => None,
-                                            };
-                                            if let Some(op) = case_op_kind {
-                                                self.pending_state =
-                                                    Some(hjkl_vim::PendingState::AfterOp {
-                                                        op,
-                                                        count1: count,
-                                                        inner_count: 0,
-                                                    });
-                                                continue;
-                                            }
-                                            // All other g-chords: delegate to engine.
-                                            self.active_mut().editor.after_g(ch, count);
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord {
-                                            ch,
-                                            count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            // All z-chords delegate directly to the engine.
-                                            // after_z reads ed.vim.mode internally so the
-                                            // visual-selection zf path works without extra
-                                            // host logic.
-                                            self.active_mut().editor.after_z(ch, count);
-                                            // after_z may set Pending::Op (zf in Normal);
-                                            // is_chord_pending() bypass on the NEXT key
-                                            // ensures the engine's op-pending arm fires.
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
-                                            op,
-                                            motion_key,
-                                            total_count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.apply_op_motion(
-                                                op_kind_to_operator(op),
-                                                motion_key,
-                                                total_count,
-                                            );
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble {
-                                            op,
-                                            total_count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.apply_op_double(
-                                                op_kind_to_operator(op),
-                                                total_count,
-                                            );
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpTextObj {
-                                            op,
-                                            ch,
-                                            inner,
-                                            total_count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.apply_op_text_obj(
-                                                op_kind_to_operator(op),
-                                                ch,
-                                                inner,
-                                                total_count,
-                                            );
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpG {
-                                            op,
-                                            ch,
-                                            total_count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.apply_op_g(
-                                                op_kind_to_operator(op),
-                                                ch,
-                                                total_count,
-                                            );
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpFind {
-                                            op,
-                                            ch,
-                                            forward,
-                                            till,
-                                            total_count,
-                                        }) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.apply_op_find(
-                                                op_kind_to_operator(op),
-                                                ch,
-                                                forward,
-                                                till,
-                                                total_count,
-                                            );
-                                            self.sync_after_engine_mutation();
-                                            continue;
-                                        }
-                                        Outcome::Commit(
-                                            hjkl_vim::EngineCmd::SetPendingRegister { reg },
-                                        ) => {
-                                            self.pending_state = None;
-                                            self.active_mut().editor.set_pending_register(reg);
-                                            continue;
-                                        }
-                                        Outcome::Cancel => {
-                                            self.pending_state = None;
-                                            continue;
-                                        }
-                                        Outcome::Forward => {
-                                            // State stays alive; fall through to normal routing.
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         // ── Route through app keymap ───────────────────────────
