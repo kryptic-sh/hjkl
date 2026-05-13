@@ -3492,6 +3492,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::set_mark_at_cursor(self, ch);
     }
 
+    /// `.` dot-repeat: replay the last buffered change at the current cursor.
+    /// `count` scales repeats (e.g. `3.` runs the last change 3 times). When
+    /// `count` is 0, defaults to 1. No-op when no change has been buffered yet.
+    ///
+    /// Storage of `LastChange` stays inside engine for now; Phase 5c of
+    /// kryptic-sh/hjkl#71 just lifts the `.` chord binding into the app
+    /// keymap so the engine FSM `.` arm is no longer the entry point. Engine
+    /// FSM `.` arm stays for macro-replay defensive coverage.
+    pub fn replay_last_change(&mut self, count: usize) {
+        vim::replay_last_change(self, count);
+    }
+
     /// Jump to the mark named `ch`, linewise (row only; col snaps to first
     /// non-blank). Pushes the pre-jump position onto the jumplist if the
     /// cursor actually moved.

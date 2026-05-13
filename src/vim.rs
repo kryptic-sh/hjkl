@@ -6508,7 +6508,7 @@ fn replay_insert_and_finish<H: crate::types::Host>(
     }
 }
 
-fn replay_last_change<H: crate::types::Host>(
+pub(crate) fn replay_last_change<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     outer_count: usize,
 ) {
