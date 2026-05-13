@@ -1856,6 +1856,127 @@ impl App {
         consumed
     }
 
+    /// Test + event-loop entry: run one key through the canonical routing
+    /// sequence. Returns `true` if the key was consumed at any step, `false`
+    /// if it should fall through to the engine (the event loop drives
+    /// `handle_key` in that case).
+    ///
+    /// Order MUST match `event_loop.rs` key-routing section:
+    ///   1. pending_state reducer (all modes, fires when state.is_some())
+    ///   2. Non-Normal trie dispatch (fires when mode != Normal AND state.is_none())
+    ///   3. Normal-mode keymap dispatch (fires when mode == Normal AND state.is_none())
+    ///
+    /// Any routing-order bug in the event loop is reproducible by calling this
+    /// in tests. Keep this method's body structurally identical to the event
+    /// loop's key-dispatch sequence so the two stay coupled — if ordering
+    /// changes in `event_loop.rs`, mirror it here.
+    ///
+    /// Out of scope: command-field overlay, picker overlay, search field, LSP
+    /// hover (`K`), `:` and `/` intercepts, Insert-mode completion,
+    /// tmux-navigator Ctrl-h/j/k/l. Those run before this entry; tests that
+    /// exercise them call the existing overlay methods directly.
+    ///
+    /// Keep in sync with: `event_loop.rs` key-routing section (search for
+    /// "KEEP IN SYNC: dispatch_event_key").
+    // Used in tests; not called from production code paths.
+    #[allow(dead_code)]
+    pub(crate) fn dispatch_event_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        use hjkl_vim::{Key as VimKey, Outcome};
+
+        // (1) pending_state reducer — fires in all modes when state is Some.
+        // This must come BEFORE the Non-Normal trie dispatch so the second
+        // key of a chord (e.g. second `g` of `gg` in VisualLine) reaches
+        // the commit arm instead of re-firing BeginPendingAfterG via the trie.
+        if let Some(state) = self.pending_state {
+            let vim_key = match key.code {
+                KeyCode::Char(c) => Some(VimKey::Char(c)),
+                KeyCode::Esc => Some(VimKey::Esc),
+                KeyCode::Enter => Some(VimKey::Enter),
+                KeyCode::Backspace => Some(VimKey::Backspace),
+                KeyCode::Tab => Some(VimKey::Tab),
+                _ => None,
+            };
+            if let Some(vk) = vim_key {
+                match hjkl_vim::step(state, vk) {
+                    Outcome::Wait(new_state) => {
+                        self.pending_state = Some(new_state);
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord { ch, count }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.after_g(ch, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.after_z(ch, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar { ch, count }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.replace_char_at(ch, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::FindChar {
+                        ch,
+                        forward,
+                        till,
+                        count,
+                    }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.find_char(ch, forward, till, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Cancel => {
+                        self.pending_state = None;
+                        return true;
+                    }
+                    Outcome::Forward => {
+                        // State stays alive; fall through to step (2) below.
+                    }
+                    Outcome::Commit(_) => {
+                        // ApplyOp* variants and other Commit arms not driven by
+                        // this test entry. Documented gap — add per-arm if a test
+                        // requires.
+                        self.pending_state = None;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // (2) Non-Normal trie dispatch — gated on pending_state.is_none().
+        // Without this gate the second key of a chord (e.g. second `g` of
+        // `gg`) would re-fire BeginPendingAfterG and reset the reducer.
+        if self.pending_state.is_none()
+            && self.active().editor.vim_mode() != hjkl_engine::VimMode::Normal
+            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+            && let Some(km_mode) = current_km_mode(self)
+        {
+            let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+            let consumed = self.dispatch_keymap_in_mode(km_ev, 1, &mut replay, km_mode);
+            if consumed {
+                self.sync_after_engine_mutation();
+                return true;
+            }
+        }
+
+        // (3) Normal-mode keymap dispatch.
+        if self.pending_state.is_none()
+            && self.active().editor.vim_mode() == hjkl_engine::VimMode::Normal
+            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+        {
+            return self.dispatch_normal_keymap_with_sync(km_ev);
+        }
+
+        false
+    }
+
     /// Force-resolve a pending chord buffer after the keymap timeout has
     /// elapsed. Called from the event loop's poll-timeout branch when a chord
     /// is pending (typically `Ambiguous`: e.g. both `g` and `gd` bound — the

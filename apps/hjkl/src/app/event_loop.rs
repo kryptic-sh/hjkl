@@ -241,6 +241,10 @@ impl App {
                     // this gate, `gg` in visual modes never commits — the
                     // second `g` re-fires BeginPendingAfterG and resets the
                     // reducer state.
+                    //
+                    // KEEP IN SYNC: `App::dispatch_event_key` in `app/mod.rs`
+                    // mirrors this chord-routing ordering for tests. If you
+                    // change the ordering here (steps 1→2→3), mirror it there.
                     if self.pending_state.is_none()
                         && self.active().editor.vim_mode() != VimMode::Normal
                         && let Some(km_ev) = to_km_event(key)
