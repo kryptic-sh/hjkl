@@ -7489,6 +7489,28 @@ fn win_cursor_col(app: &App) -> usize {
     app.windows[fw].as_ref().unwrap().cursor_col
 }
 
+/// Window cache must mirror engine state after every dispatch.
+/// Bug class: any sync-missing arm leaves these diverged. Call from
+/// every test that exercises an engine-mutating dispatch path.
+fn assert_window_synced_to_engine(app: &App) {
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    let (e_row, e_col) = app.active().editor.cursor();
+    let e_top = app.active().editor.host().viewport().top_row;
+    assert_eq!(
+        win.cursor_row, e_row,
+        "window.cursor_row out of sync with engine cursor"
+    );
+    assert_eq!(
+        win.cursor_col, e_col,
+        "window.cursor_col out of sync with engine cursor"
+    );
+    assert_eq!(
+        win.top_row, e_top,
+        "window.top_row out of sync with engine viewport"
+    );
+}
+
 #[test]
 fn j_motion_via_keymap_updates_window_cursor() {
     // Bug: j dispatched via the keymap Match arm skipped sync_after_engine_mutation,
@@ -7513,6 +7535,7 @@ fn j_motion_via_keymap_updates_window_cursor() {
         1,
         "j via keymap must update window cursor_row to 1"
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7535,6 +7558,7 @@ fn k_motion_via_keymap_updates_window_cursor() {
         1,
         "k via keymap must update window cursor_row to 1"
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7558,6 +7582,7 @@ fn line_start_zero_motion_via_keymap_updates_window_cursor() {
         0,
         "0 via keymap must update window cursor_col to 0"
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7581,6 +7606,7 @@ fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
         4,
         "$ via keymap must update window cursor_col to 4 (last char of 'hello')"
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7637,6 +7663,7 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
         height,
         win.cursor_row
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7693,6 +7720,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
         "gg must scroll viewport top_row to 0; got top_row={}",
         win.top_row
     );
+    assert_window_synced_to_engine(&app);
 }
 
 #[test]
@@ -7724,4 +7752,5 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
         5,
         "5j via keymap must update window cursor_row to 5"
     );
+    assert_window_synced_to_engine(&app);
 }
