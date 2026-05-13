@@ -434,6 +434,7 @@ impl App {
                                             // chord-starter chars that are first keys in our bindings.
                                             // Phase 3a: h/j/k/l/+/-/<Space> are now keymap-bound
                                             // motions; keep count alive so 5j/3k etc. work.
+                                            // Phase 3c: ^/$  added (line-anchor motions).
                                             matches!(
                                                 c,
                                                 'g' | 'z'
@@ -456,12 +457,15 @@ impl App {
                                                     | 'B'
                                                     | 'e'
                                                     | 'E'
+                                                    | '^'
+                                                    | '$'
                                             ) || c == self.config.editor.leader
                                         }
                                     }
                                     // Phase 3a: <BS> is now a keymap-bound motion (CharLeft);
                                     // keep count alive so count+<BS> reaches dispatch_action.
-                                    KeyCode::Backspace => true,
+                                    // Phase 3c: <Home>/<End> are keymap-bound line-anchor motions.
+                                    KeyCode::Backspace | KeyCode::Home | KeyCode::End => true,
                                     _ => false,
                                 };
                                 if !could_start_chord {

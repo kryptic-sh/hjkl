@@ -762,6 +762,12 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("B", hjkl_vim::MotionKind::BigWordBackward, "BIG word back"),
         ("e", hjkl_vim::MotionKind::WordEnd, "word end"),
         ("E", hjkl_vim::MotionKind::BigWordEnd, "BIG word end"),
+        // Phase 3c: line-anchor motions.
+        ("0", hjkl_vim::MotionKind::LineStart, "line start"),
+        ("<Home>", hjkl_vim::MotionKind::LineStart, "line start"),
+        ("^", hjkl_vim::MotionKind::FirstNonBlank, "first non-blank"),
+        ("$", hjkl_vim::MotionKind::LineEnd, "line end"),
+        ("<End>", hjkl_vim::MotionKind::LineEnd, "line end"),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [
