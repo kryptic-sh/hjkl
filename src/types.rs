@@ -295,7 +295,8 @@ pub struct Options {
     /// Matches vim's `:set numberwidth` / `:set nuw`. Default `4`. Range 1..=20.
     pub numberwidth: usize,
     /// Highlight the row where the cursor sits. Matches vim's `:set cursorline`.
-    /// Default `false`.
+    /// Default `true` (hjkl diverges from vim's `false` — improves visual
+    /// orientation, matches most modern editor defaults).
     pub cursorline: bool,
     /// Highlight the column where the cursor sits. Matches vim's `:set cursorcolumn`.
     /// Default `false`.
@@ -380,7 +381,7 @@ impl Default for Options {
             number: true,
             relativenumber: false,
             numberwidth: 4,
-            cursorline: false,
+            cursorline: true,
             cursorcolumn: false,
             signcolumn: SignColumnMode::Auto,
             foldcolumn: 0,
@@ -1480,17 +1481,17 @@ mod tests {
     #[test]
     fn options_cursorline_roundtrip() {
         let mut o = Options::default();
-        assert!(!o.cursorline, "cursorline defaults to false");
-        o.set_by_name("cursorline", OptionValue::Bool(true))
+        assert!(o.cursorline, "cursorline defaults to true");
+        o.set_by_name("cursorline", OptionValue::Bool(false))
             .unwrap();
         assert!(matches!(
             o.get_by_name("cul"),
-            Some(OptionValue::Bool(true))
+            Some(OptionValue::Bool(false))
         ));
-        o.set_by_name("cul", OptionValue::Bool(false)).unwrap();
+        o.set_by_name("cul", OptionValue::Bool(true)).unwrap();
         assert!(matches!(
             o.get_by_name("cursorline"),
-            Some(OptionValue::Bool(false))
+            Some(OptionValue::Bool(true))
         ));
     }
 
