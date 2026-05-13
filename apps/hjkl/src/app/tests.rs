@@ -7451,3 +7451,165 @@ fn quote_invalid_char_no_register_set() {
         "unnamed register must be unchanged after \"!"
     );
 }
+
+// ── Keymap dispatch → window cursor sync regression tests ──────────────
+// Bug history: Phase 3 introduced apply_motion-based bindings (j/k/0/$/...)
+// but the event_loop's Match branch skipped the post-dispatch sync block,
+// leaving the window's cached cursor_row stale even though the engine
+// cursor had moved. Cursor visually didn't move. These tests assert that
+// dispatching a Phase-3 motion via the keymap path updates the WINDOW
+// cursor cache (the field render reads), not just the engine cursor.
+//
+// Test 6 (Visual-mode j via keymap) is not included here because the
+// non-Normal dispatch path goes through dispatch_keymap_in_mode, not
+// dispatch_normal_keymap_with_sync. The non-Normal sync fix is covered by
+// the event_loop.rs change that added sync_after_engine_mutation to the
+// non-Normal Match arm; integration coverage is in the event-loop smoke
+// path (tests 1-5 exercise the Normal path; visual is exercised by the
+// existing `gv` / visual-mode tests above).
+// TODO: add test 6 once a test helper drives the non-Normal dispatch path.
+
+/// Build a `hjkl_keymap::KeyEvent` for a plain `Char` key with no modifiers.
+fn km_char(c: char) -> hjkl_keymap::KeyEvent {
+    hjkl_keymap::KeyEvent::new(
+        hjkl_keymap::KeyCode::Char(c),
+        hjkl_keymap::KeyModifiers::empty(),
+    )
+}
+
+/// Read the focused window's cursor_row from the App's window cache.
+fn win_cursor_row(app: &App) -> usize {
+    let fw = app.focused_window();
+    app.windows[fw].as_ref().unwrap().cursor_row
+}
+
+/// Read the focused window's cursor_col from the App's window cache.
+fn win_cursor_col(app: &App) -> usize {
+    let fw = app.focused_window();
+    app.windows[fw].as_ref().unwrap().cursor_col
+}
+
+#[test]
+fn j_motion_via_keymap_updates_window_cursor() {
+    // Bug: j dispatched via the keymap Match arm skipped sync_after_engine_mutation,
+    // leaving window.cursor_row stale at 0 even though the engine moved to row 1.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2");
+    app.active_mut().editor.jump_cursor(0, 0);
+    // Sync engine cursor → window cache (so window starts at row 0).
+    app.sync_viewport_from_editor();
+    assert_eq!(
+        win_cursor_row(&app),
+        0,
+        "precondition: window cursor_row at 0"
+    );
+
+    // Dispatch `j` through the Normal keymap path + sync.
+    let km_ev = km_char('j');
+    app.dispatch_normal_keymap_with_sync(km_ev);
+
+    assert_eq!(
+        win_cursor_row(&app),
+        1,
+        "j via keymap must update window cursor_row to 1"
+    );
+}
+
+#[test]
+fn k_motion_via_keymap_updates_window_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2");
+    app.active_mut().editor.jump_cursor(2, 0);
+    app.sync_viewport_from_editor();
+    assert_eq!(
+        win_cursor_row(&app),
+        2,
+        "precondition: window cursor_row at 2"
+    );
+
+    let km_ev = km_char('k');
+    app.dispatch_normal_keymap_with_sync(km_ev);
+
+    assert_eq!(
+        win_cursor_row(&app),
+        1,
+        "k via keymap must update window cursor_row to 1"
+    );
+}
+
+#[test]
+fn line_start_zero_motion_via_keymap_updates_window_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 5);
+    app.sync_viewport_from_editor();
+    assert_eq!(
+        win_cursor_col(&app),
+        5,
+        "precondition: window cursor_col at 5"
+    );
+
+    // `0` with empty pending_count routes through the keymap as LineStart.
+    let km_ev = km_char('0');
+    app.dispatch_normal_keymap_with_sync(km_ev);
+
+    assert_eq!(
+        win_cursor_col(&app),
+        0,
+        "0 via keymap must update window cursor_col to 0"
+    );
+}
+
+#[test]
+fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+    assert_eq!(
+        win_cursor_col(&app),
+        0,
+        "precondition: window cursor_col at 0"
+    );
+
+    let km_ev = km_char('$');
+    app.dispatch_normal_keymap_with_sync(km_ev);
+
+    // "hello" has 5 chars; `$` lands on the last char (index 4).
+    assert_eq!(
+        win_cursor_col(&app),
+        4,
+        "$ via keymap must update window cursor_col to 4 (last char of 'hello')"
+    );
+}
+
+#[test]
+fn count_prefix_motion_via_keymap_updates_window_cursor() {
+    // Exercises the count-prefix path: accumulate '5' in pending_count, then
+    // dispatch `j`. The method peeks the count (5) and passes it to dispatch_keymap.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..10).map(|i| format!("line{i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+    assert_eq!(
+        win_cursor_row(&app),
+        0,
+        "precondition: window cursor_row at 0"
+    );
+
+    // Accumulate count=5 in the pending_count buffer (same as typing '5' in Normal).
+    assert!(
+        app.pending_count.try_accumulate('5'),
+        "digit '5' must be accepted by pending_count"
+    );
+
+    let km_ev = km_char('j');
+    app.dispatch_normal_keymap_with_sync(km_ev);
+
+    assert_eq!(
+        win_cursor_row(&app),
+        5,
+        "5j via keymap must update window cursor_row to 5"
+    );
+}
