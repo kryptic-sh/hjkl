@@ -233,7 +233,16 @@ impl App {
                     // Built-ins are registered Normal-only so they never match
                     // here. If Unbound, fall through to the mode-specific
                     // handling below (Insert completion, engine, etc.).
-                    if self.active().editor.vim_mode() != VimMode::Normal
+                    //
+                    // Gate on `pending_state.is_none()` so the second key of a
+                    // chord (e.g. second `g` of `gg` in VisualLine) reaches
+                    // the pending_state reducer below instead of re-matching
+                    // the same chord-init binding here in a loop. Without
+                    // this gate, `gg` in visual modes never commits — the
+                    // second `g` re-fires BeginPendingAfterG and resets the
+                    // reducer state.
+                    if self.pending_state.is_none()
+                        && self.active().editor.vim_mode() != VimMode::Normal
                         && let Some(km_ev) = to_km_event(key)
                         && let Some(km_mode) = super::current_km_mode(self)
                     {
