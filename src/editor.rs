@@ -3525,6 +3525,127 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::goto_mark(self, ch, false);
     }
 
+    // ── Macro controller API (Phase 5b) ──────────────────────────────────────
+
+    /// Begin recording keystrokes into register `reg`. The caller (app) is
+    /// responsible for stopping the recording via `stop_macro_record` when the
+    /// user presses bare `q`.
+    ///
+    /// - Uppercase `reg` (e.g. `'A'`) appends to the existing lowercase
+    ///   recording by pre-seeding `recording_keys` with the decoded text of the
+    ///   matching lowercase register, matching vim's capital-register append
+    ///   semantics.
+    /// - Lowercase `reg` clears `recording_keys` (fresh recording).
+    /// - Invalid chars (non-alphabetic, non-digit) are silently ignored.
+    ///
+    /// Promoted to the public surface in Phase 5b so the app's
+    /// `route_chord_key` can start a recording without re-entering the engine
+    /// FSM. `handle_record_macro_target` (engine FSM path for macro-replay
+    /// defensive coverage) continues to use the same logic via delegation.
+    pub fn start_macro_record(&mut self, reg: char) {
+        if !(reg.is_ascii_alphabetic() || reg.is_ascii_digit()) {
+            return;
+        }
+        self.vim.recording_macro = Some(reg);
+        if reg.is_ascii_uppercase() {
+            // Seed recording_keys with the existing lowercase register's text
+            // decoded back to inputs so capital-register append continues from
+            // where the previous recording left off.
+            let lower = reg.to_ascii_lowercase();
+            let text = self
+                .registers
+                .read(lower)
+                .map(|s| s.text.clone())
+                .unwrap_or_default();
+            self.vim.recording_keys = crate::input::decode_macro(&text);
+        } else {
+            self.vim.recording_keys.clear();
+        }
+    }
+
+    /// Finalize the active recording: encode `recording_keys` as text and write
+    /// to the matching (lowercase) named register. Clears both `recording_macro`
+    /// and `recording_keys`. No-ops if no recording is active.
+    ///
+    /// Promoted to the public surface in Phase 5b so the app's `QChord` action
+    /// can stop a recording when the user presses bare `q` without re-entering
+    /// the engine FSM.
+    pub fn stop_macro_record(&mut self) {
+        let Some(reg) = self.vim.recording_macro.take() else {
+            return;
+        };
+        let keys = std::mem::take(&mut self.vim.recording_keys);
+        let text = crate::input::encode_macro(&keys);
+        self.set_named_register_text(reg.to_ascii_lowercase(), text);
+    }
+
+    /// Returns `true` while a `q{reg}` recording is in progress.
+    /// Hosts use this to show a "recording @r" status indicator and to decide
+    /// whether bare `q` should stop the recording or open the `RecordMacroTarget`
+    /// chord.
+    pub fn is_recording_macro(&self) -> bool {
+        self.vim.recording_macro.is_some()
+    }
+
+    /// Returns `true` while a macro is being replayed. The app sets this flag
+    /// (via `play_macro`) and clears it (via `end_macro_replay`) around the
+    /// re-feed loop so the recorder hook can skip double-capture.
+    pub fn is_replaying_macro(&self) -> bool {
+        self.vim.replaying_macro
+    }
+
+    /// Decode the named register `reg` into a `Vec<crate::input::Input>` and
+    /// prepare for replay, returning the inputs the app should re-feed through
+    /// `route_chord_key`.
+    ///
+    /// Resolves `reg`:
+    /// - `'@'` → use `vim.last_macro`; returns empty vec if none.
+    /// - Any other char → lowercase it, read the register, decode.
+    ///
+    /// Side-effects:
+    /// - Sets `vim.last_macro` to the resolved register.
+    /// - Sets `vim.replaying_macro = true` so the recorder hook skips during
+    ///   replay. The app calls `end_macro_replay` after the loop finishes.
+    ///
+    /// Returns an empty vec (and no side-effects for `'@'`) if the register is
+    /// unset or empty.
+    pub fn play_macro(&mut self, reg: char, count: usize) -> Vec<crate::input::Input> {
+        let resolved = if reg == '@' {
+            match self.vim.last_macro {
+                Some(r) => r,
+                None => return vec![],
+            }
+        } else {
+            reg.to_ascii_lowercase()
+        };
+        let text = match self.registers.read(resolved) {
+            Some(slot) if !slot.text.is_empty() => slot.text.clone(),
+            _ => return vec![],
+        };
+        let keys = crate::input::decode_macro(&text);
+        self.vim.last_macro = Some(resolved);
+        self.vim.replaying_macro = true;
+        // Multiply by count (minimum 1).
+        keys.repeat(count.max(1))
+    }
+
+    /// Clear the `replaying_macro` flag. Called by the app after the
+    /// re-feed loop in the `PlayMacro` commit arm completes (or aborts).
+    pub fn end_macro_replay(&mut self) {
+        self.vim.replaying_macro = false;
+    }
+
+    /// Append `input` to the active recording (`recording_keys`) if and only
+    /// if a recording is in progress AND we are not currently replaying.
+    /// Called by the app's `route_chord_key` recorder hook so that user
+    /// keystrokes captured through the app-level chord path are recorded
+    /// (rather than relying solely on the engine FSM's in-step hook).
+    pub fn record_input(&mut self, input: crate::input::Input) {
+        if self.vim.recording_macro.is_some() && !self.vim.replaying_macro {
+            self.vim.recording_keys.push(input);
+        }
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
@@ -5850,5 +5971,144 @@ mod tests {
             (0, 2),
             "invalid charwise mark char must be a no-op"
         );
+    }
+
+    // ── Macro controller API tests (Phase 5b) ─────────────────────────────────
+
+    #[test]
+    fn start_macro_record_records_register() {
+        let mut e = fresh_editor("hello");
+        assert!(!e.is_recording_macro());
+        e.start_macro_record('a');
+        assert!(e.is_recording_macro());
+        assert_eq!(e.recording_register(), Some('a'));
+    }
+
+    #[test]
+    fn start_macro_record_capital_seeds_existing() {
+        // `qa` records "h", stop. Then `qA` should seed from existing 'a' reg.
+        let mut e = fresh_editor("hello");
+        e.start_macro_record('a');
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('h'),
+            ..Default::default()
+        });
+        e.stop_macro_record();
+        // Start capital 'A' — should seed from existing 'a' register.
+        e.start_macro_record('A');
+        // recording_keys should now contain 1 input (the seeded 'h').
+        assert_eq!(
+            e.vim.recording_keys.len(),
+            1,
+            "capital record must seed from existing lowercase reg"
+        );
+    }
+
+    #[test]
+    fn stop_macro_record_writes_register() {
+        let mut e = fresh_editor("hello");
+        e.start_macro_record('a');
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('h'),
+            ..Default::default()
+        });
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('l'),
+            ..Default::default()
+        });
+        e.stop_macro_record();
+        assert!(!e.is_recording_macro());
+        // Register 'a' should contain "hl".
+        let text = e
+            .registers()
+            .read('a')
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            text, "hl",
+            "stop_macro_record must write encoded keys to register"
+        );
+    }
+
+    #[test]
+    fn is_recording_macro_reflects_state() {
+        let mut e = fresh_editor("hello");
+        assert!(!e.is_recording_macro());
+        e.start_macro_record('b');
+        assert!(e.is_recording_macro());
+        e.stop_macro_record();
+        assert!(!e.is_recording_macro());
+    }
+
+    #[test]
+    fn play_macro_returns_decoded_inputs() {
+        let mut e = fresh_editor("hello");
+        // Write "jj" into register 'a'.
+        e.set_named_register_text('a', "jj".to_string());
+        let inputs = e.play_macro('a', 1);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].key, crate::input::Key::Char('j'));
+        assert_eq!(inputs[1].key, crate::input::Key::Char('j'));
+        assert!(e.is_replaying_macro(), "play_macro must set replaying flag");
+        e.end_macro_replay();
+        assert!(!e.is_replaying_macro());
+    }
+
+    #[test]
+    fn play_macro_at_uses_last_macro() {
+        let mut e = fresh_editor("hello");
+        e.set_named_register_text('a', "k".to_string());
+        // Play 'a' first to set last_macro.
+        let _ = e.play_macro('a', 1);
+        e.end_macro_replay();
+        // Now `@@` should replay 'a' again.
+        let inputs = e.play_macro('@', 1);
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].key, crate::input::Key::Char('k'));
+        e.end_macro_replay();
+    }
+
+    #[test]
+    fn play_macro_with_count_repeats() {
+        let mut e = fresh_editor("hello");
+        e.set_named_register_text('a', "j".to_string());
+        let inputs = e.play_macro('a', 3);
+        assert_eq!(inputs.len(), 3, "3@a must produce 3 inputs");
+        e.end_macro_replay();
+    }
+
+    #[test]
+    fn record_input_appends_when_recording() {
+        let mut e = fresh_editor("hello");
+        // Not recording: record_input is a no-op.
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('j'),
+            ..Default::default()
+        });
+        assert_eq!(e.vim.recording_keys.len(), 0);
+        // Start recording: record_input appends.
+        e.start_macro_record('a');
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('j'),
+            ..Default::default()
+        });
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('k'),
+            ..Default::default()
+        });
+        assert_eq!(e.vim.recording_keys.len(), 2);
+        // During replay: record_input must NOT append.
+        e.vim.replaying_macro = true;
+        e.record_input(crate::input::Input {
+            key: crate::input::Key::Char('l'),
+            ..Default::default()
+        });
+        assert_eq!(
+            e.vim.recording_keys.len(),
+            2,
+            "record_input must skip during replay"
+        );
+        e.vim.replaying_macro = false;
+        e.stop_macro_record();
     }
 }
