@@ -635,7 +635,15 @@ impl App {
         }
 
         let active_slot = self.focused_slot_idx();
-        match ex::run(&mut self.slots[active_slot].editor, cmd) {
+        let effect = ex::run(&mut self.slots[active_slot].editor, cmd);
+        // ex commands like `:100` (goto-line), `:/pat` (search address),
+        // and `:nohl` mutate engine cursor / viewport without flipping
+        // the dirty flag — they return ExEffect::Ok. The window cursor
+        // cache (used at render time) must be re-synced or the cursor
+        // appears stuck at its pre-`:` position even though the engine
+        // moved it.
+        self.sync_viewport_from_editor();
+        match effect {
             ExEffect::None => {}
             ExEffect::Ok => {}
             ExEffect::Save => {

@@ -395,6 +395,61 @@ fn app_new_goto_line_clamps() {
 }
 
 #[test]
+fn ex_goto_line_100_via_dispatch() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Seed buffer with 120 lines.
+    let buf: String = (1..=120)
+        .map(|n| format!("line{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    use hjkl_buffer::{Edit, Position};
+    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: buf,
+    });
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.dispatch_ex("100");
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 99, "':100' must land on row 99");
+}
+
+#[test]
+fn ex_goto_line_100_via_command_field_keys() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_buffer::{Edit, Position};
+    let mut app = App::new(None, false, None, None).unwrap();
+    let buf: String = (1..=120)
+        .map(|n| format!("line{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: buf,
+    });
+    app.active_mut().editor.jump_cursor(0, 0);
+    // Open command prompt, type "100", press Enter — simulate full user path.
+    app.open_command_prompt();
+    for c in ['1', '0', '0'] {
+        app.handle_command_field_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    app.handle_command_field_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 99,
+        "':100<Enter>' via command-field must land on row 99, got {row}"
+    );
+    // Critical: the window cursor cache (used at render time) must also
+    // reflect the move. Without sync_viewport_from_editor after ex::run,
+    // engine cursor moves but render shows stale position.
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(
+        win.cursor_row, 99,
+        "window cache cursor_row must follow engine cursor after `:100`"
+    );
+}
+
+#[test]
 fn do_save_readonly_blocked() {
     let mut app = App::new(None, true, None, None).unwrap();
     app.active_mut().filename = Some(tmp_path("hjkl_phase5_ro_test.txt"));
