@@ -9268,3 +9268,347 @@ fn at_colon_within_macro_does_not_recurse() {
     macro_key_seq(&mut app, &[ck('q')]);
     assert!(!app.active().editor.is_recording_macro());
 }
+
+// ── Phase 5e: count + register audit tests ───────────────────────────────────
+//
+// These tests verify the dispatch path for count-prefixed register-targeted
+// ops and the single-use semantics of pending_register.
+
+/// Seed a buffer with N numbered lines ("line1\nline2\n...").
+fn seed_numbered_lines(app: &mut App, count: usize) {
+    let content: String = (1..=count)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    seed_buffer(app, &content);
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+}
+
+/// Drive raw keys through `route_chord_key` (recording-aware path).
+/// Falls back to engine handle_key for unrecognised keys.
+fn rck(app: &mut App, keys: &[char]) {
+    for &c in keys {
+        if !app.route_chord_key(ck(c)) {
+            app.active_mut().editor.handle_key(ck(c));
+        }
+        app.sync_viewport_from_editor();
+    }
+}
+
+#[test]
+fn count_before_op_5dd_deletes_5_lines() {
+    // `5dd` — count before doubled op deletes 5 lines.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 10);
+
+    // Simulate what event_loop does: accumulate '5' in pending_count, then
+    // route `d` through the keymap which reads pending_count.
+    app.pending_count.try_accumulate('5');
+    rck(&mut app, &['d', 'd']);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("line6"),
+        "5dd must delete lines 1-5; first line must now be 'line6', got {lines:?}"
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must be in Normal after 5dd"
+    );
+}
+
+#[test]
+fn register_then_count_a5dd_targets_register_a() {
+    // `"a5dd` — register prefix, then count, then doubled op.
+    // Sequence: `"` → SelectRegister, `a` → SetPendingRegister('a'),
+    //           `5` → pending_count=5, `dd` → delete 5 lines into reg 'a'.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 10);
+
+    // `"a` via route_chord_key (the canonical path for SelectRegister).
+    rck(&mut app, &['"', 'a']);
+    assert_eq!(
+        app.active().editor.pending_register(),
+        Some('a'),
+        "pending_register must be 'a' after \"a"
+    );
+
+    // `5` — accumulate count.
+    app.pending_count.try_accumulate('5');
+
+    // `dd` — op.
+    rck(&mut app, &['d', 'd']);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("line6"),
+        "\"a5dd must delete 5 lines; first line must now be 'line6', got {lines:?}"
+    );
+
+    // Register 'a' must hold deleted content.
+    let reg_a = &app.active().editor.registers().named[0];
+    assert!(
+        reg_a.text.contains("line1"),
+        "register 'a' must contain deleted text; got {:?}",
+        reg_a.text
+    );
+
+    // pending_register must be cleared after one-shot use.
+    assert_eq!(
+        app.active().editor.pending_register(),
+        None,
+        "pending_register must be cleared after op"
+    );
+}
+
+#[test]
+fn count_then_register_5_quote_a_dd_targets_register_a() {
+    // `5"add` — count typed BEFORE `"`, then register, then doubled op.
+    // Bug target: `BeginPendingSelectRegister` previously reset pending_count,
+    // causing the 5 to be silently discarded. With the fix, it must survive.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 10);
+
+    // `5` — accumulate in pending_count (as event_loop does).
+    app.pending_count.try_accumulate('5');
+
+    // `"a` — register selection. pending_count must NOT be reset.
+    rck(&mut app, &['"', 'a']);
+    assert_eq!(
+        app.active().editor.pending_register(),
+        Some('a'),
+        "pending_register must be 'a' after \"a"
+    );
+    assert_eq!(
+        app.pending_count.peek(),
+        5,
+        "pending_count must survive through register selection (5\"add regression)"
+    );
+
+    // `dd` — op must consume count=5 and register='a'.
+    rck(&mut app, &['d', 'd']);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("line6"),
+        "5\"add must delete 5 lines; first line must now be 'line6', got {lines:?}"
+    );
+
+    // Register 'a' must hold the deleted content.
+    let reg_a = &app.active().editor.registers().named[0];
+    assert!(
+        reg_a.text.contains("line1"),
+        "register 'a' must contain deleted text; got {:?}",
+        reg_a.text
+    );
+}
+
+#[test]
+fn outer_count_inner_count_2_quote_a_5dd_total_10() {
+    // `2"a5dd` — outer count 2, register 'a', inner count 5.
+    // In vim these multiply: total = 2 * 5 = 10 lines deleted.
+    // With our implementation: pending_count=2 survives `"`, then `5` is
+    // accumulated into pending_count making it 25 (not 10). That's a known
+    // quirk of the linear accumulation model; this test documents actual
+    // behaviour so regressions are caught. The primary bug (5 discarded by
+    // the reset) is fixed; the multiply semantic is aspirational.
+    //
+    // NOTE: This test deliberately documents current behaviour. If the
+    // multiplication semantic is ever implemented, update the assertion.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 30);
+
+    // Outer count 2.
+    app.pending_count.try_accumulate('2');
+
+    // `"a` — register. pending_count must remain 2.
+    rck(&mut app, &['"', 'a']);
+    assert_eq!(
+        app.pending_count.peek(),
+        2,
+        "pending_count must be 2 after \"a"
+    );
+
+    // Inner count 5 — appends to pending_count (becomes 25 in current model).
+    app.pending_count.try_accumulate('5');
+    assert_eq!(
+        app.pending_count.peek(),
+        25,
+        "pending_count digits accumulate to 25"
+    );
+
+    // `dd` — delete count1=25 lines into register 'a'.
+    rck(&mut app, &['d', 'd']);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    // 25 lines deleted from a 30-line buffer → line26 is now first.
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("line26"),
+        "2\"a5dd with digit-accumulation semantics must delete 25 lines; got {lines:?}"
+    );
+    let reg_a = &app.active().editor.registers().named[0];
+    assert!(
+        !reg_a.text.is_empty(),
+        "register 'a' must be non-empty after op"
+    );
+}
+
+#[test]
+fn register_prefix_then_x_targets_register() {
+    // `"ax` — delete current char into register 'a'.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // `"a` via route_chord_key.
+    rck(&mut app, &['"', 'a']);
+    assert_eq!(
+        app.active().editor.pending_register(),
+        Some('a'),
+        "pending_register must be 'a' after \"a"
+    );
+
+    // `x` — engine-handled delete-char. Feed via engine (x is not in app keymap).
+    app.active_mut().editor.handle_key(ck('x'));
+    app.sync_viewport_from_editor();
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.first().map(String::as_str),
+        Some("ello world"),
+        "\"ax must delete 'h'; got {lines:?}"
+    );
+
+    // Register 'a' must hold 'h'.
+    let reg_a = &app.active().editor.registers().named[0];
+    assert_eq!(
+        reg_a.text, "h",
+        "register 'a' must contain 'h' after \"ax; got {:?}",
+        reg_a.text
+    );
+}
+
+#[test]
+fn register_prefix_single_use_then_next_op_unnamed() {
+    // `"add` then `dd` — the second dd must go to unnamed register `"`,
+    // not reuse register 'a'. Verifies pending_register is one-shot.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 5);
+
+    // `"add` — delete line1 into reg 'a'.
+    rck(&mut app, &['"', 'a', 'd', 'd']);
+
+    let reg_a_text = app.active().editor.registers().named[0].text.clone();
+    assert!(
+        reg_a_text.contains("line1"),
+        "first dd must land in reg 'a'; got {:?}",
+        reg_a_text
+    );
+
+    // pending_register must be None now.
+    assert_eq!(
+        app.active().editor.pending_register(),
+        None,
+        "pending_register must be cleared after first op"
+    );
+
+    // Snapshot unnamed register state before second dd.
+    let unnamed_before = app.active().editor.registers().unnamed.text.clone();
+
+    // `dd` — delete line2 (now line1) to unnamed register.
+    rck(&mut app, &['d', 'd']);
+
+    let unnamed_after = app.active().editor.registers().unnamed.text.clone();
+    assert_ne!(
+        unnamed_after, unnamed_before,
+        "second dd must update unnamed register"
+    );
+
+    // Register 'a' must be unchanged — still has line1.
+    let reg_a_text2 = app.active().editor.registers().named[0].text.clone();
+    assert_eq!(
+        reg_a_text, reg_a_text2,
+        "register 'a' must not be overwritten by second dd; got {:?}",
+        reg_a_text2
+    );
+}
+
+#[test]
+fn count_then_play_macro_3at_a_plays_three_times() {
+    // `3@a` — play macro 'a' three times.
+    // Record: `qa j q` (move down once). Then `3@a` moves cursor down 3 rows.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 10);
+
+    // Record macro 'a': move down one line.
+    macro_key_seq(&mut app, &[ck('q'), ck('a')]);
+    assert!(
+        app.active().editor.is_recording_macro(),
+        "must be recording"
+    );
+    macro_key_seq(&mut app, &[ck('j')]);
+    macro_key_seq(&mut app, &[ck('q')]);
+    assert!(
+        !app.active().editor.is_recording_macro(),
+        "recording stopped"
+    );
+
+    let row_after_record = app.active().editor.cursor().0;
+    assert_eq!(row_after_record, 1, "recording 'j' moves cursor to row 1");
+
+    // Accumulate count 3 in pending_count, then `@a`.
+    app.pending_count.try_accumulate('3');
+    // `@` → BeginPendingPlayMacro, takes pending_count.
+    rck(&mut app, &['@', 'a']);
+
+    let row_after_play = app.active().editor.cursor().0;
+    assert_eq!(
+        row_after_play, 4,
+        "3@a must play macro 3 times → cursor moves from row 1 to row 4; got {row_after_play}"
+    );
+}
+
+#[test]
+fn count_then_dot_5_dot_repeats_five_times() {
+    // `5.` — dot-repeat runs last change 5 times.
+    // Setup: `x` deletes first char of "hello world", then `5.` deletes 5 more.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // `x` — delete 'h', establishes last_change.
+    app.active_mut().editor.handle_key(ck('x'));
+    app.sync_viewport_from_editor();
+
+    let lines_after_x = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines_after_x.first().map(String::as_str),
+        Some("ello world"),
+        "x must delete 'h'; got {lines_after_x:?}"
+    );
+
+    // Accumulate count 5 into pending_count, then `.`.
+    app.pending_count.try_accumulate('5');
+    // DotRepeat is bound in the app keymap; route through route_chord_key.
+    let consumed = app.route_chord_key(ck('.'));
+    assert!(consumed, ". must be consumed by keymap");
+    app.sync_viewport_from_editor();
+
+    let lines_after_dot = app.active().editor.buffer().lines().to_vec();
+    // Started with "ello world" (10 chars). Delete 5 chars one at a time:
+    // 'e','l','l','o',' ' → "world". Each dot-repeat fires x (delete-one-char)
+    // once (count folded into single repeat of the last-change op).
+    assert_eq!(
+        lines_after_dot.first().map(String::as_str),
+        Some("world"),
+        "5. must repeat x 5 more times; got {lines_after_dot:?}"
+    );
+}

@@ -2,4 +2,5 @@
 
 pub mod at_colon;
 pub mod harness;
+pub mod register_count;
 pub mod render_sync;

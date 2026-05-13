@@ -342,7 +342,14 @@ impl App {
                         // Instead we keep the same explicit list as before:
                         // digits are buffered and replayed if the next key doesn't
                         // match a chord prefix.
-                        if key.modifiers == KeyModifiers::NONE {
+                        //
+                        // Skip count-prefix buffering entirely when a pending_state
+                        // chord is active (e.g. SelectRegister after `"a`). In that
+                        // case the next key is consumed by the reducer (not the count
+                        // accumulator), and flushing digits to the engine would corrupt
+                        // the engine's internal count state. route_chord_key below owns
+                        // the key in that situation.
+                        if self.pending_state.is_none() && key.modifiers == KeyModifiers::NONE {
                             if let KeyCode::Char(d @ '0'..='9') = key.code {
                                 // try_accumulate returns false for '0' with empty buffer
                                 // (vim's LineStart quirk); in that case fall through to keymap.
@@ -375,7 +382,7 @@ impl App {
                                     self.flush_pending_count_to_engine();
                                 }
                             }
-                        } else {
+                        } else if self.pending_state.is_none() {
                             // Modifier key. For Ctrl+Char keys the keymap may
                             // match (e.g. <C-d>/<C-u>/<C-f>/<C-b> from Phase 3g)
                             // and should receive the buffered count. Keep

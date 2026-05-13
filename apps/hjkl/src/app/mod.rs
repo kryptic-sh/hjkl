@@ -1787,10 +1787,13 @@ impl App {
                 });
             }
             AppAction::BeginPendingSelectRegister => {
-                // `"<reg>` register-prefix chord. No count is consumed — the
-                // register char is captured by the second key. Discard any
-                // buffered count (it's not meaningful for register selection).
-                self.pending_count.reset();
+                // `"<reg>` register-prefix chord. The register char is captured
+                // by the second key. Do NOT reset pending_count here — a count
+                // typed before `"` (e.g. `5"add`) must survive through register
+                // selection so the subsequent operator (`d`) can consume it.
+                // Example: `5"add` → pending_count=5, `"` → SelectRegister (count
+                // preserved), `a` → SetPendingRegister, `dd` → delete 5 lines
+                // into register `a`.
                 self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
             }
             AppAction::BeginPendingSetMark => {
