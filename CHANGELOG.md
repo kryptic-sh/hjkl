@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.6.5] - 2026-05-13
+## [0.6.6] - 2026-05-13
 
 ### Added
 
@@ -17,12 +17,41 @@ project adheres to [Semantic Versioning](https://semver.org/).
   through `Motion::FindRepeat { reverse: true }`. Engine handles the "no prior
   find" no-op internally via `ed.vim.last_find`. Engine FSM arms for `;` and `,`
   in `parse_motion` are kept intact for macro-replay.
-- Bumped `hjkl-vim` dependency from `"0.15"` to `"0.16"` in `Cargo.toml`.
-- 4 controller-level tests in `crates/hjkl-engine/src/editor.rs`:
+- `apply_motion_kind` extended with `MotionKind::BracketMatch` arm (Phase 3f of
+  kryptic-sh/hjkl#69): `%` routes through
+  `execute_motion(ed, Motion::MatchBracket, count)`. Engine handles the no-match
+  case as a no-op (cursor stays). Engine FSM arm for `%` in `parse_motion` is
+  kept intact for macro-replay.
+- `apply_motion_kind` extended with 7 new MotionKind arms (Phase 3g of
+  kryptic-sh/hjkl#69): `ViewportTop` (`H`), `ViewportMiddle` (`M`),
+  `ViewportBottom` (`L`) route through `execute_motion` to
+  `Motion::ViewportTop/Middle/Bottom` respectively (engine FSM `parse_motion`
+  arms preserved for macro-replay). `HalfPageDown` (`<C-d>`), `HalfPageUp`
+  (`<C-u>`), `FullPageDown` (`<C-f>`), `FullPageUp` (`<C-b>`) call
+  `scroll_cursor_rows` directly (same expressions as the FSM Ctrl arm in
+  `step_normal`) without adding new `Motion` enum variants — approach (a) per
+  spec. Engine FSM Ctrl-d/u/f/b arms preserved for macro-replay.
+- Bumped `hjkl-vim` dependency from `"0.15"` to `"0.17"` in `Cargo.toml`
+  (carries Phase 3e `FindRepeat`/`FindRepeatReverse` and Phase 3f
+  `BracketMatch`; skips the never-published 0.6.5 version).
+- 4 controller-level tests in `crates/hjkl-engine/src/editor.rs` (Phase 3e):
   `find_repeat_after_f_finds_next_occurrence`,
   `find_repeat_reverse_after_f_finds_prev_occurrence`,
   `find_repeat_with_no_prior_find_is_noop`,
   `find_repeat_with_count_advances_count_times`.
+- 3 controller-level tests in `crates/hjkl-engine/src/editor.rs` (Phase 3f):
+  `bracket_match_jumps_to_matching_close_paren`,
+  `bracket_match_jumps_to_matching_open_paren`,
+  `bracket_match_with_no_match_on_line_is_noop_or_engine_behaviour`.
+- 8 controller-level tests in `crates/hjkl-engine/src/editor.rs` (Phase 3g):
+  `viewport_top_lands_on_first_visible_row`,
+  `viewport_top_with_count_offsets_down`,
+  `viewport_middle_lands_on_middle_visible_row`,
+  `viewport_bottom_lands_on_last_visible_row`,
+  `half_page_down_moves_cursor_by_half_window`,
+  `half_page_up_moves_cursor_by_half_window_reverse`,
+  `full_page_down_moves_cursor_by_full_window`,
+  `full_page_up_moves_cursor_by_full_window_reverse`.
 
 ## [0.6.4] - 2026-05-13
 
@@ -530,8 +559,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.5...HEAD
-[0.6.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.5
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.6
 [0.6.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.1...v0.6.2

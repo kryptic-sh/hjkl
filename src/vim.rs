@@ -2611,6 +2611,51 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // no-op if no prior find exists (None arm returns early).
             execute_motion(ed, Motion::FindRepeat { reverse: true }, count);
         }
+        hjkl_vim::MotionKind::BracketMatch => {
+            // `%` — jump to the matching bracket.
+            // count is passed through; engine-side matching_bracket handles
+            // the no-match case as a no-op (cursor stays). Engine FSM arm
+            // for `%` in parse_motion is kept intact for macro-replay.
+            execute_motion(ed, Motion::MatchBracket, count);
+        }
+        hjkl_vim::MotionKind::ViewportTop => {
+            // `H` — cursor to top of visible viewport, then count-1 rows down.
+            // Engine FSM arm for `H` in parse_motion is kept intact for macro-replay.
+            execute_motion(ed, Motion::ViewportTop, count);
+        }
+        hjkl_vim::MotionKind::ViewportMiddle => {
+            // `M` — cursor to middle of visible viewport; count ignored.
+            // Engine FSM arm for `M` in parse_motion is kept intact for macro-replay.
+            execute_motion(ed, Motion::ViewportMiddle, count);
+        }
+        hjkl_vim::MotionKind::ViewportBottom => {
+            // `L` — cursor to bottom of visible viewport, then count-1 rows up.
+            // Engine FSM arm for `L` in parse_motion is kept intact for macro-replay.
+            execute_motion(ed, Motion::ViewportBottom, count);
+        }
+        hjkl_vim::MotionKind::HalfPageDown => {
+            // `<C-d>` — half page down, count multiplies the distance.
+            // Calls scroll_cursor_rows directly (same expression as the FSM
+            // Ctrl arm in step_normal) rather than adding a Motion enum variant,
+            // keeping engine Motion churn minimal. Engine FSM Ctrl-d arm is
+            // kept intact for macro-replay.
+            scroll_cursor_rows(ed, viewport_half_rows(ed, count) as isize);
+        }
+        hjkl_vim::MotionKind::HalfPageUp => {
+            // `<C-u>` — half page up, count multiplies the distance.
+            // Direct call mirrors the FSM Ctrl-u arm. No new Motion variant.
+            scroll_cursor_rows(ed, -(viewport_half_rows(ed, count) as isize));
+        }
+        hjkl_vim::MotionKind::FullPageDown => {
+            // `<C-f>` — full page down (2-line overlap), count multiplies.
+            // Direct call mirrors the FSM Ctrl-f arm. No new Motion variant.
+            scroll_cursor_rows(ed, viewport_full_rows(ed, count) as isize);
+        }
+        hjkl_vim::MotionKind::FullPageUp => {
+            // `<C-b>` — full page up (2-line overlap), count multiplies.
+            // Direct call mirrors the FSM Ctrl-b arm. No new Motion variant.
+            scroll_cursor_rows(ed, -(viewport_full_rows(ed, count) as isize));
+        }
         _ => {
             // Future MotionKind variants added by later phases are silently
             // ignored here — callers must bump hjkl-engine when consuming new

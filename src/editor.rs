@@ -5041,4 +5041,182 @@ mod tests {
             "3; must advance 3 times from col 1 to col 5"
         );
     }
+
+    // ── BracketMatch controller tests (Phase 3f) ───────────────────────────────
+
+    #[test]
+    fn bracket_match_jumps_to_matching_close_paren() {
+        // "(abc)", cursor at (0,0) on `(` — `%` must jump to `)` at (0,4).
+        let mut e = fresh_editor("(abc)");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::BracketMatch, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 4),
+            "% on '(' must land on matching ')' at col 4"
+        );
+    }
+
+    #[test]
+    fn bracket_match_jumps_to_matching_open_paren() {
+        // "(abc)", cursor at (0,4) on `)` — `%` must jump back to `(` at (0,0).
+        let mut e = fresh_editor("(abc)");
+        e.jump_cursor(0, 4);
+        e.apply_motion(hjkl_vim::MotionKind::BracketMatch, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 0),
+            "% on ')' must land on matching '(' at col 0"
+        );
+    }
+
+    #[test]
+    fn bracket_match_with_no_match_on_line_is_noop_or_engine_behaviour() {
+        // "abcd", cursor at (0,2) — no bracket under cursor; engine returns
+        // false from matching_bracket, cursor must not move.
+        let mut e = fresh_editor("abcd");
+        e.jump_cursor(0, 2);
+        e.apply_motion(hjkl_vim::MotionKind::BracketMatch, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 2),
+            "% with no bracket under cursor must be a no-op"
+        );
+    }
+
+    // ── Scroll / viewport motion controller tests (Phase 3g) ──────────────────
+
+    /// Helper: build a 20-line buffer, set viewport to rows [5..14] (height=10).
+    fn fresh_viewport_editor() -> Editor {
+        let content = many_lines(20);
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::from_str(&content),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        // height=10, top_row=5 → visible rows 5..14.
+        // set_viewport_height stores to the atomic; sync_buffer_from_textarea
+        // propagates it to host.viewport_mut().height so motion helpers see it.
+        e.set_viewport_height(10);
+        e.sync_buffer_from_textarea();
+        e.host_mut().viewport_mut().top_row = 5;
+        e
+    }
+
+    #[test]
+    fn viewport_top_lands_on_first_visible_row() {
+        // Viewport top=5, height=10. H (count=1) should land on row 5
+        // (the first visible row, offset = count-1 = 0).
+        let mut e = fresh_viewport_editor();
+        e.jump_cursor(10, 0);
+        e.apply_motion(hjkl_vim::MotionKind::ViewportTop, 1);
+        assert_eq!(
+            e.cursor().0,
+            5,
+            "H (count=1) must land on viewport top row (5)"
+        );
+    }
+
+    #[test]
+    fn viewport_top_with_count_offsets_down() {
+        // H with count=3 → viewport top + (3-1) = 5 + 2 = row 7.
+        let mut e = fresh_viewport_editor();
+        e.jump_cursor(12, 0);
+        e.apply_motion(hjkl_vim::MotionKind::ViewportTop, 3);
+        assert_eq!(e.cursor().0, 7, "3H must land at viewport top + 2 = row 7");
+    }
+
+    #[test]
+    fn viewport_middle_lands_on_middle_visible_row() {
+        // Viewport top=5, height=10 → last visible = 14, mid = 5 + (14-5)/2 = 9.
+        let mut e = fresh_viewport_editor();
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::ViewportMiddle, 1);
+        assert_eq!(e.cursor().0, 9, "M must land on middle visible row (9)");
+    }
+
+    #[test]
+    fn viewport_bottom_lands_on_last_visible_row() {
+        // L (count=1) → viewport bottom, offset = count-1 = 0 → row 14.
+        let mut e = fresh_viewport_editor();
+        e.jump_cursor(5, 0);
+        e.apply_motion(hjkl_vim::MotionKind::ViewportBottom, 1);
+        assert_eq!(
+            e.cursor().0,
+            14,
+            "L (count=1) must land on viewport bottom row (14)"
+        );
+    }
+
+    #[test]
+    fn half_page_down_moves_cursor_by_half_window() {
+        // viewport height=10, so half=5. Cursor at row 0 → row 5 after C-d.
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::from_str(&many_lines(30)),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        e.set_viewport_height(10);
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::HalfPageDown, 1);
+        assert_eq!(
+            e.cursor().0,
+            5,
+            "<C-d> from row 0 with viewport height=10 must land on row 5"
+        );
+    }
+
+    #[test]
+    fn half_page_up_moves_cursor_by_half_window_reverse() {
+        // viewport height=10, half=5. Cursor at row 10 → row 5 after C-u.
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::from_str(&many_lines(30)),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        e.set_viewport_height(10);
+        e.jump_cursor(10, 0);
+        e.apply_motion(hjkl_vim::MotionKind::HalfPageUp, 1);
+        assert_eq!(
+            e.cursor().0,
+            5,
+            "<C-u> from row 10 with viewport height=10 must land on row 5"
+        );
+    }
+
+    #[test]
+    fn full_page_down_moves_cursor_by_full_window() {
+        // viewport height=10, full = 10 - 2 = 8. Cursor at row 0 → row 8.
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::from_str(&many_lines(30)),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        e.set_viewport_height(10);
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::FullPageDown, 1);
+        assert_eq!(
+            e.cursor().0,
+            8,
+            "<C-f> from row 0 with viewport height=10 must land on row 8"
+        );
+    }
+
+    #[test]
+    fn full_page_up_moves_cursor_by_full_window_reverse() {
+        // viewport height=10, full=8. Cursor at row 10 → row 2.
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::from_str(&many_lines(30)),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        e.set_viewport_height(10);
+        e.jump_cursor(10, 0);
+        e.apply_motion(hjkl_vim::MotionKind::FullPageUp, 1);
+        assert_eq!(
+            e.cursor().0,
+            2,
+            "<C-b> from row 10 with viewport height=10 must land on row 2"
+        );
+    }
 }
