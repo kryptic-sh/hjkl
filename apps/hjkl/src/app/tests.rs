@@ -8015,3 +8015,211 @@ fn gg_via_pending_state_in_visual_block_mode() {
     );
     assert_window_synced_to_engine(&app);
 }
+
+// ── dispatch_event_key routing-order regression tests ───────────────────────
+//
+// These tests drive the FULL keymap sequence through `dispatch_event_key`,
+// which mirrors the event loop's chord-routing ordering. They catch the bug
+// class where Non-Normal trie dispatch ran BEFORE the pending_state reducer,
+// causing the second key of a chord (e.g. second `g` of `gg`) to be
+// re-consumed by the keymap instead of reaching the reducer's commit arm.
+//
+// If you revert the `pending_state.is_none()` guard added to the Non-Normal
+// trie dispatch block in event_loop.rs (and the matching guard in
+// `dispatch_event_key`), these tests MUST fail — that is their purpose.
+
+#[test]
+fn gg_full_sequence_in_visual_line_via_keymap() {
+    // Regression: the second `g` of `gg` in VisualLine was re-consumed by
+    // the Non-Normal trie dispatch instead of reaching the pending_state
+    // reducer's AfterGChord commit arm. Cursor stayed put.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.sync_viewport_from_editor();
+
+    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+
+    // Enter VisualLine via `V`.
+    app.active_mut()
+        .editor
+        .handle_key(CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualLine,
+        "must be in VisualLine mode"
+    );
+
+    // First `g` — goes through Non-Normal dispatch → BeginPendingAfterG.
+    let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "first g must be consumed");
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "first g must set pending_state to AfterG; got {:?}",
+        app.pending_state
+    );
+
+    // Second `g` — must reach the pending_state reducer (NOT re-fire
+    // BeginPendingAfterG via the keymap). Commits gg.
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "second g must be consumed");
+    assert!(
+        app.pending_state.is_none(),
+        "after gg the reducer must clear pending_state"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        0,
+        "gg must move engine cursor to row 0 from row 20"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn gg_full_sequence_in_visual_mode_via_keymap() {
+    // Same as gg_full_sequence_in_visual_line_via_keymap but for Visual mode
+    // (entered via `v`).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.sync_viewport_from_editor();
+
+    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+
+    // Enter Visual via `v`.
+    app.active_mut()
+        .editor
+        .handle_key(CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Visual,
+        "must be in Visual mode"
+    );
+
+    let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "first g must be consumed");
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "first g must set pending_state to AfterG; got {:?}",
+        app.pending_state
+    );
+
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "second g must be consumed");
+    assert!(
+        app.pending_state.is_none(),
+        "after gg the reducer must clear pending_state"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        0,
+        "gg must move engine cursor to row 0 from row 20"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn gg_full_sequence_in_visual_block_mode_via_keymap() {
+    // Same as gg_full_sequence_in_visual_line_via_keymap but for VisualBlock
+    // mode (entered via Ctrl-V).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.sync_viewport_from_editor();
+
+    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+
+    // Enter VisualBlock via Ctrl-V.
+    app.active_mut()
+        .editor
+        .handle_key(CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualBlock,
+        "must be in VisualBlock mode"
+    );
+
+    let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "first g must be consumed");
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "first g must set pending_state to AfterG; got {:?}",
+        app.pending_state
+    );
+
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "second g must be consumed");
+    assert!(
+        app.pending_state.is_none(),
+        "after gg the reducer must clear pending_state"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        0,
+        "gg must move engine cursor to row 0 from row 20"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn gg_full_sequence_in_normal_mode_via_keymap() {
+    // Sanity-check coverage for the previously-working Normal path.
+    // Confirms dispatch_event_key handles Normal mode and that gg still works.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.sync_viewport_from_editor();
+
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must be in Normal mode"
+    );
+
+    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+    let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+    // First `g` — Normal keymap sets pending_state to AfterG.
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "first g must be consumed");
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::AfterG { .. })
+        ),
+        "first g must set pending_state to AfterG; got {:?}",
+        app.pending_state
+    );
+
+    // Second `g` — reducer commits gg.
+    let consumed = app.dispatch_event_key(g_key);
+    assert!(consumed, "second g must be consumed");
+    assert!(
+        app.pending_state.is_none(),
+        "after gg the reducer must clear pending_state"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        0,
+        "gg must move engine cursor to row 0 from row 20"
+    );
+    assert_window_synced_to_engine(&app);
+}
