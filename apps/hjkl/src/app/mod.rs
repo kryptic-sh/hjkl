@@ -770,6 +770,31 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("<End>", hjkl_vim::MotionKind::LineEnd, "line end"),
         // Phase 3d: doc-level motion.
         ("G", hjkl_vim::MotionKind::GotoLine, "goto line"),
+        // Phase 3e: find-repeat motions.
+        (";", hjkl_vim::MotionKind::FindRepeat, "find repeat"),
+        (
+            ",",
+            hjkl_vim::MotionKind::FindRepeatReverse,
+            "find repeat reverse",
+        ),
+        // Phase 3f: bracket-match motion.
+        ("%", hjkl_vim::MotionKind::BracketMatch, "match bracket"),
+        // Phase 3g: scroll / viewport motions.
+        ("H", hjkl_vim::MotionKind::ViewportTop, "viewport top"),
+        ("M", hjkl_vim::MotionKind::ViewportMiddle, "viewport middle"),
+        ("L", hjkl_vim::MotionKind::ViewportBottom, "viewport bottom"),
+        (
+            "<C-d>",
+            hjkl_vim::MotionKind::HalfPageDown,
+            "half page down",
+        ),
+        ("<C-u>", hjkl_vim::MotionKind::HalfPageUp, "half page up"),
+        (
+            "<C-f>",
+            hjkl_vim::MotionKind::FullPageDown,
+            "full page down",
+        ),
+        ("<C-b>", hjkl_vim::MotionKind::FullPageUp, "full page up"),
     ] {
         let action = AppAction::Motion { kind, count: 1 };
         for mode in [

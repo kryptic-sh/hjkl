@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-engine"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim"
-version = "0.15.0"
+version = "0.17.0"
 
 [[package]]
 name = "hjkl-xdg"

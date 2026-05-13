@@ -435,12 +435,20 @@ impl App {
                                             // Phase 3a: h/j/k/l/+/-/<Space> are now keymap-bound
                                             // motions; keep count alive so 5j/3k etc. work.
                                             // Phase 3c: ^/$  added (line-anchor motions).
+                                            // Phase 3g: H/M/L added (viewport motions).
+                                            // Ctrl-prefixed keys (C-d/u/f/b) are not Char events
+                                            // so they never reach this arm; the non-Char branch
+                                            // below handles them (they're already forwarded as
+                                            // ctrl+Char events that bypass digit-prefix replay).
                                             matches!(
                                                 c,
                                                 'g' | 'z'
                                                     | ']'
                                                     | '['
                                                     | 'G'
+                                                    | 'H'
+                                                    | 'M'
+                                                    | 'L'
                                                     | 'd'
                                                     | 'y'
                                                     | 'c'
@@ -459,6 +467,9 @@ impl App {
                                                     | 'E'
                                                     | '^'
                                                     | '$'
+                                                    | ';'
+                                                    | ','
+                                                    | '%'
                                             ) || c == self.config.editor.leader
                                         }
                                     }
@@ -479,8 +490,17 @@ impl App {
                                 }
                             }
                         } else {
-                            // Modifier key — flush count digits if any.
-                            if !self.pending_count.is_empty() {
+                            // Modifier key. For Ctrl+Char keys the keymap may
+                            // match (e.g. <C-d>/<C-u>/<C-f>/<C-b> from Phase 3g)
+                            // and should receive the buffered count. Keep
+                            // pending_count alive so dispatch_keymap sees it.
+                            // If the keymap misses, the "Unbound" path below
+                            // drains the digits to the engine before replaying.
+                            // For non-Ctrl modifier keys (Alt, etc.) flush now as
+                            // before — they are not keymap-bound count consumers.
+                            let is_ctrl_char = key.modifiers == KeyModifiers::CONTROL
+                                && matches!(key.code, KeyCode::Char(_));
+                            if !is_ctrl_char && !self.pending_count.is_empty() {
                                 let digits: String = self.pending_count.drain(..).collect();
                                 for d in digits.chars() {
                                     self.active_mut().editor.handle_key(KeyEvent::new(
