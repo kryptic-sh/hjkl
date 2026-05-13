@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-05-13
+
+### Added
+
+- `apply_motion_kind` extended with `MotionKind::FindRepeat` and
+  `MotionKind::FindRepeatReverse` arms (Phase 3e of kryptic-sh/hjkl#69): `;`
+  routes through
+  `execute_motion(ed, Motion::FindRepeat { reverse: false }, count)` and `,`
+  through `Motion::FindRepeat { reverse: true }`. Engine handles the "no prior
+  find" no-op internally via `ed.vim.last_find`. Engine FSM arms for `;` and `,`
+  in `parse_motion` are kept intact for macro-replay.
+- Bumped `hjkl-vim` dependency from `"0.15"` to `"0.16"` in `Cargo.toml`.
+- 4 controller-level tests in `crates/hjkl-engine/src/editor.rs`:
+  `find_repeat_after_f_finds_next_occurrence`,
+  `find_repeat_reverse_after_f_finds_prev_occurrence`,
+  `find_repeat_with_no_prior_find_is_noop`,
+  `find_repeat_with_count_advances_count_times`.
+
 ## [0.6.4] - 2026-05-13
 
 ### Added
@@ -512,7 +530,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.1...v0.6.2

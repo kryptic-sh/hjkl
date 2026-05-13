@@ -2599,6 +2599,18 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // down N-1 lines then lands at line-end; not yet wired).
             execute_motion(ed, Motion::LineEnd, 1);
         }
+        hjkl_vim::MotionKind::FindRepeat => {
+            // `;` — repeat last f/F/t/T in the same direction.
+            // execute_motion resolves FindRepeat via ed.vim.last_find;
+            // no-op if no prior find exists (None arm returns early).
+            execute_motion(ed, Motion::FindRepeat { reverse: false }, count);
+        }
+        hjkl_vim::MotionKind::FindRepeatReverse => {
+            // `,` — repeat last f/F/t/T in the reverse direction.
+            // execute_motion resolves FindRepeat via ed.vim.last_find;
+            // no-op if no prior find exists (None arm returns early).
+            execute_motion(ed, Motion::FindRepeat { reverse: true }, count);
+        }
         _ => {
             // Future MotionKind variants added by later phases are silently
             // ignored here — callers must bump hjkl-engine when consuming new

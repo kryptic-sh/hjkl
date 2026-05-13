@@ -4979,4 +4979,66 @@ mod tests {
         e.apply_motion(hjkl_vim::MotionKind::GotoLine, 100);
         assert_eq!(e.cursor(), (2, 0), "100G clamps to last content row");
     }
+
+    // ── FindRepeat / FindRepeatReverse controller tests (Phase 3e) ────────────
+
+    #[test]
+    fn find_repeat_after_f_finds_next_occurrence() {
+        // "abcabc", cursor at (0,0). `fc` lands on (0,2). `;` repeats → (0,5).
+        let mut e = fresh_editor("abcabc");
+        e.jump_cursor(0, 0);
+        e.find_char('c', true, false, 1);
+        assert_eq!(e.cursor(), (0, 2), "fc must land on first 'c'");
+        e.apply_motion(hjkl_vim::MotionKind::FindRepeat, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 5),
+            "find_repeat (;) must advance to second 'c'"
+        );
+    }
+
+    #[test]
+    fn find_repeat_reverse_after_f_finds_prev_occurrence() {
+        // "abcabc", cursor at (0,0). `fc` lands on (0,2). `;` → (0,5). `,` back → (0,2).
+        let mut e = fresh_editor("abcabc");
+        e.jump_cursor(0, 0);
+        e.find_char('c', true, false, 1);
+        assert_eq!(e.cursor(), (0, 2), "fc must land on first 'c'");
+        e.apply_motion(hjkl_vim::MotionKind::FindRepeat, 1);
+        assert_eq!(e.cursor(), (0, 5), "; must advance to second 'c'");
+        e.apply_motion(hjkl_vim::MotionKind::FindRepeatReverse, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 2),
+            "find_repeat_reverse (,) must go back to first 'c'"
+        );
+    }
+
+    #[test]
+    fn find_repeat_with_no_prior_find_is_noop() {
+        // Fresh editor, no prior find — `;` must not move cursor.
+        let mut e = fresh_editor("abcabc");
+        e.jump_cursor(0, 3);
+        e.apply_motion(hjkl_vim::MotionKind::FindRepeat, 1);
+        assert_eq!(
+            e.cursor(),
+            (0, 3),
+            "find_repeat with no prior find must be a no-op"
+        );
+    }
+
+    #[test]
+    fn find_repeat_with_count_advances_count_times() {
+        // "aXaXaX", cursor (0,0). `fX` → (0,1). `3;` → repeats 3× → (0,5).
+        let mut e = fresh_editor("aXaXaX");
+        e.jump_cursor(0, 0);
+        e.find_char('X', true, false, 1);
+        assert_eq!(e.cursor(), (0, 1), "fX must land on first 'X' at col 1");
+        e.apply_motion(hjkl_vim::MotionKind::FindRepeat, 3);
+        assert_eq!(
+            e.cursor(),
+            (0, 5),
+            "3; must advance 3 times from col 1 to col 5"
+        );
+    }
 }
