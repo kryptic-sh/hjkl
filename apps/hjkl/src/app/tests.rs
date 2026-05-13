@@ -4696,18 +4696,18 @@ fn zero_with_empty_count_is_start_of_line() {
 fn set_cursorline_flips_setting() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(
-        !app.active().editor.settings().cursorline,
-        "cursorline must default to false"
-    );
-    app.dispatch_ex("set cursorline");
-    assert!(
         app.active().editor.settings().cursorline,
-        ":set cursorline must enable cursorline"
+        "cursorline must default to true"
     );
     app.dispatch_ex("set nocursorline");
     assert!(
         !app.active().editor.settings().cursorline,
         ":set nocursorline must disable cursorline"
+    );
+    app.dispatch_ex("set cursorline");
+    assert!(
+        app.active().editor.settings().cursorline,
+        ":set cursorline must enable cursorline"
     );
 }
 
