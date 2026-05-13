@@ -921,6 +921,36 @@ impl App {
         win.cursor_col = cursor_col;
     }
 
+    /// Refresh window cursor cache, drain dirty flag + content edits, notify
+    /// LSP, recompute syntax — call this after any code path that mutated
+    /// engine state via `apply_motion` / `handle_key` / replay / etc.
+    ///
+    /// Bug class memo: any keymap-Match arm that triggers cursor motion via
+    /// `apply_motion` must call this before `continue` — otherwise the window
+    /// cursor cache goes stale and the render shows the cursor at its old
+    /// position. This helper consolidates the three previously duplicated
+    /// ~15-line sync blocks in `event_loop.rs` into a single call site.
+    pub(crate) fn sync_after_engine_mutation(&mut self) {
+        self.sync_viewport_from_editor();
+        if self.active_mut().editor.take_dirty() {
+            let elapsed = self.active_mut().refresh_dirty_against_saved();
+            self.last_signature_us = elapsed;
+            if self.active().dirty {
+                self.active_mut().is_new_file = false;
+            }
+        }
+        let buffer_id = self.active().buffer_id;
+        if self.active_mut().editor.take_content_reset() {
+            self.syntax.reset(buffer_id);
+        }
+        let edits = self.active_mut().editor.take_content_edits();
+        if !edits.is_empty() {
+            self.syntax.apply_edits(buffer_id, &edits);
+        }
+        self.lsp_notify_change_active();
+        self.recompute_and_install();
+    }
+
     // ── Count-prefix helpers ──────────────────────────────────────────────
 
     /// Drain the pending digit count and replay each digit to the active

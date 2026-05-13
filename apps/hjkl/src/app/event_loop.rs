@@ -5,9 +5,7 @@ use crossterm::{
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
-use hjkl_keymap::{
-    Chord as KmChord, KeyCode as KmKeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods,
-};
+use hjkl_keymap::{Chord as KmChord, KeyEvent as KmKeyEvent};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
@@ -22,47 +20,10 @@ fn to_km_event(key: KeyEvent) -> Option<KmKeyEvent> {
 }
 
 /// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
-/// `KeyEvent`s. Each keymap event is converted back to a crossterm event
-/// and forwarded to `editor.handle_key`.
+/// `KeyEvent`s. Thin wrapper delegating to `App::replay_to_engine`; kept
+/// for callers inside this file that pass `app` as a plain `&mut App` arg.
 fn replay_to_engine(app: &mut App, events: &[KmKeyEvent]) {
-    for km_ev in events {
-        let ct_ev = km_to_crossterm(km_ev);
-        app.active_mut().editor.handle_key(ct_ev);
-    }
-}
-
-/// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
-/// for replaying unbound sequences to the engine.
-fn km_to_crossterm(ev: &KmKeyEvent) -> KeyEvent {
-    let code = match ev.code {
-        KmKeyCode::Char(c) => KeyCode::Char(c),
-        KmKeyCode::Enter => KeyCode::Enter,
-        KmKeyCode::Esc => KeyCode::Esc,
-        KmKeyCode::Tab => KeyCode::Tab,
-        KmKeyCode::Backspace => KeyCode::Backspace,
-        KmKeyCode::Delete => KeyCode::Delete,
-        KmKeyCode::Insert => KeyCode::Insert,
-        KmKeyCode::Up => KeyCode::Up,
-        KmKeyCode::Down => KeyCode::Down,
-        KmKeyCode::Left => KeyCode::Left,
-        KmKeyCode::Right => KeyCode::Right,
-        KmKeyCode::Home => KeyCode::Home,
-        KmKeyCode::End => KeyCode::End,
-        KmKeyCode::PageUp => KeyCode::PageUp,
-        KmKeyCode::PageDown => KeyCode::PageDown,
-        KmKeyCode::F(n) => KeyCode::F(n),
-    };
-    let mut mods = KeyModifiers::NONE;
-    if ev.modifiers.contains(KmKeyMods::CTRL) {
-        mods |= KeyModifiers::CONTROL;
-    }
-    if ev.modifiers.contains(KmKeyMods::SHIFT) {
-        mods |= KeyModifiers::SHIFT;
-    }
-    if ev.modifiers.contains(KmKeyMods::ALT) {
-        mods |= KeyModifiers::ALT;
-    }
-    KeyEvent::new(code, mods)
+    app.replay_to_engine(events);
 }
 
 /// Map a [`hjkl_vim::OperatorKind`] (reducer-side) to a
@@ -198,24 +159,7 @@ impl App {
                     self.which_key_active = false;
                     if !replay.is_empty() {
                         replay_to_engine(self, &replay);
-                        self.sync_viewport_from_editor();
-                        if self.active_mut().editor.take_dirty() {
-                            let elapsed = self.active_mut().refresh_dirty_against_saved();
-                            self.last_signature_us = elapsed;
-                            if self.active().dirty {
-                                self.active_mut().is_new_file = false;
-                            }
-                        }
-                        let buffer_id = self.active().buffer_id;
-                        if self.active_mut().editor.take_content_reset() {
-                            self.syntax.reset(buffer_id);
-                        }
-                        let edits = self.active_mut().editor.take_content_edits();
-                        if !edits.is_empty() {
-                            self.syntax.apply_edits(buffer_id, &edits);
-                        }
-                        self.lsp_notify_change_active();
-                        self.recompute_and_install();
+                        self.sync_after_engine_mutation();
                     }
                 }
                 continue;
@@ -299,26 +243,7 @@ impl App {
                             // Match dispatched a Motion / pending-state action
                             // via apply_motion — refresh the window cursor
                             // cache + syntax + LSP so the redraw reflects it.
-                            // Same pattern as the Normal-mode keymap branch
-                            // below (apps/hjkl/src/app/event_loop.rs:~910).
-                            self.sync_viewport_from_editor();
-                            if self.active_mut().editor.take_dirty() {
-                                let elapsed = self.active_mut().refresh_dirty_against_saved();
-                                self.last_signature_us = elapsed;
-                                if self.active().dirty {
-                                    self.active_mut().is_new_file = false;
-                                }
-                            }
-                            let buffer_id = self.active().buffer_id;
-                            if self.active_mut().editor.take_content_reset() {
-                                self.syntax.reset(buffer_id);
-                            }
-                            let edits = self.active_mut().editor.take_content_edits();
-                            if !edits.is_empty() {
-                                self.syntax.apply_edits(buffer_id, &edits);
-                            }
-                            self.lsp_notify_change_active();
-                            self.recompute_and_install();
+                            self.sync_after_engine_mutation();
                             if self.exit_requested {
                                 break;
                             }
@@ -953,24 +878,7 @@ impl App {
                             // need viewport + syntax + LSP sync — otherwise the
                             // engine cursor moves but the window's cached cursor
                             // stays stale and the render shows no motion.
-                            self.sync_viewport_from_editor();
-                            if self.active_mut().editor.take_dirty() {
-                                let elapsed = self.active_mut().refresh_dirty_against_saved();
-                                self.last_signature_us = elapsed;
-                                if self.active().dirty {
-                                    self.active_mut().is_new_file = false;
-                                }
-                            }
-                            let buffer_id = self.active().buffer_id;
-                            if self.active_mut().editor.take_content_reset() {
-                                self.syntax.reset(buffer_id);
-                            }
-                            let edits = self.active_mut().editor.take_content_edits();
-                            if !edits.is_empty() {
-                                self.syntax.apply_edits(buffer_id, &edits);
-                            }
-                            self.lsp_notify_change_active();
-                            self.recompute_and_install();
+                            self.sync_after_engine_mutation();
                             continue;
                         }
                         // Key couldn't be translated (unsupported code) — fall through to engine.
