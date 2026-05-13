@@ -480,13 +480,7 @@ impl App {
                                     _ => false,
                                 };
                                 if !could_start_chord {
-                                    let digits = self.pending_count.drain_as_digits();
-                                    for d in digits.chars() {
-                                        self.active_mut().editor.handle_key(KeyEvent::new(
-                                            KeyCode::Char(d),
-                                            KeyModifiers::NONE,
-                                        ));
-                                    }
+                                    self.flush_pending_count_to_engine();
                                 }
                             }
                         } else {
@@ -501,13 +495,7 @@ impl App {
                             let is_ctrl_char = key.modifiers == KeyModifiers::CONTROL
                                 && matches!(key.code, KeyCode::Char(_));
                             if !is_ctrl_char && !self.pending_count.is_empty() {
-                                let digits = self.pending_count.drain_as_digits();
-                                for d in digits.chars() {
-                                    self.active_mut().editor.handle_key(KeyEvent::new(
-                                        KeyCode::Char(d),
-                                        KeyModifiers::NONE,
-                                    ));
-                                }
+                                self.flush_pending_count_to_engine();
                             }
                         }
 
@@ -967,13 +955,7 @@ impl App {
                             }
                             // Unbound: flush buffered count digits to engine first.
                             if !self.pending_count.is_empty() {
-                                let digits = self.pending_count.drain_as_digits();
-                                for d in digits.chars() {
-                                    self.active_mut().editor.handle_key(KeyEvent::new(
-                                        KeyCode::Char(d),
-                                        KeyModifiers::NONE,
-                                    ));
-                                }
+                                self.flush_pending_count_to_engine();
                             }
                             // Replay the unbound events to the engine.
                             // Multi-key replay = trie consumed a chord prefix then

@@ -921,6 +921,23 @@ impl App {
         win.cursor_col = cursor_col;
     }
 
+    // ── Count-prefix helpers ──────────────────────────────────────────────
+
+    /// Drain the pending digit count and replay each digit to the active
+    /// editor as a bare `Char` key event.  No-ops when the count is empty
+    /// (drain returns an empty string), so callers may omit an
+    /// `is_empty` guard if they prefer — the existing guards are kept at
+    /// call sites for clarity and symmetry with the surrounding flow.
+    fn flush_pending_count_to_engine(&mut self) {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let digits = self.pending_count.drain_as_digits();
+        for d in digits.chars() {
+            self.active_mut()
+                .editor
+                .handle_key(KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE));
+        }
+    }
+
     // ── Window focus navigation ───────────────────────────────────────────
 
     /// Move focus to the window below the current one (`Ctrl-w j`).
