@@ -2584,6 +2584,15 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // count is ignored — matches vim `^` semantics.
             execute_motion(ed, Motion::FirstNonBlank, 1);
         }
+        hjkl_vim::MotionKind::GotoLine => {
+            // `G`: bare `G` → last line; `count G` → jump to line `count`.
+            // apply_motion_kind normalises the raw count to count.max(1)
+            // above, so count == 1 means "bare G" (last line) and count > 1
+            // means "go to line N". execute_motion's FileBottom arm applies
+            // the same `count > 1` check before calling move_bottom, so the
+            // convention aligns: pass count straight through.
+            execute_motion(ed, Motion::FileBottom, count);
+        }
         hjkl_vim::MotionKind::LineEnd => {
             // `$` / `<End>`: last character on the current line.
             // count is ignored at the keymap-path level (vim `N$` moves

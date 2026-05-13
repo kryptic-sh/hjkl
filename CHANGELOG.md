@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-05-13
+
+### Added
+
+- `apply_motion_kind` extended with `MotionKind::GotoLine` arm (Phase 3d of
+  kryptic-sh/hjkl#69): `G` routes through
+  `execute_motion(ed, Motion::FileBottom, count)`. Count convention:
+  `apply_motion_kind` normalises raw count to `count.max(1)`; the `FileBottom`
+  execution arm maps `count <= 1` → `move_bottom(0)` (last content row) and
+  `count > 1` → `move_bottom(count)` (1-based line N, clamped). Engine FSM arm
+  for `G` in `parse_motion` is kept intact for macro-replay defensive coverage.
+- Bumped `hjkl-vim` dependency from `"0.14"` to `"0.15"` in `Cargo.toml`.
+- 3 controller-level tests in `crates/hjkl-engine/src/editor.rs` covering: bare
+  `G` (count=1 → last line), `5G` (count=5 → row 4), and `100G` on a 3-line
+  buffer (clamps to last content row).
+
 ## [0.6.3] - 2026-05-13
 
 ### Added
@@ -496,7 +512,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.0...v0.6.1

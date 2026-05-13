@@ -4947,4 +4947,36 @@ mod tests {
         e.apply_motion(hjkl_vim::MotionKind::LineEnd, 1);
         assert_eq!(e.cursor(), (0, 0), "LineEnd on empty line stays at col 0");
     }
+
+    // ── apply_motion controller tests (Phase 3d) — doc-level motion ───────────
+
+    #[test]
+    fn goto_line_count_1_lands_on_last_line() {
+        // "foo\nbar\nbaz\n": bare `G` (count=1) → last content line (row 2).
+        // Count convention: apply_motion_kind normalises 1 → execute_motion
+        // with count=1 → FileBottom arm sees count <= 1 → move_bottom(0) =
+        // last content row.
+        let mut e = fresh_editor("foo\nbar\nbaz\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::GotoLine, 1);
+        assert_eq!(e.cursor(), (2, 0), "bare G lands on last content row");
+    }
+
+    #[test]
+    fn goto_line_count_5_lands_on_line_5() {
+        // 6-line buffer (rows 0-5); `5G` → row 4 (1-based line 5).
+        let mut e = fresh_editor("a\nb\nc\nd\ne\nf\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::GotoLine, 5);
+        assert_eq!(e.cursor(), (4, 0), "5G lands on row 4 (1-based line 5)");
+    }
+
+    #[test]
+    fn goto_line_count_past_buffer_clamps_to_last_line() {
+        // "foo\nbar\nbaz\n": `100G` → last content line (row 2), clamped.
+        let mut e = fresh_editor("foo\nbar\nbaz\n");
+        e.jump_cursor(0, 0);
+        e.apply_motion(hjkl_vim::MotionKind::GotoLine, 100);
+        assert_eq!(e.cursor(), (2, 0), "100G clamps to last content row");
+    }
 }
