@@ -910,6 +910,18 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         eprintln!("hjkl: keymap.add(@) failed: {e}");
     }
 
+    // ── Phase 5c: dot-repeat ─────────────────────────────────────────────
+    // `.` replays the last buffered change. Normal-mode only.
+    // Engine FSM `.` arm stays for macro-replay defensive coverage.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        ".",
+        AppAction::DotRepeat { count: 1 },
+        "repeat last change",
+    ) {
+        eprintln!("hjkl: keymap.add(.) failed: {e}");
+    }
+
     km
 }
 
@@ -1811,6 +1823,14 @@ impl App {
                 let n = self.pending_count.take_or(action_count) as usize;
                 self.pending_state =
                     Some(hjkl_vim::PendingState::PlayMacroTarget { count: n.max(1) });
+            }
+            AppAction::DotRepeat {
+                count: action_count,
+            } => {
+                // `.` dot-repeat. Combine pending count prefix with action count.
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.replay_last_change(n.max(1));
+                self.sync_after_engine_mutation();
             }
             AppAction::Motion {
                 kind,

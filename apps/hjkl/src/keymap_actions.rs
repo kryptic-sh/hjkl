@@ -145,6 +145,15 @@ pub enum AppAction {
         count: u32,
     },
 
+    /// `.` pressed in Normal mode — dot-repeat. Replays the last buffered
+    /// change `count` times via `Editor::replay_last_change`. Phase 5c of
+    /// kryptic-sh/hjkl#71: chord moves from engine FSM `.` arm into the app
+    /// keymap. Engine FSM `.` arm stays for macro-replay defensive coverage;
+    /// `LastChange` storage stays on engine.
+    DotRepeat {
+        count: u32,
+    },
+
     // ── Cursor motions (Phase 3a — hjkl-vim keymap path) ──────────────
     /// Engine-level cursor motion executed via the hjkl-vim keymap path.
     ///

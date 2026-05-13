@@ -414,6 +414,57 @@ fn ex_goto_line_100_via_dispatch() {
 }
 
 #[test]
+fn dot_repeat_replays_last_change() {
+    use crate::keymap_actions::AppAction;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_buffer::{Edit, Position};
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: "abc".to_string(),
+    });
+    app.active_mut().editor.jump_cursor(0, 0);
+    // Set up a last_change by feeding `x` through the engine (single-char delete).
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    // Buffer now "bc". Dot-repeat should delete one more char.
+    app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
+    let line0 = app.active().editor.buffer().line(0).map(|l| l.to_string());
+    assert_eq!(
+        line0.as_deref(),
+        Some("c"),
+        "`.` after `x` must delete one more char, got {line0:?}"
+    );
+}
+
+#[test]
+fn dot_repeat_with_count_3_replays_three_times() {
+    use crate::keymap_actions::AppAction;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_buffer::{Edit, Position};
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().editor.mutate_edit(Edit::InsertStr {
+        at: Position::new(0, 0),
+        text: "abcdef".to_string(),
+    });
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    // Buffer "bcdef". `3.` deletes 3 more. Seed pending_count to simulate
+    // the keymap layer's count-prefix accumulation.
+    app.pending_count.try_accumulate('3');
+    app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
+    let line0 = app.active().editor.buffer().line(0).map(|l| l.to_string());
+    assert_eq!(
+        line0.as_deref(),
+        Some("ef"),
+        "`3.` after `x` must delete 3 more chars, got {line0:?}"
+    );
+}
+
+#[test]
 fn ex_goto_line_100_via_command_field_keys() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
