@@ -8,6 +8,26 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.11] - 2026-05-13
+
+### Changed
+
+- Phase 3d of the vim FSM extraction (#62, tracking #69) — `G` now routes
+  through the `hjkl-vim` keymap path. `AppAction::Motion { kind, count }`
+  dispatches to `Editor::apply_motion` instead of re-entering the engine FSM.
+  Engine FSM arm for `G` is kept for macro-replay coverage. `gg` stays on the
+  G-chord path from Phase 2b-ii.
+- Bumped `hjkl-vim` 0.14 → 0.15 — adds `MotionKind::GotoLine`. Count 1 means
+  last line, count > 1 means goto line N.
+- Bumped `hjkl-engine` 0.6.3 → 0.6.4 — `apply_motion` routes `GotoLine` to
+  `Motion::FileBottom`.
+
+### Added
+
+- `G` entry in the motion binding loop across Normal / Visual / VisualLine /
+  VisualBlock. `'G'` already in `could_start_chord` (no event_loop change
+  needed).
+
 ## [0.14.10] - 2026-05-13
 
 ### Changed
@@ -1844,7 +1864,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.10...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.11...HEAD
+[0.14.11]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.11
 [0.14.10]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.10
 [0.14.9]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.9
 [0.14.8]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.8
