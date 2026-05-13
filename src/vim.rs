@@ -2509,6 +2509,26 @@ pub(crate) fn execute_motion<H: crate::types::Host>(
 
 // ─── Keymap-layer motion controller ────────────────────────────────────────
 
+/// Wrapper around `execute_motion` that also syncs `block_vcol` when in
+/// VisualBlock mode. The engine FSM's `step()` already does this (line ~2001);
+/// the keymap path (`apply_motion_kind`) must do the same so VisualBlock h/l
+/// extend the highlighted region correctly.
+///
+/// `update_block_vcol` is only a no-op for vertical / non-horizontal motions
+/// (Up, Down, FileTop, FileBottom, Search), so passing every motion through is
+/// safe — the function's own match arm handles the no-op case.
+fn execute_motion_with_block_vcol<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    motion: Motion,
+    count: usize,
+) {
+    let motion_copy = motion.clone();
+    execute_motion(ed, motion, count);
+    if ed.vim.mode == Mode::VisualBlock {
+        update_block_vcol(ed, &motion_copy);
+    }
+}
+
 /// Execute a `hjkl_vim::MotionKind` cursor motion. Called by the host's
 /// `Editor::apply_motion` controller method — the keymap dispatch path for
 /// Phase 3a of kryptic-sh/hjkl#69.
@@ -2523,16 +2543,16 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
     let count = count.max(1);
     match kind {
         hjkl_vim::MotionKind::CharLeft => {
-            execute_motion(ed, Motion::Left, count);
+            execute_motion_with_block_vcol(ed, Motion::Left, count);
         }
         hjkl_vim::MotionKind::CharRight => {
-            execute_motion(ed, Motion::Right, count);
+            execute_motion_with_block_vcol(ed, Motion::Right, count);
         }
         hjkl_vim::MotionKind::LineDown => {
-            execute_motion(ed, Motion::Down, count);
+            execute_motion_with_block_vcol(ed, Motion::Down, count);
         }
         hjkl_vim::MotionKind::LineUp => {
-            execute_motion(ed, Motion::Up, count);
+            execute_motion_with_block_vcol(ed, Motion::Up, count);
         }
         hjkl_vim::MotionKind::FirstNonBlankDown => {
             // `+`: move down `count` lines then land on first non-blank.
@@ -2557,32 +2577,32 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             ed.sync_buffer_from_textarea();
         }
         hjkl_vim::MotionKind::WordForward => {
-            execute_motion(ed, Motion::WordFwd, count);
+            execute_motion_with_block_vcol(ed, Motion::WordFwd, count);
         }
         hjkl_vim::MotionKind::BigWordForward => {
-            execute_motion(ed, Motion::BigWordFwd, count);
+            execute_motion_with_block_vcol(ed, Motion::BigWordFwd, count);
         }
         hjkl_vim::MotionKind::WordBackward => {
-            execute_motion(ed, Motion::WordBack, count);
+            execute_motion_with_block_vcol(ed, Motion::WordBack, count);
         }
         hjkl_vim::MotionKind::BigWordBackward => {
-            execute_motion(ed, Motion::BigWordBack, count);
+            execute_motion_with_block_vcol(ed, Motion::BigWordBack, count);
         }
         hjkl_vim::MotionKind::WordEnd => {
-            execute_motion(ed, Motion::WordEnd, count);
+            execute_motion_with_block_vcol(ed, Motion::WordEnd, count);
         }
         hjkl_vim::MotionKind::BigWordEnd => {
-            execute_motion(ed, Motion::BigWordEnd, count);
+            execute_motion_with_block_vcol(ed, Motion::BigWordEnd, count);
         }
         hjkl_vim::MotionKind::LineStart => {
             // `0` / `<Home>`: first column of the current line.
             // count is ignored — matches vim `0` semantics.
-            execute_motion(ed, Motion::LineStart, 1);
+            execute_motion_with_block_vcol(ed, Motion::LineStart, 1);
         }
         hjkl_vim::MotionKind::FirstNonBlank => {
             // `^`: first non-blank column on the current line.
             // count is ignored — matches vim `^` semantics.
-            execute_motion(ed, Motion::FirstNonBlank, 1);
+            execute_motion_with_block_vcol(ed, Motion::FirstNonBlank, 1);
         }
         hjkl_vim::MotionKind::GotoLine => {
             // `G`: bare `G` → last line; `count G` → jump to line `count`.
@@ -2591,47 +2611,49 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // means "go to line N". execute_motion's FileBottom arm applies
             // the same `count > 1` check before calling move_bottom, so the
             // convention aligns: pass count straight through.
-            execute_motion(ed, Motion::FileBottom, count);
+            // FileBottom is vertical — update_block_vcol is a no-op here
+            // (preserves vcol), so the helper is safe to use.
+            execute_motion_with_block_vcol(ed, Motion::FileBottom, count);
         }
         hjkl_vim::MotionKind::LineEnd => {
             // `$` / `<End>`: last character on the current line.
             // count is ignored at the keymap-path level (vim `N$` moves
             // down N-1 lines then lands at line-end; not yet wired).
-            execute_motion(ed, Motion::LineEnd, 1);
+            execute_motion_with_block_vcol(ed, Motion::LineEnd, 1);
         }
         hjkl_vim::MotionKind::FindRepeat => {
             // `;` — repeat last f/F/t/T in the same direction.
             // execute_motion resolves FindRepeat via ed.vim.last_find;
             // no-op if no prior find exists (None arm returns early).
-            execute_motion(ed, Motion::FindRepeat { reverse: false }, count);
+            execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: false }, count);
         }
         hjkl_vim::MotionKind::FindRepeatReverse => {
             // `,` — repeat last f/F/t/T in the reverse direction.
             // execute_motion resolves FindRepeat via ed.vim.last_find;
             // no-op if no prior find exists (None arm returns early).
-            execute_motion(ed, Motion::FindRepeat { reverse: true }, count);
+            execute_motion_with_block_vcol(ed, Motion::FindRepeat { reverse: true }, count);
         }
         hjkl_vim::MotionKind::BracketMatch => {
             // `%` — jump to the matching bracket.
             // count is passed through; engine-side matching_bracket handles
             // the no-match case as a no-op (cursor stays). Engine FSM arm
             // for `%` in parse_motion is kept intact for macro-replay.
-            execute_motion(ed, Motion::MatchBracket, count);
+            execute_motion_with_block_vcol(ed, Motion::MatchBracket, count);
         }
         hjkl_vim::MotionKind::ViewportTop => {
             // `H` — cursor to top of visible viewport, then count-1 rows down.
             // Engine FSM arm for `H` in parse_motion is kept intact for macro-replay.
-            execute_motion(ed, Motion::ViewportTop, count);
+            execute_motion_with_block_vcol(ed, Motion::ViewportTop, count);
         }
         hjkl_vim::MotionKind::ViewportMiddle => {
             // `M` — cursor to middle of visible viewport; count ignored.
             // Engine FSM arm for `M` in parse_motion is kept intact for macro-replay.
-            execute_motion(ed, Motion::ViewportMiddle, count);
+            execute_motion_with_block_vcol(ed, Motion::ViewportMiddle, count);
         }
         hjkl_vim::MotionKind::ViewportBottom => {
             // `L` — cursor to bottom of visible viewport, then count-1 rows up.
             // Engine FSM arm for `L` in parse_motion is kept intact for macro-replay.
-            execute_motion(ed, Motion::ViewportBottom, count);
+            execute_motion_with_block_vcol(ed, Motion::ViewportBottom, count);
         }
         hjkl_vim::MotionKind::HalfPageDown => {
             // `<C-d>` — half page down, count multiplies the distance.
