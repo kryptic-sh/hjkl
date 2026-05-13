@@ -1242,6 +1242,19 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.registers.set_clipboard(text, linewise);
     }
 
+    /// Return the user's pending register selection (set via `"<reg>` chord
+    /// before an operator). `None` if no register was selected — caller should
+    /// use the unnamed register `"`.
+    ///
+    /// Read-only — does not consume / clear the pending selection. The
+    /// register is cleared by the engine after the next operator fires.
+    ///
+    /// Promoted in 0.6.X for Phase 4e to let the App's visual-op dispatch arm
+    /// honor `"a` + visual op chord sequences.
+    pub fn pending_register(&self) -> Option<char> {
+        self.vim.pending_register
+    }
+
     /// True when the user's pending register selector is `+` or `*`.
     /// the host peeks this so it can refresh `sync_clipboard_register`
     /// only when a clipboard read is actually about to happen.
