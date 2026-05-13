@@ -401,7 +401,12 @@ impl App {
                         }
 
                         // ── Intercept `:` ─────────────────────────────────────
-                        if key.code == KeyCode::Char(':') && key.modifiers == KeyModifiers::NONE {
+                        // Skip when a pending_state chord is waiting for its
+                        // second key — e.g. `@:` (PlayMacroTarget expects ':').
+                        if key.code == KeyCode::Char(':')
+                            && key.modifiers == KeyModifiers::NONE
+                            && self.pending_state.is_none()
+                        {
                             self.open_command_prompt();
                             continue;
                         }

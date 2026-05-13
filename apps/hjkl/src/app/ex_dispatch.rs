@@ -31,6 +31,14 @@ impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
         let raw = cmd.trim();
+        if raw.is_empty() {
+            return;
+        }
+        // Capture for `@:` repeat (Phase 5d, kryptic-sh/hjkl#71).
+        // Vim captures every executed command including errored ones; match that.
+        // The literal user text is stored; replay re-runs through dispatch_ex so
+        // behavior is identical.
+        self.last_ex_command = Some(raw.to_string());
         if let Some(map_cmd) = keymap::parse_runtime_map_command(raw, self.config.editor.leader) {
             match map_cmd {
                 keymap::RuntimeMapCommand::Add {

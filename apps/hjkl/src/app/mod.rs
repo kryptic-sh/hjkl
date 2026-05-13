@@ -445,6 +445,9 @@ pub struct App {
     /// when the reducer emits `Commit` or `Cancel`. When `Some`, the event
     /// loop routes the next key through `hjkl_vim::step` instead of the trie.
     pub(crate) pending_state: Option<hjkl_vim::PendingState>,
+    /// Last successfully-dispatched ex command (text body, no leading `:`),
+    /// used by `@:` to repeat. Phase 5d of kryptic-sh/hjkl#71.
+    pub(crate) last_ex_command: Option<String>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1532,6 +1535,7 @@ impl App {
             anvil_log: HashMap::new(),
             anvil_registry: hjkl_anvil::Registry::embedded().ok(),
             pending_state: None,
+            last_ex_command: None,
         })
     }
 
@@ -2502,8 +2506,18 @@ impl App {
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::PlayMacro { reg, count }) => {
-                        // `@{reg}` chord completed — decode and re-feed the macro.
                         self.pending_state = None;
+                        if reg == ':' {
+                            // `@:` — repeat last ex command. App-side storage,
+                            // NOT routed through engine.play_macro (which would
+                            // look in a register). count > 1 → repeat N times
+                            // (vim semantics). Phase 5d of kryptic-sh/hjkl#71.
+                            for _ in 0..count.max(1) {
+                                self.replay_last_ex();
+                            }
+                            return true;
+                        }
+                        // `@{reg}` chord completed — decode and re-feed the macro.
                         let inputs = self.active_mut().editor.play_macro(reg, count);
                         // Re-feed each Input through route_chord_key by converting
                         // it back to a crossterm KeyEvent. During replay,
@@ -2573,6 +2587,14 @@ impl App {
         }
 
         false
+    }
+
+    /// `@:` — replay the last ex command. No-op when nothing has been
+    /// dispatched yet. Phase 5d of kryptic-sh/hjkl#71.
+    pub(crate) fn replay_last_ex(&mut self) {
+        if let Some(cmd) = self.last_ex_command.clone() {
+            self.dispatch_ex(&cmd);
+        }
     }
 
     /// Force-resolve a pending chord buffer after the keymap timeout has
