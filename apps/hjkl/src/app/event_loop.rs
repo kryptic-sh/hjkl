@@ -911,24 +911,25 @@ impl App {
                             let count = self.pending_count.peek().max(1);
                             let mut replay: Vec<KmKeyEvent> = Vec::new();
                             let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
-                            if consumed {
-                                // Chord is Pending, Ambiguous, or was Matched.
-                                // Clear count only on Match (clear_prefix_state is called there).
-                                // For Pending/Ambiguous we leave count alive.
-                                continue;
+                            if !consumed {
+                                // Unbound: flush buffered count digits to engine first.
+                                if !self.pending_count.is_empty() {
+                                    self.flush_pending_count_to_engine();
+                                }
+                                // Replay the unbound events to the engine.
+                                // Multi-key replay = trie consumed a chord prefix then
+                                // hit an unmapped tail (e.g. `gg` with g-prefix bindings,
+                                // `<leader>x`). Always forward so `gg`/`gj`/etc reach the
+                                // engine. Side effect: unmapped chord tails like <leader>x
+                                // leak to the engine (space=move-right, x=delete-char) —
+                                // vim-compatible; users can `:nmap <leader> <Nop>` to stop.
+                                replay_to_engine(self, &replay);
                             }
-                            // Unbound: flush buffered count digits to engine first.
-                            if !self.pending_count.is_empty() {
-                                self.flush_pending_count_to_engine();
-                            }
-                            // Replay the unbound events to the engine.
-                            // Multi-key replay = trie consumed a chord prefix then
-                            // hit an unmapped tail (e.g. `gg` with g-prefix bindings,
-                            // `<leader>x`). Always forward so `gg`/`gj`/etc reach the
-                            // engine. Side effect: unmapped chord tails like <leader>x
-                            // leak to the engine (space=move-right, x=delete-char) —
-                            // vim-compatible; users can `:nmap <leader> <Nop>` to stop.
-                            replay_to_engine(self, &replay);
+                            // Both Match (motion dispatched via apply_motion in
+                            // dispatch_action) and Unbound (replay_to_engine above)
+                            // need viewport + syntax + LSP sync — otherwise the
+                            // engine cursor moves but the window's cached cursor
+                            // stays stale and the render shows no motion.
                             self.sync_viewport_from_editor();
                             if self.active_mut().editor.take_dirty() {
                                 let elapsed = self.active_mut().refresh_dirty_against_saved();
