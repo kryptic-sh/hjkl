@@ -7754,3 +7754,134 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
     );
     assert_window_synced_to_engine(&app);
 }
+
+#[test]
+fn all_phase3_keymap_motions_keep_window_synced() {
+    // Drift-resistant smoke: dispatch every MotionKind variant via the
+    // keymap path and assert window state stays consistent with engine
+    // state. When Phase 4 adds new MotionKinds, append them to the list
+    // below. The list is hand-maintained because MotionKind is
+    // #[non_exhaustive] in hjkl-vim (variants can be added downstream).
+    //
+    // The motion semantics differ per kind — some require a count, some
+    // need a buffer with multi-line content, some land at specific
+    // columns. So we don't assert the resulting cursor position; we just
+    // assert the SYNC INVARIANT (window cache mirrors engine state). That
+    // is the bug class this test catches.
+
+    use hjkl_vim::MotionKind;
+
+    // ── Keep in sync with hjkl_vim::MotionKind variants ────────────────
+    // If you add a variant in hjkl-vim, add it here too.
+    let kinds = [
+        MotionKind::CharLeft,
+        MotionKind::CharRight,
+        MotionKind::LineDown,
+        MotionKind::LineUp,
+        MotionKind::FirstNonBlankDown,
+        MotionKind::FirstNonBlankUp,
+        MotionKind::WordForward,
+        MotionKind::BigWordForward,
+        MotionKind::WordBackward,
+        MotionKind::BigWordBackward,
+        MotionKind::WordEnd,
+        MotionKind::BigWordEnd,
+        MotionKind::LineStart,
+        MotionKind::FirstNonBlank,
+        MotionKind::LineEnd,
+        MotionKind::GotoLine,
+        MotionKind::FindRepeat,
+        MotionKind::FindRepeatReverse,
+        MotionKind::BracketMatch,
+        MotionKind::ViewportTop,
+        MotionKind::ViewportMiddle,
+        MotionKind::ViewportBottom,
+        MotionKind::HalfPageDown,
+        MotionKind::HalfPageUp,
+        MotionKind::FullPageDown,
+        MotionKind::FullPageUp,
+    ];
+
+    for kind in kinds {
+        let mut app = App::new(None, false, None, None).unwrap();
+        let lines: Vec<String> = (0..50)
+            .map(|i| format!("line{i:02}-some-content-here"))
+            .collect();
+        seed_buffer(&mut app, &lines.join("\n"));
+        app.active_mut().editor.jump_cursor(20, 5);
+        app.active_mut().editor.set_viewport_height(10);
+        {
+            let vp = app.active_mut().editor.host_mut().viewport_mut();
+            vp.height = 10;
+            vp.top_row = 15;
+        }
+        app.sync_viewport_from_editor();
+
+        // Dispatch via the same controller path the event loop uses.
+        app.dispatch_action(
+            crate::keymap_actions::AppAction::Motion { kind, count: 1 },
+            1,
+        );
+        app.sync_after_engine_mutation();
+
+        // The bug class is window-vs-engine divergence — assert that
+        // invariant; the specific resulting cursor position varies per
+        // motion and isn't what this smoke test guards.
+        assert_window_synced_to_engine(&app);
+    }
+}
+
+#[test]
+fn visual_block_h_l_extend_selection() {
+    // Bug: apply_motion_kind didn't call update_block_vcol after
+    // execute_motion, so VisualBlock h / l moved the cursor without
+    // updating the block's right edge. The selection appeared static
+    // while the cursor moved.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "0123456789\nabcdefghij\nklmnopqrst\nuvwxyz1234");
+    app.active_mut().editor.jump_cursor(0, 2);
+    app.sync_viewport_from_editor();
+
+    // Enter VisualBlock mode (Ctrl-V). Engine handles the mode entry.
+    {
+        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        app.active_mut()
+            .editor
+            .handle_key(CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    }
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualBlock,
+        "must be in VisualBlock mode after <C-v>"
+    );
+
+    // Initial block_vcol = anchor col = 2.
+    // Dispatch `l` via the keymap path 3 times.
+    let km_l = km_char('l');
+    for _ in 0..3 {
+        app.dispatch_normal_keymap_with_sync(km_l);
+    }
+
+    // Cursor should be at col 5 after 3 l's.
+    let (_, e_col) = app.active().editor.cursor();
+    assert_eq!(e_col, 5, "cursor must advance to col 5 after 3 l's");
+
+    // Verify block_vcol followed cursor via block_highlight():
+    // block_highlight returns (top, bot, left, right) where right =
+    // max(anchor_col, block_vcol). Anchor is at col 2; cursor at col 5.
+    // Without the fix, block_vcol stays at 2 → right == 2 (1-col wide
+    // selection). With the fix, block_vcol == 5 → right == 5.
+    let highlight = app
+        .active()
+        .editor
+        .block_highlight()
+        .expect("block_highlight must be Some in VisualBlock mode");
+    let (_top, _bot, _left, right) = highlight;
+    assert_eq!(
+        right, 5,
+        "block_vcol must follow cursor: expected right edge 5, got {right}"
+    );
+
+    // Assert sync invariant as well.
+    assert_window_synced_to_engine(&app);
+}
