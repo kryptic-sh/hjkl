@@ -1753,6 +1753,88 @@ impl App {
         }
     }
 
+    /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
+    /// for replaying unbound sequences to the engine.
+    ///
+    /// Moved here from `event_loop.rs` (option A) so that both the event loop
+    /// and tests can replay keymap events without touching file-local functions.
+    pub(crate) fn km_to_crossterm(ev: &hjkl_keymap::KeyEvent) -> crossterm::event::KeyEvent {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use hjkl_keymap::{KeyCode as KmKeyCode, KeyModifiers as KmKeyMods};
+        let code = match ev.code {
+            KmKeyCode::Char(c) => KeyCode::Char(c),
+            KmKeyCode::Enter => KeyCode::Enter,
+            KmKeyCode::Esc => KeyCode::Esc,
+            KmKeyCode::Tab => KeyCode::Tab,
+            KmKeyCode::Backspace => KeyCode::Backspace,
+            KmKeyCode::Delete => KeyCode::Delete,
+            KmKeyCode::Insert => KeyCode::Insert,
+            KmKeyCode::Up => KeyCode::Up,
+            KmKeyCode::Down => KeyCode::Down,
+            KmKeyCode::Left => KeyCode::Left,
+            KmKeyCode::Right => KeyCode::Right,
+            KmKeyCode::Home => KeyCode::Home,
+            KmKeyCode::End => KeyCode::End,
+            KmKeyCode::PageUp => KeyCode::PageUp,
+            KmKeyCode::PageDown => KeyCode::PageDown,
+            KmKeyCode::F(n) => KeyCode::F(n),
+        };
+        let mut mods = KeyModifiers::NONE;
+        if ev.modifiers.contains(KmKeyMods::CTRL) {
+            mods |= KeyModifiers::CONTROL;
+        }
+        if ev.modifiers.contains(KmKeyMods::SHIFT) {
+            mods |= KeyModifiers::SHIFT;
+        }
+        if ev.modifiers.contains(KmKeyMods::ALT) {
+            mods |= KeyModifiers::ALT;
+        }
+        KeyEvent::new(code, mods)
+    }
+
+    /// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
+    /// `KeyEvent`s. Each keymap event is converted back to a crossterm event
+    /// and forwarded to `editor.handle_key`.
+    ///
+    /// Moved here from `event_loop.rs` (option A) for testability.
+    pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
+        for km_ev in events {
+            let ct_ev = Self::km_to_crossterm(km_ev);
+            self.active_mut().editor.handle_key(ct_ev);
+        }
+    }
+
+    /// Test-and-event-loop entry: dispatch a single Normal-mode key through
+    /// the app keymap and run the post-dispatch sync block.
+    ///
+    /// Returns `true` if the trie consumed the key (Pending/Ambiguous/Match),
+    /// `false` if Unbound (caller — event loop — should then forward to the
+    /// engine handle_key path).
+    ///
+    /// Internal: this is the body of the `if !engine_pending && let Some(km_ev) = ...`
+    /// block in `event_loop.rs:~910`, factored out for tests. Option A chosen:
+    /// `km_to_crossterm` + `replay_to_engine` moved to `app/mod.rs` as
+    /// `pub(crate)` methods so tests can replay too without touching file-local
+    /// helpers.
+    // Used in tests; not called from production code paths (yet).
+    #[allow(dead_code)]
+    pub(crate) fn dispatch_normal_keymap_with_sync(
+        &mut self,
+        km_ev: hjkl_keymap::KeyEvent,
+    ) -> bool {
+        let count = self.pending_count.peek().max(1);
+        let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+        let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
+        if !consumed {
+            if !self.pending_count.is_empty() {
+                self.flush_pending_count_to_engine();
+            }
+            self.replay_to_engine(&replay);
+        }
+        self.sync_after_engine_mutation();
+        consumed
+    }
+
     /// Force-resolve a pending chord buffer after the keymap timeout has
     /// elapsed. Called from the event loop's poll-timeout branch when a chord
     /// is pending (typically `Ambiguous`: e.g. both `g` and `gd` bound — the
