@@ -5,7 +5,9 @@ use crossterm::{
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
-use hjkl_keymap::{KeyCode as KmKeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods};
+use hjkl_keymap::{
+    Chord as KmChord, KeyCode as KmKeyCode, KeyEvent as KmKeyEvent, KeyModifiers as KmKeyMods,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
@@ -424,61 +426,23 @@ impl App {
                                 // Non-digit with buffered count.
                                 // If it could start a chord, keep count alive.
                                 // Otherwise replay digits now.
-                                let could_start_chord = match key.code {
-                                    KeyCode::Char(c) => {
-                                        // Check if this key is a first-key of any Normal binding.
-                                        use crate::app::keymap::HjklMode as Mode;
-                                        !self.app_keymap.pending(Mode::Normal).is_empty() || {
-                                            // Peek: does feeding this key leave Pending?
-                                            // We approximate by checking the static set of
-                                            // chord-starter chars that are first keys in our bindings.
-                                            // Phase 3a: h/j/k/l/+/-/<Space> are now keymap-bound
-                                            // motions; keep count alive so 5j/3k etc. work.
-                                            // Phase 3c: ^/$  added (line-anchor motions).
-                                            // Phase 3g: H/M/L added (viewport motions).
-                                            // Ctrl-prefixed keys (C-d/u/f/b) are not Char events
-                                            // so they never reach this arm; the non-Char branch
-                                            // below handles them (they're already forwarded as
-                                            // ctrl+Char events that bypass digit-prefix replay).
-                                            matches!(
-                                                c,
-                                                'g' | 'z'
-                                                    | ']'
-                                                    | '['
-                                                    | 'G'
-                                                    | 'H'
-                                                    | 'M'
-                                                    | 'L'
-                                                    | 'd'
-                                                    | 'y'
-                                                    | 'c'
-                                                    | 'h'
-                                                    | 'j'
-                                                    | 'k'
-                                                    | 'l'
-                                                    | '+'
-                                                    | '-'
-                                                    | ' '
-                                                    | 'w'
-                                                    | 'W'
-                                                    | 'b'
-                                                    | 'B'
-                                                    | 'e'
-                                                    | 'E'
-                                                    | '^'
-                                                    | '$'
-                                                    | ';'
-                                                    | ','
-                                                    | '%'
-                                            ) || c == self.config.editor.leader
-                                        }
-                                    }
-                                    // Phase 3a: <BS> is now a keymap-bound motion (CharLeft);
-                                    // keep count alive so count+<BS> reaches dispatch_action.
-                                    // Phase 3c: <Home>/<End> are keymap-bound line-anchor motions.
-                                    KeyCode::Backspace | KeyCode::Home | KeyCode::End => true,
-                                    _ => false,
-                                };
+                                //
+                                // Query the trie rather than a static char-set:
+                                // ask whether this key is a root-level key in
+                                // the Normal-mode bindings (i.e. a valid first
+                                // key of any chord).  `children_all` with an
+                                // empty prefix returns all root entries without
+                                // mutating the pending-chord state.
+                                use crate::app::keymap::HjklMode as Mode;
+                                let could_start_chord =
+                                    !self.app_keymap.pending(Mode::Normal).is_empty()
+                                        || to_km_event(key).is_some_and(|km_ev| {
+                                            let root = self.app_keymap.children_all(
+                                                Mode::Normal,
+                                                &KmChord::from_events(vec![]),
+                                            );
+                                            root.iter().any(|(k, _)| *k == km_ev)
+                                        });
                                 if !could_start_chord {
                                     self.flush_pending_count_to_engine();
                                 }
