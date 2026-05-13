@@ -3268,6 +3268,90 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::text_object_around_bracket_bridge(self, open)
     }
 
+    // ── Sentence text objects (is / as) ───────────────────────────────────
+
+    /// Resolve `is` (inner sentence) at the cursor position.
+    ///
+    /// Returns the range of the current sentence, excluding trailing
+    /// whitespace. Sentence boundaries follow vim's `is` semantics (period /
+    /// `?` / `!` followed by whitespace or end-of-paragraph).
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_sentence_bridge(self)
+    }
+
+    /// Resolve `as` (around sentence) at the cursor position.
+    ///
+    /// Like `is` but includes trailing whitespace after the sentence
+    /// terminator.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_sentence(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_sentence_bridge(self)
+    }
+
+    // ── Paragraph text objects (ip / ap) ──────────────────────────────────
+
+    /// Resolve `ip` (inner paragraph) at the cursor position.
+    ///
+    /// A paragraph is a block of non-blank lines bounded by blank lines or
+    /// buffer edges. Returns `None` when the cursor is on a blank line.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_paragraph_bridge(self)
+    }
+
+    /// Resolve `ap` (around paragraph) at the cursor position.
+    ///
+    /// Like `ip` but includes one trailing blank line when present.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_paragraph(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_paragraph_bridge(self)
+    }
+
+    // ── Tag text objects (it / at) ────────────────────────────────────────
+
+    /// Resolve `it` (inner tag) at the cursor position.
+    ///
+    /// Matches XML/HTML-style `<tag>...</tag>` pairs. Returns the range of
+    /// inner content between the open and close tags (excluding the tags
+    /// themselves).
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_tag(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_tag_bridge(self)
+    }
+
+    /// Resolve `at` (around tag) at the cursor position.
+    ///
+    /// Like `it` but includes the open and close tag delimiters themselves.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4d text-object
+    /// grammar migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_tag(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_tag_bridge(self)
+    }
+
     /// Execute a named cursor motion `kind` repeated `count` times.
     ///
     /// Maps the keymap-layer `hjkl_vim::MotionKind` to the engine's internal

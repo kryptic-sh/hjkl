@@ -4412,6 +4412,61 @@ pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
     bracket_text_object(ed, open, false).map(|(s, e, _kind)| (s, e))
 }
 
+// ── Sentence bridges (is / as) ─────────────────────────────────────────────
+
+/// Resolve the range of `is` (inner sentence) at the cursor. Excludes
+/// trailing whitespace.
+pub(crate) fn text_object_inner_sentence_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    sentence_text_object(ed, true)
+}
+
+/// Resolve the range of `as` (around sentence) at the cursor. Includes
+/// trailing whitespace.
+pub(crate) fn text_object_around_sentence_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    sentence_text_object(ed, false)
+}
+
+// ── Paragraph bridges (ip / ap) ────────────────────────────────────────────
+
+/// Resolve the range of `ip` (inner paragraph) at the cursor. A paragraph
+/// is a block of non-blank lines bounded by blank lines or buffer edges.
+pub(crate) fn text_object_inner_paragraph_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    paragraph_text_object(ed, true)
+}
+
+/// Resolve the range of `ap` (around paragraph) at the cursor. Includes one
+/// trailing blank line when present.
+pub(crate) fn text_object_around_paragraph_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    paragraph_text_object(ed, false)
+}
+
+// ── Tag bridges (it / at) ──────────────────────────────────────────────────
+
+/// Resolve the range of `it` (inner tag) at the cursor. Matches XML/HTML-style
+/// `<tag>...</tag>` pairs; returns the range of inner content between the open
+/// and close tags.
+pub(crate) fn text_object_inner_tag_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    tag_text_object(ed, true)
+}
+
+/// Resolve the range of `at` (around tag) at the cursor. Includes the open
+/// and close tag delimiters themselves.
+pub(crate) fn text_object_around_tag_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    tag_text_object(ed, false)
+}
+
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
 /// Splits on blank-line boundaries so paragraph structure is
 /// preserved. Each paragraph's words are joined with single spaces
