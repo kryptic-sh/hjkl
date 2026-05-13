@@ -4317,6 +4317,46 @@ pub(crate) fn case_range_bridge<H: crate::types::Host>(
     apply_case_op_to_selection(ed, op, top, bot, kind);
 }
 
+// ─── Phase 4b pub text-object resolution bridges ───────────────────────────
+//
+// These are `pub(crate)` entry points called by the four new pub methods on
+// `Editor` (`text_object_inner_word`, `text_object_around_word`,
+// `text_object_inner_big_word`, `text_object_around_big_word`). They delegate
+// to `word_text_object` — the existing private resolver — without touching any
+// operator, register, or mode state. Pure functions: only `&Editor` required.
+
+/// Resolve the range of `iw` (inner word) at the current cursor position.
+/// Returns `None` if no word exists at the cursor.
+pub(crate) fn text_object_inner_word_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    word_text_object(ed, true, false)
+}
+
+/// Resolve the range of `aw` (around word) at the current cursor position.
+/// Includes trailing whitespace (or leading whitespace if no trailing exists).
+pub(crate) fn text_object_around_word_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    word_text_object(ed, false, false)
+}
+
+/// Resolve the range of `iW` (inner WORD) at the current cursor position.
+/// A WORD is any run of non-whitespace characters (no punctuation splitting).
+pub(crate) fn text_object_inner_big_word_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    word_text_object(ed, true, true)
+}
+
+/// Resolve the range of `aW` (around WORD) at the current cursor position.
+/// Includes trailing whitespace (or leading whitespace if no trailing exists).
+pub(crate) fn text_object_around_big_word_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+) -> Option<((usize, usize), (usize, usize))> {
+    word_text_object(ed, false, true)
+}
+
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
 /// Splits on blank-line boundaries so paragraph structure is
 /// preserved. Each paragraph's words are joined with single spaces

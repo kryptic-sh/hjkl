@@ -3095,6 +3095,79 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::case_range_bridge(self, start, end, kind, op);
     }
 
+    // ─── Phase 4b: pub text-object resolution (hjkl#70) ─────────────────────
+    //
+    // Pure functions — no cursor mutation, no mode change, no register write.
+    // Each method delegates to `vim::text_object_*_bridge`, which in turn calls
+    // the existing `word_text_object` private resolver in vim.rs.
+    //
+    // Called by hjkl-vim's `OpTextObj` reducer (chunk 4e) to resolve the range
+    // before invoking a range-mutation primitive (`delete_range`, etc.).
+    //
+    // Return value: `Some((start, end))` where both positions are `(row, col)`
+    // byte-column pairs and `end` is *exclusive* (one past the last byte to act
+    // on), matching the convention used by `delete_range` / `yank_range` / etc.
+    // Returns `None` when the cursor is on an empty line or the resolver cannot
+    // find a word boundary.
+
+    /// Resolve the range of `iw` (inner word) at the current cursor position.
+    ///
+    /// An inner word is the contiguous run of keyword characters (or punctuation
+    /// characters if the cursor is on punctuation) under the cursor, without any
+    /// surrounding whitespace. Whitespace-only positions return `None`.
+    ///
+    /// Pure function — does not move the cursor or change any editor state.
+    /// Called by hjkl-vim's `OpTextObj` reducer to resolve the range before
+    /// invoking a range-mutation primitive (`delete_range`, etc.).
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4b text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_word_bridge(self)
+    }
+
+    /// Resolve the range of `aw` (around word) at the current cursor position.
+    ///
+    /// Like `iw` but extends the range to include trailing whitespace after the
+    /// word. If no trailing whitespace exists, leading whitespace before the word
+    /// is absorbed instead (vim `:help text-objects` behaviour).
+    ///
+    /// Pure function — does not move the cursor or change any editor state.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4b text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_word_bridge(self)
+    }
+
+    /// Resolve the range of `iW` (inner WORD) at the current cursor position.
+    ///
+    /// A WORD is any contiguous run of non-whitespace characters — punctuation
+    /// is not treated as a word boundary. Returns the span of the WORD under the
+    /// cursor, without surrounding whitespace.
+    ///
+    /// Pure function — does not move the cursor or change any editor state.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4b text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_big_word_bridge(self)
+    }
+
+    /// Resolve the range of `aW` (around WORD) at the current cursor position.
+    ///
+    /// Like `iW` but extends the range to include trailing whitespace after the
+    /// WORD. If no trailing whitespace exists, leading whitespace before the WORD
+    /// is absorbed instead.
+    ///
+    /// Pure function — does not move the cursor or change any editor state.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4b text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_big_word(&self) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_big_word_bridge(self)
+    }
+
     /// Execute a named cursor motion `kind` repeated `count` times.
     ///
     /// Maps the keymap-layer `hjkl_vim::MotionKind` to the engine's internal
