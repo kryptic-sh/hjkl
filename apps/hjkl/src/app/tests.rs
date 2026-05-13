@@ -7885,3 +7885,133 @@ fn visual_block_h_l_extend_selection() {
     // Assert sync invariant as well.
     assert_window_synced_to_engine(&app);
 }
+
+// ── pending_state reducer in non-Normal modes ────────────────────────────────
+//
+// Bug: the pending_state block was gated on VimMode::Normal, so the second key
+// of a g-chord (e.g. `gg`) in Visual / VisualLine / VisualBlock was never
+// dispatched through the reducer — it re-entered the keymap and re-set
+// pending_state without committing, silently no-oping.
+//
+// Fix: lift the pending_state block out of the Normal-mode gate so it fires in
+// all modes when pending_state.is_some().
+//
+// These tests shortcut the full event loop by manually setting pending_state
+// then calling after_g + sync_after_engine_mutation — the same two calls the
+// fixed AfterGChord arm makes. They document the expected sync behavior and
+// catch future regressions in the post-commit sync path.
+
+#[test]
+fn gg_via_pending_state_in_visual_mode() {
+    // Regression: gg in Visual mode must move cursor to row 0 and sync the
+    // window cache. Before the fix the pending_state reducer was Normal-only
+    // gated, so the second `g` never committed AfterGChord.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_mut().editor.set_viewport_height(10);
+    app.sync_viewport_from_editor();
+
+    // Enter Visual mode.
+    {
+        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        app.active_mut()
+            .editor
+            .handle_key(CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+    }
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Visual,
+        "must be in Visual mode after v"
+    );
+
+    // Simulate the commit path of the AfterGChord arm (same calls as the
+    // fixed event loop arm for `gg`).
+    app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
+    app.active_mut().editor.after_g('g', 1);
+    app.sync_after_engine_mutation();
+    app.pending_state = None;
+
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(
+        win.cursor_row, 0,
+        "gg must move cursor to row 0 from row 20 in Visual mode"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn gg_via_pending_state_in_visual_line_mode() {
+    // Same as above but for VisualLine mode (entered via `V`).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_mut().editor.set_viewport_height(10);
+    app.sync_viewport_from_editor();
+
+    // Enter VisualLine mode.
+    {
+        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        app.active_mut()
+            .editor
+            .handle_key(CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE));
+    }
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualLine,
+        "must be in VisualLine mode after V"
+    );
+
+    app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
+    app.active_mut().editor.after_g('g', 1);
+    app.sync_after_engine_mutation();
+    app.pending_state = None;
+
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(
+        win.cursor_row, 0,
+        "gg must move cursor to row 0 from row 20 in VisualLine mode"
+    );
+    assert_window_synced_to_engine(&app);
+}
+
+#[test]
+fn gg_via_pending_state_in_visual_block_mode() {
+    // Same as above but for VisualBlock mode (entered via Ctrl-V).
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(20, 0);
+    app.active_mut().editor.set_viewport_height(10);
+    app.sync_viewport_from_editor();
+
+    // Enter VisualBlock mode.
+    {
+        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        app.active_mut()
+            .editor
+            .handle_key(CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    }
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualBlock,
+        "must be in VisualBlock mode after <C-v>"
+    );
+
+    app.pending_state = Some(hjkl_vim::PendingState::AfterG { count: 1 });
+    app.active_mut().editor.after_g('g', 1);
+    app.sync_after_engine_mutation();
+    app.pending_state = None;
+
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(
+        win.cursor_row, 0,
+        "gg must move cursor to row 0 from row 20 in VisualBlock mode"
+    );
+    assert_window_synced_to_engine(&app);
+}
