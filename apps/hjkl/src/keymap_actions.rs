@@ -128,6 +128,23 @@ pub enum AppAction {
         count: u32,
     },
 
+    // ── Visual-mode inline operators (Phase 4e — hjkl#70) ─────────────
+    /// Visual-mode operator fired inline against the current selection.
+    ///
+    /// When dispatched the active visual selection range is resolved from
+    /// the engine, a range-mutation primitive is called directly, and the
+    /// engine exits visual mode. Bound for `d` / `c` / `y` / `>` / `<` in
+    /// `HjklMode::Visual` (which covers Visual, VisualLine, and VisualBlock
+    /// per the mode-collapse in `keymap.rs`).
+    ///
+    /// VisualBlock ops fall back to the engine FSM because block-shape
+    /// range-mutation requires `apply_block_operator`, which is not exposed
+    /// as a public primitive. That gap is tracked in the Phase 4e notes.
+    VisualOp {
+        op: hjkl_vim::OperatorKind,
+        count: u32,
+    },
+
     // ── User runtime maps (`:map` / `:noremap` family) ─────────────────
     /// User-defined `:map` / `:noremap` runtime mapping. When the trie matches
     /// the LHS, the dispatcher unrolls `keys` according to `recursive`:

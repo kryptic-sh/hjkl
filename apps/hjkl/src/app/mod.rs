@@ -732,6 +732,26 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // Visual-mode operators — fire inline against the current selection.
+    // `d` / `y` / `c` / `>` / `<` bound in HjklMode::Visual (covers Visual,
+    // VisualLine, and VisualBlock per the mode-collapse in keymap.rs:125).
+    //
+    // VisualBlock ops fall back to the engine FSM in the dispatch arm because
+    // block-shape range-mutation requires the internal `apply_block_operator`
+    // path, which is not exposed as a public primitive (Phase 4e gap).
+    for (key, op, desc) in [
+        ("d", hjkl_vim::OperatorKind::Delete, "delete selection"),
+        ("y", hjkl_vim::OperatorKind::Yank, "yank selection"),
+        ("c", hjkl_vim::OperatorKind::Change, "change selection"),
+        ("<gt>", hjkl_vim::OperatorKind::Indent, "indent selection"),
+        ("<lt>", hjkl_vim::OperatorKind::Outdent, "outdent selection"),
+    ] {
+        let action = AppAction::VisualOp { op, count: 1 };
+        if let Err(e) = km.add(Mode::Visual, key, action, desc) {
+            eprintln!("hjkl: keymap.add({key} Visual) failed: {e}");
+        }
+    }
+
     // `"<reg>` — register-prefix chord in Normal mode only. Visual-mode `"`
     // is not intercepted here; the engine FSM handles any Visual-mode `"`
     // input directly (there is no visual-register-select path in the engine).
@@ -1655,6 +1675,156 @@ impl App {
                 // Use buffered count-prefix if present, otherwise the action count.
                 let n = self.pending_count.take_or(action_count) as usize;
                 self.active_mut().editor.apply_motion(kind, n);
+            }
+            AppAction::VisualOp {
+                op,
+                count: action_count,
+            } => {
+                // Use buffered count-prefix if present, otherwise the action default.
+                let n = self.pending_count.take_or(action_count) as usize;
+                // Resolve the active visual range from the engine. The MotionKind
+                // must match the visual mode so the range-mutation primitives apply
+                // the correct inclusion semantics.
+                //
+                // VisualBlock falls back to the engine FSM because block-shape
+                // range-mutation requires the internal `apply_block_operator` path,
+                // not exposed as a public primitive (Phase 4e gap). Feed `d`/`y`/
+                // etc. directly to the engine for VisualBlock.
+                use hjkl_engine::{MotionKind, VimMode};
+                let vim_mode = self.active().editor.vim_mode();
+                match vim_mode {
+                    VimMode::VisualBlock => {
+                        // Fallback: let engine FSM handle block ops directly.
+                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        let key_char = match op {
+                            hjkl_vim::OperatorKind::Delete => 'd',
+                            hjkl_vim::OperatorKind::Yank => 'y',
+                            hjkl_vim::OperatorKind::Change => 'c',
+                            hjkl_vim::OperatorKind::Indent => '>',
+                            hjkl_vim::OperatorKind::Outdent => '<',
+                            _ => return,
+                        };
+                        self.active_mut().editor.handle_key(CtKeyEvent::new(
+                            KeyCode::Char(key_char),
+                            KeyModifiers::NONE,
+                        ));
+                    }
+                    VimMode::Visual => {
+                        // Charwise visual selection — inclusive on both ends.
+                        let Some((start, end)) = self.active().editor.char_highlight() else {
+                            return;
+                        };
+                        let kind = MotionKind::Inclusive;
+                        // Default register `"`. TODO: read engine pending_register
+                        // once a public getter is exposed (Phase 4e-prep gap).
+                        let register = '"';
+                        match op {
+                            hjkl_vim::OperatorKind::Delete => {
+                                self.active_mut()
+                                    .editor
+                                    .delete_range(start, end, kind, register);
+                            }
+                            hjkl_vim::OperatorKind::Yank => {
+                                self.active_mut()
+                                    .editor
+                                    .yank_range(start, end, kind, register);
+                            }
+                            hjkl_vim::OperatorKind::Change => {
+                                self.active_mut()
+                                    .editor
+                                    .change_range(start, end, kind, register);
+                                // change_range transitions to Insert via
+                                // begin_insert_noundo — no explicit mode-set needed.
+                                return;
+                            }
+                            hjkl_vim::OperatorKind::Indent => {
+                                self.active_mut()
+                                    .editor
+                                    .indent_range(start, end, n as i32, 0);
+                            }
+                            hjkl_vim::OperatorKind::Outdent => {
+                                self.active_mut()
+                                    .editor
+                                    .indent_range(start, end, -(n as i32), 0);
+                            }
+                            _ => return,
+                        }
+                        // Exit visual mode after the op (except Change, which already
+                        // transitioned to Insert above).
+                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        self.active_mut()
+                            .editor
+                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                    VimMode::VisualLine => {
+                        // Linewise visual selection — full rows.
+                        //
+                        // delete/yank/change fall back to the engine FSM rather than
+                        // the range-mutation bridge. The bridge routes through
+                        // `run_operator_over_range` which bails when `top == bot`
+                        // (single-row selection), making it a no-op. The engine FSM
+                        // calls `cut_vim_range` directly and handles the single-row
+                        // case correctly. Indent/Outdent use `indent_range_bridge`
+                        // which is not affected by the `top == bot` guard.
+                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        match op {
+                            hjkl_vim::OperatorKind::Delete
+                            | hjkl_vim::OperatorKind::Yank
+                            | hjkl_vim::OperatorKind::Change => {
+                                let key_char = match op {
+                                    hjkl_vim::OperatorKind::Delete => 'd',
+                                    hjkl_vim::OperatorKind::Yank => 'y',
+                                    _ => 'c',
+                                };
+                                self.active_mut().editor.handle_key(CtKeyEvent::new(
+                                    KeyCode::Char(key_char),
+                                    KeyModifiers::NONE,
+                                ));
+                                // Engine FSM transitions mode internally; for Change
+                                // it enters Insert, for Delete/Yank it returns Normal.
+                                // No further Esc needed.
+                                return;
+                            }
+                            hjkl_vim::OperatorKind::Indent => {
+                                let Some((top_row, bot_row)) =
+                                    self.active().editor.line_highlight()
+                                else {
+                                    return;
+                                };
+                                self.active_mut().editor.indent_range(
+                                    (top_row, 0),
+                                    (bot_row, 0),
+                                    n as i32,
+                                    0,
+                                );
+                            }
+                            hjkl_vim::OperatorKind::Outdent => {
+                                let Some((top_row, bot_row)) =
+                                    self.active().editor.line_highlight()
+                                else {
+                                    return;
+                                };
+                                self.active_mut().editor.indent_range(
+                                    (top_row, 0),
+                                    (bot_row, 0),
+                                    -(n as i32),
+                                    0,
+                                );
+                            }
+                            _ => return,
+                        }
+                        // Exit visual mode after indent/outdent (engine FSM path
+                        // above returns early so this only fires for indent/outdent).
+                        self.active_mut()
+                            .editor
+                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                    }
+                    _ => {
+                        // Not in a visual mode — keymap bound VisualOp but
+                        // engine is in Normal/Insert/etc. Shouldn't happen;
+                        // bail silently.
+                    }
+                }
             }
             AppAction::Replay { keys, recursive } => {
                 if recursive {
