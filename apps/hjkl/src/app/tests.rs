@@ -5014,6 +5014,24 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::StartMacroRecord { reg }) => {
+                    app.pending_state = None;
+                    app.active_mut().editor.start_macro_record(reg);
+                    return;
+                }
+                Outcome::Commit(hjkl_vim::EngineCmd::PlayMacro { reg, count }) => {
+                    app.pending_state = None;
+                    let inputs = app.active_mut().editor.play_macro(reg, count);
+                    for input in inputs {
+                        let ct_key = engine_input_to_key_event(input);
+                        if ct_key.code != KeyCode::Null {
+                            drive_key(app, ct_key);
+                        }
+                    }
+                    app.active_mut().editor.end_macro_replay();
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Cancel => {
                     app.pending_state = None;
                     return;
@@ -8722,5 +8740,209 @@ fn backtick_in_visual_jumps_pos() {
         app.active().editor.cursor().0,
         2,
         "`b in Visual mode must jump to mark row"
+    );
+}
+
+// ── Phase 5b: macro record / play integration tests ──────────────────────────
+
+/// Helper: send keys through `route_chord_key` for macro integration tests.
+/// Uses route_chord_key (not drive_key) so the recorder hook fires.
+fn macro_key_seq(app: &mut App, keys: &[KeyEvent]) {
+    for &k in keys {
+        // route_chord_key returns false for unrecognised keys; forward to engine.
+        if !app.route_chord_key(k) {
+            app.active_mut().editor.handle_key(k);
+        }
+        app.sync_viewport_from_editor();
+    }
+}
+
+#[test]
+fn q_then_esc_cancels_no_recording_started() {
+    // `q<Esc>` — Esc after `q` cancels (no recording started).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+
+    drive_key(&mut app, ck('q'));
+    // After `q`, pending state = RecordMacroTarget.
+    assert_eq!(
+        app.pending_state,
+        Some(hjkl_vim::PendingState::RecordMacroTarget),
+        "q must set RecordMacroTarget pending state"
+    );
+    drive_key(&mut app, key(KeyCode::Esc));
+    // Esc cancels — no recording.
+    assert!(
+        app.pending_state.is_none(),
+        "Esc after q must clear pending_state"
+    );
+    assert!(
+        !app.active().editor.is_recording_macro(),
+        "Esc cancel must not start recording"
+    );
+}
+
+#[test]
+fn bare_q_during_record_stops() {
+    // `qa` starts recording, bare `q` stops it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+
+    // Start recording register 'a'.
+    drive_key(&mut app, ck('q'));
+    drive_key(&mut app, ck('a'));
+    assert!(
+        app.active().editor.is_recording_macro(),
+        "q a must start recording"
+    );
+    assert_eq!(app.active().editor.recording_register(), Some('a'));
+
+    // Bare `q` must stop the recording (QChord branches to stop_macro_record).
+    drive_key(&mut app, ck('q'));
+    assert!(
+        !app.active().editor.is_recording_macro(),
+        "bare q must stop recording"
+    );
+    assert!(
+        app.pending_state.is_none(),
+        "pending_state must be clear after stop"
+    );
+}
+
+#[test]
+fn record_macro_a_j_motion_replay_plays() {
+    // Record `qa j q` (move down one line), then `@a` replays it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Record: qa j q.
+    macro_key_seq(
+        &mut app,
+        &[
+            ck('q'),
+            ck('a'), // start recording into 'a'
+            ck('j'), // record: move down
+            ck('q'), // stop recording
+        ],
+    );
+    assert!(
+        !app.active().editor.is_recording_macro(),
+        "recording must stop after second q"
+    );
+    // Should be on row 1 from the j motion during recording.
+    assert_eq!(app.active().editor.cursor().0, 1);
+
+    // Play: @a — should move down one more row.
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+    assert!(
+        !app.active().editor.is_replaying_macro(),
+        "replaying_macro must be false after replay finishes"
+    );
+    assert_eq!(
+        app.active().editor.cursor().0,
+        2,
+        "@a must replay j motion (move to row 2)"
+    );
+}
+
+#[test]
+fn at_at_repeats_last_macro() {
+    // Record `qa j q`, play `@a`, then `@@` re-plays same macro.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Record qa j q.
+    macro_key_seq(&mut app, &[ck('q'), ck('a'), ck('j'), ck('q')]);
+    assert_eq!(app.active().editor.cursor().0, 1);
+
+    // @a — plays, moves to row 2, sets last_macro = 'a'.
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+    assert_eq!(app.active().editor.cursor().0, 2);
+
+    // @@ — repeats last macro ('a'), moves to row 3.
+    macro_key_seq(&mut app, &[ck('@'), ck('@')]);
+    assert_eq!(
+        app.active().editor.cursor().0,
+        3,
+        "@@ must replay the last macro"
+    );
+}
+
+#[test]
+fn play_macro_with_count_3() {
+    // Verify that Editor::play_macro with count=3 produces 3× the inputs,
+    // which is the mechanism underlying `3@a`. We call play_macro directly
+    // here because count-prefix buffering lives in the event_loop, above
+    // route_chord_key, and cannot be easily injected in unit-test context.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3\nline4\nline5\nline6");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Record a simple macro into register 'a' via the public API.
+    app.active_mut().editor.start_macro_record('a');
+    app.active_mut().editor.record_input(hjkl_engine::Input {
+        key: hjkl_engine::Key::Char('j'),
+        ..Default::default()
+    });
+    app.active_mut().editor.stop_macro_record();
+
+    // play_macro('a', 3) must return 3 inputs.
+    let inputs = app.active_mut().editor.play_macro('a', 3);
+    app.active_mut().editor.end_macro_replay();
+    assert_eq!(
+        inputs.len(),
+        3,
+        "play_macro with count=3 must return 3 inputs"
+    );
+
+    // Re-feed them through route_chord_key.
+    for input in inputs {
+        let ct_key = engine_input_to_key_event(input);
+        if ct_key.code != KeyCode::Null {
+            let consumed = app.route_chord_key(ct_key);
+            if !consumed {
+                app.active_mut().editor.handle_key(ct_key);
+            }
+            app.sync_viewport_from_editor();
+        }
+    }
+    assert_eq!(
+        app.active().editor.cursor().0,
+        3,
+        "3× j motions must move cursor to row 3"
+    );
+}
+
+#[test]
+fn record_capital_appends_to_lowercase() {
+    // `qa j q` records one j. `qA k q` appends one k (opposite direction).
+    // `@a` should replay both (j then k — net zero movement).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3");
+    app.active_mut().editor.jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+
+    // Record qa j q.
+    macro_key_seq(&mut app, &[ck('q'), ck('a'), ck('j'), ck('q')]);
+    assert_eq!(app.active().editor.cursor().0, 2);
+
+    // Record qA k q (append: moves back up from row 2 to row 1).
+    macro_key_seq(&mut app, &[ck('q'), ck('A'), ck('k'), ck('q')]);
+    // Cursor moved k (up) from row 2 → row 1.
+    assert_eq!(app.active().editor.cursor().0, 1);
+
+    // Now @a should replay the combined macro (j then k) — net zero move.
+    // Start at row 1 after qA k q. j moves to 2, k moves back to 1.
+    let start_row = app.active().editor.cursor().0; // should be 1
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+    assert_eq!(
+        app.active().editor.cursor().0,
+        start_row,
+        "@a with capital append must replay j+k (net zero from row {start_row})"
     );
 }

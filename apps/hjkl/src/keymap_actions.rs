@@ -127,6 +127,23 @@ pub enum AppAction {
     /// the next key through `hjkl_vim::step`. The mark char is captured by the
     /// second key and passed to `Editor::goto_mark_char`.
     BeginPendingGotoMarkChar,
+    /// `q` pressed in Normal mode. Branches on `Editor::is_recording_macro()`:
+    ///   - If recording: calls `Editor::stop_macro_record()` (bare `q` stop).
+    ///   - If not recording: sets `PendingState::RecordMacroTarget` and waits
+    ///     for the register char.
+    ///
+    /// The `count` field is accepted for interface consistency with other pending
+    /// actions but is not consumed (macros don't use a count prefix on `q`).
+    QChord {
+        count: u32,
+    },
+    /// `@` pressed in Normal mode. Sets `PendingState::PlayMacroTarget { count }`
+    /// and waits for the register char. The resolved count (pending_count prefix
+    /// or action default) is stored in the state and passed to `PlayMacro` on
+    /// the next key.
+    BeginPendingPlayMacro {
+        count: u32,
+    },
 
     // ── Cursor motions (Phase 3a — hjkl-vim keymap path) ──────────────
     /// Engine-level cursor motion executed via the hjkl-vim keymap path.

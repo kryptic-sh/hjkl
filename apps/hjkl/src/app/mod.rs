@@ -886,7 +886,72 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         }
     }
 
+    // ── Phase 5b: macro record / play chord entry points ─────────────────
+    // `q` — record-macro or stop-recording gate (QChord handles the branch).
+    // Normal-mode only: macros cannot be started or stopped in Visual mode.
+    // Engine FSM arms for `q` are kept for macro-replay defensive coverage.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "q",
+        AppAction::QChord { count: 1 },
+        "record macro / stop recording",
+    ) {
+        eprintln!("hjkl: keymap.add(q) failed: {e}");
+    }
+
+    // `@` — begin play-macro chord. Normal-mode only.
+    // Engine FSM arms for `@` are kept for macro-replay defensive coverage.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "@",
+        AppAction::BeginPendingPlayMacro { count: 1 },
+        "play macro chord",
+    ) {
+        eprintln!("hjkl: keymap.add(@) failed: {e}");
+    }
+
     km
+}
+
+/// Translate an `hjkl_engine::Input` back to a `crossterm::event::KeyEvent`
+/// for re-feeding through `route_chord_key` during macro replay.
+///
+/// This is the inverse of `Editor::handle_key`'s `crossterm_to_input` path.
+/// Modifier flags (ctrl, alt, shift) are preserved. Keys that have no
+/// crossterm equivalent (e.g. `Key::Null`, `Key::PageUp` without a standard
+/// mapping) produce a `KeyCode::Null` sentinel that the replay loop skips.
+fn engine_input_to_key_event(input: hjkl_engine::Input) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use hjkl_engine::Key;
+
+    let code = match input.key {
+        Key::Char(c) => KeyCode::Char(c),
+        Key::Backspace => KeyCode::Backspace,
+        Key::Delete => KeyCode::Delete,
+        Key::Enter => KeyCode::Enter,
+        Key::Left => KeyCode::Left,
+        Key::Right => KeyCode::Right,
+        Key::Up => KeyCode::Up,
+        Key::Down => KeyCode::Down,
+        Key::Home => KeyCode::Home,
+        Key::End => KeyCode::End,
+        Key::Tab => KeyCode::Tab,
+        Key::Esc => KeyCode::Esc,
+        Key::PageUp => KeyCode::PageUp,
+        Key::PageDown => KeyCode::PageDown,
+        Key::Null => KeyCode::Null,
+    };
+    let mut mods = KeyModifiers::NONE;
+    if input.ctrl {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if input.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if input.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+    KeyEvent::new(code, mods)
 }
 
 impl App {
@@ -1728,6 +1793,25 @@ impl App {
                 self.pending_count.reset();
                 self.pending_state = Some(hjkl_vim::PendingState::GotoMarkChar);
             }
+            AppAction::QChord { .. } => {
+                // `q` in Normal mode. Branch: stop recording if active, else
+                // open the RecordMacroTarget chord to wait for the register char.
+                self.pending_count.reset();
+                if self.active().editor.is_recording_macro() {
+                    // Bare `q` ends the active recording.
+                    self.active_mut().editor.stop_macro_record();
+                } else {
+                    self.pending_state = Some(hjkl_vim::PendingState::RecordMacroTarget);
+                }
+            }
+            AppAction::BeginPendingPlayMacro {
+                count: action_count,
+            } => {
+                // `@` in Normal mode. Capture count and wait for register char.
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.pending_state =
+                    Some(hjkl_vim::PendingState::PlayMacroTarget { count: n.max(1) });
+            }
             AppAction::Motion {
                 kind,
                 count: action_count,
@@ -2118,6 +2202,52 @@ impl App {
     ///   - Shift-H / Shift-L buffer cycle
     ///   - Esc chord-reset and which-key Backspace navigate-up
     pub(crate) fn route_chord_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        // Snapshot recording state BEFORE dispatch so we can detect the moment
+        // a new recording starts (StartMacroRecord arm) — the register-name key
+        // that triggered the start is a bookkeeping key and must NOT be recorded.
+        // Similarly, if we were not recording before and are now, skip this key.
+        //
+        // The @{reg} register-name key (PlayMacro arm) also must not be recorded;
+        // that arm returns early in route_chord_key_inner so is_recording_macro()
+        // state doesn't change between before/after — BUT recording may be active
+        // before the @{reg} key (recording a macro that includes a @a call). In
+        // that case we ALSO skip the register name (pending_was_macro_chord logic).
+        let was_recording_before = self.active().editor.is_recording_macro();
+        let was_play_macro_pending = matches!(
+            self.pending_state,
+            Some(hjkl_vim::PendingState::PlayMacroTarget { .. })
+        );
+        let consumed = self.route_chord_key_inner(key);
+        // Recorder hook: append the consumed key to the active macro recording
+        // (if any) so replays reproduce the same sequence. Skip:
+        //   1. When not consumed (key was not processed).
+        //   2. When replaying (is_replaying_macro).
+        //   3. When the key just started a new recording (was_recording_before
+        //      was false but is_recording_macro() is now true — the `a` in `qa`
+        //      is the register-name bookkeeping key).
+        //   4. When the key was the second half of a @{reg} chord
+        //      (was_play_macro_pending) — the register name is bookkeeping.
+        let is_recording_now = self.active().editor.is_recording_macro();
+        let is_replaying_now = self.active().editor.is_replaying_macro();
+        let just_started_recording = !was_recording_before && is_recording_now;
+        let register_name_of_play = was_play_macro_pending;
+        if consumed
+            && is_recording_now
+            && !is_replaying_now
+            && !just_started_recording
+            && !register_name_of_play
+        {
+            let input = hjkl_engine::Input::from(key);
+            if input.key != hjkl_engine::Key::Null {
+                self.active_mut().editor.record_input(input);
+            }
+        }
+        consumed
+    }
+
+    /// Inner implementation of `route_chord_key`. Returns `true` if the key
+    /// was consumed. The public wrapper adds the recorder hook on top.
+    fn route_chord_key_inner(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
         use hjkl_vim::{Key as VimKey, Outcome};
 
@@ -2334,6 +2464,38 @@ impl App {
                     Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
                         self.pending_state = None;
                         self.active_mut().editor.goto_mark_char(ch);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::StartMacroRecord { reg }) => {
+                        // `q{reg}` chord completed — begin recording. The
+                        // bookkeeping key (`q` itself) was already excluded from
+                        // the recording by QChord's pending-count reset path;
+                        // this register-char is also a bookkeeping key (it names
+                        // the register, not a replay action), so the recorder hook
+                        // below must skip it. We set pending_state = None before
+                        // returning so the hook sees None and skips naturally.
+                        self.pending_state = None;
+                        self.active_mut().editor.start_macro_record(reg);
+                        // Do NOT call the recorder hook here — the register char is
+                        // bookkeeping, not a recorded keystroke. Return immediately.
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::PlayMacro { reg, count }) => {
+                        // `@{reg}` chord completed — decode and re-feed the macro.
+                        self.pending_state = None;
+                        let inputs = self.active_mut().editor.play_macro(reg, count);
+                        // Re-feed each Input through route_chord_key by converting
+                        // it back to a crossterm KeyEvent. During replay,
+                        // is_replaying_macro() == true so the recorder hook skips
+                        // the replayed inputs.
+                        for input in inputs {
+                            let ct_key = engine_input_to_key_event(input);
+                            if ct_key.code != KeyCode::Null {
+                                self.route_chord_key(ct_key);
+                            }
+                        }
+                        self.active_mut().editor.end_macro_replay();
                         self.sync_after_engine_mutation();
                         return true;
                     }
