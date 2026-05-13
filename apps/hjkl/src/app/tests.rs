@@ -7460,14 +7460,10 @@ fn quote_invalid_char_no_register_set() {
 // dispatching a Phase-3 motion via the keymap path updates the WINDOW
 // cursor cache (the field render reads), not just the engine cursor.
 //
-// Test 6 (Visual-mode j via keymap) is not included here because the
-// non-Normal dispatch path goes through dispatch_keymap_in_mode, not
-// dispatch_normal_keymap_with_sync. The non-Normal sync fix is covered by
-// the event_loop.rs change that added sync_after_engine_mutation to the
-// non-Normal Match arm; integration coverage is in the event-loop smoke
-// path (tests 1-5 exercise the Normal path; visual is exercised by the
-// existing `gv` / visual-mode tests above).
-// TODO: add test 6 once a test helper drives the non-Normal dispatch path.
+// Test 6 (Visual-mode j via keymap) is not included here because
+// route_chord_key now handles Non-Normal trie dispatch directly; the
+// routing-order regression tests below cover the visual path. The existing
+// `gv` / visual-mode tests above provide integration coverage.
 
 /// Build a `hjkl_keymap::KeyEvent` for a plain `Char` key with no modifiers.
 fn km_char(c: char) -> hjkl_keymap::KeyEvent {
@@ -7526,9 +7522,9 @@ fn j_motion_via_keymap_updates_window_cursor() {
         "precondition: window cursor_row at 0"
     );
 
-    // Dispatch `j` through the Normal keymap path + sync.
+    // Dispatch `j` through the canonical chord routing path.
     let km_ev = km_char('j');
-    app.dispatch_normal_keymap_with_sync(km_ev);
+    app.route_chord_key(App::km_to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -7551,7 +7547,7 @@ fn k_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('k');
-    app.dispatch_normal_keymap_with_sync(km_ev);
+    app.route_chord_key(App::km_to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -7575,7 +7571,7 @@ fn line_start_zero_motion_via_keymap_updates_window_cursor() {
 
     // `0` with empty pending_count routes through the keymap as LineStart.
     let km_ev = km_char('0');
-    app.dispatch_normal_keymap_with_sync(km_ev);
+    app.route_chord_key(App::km_to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_col(&app),
@@ -7598,7 +7594,7 @@ fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('$');
-    app.dispatch_normal_keymap_with_sync(km_ev);
+    app.route_chord_key(App::km_to_crossterm(&km_ev));
 
     // "hello" has 5 chars; `$` lands on the last char (index 4).
     assert_eq!(
@@ -7639,7 +7635,7 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     // Drive `j` 20 times — well past the viewport bottom + scrolloff margin.
     let km_ev = km_char('j');
     for _ in 0..20 {
-        app.dispatch_normal_keymap_with_sync(km_ev);
+        app.route_chord_key(App::km_to_crossterm(&km_ev));
     }
 
     let fw = app.focused_window();
@@ -7700,7 +7696,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
 
     // Press g — enters AfterG pending state via keymap.
     let km_g = km_char('g');
-    app.dispatch_normal_keymap_with_sync(km_g);
+    app.route_chord_key(App::km_to_crossterm(&km_g));
     assert!(
         app.pending_state.is_some(),
         "after first g, pending_state must be Some(AfterG)"
@@ -7745,7 +7741,7 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('j');
-    app.dispatch_normal_keymap_with_sync(km_ev);
+    app.route_chord_key(App::km_to_crossterm(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -7856,10 +7852,10 @@ fn visual_block_h_l_extend_selection() {
     );
 
     // Initial block_vcol = anchor col = 2.
-    // Dispatch `l` via the keymap path 3 times.
+    // Dispatch `l` via the canonical chord routing path 3 times.
     let km_l = km_char('l');
     for _ in 0..3 {
-        app.dispatch_normal_keymap_with_sync(km_l);
+        app.route_chord_key(App::km_to_crossterm(&km_l));
     }
 
     // Cursor should be at col 5 after 3 l's.
@@ -8016,17 +8012,17 @@ fn gg_via_pending_state_in_visual_block_mode() {
     assert_window_synced_to_engine(&app);
 }
 
-// ── dispatch_event_key routing-order regression tests ───────────────────────
+// ── route_chord_key routing-order regression tests ───────────────────────────
 //
-// These tests drive the FULL keymap sequence through `dispatch_event_key`,
-// which mirrors the event loop's chord-routing ordering. They catch the bug
+// These tests drive the FULL keymap sequence through `route_chord_key`,
+// which IS the event loop's canonical chord-routing. They catch the bug
 // class where Non-Normal trie dispatch ran BEFORE the pending_state reducer,
 // causing the second key of a chord (e.g. second `g` of `gg`) to be
 // re-consumed by the keymap instead of reaching the reducer's commit arm.
 //
-// If you revert the `pending_state.is_none()` guard added to the Non-Normal
-// trie dispatch block in event_loop.rs (and the matching guard in
-// `dispatch_event_key`), these tests MUST fail — that is their purpose.
+// If you revert the `pending_state.is_none()` guard inside `route_chord_key`
+// (step 2 Non-Normal trie dispatch), these tests MUST fail — that is their
+// purpose.
 
 #[test]
 fn gg_full_sequence_in_visual_line_via_keymap() {
@@ -8053,7 +8049,7 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
 
     // First `g` — goes through Non-Normal dispatch → BeginPendingAfterG.
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -8066,7 +8062,7 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
 
     // Second `g` — must reach the pending_state reducer (NOT re-fire
     // BeginPendingAfterG via the keymap). Commits gg.
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "second g must be consumed");
     assert!(
         app.pending_state.is_none(),
@@ -8104,7 +8100,7 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
 
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
 
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -8115,7 +8111,7 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
         app.pending_state
     );
 
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "second g must be consumed");
     assert!(
         app.pending_state.is_none(),
@@ -8153,7 +8149,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
 
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
 
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -8164,7 +8160,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
         app.pending_state
     );
 
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "second g must be consumed");
     assert!(
         app.pending_state.is_none(),
@@ -8181,7 +8177,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
 #[test]
 fn gg_full_sequence_in_normal_mode_via_keymap() {
     // Sanity-check coverage for the previously-working Normal path.
-    // Confirms dispatch_event_key handles Normal mode and that gg still works.
+    // Confirms route_chord_key handles Normal mode and that gg still works.
     let mut app = App::new(None, false, None, None).unwrap();
     let lines: Vec<String> = (0..30).map(|i| format!("line{i:02}")).collect();
     seed_buffer(&mut app, &lines.join("\n"));
@@ -8198,7 +8194,7 @@ fn gg_full_sequence_in_normal_mode_via_keymap() {
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
 
     // First `g` — Normal keymap sets pending_state to AfterG.
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -8210,7 +8206,7 @@ fn gg_full_sequence_in_normal_mode_via_keymap() {
     );
 
     // Second `g` — reducer commits gg.
-    let consumed = app.dispatch_event_key(g_key);
+    let consumed = app.route_chord_key(g_key);
     assert!(consumed, "second g must be consumed");
     assert!(
         app.pending_state.is_none(),

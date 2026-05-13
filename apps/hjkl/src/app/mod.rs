@@ -1825,69 +1825,39 @@ impl App {
         }
     }
 
-    /// Test-and-event-loop entry: dispatch a single Normal-mode key through
-    /// the app keymap and run the post-dispatch sync block.
+    /// Single canonical chord-routing entry. Called by the event loop's key
+    /// handler and by tests. Returns `true` if the key was consumed at any
+    /// stage of the chord routing; `false` if it should fall through to the
+    /// engine `handle_key` path.
     ///
-    /// Returns `true` if the trie consumed the key (Pending/Ambiguous/Match),
-    /// `false` if Unbound (caller — event loop — should then forward to the
-    /// engine handle_key path).
+    /// Order (matches production event loop exactly — this IS the production
+    /// routing now, not a test mirror):
+    ///   1. pending_state reducer (all modes, when `pending_state.is_some()`)
+    ///   2. Non-Normal trie dispatch (mode != Normal AND pending_state.is_none())
+    ///   3. Normal-mode keymap dispatch (mode == Normal AND pending_state.is_none())
     ///
-    /// Internal: this is the body of the `if !engine_pending && let Some(km_ev) = ...`
-    /// block in `event_loop.rs:~910`, factored out for tests. Option A chosen:
-    /// `km_to_crossterm` + `replay_to_engine` moved to `app/mod.rs` as
-    /// `pub(crate)` methods so tests can replay too without touching file-local
-    /// helpers.
-    // Used in tests; not called from production code paths (yet).
-    #[allow(dead_code)]
-    pub(crate) fn dispatch_normal_keymap_with_sync(
-        &mut self,
-        km_ev: hjkl_keymap::KeyEvent,
-    ) -> bool {
-        let count = self.pending_count.peek().max(1);
-        let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
-        let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
-        if !consumed {
-            if !self.pending_count.is_empty() {
-                self.flush_pending_count_to_engine();
-            }
-            self.replay_to_engine(&replay);
-        }
-        self.sync_after_engine_mutation();
-        consumed
-    }
-
-    /// Test + event-loop entry: run one key through the canonical routing
-    /// sequence. Returns `true` if the key was consumed at any step, `false`
-    /// if it should fall through to the engine (the event loop drives
-    /// `handle_key` in that case).
-    ///
-    /// Order MUST match `event_loop.rs` key-routing section:
-    ///   1. pending_state reducer (all modes, fires when state.is_some())
-    ///   2. Non-Normal trie dispatch (fires when mode != Normal AND state.is_none())
-    ///   3. Normal-mode keymap dispatch (fires when mode == Normal AND state.is_none())
-    ///
-    /// Any routing-order bug in the event loop is reproducible by calling this
-    /// in tests. Keep this method's body structurally identical to the event
-    /// loop's key-dispatch sequence so the two stay coupled — if ordering
-    /// changes in `event_loop.rs`, mirror it here.
-    ///
-    /// Out of scope: command-field overlay, picker overlay, search field, LSP
-    /// hover (`K`), `:` and `/` intercepts, Insert-mode completion,
-    /// tmux-navigator Ctrl-h/j/k/l. Those run before this entry; tests that
-    /// exercise them call the existing overlay methods directly.
-    ///
-    /// Keep in sync with: `event_loop.rs` key-routing section (search for
-    /// "KEEP IN SYNC: dispatch_event_key").
-    // Used in tests; not called from production code paths.
-    #[allow(dead_code)]
-    pub(crate) fn dispatch_event_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    /// Out of scope (run BEFORE this method in event_loop.rs):
+    ///   - command-field overlay (`self.command_field.is_some()`)
+    ///   - search-field overlay (`self.search_field.is_some()`)
+    ///   - picker overlay (`self.picker.is_some()`)
+    ///   - info-popup dismissal
+    ///   - Visual-mode `:` intercept (must precede pending_state reducer)
+    ///   - LSP hover (`K`)
+    ///   - `:` and `/` intercepts (Normal-mode only)
+    ///   - Insert-mode completion handling
+    ///   - tmux-navigator Ctrl-h/j/k/l
+    ///   - count-prefix buffering (digits `0`–`9` in Normal mode)
+    ///   - Ctrl-^/Ctrl-6 alt-buffer toggle
+    ///   - Shift-H / Shift-L buffer cycle
+    ///   - Esc chord-reset and which-key Backspace navigate-up
+    pub(crate) fn route_chord_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
         use hjkl_vim::{Key as VimKey, Outcome};
 
         // (1) pending_state reducer — fires in all modes when state is Some.
-        // This must come BEFORE the Non-Normal trie dispatch so the second
-        // key of a chord (e.g. second `g` of `gg` in VisualLine) reaches
-        // the commit arm instead of re-firing BeginPendingAfterG via the trie.
+        // Must precede the Non-Normal trie dispatch so the second key of a
+        // chord (e.g. second `g` of `gg` in VisualLine) reaches the commit
+        // arm instead of re-firing BeginPendingAfterG via the trie.
         if let Some(state) = self.pending_state {
             let vim_key = match key.code {
                 KeyCode::Char(c) => Some(VimKey::Char(c)),
@@ -1901,18 +1871,6 @@ impl App {
                 match hjkl_vim::step(state, vk) {
                     Outcome::Wait(new_state) => {
                         self.pending_state = Some(new_state);
-                        return true;
-                    }
-                    Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord { ch, count }) => {
-                        self.pending_state = None;
-                        self.active_mut().editor.after_g(ch, count);
-                        self.sync_after_engine_mutation();
-                        return true;
-                    }
-                    Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
-                        self.pending_state = None;
-                        self.active_mut().editor.after_z(ch, count);
-                        self.sync_after_engine_mutation();
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ReplaceChar { ch, count }) => {
@@ -1932,6 +1890,168 @@ impl App {
                         self.sync_after_engine_mutation();
                         return true;
                     }
+                    Outcome::Commit(hjkl_vim::EngineCmd::AfterGChord { ch, count }) => {
+                        self.pending_state = None;
+                        // App-level g-prefix actions dispatched before falling
+                        // through to the engine.
+                        match ch {
+                            't' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::Tabnext,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'T' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::Tabprev,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'd' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::LspGotoDef,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'D' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::LspGotoDecl,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'r' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::LspGotoRef,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'i' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::LspGotoImpl,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            'y' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::LspGotoTypeDef,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            _ => {}
+                        }
+                        // Chord-init case-ops: intercept u/U/~/q and set
+                        // reducer AfterOp instead of calling after_g (which
+                        // would set engine Pending::Op). This keeps the full
+                        // gU/gu/g~/gq op-pending path inside the reducer.
+                        let case_op_kind = match ch {
+                            'u' => Some(hjkl_vim::OperatorKind::Lowercase),
+                            'U' => Some(hjkl_vim::OperatorKind::Uppercase),
+                            '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
+                            'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                            _ => None,
+                        };
+                        if let Some(op) = case_op_kind {
+                            self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
+                                op,
+                                count1: count,
+                                inner_count: 0,
+                            });
+                            return true;
+                        }
+                        // All other g-chords: delegate to engine.
+                        self.active_mut().editor.after_g(ch, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::AfterZChord { ch, count }) => {
+                        self.pending_state = None;
+                        // All z-chords delegate directly to the engine.
+                        self.active_mut().editor.after_z(ch, count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMotion {
+                        op,
+                        motion_key,
+                        total_count,
+                    }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.apply_op_motion(
+                            event_loop::op_kind_to_operator(op),
+                            motion_key,
+                            total_count,
+                        );
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
+                        self.pending_state = None;
+                        self.active_mut()
+                            .editor
+                            .apply_op_double(event_loop::op_kind_to_operator(op), total_count);
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpTextObj {
+                        op,
+                        ch,
+                        inner,
+                        total_count,
+                    }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.apply_op_text_obj(
+                            event_loop::op_kind_to_operator(op),
+                            ch,
+                            inner,
+                            total_count,
+                        );
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpG {
+                        op,
+                        ch,
+                        total_count,
+                    }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.apply_op_g(
+                            event_loop::op_kind_to_operator(op),
+                            ch,
+                            total_count,
+                        );
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpFind {
+                        op,
+                        ch,
+                        forward,
+                        till,
+                        total_count,
+                    }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.apply_op_find(
+                            event_loop::op_kind_to_operator(op),
+                            ch,
+                            forward,
+                            till,
+                            total_count,
+                        );
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
+                    Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
+                        self.pending_state = None;
+                        self.active_mut().editor.set_pending_register(reg);
+                        return true;
+                    }
                     Outcome::Cancel => {
                         self.pending_state = None;
                         return true;
@@ -1939,20 +2059,15 @@ impl App {
                     Outcome::Forward => {
                         // State stays alive; fall through to step (2) below.
                     }
-                    Outcome::Commit(_) => {
-                        // ApplyOp* variants and other Commit arms not driven by
-                        // this test entry. Documented gap — add per-arm if a test
-                        // requires.
-                        self.pending_state = None;
-                        return true;
-                    }
                 }
             }
         }
 
         // (2) Non-Normal trie dispatch — gated on pending_state.is_none().
-        // Without this gate the second key of a chord (e.g. second `g` of
-        // `gg`) would re-fire BeginPendingAfterG and reset the reducer.
+        // Step (1) above already returns early when pending_state.is_some(),
+        // so this gate is logically redundant but documents intent: the second
+        // key of a chord (e.g. second `g` of `gg` in VisualLine) must reach
+        // the reducer's commit arm above, not re-fire the trie.
         if self.pending_state.is_none()
             && self.active().editor.vim_mode() != hjkl_engine::VimMode::Normal
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
@@ -1964,14 +2079,30 @@ impl App {
                 self.sync_after_engine_mutation();
                 return true;
             }
+            // Unbound — fall through to engine.
         }
 
-        // (3) Normal-mode keymap dispatch.
+        // (3) Normal-mode keymap dispatch — only the trie step; count-prefix
+        // buffering and engine-pending bypass run in event_loop.rs before this
+        // call and set up the correct state for dispatch_keymap to read.
         if self.pending_state.is_none()
             && self.active().editor.vim_mode() == hjkl_engine::VimMode::Normal
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
         {
-            return self.dispatch_normal_keymap_with_sync(km_ev);
+            let engine_pending = self.active().editor.is_chord_pending();
+            if !engine_pending {
+                let count = self.pending_count.peek().max(1);
+                let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
+                let consumed = self.dispatch_keymap(km_ev, count, &mut replay);
+                if !consumed {
+                    if !self.pending_count.is_empty() {
+                        self.flush_pending_count_to_engine();
+                    }
+                    self.replay_to_engine(&replay);
+                }
+                self.sync_after_engine_mutation();
+                return true;
+            }
         }
 
         false
