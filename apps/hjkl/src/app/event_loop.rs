@@ -296,6 +296,29 @@ impl App {
                         let mut replay: Vec<KmKeyEvent> = Vec::new();
                         let consumed = self.dispatch_keymap_in_mode(km_ev, 1, &mut replay, km_mode);
                         if consumed {
+                            // Match dispatched a Motion / pending-state action
+                            // via apply_motion — refresh the window cursor
+                            // cache + syntax + LSP so the redraw reflects it.
+                            // Same pattern as the Normal-mode keymap branch
+                            // below (apps/hjkl/src/app/event_loop.rs:~910).
+                            self.sync_viewport_from_editor();
+                            if self.active_mut().editor.take_dirty() {
+                                let elapsed = self.active_mut().refresh_dirty_against_saved();
+                                self.last_signature_us = elapsed;
+                                if self.active().dirty {
+                                    self.active_mut().is_new_file = false;
+                                }
+                            }
+                            let buffer_id = self.active().buffer_id;
+                            if self.active_mut().editor.take_content_reset() {
+                                self.syntax.reset(buffer_id);
+                            }
+                            let edits = self.active_mut().editor.take_content_edits();
+                            if !edits.is_empty() {
+                                self.syntax.apply_edits(buffer_id, &edits);
+                            }
+                            self.lsp_notify_change_active();
+                            self.recompute_and_install();
                             if self.exit_requested {
                                 break;
                             }
