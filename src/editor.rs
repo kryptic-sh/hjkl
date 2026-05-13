@@ -3168,6 +3168,106 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::text_object_around_big_word_bridge(self)
     }
 
+    // ─── Phase 4c: pub text-object resolution — quote + bracket (hjkl#70) ───
+    //
+    // Pure functions — no cursor mutation, no mode change, no register write.
+    // Each method delegates to `vim::text_object_*_bridge`, which in turn calls
+    // the existing private resolvers (`quote_text_object`, `bracket_text_object`)
+    // in vim.rs.
+    //
+    // Quote methods take the quote char itself (`'"'`, `'\''`, `` '`' ``).
+    // Bracket methods take the OPEN bracket char (`'('`, `'{'`, `'['`, `'<'`);
+    // close-bracket variants (`)`, `}`, `]`, `>`) are NOT accepted here — the
+    // hjkl-vim grammar layer normalises close→open before calling these methods.
+    //
+    // Return value: `Some((start, end))` where both positions are `(row, col)`
+    // byte-column pairs and `end` is *exclusive* (one past the last byte to act
+    // on), matching the convention used by `delete_range` / `yank_range` / etc.
+    // `bracket_text_object` internally distinguishes Linewise vs Exclusive
+    // ranges for multi-line pairs; that tag is stripped here — callers receive
+    // the same flat shape as all other text-object resolvers.
+
+    /// Resolve the range of `i<quote>` (inner quote) at the cursor position.
+    ///
+    /// `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None` when the
+    /// cursor's line contains fewer than two occurrences of `quote`, or when no
+    /// matching pair can be found around or ahead of the cursor.
+    ///
+    /// Inner range excludes the quote characters themselves.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4c text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_quote(&self, quote: char) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_quote_bridge(self, quote)
+    }
+
+    /// Resolve the range of `a<quote>` (around quote) at the cursor position.
+    ///
+    /// Like `i<quote>` but includes the quote characters themselves plus
+    /// surrounding whitespace on one side: trailing whitespace after the closing
+    /// quote if any exists; otherwise leading whitespace before the opening
+    /// quote. This matches vim `:help text-objects` behaviour.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4c text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_quote(
+        &self,
+        quote: char,
+    ) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_quote_bridge(self, quote)
+    }
+
+    /// Resolve the range of `i<bracket>` (inner bracket pair) at the cursor.
+    ///
+    /// `open` must be one of `'('`, `'{'`, `'['`, `'<'` — the corresponding
+    /// close bracket is derived automatically. Close-bracket chars (`)`, `}`,
+    /// `]`, `>`) are **not** accepted; hjkl-vim normalises close→open before
+    /// calling this method. Returns `None` when no enclosing pair is found.
+    ///
+    /// The cursor may be anywhere inside the pair or on a bracket character
+    /// itself. When not inside any pair the resolver falls back to a forward
+    /// scan (targets.vim-style: `ci(` works when the cursor is before `(`).
+    ///
+    /// Inner range excludes the bracket characters. Multi-line pairs are
+    /// supported; the returned range spans the full content between the
+    /// brackets.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// `ib` / `iB` aliases live in the hjkl-vim grammar layer and are not
+    /// handled here.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4c text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_inner_bracket(
+        &self,
+        open: char,
+    ) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_inner_bracket_bridge(self, open)
+    }
+
+    /// Resolve the range of `a<bracket>` (around bracket pair) at the cursor.
+    ///
+    /// Like `i<bracket>` but includes the bracket characters themselves.
+    /// `open` must be one of `'('`, `'{'`, `'['`, `'<'`.
+    ///
+    /// Pure function — no cursor mutation.
+    ///
+    /// `aB` alias lives in the hjkl-vim grammar layer and is not handled here.
+    ///
+    /// Promoted to the public surface in 0.6.X for Phase 4c text-object grammar
+    /// migration (kryptic-sh/hjkl#70).
+    pub fn text_object_around_bracket(
+        &self,
+        open: char,
+    ) -> Option<((usize, usize), (usize, usize))> {
+        vim::text_object_around_bracket_bridge(self, open)
+    }
+
     /// Execute a named cursor motion `kind` repeated `count` times.
     ///
     /// Maps the keymap-layer `hjkl_vim::MotionKind` to the engine's internal

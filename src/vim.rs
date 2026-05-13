@@ -4357,6 +4357,61 @@ pub(crate) fn text_object_around_big_word_bridge<H: crate::types::Host>(
     word_text_object(ed, false, true)
 }
 
+// ─── Phase 4c pub text-object resolution bridges (quote + bracket) ──────────
+//
+// `pub(crate)` entry points called by the four new pub methods on `Editor`
+// (`text_object_inner_quote`, `text_object_around_quote`,
+// `text_object_inner_bracket`, `text_object_around_bracket`). They delegate to
+// `quote_text_object` / `bracket_text_object` — the existing private resolvers
+// — without touching any operator, register, or mode state.
+//
+// `bracket_text_object` returns `Option<(Pos, Pos, MotionKind)>`; the bridges
+// strip the `MotionKind` tag so callers see a uniform
+// `Option<((usize,usize),(usize,usize))>` shape, consistent with 4b.
+
+/// Resolve the range of `i<quote>` (inner quote) at the current cursor
+/// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
+/// when the cursor's line contains fewer than two occurrences of `quote`.
+pub(crate) fn text_object_inner_quote_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    quote: char,
+) -> Option<((usize, usize), (usize, usize))> {
+    quote_text_object(ed, quote, true)
+}
+
+/// Resolve the range of `a<quote>` (around quote) at the current cursor
+/// position. Includes surrounding whitespace on one side per vim semantics.
+pub(crate) fn text_object_around_quote_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    quote: char,
+) -> Option<((usize, usize), (usize, usize))> {
+    quote_text_object(ed, quote, false)
+}
+
+/// Resolve the range of `i<bracket>` (inner bracket pair). `open` must be
+/// one of `'('`, `'{'`, `'['`, `'<'`; the corresponding close is derived
+/// internally. Returns `None` when no enclosing pair is found. The returned
+/// range excludes the bracket characters themselves. Multi-line bracket pairs
+/// whose content spans more than one line are reported as a charwise range
+/// covering the first content character through the last content character
+/// (MotionKind metadata is stripped — callers receive start/end only).
+pub(crate) fn text_object_inner_bracket_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    open: char,
+) -> Option<((usize, usize), (usize, usize))> {
+    bracket_text_object(ed, open, true).map(|(s, e, _kind)| (s, e))
+}
+
+/// Resolve the range of `a<bracket>` (around bracket pair). Includes the
+/// bracket characters themselves. `open` must be one of `'('`, `'{'`, `'['`,
+/// `'<'`.
+pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    open: char,
+) -> Option<((usize, usize), (usize, usize))> {
+    bracket_text_object(ed, open, false).map(|(s, e, _kind)| (s, e))
+}
+
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
 /// Splits on blank-line boundaries so paragraph structure is
 /// preserved. Each paragraph's words are joined with single spaces
