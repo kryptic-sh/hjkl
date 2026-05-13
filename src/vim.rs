@@ -2108,21 +2108,75 @@ fn step_normal<H: crate::types::Host>(
     true
 }
 
-fn handle_set_mark<H: crate::types::Host>(
+/// `m{ch}` — public controller entry point. Validates `ch` (must be
+/// alphanumeric to match vim's mark-name rules) and records the current
+/// cursor position under that name. Promoted to the public surface in 0.6.7
+/// so the hjkl-vim `PendingState::SetMark` reducer can dispatch
+/// `EngineCmd::SetMark` without re-entering the engine FSM.
+/// `handle_set_mark` delegates here to avoid logic duplication.
+pub(crate) fn set_mark_at_cursor<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    input: Input,
-) -> bool {
-    if let Key::Char(c) = input.key
-        && (c.is_ascii_lowercase() || c.is_ascii_uppercase())
-    {
+    ch: char,
+) {
+    if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() {
         // 0.0.36: lowercase + uppercase marks share the unified
         // `Editor::marks` map. Uppercase entries survive
         // `set_content` so they persist across tab swaps within the
         // same Editor (the map lives on the Editor, not the buffer).
         let pos = ed.cursor();
-        ed.set_mark(c, pos);
+        ed.set_mark(ch, pos);
+    }
+    // Invalid chars silently no-op (mirrors handle_set_mark behaviour).
+}
+
+fn handle_set_mark<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+) -> bool {
+    if let Key::Char(c) = input.key {
+        set_mark_at_cursor(ed, c);
     }
     true
+}
+
+/// `'<ch>` / `` `<ch> `` — public controller entry point. Validates `ch`
+/// against the set of legal mark names (lowercase, uppercase, special:
+/// `'`/`` ` ``/`.`/`[`/`]`/`<`/`>`), resolves the target position, and
+/// jumps the cursor. `linewise = true` → row only, col snaps to first
+/// non-blank; `linewise = false` → exact (row, col). Promoted to the public
+/// surface in 0.6.7 so the hjkl-vim `PendingState::GotoMarkLine` /
+/// `GotoMarkChar` reducers can dispatch without re-entering the engine FSM.
+/// `handle_goto_mark` delegates here to avoid logic duplication.
+pub(crate) fn goto_mark<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    linewise: bool,
+) {
+    // Resolve the mark target. Mirrors handle_goto_mark validation exactly.
+    let target = match ch {
+        'a'..='z' | 'A'..='Z' => ed.mark(ch),
+        '\'' | '`' => ed.vim.jump_back.last().copied(),
+        '.' => ed.vim.last_edit_pos,
+        '[' | ']' | '<' | '>' => ed.mark(ch),
+        _ => None,
+    };
+    let Some((row, col)) = target else {
+        return;
+    };
+    let pre = ed.cursor();
+    let (r, c_clamped) = clamp_pos(ed, (row, col));
+    if linewise {
+        buf_set_cursor_rc(&mut ed.buffer, r, 0);
+        ed.push_buffer_cursor_to_textarea();
+        move_first_non_whitespace(ed);
+    } else {
+        buf_set_cursor_rc(&mut ed.buffer, r, c_clamped);
+        ed.push_buffer_cursor_to_textarea();
+    }
+    if ed.cursor() != pre {
+        push_jump(ed, pre);
+    }
+    ed.sticky_col = Some(ed.cursor().1);
 }
 
 /// `"reg` — store the register selector for the next y / d / c / p.
@@ -2220,40 +2274,10 @@ fn handle_goto_mark<H: crate::types::Host>(
     let Key::Char(c) = input.key else {
         return true;
     };
-    // Resolve the mark target. Lowercase letters look up the user
-    // marks set via `m{a..z}`; the special chars below come from
-    // automatic state vim maintains:
-    //   `'` / `` ` `` — position before the most recent big jump
-    //                  (peeks `jump_back` without popping).
-    //   `.`           — the last edit's position.
-    let target = match c {
-        'a'..='z' | 'A'..='Z' => ed.mark(c),
-        '\'' | '`' => ed.vim.jump_back.last().copied(),
-        '.' => ed.vim.last_edit_pos,
-        // Special auto-marks: `[` / `]` — last yank / change / paste bounds
-        // (vim `:h '[` / `:h ']`). Stored by the operator and paste paths.
-        // `<` / `>` — last visual selection start / end (vim `:h '<` /
-        // `:h '>`). Stored by the visual-exit hook (0.5.3).
-        '[' | ']' | '<' | '>' => ed.mark(c),
-        _ => None,
-    };
-    let Some((row, col)) = target else {
-        return true;
-    };
-    let pre = ed.cursor();
-    let (r, c_clamped) = clamp_pos(ed, (row, col));
-    if linewise {
-        buf_set_cursor_rc(&mut ed.buffer, r, 0);
-        ed.push_buffer_cursor_to_textarea();
-        move_first_non_whitespace(ed);
-    } else {
-        buf_set_cursor_rc(&mut ed.buffer, r, c_clamped);
-        ed.push_buffer_cursor_to_textarea();
-    }
-    if ed.cursor() != pre {
-        push_jump(ed, pre);
-    }
-    ed.sticky_col = Some(ed.cursor().1);
+    // Delegate to the public controller entry point to avoid duplicating
+    // the validation and jump logic (mirrors handle_select_register →
+    // Editor::set_pending_register delegation pattern from 0.5.14–0.5.16).
+    goto_mark(ed, c, linewise);
     true
 }
 

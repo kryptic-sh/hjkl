@@ -6,6 +6,37 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-05-13
+
+### Added
+
+- `Editor::set_mark_at_cursor(ch)` — public controller method. Validates `ch`
+  (`a`–`z` / `A`–`Z`) and records the current cursor position under that mark
+  name. Invalid chars are silently ignored (no-op). Promoted so the hjkl-vim
+  `PendingState::SetMark` reducer can dispatch `EngineCmd::SetMark` without
+  re-entering the engine FSM. Phase 5a of kryptic-sh/hjkl#71.
+- `Editor::goto_mark_line(ch)` — public controller method. Validates `ch` (same
+  set as vim's `'<ch>` command), resolves the target position, and jumps the
+  cursor linewise (row only; col snaps to first non-blank). Pushes the pre-jump
+  position onto the jumplist if the cursor actually moved. Invalid or unset
+  marks are silently ignored (no-op). Phase 5a of kryptic-sh/hjkl#71.
+- `Editor::goto_mark_char(ch)` — public controller method. Same as
+  `goto_mark_line` but jumps charwise (exact row + col). Phase 5a of
+  kryptic-sh/hjkl#71.
+- `vim::set_mark_at_cursor` / `vim::goto_mark` — `pub(crate)` controller helpers
+  that back the three public methods. `handle_set_mark` and `handle_goto_mark`
+  now delegate to these helpers to avoid logic duplication, mirroring the
+  `handle_select_register` → `Editor::set_pending_register` delegation pattern
+  from 0.5.14–0.5.16.
+- Bumped `hjkl-vim` dependency from `"0.17"` to `"0.18"` in `Cargo.toml`.
+- 9 controller-level tests in `crates/hjkl-engine/src/editor.rs` (Phase 5a):
+  `set_mark_at_cursor_alphabetic_records`,
+  `set_mark_at_cursor_invalid_char_no_op`,
+  `set_mark_at_cursor_special_left_bracket`,
+  `goto_mark_line_jumps_to_first_non_blank`, `goto_mark_line_unset_mark_no_op`,
+  `goto_mark_line_invalid_char_no_op`, `goto_mark_char_jumps_to_exact_pos`,
+  `goto_mark_char_unset_mark_no_op`, `goto_mark_char_invalid_char_no_op`.
+
 ## [0.6.6] - 2026-05-13
 
 ### Added
@@ -559,7 +590,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.6
 [0.6.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.2...v0.6.3

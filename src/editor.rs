@@ -3479,6 +3479,52 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Invalid chars silently no-op (matches engine FSM behavior).
     }
 
+    /// Record a mark named `ch` at the current cursor position.
+    ///
+    /// Validates `ch` (must be `a`–`z` or `A`–`Z` to match vim's mark-name
+    /// rules). Invalid chars are silently ignored (no-op), matching the engine
+    /// FSM's `handle_set_mark` behaviour.
+    ///
+    /// Promoted to the public surface in 0.6.7 so the hjkl-vim
+    /// `PendingState::SetMark` reducer can dispatch `EngineCmd::SetMark`
+    /// without re-entering the engine FSM. `handle_set_mark` delegates here.
+    pub fn set_mark_at_cursor(&mut self, ch: char) {
+        vim::set_mark_at_cursor(self, ch);
+    }
+
+    /// Jump to the mark named `ch`, linewise (row only; col snaps to first
+    /// non-blank). Pushes the pre-jump position onto the jumplist if the
+    /// cursor actually moved.
+    ///
+    /// Accepts the same mark chars as vim's `'<ch>` command: `a`–`z`,
+    /// `A`–`Z`, `'`/`` ` `` (jump-back peek), `.` (last edit), and the
+    /// special auto-marks `[`, `]`, `<`, `>`. Unset marks and invalid chars
+    /// are silently ignored (no-op), matching the engine FSM's
+    /// `handle_goto_mark` behaviour.
+    ///
+    /// Promoted to the public surface in 0.6.7 so the hjkl-vim
+    /// `PendingState::GotoMarkLine` reducer can dispatch
+    /// `EngineCmd::GotoMarkLine` without re-entering the engine FSM.
+    pub fn goto_mark_line(&mut self, ch: char) {
+        vim::goto_mark(self, ch, true);
+    }
+
+    /// Jump to the mark named `ch`, charwise (exact row + col). Pushes the
+    /// pre-jump position onto the jumplist if the cursor actually moved.
+    ///
+    /// Accepts the same mark chars as vim's `` `<ch> `` command: `a`–`z`,
+    /// `A`–`Z`, `'`/`` ` `` (jump-back peek), `.` (last edit), and the
+    /// special auto-marks `[`, `]`, `<`, `>`. Unset marks and invalid chars
+    /// are silently ignored (no-op), matching the engine FSM's
+    /// `handle_goto_mark` behaviour.
+    ///
+    /// Promoted to the public surface in 0.6.7 so the hjkl-vim
+    /// `PendingState::GotoMarkChar` reducer can dispatch
+    /// `EngineCmd::GotoMarkChar` without re-entering the engine FSM.
+    pub fn goto_mark_char(&mut self, ch: char) {
+        vim::goto_mark(self, ch, false);
+    }
+
     #[cfg(feature = "crossterm")]
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         let input = crossterm_to_input(key);
@@ -5677,6 +5723,132 @@ mod tests {
             e.cursor().0,
             2,
             "<C-b> from row 10 with viewport height=10 must land on row 2"
+        );
+    }
+
+    // ── set_mark_at_cursor unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn set_mark_at_cursor_alphabetic_records() {
+        // `ma` at (0, 2) — mark 'a' must store (0, 2).
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 2);
+        e.set_mark_at_cursor('a');
+        assert_eq!(
+            e.mark('a'),
+            Some((0, 2)),
+            "mark 'a' must record current pos"
+        );
+    }
+
+    #[test]
+    fn set_mark_at_cursor_invalid_char_no_op() {
+        // Invalid chars (digits, special) must not store a mark.
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 1);
+        e.set_mark_at_cursor('1'); // digit — not alphanumeric in vim mark sense
+        assert_eq!(e.mark('1'), None, "digit mark must be a no-op");
+        e.set_mark_at_cursor('['); // special — only goto uses '[', not set_mark
+        assert_eq!(
+            e.mark('['),
+            None,
+            "bracket char must be a no-op for set_mark"
+        );
+    }
+
+    #[test]
+    fn set_mark_at_cursor_special_left_bracket() {
+        // Confirm '[' is NOT stored by set_mark_at_cursor (vim's `m[` is invalid).
+        // The `[` mark is only set automatically by operator paths, not `m[`.
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 3);
+        e.set_mark_at_cursor('[');
+        assert_eq!(
+            e.mark('['),
+            None,
+            "set_mark_at_cursor must reject '[' (vim: m[ is invalid)"
+        );
+    }
+
+    // ── goto_mark_line unit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn goto_mark_line_jumps_to_first_non_blank() {
+        // Set mark 'a' at (1, 3), then jump back to (0, 0).
+        // `'a` (linewise) must land on row 1, first non-blank column.
+        let mut e = fresh_editor("hello\n  world\n");
+        e.jump_cursor(1, 3);
+        e.set_mark_at_cursor('a');
+        e.jump_cursor(0, 0);
+        e.goto_mark_line('a');
+        assert_eq!(e.cursor().0, 1, "goto_mark_line must jump to mark row");
+        // "  world" — first non-blank is col 2.
+        assert_eq!(
+            e.cursor().1,
+            2,
+            "goto_mark_line must land on first non-blank column"
+        );
+    }
+
+    #[test]
+    fn goto_mark_line_unset_mark_no_op() {
+        // Jumping to an unset mark must not move the cursor.
+        let mut e = fresh_editor("hello\nworld\n");
+        e.jump_cursor(1, 2);
+        e.goto_mark_line('z'); // 'z' not set
+        assert_eq!(e.cursor(), (1, 2), "unset mark jump must be a no-op");
+    }
+
+    #[test]
+    fn goto_mark_line_invalid_char_no_op() {
+        // '!' is not a valid mark char — must not move cursor.
+        let mut e = fresh_editor("hello\nworld\n");
+        e.jump_cursor(0, 0);
+        e.goto_mark_line('!');
+        assert_eq!(e.cursor(), (0, 0), "invalid mark char must be a no-op");
+    }
+
+    // ── goto_mark_char unit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn goto_mark_char_jumps_to_exact_pos() {
+        // Set mark 'b' at (1, 4), then jump back to (0, 0).
+        // `` `b `` (charwise) must land on (1, 4) exactly.
+        let mut e = fresh_editor("hello\nworld\n");
+        e.jump_cursor(1, 4);
+        e.set_mark_at_cursor('b');
+        e.jump_cursor(0, 0);
+        e.goto_mark_char('b');
+        assert_eq!(
+            e.cursor(),
+            (1, 4),
+            "goto_mark_char must jump to exact mark position"
+        );
+    }
+
+    #[test]
+    fn goto_mark_char_unset_mark_no_op() {
+        // Jumping to an unset mark must not move the cursor.
+        let mut e = fresh_editor("hello\nworld\n");
+        e.jump_cursor(1, 1);
+        e.goto_mark_char('x'); // 'x' not set
+        assert_eq!(
+            e.cursor(),
+            (1, 1),
+            "unset charwise mark jump must be a no-op"
+        );
+    }
+
+    #[test]
+    fn goto_mark_char_invalid_char_no_op() {
+        // '#' is not a valid mark char — must not move cursor.
+        let mut e = fresh_editor("hello\nworld\n");
+        e.jump_cursor(0, 2);
+        e.goto_mark_char('#');
+        assert_eq!(
+            e.cursor(),
+            (0, 2),
+            "invalid charwise mark char must be a no-op"
         );
     }
 }
