@@ -7584,6 +7584,62 @@ fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
 }
 
 #[test]
+fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
+    // Bug: apply_motion_kind (keymap path) doesn't call ensure_cursor_in_scrolloff;
+    // the engine FSM's step() does. Without an app-side scrolloff call, j past
+    // the viewport bottom left the cursor off-screen and the window top_row
+    // stuck at 0. Asserts the post-dispatch sync runs scrolloff so viewport
+    // top_row advances and window.top_row mirrors it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..50).map(|i| format!("line{i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.jump_cursor(0, 0);
+    // Set engine + host viewport heights so scrolloff math fires the
+    // non-zero path (height=0 falls back to bare ensure_cursor_visible).
+    app.active_mut().editor.set_viewport_height(10);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 10;
+        vp.top_row = 0;
+    }
+    app.sync_viewport_from_editor();
+    let fw = app.focused_window();
+    assert_eq!(
+        app.windows[fw].as_ref().unwrap().top_row,
+        0,
+        "precondition: window top_row at 0"
+    );
+
+    // Drive `j` 20 times — well past the viewport bottom + scrolloff margin.
+    let km_ev = km_char('j');
+    for _ in 0..20 {
+        app.dispatch_normal_keymap_with_sync(km_ev);
+    }
+
+    let fw = app.focused_window();
+    let win = app.windows[fw].as_ref().unwrap();
+    assert_eq!(
+        win.cursor_row, 20,
+        "engine cursor should be at row 20 after 20 j's"
+    );
+    assert!(
+        win.top_row > 0,
+        "window top_row must advance so cursor stays visible; got top_row={}, cursor_row={}",
+        win.top_row,
+        win.cursor_row
+    );
+    // Cursor must be inside the viewport [top_row, top_row + height).
+    let height = 10usize;
+    assert!(
+        win.cursor_row >= win.top_row && win.cursor_row < win.top_row + height,
+        "cursor must be inside viewport: top_row={}, height={}, cursor_row={}",
+        win.top_row,
+        height,
+        win.cursor_row
+    );
+}
+
+#[test]
 fn count_prefix_motion_via_keymap_updates_window_cursor() {
     // Exercises the count-prefix path: accumulate '5' in pending_count, then
     // dispatch `j`. The method peeks the count (5) and passes it to dispatch_keymap.

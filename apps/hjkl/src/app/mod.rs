@@ -931,6 +931,14 @@ impl App {
     /// position. This helper consolidates the three previously duplicated
     /// ~15-line sync blocks in `event_loop.rs` into a single call site.
     pub(crate) fn sync_after_engine_mutation(&mut self) {
+        // Keymap-dispatched motions go through `apply_motion_kind` which
+        // calls `execute_motion` but does NOT invoke `ensure_cursor_in_scrolloff`
+        // (the engine FSM `step()` path does it explicitly). Without this call
+        // the engine cursor advances off-screen and the viewport top_row
+        // never updates — the user sees the cursor disappear. Mirror the FSM
+        // behaviour from the app side so the keymap path stays viewport-coherent.
+        // Idempotent for non-motion mutations (already-in-bounds = no-op).
+        self.active_mut().editor.ensure_cursor_in_scrolloff();
         self.sync_viewport_from_editor();
         if self.active_mut().editor.take_dirty() {
             let elapsed = self.active_mut().refresh_dirty_against_saved();
