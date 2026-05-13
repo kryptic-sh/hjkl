@@ -8,6 +8,31 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-05-13
+
+### Changed
+
+- Phase 3c of the vim FSM extraction (#62, tracking #69) — line-anchored motions
+  (`0` / `^` / `$`, plus `<Home>` / `<End>` aliases) now route through the
+  `hjkl-vim` keymap path. The host dispatches
+  `AppAction::Motion { kind, count }` and calls `Editor::apply_motion` instead
+  of re-entering the engine FSM. Engine FSM arms remain for macro-replay
+  coverage. `g_` (last non-blank) stays on the G-chord path from Phase 2b-ii.
+  `|` (column N) is not yet implemented in the engine and is deferred.
+- Bumped `hjkl-vim` 0.13 → 0.14 — adds 3 new `MotionKind` variants (`LineStart`
+  / `FirstNonBlank` / `LineEnd`).
+- Bumped `hjkl-engine` 0.6.2 → 0.6.3 — `apply_motion` now handles the 3 new
+  variants via `Motion::LineStart` / `Motion::FirstNonBlank` /
+  `Motion::LineEnd`.
+
+### Added
+
+- 5 entries in the motion binding loop (`apps/hjkl/src/app/mod.rs`) for `0`,
+  `<Home>`, `^`, `$`, `<End>` across Normal / Visual / VisualLine / VisualBlock.
+  `^` and `$` added to `could_start_chord` matches in `event_loop.rs` (digit `0`
+  already handled by the digit-buffer split). `<Home>` / `<End>` added to the
+  non-Char branch alongside `<BS>`.
+
 ## [0.14.9] - 2026-05-13
 
 ### Changed
@@ -1819,7 +1844,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.9...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.10...HEAD
+[0.14.10]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.10
 [0.14.9]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.9
 [0.14.8]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.8
 [0.14.7]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.7
