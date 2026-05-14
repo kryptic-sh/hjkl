@@ -1040,7 +1040,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hjkl"
-version = "0.14.11"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1054,15 +1054,15 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-clipboard",
  "hjkl-config",
- "hjkl-editor",
- "hjkl-engine",
+ "hjkl-editor 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "hjkl-engine 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-form",
  "hjkl-keymap",
  "hjkl-lsp",
  "hjkl-picker",
  "hjkl-ratatui",
  "hjkl-splash",
- "hjkl-vim",
+ "hjkl-vim 0.18.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "ignore",
  "lsp-types",
  "nvim-rs",
@@ -1149,7 +1149,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.6.8",
  "nvim-rs",
  "serde",
  "tokio",
@@ -1169,23 +1169,34 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor"
-version = "0.4.5"
+version = "0.4.6"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "insta",
  "regex",
 ]
 
 [[package]]
+name = "hjkl-editor"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab79ec05a8aaacb621dccecf6fd519026e5f828844263f74ffee93bd007f90ff"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "regex",
+]
+
+[[package]]
 name = "hjkl-engine"
-version = "0.6.7"
+version = "0.6.8"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
  "hjkl-buffer",
- "hjkl-vim",
+ "hjkl-vim 0.18.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "proptest",
  "ratatui",
  "regex",
@@ -1195,11 +1206,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-engine"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96c4be131381a63a66bbd2bb0773ca940fb99a19aaee80da8af719a8c7dff24c"
+dependencies = [
+ "bitflags 2.11.1",
+ "crossterm",
+ "hjkl-buffer",
+ "hjkl-vim 0.18.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ratatui",
+ "regex",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "hjkl-form"
 version = "0.3.6"
 dependencies = [
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -1243,7 +1270,7 @@ name = "hjkl-ratatui"
 version = "0.3.6"
 dependencies = [
  "crossterm",
- "hjkl-engine",
+ "hjkl-engine 0.6.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "hjkl-form",
  "ratatui",
 ]
@@ -1257,7 +1284,13 @@ dependencies = [
 
 [[package]]
 name = "hjkl-vim"
-version = "0.18.0"
+version = "0.18.1"
+
+[[package]]
+name = "hjkl-vim"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bfb27d08c086ebd037f3295123a33bd1173b749b6b09ad6f6c6515127f964fd"
 
 [[package]]
 name = "hjkl-xdg"

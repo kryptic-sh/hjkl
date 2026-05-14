@@ -8,6 +8,82 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-14
+
+### Added
+
+- **Phase 5a — marks chord lift (#71).** `m<x>`, `'<x>`, `` `<x> `` chords route
+  through the hjkl-vim reducer (`PendingState::SetMark` /
+  `PendingState::GotoMarkLine` / `PendingState::GotoMarkChar`) and dispatch
+  `EngineCmd::SetMark` / `GotoMarkLine` / `GotoMarkChar` to
+  `Editor::set_mark_at_cursor` / `goto_mark_line` / `goto_mark_char` instead of
+  re-entering the engine FSM.
+- **Phase 5b — macro chord lift (#71).** `q<x>` and `@<x>` chords route through
+  `PendingState::RecordMacroTarget` and
+  `PendingState::PlayMacroTarget { count }`. `EngineCmd::StartMacroRecord` /
+  `EngineCmd::PlayMacro` dispatch to `Editor::start_macro_record` /
+  `Editor::play_macro`. Macro replay flows back through `route_chord_key` (Phase
+  6 prereq).
+- **Phase 5c — dot-repeat (`.`) lift (#71).** `AppAction::DotRepeat { count }`
+  resolves the count prefix and calls `Editor::replay_last_change`. Engine FSM
+  `.` arm preserved for macro-replay defensive coverage.
+- **Phase 5d — `@:` last-ex repeat (#71).** App captures every executed `:`
+  command into `last_ex_command: Option<String>`. The `PlayMacroTarget` reducer
+  accepts `':'` and the host calls `replay_last_ex`. Normal-mode `:` interceptor
+  now guarded with `pending_state.is_none()` so `@:` does not open the command
+  prompt.
+- **Phase 5e — count + register-routing audit + bug fixes (#71).** New unit
+  - e2e tests cover `5dd`, `"a5dd`, `5"add`, `"a5x`, `3@a`, `5.`, `"add`×2,
+    `"+y`, `"_d`. Fixed `5"add` count-drop (removed `pending_count.reset()` from
+    `BeginPendingSelectRegister` arm) and `"a5dd` premature digit flush
+    (count-prefix block now skipped when `pending_state.is_some()`).
+- **Phase 3e/f/g — additional motions via hjkl-vim keymap path (#69).** `;` `,`
+  `%` `H` `M` `L` `<C-d>` `<C-u>` `<C-f>` `<C-b>` route through
+  `AppAction::Motion { kind, count }` → `Editor::apply_motion` instead of the
+  engine FSM. Engine FSM arms preserved for macro-replay coverage.
+- **Phase 4e — visual-mode operators dispatch via keymap (#70).**
+  `AppAction::VisualOp { op, count }` resolves the active selection range and
+  calls a range-mutation primitive; engine exits visual mode. Visual, VisualLine
+  and VisualBlock all covered (VisualBlock falls back to the engine FSM for
+  shapes that need `apply_block_operator`). Named-register routing (`"a y` then
+  visual `p`) now honored on the visual path.
+- **e2e PTY+vt100 test harness** (`apps/hjkl/tests/pty_harness/`). `portable-pty
+  - vt100`driven`TerminalSession`lets tests assert against actual rendered terminal output. Initial coverage:`render_sync.rs`(5 historical bugs:`:100`, `gg`, visual `gg`, `30j`, `G`), `at_colon.rs`(Phase 5d), and`register_count.rs`(round-trip paste,`5"add`, `3@a`).
+- `route_chord_key` central dispatcher (apps/hjkl/src/app/mod.rs) — single entry
+  point for all chord routing. Engine-pending bypass + reducer step in one
+  helper. Macro replay now flows through this path so future Phase 6 engine
+  slimming doesn't regress macro behavior.
+- `flush_pending_count_to_engine` and `sync_after_engine_mutation` helpers in
+  event_loop.rs for centralised count-flush and viewport-sync semantics.
+
+### Changed
+
+- **`cursorline` default flipped from `false` → `true`** (carried via
+  `hjkl-engine` 0.6.8). Existing `:set nocursorline` config still toggles off.
+- `pending_count: String` migrated to `hjkl_vim::CountAccumulator` —
+  digit-prefix buffer with vim's digit-0-vs-LineStart quirk and overflow
+  saturation built in.
+- Bumped `hjkl-engine` 0.6.7 → 0.6.8 (Phase 5 controllers + cursorline default
+  flip).
+- Bumped `hjkl-vim` 0.18.0 → 0.18.1 (Phase 5b/5d macro reducer states +
+  `EngineCmd` variants).
+- Bumped `hjkl-editor` 0.4.5 → 0.4.6 (engine 0.6.8 dep + cursorline snapshot +
+  `:100` engine-layer regression test).
+
+### Fixed
+
+- **`:100<Enter>` cursor-stuck regression** (commit 23cb46b). Engine cursor
+  moved to line 100 but the window cursor cache stayed at the old row.
+  `dispatch_ex` now calls `sync_viewport_from_editor` after every `ex::run`
+  regardless of effect — cursor-only ex commands no longer skip the sync.
+- **Render-sync class fixes** (commits 219de02, 0694b42, 1cead4e, 4414170,
+  b8d0459): keymap-Match dispatch, non-Normal keymap Match, keymap-dispatched
+  motion viewport scroll, pending-state Outcome arms, and VisualBlock
+  `block_vcol` all now route through `sync_after_engine_mutation`.
+- **`gg` / visual-`gg` routing-order fixes** (commits 0621944, 76f3f55):
+  pending_state reducer lifted out of Normal-mode gate; non-Normal trie dispatch
+  gated on `pending_state.is_none()`.
+
 ## [0.14.11] - 2026-05-13
 
 ### Changed
@@ -1864,7 +1940,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.14.11...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.0
 [0.14.11]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.11
 [0.14.10]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.10
 [0.14.9]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.9
