@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **`$DATABASE_URL` startup prompt.** When no `--url`/`--connection` flag is
+  provided and `$DATABASE_URL` is set to a non-empty value, sqeel prints a y/N
+  prompt on stderr (before the TUI opens) showing the URL with the password
+  replaced by `***`. Accepting feeds the URL into the same transient-connection
+  path as `--url`; declining falls through to normal startup (picker or
+  add-connection form). The `--sandbox` flag suppresses the prompt. Resolves
+  [#22](https://github.com/kryptic-sh/sqeel/issues/22).
+
 ## [0.4.14] - 2026-05-15
 
 ### Fixed

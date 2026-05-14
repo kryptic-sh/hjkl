@@ -105,6 +105,27 @@ fn prompt_yes_no(question: &str) -> bool {
     matches!(line.trim(), "y" | "Y")
 }
 
+/// Mask the password segment of a database URL for display.
+///
+/// Preserves scheme, user, host, port, and database path; replaces any
+/// password segment with `***`. Returns the original string unchanged on
+/// parse failure or when no authority block is present (e.g. sqlite paths).
+///
+/// Password detection uses the `url` crate, which already ships transitively
+/// in sqeel-core. We don't call `Url::set_password` here because the
+/// `url` crate normalises the URL in ways that can subtly alter opaque
+/// sqlite paths — instead we do a targeted in-place string replacement.
+fn mask_db_url_password(url: &str) -> String {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return url.to_string();
+    };
+    let password = match parsed.password() {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => return url.to_string(),
+    };
+    url.replacen(&format!(":{password}@"), ":***@", 1)
+}
+
 /// Best-effort cleanup of the sandbox dir. Logged failures don't
 /// surface as a process error — the user's work in the parent shell
 /// shouldn't die because `/tmp` is wedged.
@@ -192,6 +213,23 @@ fn main() -> anyhow::Result<()> {
     // exit with the field-named diagnostic from `hjkl-config`.
     let main_config = load_main_config()?;
     let conns = load_connections().unwrap_or_default();
+
+    // DATABASE_URL auto-pickup: prompt before the TUI enters its main loop so
+    // the user is back at a normal terminal cursor (not inside alternate screen).
+    if args.url.is_none()
+        && args.connection.is_none()
+        && !args.sandbox
+        && matches!(std::env::var("DATABASE_URL"), Ok(ref v) if !v.is_empty())
+    {
+        let env_url = std::env::var("DATABASE_URL").unwrap();
+        let masked = mask_db_url_password(&env_url);
+        eprintln!("Use $DATABASE_URL? (y/N)");
+        eprintln!("  {masked}");
+        if prompt_yes_no("Connect") {
+            args.url = Some(env_url);
+        }
+    }
+
     {
         let mut s = state.lock().unwrap();
         s.apply_editor_config(&main_config.editor);
@@ -1004,5 +1042,42 @@ mod cli_tests {
             help.contains(env!("CARGO_PKG_VERSION")),
             "long_help missing CARGO_PKG_VERSION; got:\n{help}"
         );
+    }
+
+    #[test]
+    fn mask_db_url_password_postgres_with_password() {
+        let url = "postgres://user:secretpass@localhost:5432/mydb";
+        let masked = mask_db_url_password(url);
+        assert_eq!(masked, "postgres://user:***@localhost:5432/mydb");
+        assert!(!masked.contains("secretpass"));
+    }
+
+    #[test]
+    fn mask_db_url_password_mysql_with_password() {
+        let url = "mysql://root:hunter2@127.0.0.1/shop";
+        let masked = mask_db_url_password(url);
+        assert_eq!(masked, "mysql://root:***@127.0.0.1/shop");
+        assert!(!masked.contains("hunter2"));
+    }
+
+    #[test]
+    fn mask_db_url_password_no_password_returns_original() {
+        let url = "postgres://user@localhost/mydb";
+        let masked = mask_db_url_password(url);
+        assert_eq!(masked, url);
+    }
+
+    #[test]
+    fn mask_db_url_password_sqlite_path_unchanged() {
+        let url = "sqlite:///tmp/sqeel.db";
+        let masked = mask_db_url_password(url);
+        assert_eq!(masked, url);
+    }
+
+    #[test]
+    fn mask_db_url_password_malformed_returns_original() {
+        let url = "not a url at all !!!";
+        let masked = mask_db_url_password(url);
+        assert_eq!(masked, url);
     }
 }
