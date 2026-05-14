@@ -44,6 +44,111 @@ pub(crate) fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Ope
 }
 
 impl App {
+    /// Phase 6.5: inline Insert-mode key dispatcher. Calls `Editor::insert_*`
+    /// primitives directly, bypassing the engine FSM for Insert-mode keys.
+    ///
+    /// This is called from the main event loop whenever the editor is in
+    /// `VimMode::Insert` and the key has not been consumed by an overlay
+    /// (completion popup, etc.). Normal / Visual modes still go through
+    /// `editor.handle_key` until Phase 6.8 removes that path.
+    ///
+    /// ### `Ctrl-R {reg}` — register paste
+    /// `insert_ctrl_r_arm()` sets an internal flag (`insert_pending_register`).
+    /// The NEXT printable character names the register; we detect this via
+    /// `editor.is_insert_register_pending()` and call
+    /// `insert_paste_register(c)` instead of `insert_char(c)`.
+    ///
+    /// ### `Ctrl-O` — one-shot normal
+    /// `insert_ctrl_o_arm()` flips `vim.mode` to Normal (and syncs
+    /// `current_mode`). The NEXT key therefore reads `vim_mode() == Normal`
+    /// and is dispatched as a Normal-mode key naturally — no extra flag needed
+    /// here. After that single normal command the engine's end-of-step hook
+    /// flips back to Insert.
+    pub(crate) fn dispatch_insert_key(&mut self, key: KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use hjkl_engine::InsertDir;
+
+        // `Ctrl-R` two-key sequence: the previous key armed the register
+        // selector. The next printable char names the register to paste.
+        // Any non-printable key cancels (mirrors vim behaviour).
+        if self.active().editor.is_insert_register_pending() {
+            // Clear the flag first (mirrors step_insert which clears before
+            // calling insert_paste_register_bridge).
+            self.active_mut().editor.clear_insert_register_pending();
+            if let (KeyCode::Char(c), mods) = (key.code, key.modifiers)
+                && !mods.contains(KeyModifiers::CONTROL)
+            {
+                self.active_mut().editor.insert_paste_register(c);
+            }
+            // Non-char key: flag already cleared; just drop the key.
+            return;
+        }
+
+        match (key.code, key.modifiers) {
+            // Printable characters (including shifted variants like 'A', '!', …).
+            // Crossterm sets SHIFT for capital letters but the char `c` already
+            // contains the upper-cased glyph, so we just forward `c` directly.
+            (KeyCode::Char(c), mods)
+                if mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT =>
+            {
+                self.active_mut().editor.insert_char(c);
+            }
+
+            // Navigation / editing keys
+            (KeyCode::Backspace, _) => self.active_mut().editor.insert_backspace(),
+            (KeyCode::Enter, _) => self.active_mut().editor.insert_newline(),
+            (KeyCode::Tab, _) => self.active_mut().editor.insert_tab(),
+            (KeyCode::Esc, _) => self.active_mut().editor.leave_insert_to_normal(),
+            (KeyCode::Delete, _) => self.active_mut().editor.insert_delete(),
+            (KeyCode::Home, _) => self.active_mut().editor.insert_home(),
+            (KeyCode::End, _) => self.active_mut().editor.insert_end(),
+
+            // Arrow keys
+            (KeyCode::Left, _) => self.active_mut().editor.insert_arrow(InsertDir::Left),
+            (KeyCode::Right, _) => self.active_mut().editor.insert_arrow(InsertDir::Right),
+            (KeyCode::Up, _) => self.active_mut().editor.insert_arrow(InsertDir::Up),
+            (KeyCode::Down, _) => self.active_mut().editor.insert_arrow(InsertDir::Down),
+
+            // Page keys — need the current viewport height.
+            (KeyCode::PageUp, _) => {
+                let h = self.active().editor.viewport_height_value();
+                self.active_mut().editor.insert_pageup(h);
+            }
+            (KeyCode::PageDown, _) => {
+                let h = self.active().editor.viewport_height_value();
+                self.active_mut().editor.insert_pagedown(h);
+            }
+
+            // Ctrl-prefixed insert shortcuts
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_w()
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_u()
+            }
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_h()
+            }
+            // `Ctrl-O`: flip to one-shot Normal; the next key routes as Normal.
+            (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_o_arm()
+            }
+            // `Ctrl-R`: arm register selector; next char calls insert_paste_register.
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_r_arm()
+            }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_t()
+            }
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.active_mut().editor.insert_ctrl_d()
+            }
+
+            // Silently drop unrecognised keys (function keys, Alt combos, etc.).
+            _ => {}
+        }
+    }
+
     /// Main event loop. Draws every frame, routes key events through
     /// the vim FSM, handles resize, exits on Ctrl-C.
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
@@ -565,8 +670,8 @@ impl App {
                                 }
                                 // Printable char or backspace: update prefix, maybe dismiss.
                                 KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
-                                    // Let engine handle it first — we update prefix after.
-                                    self.active_mut().editor.handle_key(key);
+                                    // Phase 6.5: call insert primitive directly.
+                                    self.active_mut().editor.insert_char(c);
                                     self.sync_viewport_from_editor();
                                     if self.active_mut().editor.take_dirty() {
                                         let elapsed =
@@ -628,8 +733,8 @@ impl App {
                                     continue;
                                 }
                                 KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => {
-                                    // Let engine handle backspace, then update prefix.
-                                    self.active_mut().editor.handle_key(key);
+                                    // Phase 6.5: call insert primitive directly.
+                                    self.active_mut().editor.insert_backspace();
                                     self.sync_viewport_from_editor();
                                     if self.active_mut().editor.take_dirty() {
                                         let elapsed =
@@ -701,8 +806,8 @@ impl App {
                             if key.modifiers == KeyModifiers::NONE
                                 && let KeyCode::Char(c) = key.code
                             {
-                                // Let engine handle it first.
-                                self.active_mut().editor.handle_key(key);
+                                // Phase 6.5: call insert primitive directly.
+                                self.active_mut().editor.insert_char(c);
                                 self.sync_viewport_from_editor();
                                 if self.active_mut().editor.take_dirty() {
                                     let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -733,7 +838,15 @@ impl App {
                     }
 
                     // ── Normal editor key handling ───────────────────────────
-                    self.active_mut().editor.handle_key(key);
+                    // Phase 6.5: Insert mode uses the inline dispatcher which
+                    // calls Editor::insert_* primitives directly. Normal / Visual
+                    // modes still go through the FSM via handle_key (Phase 6.8
+                    // will remove that path once all normal-mode dispatch is wired).
+                    if self.active().editor.vim_mode() == VimMode::Insert {
+                        self.dispatch_insert_key(key);
+                    } else {
+                        self.active_mut().editor.handle_key(key);
+                    }
 
                     // Persist auto-scroll changes made by the engine back into
                     // the focused window so they survive a window-focus switch.

@@ -10371,3 +10371,559 @@ fn p64_count_2dd_still_works_after_64_additions() {
         "2dd must delete 2 lines; first line must be 'line3'; got {lines:?}"
     );
 }
+
+// ── Phase 6.5: insert-mode inline dispatcher ─────────────────────────────────
+//
+// Tests call `dispatch_insert_key` directly (editor must already be in Insert).
+// They use `sync_after_engine_mutation()` to mirror what the event loop does.
+
+/// Enter Insert mode via the engine primitive and sync state.
+fn enter_insert(app: &mut App) {
+    app.active_mut().editor.enter_insert_i(1);
+    app.sync_after_engine_mutation();
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Insert,
+        "enter_insert: must be in Insert mode"
+    );
+}
+
+/// Call `dispatch_insert_key` and sync after.
+fn dik(app: &mut App, key: KeyEvent) {
+    app.dispatch_insert_key(key);
+    app.sync_after_engine_mutation();
+}
+
+#[test]
+fn p65_insert_char_types_literal() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    enter_insert(&mut app);
+
+    for c in ['H', 'e', 'l', 'l', 'o'] {
+        dik(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "Hello",
+        "insert_char must type 'Hello'"
+    );
+    // Still in Insert mode.
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+}
+
+#[test]
+fn p65_esc_exits_insert_mode() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 2);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Normal,
+        "Esc must return to Normal"
+    );
+}
+
+#[test]
+fn p65_backspace_deletes_previous_char() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 5);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "hell", "Backspace must delete 'o'; got {line:?}");
+}
+
+#[test]
+fn p65_backspace_at_col0_joins_lines() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld");
+    // Position cursor at start of second line.
+    app.active_mut().editor.jump_cursor(1, 0);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+    );
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines.len(), 1, "Backspace at col 0 must join lines; got {lines:?}");
+    assert_eq!(lines[0], "helloworld");
+}
+
+#[test]
+fn p65_enter_inserts_newline() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 2);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines.len(), 2, "Enter must split line; got {lines:?}");
+    assert_eq!(lines[0], "he");
+    assert_eq!(lines[1], "llo");
+}
+
+#[test]
+fn p65_delete_removes_char_under_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 1);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "hllo", "Delete must remove 'e'; got {line:?}");
+}
+
+#[test]
+fn p65_arrow_left_moves_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 3);
+    enter_insert(&mut app);
+
+    let (_, col_before) = app.active().editor.cursor();
+    dik(&mut app, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    let (_, col_after) = app.active().editor.cursor();
+
+    assert!(
+        col_after < col_before,
+        "Left arrow must move cursor left; before {col_before}, after {col_after}"
+    );
+}
+
+#[test]
+fn p65_arrow_right_moves_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 1);
+    enter_insert(&mut app);
+
+    let (_, col_before) = app.active().editor.cursor();
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+    );
+    let (_, col_after) = app.active().editor.cursor();
+
+    assert!(
+        col_after > col_before,
+        "Right arrow must move cursor right; before {col_before}, after {col_after}"
+    );
+}
+
+#[test]
+fn p65_arrow_down_moves_cursor_row() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld");
+    app.active_mut().editor.jump_cursor(0, 0);
+    enter_insert(&mut app);
+
+    let (row_before, _) = app.active().editor.cursor();
+    dik(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+    let (row_after, _) = app.active().editor.cursor();
+
+    assert!(
+        row_after > row_before,
+        "Down arrow must move cursor down; before row {row_before}, after {row_after}"
+    );
+}
+
+#[test]
+fn p65_arrow_up_moves_cursor_row() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld");
+    app.active_mut().editor.jump_cursor(1, 0);
+    enter_insert(&mut app);
+
+    let (row_before, _) = app.active().editor.cursor();
+    dik(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    let (row_after, _) = app.active().editor.cursor();
+
+    assert!(
+        row_after < row_before,
+        "Up arrow must move cursor up; before row {row_before}, after {row_after}"
+    );
+}
+
+#[test]
+fn p65_home_moves_to_line_start() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 4);
+    enter_insert(&mut app);
+
+    dik(&mut app, KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+
+    let (_, col) = app.active().editor.cursor();
+    assert_eq!(col, 0, "Home must move cursor to col 0; got col {col}");
+}
+
+#[test]
+fn p65_end_moves_to_line_end() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 0);
+    enter_insert(&mut app);
+
+    dik(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+
+    let (_, col) = app.active().editor.cursor();
+    // `End` in Insert mode lands on the last character (col = len-1 = 4), not
+    // past it. `move_line_end` uses `last_col` which returns `chars - 1`.
+    assert_eq!(col, 4, "End must move cursor to last char col 4; got col {col}");
+}
+
+#[test]
+fn p65_pageup_does_not_crash() {
+    // Viewport height is 0 in unit tests; just verify no panic.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 30);
+    app.active_mut().editor.jump_cursor(15, 0);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    );
+    // Should still be in Insert mode (no crash).
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+}
+
+#[test]
+fn p65_pagedown_does_not_crash() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_numbered_lines(&mut app, 30);
+    app.active_mut().editor.jump_cursor(0, 0);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    );
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
+}
+
+#[test]
+fn p65_ctrl_w_deletes_word_backwards() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 11);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "hello ", "Ctrl-W must delete 'world'; got {line:?}");
+}
+
+#[test]
+fn p65_ctrl_u_deletes_to_line_start() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 11);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "", "Ctrl-U must delete to line start; got {line:?}");
+}
+
+#[test]
+fn p65_ctrl_h_is_alias_for_backspace() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 5);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "hell", "Ctrl-H must delete 'o'; got {line:?}");
+}
+
+#[test]
+fn p65_ctrl_t_indents_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 0);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert!(
+        line.starts_with(' ') || line.starts_with('\t'),
+        "Ctrl-T must indent line; got {line:?}"
+    );
+}
+
+#[test]
+fn p65_ctrl_d_outdents_indented_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "    hello");
+    app.active_mut().editor.jump_cursor(0, 4);
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    // Must have fewer leading spaces than before.
+    let leading = line.chars().take_while(|c| *c == ' ').count();
+    assert!(
+        leading < 4,
+        "Ctrl-D must outdent; before 4 spaces, after {leading} spaces; line {line:?}"
+    );
+}
+
+#[test]
+fn p65_ctrl_o_one_shot_normal_round_trip() {
+    // `i hello <C-o> w world <Esc>` → "hello world" (trimmed leading space).
+    // After <C-o>, mode flips to Normal for one command, then back to Insert.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    enter_insert(&mut app);
+
+    // Type "hello "
+    for c in ['h', 'e', 'l', 'l', 'o', ' '] {
+        dik(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+    let line_before = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line_before, "hello ", "setup: line must be 'hello '");
+
+    // <C-o> — should flip mode to Normal.
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Normal,
+        "<C-o> must flip to Normal for one-shot"
+    );
+
+    // `w` — word-forward motion in Normal; handled by existing engine handle_key
+    // path because vim_mode() == Normal after <C-o>.
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+    app.sync_after_engine_mutation();
+
+    // Engine end-of-step hook should have returned to Insert.
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Insert,
+        "after one-shot Normal command, must return to Insert"
+    );
+
+    // Type " world".
+    for c in [' ', 'w', 'o', 'r', 'l', 'd'] {
+        dik(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+
+    // Exit insert.
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert!(
+        line.contains("hello") && line.contains("world"),
+        "<C-o>w round-trip: line must contain 'hello' and 'world'; got {line:?}"
+    );
+}
+
+#[test]
+fn p65_ctrl_r_register_paste() {
+    // Yank "hello" into register 'a', then in Insert mode use <C-r>a to paste.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\n");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Yank line 0 into register 'a' via engine.
+    // Set register 'a' directly via the engine's named registers.
+    // Simplest: yank the word via engine handle_key ("ayy").
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE));
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    app.active_mut()
+        .editor
+        .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    app.sync_after_engine_mutation();
+
+    // Move to second line (empty), enter Insert.
+    app.active_mut().editor.jump_cursor(1, 0);
+    enter_insert(&mut app);
+
+    // <C-r> — arm register selector.
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+    );
+    assert!(
+        app.active().editor.is_insert_register_pending(),
+        "<C-r> must arm register selector"
+    );
+
+    // 'a' — select register 'a'.
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
+    assert!(
+        !app.active().editor.is_insert_register_pending(),
+        "register selector must clear after char"
+    );
+
+    // Line 1 should now contain pasted text from register 'a'.
+    let line = app.active().editor.buffer().lines()[1].clone();
+    assert!(
+        line.contains("hello"),
+        "<C-r>a must paste 'hello'; got {line:?}"
+    );
+}
+
+#[test]
+fn p65_unrecognised_key_silently_dropped() {
+    // F5 in Insert mode should be silently dropped — no crash, no mode change.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.active_mut().editor.jump_cursor(0, 0);
+    enter_insert(&mut app);
+
+    dik(&mut app, KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Insert,
+        "F5 must be silently dropped; mode must remain Insert"
+    );
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "hello", "buffer must be unchanged after F5");
+}
+
+#[test]
+fn p65_shift_char_types_uppercase() {
+    // Crossterm reports 'A' with SHIFT modifier. The dispatcher must forward
+    // it as insert_char('A'), not silently drop it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    enter_insert(&mut app);
+
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "A", "SHIFT+Char('A') must type 'A'; got {line:?}");
+}
+
+#[test]
+fn p65_i_hello_esc_types_literal() {
+    // `iHello<Esc>` via dispatch_insert_key — buffer must be "Hello".
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    enter_insert(&mut app);
+
+    for c in ['H', 'e', 'l', 'l', 'o'] {
+        dik(
+            &mut app,
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+        );
+    }
+    dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(line, "Hello", "iHello<Esc> must leave 'Hello' in buffer; got {line:?}");
+}
+
+#[test]
+fn p65_replace_mode_overstrike() {
+    // `R` enters Replace; chars via insert_char overwrite.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Enter Replace via keymap chord 'R'.
+    let consumed = app.route_chord_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+    assert!(consumed, "R must be consumed by keymap (EnterInsertReplace)");
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Insert,
+        "R must enter Insert (Replace session)"
+    );
+
+    // Type 'X' — must overstrike 'h'.
+    dik(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+    );
+
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert_eq!(
+        line, "Xello world",
+        "Replace-mode overstrike must replace 'h' with 'X'; got {line:?}"
+    );
+}
