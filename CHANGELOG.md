@@ -8,6 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.17] - 2026-05-15
+
+### Added
+
+- **Keyring-backed credential storage for connection passwords** (issue #26).
+  Passwords are no longer stored in plaintext in `~/.config/sqeel/conns/*.toml`:
+  - The Add/Edit Connection dialog now has a separate `Password` field (rendered
+    masked with `*`). Tab cycles `Name → URL → Password → Name`.
+  - On save, the password is stored in the OS keyring (Linux secret-service /
+    macOS Keychain / Windows Credential Manager) and the URL written to TOML has
+    no password segment. On keyring failure (no dbus, etc.) sqeel falls back to
+    plaintext with a warning.
+  - On load, if a connection's URL has no inline password and a keyring entry
+    exists, the password is spliced back into the URL transparently.
+  - Existing plaintext connections keep working unchanged (opt-out, not forced).
+  - **`:migrate-secrets`** ex-command walks all connections and offers to move
+    inline passwords to the keyring per-connection, surfacing a summary toast.
+  - The plaintext-password warning toast now includes a `:migrate-secrets` hint.
+  - Backed by `sqeel-config 0.2.6` (`keyring-core = "1"`, `url = "2"` deps),
+    `sqeel-core 0.4.10` (password-field state + keyring-aware save flow), and
+    `sqeel-tui 0.4.15` (render + key handling + `:migrate-secrets` command).
+
 ## [0.4.16] - 2026-05-15
 
 ### Fixed
@@ -447,7 +469,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.16...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.17...HEAD
+[0.4.17]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.17
 [0.4.16]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.16
 [0.4.15]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.15
 [0.4.14]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.14
