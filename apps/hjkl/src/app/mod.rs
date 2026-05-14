@@ -925,6 +925,206 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         eprintln!("hjkl: keymap.add(.) failed: {e}");
     }
 
+    // ── Phase 6.4: insert-mode entry ─────────────────────────────────────
+    // Normal mode only. Engine FSM arms kept for macro-replay coverage.
+    for (chord, action, desc) in [
+        ("i", AppAction::EnterInsertI { count: 1 }, "insert before cursor"),
+        ("I", AppAction::EnterInsertShiftI { count: 1 }, "insert at line start"),
+        ("a", AppAction::EnterInsertA { count: 1 }, "append after cursor"),
+        ("A", AppAction::EnterInsertShiftA { count: 1 }, "append at line end"),
+        ("o", AppAction::EnterInsertO { count: 1 }, "open line below"),
+        ("O", AppAction::EnterInsertShiftO { count: 1 }, "open line above"),
+        ("R", AppAction::EnterReplace { count: 1 }, "enter replace mode"),
+    ] {
+        if let Err(e) = km.add(Mode::Normal, chord, action, desc) {
+            eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
+        }
+    }
+
+    // ── Phase 6.4: char / line mutation ops ──────────────────────────────
+    // Normal mode only. Engine FSM arms kept for macro-replay coverage.
+    for (chord, action, desc) in [
+        (
+            "x",
+            AppAction::DeleteCharForward { count: 1 },
+            "delete char forward",
+        ),
+        (
+            "X",
+            AppAction::DeleteCharBackward { count: 1 },
+            "delete char backward",
+        ),
+        (
+            "s",
+            AppAction::SubstituteChar { count: 1 },
+            "substitute char",
+        ),
+        (
+            "S",
+            AppAction::SubstituteLine { count: 1 },
+            "substitute line",
+        ),
+        ("D", AppAction::DeleteToEol, "delete to end of line"),
+        ("C", AppAction::ChangeToEol, "change to end of line"),
+        ("Y", AppAction::YankToEol { count: 1 }, "yank to end of line"),
+        ("J", AppAction::JoinLine { count: 1 }, "join lines"),
+        ("~", AppAction::ToggleCase { count: 1 }, "toggle case"),
+        ("p", AppAction::PasteAfter { count: 1 }, "paste after cursor"),
+        ("P", AppAction::PasteBefore { count: 1 }, "paste before cursor"),
+    ] {
+        if let Err(e) = km.add(Mode::Normal, chord, action, desc) {
+            eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
+        }
+    }
+
+    // ── Phase 6.4: undo / redo ────────────────────────────────────────────
+    // `u` undo in Normal mode. `<C-r>` redo in Normal mode only —
+    // Insert-mode `<C-r>` goes through the engine FSM and is not intercepted.
+    if let Err(e) = km.add(Mode::Normal, "u", AppAction::Undo, "undo") {
+        eprintln!("hjkl: keymap.add(u) failed: {e}");
+    }
+    if let Err(e) = km.add(Mode::Normal, "<C-r>", AppAction::Redo, "redo") {
+        eprintln!("hjkl: keymap.add(<C-r>) failed: {e}");
+    }
+
+    // ── Phase 6.4: jumplist ───────────────────────────────────────────────
+    // `<C-o>` / `<C-i>` bound in Normal mode only.
+    // Engine FSM arms kept for macro-replay coverage.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "<C-o>",
+        AppAction::JumpBack { count: 1 },
+        "jump back",
+    ) {
+        eprintln!("hjkl: keymap.add(<C-o>) failed: {e}");
+    }
+    // Tab in Normal mode = <C-i> (vim aliases them). Crossterm delivers the
+    // actual Tab key as KeyCode::Tab, not as Char('i')+CTRL, so we bind <Tab>
+    // here. The engine FSM also handles the Tab code path for macro-replay
+    // defensive coverage.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "<Tab>",
+        AppAction::JumpForward { count: 1 },
+        "jump forward",
+    ) {
+        eprintln!("hjkl: keymap.add(<Tab>) failed: {e}");
+    }
+
+    // ── Phase 6.4: scroll-line ops ────────────────────────────────────────
+    // `<C-e>` / `<C-y>` — scroll viewport without moving cursor.
+    // Bound in Normal mode only. (Phase 3g already bound <C-d>/<C-u>/<C-f>/<C-b>
+    // as Motion variants; those are kept intact — no conflict.)
+    use hjkl_engine::ScrollDir;
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "<C-e>",
+        AppAction::ScrollLine {
+            dir: ScrollDir::Down,
+            count: 1,
+        },
+        "scroll line down",
+    ) {
+        eprintln!("hjkl: keymap.add(<C-e>) failed: {e}");
+    }
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "<C-y>",
+        AppAction::ScrollLine {
+            dir: ScrollDir::Up,
+            count: 1,
+        },
+        "scroll line up",
+    ) {
+        eprintln!("hjkl: keymap.add(<C-y>) failed: {e}");
+    }
+
+    // ── Phase 6.4: search repeat ──────────────────────────────────────────
+    // `n` / `N` — repeat last search. Normal + all Visual modes.
+    // `*` / `#` / `g*` / `g#` — word-search. Normal mode only
+    // (g* / g# are dispatched through AfterG reducer via BeginPendingAfterG).
+    for (chord, forward, desc) in [
+        ("n", true, "search forward repeat"),
+        ("N", false, "search backward repeat"),
+    ] {
+        let action = AppAction::SearchRepeat {
+            forward,
+            count: 1,
+        };
+        for mode in [
+            Mode::Normal,
+            Mode::Visual,
+            Mode::VisualLine,
+            Mode::VisualBlock,
+        ] {
+            if let Err(e) = km.add(mode, chord, action.clone(), desc) {
+                eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
+            }
+        }
+    }
+    // `*` / `#` whole-word search. Normal mode only.
+    for (chord, forward, desc) in [
+        ("*", true, "search word under cursor forward"),
+        ("#", false, "search word under cursor backward"),
+    ] {
+        let action = AppAction::WordSearch {
+            forward,
+            whole_word: true,
+            count: 1,
+        };
+        if let Err(e) = km.add(Mode::Normal, chord, action, desc) {
+            eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
+        }
+    }
+
+    // ── Phase 6.4: visual entry from Normal ──────────────────────────────
+    // `v` / `V` / `<C-v>` — enter visual from Normal. `gv` is dispatched
+    // through the AfterG reducer (BeginPendingAfterG) — not bound here.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "v",
+        AppAction::EnterVisualChar,
+        "enter visual charwise",
+    ) {
+        eprintln!("hjkl: keymap.add(v) failed: {e}");
+    }
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "V",
+        AppAction::EnterVisualLine,
+        "enter visual linewise",
+    ) {
+        eprintln!("hjkl: keymap.add(V) failed: {e}");
+    }
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "<C-v>",
+        AppAction::EnterVisualBlock,
+        "enter visual block",
+    ) {
+        eprintln!("hjkl: keymap.add(<C-v>) failed: {e}");
+    }
+
+    // ── Phase 6.4: gv — reenter last visual ──────────────────────────────
+    // `gv` is routed through AfterG → the AfterGChord arm in event_loop.rs
+    // dispatches ReenterLastVisual. We do NOT bind `gv` directly in the trie
+    // because `g` is already bound as BeginPendingAfterG (pending state chord).
+
+    // ── Phase 6.4: visual-mode anchor toggle ─────────────────────────────
+    // `o` in Visual / VisualLine / VisualBlock — toggle cursor/anchor.
+    // Normal `o` is bound above as EnterInsertO. Mode discrimination is
+    // handled automatically by the trie (different mode → different action).
+    for mode in [Mode::Visual, Mode::VisualLine, Mode::VisualBlock] {
+        if let Err(e) = km.add(
+            mode,
+            "o",
+            AppAction::VisualToggleAnchor,
+            "visual toggle anchor",
+        ) {
+            eprintln!("hjkl: keymap.add(o Visual) failed: {e}");
+        }
+    }
+
     km
 }
 
@@ -2034,6 +2234,235 @@ impl App {
                     }
                 }
             }
+            // ── Phase 6.4: insert-mode entry ──────────────────────────────
+            AppAction::EnterInsertI {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.enter_insert_i(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterInsertShiftI {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.enter_insert_shift_i(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterInsertA {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.enter_insert_a(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterInsertShiftA {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.enter_insert_shift_a(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterInsertO {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.open_line_below(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterInsertShiftO {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.open_line_above(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::EnterReplace {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.enter_replace_mode(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: char / line mutation ops ───────────────────────
+            AppAction::DeleteCharForward {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.delete_char_forward(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::DeleteCharBackward {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.delete_char_backward(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::SubstituteChar {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.substitute_char(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::SubstituteLine {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.substitute_line(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::DeleteToEol => {
+                self.pending_count.reset();
+                self.active_mut().editor.delete_to_eol();
+                self.sync_after_engine_mutation();
+            }
+            AppAction::ChangeToEol => {
+                self.pending_count.reset();
+                self.active_mut().editor.change_to_eol();
+                self.sync_after_engine_mutation();
+            }
+            AppAction::YankToEol {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.yank_to_eol(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::JoinLine {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                // Vim join default is 2 (join current + 1 following line).
+                self.active_mut().editor.join_line(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::ToggleCase {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.toggle_case_at_cursor(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::PasteAfter {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.paste_after(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::PasteBefore {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.paste_before(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: undo / redo ────────────────────────────────────
+            AppAction::Undo => {
+                self.pending_count.reset();
+                self.active_mut().editor.undo();
+                self.sync_after_engine_mutation();
+            }
+            AppAction::Redo => {
+                self.pending_count.reset();
+                self.active_mut().editor.redo();
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: jumplist ───────────────────────────────────────
+            AppAction::JumpBack {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.jump_back(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::JumpForward {
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.jump_forward(n.max(1));
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: scroll ops ──────────────────────────────────────
+            AppAction::ScrollFullPage {
+                dir,
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.scroll_full_page(dir, n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::ScrollHalfPage {
+                dir,
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.scroll_half_page(dir, n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::ScrollLine {
+                dir,
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.scroll_line(dir, n.max(1));
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: search repeat ───────────────────────────────────
+            AppAction::SearchRepeat {
+                forward,
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut().editor.search_repeat(forward, n.max(1));
+                self.sync_after_engine_mutation();
+            }
+            AppAction::WordSearch {
+                forward,
+                whole_word,
+                count: action_count,
+            } => {
+                let n = self.pending_count.take_or(action_count) as usize;
+                self.active_mut()
+                    .editor
+                    .word_search(forward, whole_word, n.max(1));
+                self.sync_after_engine_mutation();
+            }
+
+            // ── Phase 6.4: visual entry / toggle ──────────────────────────
+            AppAction::EnterVisualChar => {
+                self.pending_count.reset();
+                self.active_mut().editor.enter_visual_char();
+                self.sync_viewport_from_editor();
+            }
+            AppAction::EnterVisualLine => {
+                self.pending_count.reset();
+                self.active_mut().editor.enter_visual_line();
+                self.sync_viewport_from_editor();
+            }
+            AppAction::EnterVisualBlock => {
+                self.pending_count.reset();
+                self.active_mut().editor.enter_visual_block();
+                self.sync_viewport_from_editor();
+            }
+            AppAction::ReenterLastVisual => {
+                self.pending_count.reset();
+                self.active_mut().editor.reenter_last_visual();
+                self.sync_viewport_from_editor();
+            }
+            AppAction::VisualToggleAnchor => {
+                self.pending_count.reset();
+                self.active_mut().editor.visual_o_toggle();
+                self.sync_viewport_from_editor();
+            }
+
             AppAction::Replay { keys, recursive } => {
                 if recursive {
                     // Re-feed each key through the chord FSM. The queue is
@@ -2319,6 +2748,37 @@ impl App {
                         // App-level g-prefix actions dispatched before falling
                         // through to the engine.
                         match ch {
+                            // Phase 6.4: `gv` — reenter last visual selection.
+                            'v' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::ReenterLastVisual,
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            // Phase 6.4: `g*` / `g#` — word search without whole-word anchors.
+                            '*' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::WordSearch {
+                                        forward: true,
+                                        whole_word: false,
+                                        count: count as u32,
+                                    },
+                                    count as u32,
+                                );
+                                return true;
+                            }
+                            '#' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::WordSearch {
+                                        forward: false,
+                                        whole_word: false,
+                                        count: count as u32,
+                                    },
+                                    count as u32,
+                                );
+                                return true;
+                            }
                             't' => {
                                 self.dispatch_action(
                                     crate::keymap_actions::AppAction::Tabnext,
