@@ -8,6 +8,37 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-05-15
+
+### Added
+
+- New backend-agnostic theme stack: `hjkl-theme` 0.1.0 (TOML parse, palette
+  interning, capture fallback chain) + `hjkl-theme-tui` 0.1.0 (`ToRatatui`
+  extension trait converting `Color`/`Modifiers`/`StyleSpec` into ratatui
+  types). Both crates published to crates.io and patched locally via
+  `[patch.crates-io]`.
+
+### Changed
+
+- `hjkl-bonsai` bumped 0.6 → 0.7 (breaking): removed bespoke `Style` struct and
+  `Style::to_ratatui`; now re-exports `hjkl_theme::StyleSpec`. `Theme::style`
+  returns `Option<&hjkl_theme::StyleSpec>`. Bonsai's bundled
+  `themes/default-{dark,light}.toml` were rewritten in the new schema.
+- `apps/hjkl` migrated onto the new theme stack: bumped its `hjkl-bonsai` dep,
+  added `hjkl-theme` + `hjkl-theme-tui` deps, swapped `.to_ratatui()` call sites
+  onto `hjkl_theme_tui::ToRatatui`, and converted
+  `apps/hjkl/themes/syntax-dark.toml` to the new schema (`@`-prefixed TS capture
+  names, `[palette]` interning table, `modifiers = [...]` arrays).
+- `apps/hjkl/themes/ui-dark.toml` + the `UiTheme` parser left untouched —
+  bespoke chrome/mode/cursor/picker/form tables don't map cleanly to
+  `hjkl_theme::UiStyles` yet; deferred.
+
+### Migration
+
+User-customized `apps/hjkl/themes/syntax-dark.toml` overrides need to be
+converted to the new schema. See the in-tree `apps/hjkl/themes/syntax-dark.toml`
+or `crates/hjkl-bonsai/themes/default-dark.toml` for a reference layout.
+
 ## [0.16.0] - 2026-05-15
 
 ### Changed
@@ -1999,7 +2030,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/kryptic-sh/hjkl/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.3
 [0.15.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.2
