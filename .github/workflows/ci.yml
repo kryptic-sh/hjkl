@@ -29,9 +29,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
+          cache: false
       - run: cargo fmt --all --check
 
   clippy:
@@ -41,9 +42,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -58,15 +60,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
-      # Force ~/.cargo/bin to win PATH resolution on macos-15-arm64. The
-      # image's Homebrew rust formula ships a `cargo` shim that wraps
-      # `rustup-init` on some pool members, which the dtolnay PATH prepend
-      # doesn't always beat. See actions/runner-images#14099.
-      - name: Force cargo PATH on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --all-features --no-fail-fast
@@ -163,19 +159,11 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
           components: clippy, rustfmt
-
-      # Force ~/.cargo/bin to win PATH resolution on macos-15-arm64. The
-      # image's Homebrew rust formula ships a `cargo` shim that wraps
-      # `rustup-init` on some pool members, which the dtolnay PATH prepend
-      # doesn't always beat. See actions/runner-images#14099.
-      - name: Force cargo PATH on macOS
-        if: runner.os == 'macOS'
-        shell: bash
-        run: echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          cache: false
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -577,7 +565,9 @@ jobs:
           submodules: recursive
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2

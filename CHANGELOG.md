@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.14] - 2026-05-15
+
+### Fixed
+
+- **CI: replace `dtolnay/rust-toolchain@stable` with
+  `actions-rust-lang/setup-rust-toolchain@v1` across all jobs.** The v0.4.13
+  `$GITHUB_PATH` prepend didn't survive — `Build x86_64-apple-darwin` still
+  resolved `cargo build` to the Homebrew `rustup-init` shim on `macos-15-arm64`.
+  The newer action handles the shim explicitly; PATH-fix workaround removed.
+  Built-in cache disabled (`cache: false`) so Swatinem remains the single cache
+  layer. See
+  [actions/runner-images#14099](https://github.com/actions/runner-images/issues/14099).
+- v0.4.13 was tagged but failed to publish for the same flake — same content
+  ships here on a workflow that survives the runner image regression.
+
 ## [0.4.13] - 2026-05-15
 
 ### Fixed
@@ -386,7 +401,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.13...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.14...HEAD
+[0.4.14]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.14
 [0.4.13]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.13
 [0.4.12]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.12
 [0.4.11]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.11
