@@ -29,9 +29,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
+          cache: false
       - run: cargo fmt --all --check
 
   clippy:
@@ -41,9 +42,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -58,7 +60,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --all-features --no-fail-fast
@@ -80,9 +84,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: wasm32-unknown-unknown
+          target: wasm32-unknown-unknown
+          cache: false
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p hjkl-buffer --no-default-features
       - run: cargo build -p hjkl-buffer --no-default-features --target wasm32-unknown-unknown
@@ -189,10 +194,11 @@ jobs:
           fi
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.target }}
+          target: ${{ matrix.target }}
           components: clippy, rustfmt
+          cache: false
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -669,7 +675,9 @@ jobs:
           submodules: recursive
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: false
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
