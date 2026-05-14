@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-05-14
+
+### Fixed
+
+- Gate `apps/hjkl/tests/e2e.rs::pty_harness` on `cfg(unix)`. ConPTY +
+  portable-pty on Windows behaves differently enough that the harness assertions
+  don't hold (cursor reads return 0,0; rendered rows don't carry the expected
+  gutter format). Windows CI now green; unix coverage unchanged (13 e2e tests
+  still run on linux/macOS). v0.15.0 tag was created but never reached publish
+  steps; v0.15.1 is the first 0.15.x line that ships.
+
 ## [0.15.0] - 2026-05-14
 
 ### Added
@@ -1940,7 +1951,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.1
 [0.15.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.0
 [0.14.11]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.11
 [0.14.10]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.10
