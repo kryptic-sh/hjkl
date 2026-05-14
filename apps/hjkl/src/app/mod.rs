@@ -1360,9 +1360,10 @@ impl App {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let digits = self.pending_count.drain_as_digits();
         for d in digits.chars() {
-            self.active_mut()
-                .editor
-                .handle_key(KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE));
+            hjkl_vim::handle_key(
+                &mut self.active_mut().editor,
+                KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE),
+            );
         }
     }
 
@@ -2149,9 +2150,10 @@ impl App {
                         }
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        self.active_mut()
-                            .editor
-                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        hjkl_vim::handle_key(
+                            &mut self.active_mut().editor,
+                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        );
                     }
                     VimMode::Visual => {
                         // Charwise visual selection — inclusive on both ends.
@@ -2193,9 +2195,10 @@ impl App {
                         // Exit visual mode after the op (except Change, which already
                         // transitioned to Insert above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        self.active_mut()
-                            .editor
-                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        hjkl_vim::handle_key(
+                            &mut self.active_mut().editor,
+                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        );
                     }
                     VimMode::VisualLine => {
                         // Linewise visual selection — full rows.
@@ -2256,9 +2259,10 @@ impl App {
                         }
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        self.active_mut()
-                            .editor
-                            .handle_key(CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        hjkl_vim::handle_key(
+                            &mut self.active_mut().editor,
+                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        );
                     }
                     _ => {
                         // Not in a visual mode — keymap bound VisualOp but
@@ -2557,7 +2561,7 @@ impl App {
     pub(crate) fn replay_km_events_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = crate::keymap_translate::to_crossterm(km_ev);
-            self.active_mut().editor.handle_key(ct_ev);
+            hjkl_vim::handle_key(&mut self.active_mut().editor, ct_ev);
         }
     }
 
@@ -2661,7 +2665,7 @@ impl App {
     pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = Self::km_to_crossterm(km_ev);
-            self.active_mut().editor.handle_key(ct_ev);
+            hjkl_vim::handle_key(&mut self.active_mut().editor, ct_ev);
         }
     }
 

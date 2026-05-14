@@ -336,9 +336,10 @@ impl App {
                         // Exit visual mode by feeding Esc to the engine. The
                         // visual-exit hook in hjkl-engine sets the `<` / `>`
                         // marks so :'<,'> resolves.
-                        self.active_mut()
-                            .editor
-                            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+                        hjkl_vim::handle_key(
+                            &mut self.active_mut().editor,
+                            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        );
                         self.open_command_prompt_with("'<,'>");
                         continue;
                     }
@@ -835,7 +836,7 @@ impl App {
                     if self.active().editor.vim_mode() == VimMode::Insert {
                         self.dispatch_insert_key(key);
                     } else {
-                        self.active_mut().editor.handle_key(key);
+                        hjkl_vim::handle_key(&mut self.active_mut().editor, key);
                     }
 
                     // Persist auto-scroll changes made by the engine back into
