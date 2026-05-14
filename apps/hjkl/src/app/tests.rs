@@ -3386,7 +3386,7 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
         key: Key::Char('n'),
         ..Default::default()
     };
-    app.active_mut().editor.step_input(n_input);
+    hjkl_vim::dispatch_input(&mut app.active_mut().editor, n_input);
     let (row1, _) = app.active().editor.cursor();
     assert_eq!(
         row1, 4,

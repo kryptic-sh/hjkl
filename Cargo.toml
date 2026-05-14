@@ -26,6 +26,8 @@ hjkl-config = { path = "crates/hjkl-config" }
 hjkl-splash = { path = "crates/hjkl-splash" }
 hjkl-lsp = { path = "crates/hjkl-lsp" }
 hjkl-keymap = { path = "crates/hjkl-keymap" }
+hjkl-editor = { path = "crates/hjkl-editor" }
+hjkl-vim = { path = "crates/hjkl-vim" }
 
 [profile.release]
 lto = "thin"

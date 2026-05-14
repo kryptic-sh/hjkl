@@ -2086,7 +2086,7 @@ impl App {
             } => {
                 // Use buffered count-prefix if present, otherwise the action default.
                 let n = self.pending_count.take_or(action_count) as usize;
-                // Resolve the active visual range from the engine. The MotionKind
+                // Resolve the active visual range from the engine. The RangeKind
                 // must match the visual mode so the range-mutation primitives apply
                 // the correct inclusion semantics.
                 //
@@ -2098,7 +2098,7 @@ impl App {
                 //     row linewise, so FSM fallback for d/y/c is removed
                 //   - VisualBlock: delete_block / yank_block / change_block / indent_block
                 //     now exposed (gap fixed), FSM fallback removed
-                use hjkl_engine::{MotionKind, VimMode};
+                use hjkl_engine::{RangeKind, VimMode};
                 let vim_mode = self.active().editor.vim_mode();
                 // Read the user's pending register selection BEFORE the match so all
                 // three mode arms can use it. pending_register() does not clear the
@@ -2158,7 +2158,7 @@ impl App {
                         let Some((start, end)) = self.active().editor.char_highlight() else {
                             return;
                         };
-                        let kind = MotionKind::Inclusive;
+                        let kind = RangeKind::Inclusive;
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
                                 self.active_mut()
@@ -2200,7 +2200,7 @@ impl App {
                     VimMode::VisualLine => {
                         // Linewise visual selection — full rows.
                         // Option (a): pass (top_row, 0) and (bot_row, usize::MAX)
-                        // with MotionKind::Linewise. The engine's run_operator_over_range
+                        // with RangeKind::Linewise. The engine's run_operator_over_range
                         // handles Linewise semantics; read_vim_range / cut_vim_range
                         // snap to full line boundaries regardless of the col values.
                         // The Phase 4e guard fix allows single-row (top==bot) Linewise
@@ -2208,7 +2208,7 @@ impl App {
                         let Some((top_row, bot_row)) = self.active().editor.line_highlight() else {
                             return;
                         };
-                        let kind = MotionKind::Linewise;
+                        let kind = RangeKind::Linewise;
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
                                 self.active_mut().editor.delete_range(

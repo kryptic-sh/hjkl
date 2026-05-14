@@ -105,7 +105,7 @@ fn dispatch(
             };
             let inputs = hjkl_engine::decode_macro(&keys);
             for input in inputs {
-                editor.step_input(input);
+                hjkl_vim::dispatch_input(editor, input);
             }
             success(id, Value::Null)
         }
