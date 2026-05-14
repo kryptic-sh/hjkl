@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-05-14
+
+### Added
+
+- `Editor::replay_last_change(count)` — public controller method for the
+  dot-repeat (`.`) command. Delegates to `vim::replay_last_change`. Phase 5c of
+  kryptic-sh/hjkl#71: lets the app dispatch `EngineCmd::DotRepeat` from the
+  hjkl-vim reducer instead of routing `.` through the engine FSM. Engine FSM `.`
+  arm stays for macro-replay defensive coverage; `LastChange` storage stays on
+  the engine.
+- Public macro controller methods (Phase 5b of kryptic-sh/hjkl#71):
+  `start_macro_record(register)`, `stop_macro_record()`, `is_recording_macro()`,
+  `is_replaying_macro()`, `play_macro(register, count)`, `end_macro_replay()`,
+  `record_input(key)`. Lets the app drive macro record/playback through
+  `route_chord_key` rather than the engine FSM. Engine FSM macro arms
+  (stop-on-bare-q, recorder hook, record/play handlers) stay for defensive
+  coverage; Phase 6 deletes them.
+- 8 unit tests covering the macro controller surface.
+
+### Changed
+
+- **`cursorline` option default flipped from `false` → `true`.** New `Editor`
+  instances render the cursor row highlighted by default, matching the most
+  common user expectation. Existing config files / `:set nocursorline` still
+  toggle off as before. Behavior change only — public API unchanged.
+
 ## [0.6.7] - 2026-05-13
 
 ### Added
@@ -590,7 +616,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.8...HEAD
+[0.6.8]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.6
 [0.6.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.3...v0.6.4
