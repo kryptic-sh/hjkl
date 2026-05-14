@@ -565,6 +565,17 @@ impl VimState {
         self.insert_pending_register = false;
     }
 
+    /// Widen the active insert session's row window to include `row`. Called
+    /// by the Phase 6.1 public `Editor::insert_*` methods after each
+    /// mutation so `finish_insert_session` diffs the right range on Esc.
+    /// No-op when no insert session is active (e.g. calling from Normal mode).
+    pub(crate) fn widen_insert_row(&mut self, row: usize) {
+        if let Some(ref mut session) = self.insert_session {
+            session.row_min = session.row_min.min(row);
+            session.row_max = session.row_max.max(row);
+        }
+    }
+
     pub fn is_visual(&self) -> bool {
         matches!(
             self.mode,
@@ -1047,129 +1058,45 @@ fn step_insert<H: crate::types::Host>(
         if let Key::Char(c) = input.key
             && !input.ctrl
         {
-            insert_register_text(ed, c);
+            insert_paste_register_bridge(ed, c);
         }
         return true;
     }
 
     if input.key == Key::Esc {
-        finish_insert_session(ed);
-        ed.vim.mode = Mode::Normal;
-        // Vim convention: pull the cursor back one cell on exit when
-        // possible. Sticky column then mirrors the *visible* post-Back
-        // column so the next vertical motion lands where the user
-        // actually sees the cursor — not one cell to the right.
-        let col = ed.cursor().1;
-        // Record the pre-step-back cursor as the `gi` target. vim's `gi`
-        // re-enters insert at this position (the cell the cursor occupied
-        // when insert mode was active), matching vim's `:h gi` / `'^` mark.
-        ed.vim.last_insert_pos = Some(ed.cursor());
-        if col > 0 {
-            crate::motions::move_left(&mut ed.buffer, 1);
-            ed.push_buffer_cursor_to_textarea();
-        }
-        ed.sticky_col = Some(ed.cursor().1);
+        leave_insert_to_normal_bridge(ed);
         return true;
     }
 
-    // Ctrl-prefixed insert-mode shortcuts.
+    // Ctrl-prefixed insert-mode shortcuts — thin dispatcher to bridge fns.
     if input.ctrl {
         match input.key {
             Key::Char('w') => {
-                use hjkl_buffer::{Edit, MotionKind};
-                ed.sync_buffer_content_from_textarea();
-                let cursor = buf_cursor_pos(&ed.buffer);
-                if cursor.row == 0 && cursor.col == 0 {
-                    return true;
-                }
-                // Find the previous word start by stepping the buffer
-                // cursor (vim `b` semantics) and snapshot it.
-                crate::motions::move_word_back(&mut ed.buffer, false, 1, &ed.settings.iskeyword);
-                let word_start = buf_cursor_pos(&ed.buffer);
-                if word_start == cursor {
-                    return true;
-                }
-                buf_set_cursor_pos(&mut ed.buffer, cursor);
-                ed.mutate_edit(Edit::DeleteRange {
-                    start: word_start,
-                    end: cursor,
-                    kind: MotionKind::Char,
-                });
-                ed.push_buffer_cursor_to_textarea();
+                insert_ctrl_w_bridge(ed);
                 return true;
             }
             Key::Char('u') => {
-                use hjkl_buffer::{Edit, MotionKind, Position};
-                ed.sync_buffer_content_from_textarea();
-                let cursor = buf_cursor_pos(&ed.buffer);
-                if cursor.col > 0 {
-                    ed.mutate_edit(Edit::DeleteRange {
-                        start: Position::new(cursor.row, 0),
-                        end: cursor,
-                        kind: MotionKind::Char,
-                    });
-                    ed.push_buffer_cursor_to_textarea();
-                }
+                insert_ctrl_u_bridge(ed);
                 return true;
             }
             Key::Char('h') => {
-                use hjkl_buffer::{Edit, MotionKind, Position};
-                ed.sync_buffer_content_from_textarea();
-                let cursor = buf_cursor_pos(&ed.buffer);
-                if cursor.col > 0 {
-                    ed.mutate_edit(Edit::DeleteRange {
-                        start: Position::new(cursor.row, cursor.col - 1),
-                        end: cursor,
-                        kind: MotionKind::Char,
-                    });
-                } else if cursor.row > 0 {
-                    let prev_row = cursor.row - 1;
-                    let prev_chars = buf_line_chars(&ed.buffer, prev_row);
-                    ed.mutate_edit(Edit::JoinLines {
-                        row: prev_row,
-                        count: 1,
-                        with_space: false,
-                    });
-                    buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
-                }
-                ed.push_buffer_cursor_to_textarea();
+                insert_ctrl_h_bridge(ed);
                 return true;
             }
             Key::Char('o') => {
-                // One-shot normal: leave insert mode for the next full
-                // normal-mode command, then come back.
-                ed.vim.one_shot_normal = true;
-                ed.vim.mode = Mode::Normal;
+                insert_ctrl_o_bridge(ed);
                 return true;
             }
             Key::Char('r') => {
-                // Arm the register selector — the next typed char picks
-                // a slot and pastes its text inline.
-                ed.vim.insert_pending_register = true;
+                insert_ctrl_r_bridge(ed);
                 return true;
             }
             Key::Char('t') => {
-                // Insert-mode indent: prepend one shiftwidth to the
-                // current line's leading whitespace. Cursor shifts
-                // right by the same amount so the user keeps typing
-                // at their logical position.
-                let (row, col) = ed.cursor();
-                let sw = ed.settings().shiftwidth;
-                indent_rows(ed, row, row, 1);
-                ed.jump_cursor(row, col + sw);
+                insert_ctrl_t_bridge(ed);
                 return true;
             }
             Key::Char('d') => {
-                // Insert-mode outdent: drop up to one shiftwidth of
-                // leading whitespace. Cursor shifts left by the amount
-                // actually stripped.
-                let (row, col) = ed.cursor();
-                let before_len = buf_line_bytes(&ed.buffer, row);
-                outdent_rows(ed, row, row, 1);
-                let after_len = buf_line_bytes(&ed.buffer, row);
-                let stripped = before_len.saturating_sub(after_len);
-                let new_col = col.saturating_sub(stripped);
-                ed.jump_cursor(row, new_col);
+                insert_ctrl_d_bridge(ed);
                 return true;
             }
             _ => {}
@@ -1369,186 +1296,39 @@ fn try_dedent_close_bracket<H: crate::types::Host>(
     true
 }
 
-/// Insert-mode key dispatcher backed by the migration buffer. Replaces
-/// the historical `textarea.input(input)` call so the textarea field
-/// can be ripped at the end of Phase 7f. PageUp / PageDown still flow
-/// through the textarea (they're scroll-only with no buffer side
-/// effect); every other navigation + edit key lands on `Buffer`.
-/// Returns true when the buffer mutated.
+/// Insert-mode key dispatcher — thin shim that routes each key to the
+/// corresponding `*_bridge` primitive (Phase 6.1). The bridge functions
+/// are the canonical logic; this function exists so the rest of
+/// `step_insert` can call a single point without knowing which primitive
+/// owns each key. Returns `true` when the buffer mutated.
 fn handle_insert_key<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     input: Input,
 ) -> bool {
-    use hjkl_buffer::{Edit, MotionKind, Position};
-    ed.sync_buffer_content_from_textarea();
-    let cursor = buf_cursor_pos(&ed.buffer);
-    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
-    // Replace mode: overstrike the cell at the cursor instead of
-    // inserting. At end-of-line, fall through to plain insert (vim
-    // appends past the line).
-    let in_replace = matches!(
-        ed.vim.insert_session.as_ref().map(|s| &s.reason),
-        Some(InsertReason::Replace)
-    );
-    let mutated = match input.key {
-        Key::Char(c) if in_replace && cursor.col < line_chars => {
-            ed.mutate_edit(Edit::DeleteRange {
-                start: cursor,
-                end: Position::new(cursor.row, cursor.col + 1),
-                kind: MotionKind::Char,
-            });
-            ed.mutate_edit(Edit::InsertChar { at: cursor, ch: c });
-            true
-        }
-        Key::Char(c) => {
-            if !try_dedent_close_bracket(ed, cursor, c) {
-                ed.mutate_edit(Edit::InsertChar { at: cursor, ch: c });
-            }
-            true
-        }
-        Key::Enter => {
-            let prev_line = buf_line(&ed.buffer, cursor.row)
-                .unwrap_or_default()
-                .to_string();
-            let indent = compute_enter_indent(&ed.settings, &prev_line);
-            let text = format!("\n{indent}");
-            ed.mutate_edit(Edit::InsertStr { at: cursor, text });
-            true
-        }
-        Key::Tab => {
-            if ed.settings.expandtab {
-                // With softtabstop > 0, fill to the next sts boundary.
-                // Otherwise insert a full tabstop run.
-                let sts = ed.settings.softtabstop;
-                let n = if sts > 0 {
-                    sts - (cursor.col % sts)
-                } else {
-                    ed.settings.tabstop.max(1)
-                };
-                ed.mutate_edit(Edit::InsertStr {
-                    at: cursor,
-                    text: " ".repeat(n),
-                });
-            } else {
-                ed.mutate_edit(Edit::InsertChar {
-                    at: cursor,
-                    ch: '\t',
-                });
-            }
-            true
-        }
-        Key::Backspace => {
-            // Softtabstop: if the N chars before the cursor are all spaces
-            // and the cursor sits on an sts-aligned column, delete the run
-            // as a single unit (vim's "backspace deletes a soft tab" feel).
-            let sts = ed.settings.softtabstop;
-            if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
-                let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
-                let chars: Vec<char> = line.chars().collect();
-                let run_start = cursor.col - sts;
-                if (run_start..cursor.col).all(|i| chars.get(i).copied() == Some(' ')) {
-                    ed.mutate_edit(Edit::DeleteRange {
-                        start: Position::new(cursor.row, run_start),
-                        end: cursor,
-                        kind: MotionKind::Char,
-                    });
-                    return true;
-                }
-            }
-            if cursor.col > 0 {
-                ed.mutate_edit(Edit::DeleteRange {
-                    start: Position::new(cursor.row, cursor.col - 1),
-                    end: cursor,
-                    kind: MotionKind::Char,
-                });
-                true
-            } else if cursor.row > 0 {
-                let prev_row = cursor.row - 1;
-                let prev_chars = buf_line_chars(&ed.buffer, prev_row);
-                ed.mutate_edit(Edit::JoinLines {
-                    row: prev_row,
-                    count: 1,
-                    with_space: false,
-                });
-                buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
-                true
-            } else {
-                false
-            }
-        }
-        Key::Delete => {
-            if cursor.col < line_chars {
-                ed.mutate_edit(Edit::DeleteRange {
-                    start: cursor,
-                    end: Position::new(cursor.row, cursor.col + 1),
-                    kind: MotionKind::Char,
-                });
-                true
-            } else if cursor.row + 1 < buf_row_count(&ed.buffer) {
-                ed.mutate_edit(Edit::JoinLines {
-                    row: cursor.row,
-                    count: 1,
-                    with_space: false,
-                });
-                buf_set_cursor_pos(&mut ed.buffer, cursor);
-                true
-            } else {
-                false
-            }
-        }
-        Key::Left => {
-            crate::motions::move_left(&mut ed.buffer, 1);
-            break_undo_group_in_insert(ed);
-            false
-        }
-        Key::Right => {
-            // Insert mode allows the cursor one past the last char so the
-            // next typed letter appends — use the operator-context move.
-            crate::motions::move_right_to_end(&mut ed.buffer, 1);
-            break_undo_group_in_insert(ed);
-            false
-        }
-        Key::Up => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
-            break_undo_group_in_insert(ed);
-            false
-        }
-        Key::Down => {
-            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
-            crate::motions::move_down(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
-            break_undo_group_in_insert(ed);
-            false
-        }
-        Key::Home => {
-            crate::motions::move_line_start(&mut ed.buffer);
-            break_undo_group_in_insert(ed);
-            false
-        }
-        Key::End => {
-            crate::motions::move_line_end(&mut ed.buffer);
-            break_undo_group_in_insert(ed);
-            false
-        }
+    match input.key {
+        Key::Char(c) => insert_char_bridge(ed, c),
+        Key::Enter => insert_newline_bridge(ed),
+        Key::Tab => insert_tab_bridge(ed),
+        Key::Backspace => insert_backspace_bridge(ed),
+        Key::Delete => insert_delete_bridge(ed),
+        Key::Left => insert_arrow_bridge(ed, InsertDir::Left),
+        Key::Right => insert_arrow_bridge(ed, InsertDir::Right),
+        Key::Up => insert_arrow_bridge(ed, InsertDir::Up),
+        Key::Down => insert_arrow_bridge(ed, InsertDir::Down),
+        Key::Home => insert_home_bridge(ed),
+        Key::End => insert_end_bridge(ed),
         Key::PageUp => {
-            // Vim default: PageUp scrolls a full window up, cursor
-            // tracks. Reuse the Ctrl-b scroll helper so behavior
-            // matches the normal-mode equivalent.
-            let rows = viewport_full_rows(ed, 1) as isize;
-            scroll_cursor_rows(ed, -rows);
-            return false;
+            let h = ed.viewport_height_value();
+            insert_pageup_bridge(ed, h)
         }
         Key::PageDown => {
-            let rows = viewport_full_rows(ed, 1) as isize;
-            scroll_cursor_rows(ed, rows);
-            return false;
+            let h = ed.viewport_height_value();
+            insert_pagedown_bridge(ed, h)
         }
         // F-keys, mouse scroll, copy/cut/paste virtual keys, Null —
         // no insert-mode behaviour.
         _ => false,
-    };
-    ed.push_buffer_cursor_to_textarea();
-    mutated
+    }
 }
 
 fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
@@ -1752,6 +1532,420 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
         session.row_min = row;
         session.row_max = row;
     }
+}
+
+// ─── Phase 6.1: public insert-mode primitives ──────────────────────────────
+//
+// Each `pub(crate)` free function below is the extractable body of one arm
+// (or sub-arm) of `handle_insert_key`. The FSM calls them through the thin
+// `step_insert` dispatcher; external callers (hjkl-vim, tests) can invoke
+// them directly without feeding synthetic `Input` events into the FSM.
+//
+// Invariants every function upholds:
+//   - Opens with `ed.sync_buffer_content_from_textarea()` (no-op, kept for
+//     forward compatibility once textarea is gone).
+//   - All buffer mutations go through `ed.mutate_edit(...)` so dirty flag,
+//     undo, change-list, content-edit fan-out all fire uniformly.
+//   - Navigation-only functions call `break_undo_group_in_insert` when the
+//     FSM did so, then return `false` (no mutation).
+//   - After mutations, `ed.push_buffer_cursor_to_textarea()` is called
+//     (currently a no-op but kept for migration hygiene).
+//   - Returns `true` when the buffer was mutated, `false` otherwise.
+
+/// Insert a single character at the cursor. Handles replace-mode overstrike
+/// (when `InsertSession::reason` is `Replace`) and smart-indent dedent of
+/// closing brackets (}/)]/). Returns `true`.
+pub(crate) fn insert_char_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+    let in_replace = matches!(
+        ed.vim.insert_session.as_ref().map(|s| &s.reason),
+        Some(InsertReason::Replace)
+    );
+    if in_replace && cursor.col < line_chars {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: cursor,
+            end: Position::new(cursor.row, cursor.col + 1),
+            kind: MotionKind::Char,
+        });
+        ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+    } else if !try_dedent_close_bracket(ed, cursor, ch) {
+        ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+    }
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
+/// Insert a newline at the cursor, applying autoindent / smartindent.
+/// Returns `true`.
+pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::Edit;
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let prev_line = buf_line(&ed.buffer, cursor.row)
+        .unwrap_or_default()
+        .to_string();
+    let indent = compute_enter_indent(&ed.settings, &prev_line);
+    let text = format!("\n{indent}");
+    ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
+/// Insert a tab character (or spaces up to the next softtabstop boundary when
+/// `expandtab` is set). Returns `true`.
+pub(crate) fn insert_tab_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::Edit;
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    if ed.settings.expandtab {
+        let sts = ed.settings.softtabstop;
+        let n = if sts > 0 {
+            sts - (cursor.col % sts)
+        } else {
+            ed.settings.tabstop.max(1)
+        };
+        ed.mutate_edit(Edit::InsertStr {
+            at: cursor,
+            text: " ".repeat(n),
+        });
+    } else {
+        ed.mutate_edit(Edit::InsertChar {
+            at: cursor,
+            ch: '\t',
+        });
+    }
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
+/// Delete the character before the cursor (vim Backspace / `^H`). With
+/// `softtabstop` active, deletes the entire soft-tab run at an aligned
+/// boundary. Joins with the previous line when at column 0. Returns
+/// `true` when something was deleted, `false` at the very start of the
+/// buffer.
+pub(crate) fn insert_backspace_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let sts = ed.settings.softtabstop;
+    if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
+        let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+        let chars: Vec<char> = line.chars().collect();
+        let run_start = cursor.col - sts;
+        if (run_start..cursor.col).all(|i| chars.get(i).copied() == Some(' ')) {
+            ed.mutate_edit(Edit::DeleteRange {
+                start: Position::new(cursor.row, run_start),
+                end: cursor,
+                kind: MotionKind::Char,
+            });
+            ed.push_buffer_cursor_to_textarea();
+            return true;
+        }
+    }
+    let result = if cursor.col > 0 {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(cursor.row, cursor.col - 1),
+            end: cursor,
+            kind: MotionKind::Char,
+        });
+        true
+    } else if cursor.row > 0 {
+        let prev_row = cursor.row - 1;
+        let prev_chars = buf_line_chars(&ed.buffer, prev_row);
+        ed.mutate_edit(Edit::JoinLines {
+            row: prev_row,
+            count: 1,
+            with_space: false,
+        });
+        buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
+        true
+    } else {
+        false
+    };
+    ed.push_buffer_cursor_to_textarea();
+    result
+}
+
+/// Delete the character under the cursor (vim `Delete`). Joins with the
+/// next line when at end-of-line. Returns `true` when something was deleted.
+pub(crate) fn insert_delete_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+    let result = if cursor.col < line_chars {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: cursor,
+            end: Position::new(cursor.row, cursor.col + 1),
+            kind: MotionKind::Char,
+        });
+        buf_set_cursor_pos(&mut ed.buffer, cursor);
+        true
+    } else if cursor.row + 1 < buf_row_count(&ed.buffer) {
+        ed.mutate_edit(Edit::JoinLines {
+            row: cursor.row,
+            count: 1,
+            with_space: false,
+        });
+        buf_set_cursor_pos(&mut ed.buffer, cursor);
+        true
+    } else {
+        false
+    };
+    ed.push_buffer_cursor_to_textarea();
+    result
+}
+
+/// Direction for insert-mode arrow movement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Move the cursor one step in `dir`, breaking the undo group per
+/// `undo_break_on_motion`. Returns `false` (no mutation).
+pub(crate) fn insert_arrow_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    dir: InsertDir,
+) -> bool {
+    ed.sync_buffer_content_from_textarea();
+    match dir {
+        InsertDir::Left => {
+            crate::motions::move_left(&mut ed.buffer, 1);
+        }
+        InsertDir::Right => {
+            crate::motions::move_right_to_end(&mut ed.buffer, 1);
+        }
+        InsertDir::Up => {
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+        }
+        InsertDir::Down => {
+            let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
+            crate::motions::move_down(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
+        }
+    }
+    break_undo_group_in_insert(ed);
+    ed.push_buffer_cursor_to_textarea();
+    false
+}
+
+/// Move the cursor to the start of the current line, breaking the undo group.
+/// Returns `false` (no mutation).
+pub(crate) fn insert_home_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    ed.sync_buffer_content_from_textarea();
+    crate::motions::move_line_start(&mut ed.buffer);
+    break_undo_group_in_insert(ed);
+    ed.push_buffer_cursor_to_textarea();
+    false
+}
+
+/// Move the cursor to the end of the current line, breaking the undo group.
+/// Returns `false` (no mutation).
+pub(crate) fn insert_end_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    ed.sync_buffer_content_from_textarea();
+    crate::motions::move_line_end(&mut ed.buffer);
+    break_undo_group_in_insert(ed);
+    ed.push_buffer_cursor_to_textarea();
+    false
+}
+
+/// Scroll up one full viewport height, moving the cursor with it.
+/// Breaks the undo group. Returns `false` (no mutation).
+pub(crate) fn insert_pageup_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    viewport_h: u16,
+) -> bool {
+    let rows = viewport_h.saturating_sub(2).max(1) as isize;
+    scroll_cursor_rows(ed, -rows);
+    false
+}
+
+/// Scroll down one full viewport height, moving the cursor with it.
+/// Breaks the undo group. Returns `false` (no mutation).
+pub(crate) fn insert_pagedown_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    viewport_h: u16,
+) -> bool {
+    let rows = viewport_h.saturating_sub(2).max(1) as isize;
+    scroll_cursor_rows(ed, rows);
+    false
+}
+
+/// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
+/// At col 0, joins with the previous line (vim semantics). Returns `true`
+/// when something was deleted.
+pub(crate) fn insert_ctrl_w_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    if cursor.row == 0 && cursor.col == 0 {
+        return true;
+    }
+    crate::motions::move_word_back(&mut ed.buffer, false, 1, &ed.settings.iskeyword);
+    let word_start = buf_cursor_pos(&ed.buffer);
+    if word_start == cursor {
+        return true;
+    }
+    buf_set_cursor_pos(&mut ed.buffer, cursor);
+    ed.mutate_edit(Edit::DeleteRange {
+        start: word_start,
+        end: cursor,
+        kind: MotionKind::Char,
+    });
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
+/// Delete from the cursor back to the start of the current line (`Ctrl-U`).
+/// No-op when already at column 0. Returns `true` when something was deleted.
+pub(crate) fn insert_ctrl_u_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    if cursor.col > 0 {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(cursor.row, 0),
+            end: cursor,
+            kind: MotionKind::Char,
+        });
+        ed.push_buffer_cursor_to_textarea();
+    }
+    true
+}
+
+/// Delete one character backwards (`Ctrl-H`) — alias for Backspace in insert
+/// mode. Joins with the previous line when at col 0. Returns `true` when
+/// something was deleted.
+pub(crate) fn insert_ctrl_h_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let cursor = buf_cursor_pos(&ed.buffer);
+    if cursor.col > 0 {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(cursor.row, cursor.col - 1),
+            end: cursor,
+            kind: MotionKind::Char,
+        });
+    } else if cursor.row > 0 {
+        let prev_row = cursor.row - 1;
+        let prev_chars = buf_line_chars(&ed.buffer, prev_row);
+        ed.mutate_edit(Edit::JoinLines {
+            row: prev_row,
+            count: 1,
+            with_space: false,
+        });
+        buf_set_cursor_rc(&mut ed.buffer, prev_row, prev_chars);
+    }
+    ed.push_buffer_cursor_to_textarea();
+    true
+}
+
+/// Indent the current line by one `shiftwidth` and shift the cursor right by
+/// the same amount (`Ctrl-T`). Returns `true`.
+pub(crate) fn insert_ctrl_t_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    let (row, col) = ed.cursor();
+    let sw = ed.settings().shiftwidth;
+    indent_rows(ed, row, row, 1);
+    ed.jump_cursor(row, col + sw);
+    true
+}
+
+/// Outdent the current line by up to one `shiftwidth` and shift the cursor
+/// left by the amount stripped (`Ctrl-D`). Returns `true`.
+pub(crate) fn insert_ctrl_d_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    let (row, col) = ed.cursor();
+    let before_len = buf_line_bytes(&ed.buffer, row);
+    outdent_rows(ed, row, row, 1);
+    let after_len = buf_line_bytes(&ed.buffer, row);
+    let stripped = before_len.saturating_sub(after_len);
+    let new_col = col.saturating_sub(stripped);
+    ed.jump_cursor(row, new_col);
+    true
+}
+
+/// Enter "one-shot normal" mode (`Ctrl-O`): suspend insert for the next
+/// complete normal-mode command, then return to insert. Returns `false`
+/// (no buffer mutation — only mode state changes).
+pub(crate) fn insert_ctrl_o_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    ed.vim.one_shot_normal = true;
+    ed.vim.mode = Mode::Normal;
+    false
+}
+
+/// Arm the register-paste selector (`Ctrl-R`): the next typed character
+/// names the register whose text will be inserted inline. Returns `false`
+/// (no buffer mutation yet — mutation happens when the register char arrives).
+pub(crate) fn insert_ctrl_r_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    ed.vim.insert_pending_register = true;
+    false
+}
+
+/// Paste the contents of `reg` at the cursor (the body of `Ctrl-R {reg}`).
+/// Unknown or empty registers are a no-op. Returns `true` when text was
+/// inserted.
+pub(crate) fn insert_paste_register_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    reg: char,
+) -> bool {
+    insert_register_text(ed, reg);
+    // insert_register_text already calls mark_content_dirty internally;
+    // return true to signal that the session row window should be widened.
+    true
+}
+
+/// Exit insert mode to Normal: finish the insert session, step the cursor one
+/// cell left (vim convention), record the `gi` target, and update the sticky
+/// column. Returns `true` (always consumed — even if no buffer mutation, the
+/// mode change itself is a meaningful step).
+pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) -> bool {
+    finish_insert_session(ed);
+    ed.vim.mode = Mode::Normal;
+    let col = ed.cursor().1;
+    ed.vim.last_insert_pos = Some(ed.cursor());
+    if col > 0 {
+        crate::motions::move_left(&mut ed.buffer, 1);
+        ed.push_buffer_cursor_to_textarea();
+    }
+    ed.sticky_col = Some(ed.cursor().1);
+    true
 }
 
 // ─── Normal / Visual / Operator-pending dispatcher ─────────────────────────

@@ -3668,6 +3668,241 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.emit_cursor_shape_if_changed();
         consumed
     }
+
+    // ─── Phase 6.1: public insert-mode primitives (kryptic-sh/hjkl#87) ────────
+    //
+    // Each method is the publicly callable form of one arm (or sub-arm) of the
+    // old `handle_insert_key` / `step_insert` match. All logic lives in the
+    // corresponding `vim::*_bridge` free function; these methods are thin
+    // delegators so the public surface stays on `Editor`.
+    //
+    // Invariants (enforced by the bridge fns):
+    //   - Buffer mutations go through `mutate_edit` (dirty/undo/change-list).
+    //   - Navigation keys call `break_undo_group_in_insert` when the FSM did.
+    //   - `push_buffer_cursor_to_textarea` is called after every mutation
+    //     (currently a no-op, kept for migration hygiene).
+
+    /// Insert `ch` at the cursor. In Replace mode, overstrike the cell under
+    /// the cursor instead of inserting; at end-of-line, always appends. With
+    /// `smartindent` on, closing brackets (`}`/`)`/`]`) trigger one-unit
+    /// dedent on an otherwise-whitespace line.
+    ///
+    /// Callers must ensure the editor is in Insert or Replace mode before
+    /// calling this method.
+    pub fn insert_char(&mut self, ch: char) {
+        let mutated = vim::insert_char_bridge(self, ch);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Insert a newline at the cursor, applying autoindent / smartindent to
+    /// prefix the new line with the appropriate leading whitespace.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_newline(&mut self) {
+        let mutated = vim::insert_newline_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Insert a tab character (or spaces up to the next `softtabstop` boundary
+    /// when `expandtab` is set).
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_tab(&mut self) {
+        let mutated = vim::insert_tab_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Delete the character before the cursor (Backspace). With `softtabstop`
+    /// active, deletes the entire soft-tab run at an aligned boundary. Joins
+    /// with the previous line when at column 0.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_backspace(&mut self) {
+        let mutated = vim::insert_backspace_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Delete the character under the cursor (Delete key). Joins with the
+    /// next line when at end-of-line.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_delete(&mut self) {
+        let mutated = vim::insert_delete_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Move the cursor one step in `dir` (arrow key), breaking the undo group
+    /// per `undo_break_on_motion`.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_arrow(&mut self, dir: vim::InsertDir) {
+        vim::insert_arrow_bridge(self, dir);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Move the cursor to the start of the current line (Home key), breaking
+    /// the undo group.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_home(&mut self) {
+        vim::insert_home_bridge(self);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Move the cursor to the end of the current line (End key), breaking the
+    /// undo group.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_end(&mut self) {
+        vim::insert_end_bridge(self);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Scroll up one full viewport height (PageUp), moving the cursor with it.
+    /// `viewport_h` is the current viewport height in rows; pass
+    /// `self.viewport_height_value()` if the stored value is current.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_pageup(&mut self, viewport_h: u16) {
+        vim::insert_pageup_bridge(self, viewport_h);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Scroll down one full viewport height (PageDown), moving the cursor with
+    /// it. `viewport_h` is the current viewport height in rows.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_pagedown(&mut self, viewport_h: u16) {
+        vim::insert_pagedown_bridge(self, viewport_h);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
+    /// At column 0, joins with the previous line (vim `b`-motion semantics).
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_w(&mut self) {
+        let mutated = vim::insert_ctrl_w_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Delete from the cursor back to the start of the current line (`Ctrl-U`).
+    /// No-op when already at column 0.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_u(&mut self) {
+        let mutated = vim::insert_ctrl_u_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Delete one character backwards (`Ctrl-H`) — alias for Backspace in
+    /// insert mode. Joins with the previous line when at col 0.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_h(&mut self) {
+        let mutated = vim::insert_ctrl_h_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Enter "one-shot normal" mode (`Ctrl-O`): suspend insert for the next
+    /// complete normal-mode command, then return to insert automatically.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_o_arm(&mut self) {
+        vim::insert_ctrl_o_bridge(self);
+    }
+
+    /// Arm the register-paste selector (`Ctrl-R`). The next call to
+    /// `insert_paste_register(reg)` will insert the register contents.
+    /// Alternatively, feeding a `Key::Char(c)` through the FSM will consume
+    /// the armed state and paste register `c`.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_r_arm(&mut self) {
+        vim::insert_ctrl_r_bridge(self);
+    }
+
+    /// Indent the current line by one `shiftwidth` and shift the cursor right
+    /// by the same amount (`Ctrl-T`).
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_t(&mut self) {
+        let mutated = vim::insert_ctrl_t_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Outdent the current line by up to one `shiftwidth` and shift the cursor
+    /// left by the amount stripped (`Ctrl-D`).
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_ctrl_d(&mut self) {
+        let mutated = vim::insert_ctrl_d_bridge(self);
+        if mutated {
+            self.mark_content_dirty();
+            let (row, _) = self.cursor();
+            self.vim.widen_insert_row(row);
+        }
+    }
+
+    /// Paste the contents of register `reg` at the cursor (the commit arm of
+    /// `Ctrl-R {reg}`). Unknown or empty registers are a no-op.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn insert_paste_register(&mut self, reg: char) {
+        vim::insert_paste_register_bridge(self, reg);
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+    }
+
+    /// Exit insert mode to Normal: finish the insert session, step the cursor
+    /// one cell left (vim convention on Esc), record the `gi` target position,
+    /// and update the sticky column.
+    ///
+    /// Callers must ensure the editor is in Insert mode before calling.
+    pub fn leave_insert_to_normal(&mut self) {
+        vim::leave_insert_to_normal_bridge(self);
+    }
 }
 
 /// Visual column of the character at `char_col` in `line`, treating `\t`
@@ -6122,5 +6357,351 @@ mod tests {
         );
         e.vim.replaying_macro = false;
         e.stop_macro_record();
+    }
+
+    // ── Phase 6.1 insert-mode primitive tests (kryptic-sh/hjkl#87) ────────────
+
+    /// Helper: enter insert mode via `i` then call the public method under test.
+    fn enter_insert(e: &mut Editor) {
+        e.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(e.vim_mode(), crate::VimMode::Insert);
+    }
+
+    #[test]
+    fn insert_char_basic() {
+        let mut e = fresh_editor("hello");
+        enter_insert(&mut e);
+        e.insert_char('X');
+        assert_eq!(e.buffer().lines()[0], "Xhello");
+        assert!(e.take_dirty());
+    }
+
+    #[test]
+    fn insert_char_appends_in_replace_mode() {
+        // `R` enters Replace mode; insert_char overwrites the cell under
+        // the cursor instead of inserting.
+        let mut e = fresh_editor("abc");
+        e.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT));
+        assert_eq!(e.vim_mode(), crate::VimMode::Insert);
+        e.insert_char('X');
+        // 'a' (col 0) overwritten by 'X': "Xbc"
+        assert_eq!(e.buffer().lines()[0], "Xbc");
+        e.insert_char('Y');
+        // 'b' (col 1) overwritten by 'Y': "XYc"
+        assert_eq!(e.buffer().lines()[0], "XYc");
+    }
+
+    #[test]
+    fn insert_newline_splits_line() {
+        let mut e = fresh_editor("hello");
+        // Move to col 3 so we split "hel" | "lo".
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        e.insert_newline();
+        let lines = e.buffer().lines().to_vec();
+        assert_eq!(lines[0], "hel");
+        assert_eq!(lines[1], "lo");
+    }
+
+    #[test]
+    fn insert_tab_expandtab_inserts_spaces() {
+        let mut e = fresh_editor("");
+        // Default options: expandtab=true, softtabstop=4, tabstop=4.
+        enter_insert(&mut e);
+        e.insert_tab();
+        // At col 0 with sts=4: 4 spaces inserted.
+        assert_eq!(e.buffer().lines()[0], "    ");
+    }
+
+    #[test]
+    fn insert_tab_real_tab_when_noexpandtab() {
+        let opts = crate::types::Options {
+            expandtab: false,
+            ..crate::types::Options::default()
+        };
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            opts,
+        );
+        e.set_content("");
+        enter_insert(&mut e);
+        e.insert_tab();
+        assert_eq!(e.buffer().lines()[0], "\t");
+    }
+
+    #[test]
+    fn insert_backspace_single_char() {
+        // Cursor at col 3 in "hello", backspace deletes 'l'.
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        e.insert_backspace();
+        assert_eq!(e.buffer().lines()[0], "helo");
+    }
+
+    #[test]
+    fn insert_backspace_softtabstop() {
+        // With sts=4, expandtab: 4 spaces at col 4 → one backspace deletes all 4.
+        let mut e = fresh_editor("    hello");
+        e.jump_cursor(0, 4);
+        enter_insert(&mut e);
+        e.insert_backspace();
+        assert_eq!(e.buffer().lines()[0], "hello");
+    }
+
+    #[test]
+    fn insert_backspace_join_up() {
+        // At col 0 on row 1, backspace joins with the previous line.
+        let mut e = fresh_editor("foo\nbar");
+        e.jump_cursor(1, 0);
+        enter_insert(&mut e);
+        e.insert_backspace();
+        // Two rows merged into one.
+        assert_eq!(e.buffer().lines().len(), 1);
+        assert_eq!(e.buffer().lines()[0], "foobar");
+    }
+
+    #[test]
+    fn leave_insert_steps_back_col() {
+        // Esc in insert mode should move the cursor one cell left (vim convention).
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        // Type one char so cursor is at col 4, then call leave_insert_to_normal.
+        e.insert_char('X');
+        // cursor is now at col 4 (after the inserted 'X').
+        let pre_col = e.cursor().1;
+        e.leave_insert_to_normal();
+        assert_eq!(e.vim_mode(), crate::VimMode::Normal);
+        // Cursor stepped back one.
+        assert_eq!(e.cursor().1, pre_col - 1);
+    }
+
+    #[test]
+    fn insert_ctrl_w_word_back() {
+        // Ctrl-W deletes from cursor back to word start.
+        // "hello world" — cursor at end of "world" (col 11).
+        let mut e = fresh_editor("hello world");
+        // Normal mode clamps cursor to col 10 (last char); jump_cursor doesn't clamp.
+        e.jump_cursor(0, 11);
+        enter_insert(&mut e);
+        e.insert_ctrl_w();
+        // "world" (5 chars) deleted, leaving "hello ".
+        assert_eq!(e.buffer().lines()[0], "hello ");
+    }
+
+    #[test]
+    fn insert_ctrl_u_deletes_to_line_start() {
+        let mut e = fresh_editor("hello world");
+        e.jump_cursor(0, 5);
+        enter_insert(&mut e);
+        e.insert_ctrl_u();
+        assert_eq!(e.buffer().lines()[0], " world");
+    }
+
+    #[test]
+    fn insert_ctrl_h_single_backspace() {
+        // Ctrl-H is an alias for Backspace in insert mode.
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        e.insert_ctrl_h();
+        assert_eq!(e.buffer().lines()[0], "helo");
+    }
+
+    #[test]
+    fn insert_ctrl_h_join_up() {
+        let mut e = fresh_editor("foo\nbar");
+        e.jump_cursor(1, 0);
+        enter_insert(&mut e);
+        e.insert_ctrl_h();
+        assert_eq!(e.buffer().lines().len(), 1);
+        assert_eq!(e.buffer().lines()[0], "foobar");
+    }
+
+    #[test]
+    fn insert_ctrl_t_indents_current_line() {
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options {
+                shiftwidth: 4,
+                ..crate::types::Options::default()
+            },
+        );
+        e.set_content("hello");
+        enter_insert(&mut e);
+        e.insert_ctrl_t();
+        assert_eq!(e.buffer().lines()[0], "    hello");
+    }
+
+    #[test]
+    fn insert_ctrl_d_outdents_current_line() {
+        let mut e = Editor::new(
+            hjkl_buffer::Buffer::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options {
+                shiftwidth: 4,
+                ..crate::types::Options::default()
+            },
+        );
+        e.set_content("    hello");
+        enter_insert(&mut e);
+        e.insert_ctrl_d();
+        assert_eq!(e.buffer().lines()[0], "hello");
+    }
+
+    #[test]
+    fn insert_ctrl_o_arm_sets_one_shot_normal() {
+        let mut e = fresh_editor("hello");
+        enter_insert(&mut e);
+        e.insert_ctrl_o_arm();
+        // Mode should flip to Normal (one-shot).
+        assert_eq!(e.vim_mode(), crate::VimMode::Normal);
+    }
+
+    #[test]
+    fn insert_ctrl_r_arm_sets_pending_register() {
+        let mut e = fresh_editor("hello");
+        enter_insert(&mut e);
+        e.insert_ctrl_r_arm();
+        // pending register flag set; mode stays Insert.
+        assert_eq!(e.vim_mode(), crate::VimMode::Insert);
+        assert!(e.vim.insert_pending_register);
+    }
+
+    #[test]
+    fn insert_delete_removes_char_under_cursor() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 2);
+        enter_insert(&mut e);
+        e.insert_delete();
+        assert_eq!(e.buffer().lines()[0], "helo");
+    }
+
+    #[test]
+    fn insert_delete_joins_lines_at_eol() {
+        let mut e = fresh_editor("foo\nbar");
+        // Position at end of row 0 (col 3 = past last char).
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        e.insert_delete();
+        assert_eq!(e.buffer().lines().len(), 1);
+        assert_eq!(e.buffer().lines()[0], "foobar");
+    }
+
+    #[test]
+    fn insert_arrow_left_moves_cursor() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 3);
+        enter_insert(&mut e);
+        e.insert_arrow(crate::vim::InsertDir::Left);
+        assert_eq!(e.cursor().1, 2);
+    }
+
+    #[test]
+    fn insert_arrow_right_moves_cursor() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 2);
+        enter_insert(&mut e);
+        e.insert_arrow(crate::vim::InsertDir::Right);
+        assert_eq!(e.cursor().1, 3);
+    }
+
+    #[test]
+    fn insert_arrow_up_moves_cursor() {
+        let mut e = fresh_editor("foo\nbar");
+        e.jump_cursor(1, 0);
+        enter_insert(&mut e);
+        e.insert_arrow(crate::vim::InsertDir::Up);
+        assert_eq!(e.cursor().0, 0);
+    }
+
+    #[test]
+    fn insert_arrow_down_moves_cursor() {
+        let mut e = fresh_editor("foo\nbar");
+        e.jump_cursor(0, 0);
+        enter_insert(&mut e);
+        e.insert_arrow(crate::vim::InsertDir::Down);
+        assert_eq!(e.cursor().0, 1);
+    }
+
+    #[test]
+    fn insert_home_moves_to_line_start() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 4);
+        enter_insert(&mut e);
+        e.insert_home();
+        assert_eq!(e.cursor().1, 0);
+    }
+
+    #[test]
+    fn insert_end_moves_to_line_end() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 0);
+        enter_insert(&mut e);
+        e.insert_end();
+        // move_line_end lands on the last char (col 4) for "hello".
+        assert_eq!(e.cursor().1, 4);
+    }
+
+    #[test]
+    fn insert_pageup_does_not_panic() {
+        let mut e = fresh_editor("line1\nline2\nline3");
+        e.jump_cursor(2, 0);
+        enter_insert(&mut e);
+        // Viewport height 0 → no crash (viewport_h saturates to 1 row effectively).
+        e.insert_pageup(24);
+    }
+
+    #[test]
+    fn insert_pagedown_does_not_panic() {
+        let mut e = fresh_editor("line1\nline2\nline3");
+        e.jump_cursor(0, 0);
+        enter_insert(&mut e);
+        e.insert_pagedown(24);
+    }
+
+    #[test]
+    fn insert_paste_register_inserts_text() {
+        let mut e = fresh_editor("abc");
+        // Yank "abc" into the unnamed register via `yy`.
+        e.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        e.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        enter_insert(&mut e);
+        // Paste from unnamed register '"'.
+        e.insert_paste_register('"');
+        // "abc\n" pasted inline — line now contains "abc\nabc".
+        assert!(e.content().contains("abc"));
+    }
+
+    #[test]
+    fn leave_insert_to_normal_exits_mode() {
+        let mut e = fresh_editor("hello");
+        enter_insert(&mut e);
+        e.leave_insert_to_normal();
+        assert_eq!(e.vim_mode(), crate::VimMode::Normal);
+    }
+
+    #[test]
+    fn insert_backspace_at_buffer_start_is_noop() {
+        let mut e = fresh_editor("hello");
+        e.jump_cursor(0, 0);
+        enter_insert(&mut e);
+        // No previous char and no previous row — should not panic.
+        e.insert_backspace();
+        assert_eq!(e.buffer().lines()[0], "hello");
+    }
+
+    #[test]
+    fn insert_delete_at_buffer_end_is_noop() {
+        let mut e = fresh_editor("hello");
+        // Cursor at col 5 (past last char index of 4), no next row.
+        e.jump_cursor(0, 5);
+        enter_insert(&mut e);
+        // col 5 >= line_chars (5), no next row → no-op.
+        e.insert_delete();
+        assert_eq!(e.buffer().lines()[0], "hello");
     }
 }

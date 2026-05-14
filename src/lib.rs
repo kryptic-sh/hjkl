@@ -46,7 +46,7 @@ pub use types::{
     Options, Pos, Query, RenderFrame, Search, Selection, SelectionKind, SelectionSet, SnapshotMode,
     SpecialKey, Style, Viewport, WrapMode,
 };
-pub use vim::{MotionKind, Operator, SearchPrompt};
+pub use vim::{InsertDir, MotionKind, Operator, SearchPrompt};
 
 /// Drive the vim FSM with one [`Input`]. Returns `true` if the engine
 /// consumed the keystroke. Hosts that don't pull in the `crossterm`
