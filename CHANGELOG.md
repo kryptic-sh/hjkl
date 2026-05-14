@@ -8,6 +8,27 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-05-15
+
+### Fixed
+
+- **`<leader>h` history picker now opens picked query in a fresh scratch tab**
+  instead of clobbering the active editor buffer while leaving the tab-bar
+  pointing at the old file (sqeel-tui 0.4.14). Backed by
+  `AppState::new_tab_with_content` in sqeel-core 0.4.8. (#17 follow-up)
+
+### Changed
+
+- **Engine 0.7 migration across the sqeel stack.** Tracks `hjkl-form 0.3.7`'s
+  caret-minor engine-pin bump to 0.7 that dragged two engine majors into any
+  consumer graph still on 0.6. Bumped all three submodule pointers in lockstep:
+  - `sqeel-config` 0.2.4 → 0.2.5 (engine 0.6 → 0.7).
+  - `sqeel-core` 0.4.8 → 0.4.9 (engine 0.6 → 0.7; v0.4.8 also added
+    `new_tab_with_content`).
+  - `sqeel-tui` 0.4.12 → 0.4.14 (engine 0.7 + `hjkl-bonsai` 0.5 → 0.6 + direct
+    `hjkl-vim` 0.19 dep; four `editor.handle_key` call sites routed through
+    `hjkl_vim::handle_key` per the engine 0.7 migration guide).
+
 ## [0.4.15] - 2026-05-15
 
 ### Added
@@ -426,7 +447,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.15...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.16...HEAD
+[0.4.16]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.16
 [0.4.15]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.15
 [0.4.14]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.14
 [0.4.13]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.13
