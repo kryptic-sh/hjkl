@@ -28,6 +28,8 @@ hjkl-lsp = { path = "crates/hjkl-lsp" }
 hjkl-keymap = { path = "crates/hjkl-keymap" }
 hjkl-editor = { path = "crates/hjkl-editor" }
 hjkl-vim = { path = "crates/hjkl-vim" }
+hjkl-theme = { path = "crates/hjkl-theme" }
+hjkl-theme-tui = { path = "crates/hjkl-theme-tui" }
 
 [profile.release]
 lto = "thin"
