@@ -1,8 +1,8 @@
 # hjkl syntax theme — dark.
-# Override for hjkl-bonsai's bundled DotFallbackTheme. Same TOML
-# shape: capture-name → { fg, bg, bold, italic, underline }, dot-fallback
-# applies. Loaded via include_str! in apps/hjkl/src/theme.rs and passed
-# to DotFallbackTheme::from_toml().
+# Override for hjkl-bonsai's bundled DotFallbackTheme. Uses hjkl-theme schema:
+# @-prefixed TS capture names, modifiers as arrays, optional $palette refs.
+# Loaded via include_str! in apps/hjkl/src/theme.rs and passed to
+# DotFallbackTheme::from_toml().
 #
 # Palette anchors (hjkl.kryptic.sh CSS custom properties):
 #   --bg #0b0d10  --fg #e5e9f0
@@ -10,67 +10,76 @@
 #   --keyword #c792ea  --string #a3e88a
 #   --number #f78c6c  --comment #8597a3
 
-default             = { fg = "#e5e9f0" }
+"@default"                        = { fg = "$fg" }
 
-"keyword"           = { fg = "#c792ea", bold = true }
-"keyword.control"   = { fg = "#bb9af7", bold = true }
-"keyword.return"    = { fg = "#bb9af7", bold = true }
-"keyword.operator"  = { fg = "#c792ea" }
+"@keyword"                        = { fg = "$keyword", modifiers = ["bold"] }
+"@keyword.control"                = { fg = "$accent", modifiers = ["bold"] }
+"@keyword.return"                 = { fg = "$accent", modifiers = ["bold"] }
+"@keyword.operator"               = { fg = "$keyword" }
+"@keyword.sql"                    = { fg = "$keyword", modifiers = ["bold"] }
 
-"string"            = { fg = "#a3e88a" }
-"string.escape"     = { fg = "#ff9e64" }
-"string.special"    = { fg = "#7aa2f7" }
+"@string"                         = { fg = "$string" }
+"@string.escape"                  = { fg = "$orange" }
+"@string.special"                 = { fg = "$blue" }
 
-"comment"           = { fg = "#8597a3", italic = true }
+"@comment"                        = { fg = "$comment", modifiers = ["italic"] }
 
-"number"            = { fg = "#f78c6c" }
+"@number"                         = { fg = "$number" }
 
-"function"          = { fg = "#7aa2f7" }
-"function.builtin"  = { fg = "#bb9af7" }
-"function.method"   = { fg = "#7aa2f7" }
-"function.macro"    = { fg = "#bb9af7", bold = true }
+"@function"                       = { fg = "$blue" }
+"@function.builtin"               = { fg = "$accent" }
+"@function.method"                = { fg = "$blue" }
+"@function.macro"                 = { fg = "$accent", modifiers = ["bold"] }
 
-"type"              = { fg = "#ff9e64" }
-"type.builtin"      = { fg = "#ff9e64", bold = true }
+"@type"                           = { fg = "$orange" }
+"@type.builtin"                   = { fg = "$orange", modifiers = ["bold"] }
 
-"variable"          = { fg = "#e5e9f0" }
-"variable.builtin"  = { fg = "#bb9af7" }
-"variable.parameter" = { fg = "#e5e9f0", italic = true }
+"@variable"                       = { fg = "$fg" }
+"@variable.builtin"               = { fg = "$accent" }
+"@variable.parameter"             = { fg = "$fg", modifiers = ["italic"] }
 
-"constant"          = { fg = "#bb9af7" }
-"constant.builtin"  = { fg = "#bb9af7", bold = true }
+"@constant"                       = { fg = "$accent" }
+"@constant.builtin"               = { fg = "$accent", modifiers = ["bold"] }
 
-"punctuation"       = { fg = "#8b95a7" }
-"punctuation.bracket" = { fg = "#8b95a7" }
-"punctuation.delimiter" = { fg = "#8b95a7" }
+"@punctuation"                    = { fg = "$punctuation" }
+"@punctuation.bracket"            = { fg = "$punctuation" }
+"@punctuation.delimiter"          = { fg = "$punctuation" }
 
-"operator"          = { fg = "#7aa2f7" }
+"@operator"                       = { fg = "$blue" }
 
-# Markdown
-"tag"               = { fg = "#7aa2f7" }
-"heading"           = { fg = "#bb9af7", bold = true }
-"link"              = { fg = "#7aa2f7", underline = true }
-"code"              = { fg = "#a3e88a" }
+"@tag"                            = { fg = "$blue" }
+"@heading"                        = { fg = "$accent", modifiers = ["bold"] }
+"@link"                           = { fg = "$blue", modifiers = ["underline"] }
+"@code"                           = { fg = "$string" }
 
-# TOML
-"property"          = { fg = "#7aa2f7" }
-"table"             = { fg = "#ff9e64" }
+"@property"                       = { fg = "$blue" }
+"@table"                          = { fg = "$orange" }
 
-# SQL
-"keyword.sql"       = { fg = "#c792ea", bold = true }
-"identifier"        = { fg = "#e5e9f0" }
+"@identifier"                     = { fg = "$fg" }
 
 # Comment markers (TODO / FIXME / NOTE / WARN badges)
 # Label: coloured bg, dark fg, bold
 # Tail:  same colour as label bg, italic, no bg
-"comment.marker.todo"       = { fg = "#0b0d10", bg = "#ff9e64", bold = true }
-"comment.marker.tail.todo"  = { fg = "#ff9e64", italic = true }
+"@comment.marker.todo"            = { fg = "$bg", bg = "$orange", modifiers = ["bold"] }
+"@comment.marker.tail.todo"       = { fg = "$orange", modifiers = ["italic"] }
 
-"comment.marker.fixme"      = { fg = "#0b0d10", bg = "#f78c6c", bold = true }
-"comment.marker.tail.fixme" = { fg = "#f78c6c", italic = true }
+"@comment.marker.fixme"           = { fg = "$bg", bg = "$number", modifiers = ["bold"] }
+"@comment.marker.tail.fixme"      = { fg = "$number", modifiers = ["italic"] }
 
-"comment.marker.note"       = { fg = "#0b0d10", bg = "#7aa2f7", bold = true }
-"comment.marker.tail.note"  = { fg = "#7aa2f7", italic = true }
+"@comment.marker.note"            = { fg = "$bg", bg = "$blue", modifiers = ["bold"] }
+"@comment.marker.tail.note"       = { fg = "$blue", modifiers = ["italic"] }
 
-"comment.marker.warn"       = { fg = "#0b0d10", bg = "#bb9af7", bold = true }
-"comment.marker.tail.warn"  = { fg = "#bb9af7", italic = true }
+"@comment.marker.warn"            = { fg = "$bg", bg = "$accent", modifiers = ["bold"] }
+"@comment.marker.tail.warn"       = { fg = "$accent", modifiers = ["italic"] }
+
+[palette]
+bg          = "#0b0d10"
+fg          = "#e5e9f0"
+accent      = "#bb9af7"
+blue        = "#7aa2f7"
+orange      = "#ff9e64"
+keyword     = "#c792ea"
+string      = "#a3e88a"
+number      = "#f78c6c"
+comment     = "#8597a3"
+punctuation = "#8b95a7"

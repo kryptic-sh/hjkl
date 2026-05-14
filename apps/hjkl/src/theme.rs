@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(theme.ui.mode_insert_bg, Color::Rgb(0x7e, 0xe7, 0x87));
         assert_eq!(theme.ui.cursor_line_bg, Color::Rgb(0x2a, 0x32, 0x40));
         // Syntax theme must resolve a known capture.
-        assert!(theme.syntax.style("keyword").is_some());
+        assert!(theme.syntax.style("@keyword").is_some());
     }
 
     #[test]

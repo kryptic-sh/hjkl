@@ -19,6 +19,7 @@ use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, Point, Theme};
 use hjkl_buffer::Sign;
 use hjkl_engine::Query;
+use hjkl_theme_tui::ToRatatui;
 
 use crate::lang::{GrammarRequest, LanguageDirectory};
 

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_picker::PreviewSpans;
+use hjkl_theme_tui::ToRatatui;
 
 use crate::git_worker::GitJob;
 use crate::lang::GrammarRequest;
