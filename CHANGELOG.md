@@ -8,6 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-05-15
+
+### Changed
+
+Phase 6.6 of kryptic-sh/hjkl#72 — full vim FSM extraction. The engine is now a
+pure controller and the FSM lives in `hjkl-vim`. apps/hjkl drives the FSM
+through `hjkl_vim::handle_key` / `hjkl_vim::dispatch_input` instead of the
+deleted `Editor::handle_key` / `Editor::step_input` / `hjkl_engine::step`.
+
+Dep bumps (breaking dep removals + new API in hjkl-vim):
+
+- `hjkl-engine` 0.6.9 → 0.7.0 (Phase 6.6 FSM deletion — breaking)
+- `hjkl-vim` 0.18.1 → 0.19.0 (canonical FSM entry points)
+- `hjkl-editor` 0.4.6 → 0.4.7 (dep bumps only)
+- `hjkl-form` 0.3.6 → 0.3.7 (internal FSM driver swapped)
+- `hjkl-ratatui` 0.3.6 → 0.3.7 (dep bumps only)
+
+apps/hjkl internal callsites of `editor.handle_key` migrated to
+`hjkl_vim::handle_key` (apps/hjkl/src/app/event_loop.rs +
+apps/hjkl/src/app/mod.rs production paths, apps/hjkl/src/app/tests.rs's 60 test
+callsites). No external UX change.
+
 ## [0.15.3] - 2026-05-14
 
 ### Changed
@@ -1978,6 +2000,7 @@ the editor side.
 - `MIGRATION.md` — extraction plan and design rationale.
 
 [Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...HEAD
+[0.16.0]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.3
 [0.15.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.2
 [0.15.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.1
