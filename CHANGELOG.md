@@ -8,8 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-05-15
+
 ### Added
 
+- **`<leader>h` query history fuzzy picker.** Press `<leader>h` to open a picker
+  over the in-session query history (newest first). Each row shows the first
+  query line (~60 chars) plus a relative age ("5s ago", "3m ago", etc.). Fuzzy
+  matching runs over the full query. Selecting loads the query into the active
+  editor buffer; Esc dismisses without change. Backed by `HistoryEntry`
+  (sqeel-core 0.4.7) and `SqeelHistorySource` (sqeel-tui 0.4.12). (#17)
 - **`$DATABASE_URL` startup prompt.** When no `--url`/`--connection` flag is
   provided and `$DATABASE_URL` is set to a non-empty value, sqeel prints a y/N
   prompt on stderr (before the TUI opens) showing the URL with the password
@@ -17,6 +25,13 @@ patch bumps.
   path as `--url`; declining falls through to normal startup (picker or
   add-connection form). The `--sandbox` flag suppresses the prompt. Resolves
   [#22](https://github.com/kryptic-sh/sqeel/issues/22).
+
+### Changed
+
+- Submodule pointer bumps: `sqeel-core` 0.4.5 → 0.4.7 (`HistoryEntry` +
+  rust-toolchain.toml runner-cache ci.yml fix); `sqeel-tui` 0.4.11 → 0.4.12
+  (history picker + bundled ci.yml fix); `sqeel-config` pointer refreshed for
+  the same ci.yml runner-cache fix (no version bump).
 
 ## [0.4.14] - 2026-05-15
 
@@ -411,7 +426,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.14...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.15...HEAD
+[0.4.15]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.15
 [0.4.14]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.14
 [0.4.13]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.13
 [0.4.12]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.12
