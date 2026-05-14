@@ -1175,6 +1175,7 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
+ "hjkl-vim",
  "insta",
  "regex",
 ]
@@ -1263,6 +1264,8 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
+ "proptest",
+ "ratatui",
 ]
 
 [[package]]
