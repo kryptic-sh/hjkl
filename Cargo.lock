@@ -2853,7 +2853,9 @@ name = "sqeel-tui"
 version = "0.4.10"
 dependencies = [
  "anyhow",
+ "chrono",
  "crossterm",
+ "dirs",
  "hjkl-anvil",
  "hjkl-bonsai 0.5.4",
  "hjkl-buffer",
@@ -2870,6 +2872,7 @@ dependencies = [
  "regex",
  "serde",
  "sqeel-core",
+ "tempfile",
  "tokio",
  "toml",
  "unicode-width",
