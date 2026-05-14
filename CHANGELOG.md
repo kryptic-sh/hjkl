@@ -6,6 +6,48 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-05-14
+
+### Added
+
+Phase 6.1 of kryptic-sh/hjkl#72 (engine slimdown, chunk 1 of 8). Promote
+`handle_insert_key`'s arms to public `Editor::*` controller methods so
+insert-mode can be driven without going through the FSM. The FSM still works
+(internal `step_insert` now delegates to the new primitives) — this release is
+purely additive.
+
+16 new public methods on `Editor`:
+
+- `insert_char(ch)` — insert char; overstrike in Replace mode; smartindent
+  dedent on closing brackets
+- `insert_newline()` — split line + autoindent/smartindent prefix
+- `insert_tab()` — tab or spaces to next softtabstop boundary
+- `insert_backspace()` — soft-tab run delete; join prev line at col 0
+- `insert_delete()` — delete under cursor; join next line at EOL
+- `insert_arrow(InsertDir)` — L/R/U/D cursor move + `break_undo_group`
+- `insert_home()` / `insert_end()` — move to line start/end + `break_undo_group`
+- `insert_pageup(viewport_h)` / `insert_pagedown(viewport_h)` — page scroll
+- `insert_ctrl_w()` — delete to previous word start (vim `b`-motion)
+- `insert_ctrl_u()` — delete to line start (no-op at col 0)
+- `insert_ctrl_h()` — single backspace (Ctrl-H alias)
+- `insert_ctrl_o_arm()` — arm one-shot Normal mode flag
+- `insert_ctrl_r_arm()` — arm register-paste selector
+- `insert_ctrl_t()` / `insert_ctrl_d()` — indent/outdent current line by
+  `shiftwidth`
+- `insert_paste_register(reg)` — paste register text at cursor
+- `leave_insert_to_normal()` — Esc handler: `finish_insert_session` + step
+  cursor 1 left + record `gi` target + update sticky col
+
+New `vim::InsertDir` enum re-exported from `lib.rs` for `insert_arrow`.
+
+Each primitive runs through `Editor::mutate_edit` so dirty / undo /
+`InsertSession` bookkeeping fires correctly (verified for dot-repeat
+compatibility).
+
+31 new unit tests in `editor.rs` (722 total, up from 691) covering each
+primitive plus edge cases: softtabstop run-delete, join-up at col 0, expandtab
+vs real tab, Esc step-back col, replace-mode overstrike, buffer-boundary no-ops.
+
 ## [0.6.8] - 2026-05-14
 
 ### Added
@@ -616,7 +658,8 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.8...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.9...HEAD
+[0.6.9]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.6.4...v0.6.6
