@@ -928,13 +928,37 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
     // ── Phase 6.4: insert-mode entry ─────────────────────────────────────
     // Normal mode only. Engine FSM arms kept for macro-replay coverage.
     for (chord, action, desc) in [
-        ("i", AppAction::EnterInsertI { count: 1 }, "insert before cursor"),
-        ("I", AppAction::EnterInsertShiftI { count: 1 }, "insert at line start"),
-        ("a", AppAction::EnterInsertA { count: 1 }, "append after cursor"),
-        ("A", AppAction::EnterInsertShiftA { count: 1 }, "append at line end"),
+        (
+            "i",
+            AppAction::EnterInsertI { count: 1 },
+            "insert before cursor",
+        ),
+        (
+            "I",
+            AppAction::EnterInsertShiftI { count: 1 },
+            "insert at line start",
+        ),
+        (
+            "a",
+            AppAction::EnterInsertA { count: 1 },
+            "append after cursor",
+        ),
+        (
+            "A",
+            AppAction::EnterInsertShiftA { count: 1 },
+            "append at line end",
+        ),
         ("o", AppAction::EnterInsertO { count: 1 }, "open line below"),
-        ("O", AppAction::EnterInsertShiftO { count: 1 }, "open line above"),
-        ("R", AppAction::EnterReplace { count: 1 }, "enter replace mode"),
+        (
+            "O",
+            AppAction::EnterInsertShiftO { count: 1 },
+            "open line above",
+        ),
+        (
+            "R",
+            AppAction::EnterReplace { count: 1 },
+            "enter replace mode",
+        ),
     ] {
         if let Err(e) = km.add(Mode::Normal, chord, action, desc) {
             eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
@@ -966,11 +990,23 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ),
         ("D", AppAction::DeleteToEol, "delete to end of line"),
         ("C", AppAction::ChangeToEol, "change to end of line"),
-        ("Y", AppAction::YankToEol { count: 1 }, "yank to end of line"),
+        (
+            "Y",
+            AppAction::YankToEol { count: 1 },
+            "yank to end of line",
+        ),
         ("J", AppAction::JoinLine { count: 1 }, "join lines"),
         ("~", AppAction::ToggleCase { count: 1 }, "toggle case"),
-        ("p", AppAction::PasteAfter { count: 1 }, "paste after cursor"),
-        ("P", AppAction::PasteBefore { count: 1 }, "paste before cursor"),
+        (
+            "p",
+            AppAction::PasteAfter { count: 1 },
+            "paste after cursor",
+        ),
+        (
+            "P",
+            AppAction::PasteBefore { count: 1 },
+            "paste before cursor",
+        ),
     ] {
         if let Err(e) = km.add(Mode::Normal, chord, action, desc) {
             eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
@@ -1047,10 +1083,7 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("n", true, "search forward repeat"),
         ("N", false, "search backward repeat"),
     ] {
-        let action = AppAction::SearchRepeat {
-            forward,
-            count: 1,
-        };
+        let action = AppAction::SearchRepeat { forward, count: 1 };
         for mode in [
             Mode::Normal,
             Mode::Visual,

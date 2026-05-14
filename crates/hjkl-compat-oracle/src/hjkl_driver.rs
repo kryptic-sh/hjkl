@@ -49,7 +49,7 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // 4. Parse and replay keystrokes.
     let inputs = decode_macro(&case.keys);
     for input in inputs {
-        hjkl_engine::step(&mut editor, input);
+        editor.step_input(input);
     }
 
     // 5. Read back state.

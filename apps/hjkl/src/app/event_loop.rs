@@ -120,15 +120,9 @@ impl App {
             }
 
             // Ctrl-prefixed insert shortcuts
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_w()
-            }
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_u()
-            }
-            (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_h()
-            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_w(),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_u(),
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_h(),
             // `Ctrl-O`: flip to one-shot Normal; the next key routes as Normal.
             (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                 self.active_mut().editor.insert_ctrl_o_arm()
@@ -137,12 +131,8 @@ impl App {
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                 self.active_mut().editor.insert_ctrl_r_arm()
             }
-            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_t()
-            }
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                self.active_mut().editor.insert_ctrl_d()
-            }
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_t(),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => self.active_mut().editor.insert_ctrl_d(),
 
             // Silently drop unrecognised keys (function keys, Alt combos, etc.).
             _ => {}

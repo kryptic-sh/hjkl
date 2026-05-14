@@ -3386,7 +3386,7 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
         key: Key::Char('n'),
         ..Default::default()
     };
-    hjkl_engine::step(&mut app.active_mut().editor, n_input);
+    app.active_mut().editor.step_input(n_input);
     let (row1, _) = app.active().editor.cursor();
     assert_eq!(
         row1, 4,
@@ -9652,7 +9652,10 @@ fn p64_shift_i_enters_insert_at_line_start() {
     );
     // Cursor must be at first non-blank col (col 2).
     let (_, col) = app.active().editor.cursor();
-    assert_eq!(col, 2, "I must place cursor at first non-blank; got col {col}");
+    assert_eq!(
+        col, 2,
+        "I must place cursor at first non-blank; got col {col}"
+    );
 }
 
 #[test]
@@ -9728,7 +9731,10 @@ fn p64_shift_o_opens_line_above_and_enters_insert() {
     );
     // After O from row 1, cursor must be on row 1 (new line inserted above line2).
     let (row, _) = app.active().editor.cursor();
-    assert_eq!(row, 1, "O must place cursor on new row above; got row {row}");
+    assert_eq!(
+        row, 1,
+        "O must place cursor on new row above; got row {row}"
+    );
 }
 
 // ── char / line mutation ops ─────────────────────────────────────────────────
@@ -9821,7 +9827,10 @@ fn p64_big_d_deletes_to_eol() {
     let consumed = app.route_chord_key(ck('D'));
     assert!(consumed, "D must be consumed by keymap");
     let line = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line, "hello", "D at col 5 must delete ' world'; got {line:?}");
+    assert_eq!(
+        line, "hello",
+        "D at col 5 must delete ' world'; got {line:?}"
+    );
     assert_eq!(
         app.active().editor.vim_mode(),
         VimMode::Normal,
@@ -9839,7 +9848,10 @@ fn p64_big_c_changes_to_eol() {
     let consumed = app.route_chord_key(ck('C'));
     assert!(consumed, "C must be consumed by keymap");
     let line = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line, "hello", "C at col 5 must delete ' world'; got {line:?}");
+    assert_eq!(
+        line, "hello",
+        "C at col 5 must delete ' world'; got {line:?}"
+    );
     assert_eq!(
         app.active().editor.vim_mode(),
         VimMode::Insert,
@@ -9858,10 +9870,16 @@ fn p64_big_y_yanks_to_eol() {
     assert!(consumed, "Y must be consumed by keymap");
     // Buffer must be unchanged.
     let line = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line, "hello world", "Y must not modify buffer; got {line:?}");
+    assert_eq!(
+        line, "hello world",
+        "Y must not modify buffer; got {line:?}"
+    );
     // Unnamed register must hold "world".
     let reg = app.active().editor.registers().unnamed.text.clone();
-    assert_eq!(reg, "world", "Y must yank 'world' to unnamed register; got {reg:?}");
+    assert_eq!(
+        reg, "world",
+        "Y must yank 'world' to unnamed register; got {reg:?}"
+    );
     assert_eq!(
         app.active().editor.vim_mode(),
         VimMode::Normal,
@@ -9914,7 +9932,10 @@ fn p64_big_j_with_count_10_joins_10_lines() {
     );
     // At least line12 must be in the remaining buffer.
     let has_line12 = lines.iter().any(|l| l == "line12");
-    assert!(has_line12, "10J must leave 'line12' in buffer; got {lines:?}");
+    assert!(
+        has_line12,
+        "10J must leave 'line12' in buffer; got {lines:?}"
+    );
 }
 
 #[test]
@@ -9965,7 +9986,10 @@ fn p64_big_p_pastes_before_cursor() {
     let consumed = app.route_chord_key(ck('P'));
     assert!(consumed, "P must be consumed by keymap");
     let line = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line, "hello", "P must paste 'l' before cursor; got {line:?}");
+    assert_eq!(
+        line, "hello",
+        "P must paste 'l' before cursor; got {line:?}"
+    );
 }
 
 #[test]
@@ -10004,7 +10028,10 @@ fn p64_u_undoes_last_change() {
     let consumed = app.route_chord_key(ck('u'));
     assert!(consumed, "u must be consumed by keymap");
     let line_after_undo = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line_after_undo, "hello", "u must undo the delete; got {line_after_undo:?}");
+    assert_eq!(
+        line_after_undo, "hello",
+        "u must undo the delete; got {line_after_undo:?}"
+    );
 }
 
 #[test]
@@ -10028,7 +10055,10 @@ fn p64_ctrl_r_redoes_after_undo() {
     let consumed = app.route_chord_key(ctrl_r);
     assert!(consumed, "<C-r> must be consumed by keymap");
     let line_after_redo = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line_after_redo, "ello", "<C-r> must redo the delete; got {line_after_redo:?}");
+    assert_eq!(
+        line_after_redo, "ello",
+        "<C-r> must redo the delete; got {line_after_redo:?}"
+    );
 }
 
 // ── visual entry / exit ──────────────────────────────────────────────────────
@@ -10102,7 +10132,10 @@ fn p64_visual_o_toggles_anchor() {
 
     // `o` in Visual should toggle anchor — cursor and anchor swap.
     let consumed = app.route_chord_key(ck('o'));
-    assert!(consumed, "o in Visual must be consumed by keymap (VisualToggleAnchor)");
+    assert!(
+        consumed,
+        "o in Visual must be consumed by keymap (VisualToggleAnchor)"
+    );
     let cursor_after = app.active().editor.cursor();
     // After toggle, cursor should be at old anchor (col 0), not old cursor.
     assert_ne!(cursor_before, cursor_after, "o must swap cursor and anchor");
@@ -10138,9 +10171,15 @@ fn p64_n_repeats_search_forward() {
     // Establish search pattern.
     app.open_search_prompt(crate::app::SearchDir::Forward);
     for c in ['f', 'o', 'o'] {
-        app.handle_search_field_key(KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE));
+        app.handle_search_field_key(KeyEvent::new(
+            KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        ));
     }
-    app.handle_search_field_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+    app.handle_search_field_key(KeyEvent::new(
+        KeyCode::Enter,
+        crossterm::event::KeyModifiers::NONE,
+    ));
 
     let (_, col_after_first) = app.active().editor.cursor();
 
@@ -10167,7 +10206,10 @@ fn p64_star_searches_word_under_cursor() {
     app.sync_viewport_from_editor();
     // Cursor must have moved to second "hello" (col 12).
     let (_, col) = app.active().editor.cursor();
-    assert_eq!(col, 12, "* must land on second 'hello' at col 12; got col {col}");
+    assert_eq!(
+        col, 12,
+        "* must land on second 'hello' at col 12; got col {col}"
+    );
 }
 
 // ── scroll ops ───────────────────────────────────────────────────────────────
@@ -10178,14 +10220,20 @@ fn p64_ctrl_e_is_consumed_by_keymap() {
     // (Viewport math depends on terminal height, which is 0 in unit tests.)
     use crossterm::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
-    let content: String = (1..=50).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+    let content: String = (1..=50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     seed_buffer(&mut app, &content);
     app.active_mut().editor.jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
     let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_e);
-    assert!(consumed, "<C-e> must be consumed by keymap (ScrollLine Down)");
+    assert!(
+        consumed,
+        "<C-e> must be consumed by keymap (ScrollLine Down)"
+    );
     // Mode must remain Normal.
     assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
 }
@@ -10196,7 +10244,10 @@ fn p64_ctrl_y_is_consumed_by_keymap() {
     // (Viewport math depends on terminal height, which is 0 in unit tests.)
     use crossterm::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
-    let content: String = (1..=50).map(|i| format!("line{i}")).collect::<Vec<_>>().join("\n");
+    let content: String = (1..=50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     seed_buffer(&mut app, &content);
     app.active_mut().editor.jump_cursor(0, 0);
     app.sync_viewport_from_editor();
@@ -10232,7 +10283,10 @@ fn p64_gv_reenters_last_visual_selection() {
     // Must be back in Visual mode.
     let mode = app.active().editor.vim_mode();
     assert!(
-        matches!(mode, VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock),
+        matches!(
+            mode,
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        ),
         "gv must reenter visual mode; got {mode:?}"
     );
 }
@@ -10298,26 +10352,46 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
 
     // `q a` — start recording into register 'a'.
     macro_key_seq(&mut app, &[ck('q'), ck('a')]);
-    assert!(app.active().editor.is_recording_macro(), "must be recording after qa");
+    assert!(
+        app.active().editor.is_recording_macro(),
+        "must be recording after qa"
+    );
 
     // `i` via keymap — enter Insert.
     macro_key_seq(&mut app, &[ck('i')]);
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Insert, "i must enter Insert");
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Insert,
+        "i must enter Insert"
+    );
 
     // Type "Hello" in Insert mode.
     for c in ['H', 'e', 'l', 'l', 'o'] {
-        app.active_mut().editor.handle_key(KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE));
+        app.active_mut().editor.handle_key(KeyEvent::new(
+            KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        ));
     }
     app.sync_after_engine_mutation();
 
     // `<Esc>` — exit Insert.
-    app.active_mut().editor.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
+    app.active_mut().editor.handle_key(KeyEvent::new(
+        KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
     app.sync_after_engine_mutation();
-    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal, "Esc must return to Normal");
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Normal,
+        "Esc must return to Normal"
+    );
 
     // `q` — stop recording.
     macro_key_seq(&mut app, &[ck('q')]);
-    assert!(!app.active().editor.is_recording_macro(), "must stop recording after q");
+    assert!(
+        !app.active().editor.is_recording_macro(),
+        "must stop recording after q"
+    );
 
     // Buffer after record: "Helloworld" (or similar depending on cursor pos).
     // Move cursor back to start and replay.
@@ -10423,10 +10497,7 @@ fn p65_esc_exits_insert_mode() {
     app.active_mut().editor.jump_cursor(0, 2);
     enter_insert(&mut app);
 
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     assert_eq!(
         app.active().editor.vim_mode(),
@@ -10465,7 +10536,11 @@ fn p65_backspace_at_col0_joins_lines() {
     );
 
     let lines = app.active().editor.buffer().lines().to_vec();
-    assert_eq!(lines.len(), 1, "Backspace at col 0 must join lines; got {lines:?}");
+    assert_eq!(
+        lines.len(),
+        1,
+        "Backspace at col 0 must join lines; got {lines:?}"
+    );
     assert_eq!(lines[0], "helloworld");
 }
 
@@ -10476,10 +10551,7 @@ fn p65_enter_inserts_newline() {
     app.active_mut().editor.jump_cursor(0, 2);
     enter_insert(&mut app);
 
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     let lines = app.active().editor.buffer().lines().to_vec();
     assert_eq!(lines.len(), 2, "Enter must split line; got {lines:?}");
@@ -10494,10 +10566,7 @@ fn p65_delete_removes_char_under_cursor() {
     app.active_mut().editor.jump_cursor(0, 1);
     enter_insert(&mut app);
 
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
     let line = app.active().editor.buffer().lines()[0].clone();
     assert_eq!(line, "hllo", "Delete must remove 'e'; got {line:?}");
@@ -10528,10 +10597,7 @@ fn p65_arrow_right_moves_cursor() {
     enter_insert(&mut app);
 
     let (_, col_before) = app.active().editor.cursor();
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
     let (_, col_after) = app.active().editor.cursor();
 
     assert!(
@@ -10599,7 +10665,10 @@ fn p65_end_moves_to_line_end() {
     let (_, col) = app.active().editor.cursor();
     // `End` in Insert mode lands on the last character (col = len-1 = 4), not
     // past it. `move_line_end` uses `last_col` which returns `chars - 1`.
-    assert_eq!(col, 4, "End must move cursor to last char col 4; got col {col}");
+    assert_eq!(
+        col, 4,
+        "End must move cursor to last char col 4; got col {col}"
+    );
 }
 
 #[test]
@@ -10610,10 +10679,7 @@ fn p65_pageup_does_not_crash() {
     app.active_mut().editor.jump_cursor(15, 0);
     enter_insert(&mut app);
 
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
     // Should still be in Insert mode (no crash).
     assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
 }
@@ -10772,10 +10838,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
     }
 
     // Exit insert.
-    dik(
-        &mut app,
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    );
+    dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
 
     let line = app.active().editor.buffer().lines()[0].clone();
@@ -10895,7 +10958,10 @@ fn p65_i_hello_esc_types_literal() {
 
     assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
     let line = app.active().editor.buffer().lines()[0].clone();
-    assert_eq!(line, "Hello", "iHello<Esc> must leave 'Hello' in buffer; got {line:?}");
+    assert_eq!(
+        line, "Hello",
+        "iHello<Esc> must leave 'Hello' in buffer; got {line:?}"
+    );
 }
 
 #[test]
@@ -10908,7 +10974,10 @@ fn p65_replace_mode_overstrike() {
 
     // Enter Replace via keymap chord 'R'.
     let consumed = app.route_chord_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
-    assert!(consumed, "R must be consumed by keymap (EnterInsertReplace)");
+    assert!(
+        consumed,
+        "R must be consumed by keymap (EnterInsertReplace)"
+    );
     assert_eq!(
         app.active().editor.vim_mode(),
         VimMode::Insert,

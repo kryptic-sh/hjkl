@@ -105,7 +105,7 @@ fn dispatch(
             };
             let inputs = hjkl_engine::decode_macro(&keys);
             for input in inputs {
-                hjkl_engine::step(editor, input);
+                editor.step_input(input);
             }
             success(id, Value::Null)
         }
