@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-15
+
+### Changed
+
+- Migrated theme parsing onto `hjkl-theme` + `hjkl-theme-tui`. The bespoke
+  `Style` struct, `parse_hex_color`, `RawStyle`, and
+  `TryFrom<RawStyle> for Style` are removed; all parsing and palette resolution
+  is now handled by `hjkl-theme`.
+- `bonsai::Style` is removed. Callers should use `hjkl_theme::StyleSpec`
+  directly. The type is re-exported from `hjkl-bonsai` as `StyleSpec` for
+  convenience.
+- `Theme::style` now returns `Option<&hjkl_theme::StyleSpec>` (borrowed) instead
+  of `Option<Style>` (owned clone).
+- `Style::to_ratatui` is removed. Callers needing a `ratatui::style::Style`
+  should add `hjkl-theme-tui` to their own deps and call
+  `hjkl_theme_tui::ToRatatui::to_ratatui()` on the `StyleSpec`.
+- Theme TOML schema updated: capture keys are `@`-prefixed tree-sitter names
+  (`@keyword`, `@function`, …). Modifiers use the array form
+  `modifiers = ["bold", "italic"]`. Palette refs use `$name` syntax. See
+  `themes/default-dark.toml` as the canonical reference. Old flat themes
+  (without `@` prefix) need conversion before they will parse.
+- `ratatui` removed from `hjkl-bonsai` direct dependencies.
+
 ## [0.6.2] - 2026-05-12
 
 ### Performance
@@ -359,7 +382,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-bonsai/releases/tag/v0.6.0

@@ -22,7 +22,7 @@
 //!
 //! let theme = DotFallbackTheme::dark();
 //! for span in &spans {
-//!     if let Some(_style) = theme.style(span.capture()) {
+//!     if let Some(_spec) = theme.style(span.capture()) {
 //!         // apply style to byte_range in your renderer
 //!     }
 //! }
@@ -45,5 +45,5 @@ pub use predicate::{
     Directive, MatchContext, MatchMetadata, MetaValue, Predicate, PredicateArg, PredicateRegistry,
     directive_fn, predicate_fn,
 };
-pub use theme::{DotFallbackTheme, Style, Theme};
+pub use theme::{DotFallbackTheme, StyleSpec, Theme};
 pub use tree_sitter::{InputEdit, Point};

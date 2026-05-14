@@ -1,139 +1,34 @@
-use std::collections::HashMap;
-
 use anyhow::{Context, Result};
-use ratatui::style::Color;
-use serde::Deserialize;
 
-/// Visual style for a syntax capture. Mirrors ratatui's `Style` but is
-/// self-contained so callers can adapt it to any renderer.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Style {
-    pub fg: Option<Color>,
-    pub bg: Option<Color>,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-}
+pub use hjkl_theme::StyleSpec;
 
-impl Style {
-    /// Convert into a ratatui `Style`.
-    pub fn to_ratatui(&self) -> ratatui::style::Style {
-        let mut s = ratatui::style::Style::default();
-        if let Some(fg) = self.fg {
-            s = s.fg(fg);
-        }
-        if let Some(bg) = self.bg {
-            s = s.bg(bg);
-        }
-        let mut mods = ratatui::style::Modifier::empty();
-        if self.bold {
-            mods |= ratatui::style::Modifier::BOLD;
-        }
-        if self.italic {
-            mods |= ratatui::style::Modifier::ITALIC;
-        }
-        if self.underline {
-            mods |= ratatui::style::Modifier::UNDERLINED;
-        }
-        s.add_modifier(mods)
-    }
-}
-
-/// Syntax theme. Implementors map capture names to `Style` values.
-/// The dot-fallback resolution (`function.method.builtin` → `function.method`
-/// → `function` → default) is provided by `DotFallbackTheme`.
+/// Syntax theme. Implementors map capture names to [`StyleSpec`] values.
+/// The dot-fallback resolution (`@function.method.builtin` → `@function.method`
+/// → `@function` → `None`) is provided by `DotFallbackTheme`.
 pub trait Theme: Send + Sync {
     /// Return the style for a capture name, or `None` to skip styling.
-    fn style(&self, capture: &str) -> Option<Style>;
-}
-
-// ---------------------------------------------------------------------------
-// TOML deserialization helpers
-// ---------------------------------------------------------------------------
-
-fn parse_hex_color(s: &str) -> Option<Color> {
-    let s = s.trim_start_matches('#');
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some(Color::Rgb(r, g, b))
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct RawStyle {
-    fg: Option<String>,
-    bg: Option<String>,
-    #[serde(default)]
-    bold: bool,
-    #[serde(default)]
-    italic: bool,
-    #[serde(default)]
-    underline: bool,
-}
-
-impl TryFrom<RawStyle> for Style {
-    type Error = anyhow::Error;
-
-    fn try_from(raw: RawStyle) -> Result<Self> {
-        let fg = raw
-            .fg
-            .as_deref()
-            .map(|s| parse_hex_color(s).with_context(|| format!("invalid fg color: {s}")))
-            .transpose()?;
-        let bg = raw
-            .bg
-            .as_deref()
-            .map(|s| parse_hex_color(s).with_context(|| format!("invalid bg color: {s}")))
-            .transpose()?;
-        Ok(Style {
-            fg,
-            bg,
-            bold: raw.bold,
-            italic: raw.italic,
-            underline: raw.underline,
-        })
-    }
+    fn style(&self, capture: &str) -> Option<&hjkl_theme::StyleSpec>;
 }
 
 // ---------------------------------------------------------------------------
 // DotFallbackTheme
 // ---------------------------------------------------------------------------
 
-/// A theme loaded from a TOML map. Resolves captures via dot-fallback:
-/// `function.method.builtin` → `function.method` → `function` → `default`.
+/// A theme loaded from a TOML string in hjkl-theme schema format.
+/// Resolves captures via dot-fallback:
+/// `@function.method.builtin` → `@function.method` → `@function` → `None`.
 pub struct DotFallbackTheme {
-    styles: HashMap<String, Style>,
-    default: Option<Style>,
+    inner: hjkl_theme::Theme,
 }
 
 impl DotFallbackTheme {
-    /// Parse from a TOML string of the form:
-    /// ```toml
-    /// "keyword"         = { fg = "#cc99cc", bold = true }
-    /// "keyword.control" = { fg = "#ffaaaa", bold = true }
-    /// default           = { fg = "#d8dee9" }
-    /// ```
+    /// Parse from a TOML string following the hjkl-theme schema.
+    ///
+    /// Capture keys must be `@`-prefixed TS names. Modifiers use the
+    /// `modifiers = ["bold", "italic"]` array form.
     pub fn from_toml(toml_str: &str) -> Result<Self> {
-        // The TOML is a flat table with string keys mapping to style tables.
-        let raw: HashMap<String, RawStyle> =
-            toml::from_str(toml_str).context("failed to parse theme TOML")?;
-
-        let mut styles = HashMap::with_capacity(raw.len());
-        let mut default = None;
-
-        for (key, raw_style) in raw {
-            let style = Style::try_from(raw_style).with_context(|| format!("key {key:?}"))?;
-            if key == "default" {
-                default = Some(style);
-            } else {
-                styles.insert(key, style);
-            }
-        }
-
-        Ok(Self { styles, default })
+        let inner = hjkl_theme::Theme::from_toml_str(toml_str).context("parse theme TOML")?;
+        Ok(Self { inner })
     }
 
     /// Built-in dark theme (embedded at compile time).
@@ -150,81 +45,97 @@ impl DotFallbackTheme {
 }
 
 impl Theme for DotFallbackTheme {
-    /// Resolve `capture` via dot-fallback:
-    /// `function.method.builtin` → `function.method` → `function` → `default`.
-    fn style(&self, capture: &str) -> Option<Style> {
-        let mut key = capture;
-        loop {
-            if let Some(s) = self.styles.get(key) {
-                return Some(s.clone());
-            }
-            // Strip the last `.segment` and retry.
-            if let Some(pos) = key.rfind('.') {
-                key = &key[..pos];
-            } else {
-                // No more segments — fall through to `default`.
-                break;
-            }
-        }
-        self.default.clone()
+    fn style(&self, capture: &str) -> Option<&hjkl_theme::StyleSpec> {
+        self.inner.captures.resolve(capture)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use hjkl_theme::Color;
+
     use super::*;
 
     #[test]
     fn theme_dot_fallback_exact_match() {
         let theme = DotFallbackTheme::dark();
-        // "keyword" exists directly
-        let s = theme.style("keyword");
-        assert!(s.is_some(), "expected style for 'keyword'");
-        assert!(s.unwrap().bold);
+        let s = theme.style("@keyword");
+        assert!(s.is_some(), "expected style for '@keyword'");
+        assert!(s.unwrap().modifiers.bold);
     }
 
     #[test]
     fn theme_dot_fallback_partial_match() {
         let theme = DotFallbackTheme::dark();
-        // "function.method.builtin" not in theme -> falls to "function"
-        let s = theme.style("function.method.builtin");
+        // "@function.method.builtin" not in theme -> falls to "@function.method" -> "@function"
+        let s = theme.style("@function.method.builtin");
         assert!(
             s.is_some(),
-            "expected fallback style for 'function.method.builtin'"
+            "expected fallback style for '@function.method.builtin'"
         );
     }
 
     #[test]
-    fn theme_dot_fallback_unknown_returns_default() {
+    fn theme_dot_fallback_unknown_returns_none() {
         let theme = DotFallbackTheme::dark();
-        // Completely unknown key falls back to `default`
-        let s = theme.style("zzzunknown.deep.capture");
-        assert!(s.is_some(), "expected default style for unknown capture");
+        // Completely unknown key with no partial matches returns None (no "default" key in schema).
+        let s = theme.style("@zzzunknown.deep.capture");
+        assert!(
+            s.is_none(),
+            "expected None for unknown capture with no fallback"
+        );
     }
 
     #[test]
     fn theme_light_loads() {
         let theme = DotFallbackTheme::light();
-        assert!(theme.style("keyword").is_some());
+        assert!(theme.style("@keyword").is_some());
     }
 
     #[test]
     fn theme_from_toml_invalid_color_errors() {
-        // Use ##- raw string delimiter to allow # inside the literal.
-        let bad = r##""keyword" = { fg = "#zzzzzz" }"##;
+        let bad = r##""@keyword" = { fg = "#zzzzzz", modifiers = ["bold"] }"##;
         assert!(DotFallbackTheme::from_toml(bad).is_err());
     }
 
     #[test]
-    fn style_to_ratatui_roundtrip() {
-        let style = Style {
-            fg: Some(Color::Rgb(100, 150, 200)),
-            bold: true,
-            italic: true,
-            ..Default::default()
-        };
-        let r = style.to_ratatui();
-        assert!(r.add_modifier.contains(ratatui::style::Modifier::BOLD));
-        assert!(r.add_modifier.contains(ratatui::style::Modifier::ITALIC));
+    fn dark_keyword_fg_matches_palette() {
+        let theme = DotFallbackTheme::dark();
+        let spec = theme
+            .style("@keyword")
+            .expect("@keyword must exist in dark theme");
+        // mauve = "#cc99cc" in the dark palette
+        assert_eq!(spec.fg, Some(Color::rgb(0xcc, 0x99, 0xcc)));
+        assert!(spec.modifiers.bold);
+    }
+
+    #[test]
+    fn dark_default_toml_parses_keyword_captures() {
+        let theme = DotFallbackTheme::dark();
+        for cap in [
+            "@keyword",
+            "@string",
+            "@comment",
+            "@function",
+            "@type",
+            "@variable",
+            "@operator",
+        ] {
+            assert!(
+                theme.style(cap).is_some(),
+                "expected capture '{cap}' in default-dark.toml"
+            );
+        }
+    }
+
+    #[test]
+    fn light_keyword_fg_matches_palette() {
+        let theme = DotFallbackTheme::light();
+        let spec = theme
+            .style("@keyword")
+            .expect("@keyword must exist in light theme");
+        // mauve = "#7b368f" in the light palette
+        assert_eq!(spec.fg, Some(Color::rgb(0x7b, 0x36, 0x8f)));
+        assert!(spec.modifiers.bold);
     }
 }

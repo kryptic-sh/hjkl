@@ -1,68 +1,73 @@
 # hjkl default-light theme
-# Capture-name dot-fallback applies: "keyword.control" falls back to "keyword" if not found.
-# Colors are #rrggbb hex strings.
+# Capture-name dot-fallback applies: "@keyword.control" falls back to "@keyword" if not found.
+# Colors are #rrggbb hex strings or palette references ($name).
 
-default             = { fg = "#2e3440" }
+"@keyword"                   = { fg = "$mauve", modifiers = ["bold"] }
+"@keyword.control"           = { fg = "$red", modifiers = ["bold"] }
+"@keyword.return"            = { fg = "$red", modifiers = ["bold"] }
+"@keyword.operator"          = "$mauve"
+"@keyword.sql"               = { fg = "$mauve", modifiers = ["bold"] }
 
-"keyword"           = { fg = "#7b368f", bold = true }
-"keyword.control"   = { fg = "#c0392b", bold = true }
-"keyword.return"    = { fg = "#c0392b", bold = true }
-"keyword.operator"  = { fg = "#7b368f" }
+"@string"                    = "$green"
+"@string.escape"             = "$peach"
+"@string.special"            = "$sky"
 
-"string"            = { fg = "#2d8a3e" }
-"string.escape"     = { fg = "#c0720c" }
-"string.special"    = { fg = "#1f6f8b" }
+"@comment"                   = { fg = "$overlay", modifiers = ["italic"] }
+"@comment.marker.todo"       = { fg = "$crust", bg = "$yellow", modifiers = ["bold"] }
+"@comment.marker.tail.todo"  = { fg = "$amber", modifiers = ["italic"] }
+"@comment.marker.fixme"      = { fg = "$crust", bg = "$red", modifiers = ["bold"] }
+"@comment.marker.tail.fixme" = { fg = "$red", modifiers = ["italic"] }
+"@comment.marker.note"       = { fg = "$crust", bg = "$blue", modifiers = ["bold"] }
+"@comment.marker.tail.note"  = { fg = "$sky", modifiers = ["italic"] }
+"@comment.marker.warn"       = { fg = "$crust", bg = "$peach", modifiers = ["bold"] }
+"@comment.marker.tail.warn"  = { fg = "$amber_dark", modifiers = ["italic"] }
 
-"comment"           = { fg = "#868e9c", italic = true }
+"@number"                    = "$number"
 
-"number"            = { fg = "#8e3a8e" }
+"@function"                  = "$sky"
+"@function.builtin"          = "$sapphire"
+"@function.method"           = "$sky"
+"@function.macro"            = { fg = "$sky", modifiers = ["bold"] }
 
-"function"          = { fg = "#1f6f8b" }
-"function.builtin"  = { fg = "#2b52a0" }
-"function.method"   = { fg = "#1f6f8b" }
-"function.macro"    = { fg = "#1f6f8b", bold = true }
+"@type"                      = "$amber"
+"@type.builtin"              = { fg = "$amber", modifiers = ["bold"] }
 
-"type"              = { fg = "#b5770d" }
-"type.builtin"      = { fg = "#b5770d", bold = true }
+"@variable"                  = "$fg"
+"@variable.builtin"          = "$red"
+"@variable.parameter"        = { fg = "$fg", modifiers = ["italic"] }
 
-"variable"          = { fg = "#2e3440" }
-"variable.builtin"  = { fg = "#c0392b" }
-"variable.parameter" = { fg = "#2e3440", italic = true }
+"@constant"                  = "$number"
+"@constant.builtin"          = { fg = "$number", modifiers = ["bold"] }
 
-"constant"          = { fg = "#8e3a8e" }
-"constant.builtin"  = { fg = "#8e3a8e", bold = true }
+"@punctuation"               = "$gutter"
+"@punctuation.bracket"       = "$gutter"
+"@punctuation.delimiter"     = "$gutter"
 
-"punctuation"       = { fg = "#5c6474" }
-"punctuation.bracket" = { fg = "#5c6474" }
-"punctuation.delimiter" = { fg = "#5c6474" }
+"@operator"                  = "$sapphire"
 
-"operator"          = { fg = "#2b52a0" }
+"@tag"                       = "$sapphire"
+"@heading"                   = { fg = "$sky", modifiers = ["bold"] }
+"@link"                      = { fg = "$sapphire", modifiers = ["underline"] }
+"@code"                      = "$green"
 
-# Markdown
-"tag"               = { fg = "#2b52a0" }
-"heading"           = { fg = "#1f6f8b", bold = true }
-"link"              = { fg = "#2b52a0", underline = true }
-"code"              = { fg = "#2d8a3e" }
+"@property"                  = "$sky"
+"@table"                     = "$amber"
 
-# TOML
-"property"          = { fg = "#1f6f8b" }
-"table"             = { fg = "#b5770d" }
+"@identifier"                = "$fg"
 
-# SQL
-"keyword.sql"       = { fg = "#7b368f", bold = true }
-"identifier"        = { fg = "#2e3440" }
-
-# Comment markers (TODO / FIXME / NOTE / WARN badges)
-# Label: coloured bg, dark fg, bold
-# Tail:  same colour as label bg, italic, no bg
-"comment.marker.todo"       = { fg = "#1d1d1d", bg = "#e5c07b", bold = true }
-"comment.marker.tail.todo"  = { fg = "#c08000", italic = true }
-
-"comment.marker.fixme"      = { fg = "#1d1d1d", bg = "#e06c75", bold = true }
-"comment.marker.tail.fixme" = { fg = "#c0392b", italic = true }
-
-"comment.marker.note"       = { fg = "#1d1d1d", bg = "#61afef", bold = true }
-"comment.marker.tail.note"  = { fg = "#1f6f8b", italic = true }
-
-"comment.marker.warn"       = { fg = "#1d1d1d", bg = "#d19a66", bold = true }
-"comment.marker.tail.warn"  = { fg = "#b06000", italic = true }
+[palette]
+fg         = "#2e3440"
+mauve      = "#7b368f"
+red        = "#c0392b"
+green      = "#2d8a3e"
+peach      = "#c0720c"
+sky        = "#1f6f8b"
+sapphire   = "#2b52a0"
+overlay    = "#868e9c"
+gutter     = "#5c6474"
+number     = "#8e3a8e"
+amber      = "#b5770d"
+amber_dark = "#b06000"
+yellow     = "#e5c07b"
+blue       = "#61afef"
+crust      = "#1d1d1d"
