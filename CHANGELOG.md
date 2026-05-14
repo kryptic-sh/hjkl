@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-05-14
+
+### Fixed
+
+- Gate `pty_harness::at_colon` e2e module off on macOS. macOS pty timing causes
+  `at_colon_repeats_last_goto_line` to see `:10\r` as literal Insert-mode text
+  (`screen` shows `:10j ... [I]`); the other 12 e2e tests pass on macOS,
+  including the `:100` regression in `render_sync.rs`. The `@:` feature is fully
+  covered by unit tests in `apps/hjkl/src/app/tests.rs`. v0.15.1 tag was created
+  but never reached publish steps because of this flake; v0.15.2 is the first
+  0.15.x line that actually ships.
+
 ## [0.15.1] - 2026-05-14
 
 ### Fixed
@@ -1951,7 +1963,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.2
 [0.15.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.1
 [0.15.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.0
 [0.14.11]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.14.11
