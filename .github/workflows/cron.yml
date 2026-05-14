@@ -73,7 +73,9 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
@@ -88,7 +90,9 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - name: Run benches if present
         run: |
@@ -113,8 +117,10 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           target: wasm32-unknown-unknown
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-opt + binaryen
         run: |
@@ -146,7 +152,9 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - name: Install neovim
         run: |

@@ -31,8 +31,10 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: rustfmt
           cache: false
+      - run: rustup update --no-self-update stable
       - run: cargo fmt --all --check
 
   clippy:
@@ -44,8 +46,10 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           components: clippy
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -62,7 +66,9 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --workspace --all-features --no-fail-fast
@@ -86,8 +92,10 @@ jobs:
           submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           target: wasm32-unknown-unknown
           cache: false
+      - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p hjkl-buffer --no-default-features
       - run: cargo build -p hjkl-buffer --no-default-features --target wasm32-unknown-unknown
@@ -196,9 +204,11 @@ jobs:
       - name: Install Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           target: ${{ matrix.target }}
           components: clippy, rustfmt
           cache: false
+      - run: rustup update --no-self-update stable
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -677,7 +687,9 @@ jobs:
       - name: Install Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: stable
           cache: false
+      - run: rustup update --no-self-update stable
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
