@@ -11671,3 +11671,135 @@ fn colon_vertical_resize_via_host_registry() {
         ":vertical resize +5 must grow focused window width ratio: before={ratio_before} after={ratio_after}"
     );
 }
+
+// ── Wildmenu / command completion (Phase 5b) tests ──────────────────────────
+
+fn tab_key() -> KeyEvent {
+    KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+}
+
+fn shift_tab_key() -> KeyEvent {
+    KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+}
+
+#[test]
+fn colon_tab_single_match_inserts_fully() {
+    // "writ" → Tab → should complete to "write" and close menu.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "writ");
+    app.handle_command_field_key(tab_key());
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "write",
+        "single match must insert fully"
+    );
+    assert!(
+        app.command_completion.is_none(),
+        "menu must close after single match"
+    );
+}
+
+#[test]
+fn colon_tab_multi_match_extends_to_lcp() {
+    // "w" → Tab → LCP of all w-commands; completion state must be Some.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    app.handle_command_field_key(tab_key());
+    // After first Tab, completion menu is open (multiple w* candidates exist).
+    assert!(
+        app.command_completion.is_some(),
+        "wildmenu must be open after Tab on multi-match"
+    );
+    let text = app.command_field.as_ref().unwrap().text();
+    // All w* candidates share "w" as prefix at minimum.
+    assert!(
+        text.starts_with('w'),
+        "field must start with typed prefix: {text:?}"
+    );
+}
+
+#[test]
+fn colon_tab_then_tab_cycles() {
+    // "w" → Tab (LCP, no selection) → Tab (selects idx 0) → Tab (selects idx 1).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    app.handle_command_field_key(tab_key()); // first Tab → LCP, selected=None
+    assert!(app.command_completion.is_some());
+    assert!(app.command_completion.as_ref().unwrap().selected.is_none());
+
+    app.handle_command_field_key(tab_key()); // second Tab → selected=Some(0)
+    let idx0 = app.command_completion.as_ref().unwrap().selected;
+    assert_eq!(idx0, Some(0));
+
+    app.handle_command_field_key(tab_key()); // third Tab → selected=Some(1)
+    let idx1 = app.command_completion.as_ref().unwrap().selected;
+    assert_eq!(idx1, Some(1));
+}
+
+#[test]
+fn colon_shift_tab_cycles_backward() {
+    // "w" → Tab (open, no sel) → Tab (idx 0) → Tab (idx 1) → S-Tab (idx 0).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    app.handle_command_field_key(tab_key()); // open, no sel
+    app.handle_command_field_key(tab_key()); // idx 0
+    app.handle_command_field_key(tab_key()); // idx 1
+    let before = app.command_completion.as_ref().unwrap().selected.unwrap();
+    app.handle_command_field_key(shift_tab_key()); // back to idx 0
+    let after = app.command_completion.as_ref().unwrap().selected.unwrap();
+    assert_eq!(after, before - 1, "S-Tab must decrement selection");
+}
+
+#[test]
+fn colon_esc_during_completion_reverts() {
+    // "w" → Tab (open) → Tab (select idx 0, text changed) → Esc → back to "w".
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    app.handle_command_field_key(tab_key()); // open
+    app.handle_command_field_key(tab_key()); // select first candidate
+    // Field now contains the candidate text, not "w".
+    let candidate_text = app.command_field.as_ref().unwrap().text();
+    // Esc should revert to "w" and clear completion but keep command_field open.
+    app.handle_command_field_key(key(KeyCode::Esc));
+    assert!(
+        app.command_completion.is_none(),
+        "completion must be cleared after Esc"
+    );
+    assert!(
+        app.command_field.is_some(),
+        "command field must stay open after completion Esc"
+    );
+    assert_eq!(
+        app.command_field.as_ref().unwrap().text(),
+        "w",
+        "field must revert to original: was {candidate_text:?}"
+    );
+}
+
+#[test]
+fn colon_other_key_during_completion_commits() {
+    // "w" → Tab (open, LCP applied) → Tab (select idx 0) → Space → commits, menu closed.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    app.handle_command_field_key(tab_key()); // open
+    app.handle_command_field_key(tab_key()); // select first candidate
+    let candidate_text = app.command_field.as_ref().unwrap().text();
+    // Press Space — should commit the candidate and close the menu.
+    app.handle_command_field_key(key(KeyCode::Char(' ')));
+    assert!(
+        app.command_completion.is_none(),
+        "completion must be cleared after non-Tab/non-Esc key"
+    );
+    // Field text should start with the selected candidate (space appended after commit).
+    let final_text = app.command_field.as_ref().unwrap().text();
+    assert!(
+        final_text.starts_with(&candidate_text),
+        "field must start with committed candidate: candidate={candidate_text:?} final={final_text:?}"
+    );
+}

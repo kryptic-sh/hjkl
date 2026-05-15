@@ -728,6 +728,20 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     render_layout(frame, app, buf_area, &mut layout);
     app.restore_layout(layout);
 
+    // When wildmenu is active, split the status row into [wildmenu | prompt].
+    // The wildmenu occupies one additional row ABOVE the prompt; we carve
+    // it from the bottom of buf_area so the buffer view shrinks by one row.
+    if app.command_completion.is_some() && buf_area.height >= 2 {
+        let wm_row = buf_area.y + buf_area.height - 1;
+        let wm_area = Rect {
+            x: buf_area.x,
+            y: wm_row,
+            width: buf_area.width,
+            height: 1,
+        };
+        wildmenu(frame, app, wm_area);
+    }
+
     status_line(frame, app, status_area);
 
     // Picker overlay sits on top of the buffer pane. Renders last so
@@ -882,6 +896,78 @@ fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
 
     let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
+}
+
+/// Render the wildmenu strip — one row of all completion candidates with the
+/// selected one highlighted. Called only when `app.command_completion.is_some()`.
+fn wildmenu(frame: &mut Frame, app: &App, area: Rect) {
+    let comp = match &app.command_completion {
+        Some(c) => c,
+        None => return,
+    };
+    let ui = &app.theme.ui;
+    let normal_style = Style::default().bg(ui.panel_bg).fg(ui.text);
+    let selected_style = Style::default().bg(ui.picker_selection_bg).fg(ui.text);
+
+    let width = area.width as usize;
+    let sep = "  ";
+    let sep_len = sep.len();
+
+    // Build spans, accumulating width. Show "... +N more" when overflow.
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    let n = comp.candidates.len();
+
+    for (i, cand) in comp.candidates.iter().enumerate() {
+        let is_selected = comp.selected == Some(i);
+        let entry = cand.clone();
+        let entry_len = entry.chars().count();
+
+        // Check if we need to truncate (remaining candidates exist).
+        let remaining = n - i;
+        let suffix = if remaining > 1 {
+            format!("  +{} more", remaining - 1)
+        } else {
+            String::new()
+        };
+
+        if used + entry_len > width {
+            // No room even for this entry — show overflow suffix if any left.
+            if !suffix.is_empty() && used + suffix.len() <= width {
+                spans.push(Span::styled(suffix, normal_style));
+            }
+            break;
+        }
+
+        if i > 0 {
+            if used + sep_len + entry_len > width {
+                // Separator + this entry won't fit — show suffix.
+                if used + suffix.len() <= width {
+                    spans.push(Span::styled(suffix, normal_style));
+                }
+                break;
+            }
+            spans.push(Span::styled(sep.to_string(), normal_style));
+            used += sep_len;
+        }
+
+        let style = if is_selected {
+            selected_style
+        } else {
+            normal_style
+        };
+        spans.push(Span::styled(entry, style));
+        used += entry_len;
+    }
+
+    // Pad remainder with the normal style background.
+    if used < width {
+        let pad = " ".repeat(width - used);
+        spans.push(Span::styled(pad, normal_style));
+    }
+
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the one-row status line.

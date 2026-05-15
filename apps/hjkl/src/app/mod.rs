@@ -328,6 +328,9 @@ pub struct App {
     /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
     /// (h/l/w/b/dw/diw/...) work inside the prompt.
     pub command_field: Option<TextFieldEditor>,
+    /// Active wildmenu state for the command-line prompt. `None` outside
+    /// completion (no Tab pressed yet, or after acceptance/cancel).
+    pub(crate) command_completion: Option<crate::app::prompt::CommandCompletion>,
     /// Active `/` (forward) / `?` (backward) search prompt.
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
@@ -1731,6 +1734,7 @@ impl App {
             status_message: None,
             info_popup: None,
             command_field: None,
+            command_completion: None,
             search_field: None,
             picker: None,
             pending_count: hjkl_vim::CountAccumulator::new(),
