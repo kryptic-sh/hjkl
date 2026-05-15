@@ -36,6 +36,9 @@ pub fn all_setting_names() -> Vec<String> {
         "scl".into(),
         "colorcolumn".into(),
         "cc".into(),
+        // completion-only (handled by host in ex_dispatch.rs)
+        "background".into(),
+        "bg".into(),
         // boolean
         "ignorecase".into(),
         "ic".into(),
@@ -260,7 +263,11 @@ fn apply_set_token<H: Host>(
         }
         // Booleans we don't (yet) honour: accept silently so :set lines
         // copied from a vimrc don't error out. `foldenable` falls here.
-        "foldenable" | "fen" => {}
+        // NOTE: `background` is completion-only — the host intercepts it in
+        // ex_dispatch.rs before hjkl-ex is consulted. Accept silently here so
+        // hjkl-ex never emits an "unknown option" error if the token somehow
+        // reaches this path.
+        "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }
     Ok(())
@@ -532,5 +539,16 @@ mod tests {
         let mut editor = make_editor();
         assert_eq!(apply_set(&mut editor, "cc=100"), ExEffect::Ok);
         assert_eq!(editor.settings().colorcolumn, "100");
+    }
+
+    // ---- background completion-only -----------------------------------------
+
+    #[test]
+    fn all_setting_names_contains_background() {
+        let names = super::all_setting_names();
+        assert!(
+            names.iter().any(|n| n == "background"),
+            "all_setting_names() must include \"background\" for :set Tab-completion"
+        );
     }
 }
