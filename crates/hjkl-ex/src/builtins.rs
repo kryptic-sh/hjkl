@@ -1,5 +1,6 @@
 use crate::{
     effect::ExEffect,
+    range::LineRange,
     registry::{ArgKind, ExCommand, Registry},
 };
 use hjkl_engine::Host;
@@ -9,6 +10,7 @@ use hjkl_engine::Host;
 fn quit_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: false,
@@ -19,6 +21,7 @@ fn quit_handler<H: Host>(
 fn quit_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: true,
@@ -32,6 +35,7 @@ fn quit_force_handler<H: Host>(
 fn write_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     let path = args.trim();
     if path.is_empty() {
@@ -49,6 +53,7 @@ fn write_handler<H: Host>(
 fn edit_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::EditFile {
         path: args.trim().to_string(),
@@ -60,6 +65,7 @@ fn edit_handler<H: Host>(
 fn edit_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::EditFile {
         path: args.trim().to_string(),
@@ -74,6 +80,7 @@ fn edit_force_handler<H: Host>(
 fn read_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     let path = args.trim();
     if path.is_empty() {
@@ -91,6 +98,7 @@ fn read_handler<H: Host>(
 fn bdelete_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::BufferDelete {
         force: false,
@@ -102,6 +110,7 @@ fn bdelete_handler<H: Host>(
 fn bdelete_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::BufferDelete {
         force: true,
@@ -113,6 +122,7 @@ fn bdelete_force_handler<H: Host>(
 fn bwipeout_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::BufferDelete {
         force: false,
@@ -124,6 +134,7 @@ fn bwipeout_handler<H: Host>(
 fn bwipeout_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::BufferDelete {
         force: true,
@@ -136,6 +147,7 @@ fn bwipeout_force_handler<H: Host>(
 fn wall_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Save)
 }
@@ -145,6 +157,7 @@ fn wall_handler<H: Host>(
 fn wq_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: false,
@@ -155,6 +168,7 @@ fn wq_handler<H: Host>(
 fn wq_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: true,
@@ -167,6 +181,7 @@ fn wq_force_handler<H: Host>(
 fn wqall_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: false,
@@ -179,6 +194,7 @@ fn wqall_handler<H: Host>(
 fn qall_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: false,
@@ -189,6 +205,7 @@ fn qall_handler<H: Host>(
 fn qall_force_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Quit {
         force: true,
@@ -201,6 +218,7 @@ fn qall_force_handler<H: Host>(
 fn nohlsearch_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     editor.set_search_pattern(None);
     Some(ExEffect::Ok)
@@ -211,6 +229,7 @@ fn nohlsearch_handler<H: Host>(
 fn undo_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     editor.undo();
     Some(ExEffect::Ok)
@@ -219,6 +238,7 @@ fn undo_handler<H: Host>(
 fn redo_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     editor.redo();
     Some(ExEffect::Ok)
@@ -229,6 +249,7 @@ fn redo_handler<H: Host>(
 fn registers_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Info(crate::listings::format_registers(editor)))
 }
@@ -236,6 +257,7 @@ fn registers_handler<H: Host>(
 fn marks_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Info(crate::listings::format_marks(editor)))
 }
@@ -243,6 +265,7 @@ fn marks_handler<H: Host>(
 fn jumps_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Info(crate::listings::format_jumps(editor)))
 }
@@ -250,8 +273,169 @@ fn jumps_handler<H: Host>(
 fn changes_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     _args: &str,
+    _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Info(crate::listings::format_changes(editor)))
+}
+
+// ---- delete ----------------------------------------------------------------
+
+/// `:[range]d` / `:[range]delete` — delete lines in range (default: cursor line).
+///
+/// `LineRange` is 1-based inclusive. Legacy `Range` (in hjkl-editor) is 0-based;
+/// we convert here before mutating the buffer.
+fn delete_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+
+    // No range → current line (1-based cursor row + 1).
+    let r = range.unwrap_or_else(|| LineRange::single(editor.cursor().0 + 1));
+    // Convert 1-based inclusive to 0-based inclusive row indices.
+    let start_row = r.start_one_based().saturating_sub(1);
+    let total = editor.buffer().row_count();
+    if total == 0 {
+        return Some(ExEffect::Ok);
+    }
+    let end_row = (r.end_one_based().saturating_sub(1)).min(total.saturating_sub(1));
+    if start_row > end_row {
+        return Some(ExEffect::Ok);
+    }
+
+    editor.push_undo();
+    // Delete bottom-up so row indices stay valid as rows are removed.
+    for row in (start_row..=end_row).rev() {
+        if editor.buffer().row_count() == 1 {
+            // Last remaining row: clear content rather than deleting the row.
+            let line_chars = editor
+                .buffer()
+                .line(0)
+                .map(|l| l.chars().count())
+                .unwrap_or(0);
+            if line_chars > 0 {
+                editor.mutate_edit(Edit::DeleteRange {
+                    start: Position::new(0, 0),
+                    end: Position::new(0, line_chars),
+                    kind: MotionKind::Char,
+                });
+            }
+            continue;
+        }
+        editor.mutate_edit(Edit::DeleteRange {
+            start: Position::new(row, 0),
+            end: Position::new(row, 0),
+            kind: MotionKind::Line,
+        });
+    }
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
+}
+
+// ---- sort ------------------------------------------------------------------
+
+/// `:[range]sort[!iun]` — sort lines in range (default: whole buffer).
+///
+/// Flags (trailing args): `!` reverse, `i` ignore-case, `u` unique, `n` numeric.
+fn sort_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let trimmed = args.trim();
+    let mut reverse = false;
+    let mut unique = false;
+    let mut numeric = false;
+    let mut ignore_case = false;
+    for c in trimmed.chars() {
+        match c {
+            '!' => reverse = true,
+            'u' => unique = true,
+            'n' => numeric = true,
+            'i' => ignore_case = true,
+            ' ' | '\t' => {}
+            other => return Some(ExEffect::Error(format!("bad :sort flag `{other}`"))),
+        }
+    }
+
+    let mut all_lines: Vec<String> = editor.buffer().lines().to_vec();
+    let total = all_lines.len();
+    if total == 0 {
+        return Some(ExEffect::Ok);
+    }
+
+    // Default range: whole buffer (0-based: 0..=total-1).
+    let (start_row, end_row) = match range {
+        Some(r) => {
+            let s = r.start_one_based().saturating_sub(1);
+            let e = (r.end_one_based().saturating_sub(1)).min(total - 1);
+            (s, e)
+        }
+        None => (0, total - 1),
+    };
+    if start_row > end_row {
+        return Some(ExEffect::Ok);
+    }
+
+    // Sort only the slice in range; keep the rest of the buffer intact.
+    let mut slice: Vec<String> = all_lines[start_row..=end_row].to_vec();
+    if numeric {
+        slice.sort_by_key(|l| extract_leading_number(l));
+    } else if ignore_case {
+        slice.sort_by_key(|s| s.to_lowercase());
+    } else {
+        slice.sort();
+    }
+    if reverse {
+        slice.reverse();
+    }
+    if unique {
+        let cmp_key = |s: &str| -> String {
+            if ignore_case {
+                s.to_lowercase()
+            } else {
+                s.to_string()
+            }
+        };
+        let mut seen = std::collections::HashSet::new();
+        slice.retain(|line| seen.insert(cmp_key(line)));
+    }
+    // Splice the sorted slice back. `unique` may have shortened it.
+    let after: Vec<String> = all_lines.split_off(end_row + 1);
+    all_lines.truncate(start_row);
+    all_lines.extend(slice);
+    all_lines.extend(after);
+
+    editor.push_undo();
+    editor.restore(all_lines, (start_row, 0));
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
+}
+
+/// Parse the first signed decimal integer from `line` for `:sort n`.
+/// Lines with no leading number sort as `i64::MIN` (cluster at top, vim compat).
+fn extract_leading_number(line: &str) -> i64 {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && !bytes[i].is_ascii_digit() && bytes[i] != b'-' {
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return i64::MIN;
+    }
+    let mut j = i;
+    if bytes[j] == b'-' {
+        j += 1;
+    }
+    let start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == start {
+        return i64::MIN;
+    }
+    line[i..j].parse().unwrap_or(i64::MIN)
 }
 
 // ---- registration ----------------------------------------------------------
@@ -490,5 +674,23 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 7,
         run: changes_handler::<H>,
+    });
+
+    // `:delete` / `:d` (min_prefix=1; range-aware)
+    reg.add(ExCommand {
+        name: "delete",
+        aliases: &["d"],
+        arg_kind: ArgKind::None,
+        min_prefix: 1,
+        run: delete_handler::<H>,
+    });
+
+    // `:sort` (min_prefix=3; range-aware)
+    reg.add(ExCommand {
+        name: "sort",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: sort_handler::<H>,
     });
 }

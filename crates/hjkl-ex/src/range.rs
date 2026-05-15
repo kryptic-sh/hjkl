@@ -241,4 +241,11 @@ mod tests {
         let result = parse("'z");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn line_range_single_start_equals_end() {
+        let r = LineRange::single(5);
+        assert_eq!(r.start_one_based(), 5);
+        assert_eq!(r.end_one_based(), 5);
+    }
 }

@@ -39,22 +39,45 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return None;
     }
 
-    // Strip a leading range so command resolution works correctly for
-    // range-prefixed inputs like `5,10w`. The range value is not threaded
-    // to the handler yet (Phase 2d will do that).
-    let cmd_str = match parse_range(input, editor) {
-        Ok((_range, rest)) => rest,
+    // Parse a leading range (`5`, `5,10`, `.,$`, `%`, `'a,'b`).
+    let (range, cmd_str) = match parse_range(input, editor) {
+        Ok(pair) => pair,
         Err(e) => return Some(ExEffect::Error(e)),
     };
 
     let (name, args) = parse::split_name_args(cmd_str);
     if name.is_empty() {
-        return None;
+        // Bare `:N` or bare range — jump to line.
+        return handle_bare_line_number(editor, cmd_str, range);
     }
     let cmd = reg.resolve(name)?;
-    // Handler may return None to defer this invocation to the legacy path
-    // (e.g. Phase 2a's `:w` claims the no-arg form but defers `:w <path>`).
-    (cmd.run)(editor, args)
+    // Handler may return None to defer this invocation to the legacy path.
+    (cmd.run)(editor, args, range)
+}
+
+/// Handle bare `:N` (jump to line N) and bare `:{range}` (jump to range start).
+///
+/// - `cmd_str` parses as `usize` AND `range.is_none()` → goto that line.
+/// - `range.is_some()` AND `cmd_str.is_empty()` → goto range start (vim semantics).
+/// - Otherwise → `None` (let caller fall back to legacy).
+fn handle_bare_line_number<H: hjkl_engine::Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    cmd_str: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    if let Ok(line) = cmd_str.trim().parse::<usize>()
+        && range.is_none()
+    {
+        editor.goto_line(line);
+        return Some(ExEffect::Ok);
+    }
+    if let Some(r) = range
+        && cmd_str.trim().is_empty()
+    {
+        editor.goto_line(r.start_one_based());
+        return Some(ExEffect::Ok);
+    }
+    None
 }
 
 /// Build a [`Registry`] seeded with the Phase 1 + Phase 2a default commands.
@@ -71,6 +94,13 @@ mod tests {
 
     fn make_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
         let buf = hjkl_buffer::Buffer::new();
+        let host = DefaultHost::new();
+        Editor::new(buf, host, Options::default())
+    }
+
+    fn make_editor_with_lines(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+        let content = lines.join("\n");
+        let buf = hjkl_buffer::Buffer::from_str(&content);
         let host = DefaultHost::new();
         Editor::new(buf, host, Options::default())
     }
@@ -746,5 +776,90 @@ mod tests {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
         assert_eq!(try_dispatch(&reg, &mut editor, "re"), None);
+    }
+
+    // ---- Phase 2d: bare line number / bare range ---------------------------
+
+    #[test]
+    fn dispatch_bare_number_jumps_to_line() {
+        // `:5` on a 5-line buffer → cursor row 4 (0-based).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c", "d", "e"]);
+        let result = try_dispatch(&reg, &mut editor, "5");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(editor.cursor().0, 4);
+    }
+
+    #[test]
+    fn dispatch_bare_range_jumps_to_range_start() {
+        // `:1,5` → jump to line 1 (cursor row 0).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b", "c", "d", "e"]);
+        let result = try_dispatch(&reg, &mut editor, "1,5");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(editor.cursor().0, 0);
+    }
+
+    // ---- Phase 2d: :delete -------------------------------------------------
+
+    #[test]
+    fn dispatch_d_no_range_deletes_cursor_line() {
+        // `:d` with cursor on line 1 (row 0) → removes first line.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["first", "second", "third"]);
+        let result = try_dispatch(&reg, &mut editor, "d");
+        assert_eq!(result, Some(ExEffect::Ok));
+        // "first" gone; remaining lines start with "second".
+        assert_eq!(editor.buffer().lines()[0], "second");
+        assert_eq!(editor.buffer().lines().len(), 2);
+    }
+
+    #[test]
+    fn dispatch_1d_deletes_line_1() {
+        // `:1d` → deletes line 1 from a 3-line buffer.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["first", "second", "third"]);
+        let result = try_dispatch(&reg, &mut editor, "1d");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(editor.buffer().lines()[0], "second");
+        assert_eq!(editor.buffer().lines().len(), 2);
+    }
+
+    #[test]
+    fn dispatch_1_2d_deletes_lines_1_and_2() {
+        // `:1,2d` → removes first two lines.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["first", "second", "third"]);
+        let result = try_dispatch(&reg, &mut editor, "1,2d");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(editor.buffer().lines()[0], "third");
+        assert_eq!(editor.buffer().lines().len(), 1);
+    }
+
+    // ---- Phase 2d: :sort ---------------------------------------------------
+
+    #[test]
+    fn dispatch_sort_sorts_whole_buffer() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["banana", "apple", "cherry"]);
+        let result = try_dispatch(&reg, &mut editor, "sort");
+        assert_eq!(result, Some(ExEffect::Ok));
+        let lines = editor.buffer().lines().to_vec();
+        assert_eq!(lines, vec!["apple", "banana", "cherry"]);
+    }
+
+    #[test]
+    fn dispatch_1_3sort_sorts_range_only() {
+        // `:1,3sort` on 5-line buffer sorts lines 1–3, leaves 4–5 intact.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["cherry", "apple", "banana", "zebra", "mango"]);
+        let result = try_dispatch(&reg, &mut editor, "1,3sort");
+        assert_eq!(result, Some(ExEffect::Ok));
+        let lines = editor.buffer().lines().to_vec();
+        assert_eq!(lines[0], "apple");
+        assert_eq!(lines[1], "banana");
+        assert_eq!(lines[2], "cherry");
+        assert_eq!(lines[3], "zebra");
+        assert_eq!(lines[4], "mango");
     }
 }

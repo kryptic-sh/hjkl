@@ -22,8 +22,11 @@ pub enum ArgKind {
 /// commands defer their `<path>`-arg variants to Phase 2b without a hard
 /// `Unknown` error: e.g. `:w` returns `Some(Save)` but `:w foo` returns
 /// `None` so `apps/hjkl::dispatch_ex` lets the legacy `SaveAs` arm handle it.
-pub type ExHandler<H> =
-    fn(&mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>, &str) -> Option<ExEffect>;
+pub type ExHandler<H> = fn(
+    &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    &str,
+    Option<crate::range::LineRange>,
+) -> Option<ExEffect>;
 
 /// A single registered ex command.
 pub struct ExCommand<H: Host> {
@@ -107,6 +110,7 @@ mod tests {
     fn noop_handler(
         _editor: &mut Editor<hjkl_buffer::Buffer, DefaultHost>,
         _args: &str,
+        _range: Option<crate::range::LineRange>,
     ) -> Option<ExEffect> {
         Some(ExEffect::Ok)
     }
