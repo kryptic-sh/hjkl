@@ -44,13 +44,13 @@ pub(crate) fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Ope
 }
 
 impl App {
-    /// Phase 6.5: inline Insert-mode key dispatcher. Calls `Editor::insert_*`
-    /// primitives directly, bypassing the engine FSM for Insert-mode keys.
+    /// Insert-mode key dispatcher. Calls `Editor::insert_*` primitives
+    /// directly, bypassing the engine FSM for Insert-mode keys.
     ///
     /// This is called from the main event loop whenever the editor is in
     /// `VimMode::Insert` and the key has not been consumed by an overlay
-    /// (completion popup, etc.). Normal / Visual modes still go through
-    /// `editor.handle_key` until Phase 6.8 removes that path.
+    /// (completion popup, etc.). Normal / Visual modes still route through
+    /// `hjkl_vim::handle_key`.
     ///
     /// ### `Ctrl-R {reg}` — register paste
     /// `insert_ctrl_r_arm()` sets an internal flag (`insert_pending_register`).
@@ -638,12 +638,14 @@ impl App {
                                 // <Tab> or <C-y> accept selected item.
                                 KeyCode::Tab => {
                                     self.accept_completion();
+                                    self.sync_after_engine_mutation();
                                     continue;
                                 }
                                 KeyCode::Char('y')
                                     if key.modifiers.contains(KeyModifiers::CONTROL) =>
                                 {
                                     self.accept_completion();
+                                    self.sync_after_engine_mutation();
                                     continue;
                                 }
                                 // <C-e> dismiss without accepting.
@@ -829,10 +831,9 @@ impl App {
                     }
 
                     // ── Normal editor key handling ───────────────────────────
-                    // Phase 6.5: Insert mode uses the inline dispatcher which
-                    // calls Editor::insert_* primitives directly. Normal / Visual
-                    // modes still go through the FSM via handle_key (Phase 6.8
-                    // will remove that path once all normal-mode dispatch is wired).
+                    // Insert mode uses the inline dispatcher which calls
+                    // Editor::insert_* primitives directly. Normal / Visual
+                    // modes route through the FSM via hjkl_vim::handle_key.
                     if self.active().editor.vim_mode() == VimMode::Insert {
                         self.dispatch_insert_key(key);
                         // dispatch_insert_key calls Editor primitives directly and

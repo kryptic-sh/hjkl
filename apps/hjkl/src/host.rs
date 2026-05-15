@@ -24,7 +24,6 @@ use std::time::Instant;
 pub struct TuiHost {
     last_cursor_shape: CursorShape,
     started: Instant,
-    cancel: bool,
     clipboard: Option<Clipboard>,
     viewport: Viewport,
 }
@@ -38,7 +37,6 @@ impl TuiHost {
         Self {
             last_cursor_shape: CursorShape::Block,
             started: Instant::now(),
-            cancel: false,
             clipboard: Clipboard::new().ok(),
             viewport: Viewport {
                 top_row: 0,
@@ -51,16 +49,8 @@ impl TuiHost {
     }
 
     /// Most recent cursor shape requested by the engine. Renderer reads.
-    #[allow(dead_code)] // Phase 2: renderer wires this in.
     pub fn cursor_shape(&self) -> CursorShape {
         self.last_cursor_shape
-    }
-
-    /// Set / clear the cancellation flag (`Ctrl-C` handler hooks here
-    /// once the event loop lands in Phase 2).
-    #[allow(dead_code)] // Phase 2: event loop wires this in.
-    pub fn set_cancel(&mut self, cancel: bool) {
-        self.cancel = cancel;
     }
 
     /// Borrow the active clipboard, if construction succeeded.
@@ -105,7 +95,7 @@ impl Host for TuiHost {
     }
 
     fn should_cancel(&self) -> bool {
-        self.cancel
+        false
     }
 
     fn prompt_search(&mut self) -> Option<String> {

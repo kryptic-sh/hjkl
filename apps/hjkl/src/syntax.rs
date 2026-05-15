@@ -107,9 +107,6 @@ enum Msg {
     /// Set / replace the highlighter for a buffer. `None` detaches (no
     /// highlighter → parse requests for this buffer are dropped).
     SetLanguage(BufferId, Option<Arc<Grammar>>),
-    /// Drop the retained tree for a buffer so the next parse is cold.
-    #[allow(dead_code)] // Phase B: wired via ParseRequest.reset flag for now.
-    Reset(BufferId),
     /// Remove all worker state for a buffer (highlighter, retained
     /// tree, parse-cache key). Sent on buffer close.
     Forget(BufferId),
@@ -130,7 +127,7 @@ enum Msg {
 struct Pending {
     /// `Some` when a Parse is queued. Replaced on each new submit.
     parse: Option<ParseRequest>,
-    /// FIFO of control messages (everything that's not a Parse).
+    /// FIFO of control messages (everything that is not a Parse).
     controls: std::collections::VecDeque<Msg>,
 }
 
@@ -187,12 +184,6 @@ impl SyntaxWorker {
     /// Set / replace the highlighter for a buffer. `None` detaches.
     pub fn set_language(&self, id: BufferId, grammar: Option<Arc<Grammar>>) {
         self.enqueue_control(Msg::SetLanguage(id, grammar));
-    }
-
-    /// Drop a buffer's retained tree so the next parse for it is cold.
-    #[allow(dead_code)] // Phase B: reset is currently routed via ParseRequest.reset.
-    pub fn reset(&self, id: BufferId) {
-        self.enqueue_control(Msg::Reset(id));
     }
 
     /// Forget all worker state for a buffer (highlighter + tree).
@@ -288,9 +279,9 @@ fn worker_loop(
             while !p.has_work() {
                 p = cvar.wait(p).expect("syntax pending cvar poisoned");
             }
-            // Drain controls first so a SetLanguage / Reset that
-            // arrived alongside a Parse gets applied before we run the
-            // parse with stale state.
+            // Drain controls first so a SetLanguage / Forget / SetTheme
+            // that arrived alongside a Parse gets applied before we run
+            // the parse with stale state.
             if let Some(c) = p.controls.pop_front() {
                 c
             } else {
@@ -324,12 +315,6 @@ fn worker_loop(
                         );
                         buffers.remove(&id);
                     }
-                }
-            }
-            Msg::Reset(id) => {
-                if let Some(s) = buffers.get_mut(&id) {
-                    s.highlighter.reset();
-                    s.last_parsed_dirty_gen = None;
                 }
             }
             Msg::Forget(id) => {

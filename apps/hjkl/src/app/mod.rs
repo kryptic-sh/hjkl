@@ -2482,17 +2482,14 @@ impl App {
             AppAction::EnterVisualChar => {
                 self.pending_count.reset();
                 self.active_mut().editor.enter_visual_char();
-                self.sync_viewport_from_editor();
             }
             AppAction::EnterVisualLine => {
                 self.pending_count.reset();
                 self.active_mut().editor.enter_visual_line();
-                self.sync_viewport_from_editor();
             }
             AppAction::EnterVisualBlock => {
                 self.pending_count.reset();
                 self.active_mut().editor.enter_visual_block();
-                self.sync_viewport_from_editor();
             }
             AppAction::ReenterLastVisual => {
                 self.pending_count.reset();

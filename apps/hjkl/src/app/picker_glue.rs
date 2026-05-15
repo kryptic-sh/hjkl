@@ -211,10 +211,7 @@ impl App {
                 // goto_line is 1-based and clamps to buffer length.
                 if line > 0 {
                     self.active_mut().editor.goto_line(line as usize);
-                    // Reset viewport top so the line is visible.
-                    let vp = self.active_mut().editor.host_mut().viewport_mut();
-                    let top = (line as usize).saturating_sub(5);
-                    vp.top_row = top;
+                    self.sync_after_engine_mutation();
                 }
             }
             AppAction::ShowCommit(sha) => self.do_show_commit(&sha),
@@ -226,7 +223,7 @@ impl App {
             AppAction::StashDrop(idx) => self.do_stash_drop(idx),
             AppAction::JumpToRowCol(row, col) => {
                 self.active_mut().editor.jump_cursor(row, col);
-                self.sync_viewport_from_editor();
+                self.sync_after_engine_mutation();
             }
             AppAction::ApplyCodeAction(idx) => {
                 // Take the action from pending_code_actions by index.

@@ -4052,6 +4052,7 @@ fn accept_completion_inserts_selected_item() {
     app.completion.as_mut().unwrap().selected = 1;
 
     app.accept_completion();
+    app.sync_after_engine_mutation();
 
     // Popup must be gone.
     assert!(app.completion.is_none());
@@ -4060,6 +4061,15 @@ fn accept_completion_inserts_selected_item() {
     assert!(
         line.starts_with("world"),
         "buffer line should start with inserted text, got: {line:?}"
+    );
+    // Sync footer must have drained dirty + content_edits.
+    assert!(
+        !app.active_mut().editor.take_dirty(),
+        "accept_completion call site must drain dirty via sync_after_engine_mutation"
+    );
+    assert!(
+        app.active_mut().editor.take_content_edits().is_empty(),
+        "accept_completion call site must drain content_edits"
     );
 }
 
@@ -9653,6 +9663,11 @@ fn p64_i_enters_insert_mode() {
         VimMode::Insert,
         "i must enter Insert mode"
     );
+    assert_eq!(
+        app.active().editor.host().cursor_shape(),
+        hjkl_engine::CursorShape::Bar,
+        "cursor must flip to Bar on entering Insert"
+    );
 }
 
 #[test]
@@ -10522,6 +10537,11 @@ fn p65_esc_exits_insert_mode() {
         app.active().editor.vim_mode(),
         VimMode::Normal,
         "Esc must return to Normal"
+    );
+    assert_eq!(
+        app.active().editor.host().cursor_shape(),
+        hjkl_engine::CursorShape::Block,
+        "cursor must flip back to Block on Esc"
     );
 }
 
