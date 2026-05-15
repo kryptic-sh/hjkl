@@ -130,6 +130,19 @@ impl App {
             return;
         }
 
+        // Backspace on an empty prompt dismisses it (vim/neovim parity:
+        // the leading `:` itself counts as the dismissable prefix).
+        if input.key == EngineKey::Backspace
+            && self
+                .command_field
+                .as_ref()
+                .is_some_and(|f| f.text().is_empty())
+        {
+            self.command_field = None;
+            self.command_completion = None;
+            return;
+        }
+
         // Any other key while completion is active: commit current candidate
         // (field text already has it) and clear completion state.
         if self.command_completion.is_some() {
@@ -336,6 +349,13 @@ impl App {
             } else {
                 self.cancel_search_prompt();
             }
+            return;
+        }
+
+        // Backspace on an empty prompt dismisses it (vim/neovim parity:
+        // the leading `/` or `?` itself counts as the dismissable prefix).
+        if input.key == EngineKey::Backspace && field.text().is_empty() {
+            self.cancel_search_prompt();
             return;
         }
 

@@ -12705,6 +12705,65 @@ mod border_drag_tests {
         );
     }
 
+    // ── Backspace on empty prompt dismisses (neovim parity) ─────────────────
+
+    /// Regression: `:` prompt — backspacing past the last character must
+    /// dismiss the prompt entirely. Pre-fix, backspace on an empty prompt
+    /// was a no-op, and the user had to press Esc explicitly.
+    #[test]
+    fn backspace_on_empty_command_prompt_dismisses() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_command_prompt();
+        assert!(app.command_field.is_some(), "prompt should be open");
+
+        // Type "g", then backspace twice. After first backspace the field
+        // is empty; after second backspace the prompt must dismiss.
+        app.handle_command_field_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
+        app.handle_command_field_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            app.command_field.is_some(),
+            "first backspace cleared the char; prompt still open"
+        );
+        app.handle_command_field_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            app.command_field.is_none(),
+            "second backspace on empty prompt must dismiss it (neovim parity)"
+        );
+    }
+
+    /// Same behavior for the `/` and `?` search prompts.
+    #[test]
+    fn backspace_on_empty_forward_search_prompt_dismisses() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_search_prompt(SearchDir::Forward);
+        assert!(app.search_field.is_some(), "search prompt should be open");
+
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(app.search_field.is_some(), "still open while empty");
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            app.search_field.is_none(),
+            "backspace on empty search prompt must dismiss"
+        );
+    }
+
+    #[test]
+    fn backspace_on_empty_backward_search_prompt_dismisses() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = App::new(None, false, None, None).unwrap();
+        app.open_search_prompt(SearchDir::Backward);
+        assert!(app.search_field.is_some());
+
+        app.handle_search_field_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(
+            app.search_field.is_none(),
+            "backspace on freshly-opened (empty) backward-search prompt must dismiss"
+        );
+    }
+
     // ── middle-click zone dispatch ──────────────────────────────────────────
 
     /// Middle-click on a buffer line entry closes that buffer (`:bdelete`
