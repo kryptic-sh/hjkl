@@ -835,6 +835,11 @@ impl App {
                     // will remove that path once all normal-mode dispatch is wired).
                     if self.active().editor.vim_mode() == VimMode::Insert {
                         self.dispatch_insert_key(key);
+                        // dispatch_insert_key calls Editor primitives directly and
+                        // does not go through hjkl_vim::handle_key, which is the
+                        // normal site for emit_cursor_shape_if_changed. Emit here
+                        // so Esc (→ Normal/Block) and Ctrl-O surface immediately.
+                        self.active_mut().editor.emit_cursor_shape_if_changed();
                     } else {
                         hjkl_vim::handle_key(&mut self.active_mut().editor, key);
                     }

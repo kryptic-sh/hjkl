@@ -1329,6 +1329,11 @@ impl App {
         // behaviour from the app side so the keymap path stays viewport-coherent.
         // Idempotent for non-motion mutations (already-in-bounds = no-op).
         self.active_mut().editor.ensure_cursor_in_scrolloff();
+        // Propagate any mode change (e.g. i/I/a/A/o/O enter-insert actions
+        // dispatched through the app keymap) to the host cursor-shape so the
+        // render loop picks it up on the next frame. Idempotent when mode
+        // did not change.
+        self.active_mut().editor.emit_cursor_shape_if_changed();
         self.sync_viewport_from_editor();
         if self.active_mut().editor.take_dirty() {
             let elapsed = self.active_mut().refresh_dirty_against_saved();
