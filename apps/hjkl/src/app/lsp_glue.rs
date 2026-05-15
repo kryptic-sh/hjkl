@@ -263,6 +263,28 @@ impl App {
         mgr.notify_change(buffer_id, &text);
     }
 
+    /// Return `true` when the active buffer has a running, initialized LSP
+    /// server attached (i.e. its file extension maps to a configured language
+    /// and the server has completed the `initialize` handshake).
+    ///
+    /// Used by the right-click context menu to enable/disable LSP items.
+    pub(crate) fn active_has_lsp(&self) -> bool {
+        if self.lsp.is_none() {
+            return false;
+        }
+        let lang = self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext);
+        let Some(lang) = lang else {
+            return false;
+        };
+        self.lsp_state.keys().any(|k| k.language == lang)
+    }
+
     /// Attach `slot_idx` to the appropriate language server (if configured).
     pub(crate) fn lsp_attach_buffer(&mut self, slot_idx: usize) {
         let mgr = match self.lsp.as_ref() {
