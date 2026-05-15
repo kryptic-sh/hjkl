@@ -18,6 +18,7 @@ mod listings;
 mod parse;
 mod range;
 mod registry;
+mod setopt;
 
 /// Try to dispatch `input` (without the leading `:`) through the registry.
 ///
@@ -967,5 +968,58 @@ mod tests {
             matches!(result, Some(ExEffect::Error(_))),
             "expected Some(Error(_)), got {result:?}"
         );
+    }
+
+    // ---- Phase 3: :set -------------------------------------------------------
+
+    #[test]
+    fn dispatch_set_bare_returns_info() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "set");
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Some(Info(_)), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_se_prefix_returns_info() {
+        // `:se` — min_prefix=2 so resolves to `:set`.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "se");
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Some(Info(_)), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_set_number_enables_number() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "set number");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert!(editor.settings().number);
+    }
+
+    #[test]
+    fn dispatch_set_nonumber_disables_number() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        editor.settings_mut().number = true;
+        let result = try_dispatch(&reg, &mut editor, "set nonumber");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert!(!editor.settings().number);
+    }
+
+    #[test]
+    fn dispatch_set_tabstop_eq_4() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "set tabstop=4");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(editor.settings().tabstop, 4);
     }
 }

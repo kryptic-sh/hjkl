@@ -486,6 +486,17 @@ fn substitute_handler<H: Host>(
     }
 }
 
+// ---- set -------------------------------------------------------------------
+
+/// `:set [option ...]` — query / assign vim settings.
+fn set_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(crate::setopt::apply_set(editor, args))
+}
+
 // ---- registration ----------------------------------------------------------
 
 /// Register all Phase 1 + Phase 2a built-in commands.
@@ -752,5 +763,14 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 1,
         run: substitute_handler::<H>,
+    });
+
+    // `:set` / `:se` (min_prefix=2 — matches legacy COMMAND_NAMES line 47)
+    reg.add(ExCommand {
+        name: "set",
+        aliases: &[],
+        arg_kind: ArgKind::Setting,
+        min_prefix: 2,
+        run: set_handler::<H>,
     });
 }
