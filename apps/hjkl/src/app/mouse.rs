@@ -6,6 +6,7 @@
 //!   stored `last_rect`, viewport, and gutter geometry.
 //! - [`hit_test_window`] — map a terminal cell to a `WindowId`.
 //! - [`hit_test_zone`] — classify a click into [`Zone`] (Code / Gutter / TabBar / None).
+//! - [`hit_test_border`] — detect clicks on split dividers (Phase 9).
 //! - [`MouseClickTracker`] — double/triple-click state machine.
 //!
 //! The engine receives only doc-space coordinates via the host-agnostic
@@ -22,6 +23,107 @@ use ratatui::layout::Rect;
 use std::time::{Duration, Instant};
 
 use super::{App, window};
+
+// ── Phase 9: border hit-testing ───────────────────────────────────────────────
+
+/// Orientation of a split border — which axis the border divides.
+///
+/// `Vertical` means a VSplit (side-by-side panes; the border is a vertical
+/// column of `│` characters). `Horizontal` means a HSplit (stacked panes;
+/// the border is a horizontal row of `─` characters).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitOrientation {
+    /// VSplit — border is a vertical column dividing columns.
+    Vertical,
+    /// HSplit — border is a horizontal row dividing rows.
+    Horizontal,
+}
+
+/// A draggable split border identified by the screen cell that IS the border,
+/// plus enough context to drive resize during a drag.
+#[derive(Debug, Clone, Copy)]
+pub struct BorderHit {
+    /// Orientation of the split that owns this border.
+    pub orientation: SplitOrientation,
+    /// The border cell (col, row) in terminal coordinates.
+    pub border_cell: (u16, u16),
+    /// The origin (x for VSplit, y for HSplit) of the split's `last_rect`.
+    /// Used to convert drag position → split_pos (cells from origin).
+    pub split_origin: u16,
+    /// Total size (width for VSplit, height for HSplit) of the split's
+    /// `last_rect`. Needed in `resize_split_to` for ratio math.
+    pub split_total: u16,
+}
+
+/// Walk the layout tree and find a border within `tolerance` cells of
+/// `(col, row)`. `tolerance = 0` requires an exact hit on the 1-cell divider.
+///
+/// The divider geometry mirrors `render::render_layout`:
+/// - VSplit: separator column = `rect_a.x + a_w - 1` where `a_w = round(area.width * ratio)`.
+/// - HSplit: separator row    = `rect_a.y + a_h - 1` where `a_h = round(area.height * ratio)`.
+///
+/// Both use the split's `last_rect` (written by the renderer each frame).
+/// Returns `None` before the first render or when not on any border.
+pub fn hit_test_border(app: &App, col: u16, row: u16) -> Option<BorderHit> {
+    let layout = app.layout();
+    hit_test_border_tree(layout, col, row)
+}
+
+fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Option<BorderHit> {
+    match layout {
+        window::LayoutTree::Leaf(_) => None,
+        window::LayoutTree::Split {
+            dir,
+            ratio,
+            a,
+            b,
+            last_rect,
+        } => {
+            let area = (*last_rect)?;
+            // Compute the separator position from ratio (matches render::split_rect).
+            let hit = match dir {
+                window::SplitDir::Vertical => {
+                    let a_w = ((area.width as f32) * ratio).round() as u16;
+                    let a_w = a_w.clamp(1, area.width.saturating_sub(1).max(1));
+                    // Separator column: rightmost cell of rect_a (before shrinking).
+                    let sep_col = area.x + a_w.saturating_sub(1);
+                    if col == sep_col && row >= area.y && row < area.y + area.height {
+                        Some(BorderHit {
+                            orientation: SplitOrientation::Vertical,
+                            border_cell: (col, row),
+                            split_origin: area.x,
+                            split_total: area.width,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                window::SplitDir::Horizontal => {
+                    let a_h = ((area.height as f32) * ratio).round() as u16;
+                    let a_h = a_h.clamp(1, area.height.saturating_sub(1).max(1));
+                    // Separator row: bottom row of rect_a (before shrinking).
+                    let sep_row = area.y + a_h.saturating_sub(1);
+                    if row == sep_row && col >= area.x && col < area.x + area.width {
+                        Some(BorderHit {
+                            orientation: SplitOrientation::Horizontal,
+                            border_cell: (col, row),
+                            split_origin: area.y,
+                            split_total: area.height,
+                        })
+                    } else {
+                        None
+                    }
+                }
+            };
+            // Return this split's hit if found; otherwise recurse into children.
+            if hit.is_some() {
+                hit
+            } else {
+                hit_test_border_tree(a, col, row).or_else(|| hit_test_border_tree(b, col, row))
+            }
+        }
+    }
+}
 
 // ── Layout hit-testing ────────────────────────────────────────────────────────
 
@@ -964,6 +1066,209 @@ mod tests {
         }
 
         cleanup_paths(&paths);
+    }
+
+    // ── hit_test_border (Phase 9) ─────────────────────────────────────────────
+
+    /// Helper: build an app with two windows in a VSplit, pre-fill last_rects
+    /// so hit_test_border can operate without a live renderer.
+    fn make_vsplit_app() -> App {
+        use crate::app::window::{LayoutTree, Tab, Window};
+        use ratatui::layout::Rect;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        // Add a second window.
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: None,
+        }));
+
+        // Build: VSplit(ratio=0.5, Leaf(0), Leaf(1)), total area 80x24.
+        // With ratio=0.5 and width=80: a_w = round(80*0.5)=40
+        // sep_col = 0 + 40 - 1 = 39
+        let split_area = Rect::new(0, 0, 80, 24);
+        app.tabs[0] = Tab {
+            layout: LayoutTree::Split {
+                dir: crate::app::window::SplitDir::Vertical,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(split_area),
+            },
+            focused_window: 0,
+        };
+        // Fill window last_rects.
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(Rect::new(0, 0, 39, 24)); // left pane (shrunk by 1)
+        }
+        if let Some(Some(w)) = app.windows.get_mut(win1) {
+            w.last_rect = Some(Rect::new(40, 0, 40, 24)); // right pane
+        }
+        app
+    }
+
+    /// Helper: build an app with two windows in an HSplit, pre-fill last_rects.
+    fn make_hsplit_app() -> App {
+        use crate::app::window::{LayoutTree, Tab, Window};
+        use ratatui::layout::Rect;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: None,
+        }));
+
+        // HSplit(ratio=0.5, Leaf(0), Leaf(1)), area 80x24
+        // a_h = round(24*0.5) = 12; sep_row = 0 + 12 - 1 = 11
+        let split_area = Rect::new(0, 0, 80, 24);
+        app.tabs[0] = Tab {
+            layout: LayoutTree::Split {
+                dir: crate::app::window::SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(split_area),
+            },
+            focused_window: 0,
+        };
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(Rect::new(0, 0, 80, 11));
+        }
+        if let Some(Some(w)) = app.windows.get_mut(win1) {
+            w.last_rect = Some(Rect::new(0, 12, 80, 12));
+        }
+        app
+    }
+
+    #[test]
+    fn hit_test_border_on_vertical_divider() {
+        let app = make_vsplit_app();
+        // sep_col = 39 (for ratio=0.5, width=80)
+        let hit = hit_test_border(&app, 39, 10);
+        assert!(
+            hit.is_some(),
+            "click on vertical divider (col=39) should return BorderHit"
+        );
+        let h = hit.unwrap();
+        assert_eq!(h.orientation, SplitOrientation::Vertical);
+        assert_eq!(h.border_cell, (39, 10));
+        assert_eq!(h.split_origin, 0);
+        assert_eq!(h.split_total, 80);
+    }
+
+    #[test]
+    fn hit_test_border_off_divider() {
+        let app = make_vsplit_app();
+        // 2 cells away from divider (col=41) → None
+        let hit = hit_test_border(&app, 41, 10);
+        assert!(
+            hit.is_none(),
+            "click 2 cells away from divider should return None"
+        );
+    }
+
+    #[test]
+    fn hit_test_border_on_horizontal_divider() {
+        let app = make_hsplit_app();
+        // sep_row = 11 (for ratio=0.5, height=24)
+        let hit = hit_test_border(&app, 20, 11);
+        assert!(
+            hit.is_some(),
+            "click on horizontal divider (row=11) should return BorderHit"
+        );
+        let h = hit.unwrap();
+        assert_eq!(h.orientation, SplitOrientation::Horizontal);
+        assert_eq!(h.border_cell, (20, 11));
+        assert_eq!(h.split_origin, 0);
+        assert_eq!(h.split_total, 24);
+    }
+
+    #[test]
+    fn hit_test_border_with_nested_splits() {
+        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
+        use ratatui::layout::Rect;
+
+        // Layout: HSplit(
+        //   a = VSplit(Leaf(0), Leaf(1))   — top row, two columns
+        //   b = Leaf(2)                    — bottom row
+        // )
+        // Full area: 80x24
+        // HSplit: a_h = round(24*0.5) = 12; sep_row = 11
+        // VSplit (inner, area 80x12): a_w = round(80*0.5) = 40; sep_col = 39
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: Some(Rect::new(40, 0, 40, 11)),
+        }));
+        let win2 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: Some(Rect::new(0, 12, 80, 12)),
+        }));
+
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(Rect::new(0, 0, 39, 11));
+        }
+
+        app.tabs[0] = Tab {
+            layout: LayoutTree::Split {
+                dir: SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(LayoutTree::Split {
+                    dir: SplitDir::Vertical,
+                    ratio: 0.5,
+                    a: Box::new(LayoutTree::Leaf(0)),
+                    b: Box::new(LayoutTree::Leaf(win1)),
+                    last_rect: Some(Rect::new(0, 0, 80, 12)),
+                }),
+                b: Box::new(LayoutTree::Leaf(win2)),
+                last_rect: Some(Rect::new(0, 0, 80, 24)),
+            },
+            focused_window: 0,
+        };
+
+        // Click on the vertical divider inside the top VSplit (col=39, row=5).
+        let hit_v = hit_test_border(&app, 39, 5);
+        assert!(
+            hit_v.is_some(),
+            "nested VSplit border at col=39 row=5 should be hittable"
+        );
+        assert_eq!(hit_v.unwrap().orientation, SplitOrientation::Vertical);
+
+        // Click on the horizontal divider (row=11, col=20).
+        let hit_h = hit_test_border(&app, 20, 11);
+        assert!(
+            hit_h.is_some(),
+            "outer HSplit border at row=11 col=20 should be hittable"
+        );
+        assert_eq!(hit_h.unwrap().orientation, SplitOrientation::Horizontal);
     }
 
     /// Single tab + single slot → no top bar. Row 0 is the editor, not the bar.
