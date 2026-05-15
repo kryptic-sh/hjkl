@@ -295,12 +295,18 @@ mod tests {
     #[test]
     fn markup_heading_renders_bold() {
         let theme = AppTheme::default_dark();
-        let spec = theme.syntax.style("@markup.heading.1").expect("must resolve");
+        let spec = theme
+            .syntax
+            .style("@markup.heading.1")
+            .expect("must resolve");
         assert!(
             spec.modifiers.bold,
             "@markup.heading.1 must be bold so ## headers stand out"
         );
-        let spec_h2 = theme.syntax.style("@markup.heading.2").expect("must resolve");
+        let spec_h2 = theme
+            .syntax
+            .style("@markup.heading.2")
+            .expect("must resolve");
         assert!(spec_h2.modifiers.bold, "@markup.heading.2 must be bold");
     }
 
@@ -311,7 +317,10 @@ mod tests {
     #[test]
     fn markup_strikethrough_uses_strikethrough_modifier() {
         let theme = AppTheme::default_dark();
-        let spec = theme.syntax.style("@markup.strikethrough").expect("must resolve");
+        let spec = theme
+            .syntax
+            .style("@markup.strikethrough")
+            .expect("must resolve");
         assert!(
             spec.modifiers.strikethrough,
             "@markup.strikethrough must actually strike through"
