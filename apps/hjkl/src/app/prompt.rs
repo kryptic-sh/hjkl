@@ -148,11 +148,58 @@ impl App {
         let caret = line.len(); // caret at end for completion
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
-        let mut names: Vec<String> = hjkl_ex::collect_host_registry_names(host_reg);
-        names.extend(hjkl_ex::collect_registry_names(&editor_reg));
-        names.sort();
-        names.dedup();
-        let comp = hjkl_ex::complete_command_from_names(&line, caret, &names);
+
+        // Build arg sources.
+        let cwd = std::env::current_dir().ok();
+        let settings: Vec<String> = hjkl_ex::all_setting_names();
+        let buffers: Vec<String> = self
+            .slots
+            .iter()
+            .filter_map(|s| {
+                let name = s
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                if name.is_empty() { None } else { Some(name) }
+            })
+            .collect();
+        // TODO(phase6): wire register names from live editor state.
+        let registers: Vec<String> = {
+            let r = self.active().editor.registers();
+            let mut regs: Vec<String> = Vec::new();
+            if !r.unnamed.text.is_empty() {
+                regs.push("\"\"".into());
+            }
+            if !r.yank_zero.text.is_empty() {
+                regs.push("\"0".into());
+            }
+            for (i, slot) in r.delete_ring.iter().enumerate() {
+                if !slot.text.is_empty() {
+                    regs.push(format!("\"{}", i + 1));
+                }
+            }
+            for (i, slot) in r.named.iter().enumerate() {
+                if !slot.text.is_empty() {
+                    regs.push(format!("\"{}", (b'a' + i as u8) as char));
+                }
+            }
+            regs
+        };
+        let marks: Vec<String> = self
+            .active()
+            .editor
+            .marks()
+            .map(|(c, _)| c.to_string())
+            .collect();
+        let sources = hjkl_ex::ArgSources {
+            cwd: cwd.as_deref(),
+            settings: &settings,
+            buffers: &buffers,
+            registers: &registers,
+            marks: &marks,
+        };
+        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources);
         if comp.candidates.is_empty() {
             return;
         }

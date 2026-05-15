@@ -5,6 +5,69 @@
 use crate::effect::ExEffect;
 use hjkl_engine::Host;
 
+/// All `:set` option names and their short aliases.
+///
+/// Used by Phase 6's `Setting` arg completer to populate the candidate list.
+/// Includes both canonical names and aliases; no dedup needed (they're all
+/// distinct strings).
+pub fn all_setting_names() -> Vec<String> {
+    vec![
+        // numeric
+        "shiftwidth".into(),
+        "sw".into(),
+        "tabstop".into(),
+        "ts".into(),
+        "softtabstop".into(),
+        "sts".into(),
+        "textwidth".into(),
+        "tw".into(),
+        "undolevels".into(),
+        "ul".into(),
+        "timeoutlen".into(),
+        "tm".into(),
+        "numberwidth".into(),
+        "nuw".into(),
+        "foldcolumn".into(),
+        "fdc".into(),
+        // string
+        "iskeyword".into(),
+        "isk".into(),
+        "signcolumn".into(),
+        "scl".into(),
+        "colorcolumn".into(),
+        "cc".into(),
+        // boolean
+        "ignorecase".into(),
+        "ic".into(),
+        "smartcase".into(),
+        "scs".into(),
+        "wrapscan".into(),
+        "ws".into(),
+        "expandtab".into(),
+        "et".into(),
+        "autoindent".into(),
+        "ai".into(),
+        "smartindent".into(),
+        "si".into(),
+        "undobreak".into(),
+        "readonly".into(),
+        "ro".into(),
+        "number".into(),
+        "nu".into(),
+        "relativenumber".into(),
+        "rnu".into(),
+        "cursorline".into(),
+        "cul".into(),
+        "cursorcolumn".into(),
+        "cuc".into(),
+        "wrap".into(),
+        "linebreak".into(),
+        "lbr".into(),
+        "foldenable".into(),
+        "fen".into(),
+    ]
+}
+
 /// `:set [opt ...]` body. Splits on whitespace and applies each token.
 /// Bare `:set` reports the current values for the supported options.
 pub(crate) fn apply_set<H: Host>(

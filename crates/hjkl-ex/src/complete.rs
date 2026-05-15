@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{HostRegistry, Registry};
+use crate::{ArgKind, HostRegistry, Registry};
 
 /// What kind of token is being completed. Phase 5a only emits `Command`;
 /// Phase 6 adds Path/Setting/Buffer/Register/Mark for arg completion.
@@ -8,7 +8,27 @@ use crate::{HostRegistry, Registry};
 pub enum CompletionKind {
     None,
     Command,
-    // Reserved for Phase 6: Path, Setting, Buffer, Register, Mark
+    Path,
+    Setting,
+    Buffer,
+    Register,
+    Mark,
+}
+
+/// Sources for arg completion. Caller fills the slots applicable to
+/// their context. None means "no candidates" — completer returns empty.
+#[derive(Default)]
+pub struct ArgSources<'a> {
+    /// cwd to scan for `:e <Tab>` style path completion. None disables.
+    pub cwd: Option<&'a std::path::Path>,
+    /// All known option names + aliases for `:set <Tab>`. Empty disables.
+    pub settings: &'a [String],
+    /// Open buffer names for `:b <Tab>`. Empty disables.
+    pub buffers: &'a [String],
+    /// Non-empty register selectors (e.g. `"a"`, `"+"`, `"0"`) for `:reg`/`:put`.
+    pub registers: &'a [String],
+    /// Live mark names for `:marks`/`:delmarks`. Empty disables.
+    pub marks: &'a [String],
 }
 
 /// Completion candidates for an input line at a given caret offset.
@@ -130,6 +150,199 @@ pub fn collect_host_registry_names<Ctx>(reg: &HostRegistry<Ctx>) -> Vec<String> 
     names
 }
 
+// ── Arg-position helpers ──────────────────────────────────────────────────────
+
+/// Returns `(end_byte_offset_of_command_token, did_find_space_after)`.
+///
+/// The command token is the leading run of ASCII alpha characters with an
+/// optional trailing `!`. We don't consume the space itself.
+pub fn first_word_end(line: &str) -> (usize, bool) {
+    let alpha_end = line
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphabetic())
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let token_end = if line.as_bytes().get(alpha_end) == Some(&b'!') {
+        alpha_end + 1
+    } else {
+        alpha_end
+    };
+    let has_space = line.as_bytes().get(token_end) == Some(&b' ');
+    (token_end, has_space)
+}
+
+/// Scan `cwd` for entries whose names begin with `file_part` (respecting the
+/// `dir_part` prefix).  Appends `/` to directories.  Hidden entries (starting
+/// with `.`) are skipped unless `file_part` itself starts with `.`.
+fn complete_path_entries(prefix: &str, cwd: &std::path::Path) -> Vec<String> {
+    // Split prefix at the last '/' into (dir_part, file_part).
+    let (dir_part, file_part) = match prefix.rfind('/') {
+        Some(idx) => (&prefix[..=idx], &prefix[idx + 1..]),
+        None => ("", prefix),
+    };
+    let scan_dir = if dir_part.is_empty() {
+        cwd.to_path_buf()
+    } else if std::path::Path::new(dir_part).is_absolute() {
+        std::path::PathBuf::from(dir_part)
+    } else {
+        cwd.join(dir_part)
+    };
+    let rd = match std::fs::read_dir(&scan_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let show_hidden = file_part.starts_with('.');
+    let mut results: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name_str = name.to_str()?.to_string();
+            // Skip hidden unless file_part starts with '.'
+            if !show_hidden && name_str.starts_with('.') {
+                return None;
+            }
+            if !name_str.starts_with(file_part) {
+                return None;
+            }
+            let suffix = if e.file_type().ok()?.is_dir() {
+                "/"
+            } else {
+                ""
+            };
+            Some(format!("{dir_part}{name_str}{suffix}"))
+        })
+        .collect();
+    results.sort();
+    results
+}
+
+/// Per-arg-kind completion. Caller resolves the command and passes its
+/// arg_kind. Returns empty Completions when caret isn't in arg position,
+/// or when no sources match.
+pub fn complete_arg(
+    line: &str,
+    caret: usize,
+    arg_kind: ArgKind,
+    sources: &ArgSources<'_>,
+) -> Completions {
+    let caret = caret.min(line.len());
+    // Find end of command token.
+    let (cmd_end, has_space) = first_word_end(line);
+    // Arg position starts at cmd_end + 1 (past the space).
+    let arg_start = if has_space { cmd_end + 1 } else { cmd_end };
+    if caret <= cmd_end || !has_space {
+        // Caret still in command-name territory.
+        return Completions::empty(caret);
+    }
+    // Find token under caret: walk back from caret to previous whitespace.
+    let slice = &line[arg_start..caret];
+    let token_offset = slice
+        .rfind(|c: char| c.is_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let token_start = arg_start + token_offset;
+    let prefix = &line[token_start..caret];
+
+    let (candidates, kind) = match arg_kind {
+        ArgKind::None | ArgKind::Raw => return Completions::empty(caret),
+        ArgKind::Path => {
+            let cwd = match sources.cwd {
+                Some(p) => p,
+                None => return Completions::empty(caret),
+            };
+            (complete_path_entries(prefix, cwd), CompletionKind::Path)
+        }
+        ArgKind::Setting => {
+            let mut c: Vec<String> = sources
+                .settings
+                .iter()
+                .filter(|s| s.starts_with(prefix))
+                .cloned()
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Setting)
+        }
+        ArgKind::Buffer => {
+            let mut c: Vec<String> = sources
+                .buffers
+                .iter()
+                .filter(|s| s.starts_with(prefix))
+                .cloned()
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Buffer)
+        }
+        ArgKind::Register => {
+            let mut c: Vec<String> = sources
+                .registers
+                .iter()
+                .filter(|s| s.starts_with(prefix))
+                .cloned()
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Register)
+        }
+        ArgKind::Mark => {
+            let mut c: Vec<String> = sources
+                .marks
+                .iter()
+                .filter(|s| s.starts_with(prefix))
+                .cloned()
+                .collect();
+            c.sort();
+            c.dedup();
+            (c, CompletionKind::Mark)
+        }
+    };
+
+    Completions {
+        replace_range: token_start..caret,
+        candidates,
+        kind,
+    }
+}
+
+/// High-level orchestrator: resolve the command name in `line` against both
+/// registries, then dispatch to arg completer or command-name completer.
+///
+/// Falls back to Phase 5a's command completer when caret is in command-name
+/// position.
+pub fn complete<H, Ctx>(
+    line: &str,
+    caret: usize,
+    editor_reg: &Registry<H>,
+    host_reg: &HostRegistry<Ctx>,
+    sources: &ArgSources<'_>,
+) -> Completions
+where
+    H: hjkl_engine::Host,
+{
+    let (cmd_token_end, has_arg_space) = first_word_end(line);
+    let caret = caret.min(line.len());
+    if caret <= cmd_token_end {
+        // Command-name completion path.
+        let mut names = collect_host_registry_names(host_reg);
+        names.extend(collect_registry_names(editor_reg));
+        names.sort();
+        names.dedup();
+        return complete_command_from_names(line, caret, &names);
+    }
+    if !has_arg_space {
+        return Completions::empty(caret);
+    }
+    // Arg position — resolve command name to find arg_kind.
+    let cmd_name = &line[..cmd_token_end];
+    let arg_kind = host_reg
+        .resolve(cmd_name)
+        .map(|c| c.arg_kind())
+        .or_else(|| editor_reg.resolve(cmd_name).map(|c| c.arg_kind))
+        .unwrap_or(ArgKind::None);
+    complete_arg(line, caret, arg_kind, sources)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +428,170 @@ mod tests {
     fn lcp_no_common() {
         let candidates = names(&["a", "b"]);
         assert_eq!(longest_common_prefix(&candidates), "");
+    }
+
+    // ── Phase 6 tests ─────────────────────────────────────────────────────────
+
+    fn str_vec(s: &[&str]) -> Vec<String> {
+        s.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn arg_position_detection_with_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Write a file so read_dir has at least one result.
+        std::fs::write(tmp.path().join("foo.txt"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+        // "e " caret=2 → arg position, path completion → non-empty
+        let result = complete_arg("e ", 2, ArgKind::Path, &sources);
+        assert_eq!(result.kind, CompletionKind::Path);
+        assert!(!result.candidates.is_empty());
+        assert!(result.candidates.iter().any(|c| c.contains("foo.txt")));
+    }
+
+    #[test]
+    fn complete_set_filters_settings() {
+        let settings = str_vec(&["number", "numberwidth", "nu", "noic", "relativenumber"]);
+        let sources = ArgSources {
+            settings: &settings,
+            ..Default::default()
+        };
+        let result = complete_arg("set ", 4, ArgKind::Setting, &sources);
+        assert_eq!(result.kind, CompletionKind::Setting);
+        // prefix "" → all settings
+        assert!(result.candidates.contains(&"number".to_string()));
+        assert!(result.candidates.contains(&"numberwidth".to_string()));
+        assert!(result.candidates.contains(&"nu".to_string()));
+
+        // Now filter with prefix "nu"
+        let result2 = complete_arg("set nu", 6, ArgKind::Setting, &sources);
+        assert_eq!(result2.kind, CompletionKind::Setting);
+        assert!(result2.candidates.contains(&"number".to_string()));
+        assert!(result2.candidates.contains(&"numberwidth".to_string()));
+        assert!(result2.candidates.contains(&"nu".to_string()));
+        assert!(!result2.candidates.contains(&"noic".to_string()));
+        assert!(!result2.candidates.contains(&"relativenumber".to_string()));
+    }
+
+    #[test]
+    fn complete_buffer_filters_buffers() {
+        let buffers = str_vec(&["src/main.rs", "src/lib.rs", "tests/foo.rs"]);
+        let sources = ArgSources {
+            buffers: &buffers,
+            ..Default::default()
+        };
+        let result = complete_arg("b ", 2, ArgKind::Buffer, &sources);
+        assert_eq!(result.kind, CompletionKind::Buffer);
+        assert!(result.candidates.contains(&"src/main.rs".to_string()));
+        assert!(result.candidates.contains(&"src/lib.rs".to_string()));
+        assert!(result.candidates.contains(&"tests/foo.rs".to_string()));
+
+        let result2 = complete_arg("b src", 5, ArgKind::Buffer, &sources);
+        assert_eq!(result2.kind, CompletionKind::Buffer);
+        assert!(result2.candidates.contains(&"src/main.rs".to_string()));
+        assert!(result2.candidates.contains(&"src/lib.rs".to_string()));
+        assert!(!result2.candidates.contains(&"tests/foo.rs".to_string()));
+    }
+
+    #[test]
+    fn complete_register_filters() {
+        let regs = str_vec(&["\"\"", "\"0", "\"a", "\"b"]);
+        let sources = ArgSources {
+            registers: &regs,
+            ..Default::default()
+        };
+        let result = complete_arg("reg ", 4, ArgKind::Register, &sources);
+        assert_eq!(result.kind, CompletionKind::Register);
+        assert!(result.candidates.contains(&"\"a".to_string()));
+
+        // prefix "\"a" → only "\"a"
+        let result2 = complete_arg("reg \"a", 6, ArgKind::Register, &sources);
+        assert!(result2.candidates.contains(&"\"a".to_string()));
+        assert!(!result2.candidates.contains(&"\"b".to_string()));
+    }
+
+    #[test]
+    fn complete_mark_filters() {
+        let marks = str_vec(&["a", "b", "c"]);
+        let sources = ArgSources {
+            marks: &marks,
+            ..Default::default()
+        };
+        // prefix "" → all marks
+        let result = complete_arg("marks ", 6, ArgKind::Mark, &sources);
+        assert_eq!(result.kind, CompletionKind::Mark);
+        assert_eq!(result.candidates.len(), 3);
+
+        // prefix "a" → only "a"
+        let result2 = complete_arg("marks a", 7, ArgKind::Mark, &sources);
+        assert_eq!(result2.candidates, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn complete_path_skips_hidden_unless_dot() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join(".hidden"), b"x").unwrap();
+        std::fs::write(tmp.path().join("visible.txt"), b"x").unwrap();
+
+        let sources = ArgSources {
+            cwd: Some(tmp.path()),
+            ..Default::default()
+        };
+
+        // prefix "" → hidden skipped
+        let result = complete_arg("e ", 2, ArgKind::Path, &sources);
+        assert!(result.candidates.iter().all(|c| !c.starts_with(".hidden")));
+        assert!(result.candidates.iter().any(|c| c.contains("visible.txt")));
+
+        // prefix "." → hidden shown
+        let result2 = complete_arg("e .", 3, ArgKind::Path, &sources);
+        assert!(result2.candidates.iter().any(|c| c.contains(".hidden")));
+    }
+
+    #[test]
+    fn complete_in_command_position_falls_back_to_command() {
+        use crate::{ExCommand, Registry};
+        use hjkl_engine::DefaultHost;
+
+        fn noop(
+            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &str,
+            _: Option<crate::range::LineRange>,
+        ) -> Option<crate::effect::ExEffect> {
+            None
+        }
+
+        let mut reg = Registry::<DefaultHost>::new();
+        reg.add(ExCommand {
+            name: "edit",
+            aliases: &["e"],
+            arg_kind: ArgKind::Path,
+            min_prefix: 1,
+            run: noop,
+        });
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // caret=1, line="e" → command position
+        let result = complete("e", 1, &reg, &host_reg, &sources);
+        assert_eq!(result.kind, CompletionKind::Command);
+    }
+
+    #[test]
+    fn complete_unknown_command_returns_none_kind() {
+        use crate::Registry;
+        use hjkl_engine::DefaultHost;
+
+        let reg = Registry::<DefaultHost>::new();
+        let host_reg = HostRegistry::<()>::new();
+        let sources = ArgSources::default();
+
+        // "xxx " with unknown command → kind=None
+        let result = complete("xxx ", 4, &reg, &host_reg, &sources);
+        assert_eq!(result.kind, CompletionKind::None);
+        assert!(result.candidates.is_empty());
     }
 }

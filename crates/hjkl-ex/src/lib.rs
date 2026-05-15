@@ -9,8 +9,8 @@
 //! `:undo`, `:redo`, `:qall`, `:qall!`, `:wqall`, `:wqall!`).
 
 pub use complete::{
-    CompletionKind, Completions, collect_host_registry_names, collect_registry_names,
-    complete_command_from_names, longest_common_prefix,
+    ArgSources, CompletionKind, Completions, collect_host_registry_names, collect_registry_names,
+    complete, complete_arg, complete_command_from_names, first_word_end, longest_common_prefix,
 };
 pub use effect::ExEffect;
 pub use range::{LineRange, parse_range};
@@ -24,6 +24,8 @@ mod parse;
 mod range;
 mod registry;
 mod setopt;
+
+pub use setopt::all_setting_names;
 
 /// Try to dispatch `input` (without the leading `:`) through the registry.
 ///
