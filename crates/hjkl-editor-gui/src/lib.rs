@@ -27,8 +27,8 @@ use floem::{
     views::{Decorators, container, label, scroll, v_stack},
 };
 use hjkl_buffer::Buffer;
-use hjkl_engine::{Editor, Input as EngineInput, Key as EngineKey};
 use hjkl_engine::types::DefaultHost;
+use hjkl_engine::{Editor, Input as EngineInput, Key as EngineKey};
 
 // ─── EditorHandle ────────────────────────────────────────────────────────────
 
@@ -118,7 +118,12 @@ pub fn floem_key_to_input(event: &floem::keyboard::KeyEvent) -> Option<EngineInp
         return None;
     }
 
-    Some(EngineInput { key, ctrl, alt, shift })
+    Some(EngineInput {
+        key,
+        ctrl,
+        alt,
+        shift,
+    })
 }
 
 // ─── editor_view ─────────────────────────────────────────────────────────────
@@ -190,23 +195,20 @@ pub fn editor_view(handle: EditorHandle) -> impl IntoView {
 
     // ── Outer container: captures key events ──────────────────────────────
     let h_keys = handle.clone();
-    container(
-        v_stack((text_area, status_bar))
-            .style(|s| s.width_full().height_full()),
-    )
-    .keyboard_navigable()
-    .on_event(EventListener::KeyDown, move |ev| {
-        if let Event::KeyDown(ke) = ev
-            && let Some(input) = floem_key_to_input(ke)
-        {
-            h_keys.with_mut(|ed| {
-                hjkl_vim::dispatch_input(ed, input);
-            });
-            return EventPropagation::Stop;
-        }
-        EventPropagation::Continue
-    })
-    .style(|s| s.width_full().height_full())
+    container(v_stack((text_area, status_bar)).style(|s| s.width_full().height_full()))
+        .keyboard_navigable()
+        .on_event(EventListener::KeyDown, move |ev| {
+            if let Event::KeyDown(ke) = ev
+                && let Some(input) = floem_key_to_input(ke)
+            {
+                h_keys.with_mut(|ed| {
+                    hjkl_vim::dispatch_input(ed, input);
+                });
+                return EventPropagation::Stop;
+            }
+            EventPropagation::Continue
+        })
+        .style(|s| s.width_full().height_full())
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

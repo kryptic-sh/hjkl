@@ -21,11 +21,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{
-    cell::RefCell,
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use clap::Parser;
 use floem::{
@@ -82,10 +78,7 @@ enum CmdState {
     Collecting(String),
 }
 
-fn app_view(
-    handle: EditorHandle,
-    save_path: Rc<RefCell<Option<PathBuf>>>,
-) -> impl IntoView {
+fn app_view(handle: EditorHandle, save_path: Rc<RefCell<Option<PathBuf>>>) -> impl IntoView {
     // Signal driving the ex-command bar text.
     let cmd_signal: RwSignal<CmdState> = RwSignal::new(CmdState::Idle);
 
@@ -114,78 +107,70 @@ fn app_view(
     let h_outer = handle.clone();
     let sp = save_path.clone();
 
-    container(
-        v_stack((inner_view, cmd_label))
-            .style(|s| s.width_full().height_full()),
-    )
-    .keyboard_navigable()
-    .on_event(EventListener::KeyDown, move |ev| {
-        let Event::KeyDown(ke) = ev else {
-            return EventPropagation::Continue;
-        };
+    container(v_stack((inner_view, cmd_label)).style(|s| s.width_full().height_full()))
+        .keyboard_navigable()
+        .on_event(EventListener::KeyDown, move |ev| {
+            let Event::KeyDown(ke) = ev else {
+                return EventPropagation::Continue;
+            };
 
-        // ── Ex-command accumulation ───────────────────────────────────────
-        match cmd_signal.get() {
-            CmdState::Idle => {
-                // In normal mode, `:` starts command collection.
-                // We check whether the editor is in Normal mode: if the key
-                // is `:` and no modifier is held, begin collecting.
-                let is_colon = matches!(&ke.key.logical_key, Key::Character(s) if s == ":");
-                if is_colon && !ke.modifiers.control() && !ke.modifiers.alt() {
-                    // Only intercept when the engine is in normal mode.
-                    let in_normal = h_outer.with(|ed| {
-                        matches!(ed.vim_mode(), hjkl_engine::VimMode::Normal)
-                    });
-                    if in_normal {
-                        cmd_signal.set(CmdState::Collecting(String::new()));
+            // ── Ex-command accumulation ───────────────────────────────────────
+            match cmd_signal.get() {
+                CmdState::Idle => {
+                    // In normal mode, `:` starts command collection.
+                    // We check whether the editor is in Normal mode: if the key
+                    // is `:` and no modifier is held, begin collecting.
+                    let is_colon = matches!(&ke.key.logical_key, Key::Character(s) if s == ":");
+                    if is_colon && !ke.modifiers.control() && !ke.modifiers.alt() {
+                        // Only intercept when the engine is in normal mode.
+                        let in_normal = h_outer
+                            .with(|ed| matches!(ed.vim_mode(), hjkl_engine::VimMode::Normal));
+                        if in_normal {
+                            cmd_signal.set(CmdState::Collecting(String::new()));
+                            return EventPropagation::Stop;
+                        }
+                    }
+                    // Otherwise forward to the editor.
+                    if let Some(input) = floem_key_to_input(ke) {
+                        h_outer.with_mut(|ed| {
+                            hjkl_vim::dispatch_input(ed, input);
+                        });
                         return EventPropagation::Stop;
                     }
+                    EventPropagation::Continue
                 }
-                // Otherwise forward to the editor.
-                if let Some(input) = floem_key_to_input(ke) {
-                    h_outer.with_mut(|ed| {
-                        hjkl_vim::dispatch_input(ed, input);
-                    });
-                    return EventPropagation::Stop;
-                }
-                EventPropagation::Continue
-            }
 
-            CmdState::Collecting(mut buf) => {
-                match &ke.key.logical_key {
-                    Key::Named(NamedKey::Escape) => {
-                        // Cancel.
-                        cmd_signal.set(CmdState::Idle);
+                CmdState::Collecting(mut buf) => {
+                    match &ke.key.logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            // Cancel.
+                            cmd_signal.set(CmdState::Idle);
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            // Execute.
+                            let cmd = buf.trim().to_string();
+                            cmd_signal.set(CmdState::Idle);
+                            execute_ex(&cmd, &h_outer, &sp);
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            buf.pop();
+                            cmd_signal.set(CmdState::Collecting(buf));
+                        }
+                        Key::Character(s) => {
+                            buf.push_str(s);
+                            cmd_signal.set(CmdState::Collecting(buf));
+                        }
+                        _ => {}
                     }
-                    Key::Named(NamedKey::Enter) => {
-                        // Execute.
-                        let cmd = buf.trim().to_string();
-                        cmd_signal.set(CmdState::Idle);
-                        execute_ex(&cmd, &h_outer, &sp);
-                    }
-                    Key::Named(NamedKey::Backspace) => {
-                        buf.pop();
-                        cmd_signal.set(CmdState::Collecting(buf));
-                    }
-                    Key::Character(s) => {
-                        buf.push_str(s);
-                        cmd_signal.set(CmdState::Collecting(buf));
-                    }
-                    _ => {}
+                    EventPropagation::Stop
                 }
-                EventPropagation::Stop
             }
-        }
-    })
-    .style(|s| s.width_full().height_full())
+        })
+        .style(|s| s.width_full().height_full())
 }
 
 /// Dispatch a completed ex command.
-fn execute_ex(
-    cmd: &str,
-    handle: &EditorHandle,
-    save_path: &Rc<RefCell<Option<PathBuf>>>,
-) {
+fn execute_ex(cmd: &str, handle: &EditorHandle, save_path: &Rc<RefCell<Option<PathBuf>>>) {
     match cmd {
         "q" | "q!" => {
             floem::quit_app();
