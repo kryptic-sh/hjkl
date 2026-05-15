@@ -748,8 +748,11 @@
           Multi-buffer TUI editor with fuzzy file/buffer/grep pickers,
           lazygit-adjacent <code>&lt;leader&gt;g</code> git surface (status,
           log, branches, file history, stash, tags, remotes), tree-sitter
-          highlighting, and focus-regain disk auto-reload. Same FSM also drives
-          sqeel, hjkl, inbx.
+          highlighting via runtime-loaded grammars (hjkl-bonsai 0.7), the new
+          backend-agnostic <code>hjkl-theme</code> +
+          <code>hjkl-theme-tui</code> stack, marks / macros / dot-repeat /
+          <code>@:</code> last-ex repeat, and focus-regain disk auto-reload.
+          Same vim FSM (<code>hjkl-vim</code>) drives sqeel, buffr, inbx.
         </p>
 
         <div class="cta">
@@ -854,7 +857,7 @@
 
       <section id="crates">
         <h2>crates</h2>
-        <h3>One binary. Nine ecosystem crates. Each in its own repo.</h3>
+        <h3>One binary. Twelve ecosystem crates. Each in its own repo.</h3>
         <div class="crates">
           <a
             class="crate"
@@ -877,10 +880,29 @@
             rel="noopener"
           >
             <div class="crate-name">hjkl-engine</div>
+            <div class="crate-meta">core · controller</div>
+            <p class="crate-desc">
+              Pure controller: cursor, motions, operators, registers, marks,
+              macros. No I/O deps. The vim FSM was extracted to
+              <code>hjkl-vim</code> in 0.7 — the engine just executes primitives
+              now.
+            </p>
+          </a>
+          <a
+            class="crate"
+            href="https://github.com/kryptic-sh/hjkl-vim"
+            target="_blank"
+            rel="noopener"
+          >
+            <div class="crate-name">hjkl-vim</div>
             <div class="crate-meta">core · vim FSM</div>
             <p class="crate-desc">
-              Vim FSM + grammar. Pending-operator state, motions, text objects,
-              registers. No I/O deps.
+              The vim grammar reducer. Pending-state machine for chords
+              (<code>m&lt;x&gt;</code>, <code>q&lt;x&gt;</code>,
+              <code>@&lt;x&gt;</code>, <code>5dd</code>, <code>"a5dd</code>),
+              count accumulator, dot-repeat, <code>@:</code> last-ex replay.
+              <code>hjkl_vim::handle_key</code> is the canonical FSM entry
+              point.
             </p>
           </a>
           <a
@@ -919,9 +941,40 @@
             <div class="crate-meta">std · highlighting</div>
             <p class="crate-desc">
               Runtime grammar loader. Clones, compiles, and caches
-              <code>tree-sitter-*</code> grammars on demand with
-              Neovim-flavoured themes and comment-marker overlay
-              (TODO/FIXME/NOTE/WARN). Zero grammars baked into the binary.
+              <code>tree-sitter-*</code> grammars on demand. Bare and
+              <code>@</code>-prefixed capture names both resolve;
+              <code>lua-match?</code> / <code>not-lua-match?</code> predicates
+              built in. Comment-marker overlay (TODO/FIXME/NOTE/WARN).
+              Re-exports <code>hjkl_theme::StyleSpec</code> — zero grammars
+              baked in.
+            </p>
+          </a>
+          <a
+            class="crate"
+            href="https://github.com/kryptic-sh/hjkl-theme"
+            target="_blank"
+            rel="noopener"
+          >
+            <div class="crate-name">hjkl-theme</div>
+            <div class="crate-meta">core · theming</div>
+            <p class="crate-desc">
+              Backend-agnostic theme schema. TOML parse, palette interning,
+              tree-sitter capture fallback chain. <code>StyleSpec</code> shared
+              between bonsai, hjkl, and any downstream renderer.
+            </p>
+          </a>
+          <a
+            class="crate"
+            href="https://github.com/kryptic-sh/hjkl-theme-tui"
+            target="_blank"
+            rel="noopener"
+          >
+            <div class="crate-name">hjkl-theme-tui</div>
+            <div class="crate-meta">optional · adapter</div>
+            <p class="crate-desc">
+              <code>ToRatatui</code> extension trait — converts
+              <code>hjkl_theme::Color</code> / <code>Modifiers</code> /
+              <code>StyleSpec</code> into ratatui types. Drop into any TUI.
             </p>
           </a>
           <a
