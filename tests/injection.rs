@@ -174,6 +174,8 @@ fn child_cache_avoids_repeated_parses() {
         ```rust\nfn three() -> u32 { 42 }\n```\n";
 
     let mut highlighter = Highlighter::new(markdown_grammar).unwrap();
+    // `highlight_range_with_injections` assumes the parent parse tree exists.
+    highlighter.parse_initial(source);
     let resolver = |name: &str| -> Option<Arc<Grammar>> {
         if name == "rust" {
             Some(rust_grammar.clone())
@@ -182,7 +184,8 @@ fn child_cache_avoids_repeated_parses() {
         }
     };
 
-    // First call: seeds the parent tree + parses all 3 child blocks.
+    // First call: parses all 3 child blocks (the parent tree was already
+    // seeded above so we don't count it here).
     hjkl_bonsai::parse_counter::reset();
     highlighter.highlight_range_with_injections(source, 0..source.len(), resolver);
     let after_first = hjkl_bonsai::parse_counter::get();
@@ -205,8 +208,11 @@ fn child_cache_avoids_repeated_parses() {
     );
 }
 
-/// `highlight_with_injections` on a grammar that has no `injections.scm`
-/// (e.g. the rust grammar itself) should behave identically to `highlight`.
+/// `highlight_with_injections` on a grammar whose `injections.scm` only uses
+/// the `(#set! injection.language ...)` directive form (no
+/// `@injection.language` captures) should — with a null resolver — produce
+/// the same span set as `highlight()`. The directive form IS detected as of
+/// the regression below, but a null resolver still drops the injection.
 #[test]
 #[ignore = "network + compiler: fetches rust grammar"]
 fn no_injection_grammar_behaves_like_highlight() {
@@ -214,10 +220,6 @@ fn no_injection_grammar_behaves_like_highlight() {
     let (registry, meta) = registry_and_meta();
     let loader = make_loader(&tmp);
 
-    // Rust's own injections.scm (from its grammar source) uses
-    // (#set! injection.language ...) without @injection.language captures,
-    // so our v1 implementation skips those matches. The output should
-    // therefore be identical to a plain highlight() call.
     let rust_grammar = load_grammar("rust", &loader, &registry, &meta);
 
     let source = b"fn main() { let x = 42; }";
@@ -231,5 +233,82 @@ fn no_injection_grammar_behaves_like_highlight() {
     assert_eq!(
         plain, with_inj,
         "highlight_with_injections with null resolver must equal highlight"
+    );
+}
+
+/// Regression: tree-sitter-markdown's injections.scm wires
+/// `((inline) @injection.content (#set! injection.language "markdown_inline"))`,
+/// `((html_block) @injection.content (#set! injection.language "html"))`,
+/// `((minus_metadata) @injection.content (#set! injection.language "yaml"))`,
+/// and `((plus_metadata) @injection.content (#set! injection.language "toml"))`.
+/// Before the `(#set! injection.language ...)` directive support landed, the
+/// highlighter only consumed the capture form, so paragraph-inline markdown
+/// got no `markdown_inline` injection — and italic / strong / inline code /
+/// inline links rendered without highlighting.
+///
+/// This test asserts the resolver is called with `"markdown_inline"` when a
+/// paragraph is present in the markdown source.
+#[test]
+#[ignore = "network + compiler: fetches markdown grammar"]
+fn markdown_inline_injection_directive_form_fires_resolver() {
+    use std::cell::RefCell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (registry, meta) = registry_and_meta();
+    let loader = make_loader(&tmp);
+
+    let markdown_grammar = load_grammar("markdown", &loader, &registry, &meta);
+
+    // Paragraph text triggers an (inline) node → markdown_inline injection
+    // via the directive form. Use prose that does not look like a fence so
+    // the (fenced_code_block …) pattern (capture-form @injection.language)
+    // is NOT what we're observing.
+    let source: &[u8] = b"# Title\n\nSome *italic* prose with `code`.\n";
+
+    let asked: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut highlighter = Highlighter::new(markdown_grammar).unwrap();
+    let _ = highlighter.highlight_with_injections(source, |name: &str| {
+        asked.borrow_mut().push(name.to_string());
+        None
+    });
+
+    let names = asked.borrow();
+    assert!(
+        names.iter().any(|n| n == "markdown_inline"),
+        "resolver must be asked for `markdown_inline` (via #set! directive) on \
+         a paragraph; got: {names:?}"
+    );
+}
+
+/// Companion regression for the scoped variant: the
+/// `(#set! injection.language ...)` directive form must work in
+/// `highlight_range_with_injections` as well as the full-buffer walker.
+#[test]
+#[ignore = "network + compiler: fetches markdown grammar"]
+fn markdown_inline_injection_directive_form_fires_in_range_variant() {
+    use std::cell::RefCell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (registry, meta) = registry_and_meta();
+    let loader = make_loader(&tmp);
+
+    let markdown_grammar = load_grammar("markdown", &loader, &registry, &meta);
+
+    let source: &[u8] = b"# Title\n\nSome *italic* prose with `code`.\n";
+
+    let asked: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut highlighter = Highlighter::new(markdown_grammar).unwrap();
+    // The scoped variant assumes the parse tree exists — callers always
+    // invoke `parse_initial` (or `highlight()`) first; we mirror that here.
+    highlighter.parse_initial(source);
+    let _ = highlighter.highlight_range_with_injections(source, 0..source.len(), |name: &str| {
+        asked.borrow_mut().push(name.to_string());
+        None
+    });
+
+    let names = asked.borrow();
+    assert!(
+        names.iter().any(|n| n == "markdown_inline"),
+        "scoped variant must also fire the directive-form resolver; got: {names:?}"
     );
 }

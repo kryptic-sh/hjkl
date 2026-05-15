@@ -663,15 +663,22 @@ impl Highlighter {
             while let Some(m) = matches.next() {
                 // Each match may have both @injection.language and
                 // @injection.content captures, possibly in either order.
-                let mut lang_text: Option<&[u8]> = None;
+                // Alternatively, the pattern may set injection.language as a
+                // `(#set! injection.language "foo")` directive — used by
+                // tree-sitter-markdown for (inline) → markdown_inline,
+                // (html_block) → html, (minus_metadata) → yaml, etc.
+                let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
                 for cap in m.captures {
                     if cap.index == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
-                        if s < e && e <= source.len() {
-                            lang_text = Some(&source[s..e]);
+                        if s < e
+                            && e <= source.len()
+                            && let Ok(t) = std::str::from_utf8(&source[s..e])
+                        {
+                            lang_name = Some(t.trim().to_string());
                         }
                     } else if cap.index == content_idx {
                         let s = cap.node.start_byte();
@@ -682,18 +689,28 @@ impl Highlighter {
                     }
                 }
 
-                if let (Some(raw_name), Some(range)) = (lang_text, content_range) {
-                    // Reject non-ASCII or suspiciously long language names.
-                    if let Ok(name_str) = std::str::from_utf8(raw_name) {
-                        let name = name_str.trim();
-                        if !name.is_empty()
-                            && name.len() <= 64
-                            && name
-                                .chars()
-                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                // Fallback: pattern-level `(#set! injection.language "foo")`
+                // directive. Tree-sitter exposes these via property_settings().
+                if lang_name.is_none() {
+                    for prop in inj_query.property_settings(m.pattern_index) {
+                        if prop.key.as_ref() == INJ_LANG_CAPTURE
+                            && let Some(v) = prop.value.as_deref()
                         {
-                            injections.push((name.to_string(), range));
+                            lang_name = Some(v.trim().to_string());
+                            break;
                         }
+                    }
+                }
+
+                if let (Some(name), Some(range)) = (lang_name, content_range) {
+                    // Reject non-ASCII or suspiciously long language names.
+                    if !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
+                        injections.push((name, range));
                     }
                 }
             }
@@ -849,15 +866,21 @@ impl Highlighter {
             let mut matches = cursor.matches(inj_query, tree.root_node(), source);
 
             while let Some(m) = matches.next() {
-                let mut lang_text: Option<&[u8]> = None;
+                // Mirrors the full-buffer walker; see comments there for the
+                // injection.language resolution policy (capture form first,
+                // then `(#set! injection.language "foo")` pattern directive).
+                let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
                 for cap in m.captures {
                     if cap.index == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
-                        if s < e && e <= source.len() {
-                            lang_text = Some(&source[s..e]);
+                        if s < e
+                            && e <= source.len()
+                            && let Ok(t) = std::str::from_utf8(&source[s..e])
+                        {
+                            lang_name = Some(t.trim().to_string());
                         }
                     } else if cap.index == content_idx {
                         let s = cap.node.start_byte();
@@ -868,21 +891,29 @@ impl Highlighter {
                     }
                 }
 
-                if let (Some(raw_name), Some(range)) = (lang_text, content_range) {
+                if lang_name.is_none() {
+                    for prop in inj_query.property_settings(m.pattern_index) {
+                        if prop.key.as_ref() == INJ_LANG_CAPTURE
+                            && let Some(v) = prop.value.as_deref()
+                        {
+                            lang_name = Some(v.trim().to_string());
+                            break;
+                        }
+                    }
+                }
+
+                if let (Some(name), Some(range)) = (lang_name, content_range) {
                     // Only include injections that intersect the viewport.
                     if range.start >= byte_range.end || range.end <= byte_range.start {
                         continue;
                     }
-                    if let Ok(name_str) = std::str::from_utf8(raw_name) {
-                        let name = name_str.trim();
-                        if !name.is_empty()
-                            && name.len() <= 64
-                            && name
-                                .chars()
-                                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                        {
-                            injections.push((name.to_string(), range));
-                        }
+                    if !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
+                        injections.push((name, range));
                     }
                 }
             }
