@@ -2046,7 +2046,7 @@ dependencies = [
  "hjkl-form",
  "hjkl-keymap",
  "hjkl-lsp",
- "hjkl-picker",
+ "hjkl-picker 0.6.0",
  "hjkl-picker-tui",
  "hjkl-ratatui",
  "hjkl-splash",
@@ -2161,7 +2161,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor"
-version = "0.4.8"
+version = "0.4.7"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -2204,6 +2204,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "regex",
+ "tempfile",
  "thiserror 2.0.18",
 ]
 
@@ -2254,14 +2255,28 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
+version = "0.5.2"
+dependencies = [
+ "crossterm",
+ "hjkl-buffer",
+ "hjkl-form",
+ "ignore",
+ "ratatui",
+ "regex",
+ "tempfile",
+]
+
+[[package]]
+name = "hjkl-picker"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3d7facf0891907fd6d24bef1664537fa03e4f02226faffd4bbb5a5e7d042df8"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-form",
  "ignore",
  "regex",
- "tempfile",
 ]
 
 [[package]]
@@ -2271,7 +2286,7 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
- "hjkl-picker",
+ "hjkl-picker 0.6.0",
  "ratatui",
 ]
 
