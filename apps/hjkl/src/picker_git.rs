@@ -8,8 +8,8 @@ use git2::{
     StatusOptions, Time,
 };
 use hjkl_buffer::Buffer;
+use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::{PickerAction, PickerLogic, RequeryMode, load_preview};
-use ratatui::style::{Color, Style};
 
 use crate::picker_action::AppAction;
 
@@ -53,13 +53,30 @@ fn author_initials(name: &str) -> String {
 
 /// Deterministic color from author name. FNV-1a hash → HSL → RGB. Matches
 /// lazygit's behavior: same name always picks the same color.
-fn author_color(name: &str) -> Color {
+fn author_color(name: &str) -> EngineColor {
     let h = fnv1a_64(name.as_bytes());
     let hue = ((h & 0xFFFF) as f32 / 65535.0) * 360.0;
     let sat = 0.6 + (((h >> 16) & 0xFFFF) as f32 / 65535.0) * 0.4;
     let lit = 0.45 + (((h >> 32) & 0xFFFF) as f32 / 65535.0) * 0.15;
     let (r, g, b) = hsl_to_rgb(hue, sat, lit);
-    Color::Rgb(r, g, b)
+    EngineColor(r, g, b)
+}
+
+/// Map a small set of named ratatui colors to engine RGB triples.
+/// All callers in this file use only Yellow, Magenta, Cyan, Green, and Rgb.
+fn to_engine_color(c: ratatui::style::Color) -> EngineColor {
+    match c {
+        ratatui::style::Color::Rgb(r, g, b) => EngineColor(r, g, b),
+        ratatui::style::Color::Yellow => EngineColor(255, 215, 0),
+        ratatui::style::Color::Magenta => EngineColor(255, 0, 255),
+        ratatui::style::Color::Cyan => EngineColor(0, 255, 255),
+        ratatui::style::Color::Green => EngineColor(0, 205, 0),
+        ratatui::style::Color::Red => EngineColor(255, 0, 0),
+        ratatui::style::Color::Blue => EngineColor(0, 0, 255),
+        ratatui::style::Color::White => EngineColor(255, 255, 255),
+        ratatui::style::Color::Black => EngineColor(0, 0, 0),
+        _ => EngineColor(128, 128, 128),
+    }
 }
 
 fn fnv1a_64(bytes: &[u8]) -> u64 {
@@ -690,7 +707,7 @@ impl PickerLogic for GitLogPicker {
         &self,
         idx: usize,
         label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -698,27 +715,37 @@ impl PickerLogic for GitLogPicker {
             g.get(idx)
                 .map(|i| (i.short_sha.chars().count(), i.author.clone()))
         })?;
-        let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
         let hash_start = 2usize;
         let hash_end = hash_start + short_len;
-        out.push((hash_start..hash_end, Style::default().fg(Color::Yellow)));
+        out.push((
+            hash_start..hash_end,
+            EngineStyle {
+                fg: Some(to_engine_color(ratatui::style::Color::Yellow)),
+                ..EngineStyle::default()
+            },
+        ));
         // Initials column: 2 chars after a 2-space gap.
         let initials_start = hash_end + 2;
         let initials_end = initials_start + 2;
         out.push((
             initials_start..initials_end,
-            Style::default()
-                .fg(author_color(&author))
-                .add_modifier(ratatui::style::Modifier::BOLD),
+            EngineStyle {
+                fg: Some(author_color(&author)),
+                attrs: Attrs::BOLD,
+                ..EngineStyle::default()
+            },
         ));
         // Subject starts after another 2-space gap.
         let subject_start = initials_end + 2;
         if let Some(end) = conv_commit_prefix_end(label, subject_start) {
             out.push((
                 subject_start..end,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
+                EngineStyle {
+                    fg: Some(to_engine_color(ratatui::style::Color::Magenta)),
+                    attrs: Attrs::BOLD,
+                    ..EngineStyle::default()
+                },
             ));
         }
         Some(out)
@@ -1002,7 +1029,7 @@ impl PickerLogic for GitFileHistoryPicker {
         &self,
         idx: usize,
         label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -1010,25 +1037,35 @@ impl PickerLogic for GitFileHistoryPicker {
             g.get(idx)
                 .map(|i| (i.short_sha.chars().count(), i.author.clone()))
         })?;
-        let mut out: Vec<(std::ops::Range<usize>, Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
         let hash_start = 2usize;
         let hash_end = hash_start + short_len;
-        out.push((hash_start..hash_end, Style::default().fg(Color::Yellow)));
+        out.push((
+            hash_start..hash_end,
+            EngineStyle {
+                fg: Some(to_engine_color(ratatui::style::Color::Yellow)),
+                ..EngineStyle::default()
+            },
+        ));
         let initials_start = hash_end + 2;
         let initials_end = initials_start + 2;
         out.push((
             initials_start..initials_end,
-            Style::default()
-                .fg(author_color(&author))
-                .add_modifier(ratatui::style::Modifier::BOLD),
+            EngineStyle {
+                fg: Some(author_color(&author)),
+                attrs: Attrs::BOLD,
+                ..EngineStyle::default()
+            },
         ));
         let subject_start = initials_end + 2;
         if let Some(end) = conv_commit_prefix_end(label, subject_start) {
             out.push((
                 subject_start..end,
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(ratatui::style::Modifier::BOLD),
+                EngineStyle {
+                    fg: Some(to_engine_color(ratatui::style::Color::Magenta)),
+                    attrs: Attrs::BOLD,
+                    ..EngineStyle::default()
+                },
             ));
         }
         Some(out)
@@ -1317,7 +1354,7 @@ impl PickerLogic for GitBranchPicker {
         &self,
         idx: usize,
         _label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -1326,13 +1363,16 @@ impl PickerLogic for GitBranchPicker {
                 .map(|i| (i.is_head, i.kind, i.name.chars().count()))
         })?;
         let _ = name_len;
-        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
 
         // Marker at char index 2..3.
         if is_head {
             out.push((
                 2..3,
-                ratatui::style::Style::default().fg(ratatui::style::Color::Green),
+                EngineStyle {
+                    fg: Some(to_engine_color(ratatui::style::Color::Green)),
+                    ..EngineStyle::default()
+                },
             ));
         }
 
@@ -1344,12 +1384,14 @@ impl PickerLogic for GitBranchPicker {
         let name_char_end = label.chars().count();
         if name_char_start < name_char_end {
             let style = match kind {
-                BranchKind::Local => {
-                    ratatui::style::Style::default().fg(ratatui::style::Color::Cyan)
-                }
-                BranchKind::Remote => {
-                    ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM)
-                }
+                BranchKind::Local => EngineStyle {
+                    fg: Some(to_engine_color(ratatui::style::Color::Cyan)),
+                    ..EngineStyle::default()
+                },
+                BranchKind::Remote => EngineStyle {
+                    attrs: Attrs::DIM,
+                    ..EngineStyle::default()
+                },
             };
             out.push((name_char_start..name_char_end, style));
         }
@@ -1608,7 +1650,7 @@ impl PickerLogic for GitStashPicker {
         &self,
         idx: usize,
         _label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -1619,13 +1661,16 @@ impl PickerLogic for GitStashPicker {
             .and_then(|g| g.get(idx).map(|i| (i.index, i.branch_hint.clone())))?;
         let index_str = format!("stash@{{{stash_idx}}}");
         let index_len = index_str.chars().count();
-        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
         // "  stash@{N}" — index starts at char 2.
         let index_start = 2usize;
         let index_end = index_start + index_len;
         out.push((
             index_start..index_end,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+            EngineStyle {
+                fg: Some(to_engine_color(ratatui::style::Color::Yellow)),
+                ..EngineStyle::default()
+            },
         ));
         if !branch_hint.is_empty() {
             // "  on <branch>" — 2 chars gap after index
@@ -1634,7 +1679,10 @@ impl PickerLogic for GitStashPicker {
             let branch_end = branch_start + branch_label.chars().count();
             out.push((
                 branch_start..branch_end,
-                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+                EngineStyle {
+                    attrs: Attrs::DIM,
+                    ..EngineStyle::default()
+                },
             ));
         }
         Some(out)
@@ -1701,7 +1749,7 @@ impl PickerLogic for GitStashPicker {
         }
     }
 
-    fn handle_key(&self, idx: usize, key: crossterm::event::KeyEvent) -> Option<PickerAction> {
+    fn handle_key(&self, idx: usize, key: hjkl_engine::Input) -> Option<PickerAction> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -1711,14 +1759,14 @@ impl PickerLogic for GitStashPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.index))?;
         // Alt+P / Alt+D so plain p/d stay free for filter input.
-        if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) {
+        if !key.alt {
             return None;
         }
-        match key.code {
-            crossterm::event::KeyCode::Char('p') => Some(PickerAction::Custom(Box::new(
+        match key.key {
+            hjkl_engine::Key::Char('p') => Some(PickerAction::Custom(Box::new(
                 AppAction::StashPop(stash_idx),
             ))),
-            crossterm::event::KeyCode::Char('d') => Some(PickerAction::Custom(Box::new(
+            hjkl_engine::Key::Char('d') => Some(PickerAction::Custom(Box::new(
                 AppAction::StashDrop(stash_idx),
             ))),
             _ => None,
@@ -1915,7 +1963,7 @@ impl PickerLogic for GitTagsPicker {
         &self,
         idx: usize,
         _label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -1924,12 +1972,15 @@ impl PickerLogic for GitTagsPicker {
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.name.chars().count()))?;
-        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
         let name_start = 2usize;
         let name_end = name_start + name_len;
         out.push((
             name_start..name_end,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+            EngineStyle {
+                fg: Some(to_engine_color(ratatui::style::Color::Yellow)),
+                ..EngineStyle::default()
+            },
         ));
         Some(out)
     }
@@ -2185,7 +2236,7 @@ impl PickerLogic for GitRemotesPicker {
         &self,
         idx: usize,
         _label: &str,
-    ) -> Option<Vec<(std::ops::Range<usize>, ratatui::style::Style)>> {
+    ) -> Option<Vec<(std::ops::Range<usize>, EngineStyle)>> {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
@@ -2194,13 +2245,16 @@ impl PickerLogic for GitRemotesPicker {
             .lock()
             .ok()
             .and_then(|g| g.get(idx).map(|i| (i.name.chars().count(), i.branch_count)))?;
-        let mut out: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = Vec::new();
+        let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
         // Name in yellow: "  <name>"
         let name_start = 2usize;
         let name_end = name_start + name_len;
         out.push((
             name_start..name_end,
-            ratatui::style::Style::default().fg(ratatui::style::Color::Yellow),
+            EngineStyle {
+                fg: Some(to_engine_color(ratatui::style::Color::Yellow)),
+                ..EngineStyle::default()
+            },
         ));
         // Branch count dim: "  ↑N" — ↑ is 3 bytes (U+2191), count digits vary.
         // char positions: name_end, then 2 spaces, then ↑, then digits.
@@ -2210,7 +2264,10 @@ impl PickerLogic for GitRemotesPicker {
         let count_end = count_arrow_start + count_str.chars().count();
         out.push((
             count_arrow_start..count_end,
-            ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            EngineStyle {
+                attrs: Attrs::DIM,
+                ..EngineStyle::default()
+            },
         ));
         Some(out)
     }

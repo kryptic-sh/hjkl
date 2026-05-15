@@ -1061,6 +1061,7 @@ dependencies = [
  "hjkl-keymap",
  "hjkl-lsp",
  "hjkl-picker",
+ "hjkl-picker-tui",
  "hjkl-ratatui",
  "hjkl-splash",
  "hjkl-theme",
@@ -1174,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-editor"
-version = "0.4.7"
+version = "0.4.8"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
@@ -1243,15 +1244,25 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.5.2"
+version = "0.6.0"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine",
+ "hjkl-form",
+ "ignore",
+ "regex",
+ "tempfile",
+]
+
+[[package]]
+name = "hjkl-picker-tui"
+version = "0.1.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-form",
- "ignore",
+ "hjkl-engine",
+ "hjkl-picker",
  "ratatui",
- "regex",
- "tempfile",
 ]
 
 [[package]]

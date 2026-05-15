@@ -168,7 +168,7 @@ impl App {
 
     pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
         let event = match self.picker.as_mut() {
-            Some(p) => p.handle_key(key),
+            Some(p) => hjkl_picker_tui::handle_key(p, key),
             None => return,
         };
         match event {

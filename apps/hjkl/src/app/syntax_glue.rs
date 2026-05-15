@@ -3,8 +3,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
+use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::PreviewSpans;
-use hjkl_theme_tui::ToRatatui;
 
 use crate::git_worker::GitJob;
 use crate::lang::GrammarRequest;
@@ -376,12 +376,30 @@ impl App {
         drop(cache);
         CommentMarkerPass::new().apply(&mut flat, bytes);
         let theme = self.theme.syntax.clone();
-        let ranges: Vec<(std::ops::Range<usize>, ratatui::style::Style)> = flat
+        let ranges: Vec<(std::ops::Range<usize>, EngineStyle)> = flat
             .into_iter()
             .filter_map(|span| {
-                theme
-                    .style(span.capture())
-                    .map(|s| (span.byte_range.clone(), s.to_ratatui()))
+                theme.style(span.capture()).map(|s| {
+                    let fg = s.fg.map(|c| EngineColor(c.r, c.g, c.b));
+                    let bg = s.bg.map(|c| EngineColor(c.r, c.g, c.b));
+                    let mut attrs = Attrs::empty();
+                    if s.modifiers.bold {
+                        attrs |= Attrs::BOLD;
+                    }
+                    if s.modifiers.italic {
+                        attrs |= Attrs::ITALIC;
+                    }
+                    if s.modifiers.underline {
+                        attrs |= Attrs::UNDERLINE;
+                    }
+                    if s.modifiers.reverse {
+                        attrs |= Attrs::REVERSE;
+                    }
+                    if s.modifiers.strikethrough {
+                        attrs |= Attrs::STRIKE;
+                    }
+                    (span.byte_range.clone(), EngineStyle { fg, bg, attrs })
+                })
             })
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)

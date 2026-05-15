@@ -20,6 +20,7 @@ hjkl-buffer = { path = "crates/hjkl-buffer" }
 hjkl-clipboard = { path = "crates/hjkl-clipboard" }
 hjkl-form = { path = "crates/hjkl-form" }
 hjkl-picker = { path = "crates/hjkl-picker" }
+hjkl-picker-tui = { path = "crates/hjkl-picker-tui" }
 hjkl-ratatui = { path = "crates/hjkl-ratatui" }
 hjkl-bonsai = { path = "crates/hjkl-bonsai" }
 hjkl-config = { path = "crates/hjkl-config" }
