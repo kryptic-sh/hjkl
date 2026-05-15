@@ -1188,6 +1188,24 @@ fn q_on_last_slot_quits_app() {
     assert!(app.exit_requested, "`:q` on clean last slot should exit");
 }
 
+/// Phase 1 of the hjkl-ex extraction (kryptic-sh/hjkl#73): `:q!` on a dirty
+/// buffer must force-quit even though the buffer is unsaved. This exercises
+/// the new `hjkl_ex::try_dispatch` → `bridge_ex_effect` path; if either side
+/// regresses (registry stops resolving `q!` or the bridge drops `force=true`)
+/// the dirty buffer would block the exit and the assertion fails.
+#[test]
+fn q_bang_force_quits_dirty_buffer_via_hjkl_ex() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "unsaved work");
+    // Mark the buffer dirty so a plain `:q` would refuse with E37.
+    app.active_mut().dirty = true;
+    app.dispatch_ex("q!");
+    assert!(
+        app.exit_requested,
+        "`:q!` must force-quit a dirty buffer (hjkl-ex Phase 1 routing)"
+    );
+}
+
 // ── Start screen tests ─────────────────────────────────────────────────
 
 #[test]

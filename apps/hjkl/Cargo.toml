@@ -26,6 +26,7 @@ hjkl-buffer = "0.6"
 hjkl-splash = { version = "0.2", features = ["ratatui"] }
 hjkl-engine = "0.7.0"
 hjkl-editor = "0.4.6"
+hjkl-ex = "0.1"
 hjkl-ratatui = "0.3"
 hjkl-bonsai = "0.7"
 hjkl-theme = "0.1"

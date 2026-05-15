@@ -30,6 +30,7 @@ hjkl-editor = { path = "crates/hjkl-editor" }
 hjkl-vim = { path = "crates/hjkl-vim" }
 hjkl-theme = { path = "crates/hjkl-theme" }
 hjkl-theme-tui = { path = "crates/hjkl-theme-tui" }
+hjkl-ex = { path = "crates/hjkl-ex" }
 
 [profile.release]
 lto = "thin"

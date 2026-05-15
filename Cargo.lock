@@ -1056,6 +1056,7 @@ dependencies = [
  "hjkl-config",
  "hjkl-editor",
  "hjkl-engine",
+ "hjkl-ex",
  "hjkl-form",
  "hjkl-keymap",
  "hjkl-lsp",
@@ -1195,6 +1196,16 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-ex"
+version = "0.1.0"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine",
+ "regex",
  "thiserror 2.0.18",
 ]
 

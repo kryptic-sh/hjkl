@@ -4,6 +4,35 @@ use hjkl_engine::{Host, Query};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::host::TuiHost;
+
+/// Bridge a [`hjkl_ex::ExEffect`] into the legacy
+/// [`hjkl_editor::runtime::ex::ExEffect`] shape consumed by the match block
+/// below. The two enums are structurally identical; this conversion is the
+/// only thing keeping the `hjkl-ex` extraction from coupling to `hjkl-editor`
+/// while the legacy dispatcher still owns most commands. Phases 2+ migrate
+/// commands across; the final phase removes the legacy enum and this bridge.
+fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
+    use hjkl_ex::ExEffect as Src;
+    match eff {
+        Src::None => ExEffect::None,
+        Src::Save => ExEffect::Save,
+        Src::SaveAs(p) => ExEffect::SaveAs(p),
+        Src::Quit { force, save } => ExEffect::Quit { force, save },
+        Src::Unknown(s) => ExEffect::Unknown(s),
+        Src::Substituted {
+            count,
+            lines_changed,
+        } => ExEffect::Substituted {
+            count,
+            lines_changed,
+        },
+        Src::Ok => ExEffect::Ok,
+        Src::Info(s) => ExEffect::Info(s),
+        Src::Error(s) => ExEffect::Error(s),
+    }
+}
+
 use super::{App, DiskState, keymap};
 use crate::keymap_actions::AppAction;
 
@@ -643,7 +672,17 @@ impl App {
         }
 
         let active_slot = self.focused_slot_idx();
-        let effect = ex::run(&mut self.slots[active_slot].editor, cmd);
+        // Try the new hjkl-ex registry first. Phase 1 only handles `:q` /
+        // `:q!`; everything else falls through to the legacy ex::run dispatcher.
+        // Each subsequent phase migrates more commands across.
+        let new_reg = hjkl_ex::default_registry::<TuiHost>();
+        let effect = if let Some(eff) =
+            hjkl_ex::try_dispatch(&new_reg, &mut self.slots[active_slot].editor, cmd)
+        {
+            bridge_ex_effect(eff)
+        } else {
+            ex::run(&mut self.slots[active_slot].editor, cmd)
+        };
         // ex commands like `:100` (goto-line), `:/pat` (search address),
         // and `:nohl` mutate engine cursor / viewport without flipping
         // the dirty flag — they return ExEffect::Ok. The window cursor
