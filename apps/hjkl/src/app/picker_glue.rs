@@ -792,6 +792,7 @@ fn build_scratch_slot(
         disk_mtime: None,
         disk_len: None,
         disk_state: DiskState::Synced,
+        last_render_output: None,
     };
     slot.snapshot_saved();
     Ok(slot)

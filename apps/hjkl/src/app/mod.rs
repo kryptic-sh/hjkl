@@ -391,6 +391,11 @@ pub struct BufferSlot {
     pub disk_len: Option<u64>,
     /// Whether the on-disk file is in sync, changed, or deleted.
     pub disk_state: DiskState,
+    /// Most recent completed `RenderOutput` for this buffer. Cached so
+    /// that a buffer switch can immediately re-install the last known
+    /// spans while a fresh parse runs in the background (T3 — per-slot
+    /// span cache). `None` until the first parse result arrives.
+    pub(crate) last_render_output: Option<crate::syntax::RenderOutput>,
 }
 
 impl BufferSlot {
@@ -749,6 +754,7 @@ pub(super) fn build_slot(
         disk_mtime,
         disk_len,
         disk_state: DiskState::Synced,
+        last_render_output: None,
     };
     slot.snapshot_saved();
     Ok(slot)

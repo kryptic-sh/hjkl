@@ -31,14 +31,46 @@ impl App {
             let vp = self.active().editor.host().viewport();
             (vp.top_row, vp.height as usize)
         };
-        if let Some(out) =
-            self.syntax
-                .preview_render(buffer_id, self.active().editor.buffer(), vp_top, vp_height)
+
+        // T3/T4: Re-install cached spans from the last completed parse for
+        // this slot — gives the first frame after a buffer switch correct
+        // highlight colours while the fresh parse runs in the background.
+        // T4: Drop the cache if the buffer's dirty_gen has advanced since
+        // the cached output was computed (stale spans would show wrong highlights).
+        let cached_spans_installed = {
+            let current_dg = self.slots[idx].editor.buffer().dirty_gen();
+            if let Some(ref cached) = self.slots[idx].last_render_output {
+                if cached.key.0 == current_dg {
+                    // Spans are current — install immediately.
+                    let spans = cached.spans.clone();
+                    let signs = cached.signs.clone();
+                    self.slots[idx].editor.install_ratatui_syntax_spans(spans);
+                    self.slots[idx].diag_signs = signs;
+                    true
+                } else {
+                    // Dirty gen mismatch — cache is stale, drop it.
+                    self.slots[idx].last_render_output = None;
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        // Fall back to the cheap preview render when no valid cache.
+        if !cached_spans_installed
+            && let Some(out) = self.syntax.preview_render(
+                buffer_id,
+                self.active().editor.buffer(),
+                vp_top,
+                vp_height,
+            )
         {
             self.active_mut()
                 .editor
                 .install_ratatui_syntax_spans(out.spans);
         }
+
         self.active_mut().last_recompute_key = None;
         self.recompute_and_install();
         self.refresh_git_signs_force();
@@ -114,6 +146,7 @@ impl App {
             slot.git_signs.clear();
             slot.last_git_dirty_gen = None;
             slot.last_recompute_key = None;
+            slot.last_render_output = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;

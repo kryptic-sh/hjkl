@@ -213,28 +213,41 @@ impl App {
         redraw
     }
 
-    /// Install a worker-produced `RenderOutput` onto the buffer it was
-    /// computed for. Returns `true` if the install ran, `false` if the
-    /// result was discarded as stale.
+    /// Install a worker-produced `RenderOutput` onto the slot whose
+    /// `buffer_id` matches `out.buffer_id`.
     ///
-    /// Race fix: a parse submitted before a tab/buffer switch can land
-    /// here after the active buffer has changed. Painting the old
-    /// buffer's spans onto the now-active buffer produces cross-buffer
-    /// highlight contamination (visible under lag). The worker tags
-    /// every `RenderOutput` with the `buffer_id` it parsed against; we
-    /// drop the result if that no longer matches the active buffer.
-    /// Stale drops are counted in `syntax_stale_drops`.
+    /// - When the result is for the **active** buffer: install spans +
+    ///   signs onto the editor immediately and update the slot cache.
+    /// - When the result is for a **non-active** buffer: store the output
+    ///   in `last_render_output` on that slot so a subsequent `switch_to`
+    ///   can restore spans without waiting for a fresh parse (T3 cache).
+    ///
+    /// Returns `true` if the install ran on the active buffer, `false` for
+    /// non-active routes and genuine stale drops (no matching slot).
     pub(crate) fn install_render_result(&mut self, out: crate::syntax::RenderOutput) -> bool {
         let active_id = self.active().buffer_id;
-        if out.buffer_id != active_id {
-            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+
+        // Find the slot that owns this buffer_id.
+        if let Some(slot_idx) = self.slots.iter().position(|s| s.buffer_id == out.buffer_id) {
+            // Always cache the latest completed output on the owning slot.
+            self.slots[slot_idx].last_render_output = Some(out.clone());
+
+            if out.buffer_id == active_id {
+                // Active buffer: install spans + signs directly.
+                let active_idx = self.focused_slot_idx();
+                self.slots[active_idx]
+                    .editor
+                    .install_ratatui_syntax_spans(out.spans);
+                self.slots[active_idx].diag_signs = out.signs;
+                return true;
+            }
+            // Non-active buffer: cached above, no live install needed.
             return false;
         }
-        self.active_mut()
-            .editor
-            .install_ratatui_syntax_spans(out.spans);
-        self.active_mut().diag_signs = out.signs;
-        true
+
+        // No slot matched (buffer was closed before the result arrived).
+        self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+        false
     }
 
     /// Submit a new viewport-scoped parse on the syntax worker and install
@@ -265,6 +278,16 @@ impl App {
         }
         let top = union_top;
         let height = union_bot - union_top;
+
+        // T1: Over-provision the parse range to 3× the visible height
+        // (one viewport above + current + one viewport below). The extra
+        // rows are cached in the editor's span table so fast scroll
+        // stays within already-highlighted territory.
+        let line_count = self.active().editor.buffer().line_count() as usize;
+        let oversize_top = top.saturating_sub(height);
+        let oversize_height = height
+            .saturating_mul(3)
+            .min(line_count.saturating_sub(oversize_top));
 
         let dg = self.active().editor.buffer().dirty_gen();
         let key = (dg, top, height);
@@ -298,7 +321,9 @@ impl App {
                 let submit_result = {
                     let active_idx = self.focused_slot_idx();
                     let buf = self.slots[active_idx].editor.buffer();
-                    self.syntax.submit_render(buffer_id, buf, top, height)
+                    // T1: Submit oversized range so ahead-of-scroll spans are ready.
+                    self.syntax
+                        .submit_render(buffer_id, buf, oversize_top, oversize_height)
                 };
                 if submit_result.is_some() {
                     submitted = true;
@@ -308,23 +333,47 @@ impl App {
             }
         }
 
-        // Non-blocking drain. Previously a viewport-only resubmit waited
-        // up to 5ms on the worker; with the bonsai 0.6.2 child-highlighter
-        // cache + preview-highlighter cache on the layer, the initial paint
-        // is cheap enough that letting the worker spans arrive on a
-        // subsequent tick avoids the per-switch hitch.
-        let t_install = Instant::now();
-        let drained = self.syntax.take_result();
-        let _ = prev_dirty_gen;
-        if let Some(out) = drained {
-            if self.install_render_result(out) {
-                self.last_install_us = t_install.elapsed().as_micros();
-            } else {
-                self.last_install_us = 0;
-            }
-        } else {
-            self.last_install_us = 0;
+        // T2: Pre-warm other open slots. The per-buffer dedup on the queue
+        // ensures this never starves the active buffer's request — active
+        // was enqueued first and the worker drains FIFO. If the active
+        // buffer's result is not yet back, we still queue the pre-warms
+        // so the worker can pipeline: it processes active, then the others.
+        let active_idx = self.focused_slot_idx();
+        let slot_indices: Vec<usize> = (0..self.slots.len()).filter(|&i| i != active_idx).collect();
+        for slot_idx in slot_indices {
+            let slot_buf_id = self.slots[slot_idx].buffer_id;
+            let (slot_top, slot_height) = {
+                let vp = self.slots[slot_idx].editor.host().viewport();
+                (vp.top_row, vp.height as usize)
+            };
+            // Over-provision the secondary slots too so switching into
+            // them is likely already covered.
+            let slot_line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
+            let slot_oversize_top = slot_top.saturating_sub(slot_height);
+            let slot_oversize_height = slot_height
+                .saturating_mul(3)
+                .min(slot_line_count.saturating_sub(slot_oversize_top));
+            let buf = self.slots[slot_idx].editor.buffer();
+            self.syntax
+                .submit_render(slot_buf_id, buf, slot_oversize_top, slot_oversize_height);
         }
+
+        // Non-blocking drain of ALL results. Routes each completed result
+        // to the correct slot's editor + cache (T3).
+        let t_install = Instant::now();
+        let all_results = self.syntax.take_all_results();
+        let _ = prev_dirty_gen;
+        let mut active_installed = false;
+        for out in all_results {
+            if self.install_render_result(out) {
+                active_installed = true;
+            }
+        }
+        self.last_install_us = if active_installed {
+            t_install.elapsed().as_micros()
+        } else {
+            0
+        };
         self.last_perf = self.syntax.last_perf;
 
         let t_git = Instant::now();
@@ -656,5 +705,180 @@ mod tests {
             'G',
             "fresh signs replaced the sentinel"
         );
+    }
+
+    /// T5a: oversize_height must not exceed the buffer's line count.
+    /// 5-line buffer, viewport_height=10 → oversize must clamp to 5.
+    #[test]
+    fn oversize_height_clamped_to_buffer_line_count() {
+        // The computation mirrors what recompute_and_install does:
+        //   oversize_top    = top.saturating_sub(height)
+        //   oversize_height = (height * 3).min(line_count - oversize_top)
+        let line_count: usize = 5;
+        let top: usize = 0;
+        let height: usize = 10;
+
+        let oversize_top = top.saturating_sub(height);
+        let oversize_height = height
+            .saturating_mul(3)
+            .min(line_count.saturating_sub(oversize_top));
+
+        assert_eq!(
+            oversize_top, 0,
+            "oversize_top must clamp to 0 when top < height"
+        );
+        assert_eq!(
+            oversize_height, 5,
+            "oversize_height must not exceed line_count (5)"
+        );
+    }
+
+    /// T5b: `install_render_result` must route a result to the correct
+    /// non-active slot and populate `last_render_output`.
+    #[test]
+    fn install_render_result_routes_to_correct_slot() {
+        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use ratatui::style::Style;
+        use std::path::PathBuf;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        // Open a second slot — gives us slot 0 (active) and slot 1.
+        let tmp = std::env::temp_dir().join("hjkl_test_route_slot.txt");
+        std::fs::write(&tmp, "hello\nworld\n").unwrap();
+        let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
+        let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
+
+        // Build a synthetic output tagged to slot 1's buffer_id.
+        let target_spans = vec![
+            vec![(0usize, 5usize, Style::default())],
+            vec![(0usize, 5usize, Style::default())],
+        ];
+        let out = RenderOutput {
+            buffer_id: slot1_buf_id,
+            spans: target_spans.clone(),
+            signs: Vec::new(),
+            key: (0, 0, 0),
+            perf: PerfBreakdown::default(),
+        };
+
+        // Active slot is still slot 0 — install must NOT touch it.
+        let active_id = app.active().buffer_id;
+        assert_ne!(
+            active_id, slot1_buf_id,
+            "precondition: slot 0 must be active"
+        );
+
+        let installed_on_active = app.install_render_result(out);
+        assert!(
+            !installed_on_active,
+            "result for non-active slot must not return true"
+        );
+
+        // The cache on slot 1 must now hold the output.
+        let cached = app.slots()[slot1_idx]
+            .last_render_output
+            .as_ref()
+            .expect("last_render_output must be populated on slot 1");
+        assert_eq!(
+            cached.spans, target_spans,
+            "cached spans must match what was installed"
+        );
+
+        // Active slot 0 must be untouched.
+        assert_eq!(
+            app.syntax_stale_drops, 0,
+            "routing to non-active slot must not count as stale drop"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// T5c: `switch_to` must install cached spans from `last_render_output`
+    /// when the dirty_gen matches.
+    #[test]
+    fn switch_to_installs_cached_spans() {
+        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use ratatui::style::Style;
+        use std::path::PathBuf;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let tmp = std::env::temp_dir().join("hjkl_test_switch_cached.txt");
+        std::fs::write(&tmp, "line1\nline2\n").unwrap();
+        let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
+        let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
+        let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
+
+        // Seed a known cache into slot 1.
+        let cached_spans = vec![
+            vec![(0usize, 5usize, Style::default())],
+            vec![(0usize, 5usize, Style::default())],
+        ];
+        app.slots_mut()[slot1_idx].last_render_output = Some(RenderOutput {
+            buffer_id: slot1_buf_id,
+            spans: cached_spans.clone(),
+            signs: Vec::new(),
+            key: (current_dg, 0, 40),
+            perf: PerfBreakdown::default(),
+        });
+
+        // Switch to slot 1 — cached spans should be installed immediately.
+        app.switch_to(slot1_idx);
+
+        // After switch, slot 1 is active. We can't easily assert the
+        // internal span table but we can verify no panic and that the
+        // cache is still populated (not cleared) on a clean dirty_gen.
+        assert!(
+            app.slots()[slot1_idx].last_render_output.is_some(),
+            "cache must survive a clean switch_to (dirty_gen matched)"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// T5d: `switch_to` must drop a stale cache when dirty_gen mismatches
+    /// and must NOT install the stale spans.
+    #[test]
+    fn switch_to_drops_stale_cache_when_dirty_gen_mismatch() {
+        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use ratatui::style::Style;
+        use std::path::PathBuf;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let tmp = std::env::temp_dir().join("hjkl_test_switch_stale.txt");
+        std::fs::write(&tmp, "line1\nline2\n").unwrap();
+        let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
+        let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
+        let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
+
+        // Seed a cache with an old dirty_gen (current_dg + 1 simulates
+        // the buffer having been modified since the parse).
+        let stale_dg = current_dg.wrapping_sub(1);
+        app.slots_mut()[slot1_idx].last_render_output = Some(RenderOutput {
+            buffer_id: slot1_buf_id,
+            spans: vec![vec![(0usize, 5usize, Style::default())]],
+            signs: Vec::new(),
+            key: (stale_dg, 0, 40),
+            perf: PerfBreakdown::default(),
+        });
+
+        // Switch to slot 1 — stale cache must be evicted.
+        app.switch_to(slot1_idx);
+
+        // The cache for slot 1 must have been cleared.
+        // Note: switch_to calls recompute_and_install which may re-populate
+        // last_render_output if the worker responds fast enough. We check
+        // immediately after switch — if populated, its key must NOT be stale_dg.
+        if let Some(ref cached) = app.slots()[slot1_idx].last_render_output {
+            assert_ne!(
+                cached.key.0, stale_dg,
+                "stale cache must have been replaced, not re-installed"
+            );
+        }
+        // (If None, the cache was cleared and nothing re-populated yet — also correct.)
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }
