@@ -1392,6 +1392,20 @@ impl App {
         self.hover_timer = None;
     }
 
+    /// `true` when a blocking overlay is on top of the editor — context
+    /// menu, picker, command/search field, info popup. Used to gate
+    /// background features that shouldn't fire while the user is
+    /// interacting with the overlay (notably the LSP hover popup, which
+    /// would otherwise show through the menu for whatever doc text the
+    /// mouse cell happens to sit over).
+    pub(crate) fn overlay_active(&self) -> bool {
+        self.context_menu.is_some()
+            || self.picker.is_some()
+            || self.command_field.is_some()
+            || self.search_field.is_some()
+            || self.info_popup.is_some()
+    }
+
     /// Full-screen rect for clamping popups / context menus to the
     /// terminal area. Matches the layout `render::frame` computes:
     /// optional top bar (tabs + buffer line, when multiple slots OR

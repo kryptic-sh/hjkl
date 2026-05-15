@@ -1481,6 +1481,12 @@ impl App {
         _origin: (usize, usize),
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
     ) {
+        // Drop the response if a blocking overlay (context menu, picker,
+        // command field) opened while the RPC was in flight — the popup
+        // would render through the overlay onto the buffer text behind it.
+        if self.overlay_active() {
+            return;
+        }
         // Only show the popup when the timer is still armed and the RPC was
         // sent from it (guard against stale in-flight requests).
         let timer_cell = match &self.hover_timer {

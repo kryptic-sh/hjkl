@@ -12576,6 +12576,102 @@ mod border_drag_tests {
         }
     }
 
+    // ── overlay_active / hover-suppression regression tests ────────────────
+
+    /// Regression: when a context menu is open, the LSP hover popup must NOT
+    /// arm/fire from the mouse resting over a menu cell. Pre-fix, hovering on
+    /// a menu item for 500ms triggered a hover RPC for the doc cell BEHIND
+    /// the menu, and the popup rendered through the menu on top of buffer
+    /// text the user couldn't even see.
+    #[test]
+    fn tick_hover_timer_suppressed_while_context_menu_open() {
+        use crate::menu::{ContextMenu, MenuAction, MenuItem};
+        use std::time::{Duration, Instant};
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        // Arm a hover timer that's already past the 500ms threshold —
+        // tick_hover_timer would normally fire the RPC right now.
+        app.hover_timer = Some(HoverTimer {
+            cell: (10, 5),
+            started_at: Instant::now() - Duration::from_millis(800),
+            request_sent: false,
+        });
+
+        // Open a context menu — overlay_active() should now be true.
+        let items = vec![MenuItem::new("Cut", MenuAction::Cut, None)];
+        app.context_menu = Some(ContextMenu::new(items, (5, 5)));
+        assert!(
+            app.overlay_active(),
+            "overlay_active must report true when context_menu is set"
+        );
+
+        // Tick the timer. The guard must (a) NOT mark request_sent and
+        // (b) clear the timer so it doesn't fire the instant the menu closes.
+        app.tick_hover_timer();
+
+        assert!(
+            app.hover_popup.is_none(),
+            "hover_popup must remain unset while a context menu is open"
+        );
+        assert!(
+            app.hover_timer.is_none(),
+            "hover_timer must be dropped under overlay so it doesn't fire the moment the overlay closes"
+        );
+    }
+
+    /// Mirror: a hover RPC response that arrives AFTER a context menu opened
+    /// must be dropped — otherwise the popup paints over the menu.
+    #[test]
+    fn handle_hover_at_mouse_response_dropped_under_overlay() {
+        use crate::menu::{ContextMenu, MenuAction, MenuItem};
+        use std::time::Instant;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        // Set the timer state that would normally accept the response.
+        app.hover_timer = Some(HoverTimer {
+            cell: (10, 5),
+            started_at: Instant::now(),
+            request_sent: true,
+        });
+
+        // Open a context menu mid-flight.
+        let items = vec![MenuItem::new("Cut", MenuAction::Cut, None)];
+        app.context_menu = Some(ContextMenu::new(items, (5, 5)));
+
+        // Simulate a response arriving with valid hover JSON.
+        let response: Result<serde_json::Value, hjkl_lsp::RpcError> = Ok(serde_json::json!({
+            "contents": { "kind": "plaintext", "value": "stale hover text" }
+        }));
+        app.handle_hover_at_mouse_response(0, (0, 0), response);
+
+        assert!(
+            app.hover_popup.is_none(),
+            "hover_popup must not be created when an overlay was open at response time"
+        );
+    }
+
+    /// `overlay_active` must report true for any of the blocking overlays.
+    /// Belt-and-suspenders: this prevents a regression where the helper
+    /// forgets to check one of the overlay fields.
+    #[test]
+    fn overlay_active_reports_each_overlay_kind() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert!(!app.overlay_active(), "fresh app has no overlays");
+
+        // Context menu.
+        let items = vec![crate::menu::MenuItem::new(
+            "x",
+            crate::menu::MenuAction::Cut,
+            None,
+        )];
+        app.context_menu = Some(crate::menu::ContextMenu::new(items, (0, 0)));
+        assert!(app.overlay_active());
+        app.context_menu = None;
+        assert!(!app.overlay_active());
+    }
+
     #[test]
     fn dismiss_hover_popup_on_click_is_idempotent_when_no_popup() {
         let mut app = App::new(None, false, None, None).unwrap();

@@ -1371,21 +1371,24 @@ impl App {
                                 self.hover_timer = None;
                             }
 
-                            // Re-arm or advance the timer for the new cell.
-                            let same_cell =
-                                self.hover_timer.as_ref().is_some_and(|h| h.cell == cell);
-                            if !same_cell {
-                                // New cell — restart the timer.
-                                self.hover_timer = Some(crate::app::HoverTimer {
-                                    cell,
-                                    started_at: std::time::Instant::now(),
-                                    request_sent: false,
-                                });
+                            // Skip arming entirely while an overlay is up —
+                            // a hover for the doc cell behind the menu/picker
+                            // would render through the overlay.
+                            if !self.overlay_active() {
+                                let same_cell =
+                                    self.hover_timer.as_ref().is_some_and(|h| h.cell == cell);
+                                if !same_cell {
+                                    self.hover_timer = Some(crate::app::HoverTimer {
+                                        cell,
+                                        started_at: std::time::Instant::now(),
+                                        request_sent: false,
+                                    });
+                                }
+                                // Fire check (also handled in the poll-timeout
+                                // tick) so we react immediately on the Moved
+                                // event that coincides with the 500ms threshold.
+                                self.tick_hover_timer();
                             }
-                            // Fire check (also handled in the poll-timeout tick,
-                            // but calling here means we react immediately on the
-                            // Moved event that coincides with the 500ms threshold).
-                            self.tick_hover_timer();
                         }
 
                         _ => {}
@@ -1420,6 +1423,14 @@ impl App {
     pub(crate) fn tick_hover_timer(&mut self) {
         // If a popup is already showing, nothing to do.
         if self.hover_popup.is_some() {
+            return;
+        }
+        // Suppress hover firing while any overlay is on top of the editor —
+        // a hover RPC for the doc cell BEHIND the overlay would show the
+        // popup through the menu/picker/command field. Drop the timer too
+        // so it doesn't fire the instant the overlay closes.
+        if self.overlay_active() {
+            self.hover_timer = None;
             return;
         }
         let (cell, should_fire) = match &self.hover_timer {
