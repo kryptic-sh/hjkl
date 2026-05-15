@@ -286,6 +286,35 @@ impl SyntaxWorker {
         }
         latest
     }
+
+    /// Wait up to `timeout` for the first result to arrive, then drain
+    /// every additional result already in the channel. Returns ALL
+    /// results in arrival order (latest per buffer_id, same coalescing as
+    /// [`Self::try_recv_all`]).
+    ///
+    /// Unlike [`Self::wait_for_latest`] this does NOT discard earlier
+    /// results — required when pre-warming non-active buffers, because
+    /// the active buffer's result must be routed to the active slot AND
+    /// pre-warm results must be routed to their respective slot caches.
+    /// Used by `gg` / `G` / `<C-d>` / `<C-u>` big-jump paths so the new
+    /// viewport paints highlighted on the very next frame.
+    pub fn wait_then_recv_all(&self, timeout: std::time::Duration) -> Vec<RenderOutput> {
+        let mut results: Vec<RenderOutput> = Vec::new();
+        if let Ok(first) = self.rx.recv_timeout(timeout) {
+            results.push(first);
+        }
+        while let Ok(out) = self.rx.try_recv() {
+            if let Some(existing) = results
+                .iter_mut()
+                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id)
+            {
+                *existing = out;
+            } else {
+                results.push(out);
+            }
+        }
+        results
+    }
 }
 
 impl Drop for SyntaxWorker {
@@ -1029,6 +1058,20 @@ impl SyntaxLayer {
         let out = self.worker.wait_for_latest(timeout)?;
         self.last_perf = out.perf;
         Some(out)
+    }
+
+    /// Block up to `timeout` for the first result, then drain ALL
+    /// available results in arrival order (per-buffer-id coalesced).
+    /// Unlike [`Self::wait_result`] this keeps every buffer's result —
+    /// required for big-jump paths that submit the active buffer's
+    /// parse AND pre-warms for other open buffers in the same tick:
+    /// both routes must reach their slot caches.
+    pub fn wait_all_results(&mut self, timeout: std::time::Duration) -> Vec<RenderOutput> {
+        let results = self.worker.wait_then_recv_all(timeout);
+        if let Some(last) = results.last() {
+            self.last_perf = last.perf;
+        }
+        results
     }
 
     /// Synchronously drain the next result, blocking up to `timeout`.

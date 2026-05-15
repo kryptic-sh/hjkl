@@ -355,11 +355,34 @@ impl App {
                 .submit_render(slot_buf_id, buf, slot_oversize_top, slot_oversize_height);
         }
 
-        // Non-blocking drain of ALL results. Routes each completed result
-        // to the correct slot's editor + cache (T3).
-        let t_install = Instant::now();
-        let all_results = self.syntax.take_all_results();
+        // Detect a "big jump" (viewport teleport past the over-provisioned
+        // band — typically `gg` / `G` / `<C-d>` / `<C-u>` / line-number `:N`).
+        // Without this, the new viewport lands on un-highlighted rows because
+        // the pre-warm cache only covers the previous viewport ±1×.
+        //
+        // Threshold: any move greater than `height` (one viewport) is past
+        // the 3× over-provisioned range and forces a fresh parse. Block up to
+        // BIG_JUMP_WAIT for it so the next frame paints highlighted.
+        //
+        // First frame after construction (no prior key) also counts as a
+        // big jump so the splash → editor transition isn't blank.
+        const BIG_JUMP_WAIT: Duration = Duration::from_millis(40);
+        let is_big_jump = match self.active().last_recompute_key {
+            None => true,
+            Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
+        };
         let _ = prev_dirty_gen;
+
+        let t_install = Instant::now();
+        // For big jumps, block briefly on the FIRST result (which is the
+        // active buffer's parse — it was submitted first into the FIFO
+        // queue) then drain everything else. `wait_all_results` returns
+        // every per-buffer result so pre-warm hits also reach their caches.
+        let all_results = if is_big_jump && submitted {
+            self.syntax.wait_all_results(BIG_JUMP_WAIT)
+        } else {
+            self.syntax.take_all_results()
+        };
         let mut active_installed = false;
         for out in all_results {
             if self.install_render_result(out) {
