@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-16
+
+### Fixed
+
+- Highlight-span order on identical byte ranges now favours the more-specific
+  capture. tree-sitter-markdown emits both `@markup.link` and `@markup.link.url`
+  on a `(link_destination)` node with the same byte range; `hjkl-buffer`'s
+  resolver keeps the first equal-length match, so the deeper capture must come
+  first in `flat_spans` to win. Before this fix, source-order in the .scm file
+  decided the winner — markdown's `@markup.link` pattern is declared first, so
+  URLs in `[label](url)` rendered the same colour as `[label]` (label colour),
+  losing vim/Helix's dim-URL distinction. A new `sort_by_start_then_depth`
+  helper replaces the bare start-byte sort in `highlight_range`,
+  `highlight_with_injections`, and `highlight_range_with_injections`, ordering
+  ties by capture depth descending.
+
+### Tests
+
+- `sort_puts_deeper_capture_first_on_identical_range`,
+  `sort_is_order_independent_on_identical_range`,
+  `sort_prefers_deepest_capture`, and `sort_preserves_start_order_across_depths`
+  pin the new sort semantics.
+
 ## [0.7.3] - 2026-05-16
 
 ### Fixed
@@ -429,7 +452,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.0...v0.7.1

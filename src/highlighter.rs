@@ -97,6 +97,26 @@ const DEFAULT_PARSE_TIMEOUT_MICROS: u64 = 0;
 /// FNV-1a-inspired fast hash of a byte slice.  Standard library's
 /// `DefaultHasher` is good enough — all we need is collision resistance across
 /// typical code-block content, not cryptographic security.
+/// Sort highlight spans by `(byte_range.start asc, capture-depth desc)`.
+///
+/// Two captures that cover the same byte range (e.g. tree-sitter-markdown
+/// emits both `@markup.link` and `@markup.link.url` on a (link_destination)
+/// node) must be ordered with the more-specific one FIRST in `flat_spans`.
+/// `hjkl-buffer`'s `resolve_span_style` walks spans first-equal-wins on
+/// equal-length matches — so first-emitted ⇒ first-encountered ⇒ kept.
+/// Putting the deeper capture first makes `@markup.link.url` win over
+/// `@markup.link` instead of the source-order accident.
+fn sort_by_start_then_depth(spans: &mut [HighlightSpan]) {
+    spans.sort_by(|a, b| {
+        a.byte_range.start.cmp(&b.byte_range.start).then_with(|| {
+            // More-specific (more `.` segments) wins → comes first.
+            let a_depth = a.capture.matches('.').count();
+            let b_depth = b.capture.matches('.').count();
+            b_depth.cmp(&a_depth)
+        })
+    });
+}
+
 fn hash_bytes(b: &[u8]) -> u64 {
     let mut h = DefaultHasher::new();
     b.hash(&mut h);
@@ -534,7 +554,7 @@ impl Highlighter {
             }
         }
 
-        spans.sort_by_key(|s| s.byte_range.start);
+        sort_by_start_then_depth(&mut spans);
         spans
     }
 
@@ -796,7 +816,7 @@ impl Highlighter {
             .collect();
 
         merged.extend(child_spans);
-        merged.sort_by_key(|s| s.byte_range.start);
+        sort_by_start_then_depth(&mut merged);
         merged
     }
 
@@ -1005,7 +1025,7 @@ impl Highlighter {
             .collect();
 
         merged.extend(child_spans);
-        merged.sort_by_key(|s| s.byte_range.start);
+        sort_by_start_then_depth(&mut merged);
         merged
     }
 
@@ -1147,6 +1167,77 @@ mod tests {
         GrammarCompiler, GrammarLoader, LangSpec, ManifestMeta, QuerySource, QuerySourceCache,
         SourceCache,
     };
+
+    fn span(start: usize, end: usize, capture: &str) -> HighlightSpan {
+        HighlightSpan {
+            byte_range: start..end,
+            capture: capture.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Regression: tree-sitter-markdown emits both `@markup.link` and
+    /// `@markup.link.url` on a (link_destination) node with identical byte
+    /// ranges. `hjkl-buffer`'s span resolver picks the *first* encountered
+    /// span on equal-length ties, so the deeper capture must come first in
+    /// `flat_spans` to win. Before this sort, source-order in the .scm file
+    /// decided the winner — and markdown's @markup.link pattern is declared
+    /// first, so URLs rendered the same colour as the surrounding link
+    /// (label colour), losing the dim-url distinction.
+    #[test]
+    fn sort_puts_deeper_capture_first_on_identical_range() {
+        let mut spans = vec![
+            span(10, 30, "markup.link"),
+            span(10, 30, "markup.link.url"),
+        ];
+        sort_by_start_then_depth(&mut spans);
+        assert_eq!(spans[0].capture, "markup.link.url");
+        assert_eq!(spans[1].capture, "markup.link");
+    }
+
+    /// Reverse-order regression: even when the broader capture is pushed
+    /// AFTER the deeper one, the sort still places the deeper one first.
+    #[test]
+    fn sort_is_order_independent_on_identical_range() {
+        let mut spans = vec![
+            span(10, 30, "markup.link.url"),
+            span(10, 30, "markup.link"),
+        ];
+        sort_by_start_then_depth(&mut spans);
+        assert_eq!(spans[0].capture, "markup.link.url");
+        assert_eq!(spans[1].capture, "markup.link");
+    }
+
+    /// Three-deep tie: `@markup.heading.1` must beat `@markup.heading`
+    /// must beat `@markup` for the same range.
+    #[test]
+    fn sort_prefers_deepest_capture() {
+        let mut spans = vec![
+            span(0, 5, "markup"),
+            span(0, 5, "markup.heading.1"),
+            span(0, 5, "markup.heading"),
+        ];
+        sort_by_start_then_depth(&mut spans);
+        assert_eq!(spans[0].capture, "markup.heading.1");
+        assert_eq!(spans[1].capture, "markup.heading");
+        assert_eq!(spans[2].capture, "markup");
+    }
+
+    /// Sort still orders by start byte first; depth is a tie-breaker.
+    #[test]
+    fn sort_preserves_start_order_across_depths() {
+        let mut spans = vec![
+            span(20, 30, "markup"), // later start, shallow
+            span(10, 30, "markup.link"),
+            span(10, 30, "markup.link.url"),
+        ];
+        sort_by_start_then_depth(&mut spans);
+        assert_eq!(spans[0].byte_range.start, 10);
+        assert_eq!(spans[0].capture, "markup.link.url");
+        assert_eq!(spans[1].byte_range.start, 10);
+        assert_eq!(spans[1].capture, "markup.link");
+        assert_eq!(spans[2].byte_range.start, 20);
+    }
 
     fn c_grammar_loader() -> (Arc<Grammar>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
