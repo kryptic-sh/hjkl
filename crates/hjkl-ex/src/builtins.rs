@@ -224,6 +224,36 @@ fn redo_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+// ---- registers / marks / jumps / changes -----------------------------------
+
+fn registers_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::Info(crate::listings::format_registers(editor)))
+}
+
+fn marks_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::Info(crate::listings::format_marks(editor)))
+}
+
+fn jumps_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::Info(crate::listings::format_jumps(editor)))
+}
+
+fn changes_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::Info(crate::listings::format_changes(editor)))
+}
+
 // ---- registration ----------------------------------------------------------
 
 /// Register all Phase 1 + Phase 2a built-in commands.
@@ -424,5 +454,41 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: bwipeout_force_handler::<H>,
+    });
+
+    // `:registers` / `:reg` (min_prefix=3; `:reg` via alias since "reg" < 3 chars)
+    reg.add(ExCommand {
+        name: "registers",
+        aliases: &["reg"],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: registers_handler::<H>,
+    });
+
+    // `:marks` (min_prefix=5)
+    reg.add(ExCommand {
+        name: "marks",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: marks_handler::<H>,
+    });
+
+    // `:jumps` (min_prefix=5)
+    reg.add(ExCommand {
+        name: "jumps",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: jumps_handler::<H>,
+    });
+
+    // `:changes` (min_prefix=7)
+    reg.add(ExCommand {
+        name: "changes",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 7,
+        run: changes_handler::<H>,
     });
 }

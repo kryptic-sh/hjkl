@@ -14,6 +14,7 @@ pub use registry::{ArgKind, ExCommand, Registry};
 
 mod builtins;
 mod effect;
+mod listings;
 mod parse;
 mod range;
 mod registry;
@@ -635,5 +636,115 @@ mod tests {
             try_dispatch(&reg, &mut editor, "r foo"),
             Some(ExEffect::ReadFile { path: "foo".into() })
         );
+    }
+
+    // ---- Phase 2c: registers -----------------------------------------------
+
+    #[test]
+    fn dispatch_reg_returns_info_registers() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "reg");
+        match result {
+            Some(ExEffect::Info(s)) => assert!(s.starts_with("--- Registers ---"), "got: {s}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_registers_returns_info_registers() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "registers");
+        match result {
+            Some(ExEffect::Info(s)) => assert!(s.starts_with("--- Registers ---"), "got: {s}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    // ---- Phase 2c: marks ---------------------------------------------------
+
+    #[test]
+    fn dispatch_marks_returns_info_marks() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "marks");
+        match result {
+            Some(ExEffect::Info(s)) => assert!(s.starts_with("--- Marks ---"), "got: {s}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    // ---- Phase 2c: jumps ---------------------------------------------------
+
+    #[test]
+    fn dispatch_jumps_returns_info_jumps_empty() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "jumps");
+        match result {
+            Some(ExEffect::Info(s)) => assert!(s.starts_with("(no jumps"), "got: {s}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    // ---- Phase 2c: changes -------------------------------------------------
+
+    #[test]
+    fn dispatch_changes_returns_info_changes_empty() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        let result = try_dispatch(&reg, &mut editor, "changes");
+        match result {
+            Some(ExEffect::Info(s)) => assert!(s.starts_with("(no changes"), "got: {s}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    // ---- Phase 2c: prefix gating (marks) -----------------------------------
+
+    #[test]
+    fn dispatch_m_returns_none_below_min_prefix() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        // `:m` — below min_prefix=5 for marks; no other registered command starts with "m"
+        assert_eq!(try_dispatch(&reg, &mut editor, "m"), None);
+    }
+
+    #[test]
+    fn dispatch_mark_returns_none_below_min_prefix() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        // `:mark` is 4 chars, min_prefix=5 → no match
+        assert_eq!(try_dispatch(&reg, &mut editor, "mark"), None);
+    }
+
+    #[test]
+    fn dispatch_marks_full_name_returns_some() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert!(try_dispatch(&reg, &mut editor, "marks").is_some());
+    }
+
+    // ---- Phase 2c: prefix gating (registers) -------------------------------
+
+    // `:r` resolves to `:read` (existing), `:re` resolves to `:read` (no-args → None).
+    // `:reg` is an alias for `:registers` → Info.
+    #[test]
+    fn dispatch_reg_via_alias_returns_info() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert!(matches!(
+            try_dispatch(&reg, &mut editor, "reg"),
+            Some(ExEffect::Info(_))
+        ));
+    }
+
+    #[test]
+    fn dispatch_re_still_resolves_to_read_no_args() {
+        // `:re` — resolves to `:read` (min_prefix=1), no path → None
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(try_dispatch(&reg, &mut editor, "re"), None);
     }
 }
