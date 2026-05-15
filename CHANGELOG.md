@@ -8,28 +8,60 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-05-16
+
 ### Added
 
+- `hjkl-ex` crate (Phase 1–8 arc): new dedicated ex-command registry,
+  dispatcher, and completion crate. Major public surface: `Registry<H>` /
+  `HostRegistry<Ctx>` for registering built-in and host-provided commands;
+  `try_dispatch` for FSM-agnostic command execution; `complete` + `complete_arg`
+  for Tab-completion; `parse_range` for Vim-style line-range parsing;
+  `all_setting_names` for `:set <Tab>` expansion. Host/FSM boundary is fully
+  decoupled — the crate carries no ratatui or event-loop dependency.
+- `HostCmd<Ctx>` trait + `HostRegistry<Ctx>` foundation (Phase 4a): allows host
+  applications to register arbitrary context-typed commands without touching
+  `hjkl-ex` internals.
+- Wildmenu Tab-completion rendering and per-command argument completers (Phase
+  5a/5b/6): `:e`, `:w`, `:set`, `:colorscheme`, and custom host commands all
+  surface completions through the unified `complete_arg` protocol.
+- `% / # / <cword>` filename expansion and Vim filename modifiers (`%:h`, `%:t`,
+  `%:r`, `%:e`, `%:p`) in ex command arguments (Phase 7).
+- `apps/hjkl-gui` binary: floem-based GUI host backed by the new
+  `hjkl-editor-gui` adapter crate (commit 7b6f971). Follows the `<project>-gui`
+  binary naming convention.
+- `:set background=dark|light` surfaces in `:set <Tab>` completion via
+  `all_setting_names()`; both `"background"` and `"bg"` aliases included.
 - Tests: `:write[!]` disk-state guard (2 cases), `:set background=` inline
   dispatch (3 cases), `hjkl-gui` smoke tests (2 cases).
+- `docs/README.md` and `LICENSE` added to `hjkl-ex`, `hjkl-picker-tui`,
+  `hjkl-theme`, and `hjkl-theme-tui` submodule repos.
 
 ### Changed
 
-- `hjkl-ex`: `all_setting_names()` now includes `"background"` and `"bg"` so
-  `:set <Tab>` surfaces the option. The host's inline
-  `set background=dark|light` dispatch in `ex_dispatch.rs` is unchanged; hjkl-ex
-  silently accepts the token if it reaches `apply_set_token`.
+- Submodule extractions: `hjkl-ex` 0.1.0, `hjkl-picker-tui` 0.1.0, `hjkl-theme`
+  0.1.0, and `hjkl-theme-tui` 0.1.0 now live at their own `kryptic-sh/*`
+  repositories with independent CI and release pipelines; in-tree paths remain
+  via `[patch.crates-io]`.
+- `hjkl-picker` bumped 0.5 → 0.6 with headless API migration (commit c37a948);
+  picker callers updated to the new interface.
+- `apps/hjkl-gui`: `hjkl-editor` dep bumped `"0.4"` → `"0.5"` (stale
+  post-0.5.0).
 - `apps/hjkl`: `hjkl-engine` dep range loosened `"0.7.0"` → `"0.7"` so the
   patched 0.7.1 is in-range without manifest-side re-pin.
-- `apps/hjkl-gui`: `hjkl-editor` bumped `"0.4"` → `"0.5"` (stale post-0.5.0).
 - `.gitmodules`: `crates/hjkl-lsp` URL changed from SSH (`git@github.com:`) to
   HTTPS (`https://github.com/kryptic-sh/hjkl-lsp.git`) for anonymous-clone
   compatibility.
 - `hjkl-compat-oracle`: removed redundant `path =` segments from `hjkl-buffer`
   and `hjkl-engine` deps; umbrella `[patch.crates-io]` resolves them.
+- `hjkl-ex`: `all_setting_names()` now includes `"background"` and `"bg"` so
+  `:set <Tab>` surfaces the option.
 
 ### Fixed
 
+- Sync-helper bypass paths and stale dead-code from FSM extraction closed
+  (commit 3a1d7ec): every engine-mutating arm in `event_loop.rs` now routes
+  through `sync_after_engine_mutation`.
 - H1 (submodule context): `hjkl-clipboard` 0.5.4 — INCR chunk read timeout
   raised from 10 s to 30 s, fixing clipboard hangs on slow Wayland compositors.
 - H2 (submodule context): `hjkl-engine` 0.7.1 — `editor.rs` `Key` import gated
@@ -38,9 +70,11 @@ patch bumps.
 
 ### Removed
 
+- Legacy `hjkl-editor::ex` module deleted (Phase 8b); all ex-command routing now
+  lives in `hjkl-ex`. Consumers migrated in Phase 8a before deletion.
 - Dead code: `AppAction::AnvilUninstall` and `AppAction::AnvilUpdate` enum
   variants, `AnvilState::installed_version` and `AnvilState::registry_version`
-  fields, and the `backtab_event()` helper function (dc618e5).
+  fields, and the `backtab_event()` helper function (commit dc618e5).
 
 ## [0.17.1] - 2026-05-15
 
@@ -2086,7 +2120,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/kryptic-sh/hjkl/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...v0.16.0
