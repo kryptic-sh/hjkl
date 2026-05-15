@@ -44,10 +44,7 @@ pub fn hit_test_window(app: &App, col: u16, row: u16) -> Option<window::WindowId
 }
 
 fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
-    col >= rect.x
-        && col < rect.x + rect.width
-        && row >= rect.y
-        && row < rect.y + rect.height
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
 // ── Gutter width (mirrors render.rs — keep in sync) ──────────────────────────
@@ -74,7 +71,11 @@ fn full_gutter_width(
         hjkl_engine::types::SignColumnMode::Yes => 1,
         hjkl_engine::types::SignColumnMode::No => 0,
         hjkl_engine::types::SignColumnMode::Auto => {
-            if has_visible_signs { 1 } else { 0 }
+            if has_visible_signs {
+                1
+            } else {
+                0
+            }
         }
     };
     let fold_w = foldcolumn.min(12) as u16;
@@ -204,7 +205,13 @@ impl MouseClickTracker {
         } else {
             1
         };
-        self.last = Some(LastClick { win_id, row, col, at: now, count });
+        self.last = Some(LastClick {
+            win_id,
+            row,
+            col,
+            at: now,
+            count,
+        });
         count
     }
 
@@ -239,9 +246,7 @@ pub fn word_bounds(line: &str, col: usize) -> (usize, usize) {
         .map(|i| i + 1)
         .unwrap_or(0);
     // Expand right.
-    let end = (col..len)
-        .find(|&i| !is_word_char(chars[i]))
-        .unwrap_or(len);
+    let end = (col..len).find(|&i| !is_word_char(chars[i])).unwrap_or(len);
     (start, end)
 }
 

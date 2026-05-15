@@ -896,9 +896,7 @@ impl App {
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
                             use crate::app::mouse;
-                            if let Some(win_id) =
-                                mouse::hit_test_window(self, me.column, me.row)
-                            {
+                            if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
                                 // Focus the clicked window if it differs.
                                 let current_focus = self.focused_window();
                                 if win_id != current_focus {
@@ -909,9 +907,8 @@ impl App {
                                 if let Some((doc_row, doc_col)) =
                                     mouse::cell_to_doc(self, win_id, me.column, me.row)
                                 {
-                                    let count = self
-                                        .mouse_click_tracker
-                                        .register(win_id, doc_row, doc_col);
+                                    let count =
+                                        self.mouse_click_tracker.register(win_id, doc_row, doc_col);
                                     match count {
                                         1 => {
                                             self.active_mut()
@@ -930,13 +927,10 @@ impl App {
                                                 .line(doc_row)
                                                 .unwrap_or("")
                                                 .to_owned();
-                                            let (ws, we) =
-                                                mouse::word_bounds(&line, doc_col);
+                                            let (ws, we) = mouse::word_bounds(&line, doc_col);
                                             // Anchor at word start, cursor at word end - 1.
                                             self.active_mut().editor.enter_visual_char();
-                                            self.active_mut()
-                                                .editor
-                                                .set_cursor_doc(doc_row, ws);
+                                            self.active_mut().editor.set_cursor_doc(doc_row, ws);
                                             self.active_mut().editor.mouse_begin_drag();
                                             self.active_mut().editor.set_cursor_doc(
                                                 doc_row,
