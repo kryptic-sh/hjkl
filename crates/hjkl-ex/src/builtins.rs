@@ -438,6 +438,54 @@ fn extract_leading_number(line: &str) -> i64 {
     line[i..j].parse().unwrap_or(i64::MIN)
 }
 
+// ---- substitute ------------------------------------------------------------
+
+/// `:[range]s/pattern/replacement/[flags]` — substitute text in lines.
+///
+/// `args` arrives already stripped of the leading `s` command name, so it
+/// begins with the delimiter (`/`) that `hjkl_engine::substitute::parse_substitute`
+/// expects.  No-range → current cursor line; with range the engine receives a
+/// 0-based inclusive `RangeInclusive<u32>`.
+///
+/// `:&` and `:~` (repeat-last-substitute shortcuts) are NOT registered here.
+/// They use non-alphabetic names that `split_name_args` cannot parse; defer
+/// them to a future phase once the parse layer can handle bare-symbol commands.
+fn substitute_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    use hjkl_engine::substitute::{apply_substitute, parse_substitute};
+
+    // args already starts with `/` (the delimiter); pass straight to engine.
+    let cmd = match parse_substitute(args) {
+        Ok(c) => c,
+        Err(e) => return Some(ExEffect::Error(e.to_string())),
+    };
+
+    // Resolve range to 0-based inclusive u32 bounds.
+    // No range → current cursor line (cursor() returns 0-based (row, col)).
+    let r = match range {
+        Some(lr) => {
+            let start = lr.start_one_based().saturating_sub(1) as u32;
+            let end = lr.end_one_based().saturating_sub(1) as u32;
+            start..=end
+        }
+        None => {
+            let row = editor.cursor().0 as u32;
+            row..=row
+        }
+    };
+
+    match apply_substitute(editor, &cmd, r) {
+        Ok(out) => Some(ExEffect::Substituted {
+            count: out.replacements,
+            lines_changed: out.lines_changed,
+        }),
+        Err(e) => Some(ExEffect::Error(e.to_string())),
+    }
+}
+
 // ---- registration ----------------------------------------------------------
 
 /// Register all Phase 1 + Phase 2a built-in commands.
@@ -692,5 +740,17 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 3,
         run: sort_handler::<H>,
+    });
+
+    // `:substitute` / `:s` (min_prefix=1; range-aware)
+    // `:&` and `:~` (repeat-last-substitute) are NOT registered here — their
+    // non-alphabetic names cannot be parsed by `split_name_args`.  Deferred to
+    // a future phase that extends the command-name parser.
+    reg.add(ExCommand {
+        name: "substitute",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 1,
+        run: substitute_handler::<H>,
     });
 }

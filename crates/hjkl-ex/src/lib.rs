@@ -862,4 +862,110 @@ mod tests {
         assert_eq!(lines[3], "zebra");
         assert_eq!(lines[4], "mango");
     }
+
+    // ---- Phase 2e: :substitute (:s) ----------------------------------------
+
+    #[test]
+    fn substitute_single_occurrence_on_cursor_line() {
+        // `:s/foo/bar/` — replace first `foo` on current line (row 0).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s/foo/bar/");
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 1,
+                lines_changed: 1
+            })
+        );
+        assert_eq!(editor.buffer().lines()[0], "bar");
+    }
+
+    #[test]
+    fn substitute_global_flag_replaces_all_occurrences() {
+        // `:s/foo/bar/g` — replace every `foo` on current line.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo foo foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s/foo/bar/g");
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 3,
+                lines_changed: 1
+            })
+        );
+        assert_eq!(editor.buffer().lines()[0], "bar bar bar");
+    }
+
+    #[test]
+    fn substitute_percent_range_applies_to_all_lines() {
+        // `:%s/foo/bar/g` — whole buffer.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "foo bar", "baz"]);
+        let result = try_dispatch(&reg, &mut editor, "%s/foo/bar/g");
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 2,
+                lines_changed: 2
+            })
+        );
+        assert_eq!(editor.buffer().lines()[0], "bar");
+        assert_eq!(editor.buffer().lines()[1], "bar bar");
+        assert_eq!(editor.buffer().lines()[2], "baz");
+    }
+
+    #[test]
+    fn substitute_explicit_range_applied_correctly() {
+        // `:1,2s/x/y/` — only lines 1–2 (0-based 0–1); line 3 unchanged.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["x", "x", "x"]);
+        let result = try_dispatch(&reg, &mut editor, "1,2s/x/y/");
+        assert_eq!(
+            result,
+            Some(ExEffect::Substituted {
+                count: 2,
+                lines_changed: 2
+            })
+        );
+        assert_eq!(editor.buffer().lines()[0], "y");
+        assert_eq!(editor.buffer().lines()[1], "y");
+        assert_eq!(editor.buffer().lines()[2], "x"); // untouched
+    }
+
+    #[test]
+    fn substitute_bad_regex_returns_error() {
+        // `:s/[bad/` — engine parse_substitute should fail (unclosed `[`).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s/[bad/foo/");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Some(Error(_)), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn substitute_no_body_returns_error() {
+        // `:s` with no args — parse_substitute("") fails (no leading `/`).
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Some(Error(_)), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn substitute_empty_pattern_no_prior_search_returns_error() {
+        // `:s//bar/` — empty pattern with no last_search → engine error.
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "s//bar/");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Some(Error(_)), got {result:?}"
+        );
+    }
 }
