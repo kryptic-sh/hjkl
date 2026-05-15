@@ -1295,6 +1295,7 @@ impl App {
                             let zone = mouse::hit_test_zone(self, me.column, me.row);
                             let items = match zone {
                                 mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
+                                    self.move_cursor_for_right_click(me.column, me.row);
                                     let has_sel = matches!(
                                         self.active().editor.vim_mode(),
                                         VimMode::Visual

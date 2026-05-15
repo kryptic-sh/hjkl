@@ -12576,6 +12576,135 @@ mod border_drag_tests {
         }
     }
 
+    // ── right-click cursor move ─────────────────────────────────────────────
+
+    /// Build a small App with `content` loaded into slot 0 and the window's
+    /// last_rect + viewport set so hit_test_zone / cell_to_doc produce
+    /// well-defined results. Mirrors `mouse.rs::make_app_with_content`.
+    fn make_app_with_window(content: &str, area: ratatui::layout::Rect) -> App {
+        use hjkl_engine::BufferEdit;
+        let mut app = App::new(None, false, None, None).unwrap();
+        {
+            let buf = app.slots_mut()[0].editor.buffer_mut();
+            BufferEdit::replace_all(buf, content);
+        }
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(area);
+            win.top_row = 0;
+            win.top_col = 0;
+        }
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.width = area.width;
+            vp.height = area.height;
+            vp.text_width = area.width;
+            vp.top_row = 0;
+            vp.top_col = 0;
+            vp.tab_width = 4;
+        }
+        app
+    }
+
+    /// Regression: right-click did not move the cursor to the clicked cell,
+    /// so menu actions (Go to Definition, Rename, Format, etc.) operated on
+    /// the previous cursor position. Fix moves cursor to the clicked
+    /// doc-position before opening the menu.
+    #[test]
+    fn move_cursor_for_right_click_moves_cursor_to_click() {
+        // 5-line buffer, default settings → gutter_width = 4 (numberwidth=4).
+        // First text cell is col=4.
+        let mut app = make_app_with_window(
+            "line one\nline two\nline three\nline four\nline five",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+
+        // Park the cursor at (0, 0) via keyboard motion semantics.
+        app.active_mut().editor.set_cursor_doc(0, 0);
+        assert_eq!(app.active().editor.cursor(), (0, 0));
+
+        // Right-click on row 2, text column 8 (cell col = gutter 4 + text 8 = 12).
+        // Doc col after tab-expansion inverse on a tab-free line = visual col 8.
+        app.move_cursor_for_right_click(12, 2);
+
+        assert_eq!(
+            app.active().editor.cursor(),
+            (2, 8),
+            "right-click must move cursor to clicked doc position"
+        );
+    }
+
+    /// Right-click WITH an active visual selection must preserve the
+    /// selection — Cut / Copy from the menu need to operate on it. Cursor
+    /// stays put.
+    #[test]
+    fn move_cursor_for_right_click_preserves_visual_selection() {
+        use hjkl_engine::VimMode;
+        let mut app = make_app_with_window(
+            "line one\nline two\nline three\nline four\nline five",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        app.active_mut().editor.set_cursor_doc(0, 0);
+        app.active_mut().editor.enter_visual_char();
+        // Extend selection a bit so something is actually selected.
+        app.active_mut().editor.set_cursor_doc(0, 4);
+        let before = app.active().editor.cursor();
+        assert_eq!(app.active().editor.vim_mode(), VimMode::Visual);
+
+        // Right-click somewhere far from the selection.
+        app.move_cursor_for_right_click(12, 3);
+
+        assert_eq!(
+            app.active().editor.cursor(),
+            before,
+            "right-click with active visual selection must not move cursor"
+        );
+        assert_eq!(
+            app.active().editor.vim_mode(),
+            VimMode::Visual,
+            "visual mode must survive the right-click"
+        );
+    }
+
+    /// Right-click in the gutter zone moves the cursor to the start of that
+    /// line.
+    #[test]
+    fn move_cursor_for_right_click_in_gutter_goes_to_col_zero() {
+        let mut app = make_app_with_window(
+            "first\nsecond\nthird\nfourth\nfifth",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        app.active_mut().editor.set_cursor_doc(0, 2);
+
+        // Cell col 0 is inside the gutter (gutter_width = 4 by default).
+        app.move_cursor_for_right_click(0, 2);
+
+        assert_eq!(
+            app.active().editor.cursor(),
+            (2, 0),
+            "gutter right-click moves cursor to (clicked_row, 0)"
+        );
+    }
+
+    /// Right-click outside any window (e.g. on the status bar) is a no-op.
+    #[test]
+    fn move_cursor_for_right_click_outside_window_is_noop() {
+        let mut app = make_app_with_window(
+            "first\nsecond\nthird",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        app.active_mut().editor.set_cursor_doc(1, 3);
+        let before = app.active().editor.cursor();
+
+        // Row 30 is outside the 24-row area entirely.
+        app.move_cursor_for_right_click(10, 30);
+
+        assert_eq!(
+            app.active().editor.cursor(),
+            before,
+            "right-click outside any window must not move the cursor"
+        );
+    }
+
     // ── overlay_active / hover-suppression regression tests ────────────────
 
     /// Regression: when a context menu is open, the LSP hover popup must NOT

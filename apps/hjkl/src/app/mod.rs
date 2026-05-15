@@ -1392,6 +1392,49 @@ impl App {
         self.hover_timer = None;
     }
 
+    /// Focus the window under `(col, row)` and move its cursor to the
+    /// clicked doc-position. Used at the top of the right-click handler
+    /// so menu actions (Go to Definition, Rename, etc.) operate on the
+    /// symbol under the mouse — not on the keyboard cursor's previous
+    /// position.
+    ///
+    /// Preserves an active visual selection: when the user has a visual
+    /// range up and right-clicks, the selection stays intact so Cut /
+    /// Copy work on it. Without a selection, the cursor moves to the
+    /// clicked cell. Gutter clicks move to `(doc_row, 0)`.
+    pub(crate) fn move_cursor_for_right_click(&mut self, col: u16, row: u16) {
+        use hjkl_engine::VimMode;
+        let has_sel = matches!(
+            self.active().editor.vim_mode(),
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        );
+        if has_sel {
+            return;
+        }
+        let zone = mouse::hit_test_zone(self, col, row);
+        let win_id = match mouse::hit_test_window(self, col, row) {
+            Some(w) => w,
+            None => return,
+        };
+        let current_focus = self.focused_window();
+        if win_id != current_focus {
+            self.sync_viewport_from_editor();
+            self.set_focused_window(win_id);
+            self.sync_viewport_to_editor();
+        }
+        let target = match zone {
+            mouse::Zone::Code {
+                doc_row, doc_col, ..
+            } => Some((doc_row, doc_col)),
+            mouse::Zone::Gutter { doc_row, .. } => Some((doc_row, 0)),
+            _ => None,
+        };
+        if let Some((doc_row, doc_col)) = target {
+            self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+            self.sync_after_engine_mutation();
+        }
+    }
+
     /// `true` when a blocking overlay is on top of the editor — context
     /// menu, picker, command/search field, info popup. Used to gate
     /// background features that shouldn't fire while the user is
