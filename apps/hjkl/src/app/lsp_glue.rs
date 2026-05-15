@@ -263,6 +263,59 @@ impl App {
         mgr.notify_change(buffer_id, &text);
     }
 
+    /// File-type label for the active buffer — the language id string when
+    /// the extension is recognized, otherwise the raw extension, otherwise
+    /// `"(none)"`.
+    ///
+    /// Used by the status-line right-click menu to show `Filetype: rust`.
+    pub(crate) fn active_filetype_label(&self) -> String {
+        let ext = self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if ext.is_empty() {
+            return "(none)".to_string();
+        }
+        match language_id_for_ext(ext) {
+            Some(lang) => lang.to_string(),
+            None => ext.to_string(),
+        }
+    }
+
+    /// LSP server name for the active buffer, if one is attached.
+    ///
+    /// Returns the `language` string from the first matching [`ServerKey`]
+    /// in `lsp_state` (which doubles as the server name in the simple
+    /// one-server-per-language setup used today).
+    pub(crate) fn active_lsp_server_name(&self) -> Option<String> {
+        self.lsp.as_ref()?;
+        let lang = self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext)?;
+        self.lsp_state
+            .keys()
+            .find(|k| k.language == lang)
+            .map(|k| k.language.clone())
+    }
+
+    /// Restart the LSP server for the active buffer: detach, then re-attach.
+    ///
+    /// Detaching stops the server and clears state; re-attaching restarts it.
+    /// Mirrors what a `:LspRestart` command would do.
+    pub(crate) fn restart_lsp(&mut self) {
+        let slot_idx = self.focused_slot_idx();
+        self.lsp_detach_buffer(slot_idx);
+        self.lsp_attach_buffer(slot_idx);
+        self.status_message = Some("LSP restarted".into());
+    }
+
     /// Return `true` when the active buffer has a running, initialized LSP
     /// server attached (i.e. its file extension maps to a configured language
     /// and the server has completed the `initialize` handshake).

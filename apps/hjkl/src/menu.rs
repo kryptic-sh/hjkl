@@ -38,9 +38,34 @@ pub enum MenuAction {
     LspRename,
     LspCodeActions,
     LspFormat,
+    // ── Phase 7: status-line menu ──────────────────────────────────────────
+    /// Restart the LSP server for the current buffer.
+    LspRestart,
+    /// Open the file picker (`<leader><space>`).
+    OpenFilePicker,
+    // ── Phase 7: split-border menu ─────────────────────────────────────────
+    /// Equalize all splits to 0.5 ratio.
+    WindowEqualize,
+    /// Close the focused window (`:close`).
+    WindowClose,
+    // ── Phase 8: picker overlay menu ───────────────────────────────────────
+    /// Open the focused picker row (same as Enter).
+    PickerOpen,
+    /// Open the focused picker row in a horizontal split.
+    PickerOpenSplit,
+    /// Open the focused picker row in a vertical split.
+    PickerOpenVSplit,
+    /// Open the focused picker row in a new tab.
+    PickerOpenTab,
+    /// Copy the focused picker row's path to the system clipboard.
+    PickerCopyPath,
     // ── Visual decoration ──────────────────────────────────────────────────
     /// A non-selectable horizontal separator.
     Separator,
+    /// A non-selectable informational header label (rendered as dimmed text,
+    /// not as a horizontal rule). Used for status-line menu headers like
+    /// "Filetype: rust" and "LSP: rust-analyzer".
+    Info,
 }
 
 // ── MenuItem ──────────────────────────────────────────────────────────────────
@@ -364,6 +389,89 @@ pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
             action: MenuAction::LspFormat,
             enabled: has_lsp,
             shortcut_hint: Some(":LspFormat".into()),
+        },
+    ]
+}
+
+/// Build the context menu for a right-click on the status line.
+///
+/// `ft` is the file-type label (e.g. `"rust"`, `"(none)"`).
+/// `lsp_name` is `Some("rust-analyzer")` when a server is attached,
+/// `None` otherwise.
+pub fn build_status_line_menu(ft: &str, lsp_name: Option<&str>) -> Vec<MenuItem> {
+    let ft_label = format!("Filetype: {ft}");
+    let lsp_label = match lsp_name {
+        Some(name) => format!("LSP: {name}"),
+        None => "LSP: (none)".to_string(),
+    };
+    let has_lsp = lsp_name.is_some();
+    vec![
+        // Header: filetype info — not selectable.
+        MenuItem {
+            label: ft_label,
+            action: MenuAction::Info,
+            enabled: false,
+            shortcut_hint: None,
+        },
+        // Header: LSP server info — not selectable.
+        MenuItem {
+            label: lsp_label,
+            action: MenuAction::Info,
+            enabled: false,
+            shortcut_hint: None,
+        },
+        MenuItem::separator(),
+        MenuItem {
+            label: "Restart LSP".into(),
+            action: MenuAction::LspRestart,
+            enabled: has_lsp,
+            shortcut_hint: None,
+        },
+        MenuItem::separator(),
+        MenuItem::new("Open File…", MenuAction::OpenFilePicker, None),
+    ]
+}
+
+/// Build the context menu for a right-click on a split border.
+pub fn build_split_border_menu() -> Vec<MenuItem> {
+    vec![
+        MenuItem::new("Equalize Splits", MenuAction::WindowEqualize, None),
+        MenuItem::new("Close This Window", MenuAction::WindowClose, None),
+    ]
+}
+
+/// Build the context menu for a right-click on a picker overlay row.
+///
+/// `has_path` controls whether the split/tab/copy-path items are enabled.
+/// When the focused row has no file-system path (e.g. a git-log entry),
+/// those items are shown but disabled.
+pub fn build_picker_menu(has_path: bool) -> Vec<MenuItem> {
+    vec![
+        MenuItem::new("Open", MenuAction::PickerOpen, Some("Enter".into())),
+        MenuItem {
+            label: "Open in Horizontal Split".into(),
+            action: MenuAction::PickerOpenSplit,
+            enabled: has_path,
+            shortcut_hint: None,
+        },
+        MenuItem {
+            label: "Open in Vertical Split".into(),
+            action: MenuAction::PickerOpenVSplit,
+            enabled: has_path,
+            shortcut_hint: None,
+        },
+        MenuItem {
+            label: "Open in New Tab".into(),
+            action: MenuAction::PickerOpenTab,
+            enabled: has_path,
+            shortcut_hint: None,
+        },
+        MenuItem::separator(),
+        MenuItem {
+            label: "Copy Path".into(),
+            action: MenuAction::PickerCopyPath,
+            enabled: has_path,
+            shortcut_hint: None,
         },
     ]
 }
@@ -700,5 +808,148 @@ mod tests {
         let items = build_tab_menu(true);
         assert!(items[0].enabled); // Close Tab
         assert!(items[1].enabled); // Close Other Tabs
+    }
+
+    // ── build_status_line_menu (Phase 7) ─────────────────────────────────────
+
+    /// The first item's label must contain the filetype string.
+    #[test]
+    fn build_status_line_menu_includes_filetype_info() {
+        let items = build_status_line_menu("rust", Some("rust-analyzer"));
+        let ft_item = &items[0];
+        assert!(
+            ft_item.label.contains("rust"),
+            "first item label should contain 'rust', got {:?}",
+            ft_item.label
+        );
+        assert!(
+            !ft_item.enabled,
+            "filetype info item must not be selectable"
+        );
+        assert_eq!(
+            ft_item.action,
+            MenuAction::Info,
+            "filetype item uses Info action"
+        );
+    }
+
+    /// LSP header item (index 1) must reflect the server name when provided.
+    #[test]
+    fn build_status_line_menu_lsp_name_shown() {
+        let items = build_status_line_menu("rust", Some("rust-analyzer"));
+        let lsp_item = &items[1];
+        assert!(
+            lsp_item.label.contains("rust-analyzer"),
+            "lsp item label should contain server name, got {:?}",
+            lsp_item.label
+        );
+    }
+
+    /// Restart LSP is disabled when no server is attached.
+    #[test]
+    fn build_status_line_menu_restart_disabled_when_no_lsp() {
+        let items = build_status_line_menu("(none)", None);
+        let restart = items
+            .iter()
+            .find(|it| it.action == MenuAction::LspRestart)
+            .expect("LspRestart item must exist");
+        assert!(
+            !restart.enabled,
+            "LspRestart should be disabled when lsp_name is None"
+        );
+    }
+
+    /// Restart LSP is enabled when a server is attached.
+    #[test]
+    fn build_status_line_menu_restart_enabled_when_lsp_present() {
+        let items = build_status_line_menu("rust", Some("rust-analyzer"));
+        let restart = items
+            .iter()
+            .find(|it| it.action == MenuAction::LspRestart)
+            .expect("LspRestart item must exist");
+        assert!(
+            restart.enabled,
+            "LspRestart should be enabled when lsp_name is Some"
+        );
+    }
+
+    /// Open File… is always enabled.
+    #[test]
+    fn build_status_line_menu_open_file_always_enabled() {
+        let items = build_status_line_menu("(none)", None);
+        let open = items
+            .iter()
+            .find(|it| it.action == MenuAction::OpenFilePicker)
+            .expect("OpenFilePicker item must exist");
+        assert!(open.enabled, "Open File… should always be enabled");
+    }
+
+    // ── build_split_border_menu (Phase 7) ────────────────────────────────────
+
+    /// The split-border menu must contain exactly Equalize and Close (no stubs).
+    #[test]
+    fn build_split_border_menu_has_equalize_and_close() {
+        let items = build_split_border_menu();
+        let non_sep: Vec<&MenuItem> = items
+            .iter()
+            .filter(|it| it.action != MenuAction::Separator && it.action != MenuAction::Info)
+            .collect();
+        assert_eq!(
+            non_sep.len(),
+            2,
+            "expected exactly 2 real items, got {:?}",
+            non_sep.iter().map(|it| &it.action).collect::<Vec<_>>()
+        );
+        assert_eq!(non_sep[0].action, MenuAction::WindowEqualize);
+        assert_eq!(non_sep[1].action, MenuAction::WindowClose);
+        assert!(non_sep[0].enabled);
+        assert!(non_sep[1].enabled);
+    }
+
+    // ── build_picker_menu (Phase 8) ──────────────────────────────────────────
+
+    /// When has_path=true all items are enabled.
+    #[test]
+    fn build_picker_menu_all_enabled_when_has_path() {
+        let items = build_picker_menu(true);
+        for it in &items {
+            if it.action == MenuAction::Separator {
+                continue;
+            }
+            assert!(
+                it.enabled,
+                "{:?} should be enabled when has_path=true",
+                it.action
+            );
+        }
+    }
+
+    /// When has_path=false, split/tab/copy items are disabled; Open is always enabled.
+    #[test]
+    fn build_picker_menu_disables_path_items_when_no_path() {
+        let items = build_picker_menu(false);
+        // Open (Enter) always enabled.
+        let open = items
+            .iter()
+            .find(|it| it.action == MenuAction::PickerOpen)
+            .unwrap();
+        assert!(open.enabled, "PickerOpen should always be enabled");
+
+        // Path-dependent items must be disabled.
+        for action in &[
+            MenuAction::PickerOpenSplit,
+            MenuAction::PickerOpenVSplit,
+            MenuAction::PickerOpenTab,
+            MenuAction::PickerCopyPath,
+        ] {
+            let item = items
+                .iter()
+                .find(|it| &it.action == action)
+                .unwrap_or_else(|| panic!("{action:?} not found"));
+            assert!(
+                !item.enabled,
+                "{action:?} should be disabled when has_path=false"
+            );
+        }
     }
 }

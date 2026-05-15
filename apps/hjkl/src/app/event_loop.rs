@@ -1236,10 +1236,13 @@ impl App {
                             self.middle_click(me.column, me.row);
                         }
 
-                        // ── Right-click: open context menu (Phase 2, Round A) ─
+                        // ── Right-click: open context menu (Phase 2 + 7 + 8) ─
                         MouseEventKind::Down(MouseButton::Right) => {
                             use crate::app::mouse;
-                            use crate::menu::{ContextMenu, build_code_menu, build_tab_menu};
+                            use crate::menu::{
+                                ContextMenu, build_code_menu, build_picker_menu,
+                                build_split_border_menu, build_status_line_menu, build_tab_menu,
+                            };
 
                             // Dismiss hover popup — same rationale as left-click.
                             self.hover_popup = None;
@@ -1276,6 +1279,27 @@ impl App {
                                         self.switch_to(slot_idx);
                                     }
                                     build_tab_menu(self.tabs.len() > 1)
+                                }
+                                // ── Phase 7: status-line menu ─────────────────
+                                mouse::Zone::StatusLine => {
+                                    let ft = self.active_filetype_label();
+                                    let lsp_name = self.active_lsp_server_name();
+                                    build_status_line_menu(&ft, lsp_name.as_deref())
+                                }
+                                // ── Phase 7: split-border menu ─────────────────
+                                mouse::Zone::SplitBorder { .. } => build_split_border_menu(),
+                                // ── Phase 8: picker overlay row menu ───────────
+                                mouse::Zone::PickerRow { row_idx } => {
+                                    // Move picker selection to the clicked row.
+                                    if let Some(ref mut p) = self.picker {
+                                        p.selected = row_idx;
+                                    }
+                                    let has_path = self
+                                        .picker
+                                        .as_ref()
+                                        .and_then(|p| p.path_for_visible_row(p.selected))
+                                        .is_some();
+                                    build_picker_menu(has_path)
                                 }
                                 mouse::Zone::None => continue,
                             };

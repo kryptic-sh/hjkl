@@ -1423,7 +1423,10 @@ impl App {
             mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
                 self.middle_click_paste_primary(col, row);
             }
-            mouse::Zone::None => {}
+            mouse::Zone::None
+            | mouse::Zone::StatusLine
+            | mouse::Zone::SplitBorder { .. }
+            | mouse::Zone::PickerRow { .. } => {}
         }
     }
 
@@ -2386,7 +2389,19 @@ impl App {
             MenuAction::LspRename => {
                 self.status_message = Some("use :Rename <newname> to rename".into());
             }
-            MenuAction::Separator => {} // no-op
+            // ── Phase 7: status-line menu actions ────────────────────────────
+            MenuAction::LspRestart => self.restart_lsp(),
+            MenuAction::OpenFilePicker => self.open_picker(),
+            // ── Phase 7: split-border menu actions ───────────────────────────
+            MenuAction::WindowEqualize => self.equalize_layout(),
+            MenuAction::WindowClose => self.dispatch_ex("close"),
+            // ── Phase 8: picker overlay menu actions ──────────────────────────
+            MenuAction::PickerOpen => self.picker_accept(),
+            MenuAction::PickerOpenSplit => self.picker_open_in_split(),
+            MenuAction::PickerOpenVSplit => self.picker_open_in_vsplit(),
+            MenuAction::PickerOpenTab => self.picker_open_in_tab(),
+            MenuAction::PickerCopyPath => self.picker_copy_path(),
+            MenuAction::Separator | MenuAction::Info => {} // no-op
         }
     }
 

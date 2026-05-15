@@ -166,6 +166,98 @@ impl App {
         self.picker = Some(crate::picker::Picker::new(source));
     }
 
+    /// Accept the currently highlighted picker item — same as pressing Enter.
+    ///
+    /// Dismisses the picker and dispatches the item's action.
+    pub(crate) fn picker_accept(&mut self) {
+        let event = match self.picker.as_mut() {
+            Some(p) => p.accept(),
+            None => return,
+        };
+        self.picker = None;
+        if let crate::picker::PickerEvent::Select(action) = event {
+            self.dispatch_picker_action(action);
+        }
+    }
+
+    /// Open the currently focused picker row in a horizontal split.
+    ///
+    /// Gets the path from the focused row, dismisses the picker, then runs
+    /// `:split <path>`.
+    pub(crate) fn picker_open_in_split(&mut self) {
+        let path = match self
+            .picker
+            .as_ref()
+            .and_then(|p| p.path_for_visible_row(p.selected))
+        {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("picker: no path for selected item".into());
+                return;
+            }
+        };
+        self.picker = None;
+        let s = path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("split {s}"));
+    }
+
+    /// Open the currently focused picker row in a vertical split.
+    pub(crate) fn picker_open_in_vsplit(&mut self) {
+        let path = match self
+            .picker
+            .as_ref()
+            .and_then(|p| p.path_for_visible_row(p.selected))
+        {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("picker: no path for selected item".into());
+                return;
+            }
+        };
+        self.picker = None;
+        let s = path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("vsplit {s}"));
+    }
+
+    /// Open the currently focused picker row in a new tab.
+    pub(crate) fn picker_open_in_tab(&mut self) {
+        let path = match self
+            .picker
+            .as_ref()
+            .and_then(|p| p.path_for_visible_row(p.selected))
+        {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("picker: no path for selected item".into());
+                return;
+            }
+        };
+        self.picker = None;
+        let s = path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("tabnew {s}"));
+    }
+
+    /// Copy the path of the currently focused picker row to the system clipboard.
+    pub(crate) fn picker_copy_path(&mut self) {
+        let path = match self
+            .picker
+            .as_ref()
+            .and_then(|p| p.path_for_visible_row(p.selected))
+        {
+            Some(p) => p,
+            None => {
+                self.status_message = Some("picker: no path for selected item".into());
+                return;
+            }
+        };
+        let s = path.to_string_lossy().to_string();
+        self.active_mut()
+            .editor
+            .host_mut()
+            .write_clipboard(s.clone());
+        self.status_message = Some(format!("copied: {s}"));
+    }
+
     pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
         let event = match self.picker.as_mut() {
             Some(p) => hjkl_picker_tui::handle_key(p, key),
