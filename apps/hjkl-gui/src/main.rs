@@ -71,7 +71,7 @@ fn main() {
 ///
 /// When vim is in Normal mode and the user presses `:`, we switch to
 /// `Collecting` and gather chars until Enter or Esc.
-#[derive(Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum CmdState {
     #[default]
     Idle,
@@ -199,5 +199,29 @@ fn execute_ex(cmd: &str, handle: &EditorHandle, save_path: &Rc<RefCell<Option<Pa
         _ => {
             // Unknown command — silently ignore (Phase A).
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hjkl_buffer::Buffer;
+    use hjkl_editor::runtime::{DefaultHost, Editor, Options};
+
+    /// Smoke test: constructing an Editor from a string buffer succeeds and
+    /// the buffer is non-empty. Ensures the hjkl-gui dependency graph
+    /// compiles and the basic editor API is callable without a floem runtime.
+    #[test]
+    fn gui_editor_constructs_from_str() {
+        let buf = Buffer::from_str("hello\nworld\n");
+        let editor = Editor::new(buf, DefaultHost::new(), Options::default());
+        assert!(!editor.buffer().lines().is_empty());
+    }
+
+    /// Smoke test: `CmdState` default is `Idle` (compile-time check that the
+    /// enum and its `Default` derive are intact).
+    #[test]
+    fn gui_app_builds() {
+        let state = super::CmdState::default();
+        assert_eq!(state, super::CmdState::Idle);
     }
 }

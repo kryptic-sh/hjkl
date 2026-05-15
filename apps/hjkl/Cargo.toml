@@ -24,7 +24,7 @@ hjkl-lsp = "0.1"
 crossbeam-channel = "0.5"
 hjkl-buffer = "0.6"
 hjkl-splash = { version = "0.2", features = ["ratatui"] }
-hjkl-engine = "0.7.0"
+hjkl-engine = "0.7"
 hjkl-editor = "0.5"
 hjkl-ex = "0.1"
 hjkl-ratatui = "0.3"

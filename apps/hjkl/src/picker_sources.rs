@@ -447,8 +447,6 @@ impl PickerLogic for StaticListSource {
                     AppAction::StashDrop(i) => Box::new(AppAction::StashDrop(*i)),
                     AppAction::ApplyCodeAction(i) => Box::new(AppAction::ApplyCodeAction(*i)),
                     AppAction::AnvilInstall(s) => Box::new(AppAction::AnvilInstall(s.clone())),
-                    AppAction::AnvilUninstall(s) => Box::new(AppAction::AnvilUninstall(s.clone())),
-                    AppAction::AnvilUpdate(s) => Box::new(AppAction::AnvilUpdate(s.clone())),
                     AppAction::AnvilNoOp(s) => Box::new(AppAction::AnvilNoOp(s.clone())),
                 };
                 PickerAction::Custom(boxed)
@@ -470,28 +468,22 @@ impl PickerLogic for StaticListSource {
 
 /// Install-state of a single anvil tool.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum AnvilState {
     /// Tool is installed at the given version string.
     Installed { version: String },
     /// Tool is installed but the registry has a newer version.
-    Outdated {
-        installed_version: String,
-        available_version: String,
-    },
+    Outdated { available_version: String },
     /// Tool is in the registry but not installed.
     Available,
 }
 
 /// One row in the anvil picker.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AnvilPickerItem {
     pub name: String,
     pub category: hjkl_anvil::ToolCategory,
     pub description: String,
     pub state: AnvilState,
-    pub registry_version: String,
 }
 
 impl AnvilPickerItem {
@@ -534,7 +526,6 @@ impl AnvilPickerSource {
                             }
                         } else {
                             AnvilState::Outdated {
-                                installed_version: r.version.clone(),
                                 available_version: spec.version.clone(),
                             }
                         }
@@ -545,7 +536,6 @@ impl AnvilPickerSource {
                     category: spec.category,
                     description: spec.description.clone(),
                     state,
-                    registry_version: spec.version.clone(),
                 })
             })
             .collect();

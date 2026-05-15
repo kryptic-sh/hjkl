@@ -1445,7 +1445,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
 ///
 /// `readonly` and `is_new_file` mirror the app state flags.
 /// Filename is truncated with `…` when necessary.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn format_status_line(
     mode: &str,
     filename: &str,
@@ -1469,6 +1469,7 @@ pub fn format_status_line(
 }
 
 /// Full status line formatter with readonly + new-file flags.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn format_status_line_full(
     mode: &str,

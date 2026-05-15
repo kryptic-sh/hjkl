@@ -284,10 +284,12 @@ pub enum AppAction {
     /// `<C-f>` / `<C-b>` — scroll cursor by one full viewport height.
     /// `dir = Down` for `<C-f>`, `Up` for `<C-b>`.
     ///
-    /// Note: Phase 3g already bound `<C-f>`/`<C-b>` as `Motion` variants
-    /// (FullPageDown / FullPageUp). These variants provide the Phase 6.4
-    /// primitive path for future re-binding once Phase 6.8 deletes the FSM
-    /// fallthrough.
+    /// These variants are the keymap-driven scroll bindings dispatched from
+    /// `dispatch_action`. The FSM fallthrough was removed in Phase 6.8;
+    /// hjkl-vim now handles all inputs, and these variants are the sole
+    /// scroll path. The dispatch arm in `dispatch_action` exists but no
+    /// keymap binding currently constructs this variant — reserved for a
+    /// future binding that routes `<C-f>`/`<C-b>` here instead of as Motion.
     #[allow(dead_code)]
     ScrollFullPage {
         dir: hjkl_engine::ScrollDir,
@@ -296,10 +298,12 @@ pub enum AppAction {
     /// `<C-d>` / `<C-u>` — scroll cursor by half the viewport height.
     /// `dir = Down` for `<C-d>`, `Up` for `<C-u>`.
     ///
-    /// Note: Phase 3g already bound `<C-d>`/`<C-u>` as `Motion` variants
-    /// (HalfPageDown / HalfPageUp). These variants provide the Phase 6.4
-    /// primitive path for future re-binding once Phase 6.8 deletes the FSM
-    /// fallthrough.
+    /// These variants are the keymap-driven scroll bindings dispatched from
+    /// `dispatch_action`. The FSM fallthrough was removed in Phase 6.8;
+    /// hjkl-vim now handles all inputs, and these variants are the sole
+    /// scroll path. The dispatch arm in `dispatch_action` exists but no
+    /// keymap binding currently constructs this variant — reserved for a
+    /// future binding that routes `<C-d>`/`<C-u>` here instead of as Motion.
     #[allow(dead_code)]
     ScrollHalfPage {
         dir: hjkl_engine::ScrollDir,

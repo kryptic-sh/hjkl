@@ -87,13 +87,6 @@ fn ct_mods_to_keymap(mods: CtKeyMods) -> KeyModifiers {
     out
 }
 
-/// Special-case: crossterm `BackTab` (Shift-Tab) arrives without the SHIFT
-/// modifier set. This function synthesises the correct keymap event.
-#[allow(dead_code)]
-pub fn backtab_event() -> KeyEvent {
-    KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT)
-}
-
 /// Convert a `hjkl_keymap::KeyEvent` back to a `crossterm::event::KeyEvent`
 /// for replaying unbound sequences or user maps to the engine.
 pub fn to_crossterm(ev: &KeyEvent) -> CtKeyEvent {

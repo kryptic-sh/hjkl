@@ -508,8 +508,7 @@ pub enum SetLanguageOutcome {
     /// renders as plain text until [`SyntaxLayer::poll_pending_loads`] fires
     /// the `Ready` event for this buffer.  The inner `String` is the language
     /// name (useful for status-line indicators — TODO hjkl#17).
-    #[allow(dead_code)]
-    Loading(String),
+    Loading(#[allow(dead_code)] String),
     /// Extension unrecognized.  No grammar — plain text only.
     Unknown,
 }

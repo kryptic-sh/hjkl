@@ -238,12 +238,6 @@ impl App {
             AppAction::AnvilInstall(name) => {
                 self.anvil_install(&name.clone());
             }
-            AppAction::AnvilUninstall(name) => {
-                self.anvil_uninstall(&name.clone());
-            }
-            AppAction::AnvilUpdate(name) => {
-                self.anvil_update(&name.clone());
-            }
             AppAction::AnvilNoOp(_name) => {
                 // Tool already installed — no-op from picker <CR>.
                 // TODO: could show the install log popup here.

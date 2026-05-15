@@ -604,6 +604,95 @@ fn do_save_no_filename_e32() {
     assert!(msg.contains("E32"), "expected E32, got: {msg}");
 }
 
+// ── :write / :write! disk-state guard tests ─────────────────────────────
+
+#[test]
+fn colon_write_blocked_by_disk_state_guard_without_bang() {
+    let path = std::env::temp_dir().join("hjkl_write_no_bang_guard.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    // Mark disk changed without reloading buffer, then dirty the buffer.
+    app.active_mut().disk_state = DiskState::ChangedOnDisk;
+    app.active_mut().dirty = true;
+    seed_buffer(&mut app, "edited\n");
+    // :write without bang must refuse.
+    app.dispatch_ex("write");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("E13"),
+        "expected E13 guard message, got: {msg}"
+    );
+    // File on disk must be unchanged.
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, "original\n",
+        "disk must be unchanged after blocked :w"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn colon_write_bang_overrides_disk_state_guard() {
+    let path = std::env::temp_dir().join("hjkl_write_bang_guard.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.active_mut().disk_state = DiskState::ChangedOnDisk;
+    app.active_mut().dirty = true;
+    seed_buffer(&mut app, "edited\n");
+    // :write! must force-save.
+    app.dispatch_ex("write!");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(!msg.contains("E13"), ":w! must not produce E13, got: {msg}");
+    // disk_state must be reset to Synced.
+    assert_eq!(
+        app.active().disk_state,
+        DiskState::Synced,
+        "disk_state must be Synced after :w!"
+    );
+    // File on disk must contain the new content.
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        on_disk.contains("edited"),
+        "disk must have new content after :w!"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── :set background= tests ───────────────────────────────────────────────
+
+#[test]
+fn colon_set_background_dark_swaps_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set background=dark");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(
+        msg, "background=dark",
+        "expected background=dark, got: {msg}"
+    );
+}
+
+#[test]
+fn colon_set_background_light_swaps_theme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set background=light");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(
+        msg, "background=light",
+        "expected background=light, got: {msg}"
+    );
+}
+
+#[test]
+fn colon_set_background_unknown_errors() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set background=mauve");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.starts_with("E:"),
+        "expected E: error for unknown background, got: {msg}"
+    );
+}
+
 // ── :e tests ────────────────────────────────────────────────────────────
 
 #[test]

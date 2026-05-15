@@ -1330,7 +1330,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
- "miniz_oxide",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -2029,7 +2029,7 @@ dependencies = [
  "hjkl-form",
  "hjkl-keymap",
  "hjkl-lsp",
- "hjkl-picker 0.6.0",
+ "hjkl-picker",
  "hjkl-picker-tui",
  "hjkl-ratatui",
  "hjkl-splash",
@@ -2112,7 +2112,7 @@ dependencies = [
  "async-trait",
  "bitflags 2.11.1",
  "libc",
- "miniz_oxide",
+ "miniz_oxide 0.9.1",
  "pollster",
 ]
 
@@ -2215,7 +2215,7 @@ dependencies = [
  "clap",
  "floem",
  "hjkl-buffer",
- "hjkl-editor 0.4.8",
+ "hjkl-editor 0.5.0",
  "hjkl-editor-gui",
  "hjkl-engine",
  "hjkl-vim",
@@ -2246,28 +2246,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-picker"
-version = "0.5.2"
-dependencies = [
- "crossterm",
- "hjkl-buffer",
- "hjkl-form",
- "ignore",
- "ratatui",
- "regex",
- "tempfile",
-]
-
-[[package]]
-name = "hjkl-picker"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3d7facf0891907fd6d24bef1664537fa03e4f02226faffd4bbb5a5e7d042df8"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-form",
  "ignore",
  "regex",
+ "tempfile",
 ]
 
 [[package]]
@@ -2277,7 +2263,7 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
- "hjkl-picker 0.6.0",
+ "hjkl-picker",
  "ratatui",
 ]
 
@@ -3116,6 +3102,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3758,7 +3753,7 @@ dependencies = [
  "crc32fast",
  "fdeflate",
  "flate2",
- "miniz_oxide",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -3771,7 +3766,7 @@ dependencies = [
  "crc32fast",
  "fdeflate",
  "flate2",
- "miniz_oxide",
+ "miniz_oxide 0.8.9",
 ]
 
 [[package]]
@@ -3790,9 +3785,9 @@ dependencies = [
 
 [[package]]
 name = "pollster"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22686f4785f02a4fcc856d3b3bb19bf6c8160d103f7a99cc258bddd0251dc7f2"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"

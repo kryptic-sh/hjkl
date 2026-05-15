@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-#[allow(dead_code)]
 pub enum AppAction {
     OpenPath(PathBuf),
     OpenPathAtLine(PathBuf, u32),
@@ -23,10 +22,6 @@ pub enum AppAction {
     ApplyCodeAction(usize),
     /// Install (or reinstall) the named anvil tool.
     AnvilInstall(String),
-    /// Uninstall the named anvil tool.
-    AnvilUninstall(String),
-    /// Update the named anvil tool if outdated.
-    AnvilUpdate(String),
     /// No-op placeholder used by the picker for already-installed tools.
     AnvilNoOp(String),
 }

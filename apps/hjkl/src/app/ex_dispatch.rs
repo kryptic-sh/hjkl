@@ -279,7 +279,8 @@ impl App {
                 ExEffect::BufferDelete { force, wipe: _ } => {
                     // `:bd[!]` / `:bw[!]` — wipe semantics not yet distinct
                     // from delete in the app layer; treat both as buffer_delete.
-                    // TODO Phase 2c: differentiate wipe (discard swap, remove marks).
+                    // TODO(follow-up): differentiate :bwipeout wipe semantics from :bdelete
+                    // (vim drops swap/marks/jumps for wiped buffers). File as issue.
                     self.buffer_delete(force);
                     return;
                 }
