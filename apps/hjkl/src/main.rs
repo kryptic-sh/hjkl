@@ -9,6 +9,7 @@ mod git;
 mod git_worker;
 mod headless;
 mod host;
+pub(crate) mod hover_popup;
 mod keymap_actions;
 mod keymap_translate;
 mod lang;

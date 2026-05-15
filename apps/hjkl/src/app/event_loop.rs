@@ -13,6 +13,9 @@ use std::time::Duration;
 use super::{App, STATUS_LINE_HEIGHT, SearchDir, prompt_cursor_shape};
 use crate::render;
 
+/// How long the mouse must rest on a Code zone before the LSP hover RPC fires.
+const HOVER_DELAY: Duration = Duration::from_millis(500);
+
 /// Translate a crossterm `KeyEvent` to a `hjkl_keymap::KeyEvent`.
 /// Returns `None` for release events or unsupported key codes.
 fn to_km_event(key: KeyEvent) -> Option<KmKeyEvent> {
@@ -257,6 +260,14 @@ impl App {
                         self.sync_after_engine_mutation();
                     }
                 }
+                // Tick the hover timer (Phase 5): when the mouse is stationary
+                // no Moved events arrive, so we fire from the poll-timeout tick.
+                self.tick_hover_timer();
+                // Expire a displayed hover popup after 8 seconds.
+                if self.hover_popup.as_ref().is_some_and(|p| p.is_expired()) {
+                    self.hover_popup = None;
+                    self.hover_timer = None;
+                }
                 continue;
             }
             match event::read()? {
@@ -293,6 +304,13 @@ impl App {
                     if self.info_popup.is_some() {
                         self.info_popup = None;
                         continue;
+                    }
+
+                    // ── Hover popup dismissal (Phase 5 mouse support) ─────────
+                    if self.hover_popup.is_some() {
+                        self.hover_popup = None;
+                        self.hover_timer = None;
+                        // fall through — key still takes effect
                     }
 
                     // ── Context menu keyboard navigation (Phase 2, Round A) ───
@@ -1286,6 +1304,32 @@ impl App {
                                     }
                                 }
                             }
+
+                            // ── Phase 5: hover-popup timer ────────────────────
+                            let cell = (me.column, me.row);
+
+                            // Any mouse move dismisses an open hover popup and
+                            // resets the timer to track the new cell.
+                            if self.hover_popup.is_some() {
+                                self.hover_popup = None;
+                                self.hover_timer = None;
+                            }
+
+                            // Re-arm or advance the timer for the new cell.
+                            let same_cell =
+                                self.hover_timer.as_ref().is_some_and(|h| h.cell == cell);
+                            if !same_cell {
+                                // New cell — restart the timer.
+                                self.hover_timer = Some(crate::app::HoverTimer {
+                                    cell,
+                                    started_at: std::time::Instant::now(),
+                                    request_sent: false,
+                                });
+                            }
+                            // Fire check (also handled in the poll-timeout tick,
+                            // but calling here means we react immediately on the
+                            // Moved event that coincides with the 500ms threshold).
+                            self.tick_hover_timer();
                         }
 
                         _ => {}
@@ -1309,5 +1353,35 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Tick the Phase 5 hover timer.
+    ///
+    /// Called on every poll-timeout tick AND on every `MouseEventKind::Moved`
+    /// event so the RPC fires promptly when the mouse has been stationary for
+    /// [`HOVER_DELAY`]. If the timer is armed, the cell is in a Code zone, and
+    /// the 500ms threshold has elapsed, sends the LSP hover RPC once.
+    pub(crate) fn tick_hover_timer(&mut self) {
+        // If a popup is already showing, nothing to do.
+        if self.hover_popup.is_some() {
+            return;
+        }
+        let (cell, should_fire) = match &self.hover_timer {
+            Some(h) if !h.request_sent && h.started_at.elapsed() >= HOVER_DELAY => (h.cell, true),
+            _ => return,
+        };
+
+        // Hit-test the resting cell for a Code zone.
+        let zone = crate::app::mouse::hit_test_zone(self, cell.0, cell.1);
+        if let crate::app::mouse::Zone::Code {
+            doc_row, doc_col, ..
+        } = zone
+            && should_fire
+        {
+            self.lsp_hover_at_doc(doc_row, doc_col);
+            if let Some(h) = self.hover_timer.as_mut() {
+                h.request_sent = true;
+            }
+        }
     }
 }

@@ -466,6 +466,38 @@ impl App {
         });
     }
 
+    /// Mouse-hover variant: send `textDocument/hover` for an explicit doc
+    /// position without moving the cursor. Used by the Phase 5 hover-popup
+    /// timer so the user's cursor stays in place.
+    pub(crate) fn lsp_hover_at_doc(&mut self, doc_row: usize, doc_col: usize) {
+        if self.lsp.is_none() {
+            return; // LSP not running — silently skip mouse hover
+        }
+        let slot = self.active();
+        let path = match slot.filename.as_ref() {
+            Some(p) => absolutize(p),
+            None => return,
+        };
+        let uri = match hjkl_lsp::uri::from_path(&path) {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+        let params = serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": doc_row as u32, "character": doc_col as u32 },
+        });
+        let request_id = self.lsp_alloc_request_id();
+        let pending = LspPendingRequest::HoverAtMouse {
+            buffer_id,
+            origin: (doc_row, doc_col),
+        };
+        self.lsp_pending.insert(request_id, pending);
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.send_request(request_id, buffer_id, "textDocument/hover", params);
+        }
+    }
+
     // ── Response handlers ─────────────────────────────────────────────────
 
     /// Dispatch a received LSP response to the appropriate handler.
@@ -492,6 +524,9 @@ impl App {
             }
             LspPendingRequest::Hover { buffer_id, origin } => {
                 self.handle_hover_response(buffer_id, origin, result);
+            }
+            LspPendingRequest::HoverAtMouse { buffer_id, origin } => {
+                self.handle_hover_at_mouse_response(buffer_id, origin, result);
             }
             LspPendingRequest::Completion {
                 buffer_id,
@@ -1436,6 +1471,39 @@ impl App {
         } else {
             self.info_popup = Some(text);
         }
+    }
+
+    /// Handle a mouse-hover response — set `hover_popup` if the timer is
+    /// still armed at the same cell. Drops the result if the user moved.
+    pub(crate) fn handle_hover_at_mouse_response(
+        &mut self,
+        _buffer_id: hjkl_lsp::BufferId,
+        _origin: (usize, usize),
+        result: Result<serde_json::Value, hjkl_lsp::RpcError>,
+    ) {
+        // Only show the popup when the timer is still armed and the RPC was
+        // sent from it (guard against stale in-flight requests).
+        let timer_cell = match &self.hover_timer {
+            Some(t) if t.request_sent => t.cell,
+            _ => return, // user moved before the response arrived
+        };
+
+        let val = match result {
+            Ok(v) => v,
+            Err(_) => return, // silently drop errors for mouse hover
+        };
+        if val.is_null() {
+            return; // no hover info — don't show an empty popup
+        }
+        let hover: lsp_types::Hover = match serde_json::from_value(val) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let text = extract_hover_text(&hover.contents);
+        if text.trim().is_empty() {
+            return;
+        }
+        self.hover_popup = Some(crate::hover_popup::HoverPopup::new(text, timer_cell));
     }
 }
 

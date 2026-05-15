@@ -296,6 +296,12 @@ pub enum LspPendingRequest {
         buffer_id: hjkl_lsp::BufferId,
         origin: (usize, usize),
     },
+    /// Mouse-hover variant of `Hover` — result goes to the floating
+    /// [`HoverPopup`] instead of `info_popup`. Phase 5 mouse support.
+    HoverAtMouse {
+        buffer_id: hjkl_lsp::BufferId,
+        origin: (usize, usize),
+    },
     Completion {
         buffer_id: hjkl_lsp::BufferId,
         /// 0-based cursor position when the request was sent.
@@ -579,6 +585,24 @@ pub struct App {
     /// `None` when no menu is open. Floated above all other content by the
     /// renderer. Dismissed on Esc, click-outside, or action invocation.
     pub(crate) context_menu: Option<crate::menu::ContextMenu>,
+    /// Floating LSP hover popup (Phase 5 mouse support).
+    /// Shown after the mouse rests on a Code zone for [`HOVER_DELAY`].
+    /// Dismissed by mouse move, any key press, or 8-second auto-fade.
+    pub(crate) hover_popup: Option<crate::hover_popup::HoverPopup>,
+    /// "Mouse has been resting at this cell since `started_at`" tracker.
+    /// Reset on any cell change; fires the LSP hover RPC after [`HOVER_DELAY`].
+    pub(crate) hover_timer: Option<HoverTimer>,
+}
+
+/// Tracks how long the mouse has been stationary at a given terminal cell.
+/// Used to fire the LSP `textDocument/hover` request after [`HOVER_DELAY`].
+pub(crate) struct HoverTimer {
+    /// Terminal cell (col, row) the mouse is resting on.
+    pub cell: (u16, u16),
+    /// When the mouse first arrived at this cell.
+    pub started_at: Instant,
+    /// `true` once we've fired the LSP hover RPC — prevents re-sending.
+    pub request_sent: bool,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1911,6 +1935,8 @@ impl App {
             last_ex_command: None,
             mouse_click_tracker: mouse::MouseClickTracker::new(),
             context_menu: None,
+            hover_popup: None,
+            hover_timer: None,
         })
     }
 

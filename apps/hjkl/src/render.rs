@@ -750,6 +750,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if let Some(ref menu) = app.context_menu {
         menu.render(frame, area);
     }
+
+    // Hover popup (Phase 5 mouse support) — renders above all other content.
+    if let Some(ref popup) = app.hover_popup {
+        popup.render(frame, frame.area(), &app.theme);
+    }
 }
 
 /// Render the unified top bar into a single row.
