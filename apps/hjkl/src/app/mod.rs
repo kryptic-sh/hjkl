@@ -592,6 +592,9 @@ pub struct App {
     /// "Mouse has been resting at this cell since `started_at`" tracker.
     /// Reset on any cell change; fires the LSP hover RPC after [`HOVER_DELAY`].
     pub(crate) hover_timer: Option<HoverTimer>,
+    /// Active split-border drag state (Phase 9). `Some` while the user is
+    /// dragging a split border; `None` otherwise.
+    pub(crate) border_drag: Option<BorderDrag>,
 }
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.
@@ -603,6 +606,26 @@ pub(crate) struct HoverTimer {
     pub started_at: Instant,
     /// `true` once we've fired the LSP hover RPC — prevents re-sending.
     pub request_sent: bool,
+}
+
+/// Minimum cell size for each side of a split when drag-resizing (Phase 9).
+/// VSplit: each pane must be at least this many columns wide.
+/// HSplit: each pane must be at least this many rows tall.
+pub(crate) const SPLIT_MIN_SIZE_COLS: u16 = 10;
+pub(crate) const SPLIT_MIN_SIZE_ROWS: u16 = 3;
+
+/// Active split-border drag state (Phase 9). Populated on `Down(Left)` when
+/// the click lands on a border; cleared on `Up(Left)`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BorderDrag {
+    /// Orientation of the split being resized.
+    pub orientation: mouse::SplitOrientation,
+    /// Origin of the split's rect (x for VSplit, y for HSplit).
+    pub split_origin: u16,
+    /// Total size of the split's rect (width for VSplit, height for HSplit).
+    pub split_total: u16,
+    /// Most recent mouse position (column for VSplit, row for HSplit).
+    pub last_pos: u16,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1727,6 +1750,84 @@ impl App {
         self.layout_mut().equalize_all();
     }
 
+    /// Resize the split whose `last_rect` encompasses `split_origin` and
+    /// `split_total` so the boundary sits at `split_pos` cells from the
+    /// split origin. `split_pos` is clamped to leave at least
+    /// `SPLIT_MIN_SIZE_COLS` / `SPLIT_MIN_SIZE_ROWS` on each side.
+    ///
+    /// Called by the border-drag handler in the event loop (Phase 9).
+    /// `orientation` determines whether we're moving a column (VSplit) or
+    /// a row (HSplit) boundary.
+    pub(crate) fn resize_split_to(
+        &mut self,
+        orientation: mouse::SplitOrientation,
+        split_origin: u16,
+        split_total: u16,
+        split_pos: u16,
+    ) {
+        use window::SplitDir;
+
+        let min_size = match orientation {
+            mouse::SplitOrientation::Vertical => SPLIT_MIN_SIZE_COLS,
+            mouse::SplitOrientation::Horizontal => SPLIT_MIN_SIZE_ROWS,
+        };
+
+        if split_total < min_size * 2 + 1 {
+            return; // too small to resize
+        }
+
+        // Clamp split_pos so both children stay at least min_size.
+        let clamped = split_pos.clamp(min_size, split_total.saturating_sub(min_size + 1));
+        let new_ratio = clamped as f32 / split_total as f32;
+        let new_ratio = new_ratio.clamp(0.01, 0.99);
+
+        // Find the matching split node by walking the layout tree and looking
+        // for a Split whose last_rect matches the origin + total we recorded
+        // when the drag started.
+        let dir = match orientation {
+            mouse::SplitOrientation::Vertical => SplitDir::Vertical,
+            mouse::SplitOrientation::Horizontal => SplitDir::Horizontal,
+        };
+        fn update_matching(
+            node: &mut window::LayoutTree,
+            dir: window::SplitDir,
+            origin: u16,
+            total: u16,
+            new_ratio: f32,
+        ) {
+            if let window::LayoutTree::Split {
+                dir: my_dir,
+                ratio,
+                a,
+                b,
+                last_rect,
+            } = node
+            {
+                if *my_dir == dir
+                    && let Some(r) = last_rect
+                {
+                    let (rect_origin, rect_total) = match dir {
+                        window::SplitDir::Vertical => (r.x, r.width),
+                        window::SplitDir::Horizontal => (r.y, r.height),
+                    };
+                    if rect_origin == origin && rect_total == total {
+                        *ratio = new_ratio;
+                        return; // found the target; done
+                    }
+                }
+                update_matching(a, dir, origin, total, new_ratio);
+                update_matching(b, dir, origin, total, new_ratio);
+            }
+        }
+        update_matching(self.layout_mut(), dir, split_origin, split_total, new_ratio);
+    }
+
+    /// Equalize all splits (set every ratio to 0.5). Used by double-click on a
+    /// border (Phase 9). Delegates to the existing `equalize_layout`.
+    pub(crate) fn equalize_split(&mut self) {
+        self.equalize_layout();
+    }
+
     /// Maximize focused window's height — set every enclosing Horizontal
     /// split so the focused branch gets as much height as possible (siblings
     /// collapse to 1 line each).
@@ -1937,6 +2038,7 @@ impl App {
             context_menu: None,
             hover_popup: None,
             hover_timer: None,
+            border_drag: None,
         })
     }
 

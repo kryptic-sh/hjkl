@@ -989,6 +989,36 @@ impl App {
                         MouseEventKind::Down(MouseButton::Left) => {
                             use crate::app::mouse;
 
+                            // ── Phase 9: border-drag hit-test ─────────────────
+                            // Check BEFORE context-menu and window-click logic so
+                            // a border click never accidentally focuses a window.
+                            if let Some(hit) = mouse::hit_test_border(self, me.column, me.row) {
+                                // Encode border position as a synthetic id for the
+                                // double-click tracker. We use a large offset beyond
+                                // real WindowIds to avoid collisions.
+                                let synthetic_id: usize = usize::MAX
+                                    .wrapping_sub(hit.border_cell.0 as usize)
+                                    .wrapping_sub((hit.border_cell.1 as usize) << 16);
+                                let count = self.mouse_click_tracker.register(synthetic_id, 0, 0);
+                                if count == 2 {
+                                    // Double-click → equalize all splits.
+                                    self.equalize_split();
+                                } else {
+                                    // Single click → begin drag.
+                                    let last_pos = match hit.orientation {
+                                        mouse::SplitOrientation::Vertical => me.column,
+                                        mouse::SplitOrientation::Horizontal => me.row,
+                                    };
+                                    self.border_drag = Some(crate::app::BorderDrag {
+                                        orientation: hit.orientation,
+                                        split_origin: hit.split_origin,
+                                        split_total: hit.split_total,
+                                        last_pos,
+                                    });
+                                }
+                                continue;
+                            }
+
                             // ── Context-menu: click-inside → invoke / click-outside → dismiss
                             if let Some(ref menu) = self.context_menu {
                                 let screen_size = ratatui::layout::Rect {
@@ -1156,6 +1186,26 @@ impl App {
                         }
                         MouseEventKind::Drag(MouseButton::Left) => {
                             use crate::app::mouse;
+
+                            // ── Phase 9: border drag ──────────────────────────
+                            if let Some(drag) = self.border_drag {
+                                let new_pos = match drag.orientation {
+                                    mouse::SplitOrientation::Vertical => me.column,
+                                    mouse::SplitOrientation::Horizontal => me.row,
+                                };
+                                let split_pos = new_pos.saturating_sub(drag.split_origin);
+                                self.resize_split_to(
+                                    drag.orientation,
+                                    drag.split_origin,
+                                    drag.split_total,
+                                    split_pos,
+                                );
+                                if let Some(d) = self.border_drag.as_mut() {
+                                    d.last_pos = new_pos;
+                                }
+                                continue;
+                            }
+
                             let win_id = self.focused_window();
                             if let Some((doc_row, doc_col)) =
                                 mouse::cell_to_doc(self, win_id, me.column, me.row)
@@ -1171,8 +1221,11 @@ impl App {
                                 self.sync_after_engine_mutation();
                             }
                         }
-                        // Up: vim stays in Visual after drag-release — no-op.
-                        MouseEventKind::Up(MouseButton::Left) => {}
+                        // Up: clear any active border drag; vim stays in
+                        // Visual after a text drag-release — no-op otherwise.
+                        MouseEventKind::Up(MouseButton::Left) if self.border_drag.is_some() => {
+                            self.border_drag = None;
+                        }
 
                         // ── P4.3: Middle-click → primary-selection paste ──────
                         //

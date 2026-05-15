@@ -12264,3 +12264,223 @@ fn shift_click_enters_visual_and_extends_selection() {
         }
     }
 }
+
+// ── Phase 9: border drag-resize tests ────────────────────────────────────────
+
+#[cfg(test)]
+mod border_drag_tests {
+    use super::*;
+    use crate::app::mouse::SplitOrientation;
+    use crate::app::{App, SPLIT_MIN_SIZE_COLS, SPLIT_MIN_SIZE_ROWS};
+    use ratatui::layout::Rect;
+
+    /// Set up a VSplit app with `last_rect` pre-filled so resize_split_to works.
+    fn make_vsplit_with_rect(ratio: f32, total_w: u16, total_h: u16) -> App {
+        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
+        let mut app = App::new(None, false, None, None).unwrap();
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: None,
+        }));
+        let area = Rect::new(0, 0, total_w, total_h);
+        // a_w = round(total_w * ratio), clamped. Separator at a_w - 1.
+        let a_w = ((total_w as f32) * ratio).round() as u16;
+        let a_w = a_w.clamp(1, total_w.saturating_sub(1).max(1));
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(Rect::new(0, 0, a_w.saturating_sub(1), total_h));
+        }
+        if let Some(Some(w)) = app.windows.get_mut(win1) {
+            w.last_rect = Some(Rect::new(a_w, 0, total_w - a_w, total_h));
+        }
+        app.tabs[0] = Tab {
+            layout: LayoutTree::Split {
+                dir: SplitDir::Vertical,
+                ratio,
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(area),
+            },
+            focused_window: 0,
+        };
+        app
+    }
+
+    /// Set up an HSplit app with `last_rect` pre-filled.
+    fn make_hsplit_with_rect(ratio: f32, total_w: u16, total_h: u16) -> App {
+        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
+        let mut app = App::new(None, false, None, None).unwrap();
+        let win1 = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: None,
+        }));
+        let area = Rect::new(0, 0, total_w, total_h);
+        let a_h = ((total_h as f32) * ratio).round() as u16;
+        let a_h = a_h.clamp(1, total_h.saturating_sub(1).max(1));
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(Rect::new(0, 0, total_w, a_h.saturating_sub(1)));
+        }
+        if let Some(Some(w)) = app.windows.get_mut(win1) {
+            w.last_rect = Some(Rect::new(0, a_h, total_w, total_h - a_h));
+        }
+        app.tabs[0] = Tab {
+            layout: LayoutTree::Split {
+                dir: SplitDir::Horizontal,
+                ratio,
+                a: Box::new(LayoutTree::Leaf(0)),
+                b: Box::new(LayoutTree::Leaf(win1)),
+                last_rect: Some(area),
+            },
+            focused_window: 0,
+        };
+        app
+    }
+
+    fn get_split_ratio(app: &App) -> f32 {
+        match app.layout() {
+            window::LayoutTree::Split { ratio, .. } => *ratio,
+            _ => panic!("expected Split"),
+        }
+    }
+
+    // ── T2: hit_test_border ────────────────────────────────────────────────
+
+    // (Covered in mouse.rs unit tests; integration smoke here.)
+
+    // ── T7a: border_drag_resizes_vertical_split ──────────────────────────
+
+    #[test]
+    fn border_drag_resizes_vertical_split() {
+        // VSplit 0.5 ratio, 80 cols wide. a_w=40, sep at col 39.
+        // Drag from col 39 to col 44 (+5). Expect ratio grows.
+        let mut app = make_vsplit_with_rect(0.5, 80, 24);
+        let ratio_before = get_split_ratio(&app);
+
+        // Simulate the drag: split_pos = 44 (new column from origin 0).
+        app.resize_split_to(SplitOrientation::Vertical, 0, 80, 44);
+
+        let ratio_after = get_split_ratio(&app);
+        assert!(
+            ratio_after > ratio_before,
+            "dragging VSplit right must grow ratio: before={ratio_before} after={ratio_after}"
+        );
+        // new_ratio should be approximately 44/80 = 0.55
+        let expected = 44.0f32 / 80.0;
+        assert!(
+            (ratio_after - expected).abs() < 0.02,
+            "ratio should be ~{expected:.2}, got {ratio_after:.4}"
+        );
+    }
+
+    // ── T7b: border_drag_resizes_horizontal_split ────────────────────────
+
+    #[test]
+    fn border_drag_resizes_horizontal_split() {
+        // HSplit 0.5 ratio, 24 rows tall. a_h=12, sep at row 11.
+        // Drag from row 11 to row 8 (-3). Expect ratio shrinks.
+        let mut app = make_hsplit_with_rect(0.5, 80, 24);
+        let ratio_before = get_split_ratio(&app);
+
+        // split_pos = 8 (from origin 0).
+        app.resize_split_to(SplitOrientation::Horizontal, 0, 24, 8);
+
+        let ratio_after = get_split_ratio(&app);
+        assert!(
+            ratio_after < ratio_before,
+            "dragging HSplit up must shrink ratio: before={ratio_before} after={ratio_after}"
+        );
+        let expected = 8.0f32 / 24.0;
+        assert!(
+            (ratio_after - expected).abs() < 0.02,
+            "ratio should be ~{expected:.2}, got {ratio_after:.4}"
+        );
+    }
+
+    // ── T7c: border_double_click_equalizes_split ─────────────────────────
+
+    #[test]
+    fn border_double_click_equalizes_split() {
+        let mut app = make_vsplit_with_rect(0.3, 80, 24);
+        // Skew ratio.
+        if let window::LayoutTree::Split { ratio, .. } = app.layout_mut() {
+            *ratio = 0.3;
+        }
+        assert!((get_split_ratio(&app) - 0.3).abs() < 1e-4, "precondition");
+
+        app.equalize_split();
+
+        let ratio_after = get_split_ratio(&app);
+        assert!(
+            (ratio_after - 0.5).abs() < 1e-4,
+            "equalize_split must set ratio to 0.5, got {ratio_after}"
+        );
+    }
+
+    // ── T7d: border_drag_respects_min_size ───────────────────────────────
+
+    #[test]
+    fn border_drag_respects_min_size_vertical() {
+        // VSplit 80 cols wide. Drag split_pos to 2 (< SPLIT_MIN_SIZE_COLS=10).
+        // Expect clamped to 10/80.
+        let mut app = make_vsplit_with_rect(0.5, 80, 24);
+        app.resize_split_to(SplitOrientation::Vertical, 0, 80, 2);
+        let ratio = get_split_ratio(&app);
+        let min_ratio = SPLIT_MIN_SIZE_COLS as f32 / 80.0;
+        assert!(
+            ratio >= min_ratio - 1e-4,
+            "ratio must be >= min ({min_ratio:.3}), got {ratio:.4}"
+        );
+    }
+
+    #[test]
+    fn border_drag_respects_min_size_horizontal() {
+        // HSplit 24 rows. Drag split_pos to 1 (< SPLIT_MIN_SIZE_ROWS=3).
+        let mut app = make_hsplit_with_rect(0.5, 80, 24);
+        app.resize_split_to(SplitOrientation::Horizontal, 0, 24, 1);
+        let ratio = get_split_ratio(&app);
+        let min_ratio = SPLIT_MIN_SIZE_ROWS as f32 / 24.0;
+        assert!(
+            ratio >= min_ratio - 1e-4,
+            "ratio must be >= min ({min_ratio:.3}), got {ratio:.4}"
+        );
+    }
+
+    #[test]
+    fn border_drag_respects_min_size_other_side() {
+        // VSplit 80 cols. Drag split_pos to 79 (leaves only 1 for b).
+        // Must clamp so b has at least SPLIT_MIN_SIZE_COLS.
+        let mut app = make_vsplit_with_rect(0.5, 80, 24);
+        app.resize_split_to(SplitOrientation::Vertical, 0, 80, 79);
+        let ratio = get_split_ratio(&app);
+        let max_ratio = (80 - SPLIT_MIN_SIZE_COLS - 1) as f32 / 80.0;
+        assert!(
+            ratio <= max_ratio + 1e-4,
+            "ratio must be <= max ({max_ratio:.3}) to leave room for b, got {ratio:.4}"
+        );
+    }
+
+    // ── T7e: border_drag_no_active_split_is_noop ─────────────────────────
+
+    #[test]
+    fn border_drag_no_active_split_is_noop() {
+        // With no border_drag set, Drag(Left) on a split must not panic.
+        // We exercise resize_split_to on a single-window app — should silently no-op.
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert!(app.border_drag.is_none(), "border_drag must start None");
+        // resize_split_to with a single-window app (no split) — must not panic.
+        app.resize_split_to(SplitOrientation::Vertical, 0, 80, 40);
+        // And border_drag stays None.
+        assert!(app.border_drag.is_none());
+    }
+}
