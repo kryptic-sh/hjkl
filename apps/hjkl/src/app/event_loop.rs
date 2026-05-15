@@ -881,16 +881,71 @@ impl App {
                     {
                         continue;
                     }
-                    // 3 lines per wheel notch — vim's `mousescroll` default.
-                    const WHEEL_LINES: i16 = 3;
+                    // 3 lines/cols per wheel notch — vim's `mousescroll` default.
+                    const WHEEL_TICKS: i16 = 3;
+                    use crossterm::event::KeyModifiers;
+                    /// Route scroll to the window under the cursor, focusing it
+                    /// if needed. Returns `false` when the pointer is outside
+                    /// every window (e.g. over the status bar) — caller should
+                    /// skip the scroll in that case.
+                    fn focus_window_under_cursor(
+                        app: &mut crate::app::App,
+                        col: u16,
+                        row: u16,
+                    ) -> bool {
+                        use crate::app::mouse;
+                        if let Some(win_id) = mouse::hit_test_window(app, col, row) {
+                            let current_focus = app.focused_window();
+                            if win_id != current_focus {
+                                app.sync_viewport_from_editor();
+                                app.set_focused_window(win_id);
+                                app.sync_viewport_to_editor();
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
                     match me.kind {
                         MouseEventKind::ScrollDown => {
-                            self.active_mut().editor.scroll_down(WHEEL_LINES);
+                            if me.modifiers.contains(KeyModifiers::SHIFT) {
+                                // Shift+ScrollDown → scroll viewport right.
+                                if focus_window_under_cursor(self, me.column, me.row) {
+                                    self.active_mut().editor.scroll_right(WHEEL_TICKS);
+                                    self.sync_viewport_from_editor();
+                                    self.recompute_and_install();
+                                }
+                            } else if focus_window_under_cursor(self, me.column, me.row) {
+                                self.active_mut().editor.scroll_down(WHEEL_TICKS);
+                                self.sync_viewport_from_editor();
+                                self.recompute_and_install();
+                            }
+                        }
+                        MouseEventKind::ScrollUp => {
+                            if me.modifiers.contains(KeyModifiers::SHIFT) {
+                                // Shift+ScrollUp → scroll viewport left.
+                                if focus_window_under_cursor(self, me.column, me.row) {
+                                    self.active_mut().editor.scroll_left(WHEEL_TICKS);
+                                    self.sync_viewport_from_editor();
+                                    self.recompute_and_install();
+                                }
+                            } else if focus_window_under_cursor(self, me.column, me.row) {
+                                self.active_mut().editor.scroll_up(WHEEL_TICKS);
+                                self.sync_viewport_from_editor();
+                                self.recompute_and_install();
+                            }
+                        }
+                        MouseEventKind::ScrollLeft
+                            if focus_window_under_cursor(self, me.column, me.row) =>
+                        {
+                            self.active_mut().editor.scroll_left(WHEEL_TICKS);
                             self.sync_viewport_from_editor();
                             self.recompute_and_install();
                         }
-                        MouseEventKind::ScrollUp => {
-                            self.active_mut().editor.scroll_up(WHEEL_LINES);
+                        MouseEventKind::ScrollRight
+                            if focus_window_under_cursor(self, me.column, me.row) =>
+                        {
+                            self.active_mut().editor.scroll_right(WHEEL_TICKS);
                             self.sync_viewport_from_editor();
                             self.recompute_and_install();
                         }
