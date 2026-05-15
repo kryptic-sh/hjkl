@@ -14,9 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::{
-    App, BUFFER_LINE_HEIGHT, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TAB_BAR_HEIGHT, window,
-};
+use crate::app::{App, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TOP_BAR_HEIGHT, window};
 
 /// Build the style for a diagnostic severity used in overlays and the status line.
 fn diag_severity_style(sev: DiagSeverity) -> Style {
@@ -652,16 +650,12 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
-    let multi = app.slots().len() > 1;
-    let show_tab_bar = app.tabs.len() > 1;
-    let (buf_area, status_area, bufline_area, tabbar_area) = {
+    let show_top_bar = app.tabs.len() > 1 || app.slots().len() > 1;
+    let (buf_area, status_area, top_bar_area) = {
         // Build constraint list dynamically based on what rows are visible.
         let mut constraints = Vec::new();
-        if show_tab_bar {
-            constraints.push(Constraint::Length(TAB_BAR_HEIGHT));
-        }
-        if multi {
-            constraints.push(Constraint::Length(BUFFER_LINE_HEIGHT));
+        if show_top_bar {
+            constraints.push(Constraint::Length(TOP_BAR_HEIGHT));
         }
         constraints.push(Constraint::Min(1));
         constraints.push(Constraint::Length(STATUS_LINE_HEIGHT));
@@ -672,14 +666,7 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
             .split(area);
 
         let mut idx = 0usize;
-        let tab_area = if show_tab_bar {
-            let a = Some(chunks[idx]);
-            idx += 1;
-            a
-        } else {
-            None
-        };
-        let bl_area = if multi {
+        let tb_area = if show_top_bar {
             let a = Some(chunks[idx]);
             idx += 1;
             a
@@ -689,16 +676,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         let buf = chunks[idx];
         idx += 1;
         let stat = chunks[idx];
-        (buf, stat, bl_area, tab_area)
+        (buf, stat, tb_area)
     };
 
     // Splash screen path — skip all buffer rendering while active.
     if let Some(ref screen) = app.start_screen {
-        if let Some(ta) = tabbar_area {
-            tab_bar(frame, app, ta);
-        }
-        if let Some(bl_area) = bufline_area {
-            buffer_line(frame, app, bl_area);
+        if let Some(tb) = top_bar_area {
+            top_bar(frame, app, tb);
         }
         crate::start_screen::render(frame, buf_area, screen, &app.theme);
         status_line(frame, app, status_area);
@@ -712,12 +696,8 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // is ~140µs even on 100k-line files.
     app.recompute_and_install();
 
-    if let Some(ta) = tabbar_area {
-        tab_bar(frame, app, ta);
-    }
-
-    if let Some(bl_area) = bufline_area {
-        buffer_line(frame, app, bl_area);
+    if let Some(tb) = top_bar_area {
+        top_bar(frame, app, tb);
     }
 
     // Walk the window tree and render each pane. Use take_layout /
@@ -772,13 +752,21 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Render the vim-style tab bar. Only called when `app.tabs.len() > 1`.
+/// Render the unified top bar into a single row.
 ///
-/// Format: `[1: foo.rs] [2: +bar.rs]` where the number is the 1-based tab
-/// index, the label is the focused window's slot basename (or `[No Name]`),
-/// and a leading `+` marks any dirty slot in the tab.  Active tab is
-/// highlighted; inactive tabs are dimmed.
-fn tab_bar(frame: &mut Frame, app: &App, area: Rect) {
+/// Left side: buffer-line entries (one per slot), only when `app.slots().len() > 1`.
+/// Format: ` name ` or ` name+ ` (dirty), separated by `│`.
+///
+/// Right side: tab entries (one per tab), only when `app.tabs.len() > 1`.
+/// Format: `[1: name] [2: name]`, right-aligned flush with the row's right edge.
+///
+/// If both sides overflow the row width, the left (buffer) side is truncated
+/// from the right with `…`. If buffers still don't fit even after truncation,
+/// they are dropped entirely.
+///
+/// Show the row whenever EITHER side has content. When neither does, this
+/// function is not called (see `render::frame`).
+fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     let ui = &app.theme.ui;
     let active_style = Style::default()
         .fg(ui.on_accent)
@@ -787,119 +775,132 @@ fn tab_bar(frame: &mut Frame, app: &App, area: Rect) {
     let inactive_style = Style::default().fg(ui.text_dim);
     let sep_style = Style::default().fg(ui.border);
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let max_width = area.width as usize;
-    let mut used = 0usize;
+    let show_tabs = app.tabs.len() > 1;
+    let show_buffers = app.slots().len() > 1;
+    let total_width = area.width as usize;
 
-    for (i, tab) in app.tabs.iter().enumerate() {
-        // Find the focused window's slot for this tab.
-        let slot_idx = app.windows[tab.focused_window]
-            .as_ref()
-            .map(|w| w.slot)
-            .unwrap_or(0);
-        let slot = &app.slots()[slot_idx];
-        let base_name = slot
-            .filename
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("[No Name]");
-        // Mark tab dirty if any window in the tab has a dirty slot.
-        let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
-            app.windows[wid]
+    // ── Right side: compute tab spans and their total width ──────────────────
+    struct TabEntry {
+        label: String,
+        is_active: bool,
+        has_sep: bool, // true for all except the first
+    }
+    let mut tab_entries: Vec<TabEntry> = Vec::new();
+    let mut tabs_total_len = 0usize;
+
+    if show_tabs {
+        for (i, tab) in app.tabs.iter().enumerate() {
+            let slot_idx = app.windows[tab.focused_window]
                 .as_ref()
-                .map(|w| app.slots()[w.slot].dirty)
-                .unwrap_or(false)
-        });
-        let label = if tab_dirty {
-            format!("[{}: +{}]", i + 1, base_name)
-        } else {
-            format!("[{}: {}]", i + 1, base_name)
-        };
-
-        let sep = if i == 0 { "" } else { " " };
-        let entry_width = sep.len() + label.len();
-
-        if used + entry_width > max_width {
-            if used < max_width {
-                spans.push(Span::styled("…".to_string(), sep_style));
-            }
-            break;
+                .map(|w| w.slot)
+                .unwrap_or(0);
+            let slot = &app.slots()[slot_idx];
+            let base_name = slot
+                .filename
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("[No Name]");
+            let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
+                app.windows[wid]
+                    .as_ref()
+                    .map(|w| app.slots()[w.slot].dirty)
+                    .unwrap_or(false)
+            });
+            let label = if tab_dirty {
+                format!("[{}: +{}]", i + 1, base_name)
+            } else {
+                format!("[{}: {}]", i + 1, base_name)
+            };
+            let has_sep = i > 0;
+            let entry_width = if has_sep { 1 } else { 0 } + label.len();
+            tabs_total_len += entry_width;
+            tab_entries.push(TabEntry {
+                label,
+                is_active: i == app.active_tab,
+                has_sep,
+            });
         }
-
-        if i > 0 {
-            spans.push(Span::styled(" ".to_string(), sep_style));
-        }
-        let style = if i == app.active_tab {
-            active_style
-        } else {
-            inactive_style
-        };
-        spans.push(Span::styled(label, style));
-        used += entry_width;
     }
 
-    let paragraph = Paragraph::new(Line::from(spans));
-    frame.render_widget(paragraph, area);
-}
+    // ── Left side: compute how much width buffers can use ────────────────────
+    // Tabs are right-aligned and never truncated; buffers get the remainder.
+    let buf_budget = if show_buffers {
+        total_width.saturating_sub(tabs_total_len)
+    } else {
+        0
+    };
 
-/// Render the one-row buffer/tab line at the top of the screen.
-///
-/// Shows all open slots with the active one highlighted and a `+` marker
-/// on dirty slots. Only called when `app.slots.len() > 1`.
-fn buffer_line(frame: &mut Frame, app: &App, area: Rect) {
-    let ui = &app.theme.ui;
-    let active_style = Style::default()
-        .fg(ui.on_accent)
-        .bg(ui.mode_normal_bg)
-        .add_modifier(Modifier::BOLD);
-    let inactive_style = Style::default().fg(ui.text_dim);
-    let sep_style = Style::default().fg(ui.border);
+    // Build buffer spans within the budget.
+    let mut buf_spans: Vec<Span<'static>> = Vec::new();
+    let mut buf_used = 0usize;
 
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let max_width = area.width as usize;
-    let mut used = 0usize;
+    if show_buffers && buf_budget > 0 {
+        for (i, slot) in app.slots().iter().enumerate() {
+            let base_name = slot
+                .filename
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("[No Name]");
+            let label = if slot.dirty {
+                format!(" {}+ ", base_name)
+            } else {
+                format!(" {} ", base_name)
+            };
+            let sep_len = if i == 0 { 0 } else { 1 };
+            let entry_width = sep_len + label.len();
 
-    for (i, slot) in app.slots().iter().enumerate() {
-        let base_name = slot
-            .filename
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("[No Name]");
-        let label = if slot.dirty {
-            format!(" {}+ ", base_name)
-        } else {
-            format!(" {} ", base_name)
-        };
-
-        // Separator between entries (not before the first).
-        let sep = if i == 0 { "" } else { "│" };
-        let entry_width = sep.len() + label.len();
-
-        // If adding this entry would overflow, truncate remaining with `…`.
-        if used + entry_width > max_width {
-            // Always include the active slot even if it means skipping earlier
-            // entries — but for simplicity, just hard-truncate the end.
-            if used < max_width {
-                spans.push(Span::styled("…".to_string(), sep_style));
+            if buf_used + entry_width > buf_budget {
+                // Truncate with ellipsis if space remains.
+                if buf_used < buf_budget {
+                    buf_spans.push(Span::styled("…".to_string(), sep_style));
+                }
+                break;
             }
-            break;
-        }
 
-        if i > 0 {
-            spans.push(Span::styled("│".to_string(), sep_style));
+            if i > 0 {
+                buf_spans.push(Span::styled("│".to_string(), sep_style));
+            }
+            let style = if i == app.active_index() {
+                active_style
+            } else {
+                inactive_style
+            };
+            buf_spans.push(Span::styled(label, style));
+            buf_used += entry_width;
         }
-        let style = if i == app.active_index() {
-            active_style
-        } else {
-            inactive_style
-        };
-        spans.push(Span::styled(label, style));
-        used += entry_width;
     }
 
-    let paragraph = Paragraph::new(Line::from(spans));
+    // ── Assemble the full line ────────────────────────────────────────────────
+    // Layout: [buf_spans ... padding ... tab_spans]
+    // Padding fills the gap so tabs land flush-right.
+
+    let mut all_spans: Vec<Span<'static>> = buf_spans;
+
+    if show_tabs {
+        // Pad between left and right sides.
+        let used_left = buf_used;
+        let pad_width = total_width.saturating_sub(used_left + tabs_total_len);
+        if pad_width > 0 {
+            all_spans.push(Span::raw(" ".repeat(pad_width)));
+        }
+
+        // Emit tab spans.
+        for entry in &tab_entries {
+            if entry.has_sep {
+                all_spans.push(Span::styled(" ".to_string(), sep_style));
+            }
+            let style = if entry.is_active {
+                active_style
+            } else {
+                inactive_style
+            };
+            all_spans.push(Span::styled(entry.label.clone(), style));
+        }
+    }
+
+    let paragraph = Paragraph::new(Line::from(all_spans));
     frame.render_widget(paragraph, area);
 }
 
@@ -1917,7 +1918,7 @@ mod tests {
     }
 
     #[test]
-    fn buffer_line_height_is_one() {
-        assert_eq!(crate::app::BUFFER_LINE_HEIGHT, 1);
+    fn top_bar_height_is_one() {
+        assert_eq!(crate::app::TOP_BAR_HEIGHT, 1);
     }
 }

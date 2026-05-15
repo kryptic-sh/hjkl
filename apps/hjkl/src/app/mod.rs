@@ -56,12 +56,9 @@ impl GrammarLoadError {
     }
 }
 
-/// Height of the buffer/tab line at the top of the screen, when shown.
-pub const BUFFER_LINE_HEIGHT: u16 = 1;
-
-/// Height of the vim-style tab bar at the top of the screen, when shown
-/// (only when more than one tab is open).
-pub const TAB_BAR_HEIGHT: u16 = 1;
+/// Height of the unified top bar (buffers left, tabs right) at the top of the
+/// screen, when shown (either more than one slot or more than one tab).
+pub const TOP_BAR_HEIGHT: u16 = 1;
 
 /// Resolve a path for buffer-list matching. Two paths that point to
 /// the same file should compare equal here even when one is relative
