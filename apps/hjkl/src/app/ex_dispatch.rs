@@ -52,6 +52,17 @@ impl App {
         // The literal user text is stored; replay re-runs through dispatch_ex so
         // behavior is identical.
         self.last_ex_command = Some(raw.to_string());
+
+        // Phase 7: expand `%`, `#`, `<cword>`, `<cWORD>` tokens in the command
+        // line BEFORE dispatch so commands see literal paths.
+        let cmd_expanded = {
+            let ctx = build_expand_context(self);
+            hjkl_ex::expand_args(&ctx, raw)
+        };
+        // Shadow both `raw` and `cmd` so all dispatch arms see the expanded text.
+        let raw = cmd_expanded.as_str();
+        let cmd = raw;
+
         if self.try_handle_runtime_map(raw) {
             return;
         }
@@ -1722,6 +1733,29 @@ fn sev_label(s: super::DiagSeverity) -> &'static str {
         super::DiagSeverity::Warning => "W",
         super::DiagSeverity::Info => "I",
         super::DiagSeverity::Hint => "H",
+    }
+}
+
+/// Build an [`hjkl_ex::ExpandContext`] from current app state for Phase 7
+/// filename expansion (`%`, `#`, `<cword>`, `<cWORD>`).
+///
+/// `cword` / `cwword` are wired to `None` for now — the engine API for
+/// word-under-cursor is not trivially accessible without a borrow chain
+/// that conflicts with the `&mut App` call sites.
+/// TODO(phase7): wire cword/cwword once `Editor::word_under_cursor()` is
+/// stable in hjkl-engine.
+fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
+    let alt_path = app
+        .prev_active
+        .and_then(|i| app.slots.get(i))
+        .and_then(|s| s.filename.as_deref());
+
+    hjkl_ex::ExpandContext {
+        current_path: app.active().filename.as_deref(),
+        alt_path,
+        cword: None,
+        cwword: None,
+        cwd: None,
     }
 }
 

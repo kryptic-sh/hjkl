@@ -4,6 +4,40 @@ use hjkl_form::TextFieldEditor;
 
 use super::{App, SearchDir};
 
+/// Walk backwards from `caret` to find the start of the token under the
+/// caret. A token starts at the beginning of the string or after any
+/// ASCII whitespace character.
+fn find_token_start(line: &str, caret: usize) -> usize {
+    let bytes = line.as_bytes();
+    let mut i = caret;
+    while i > 0 {
+        let b = bytes[i - 1];
+        if b.is_ascii_whitespace() {
+            break;
+        }
+        i -= 1;
+    }
+    i
+}
+
+/// Build an [`hjkl_ex::ExpandContext`] from app state for tab-time inline
+/// expansion. Same wiring as `build_expand_context` in ex_dispatch.rs.
+/// cword/cwword stay None (see TODO in ex_dispatch.rs).
+fn build_inline_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
+    let alt_path = app
+        .prev_active
+        .and_then(|i| app.slots.get(i))
+        .and_then(|s| s.filename.as_deref());
+
+    hjkl_ex::ExpandContext {
+        current_path: app.active().filename.as_deref(),
+        alt_path,
+        cword: None,
+        cwword: None,
+        cwd: None,
+    }
+}
+
 /// Active wildmenu state for the command-line prompt. `None` outside
 /// completion (no Tab pressed yet, or after acceptance/cancel).
 #[derive(Clone, Debug)]
@@ -146,6 +180,30 @@ impl App {
             field.text()
         };
         let caret = line.len(); // caret at end for completion
+
+        // Phase 7: tab-time inline expansion. If the token under the caret
+        // starts with a filename-expansion prefix (`%`, `#`, `<cword>`,
+        // `<cWORD>`), expand it in place so the user sees the literal path
+        // before pressing Enter.
+        {
+            let token_start = find_token_start(&line, caret);
+            let token = &line[token_start..caret];
+            if token.starts_with('%')
+                || token.starts_with('#')
+                || token.starts_with("<cword>")
+                || token.starts_with("<cWORD>")
+            {
+                let ctx = build_inline_expand_context(self);
+                if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {
+                    let new_text =
+                        format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
+                    let field = self.command_field.as_mut().unwrap();
+                    set_field_text(field, &new_text);
+                    return; // don't fall through to candidate completion
+                }
+            }
+        }
+
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
 

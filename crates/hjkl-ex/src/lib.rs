@@ -13,12 +13,14 @@ pub use complete::{
     complete, complete_arg, complete_command_from_names, first_word_end, longest_common_prefix,
 };
 pub use effect::ExEffect;
+pub use expand::{ExpandContext, expand_args, expand_filename};
 pub use range::{LineRange, parse_range};
 pub use registry::{ArgKind, ExCommand, HostCmd, HostRegistry, Registry};
 
 mod builtins;
 mod complete;
 mod effect;
+pub mod expand;
 mod listings;
 mod parse;
 mod range;

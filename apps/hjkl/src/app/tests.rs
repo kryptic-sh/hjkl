@@ -11223,6 +11223,97 @@ fn colon_bd_via_hjkl_ex_clears_sole_buffer() {
     );
 }
 
+// ── Phase 7: filename expansion (`%`, `#`) integration tests ────────────────
+
+/// `dispatch_ex("e %")` with a current filename set must re-open the same
+/// file (no error) — the `%` expands to the current buffer path at dispatch
+/// time.
+#[test]
+fn colon_e_percent_expands_to_current_file() {
+    let path = tmp_path("hjkl_phase7_percent_test.txt");
+    std::fs::write(&path, "phase7 percent\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Open the file by path first so active().filename is set.
+    app.dispatch_ex(&format!("e {}", path.display()));
+    let active_after_first_open = app
+        .active()
+        .filename
+        .as_deref()
+        .unwrap_or(std::path::Path::new(""))
+        .to_path_buf();
+
+    // Now dispatch `e %` — should expand to the same path and re-open.
+    app.dispatch_ex("e %");
+
+    let active_after_percent = app
+        .active()
+        .filename
+        .as_deref()
+        .unwrap_or(std::path::Path::new(""))
+        .to_path_buf();
+
+    assert_eq!(
+        active_after_percent, active_after_first_open,
+        "`:e %%` must expand to the current file path; got {active_after_percent:?}"
+    );
+    // No error message — expansion and re-open succeeded.
+    assert!(
+        app.status_message
+            .as_deref()
+            .map(|m| !m.starts_with('E'))
+            .unwrap_or(true),
+        "`:e %%` must not produce an error; got: {:?}",
+        app.status_message
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `dispatch_ex("e #")` after opening two files must switch back to the
+/// first file (alternate buffer expansion).
+#[test]
+fn colon_e_hash_expands_to_alt() {
+    let path_a = tmp_path("hjkl_phase7_hash_a.txt");
+    let path_b = tmp_path("hjkl_phase7_hash_b.txt");
+    std::fs::write(&path_a, "file a\n").unwrap();
+    std::fs::write(&path_b, "file b\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Open file A.
+    app.dispatch_ex(&format!("e {}", path_a.display()));
+    // Open file B — now A becomes the alternate buffer (prev_active).
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+
+    let active_before = app
+        .active()
+        .filename
+        .as_deref()
+        .map(|p| p.to_path_buf())
+        .unwrap();
+    assert!(
+        active_before.ends_with("hjkl_phase7_hash_b.txt"),
+        "sanity: active must be B; got {active_before:?}"
+    );
+
+    // `e #` must expand to file A and open it.
+    app.dispatch_ex("e #");
+
+    let active_after = app
+        .active()
+        .filename
+        .as_deref()
+        .map(|p| p.to_path_buf())
+        .unwrap();
+    assert!(
+        active_after.ends_with("hjkl_phase7_hash_a.txt"),
+        "`:e #` must expand to alt (file A); got {active_after:?}"
+    );
+
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
 // ── Phase 4b: host-registry window/tab command tests ────────────────────────
 
 #[test]
