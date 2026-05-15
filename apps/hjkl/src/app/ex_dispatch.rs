@@ -40,26 +40,6 @@ fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
 
 use super::{App, DiskState, ex_host_cmds};
 
-/// Parse a resize argument string into a line/column delta.
-///
-/// Accepts:
-/// - `"+N"` → `+N` (relative grow)
-/// - `"-N"` → `-N` (relative shrink)
-/// - `"N"` → treated as a relative delta for simplicity
-fn parse_resize_arg(arg: &str) -> Option<i32> {
-    let arg = arg.trim();
-    if arg.is_empty() {
-        return None;
-    }
-    if let Some(rest) = arg.strip_prefix('+') {
-        rest.trim().parse::<i32>().ok()
-    } else if let Some(rest) = arg.strip_prefix('-') {
-        rest.trim().parse::<i32>().ok().map(|n| -n)
-    } else {
-        arg.parse::<i32>().ok()
-    }
-}
-
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
@@ -136,6 +116,7 @@ impl App {
 
         // `:perf` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
+        // stays inline: :set background= reloads theme + recomputes; intricate enough to justify legacy intercept.
         if let Some(rest) = cmd.strip_prefix("set background=") {
             match rest.trim() {
                 "dark" => {
@@ -247,125 +228,18 @@ impl App {
         // `:tabfirst` / `:tabrewind` / `:tabr` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
         // `:tablast` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
-        // `:tabonly` / `:tabo` — close all tabs except the current one.
-        if cmd == "tabonly" || cmd == "tabo" {
-            self.do_tabonly();
-            return;
-        }
+        // `:tabonly` / `:tabo` — migrated to Phase 4f host registry (ex_host_cmds.rs).
 
         // `:tabmove` — migrated to Phase 4b host registry (ex_host_cmds.rs).
 
-        // `:tabs` — show info popup listing all tabs.
-        if cmd == "tabs" {
-            self.do_tabs();
-            return;
-        }
+        // `:tabs` — migrated to Phase 4f host registry (ex_host_cmds.rs).
 
-        // `:resize [+|-]N` — adjust focused window height.
-        // `:vertical resize [+|-]N` / `:vert res [+|-]N` — adjust width.
-        let (is_resize, is_vertical) = if cmd == "resize" || cmd.starts_with("resize ") {
-            (true, false)
-        } else if cmd.starts_with("vertical resize ")
-            || cmd.starts_with("vert res ")
-            || cmd.starts_with("vert resize ")
-        {
-            (true, true)
-        } else {
-            (false, false)
-        };
-        if is_resize {
-            let arg = cmd
-                .trim_start_matches("vertical")
-                .trim_start_matches("vert")
-                .trim_start_matches("resize")
-                .trim_start_matches("res")
-                .trim();
-            if let Some(delta) = parse_resize_arg(arg) {
-                if is_vertical {
-                    self.resize_width(delta);
-                } else {
-                    self.resize_height(delta);
-                }
-                self.status_message = Some("resize".into());
-            } else {
-                self.status_message = Some("E: invalid resize argument".into());
-            }
-            return;
-        }
+        // `:resize [+|-]N` — migrated to Phase 4f host registry (ex_host_cmds.rs).
+        // `:vertical resize [+|-]N` / `:vert res [+|-]N` — migrated to Phase 4f host registry.
 
-        // ── LSP diagnostic commands ───────────────────────────────────────────
-        // `:Rename <newname>` — LSP rename.
-        if cmd.starts_with("Rename ") || cmd == "Rename" {
-            if let Some(new_name) = cmd.strip_prefix("Rename ") {
-                let new_name = new_name.trim().to_string();
-                if new_name.is_empty() {
-                    self.status_message = Some("E: usage: :Rename <newname>".into());
-                } else {
-                    self.lsp_rename(new_name);
-                }
-            } else {
-                // TODO: open prompt-based rename UI (Phase 6).
-                self.status_message = Some("E: usage: :Rename <newname>".into());
-            }
-            return;
-        }
-
-        // `:LspFormat` / `:Format` — LSP format.
-        if cmd == "LspFormat" || cmd == "Format" {
-            // TODO: range formatting when invoked from visual mode (Phase 6).
-            self.lsp_format();
-            return;
-        }
-
-        // `:LspCodeAction` — LSP code actions.
-        if cmd == "LspCodeAction" || cmd == "CodeAction" {
-            self.lsp_code_actions();
-            return;
-        }
-
-        match cmd {
-            "lopen" => {
-                self.open_diag_picker();
-                return;
-            }
-            "lnext" => {
-                self.lnext_severity(None);
-                return;
-            }
-            "lprev" => {
-                self.lprev_severity(None);
-                return;
-            }
-            "lfirst" => {
-                self.ldiag_first();
-                return;
-            }
-            "llast" => {
-                self.ldiag_last();
-                return;
-            }
-            "LspInfo" => {
-                self.show_lsp_info();
-                return;
-            }
-            _ if raw.starts_with("Anvil") => {
-                let rest = raw["Anvil".len()..].trim();
-                let args: Vec<&str> = rest.split_whitespace().collect();
-                match args.as_slice() {
-                    [] => self.open_anvil_picker(),
-                    ["install", name] => self.anvil_install(name),
-                    ["uninstall", name] => self.anvil_uninstall(name),
-                    ["update"] => self.anvil_update_all(),
-                    ["update", name] => self.anvil_update(name),
-                    _ => {
-                        self.status_message =
-                            Some("usage: :Anvil [install|uninstall|update] [name]".into());
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
+        // ── LSP / diag / Anvil — migrated to Phase 4f host registry (ex_host_cmds.rs) ───
+        // `:Rename <newname>`, `:LspFormat`, `:Format`, `:LspCodeAction`, `:CodeAction`,
+        // `:lopen`, `:lnext`, `:lprev`, `:lfirst`, `:llast`, `:LspInfo`, `:Anvil [...]`
 
         // Phase 4a–4d2: try the app-level host registry first.
         // Commands live in ex_host_cmds.rs; see host_registry() for the full list.
@@ -1235,7 +1109,7 @@ impl App {
     }
 
     /// `:tabonly` / `:tabo` — close all tabs except the current one.
-    fn do_tabonly(&mut self) {
+    pub(super) fn do_tabonly(&mut self) {
         if self.tabs.len() <= 1 {
             self.status_message = Some("tabonly".into());
             return;
@@ -1296,7 +1170,7 @@ impl App {
 
     /// `:tabs` — show an info popup listing all tabs with their active buffer
     /// name. The `>` marker indicates the active tab.
-    fn do_tabs(&mut self) {
+    pub(super) fn do_tabs(&mut self) {
         let mut lines: Vec<String> = Vec::new();
         for (i, tab) in self.tabs.iter().enumerate() {
             let label = format!("Tab page {}", i + 1);

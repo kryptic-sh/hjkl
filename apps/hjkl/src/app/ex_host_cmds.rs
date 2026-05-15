@@ -725,6 +725,440 @@ impl HostCmd<App> for TablastCmd {
     }
 }
 
+// ── Phase 4f commands ────────────────────────────────────────────────────────
+
+/// Parse a resize argument string (`"+N"`, `"-N"`, or `"N"`) into an i32 delta.
+fn parse_resize_arg(arg: &str) -> Option<i32> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    if let Some(rest) = arg.strip_prefix('+') {
+        rest.trim().parse::<i32>().ok()
+    } else if let Some(rest) = arg.strip_prefix('-') {
+        rest.trim().parse::<i32>().ok().map(|n| -n)
+    } else {
+        arg.parse::<i32>().ok()
+    }
+}
+
+/// `:tabonly` / `:tabo` — close all tabs except the current one.
+pub(crate) struct TabonlyCmd;
+
+impl HostCmd<App> for TabonlyCmd {
+    fn name(&self) -> &'static str {
+        "tabonly"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["tabo"]
+    }
+
+    /// Vim accepts `:tabo` (4 chars); match that minimum.
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_tabonly();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:tabs` — show an info popup listing all tabs.
+pub(crate) struct TabsCmd;
+
+impl HostCmd<App> for TabsCmd {
+    fn name(&self) -> &'static str {
+        "tabs"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Full name length — no standard abbreviation.
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_tabs();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:resize [+|-]N` — adjust focused window height.
+pub(crate) struct ResizeCmd;
+
+impl HostCmd<App> for ResizeCmd {
+    fn name(&self) -> &'static str {
+        "resize"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        6
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Raw
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        if let Some(delta) = parse_resize_arg(args) {
+            app.resize_height(delta);
+            Some(ExEffect::Ok)
+        } else {
+            Some(ExEffect::Error("E: invalid resize argument".into()))
+        }
+    }
+}
+
+/// `:vertical resize [+|-]N` / `:vert res [+|-]N` — adjust focused window width.
+///
+/// `split_name_args` gives name=`"vertical"` (or `"vert"`), args=`"resize +5"` etc.
+/// We strip the leading `resize`/`res` sub-word and parse the delta.
+pub(crate) struct VerticalResizeCmd;
+
+impl HostCmd<App> for VerticalResizeCmd {
+    fn name(&self) -> &'static str {
+        "vertical"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["vert"]
+    }
+
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Raw
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        // args is e.g. "resize +5" or "res +5" or "resize"
+        // Strip the mandatory "resize"/"res" sub-word; defer if absent.
+        let rest = args
+            .strip_prefix("resize")
+            .or_else(|| args.strip_prefix("res"))?;
+        if let Some(delta) = parse_resize_arg(rest) {
+            app.resize_width(delta);
+            Some(ExEffect::Ok)
+        } else {
+            Some(ExEffect::Error("E: invalid resize argument".into()))
+        }
+    }
+}
+
+/// `:Rename <newname>` — LSP symbol rename.
+pub(crate) struct RenameCmd;
+
+impl HostCmd<App> for RenameCmd {
+    fn name(&self) -> &'static str {
+        "Rename"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Full name — uppercase commands have no standard abbreviation.
+    fn min_prefix(&self) -> usize {
+        6
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Raw
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let new_name = args.trim().to_string();
+        if new_name.is_empty() {
+            // TODO: open prompt-based rename UI (Phase 6).
+            Some(ExEffect::Error("E: usage: :Rename <newname>".into()))
+        } else {
+            app.lsp_rename(new_name);
+            Some(ExEffect::Ok)
+        }
+    }
+}
+
+/// `:LspFormat` / `:Format` — LSP whole-file format.
+pub(crate) struct LspFormatCmd;
+
+impl HostCmd<App> for LspFormatCmd {
+    fn name(&self) -> &'static str {
+        "LspFormat"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["Format"]
+    }
+
+    fn min_prefix(&self) -> usize {
+        9
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        // TODO: range formatting when invoked from visual mode (Phase 6).
+        app.lsp_format();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:LspCodeAction` / `:CodeAction` — LSP code actions.
+pub(crate) struct LspCodeActionCmd;
+
+impl HostCmd<App> for LspCodeActionCmd {
+    fn name(&self) -> &'static str {
+        "LspCodeAction"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["CodeAction"]
+    }
+
+    fn min_prefix(&self) -> usize {
+        13
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.lsp_code_actions();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:lopen` — open the diagnostics picker.
+pub(crate) struct LopenCmd;
+
+impl HostCmd<App> for LopenCmd {
+    fn name(&self) -> &'static str {
+        "lopen"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.open_diag_picker();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:lnext` — jump to the next diagnostic.
+pub(crate) struct LnextCmd;
+
+impl HostCmd<App> for LnextCmd {
+    fn name(&self) -> &'static str {
+        "lnext"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.lnext_severity(None);
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:lprev` — jump to the previous diagnostic.
+pub(crate) struct LprevCmd;
+
+impl HostCmd<App> for LprevCmd {
+    fn name(&self) -> &'static str {
+        "lprev"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.lprev_severity(None);
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:lfirst` — jump to the first diagnostic.
+pub(crate) struct LfirstCmd;
+
+impl HostCmd<App> for LfirstCmd {
+    fn name(&self) -> &'static str {
+        "lfirst"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        6
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.ldiag_first();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:llast` — jump to the last diagnostic.
+pub(crate) struct LlastCmd;
+
+impl HostCmd<App> for LlastCmd {
+    fn name(&self) -> &'static str {
+        "llast"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.ldiag_last();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:LspInfo` — display LSP server status.
+pub(crate) struct LspInfoCmd;
+
+impl HostCmd<App> for LspInfoCmd {
+    fn name(&self) -> &'static str {
+        "LspInfo"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        7
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.show_lsp_info();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:Anvil [install|uninstall|update] [name]` — plugin manager.
+///
+/// `split_name_args` gives name=`"Anvil"`, args=`"install foo"` etc.
+pub(crate) struct AnvilCmd;
+
+impl HostCmd<App> for AnvilCmd {
+    fn name(&self) -> &'static str {
+        "Anvil"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Full name — no standard abbreviation.
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Raw
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+            [] => {
+                app.open_anvil_picker();
+                Some(ExEffect::Ok)
+            }
+            ["install", name] => {
+                app.anvil_install(name);
+                Some(ExEffect::Ok)
+            }
+            ["uninstall", name] => {
+                app.anvil_uninstall(name);
+                Some(ExEffect::Ok)
+            }
+            ["update"] => {
+                app.anvil_update_all();
+                Some(ExEffect::Ok)
+            }
+            ["update", name] => {
+                app.anvil_update(name);
+                Some(ExEffect::Ok)
+            }
+            _ => Some(ExEffect::Error(
+                "usage: :Anvil [install|uninstall|update] [name]".into(),
+            )),
+        }
+    }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────────
 
 fn build_registry() -> hjkl_ex::HostRegistry<App> {
@@ -758,6 +1192,21 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(NewCmd));
     reg.add(Box::new(TabfirstCmd));
     reg.add(Box::new(TablastCmd));
+    // Phase 4f
+    reg.add(Box::new(TabonlyCmd));
+    reg.add(Box::new(TabsCmd));
+    reg.add(Box::new(ResizeCmd));
+    reg.add(Box::new(VerticalResizeCmd));
+    reg.add(Box::new(RenameCmd));
+    reg.add(Box::new(LspFormatCmd));
+    reg.add(Box::new(LspCodeActionCmd));
+    reg.add(Box::new(LopenCmd));
+    reg.add(Box::new(LnextCmd));
+    reg.add(Box::new(LprevCmd));
+    reg.add(Box::new(LfirstCmd));
+    reg.add(Box::new(LlastCmd));
+    reg.add(Box::new(LspInfoCmd));
+    reg.add(Box::new(AnvilCmd));
     reg
 }
 

@@ -11547,3 +11547,127 @@ fn colon_tablast_via_host_registry() {
     let last = app.tabs.len() - 1;
     assert_eq!(app.active_tab, last, ":tablast must jump to the last tab");
 }
+
+// ── Phase 4f: host-registry tests ────────────────────────────────────────────
+
+#[test]
+fn colon_tabonly_via_host_registry() {
+    // Two-tab setup: tabonly must close all but the current tab.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 3);
+    // Navigate to middle tab so we aren't on the last one.
+    app.dispatch_ex("tabfirst");
+    app.dispatch_ex("tabnext");
+    assert_eq!(app.active_tab, 1);
+    app.dispatch_ex("tabonly");
+    assert_eq!(app.tabs.len(), 1, ":tabonly must leave exactly one tab");
+    assert_eq!(app.active_tab, 0, ":tabonly must reset active_tab to 0");
+}
+
+#[test]
+fn colon_tabs_via_host_registry() {
+    // Multi-tab setup: :tabs must populate info_popup.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    app.info_popup = None;
+    app.dispatch_ex("tabs");
+    assert!(
+        app.info_popup.is_some(),
+        ":tabs must set info_popup with tab listing"
+    );
+    let popup = app.info_popup.as_ref().unwrap();
+    assert!(popup.contains("Tab page 1"), "popup must list Tab page 1");
+    assert!(popup.contains("Tab page 2"), "popup must list Tab page 2");
+}
+
+#[test]
+fn colon_lnext_via_host_registry() {
+    // No live LSP server — lnext_severity(None) must not panic on empty diag list.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("lnext");
+    // no assertion beyond no-panic
+}
+
+#[test]
+fn colon_lopen_via_host_registry() {
+    // open_diag_picker with no diagnostics: routes through host registry and
+    // sets status_message = "no diagnostics" (empty-state path, no server needed).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("lopen");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no diagnostics"),
+        ":lopen with empty diag list must set status 'no diagnostics', got: {msg}"
+    );
+}
+
+#[test]
+fn colon_resize_via_host_registry() {
+    // Horizontal split: dispatch `resize +5` must grow the focused window.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("sp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 40,
+    };
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    app.dispatch_ex("resize +5");
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    assert!(
+        ratio_after > ratio_before,
+        ":resize +5 must grow focused window ratio: before={ratio_before} after={ratio_after}"
+    );
+}
+
+#[test]
+fn colon_vertical_resize_via_host_registry() {
+    // Vertical split: dispatch `vertical resize +5` must grow focused window width.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("vsp");
+    let rect = ratatui::layout::Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 24,
+    };
+    let fw = app.focused_window();
+    inject_split_rect(app.layout_mut(), fw, rect);
+
+    let ratio_before = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    app.dispatch_ex("vertical resize +5");
+
+    let ratio_after = if let window::LayoutTree::Split { ratio, .. } = app.layout() {
+        *ratio
+    } else {
+        panic!("expected Split");
+    };
+
+    assert!(
+        ratio_after > ratio_before,
+        ":vertical resize +5 must grow focused window width ratio: before={ratio_before} after={ratio_after}"
+    );
+}
