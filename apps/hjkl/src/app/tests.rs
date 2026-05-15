@@ -11058,3 +11058,60 @@ fn p65_replace_mode_overstrike() {
         "Replace-mode overstrike must replace 'h' with 'X'; got {line:?}"
     );
 }
+
+// ── Phase 2b hjkl-ex integration: :e <path> ────────────────────────────────
+
+/// `:e <path>` dispatched via hjkl_ex::try_dispatch must open the file and
+/// make its content visible in the active buffer.  This exercises the
+/// EditFile early-intercept in dispatch_ex introduced in Phase 2b.
+#[test]
+fn colon_e_path_opens_file_via_hjkl_ex() {
+    // Write a temp file with known content.
+    let path = tmp_path("hjkl_ex_2b_edit_test.txt");
+    std::fs::write(&path, "hello from hjkl-ex\n").unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    // dispatch_ex expects a command string without the leading `:`.
+    app.dispatch_ex(&format!("e {}", path.display()));
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["hello from hjkl-ex"],
+        "`:e <path>` must load the file content into the active buffer; got {lines:?}"
+    );
+    let active_path = app
+        .active()
+        .filename
+        .as_deref()
+        .unwrap_or(std::path::Path::new(""));
+    assert_eq!(
+        active_path,
+        path.as_path(),
+        "`:e <path>` must set the active slot filename to the opened path"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `:bd` dispatched via hjkl_ex::try_dispatch on the only slot must reset
+/// the buffer to an empty unnamed scratch (vim parity).
+#[test]
+fn colon_bd_via_hjkl_ex_clears_sole_buffer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "some content");
+    // Mark clean so buffer_delete doesn't refuse.
+    app.active_mut().dirty = false;
+    app.dispatch_ex("bd");
+    let lines = app.active().editor.buffer().lines().to_vec();
+    // After :bd on the last slot the buffer is reset to empty unnamed scratch.
+    assert_eq!(
+        lines,
+        vec![""],
+        "`:bd` on sole buffer must leave an empty scratch; got {lines:?}"
+    );
+    assert!(
+        app.active().filename.is_none(),
+        "`:bd` on sole buffer must clear the filename"
+    );
+}

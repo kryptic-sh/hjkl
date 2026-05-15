@@ -30,6 +30,11 @@ fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
         Src::Ok => ExEffect::Ok,
         Src::Info(s) => ExEffect::Info(s),
         Src::Error(s) => ExEffect::Error(s),
+        // Phase 2b variants are intercepted in dispatch_ex before reaching
+        // this bridge — they should never arrive here.
+        Src::EditFile { .. } | Src::ReadFile { .. } | Src::BufferDelete { .. } => {
+            unreachable!("Phase 2b effects are handled before bridge_ex_effect")
+        }
     }
 }
 
@@ -337,14 +342,6 @@ impl App {
                 self.buffer_prev();
                 return;
             }
-            "bdelete" => {
-                self.buffer_delete(false);
-                return;
-            }
-            "bdelete!" => {
-                self.buffer_delete(true);
-                return;
-            }
             "bfirst" => {
                 self.switch_to(0);
                 return;
@@ -391,19 +388,6 @@ impl App {
                 return;
             }
             _ => {}
-        }
-
-        if cmd == "edit" || cmd == "edit!" || cmd.starts_with("edit ") || cmd.starts_with("edit!") {
-            let force = cmd.starts_with("edit!");
-            let arg = if let Some(rest) = cmd.strip_prefix("edit!") {
-                rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("edit ") {
-                rest.trim()
-            } else {
-                ""
-            };
-            self.do_edit(arg, force);
-            return;
         }
 
         // `:checktime` — check all open buffers for changes on disk.
@@ -672,14 +656,49 @@ impl App {
         }
 
         let active_slot = self.focused_slot_idx();
-        // Try the new hjkl-ex registry first. Phase 1 only handles `:q` /
-        // `:q!`; everything else falls through to the legacy ex::run dispatcher.
-        // Each subsequent phase migrates more commands across.
+        // Try the new hjkl-ex registry first. Phases 1–2 handle an expanding
+        // set of commands; everything else falls through to the legacy
+        // ex::run dispatcher. Each subsequent phase migrates more commands.
         let new_reg = hjkl_ex::default_registry::<TuiHost>();
         let effect = if let Some(eff) =
             hjkl_ex::try_dispatch(&new_reg, &mut self.slots[active_slot].editor, cmd)
         {
-            bridge_ex_effect(eff)
+            // Phase 2b: intercept new effect variants that have no analog in
+            // the legacy ExEffect enum. Handle them here and return early so
+            // they never reach bridge_ex_effect or the match block below.
+            match eff {
+                hjkl_ex::ExEffect::EditFile { path, force } => {
+                    self.do_edit(&path, force);
+                    return;
+                }
+                hjkl_ex::ExEffect::ReadFile { path } => {
+                    // `:r <path>` — delegate to legacy ex::run which calls
+                    // apply_read_file. Reconstruct the canonical form so the
+                    // legacy dispatcher can parse it.
+                    let legacy_cmd = format!("read {path}");
+                    let read_effect = ex::run(&mut self.slots[active_slot].editor, &legacy_cmd);
+                    self.sync_viewport_from_editor();
+                    match read_effect {
+                        ExEffect::Ok => {}
+                        ExEffect::Info(msg) => {
+                            self.status_message = Some(msg);
+                        }
+                        ExEffect::Error(msg) => {
+                            self.status_message = Some(format!("E: {msg}"));
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                hjkl_ex::ExEffect::BufferDelete { force, wipe: _ } => {
+                    // `:bd[!]` / `:bw[!]` — wipe semantics not yet distinct
+                    // from delete in the app layer; treat both as buffer_delete.
+                    // TODO Phase 2c: differentiate wipe (discard swap, remove marks).
+                    self.buffer_delete(force);
+                    return;
+                }
+                other => bridge_ex_effect(other),
+            }
         } else {
             ex::run(&mut self.slots[active_slot].editor, cmd)
         };

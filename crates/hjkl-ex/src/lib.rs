@@ -162,14 +162,12 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_w_with_path_falls_through_to_legacy() {
-        // Phase 2a: handler returns None for non-empty args so the legacy
-        // SaveAs(<path>) arm in hjkl-editor::ex still wins. Phase 2b will
-        // replace this with a path-aware handler that returns Some(SaveAs).
+    fn dispatch_w_with_path_returns_save_as_phase_2b() {
+        // Phase 2b: handler returns Some(SaveAs) for non-empty args.
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
         let result = try_dispatch(&reg, &mut editor, "w /tmp/foo.txt");
-        assert_eq!(result, None);
+        assert_eq!(result, Some(ExEffect::SaveAs("/tmp/foo.txt".into())));
     }
 
     #[test]
@@ -408,12 +406,234 @@ mod tests {
         assert_eq!(try_dispatch(&reg, &mut editor, "red"), Some(ExEffect::Ok));
     }
 
-    // `:re` is ambiguous (redo, read in legacy) — should return None so legacy handles it
+    // `:re` — redo needs min_prefix=3 so doesn't match; read matches (min_prefix=1).
+    // `:re` unambiguously resolves to `:read` with no args → None (no path).
     #[test]
-    fn dispatch_re_returns_none_ambiguous() {
+    fn dispatch_re_resolves_to_read_no_args() {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
-        // `:re` is below min_prefix=3 for redo, and there's no exact match
+        // read_handler returns None when no path given, so try_dispatch returns None.
         assert_eq!(try_dispatch(&reg, &mut editor, "re"), None);
+    }
+
+    // ---- Phase 2b: write with path -----------------------------------------
+
+    #[test]
+    fn dispatch_write_with_path_returns_save_as() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "write foo.txt"),
+            Some(ExEffect::SaveAs("foo.txt".into()))
+        );
+    }
+
+    // ---- Phase 2b: edit ----------------------------------------------------
+
+    #[test]
+    fn dispatch_e_with_path_returns_edit_file() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "e foo.txt"),
+            Some(ExEffect::EditFile {
+                path: "foo.txt".into(),
+                force: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_edit_with_path_returns_edit_file() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "edit src/main.rs"),
+            Some(ExEffect::EditFile {
+                path: "src/main.rs".into(),
+                force: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_e_no_args_returns_edit_file_empty_path() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        // No-arg edit: reload current buffer (empty path, no force).
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "e"),
+            Some(ExEffect::EditFile {
+                path: "".into(),
+                force: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_e_bang_with_path_returns_edit_file_force() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "e! foo.txt"),
+            Some(ExEffect::EditFile {
+                path: "foo.txt".into(),
+                force: true
+            })
+        );
+    }
+
+    // ---- Phase 2b: read ----------------------------------------------------
+
+    #[test]
+    fn dispatch_r_with_path_returns_read_file() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "r LICENSE"),
+            Some(ExEffect::ReadFile {
+                path: "LICENSE".into()
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_read_with_path_returns_read_file() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "read LICENSE"),
+            Some(ExEffect::ReadFile {
+                path: "LICENSE".into()
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_r_no_args_returns_none() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(try_dispatch(&reg, &mut editor, "r"), None);
+    }
+
+    // ---- Phase 2b: bdelete -------------------------------------------------
+
+    #[test]
+    fn dispatch_bd_returns_buffer_delete() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bd"),
+            Some(ExEffect::BufferDelete {
+                force: false,
+                wipe: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bdelete_returns_buffer_delete() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bdelete"),
+            Some(ExEffect::BufferDelete {
+                force: false,
+                wipe: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bd_bang_returns_buffer_delete_force() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bd!"),
+            Some(ExEffect::BufferDelete {
+                force: true,
+                wipe: false
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bdelete_bang_returns_buffer_delete_force() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bdelete!"),
+            Some(ExEffect::BufferDelete {
+                force: true,
+                wipe: false
+            })
+        );
+    }
+
+    // ---- Phase 2b: bwipeout ------------------------------------------------
+
+    #[test]
+    fn dispatch_bw_returns_buffer_wipeout() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bw"),
+            Some(ExEffect::BufferDelete {
+                force: false,
+                wipe: true
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bwipeout_returns_buffer_wipeout() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bwipeout"),
+            Some(ExEffect::BufferDelete {
+                force: false,
+                wipe: true
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bw_bang_returns_buffer_wipeout_force() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bw!"),
+            Some(ExEffect::BufferDelete {
+                force: true,
+                wipe: true
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_bwipeout_bang_returns_buffer_wipeout_force() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "bwipeout!"),
+            Some(ExEffect::BufferDelete {
+                force: true,
+                wipe: true
+            })
+        );
+    }
+
+    // `:r` resolves to `:read` (min_prefix=1); `:re` also resolves to `:read`
+    // since `:redo` requires min_prefix=3.
+    #[test]
+    fn dispatch_r_resolves_to_read_not_redo() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor();
+        // `:r foo` → ReadFile, confirming `:r` means `:read` not `:redo`.
+        assert_eq!(
+            try_dispatch(&reg, &mut editor, "r foo"),
+            Some(ExEffect::ReadFile { path: "foo".into() })
+        );
     }
 }

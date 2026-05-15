@@ -28,18 +28,107 @@ fn quit_force_handler<H: Host>(
 
 // ---- write -----------------------------------------------------------------
 
-/// `:w` / `:write` — save current buffer.
-/// Phase 2a only: defer `:w <path>` to legacy by returning `None` so the
-/// `SaveAs` arm in `hjkl-editor::ex` still wins. Phase 2b replaces this.
+/// `:w` / `:write` — save current buffer, or save to `<path>` when given.
 fn write_handler<H: Host>(
     _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
 ) -> Option<ExEffect> {
-    if args.trim().is_empty() {
+    let path = args.trim();
+    if path.is_empty() {
         Some(ExEffect::Save)
     } else {
-        None
+        Some(ExEffect::SaveAs(path.to_string()))
     }
+}
+
+// ---- edit ------------------------------------------------------------------
+
+/// `:e [path]` / `:edit [path]` — open or reload a file.
+/// Returns `None` (defer to legacy) when no path given — legacy handles
+/// the reload-current-buffer case via app-side logic.
+fn edit_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::EditFile {
+        path: args.trim().to_string(),
+        force: false,
+    })
+}
+
+/// `:e! [path]` / `:edit! [path]` — open or force-reload a file.
+fn edit_force_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::EditFile {
+        path: args.trim().to_string(),
+        force: true,
+    })
+}
+
+// ---- read ------------------------------------------------------------------
+
+/// `:r <path>` / `:read <path>` — insert file contents below cursor row.
+/// Returns `None` when no path is given (vim errors; we defer to legacy).
+fn read_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+) -> Option<ExEffect> {
+    let path = args.trim();
+    if path.is_empty() {
+        None
+    } else {
+        Some(ExEffect::ReadFile {
+            path: path.to_string(),
+        })
+    }
+}
+
+// ---- bdelete / bwipeout ----------------------------------------------------
+
+/// `:bd` / `:bdelete` — close current buffer (no force).
+fn bdelete_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::BufferDelete {
+        force: false,
+        wipe: false,
+    })
+}
+
+/// `:bd!` / `:bdelete!` — close current buffer (force).
+fn bdelete_force_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::BufferDelete {
+        force: true,
+        wipe: false,
+    })
+}
+
+/// `:bw` / `:bwipeout` — wipe current buffer (no force).
+fn bwipeout_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::BufferDelete {
+        force: false,
+        wipe: true,
+    })
+}
+
+/// `:bw!` / `:bwipeout!` — wipe current buffer (force).
+fn bwipeout_force_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+) -> Option<ExEffect> {
+    Some(ExEffect::BufferDelete {
+        force: true,
+        wipe: true,
+    })
 }
 
 /// `:wa` / `:wall` — write all modified buffers.
@@ -265,12 +354,75 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: undo_handler::<H>,
     });
 
-    // `:redo` (min_prefix=3; `:r` is `:read`, `:re` is ambiguous)
+    // `:redo` (min_prefix=3; `:r` resolves to `:read`, `:re` is ambiguous)
     reg.add(ExCommand {
         name: "redo",
         aliases: &[],
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: redo_handler::<H>,
+    });
+
+    // `:edit` / `:e` (min_prefix=1; no other registered command starts with `e`)
+    reg.add(ExCommand {
+        name: "edit",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 1,
+        run: edit_handler::<H>,
+    });
+
+    // `:edit!` / `:e!` (min_prefix=2)
+    reg.add(ExCommand {
+        name: "edit!",
+        aliases: &["e!"],
+        arg_kind: ArgKind::Path,
+        min_prefix: 2,
+        run: edit_force_handler::<H>,
+    });
+
+    // `:read` / `:r` (min_prefix=1; `:re` still ambiguous with `:redo` at min=3)
+    reg.add(ExCommand {
+        name: "read",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 1,
+        run: read_handler::<H>,
+    });
+
+    // `:bdelete` / `:bd` (min_prefix=2)
+    reg.add(ExCommand {
+        name: "bdelete",
+        aliases: &["bd"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2,
+        run: bdelete_handler::<H>,
+    });
+
+    // `:bdelete!` / `:bd!` (min_prefix=3)
+    reg.add(ExCommand {
+        name: "bdelete!",
+        aliases: &["bd!"],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: bdelete_force_handler::<H>,
+    });
+
+    // `:bwipeout` / `:bw` (min_prefix=2)
+    reg.add(ExCommand {
+        name: "bwipeout",
+        aliases: &["bw"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2,
+        run: bwipeout_handler::<H>,
+    });
+
+    // `:bwipeout!` / `:bw!` (min_prefix=3)
+    reg.add(ExCommand {
+        name: "bwipeout!",
+        aliases: &["bw!"],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: bwipeout_force_handler::<H>,
     });
 }
