@@ -11140,3 +11140,108 @@ fn colon_bd_via_hjkl_ex_clears_sole_buffer() {
         "`:bd` on sole buffer must clear the filename"
     );
 }
+
+// ── Phase 4b: host-registry window/tab command tests ────────────────────────
+
+#[test]
+fn colon_split_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    let before = app.layout().leaves().len();
+    app.dispatch_ex("split");
+    assert_eq!(
+        app.layout().leaves().len(),
+        before + 1,
+        ":split must add one leaf"
+    );
+}
+
+#[test]
+fn colon_sp_alias_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    let before = app.layout().leaves().len();
+    app.dispatch_ex("sp");
+    assert_eq!(
+        app.layout().leaves().len(),
+        before + 1,
+        ":sp alias must add one leaf"
+    );
+}
+
+#[test]
+fn colon_vsplit_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    let before = app.layout().leaves().len();
+    app.dispatch_ex("vsplit");
+    assert_eq!(
+        app.layout().leaves().len(),
+        before + 1,
+        ":vsplit must add one leaf"
+    );
+}
+
+#[test]
+fn colon_close_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello");
+    app.dispatch_ex("split");
+    assert_eq!(app.layout().leaves().len(), 2, "setup: need 2 leaves");
+    app.dispatch_ex("close");
+    assert_eq!(
+        app.layout().leaves().len(),
+        1,
+        ":close must collapse back to 1 leaf"
+    );
+}
+
+#[test]
+fn colon_tabnew_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.tabs.len();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), before + 1, ":tabnew must add a tab");
+}
+
+#[test]
+fn colon_tabprev_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabnew");
+    // active_tab = 2; go back one.
+    let before = app.active_tab;
+    app.dispatch_ex("tabprev");
+    assert_eq!(
+        app.active_tab,
+        before - 1,
+        ":tabprev must decrement active_tab"
+    );
+}
+
+#[test]
+fn colon_tabclose_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2, "setup: need 2 tabs");
+    app.dispatch_ex("tabclose");
+    assert_eq!(app.tabs.len(), 1, ":tabclose must remove a tab");
+}
+
+#[test]
+fn colon_only_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "data");
+    app.dispatch_ex("split");
+    app.dispatch_ex("split");
+    assert!(
+        app.layout().leaves().len() >= 2,
+        "setup: need at least 2 leaves"
+    );
+    app.dispatch_ex("only");
+    assert_eq!(
+        app.layout().leaves().len(),
+        1,
+        ":only must leave exactly 1 leaf"
+    );
+}

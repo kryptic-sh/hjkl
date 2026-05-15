@@ -426,32 +426,7 @@ impl App {
             return;
         }
 
-        // `:sp[lit] [file]` — horizontal split.
-        if cmd == "split" || cmd == "sp" || cmd.starts_with("split ") || cmd.starts_with("sp ") {
-            let arg = if let Some(rest) = cmd.strip_prefix("split ") {
-                rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("sp ") {
-                rest.trim()
-            } else {
-                ""
-            };
-            self.do_split(arg);
-            return;
-        }
-
-        // `:vsp[lit] [file]` — vertical split.
-        if cmd == "vsplit" || cmd == "vsp" || cmd.starts_with("vsplit ") || cmd.starts_with("vsp ")
-        {
-            let arg = if let Some(rest) = cmd.strip_prefix("vsplit ") {
-                rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("vsp ") {
-                rest.trim()
-            } else {
-                ""
-            };
-            self.do_vsplit(arg);
-            return;
-        }
+        // `:sp[lit]` / `:vsp[lit]` — migrated to Phase 4b host registry (ex_host_cmds.rs).
 
         // `:vnew` — vertical split with a fresh empty unnamed buffer.
         if cmd == "vnew" {
@@ -459,17 +434,7 @@ impl App {
             return;
         }
 
-        // `:close` / `:clo` — close the focused window.
-        if cmd == "close" || cmd == "clo" {
-            self.close_focused_window();
-            return;
-        }
-
-        // `:only` / `:on` — close all windows except the focused one.
-        if cmd == "only" || cmd == "on" {
-            self.only_focused_window();
-            return;
-        }
+        // `:close` / `:only` — migrated to Phase 4b host registry (ex_host_cmds.rs).
 
         // `:new` — horizontal split with a fresh empty unnamed buffer.
         if cmd == "new" {
@@ -479,40 +444,10 @@ impl App {
 
         // ─── Tab commands ────────────────────────────────────────────────────
 
-        // `:tabnew [file]` / `:tabedit [file]` / `:tabe [file]`
-        if cmd == "tabnew"
-            || cmd.starts_with("tabnew ")
-            || cmd == "tabedit"
-            || cmd.starts_with("tabedit ")
-            || cmd == "tabe"
-            || cmd.starts_with("tabe ")
-        {
-            let arg = if let Some(rest) = cmd.strip_prefix("tabnew ") {
-                rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("tabedit ") {
-                rest.trim()
-            } else if let Some(rest) = cmd.strip_prefix("tabe ") {
-                rest.trim()
-            } else {
-                ""
-            };
-            self.do_tabnew(arg);
-            return;
-        }
-
+        // `:tabnew` / `:tabedit` / `:tabe` — migrated to Phase 4b host registry (ex_host_cmds.rs).
         // `:tabnext` / `:tabn` — migrated to Phase 4a host registry (ex_host_cmds.rs).
-
-        // `:tabprev` / `:tabp` / `:tabN` (uppercase N = previous in vim)
-        if cmd == "tabprev" || cmd == "tabp" || cmd == "tabN" {
-            self.do_tabprev();
-            return;
-        }
-
-        // `:tabclose` / `:tabc`
-        if cmd == "tabclose" || cmd == "tabc" {
-            self.do_tabclose();
-            return;
-        }
+        // `:tabprev` / `:tabp` / `:tabN` — migrated to Phase 4b host registry (ex_host_cmds.rs).
+        // `:tabclose` / `:tabc` — migrated to Phase 4b host registry (ex_host_cmds.rs).
 
         // `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
         if cmd == "tabfirst" || cmd == "tabrewind" || cmd == "tabr" {
@@ -532,12 +467,7 @@ impl App {
             return;
         }
 
-        // `:tabmove [N|+N|-N]` — reorder tabs.
-        if cmd == "tabmove" || cmd.starts_with("tabmove ") {
-            let arg = cmd.strip_prefix("tabmove ").map(str::trim).unwrap_or("");
-            self.do_tabmove(arg);
-            return;
-        }
+        // `:tabmove` — migrated to Phase 4b host registry (ex_host_cmds.rs).
 
         // `:tabs` — show info popup listing all tabs.
         if cmd == "tabs" {
@@ -651,34 +581,15 @@ impl App {
             _ => {}
         }
 
-        // Phase 4a: try the app-level host registry first.
-        // TabNextCmd (and future Phase 4b–4e commands) live here so they can
-        // receive `&mut App` rather than `&mut Editor`.
-        // Only ExEffect::Ok is returned by Phase 4a commands; bridge the rest
-        // for future-proofing. Phase 4a simplification: sync viewport then
-        // return on Ok — no legacy effect match needed.
+        // Phase 4a/4b: try the app-level host registry first.
+        // Phase 4b commands (split, vsplit, close, tabnew, tabprev, tabclose,
+        // tabmove, only) now live here alongside Phase 4a's TabNextCmd.
         {
             let host_reg = ex_host_cmds::build_host_registry();
             if let Some(eff) = hjkl_ex::try_dispatch_host(&host_reg, self, cmd) {
                 self.sync_viewport_from_editor();
-                match eff {
-                    hjkl_ex::ExEffect::Ok => return,
-                    hjkl_ex::ExEffect::Info(msg) => {
-                        if msg.contains('\n') {
-                            self.info_popup = Some(msg);
-                        } else {
-                            self.status_message = Some(msg);
-                        }
-                        return;
-                    }
-                    hjkl_ex::ExEffect::Error(msg) => {
-                        self.status_message = Some(format!("E: {msg}"));
-                        return;
-                    }
-                    // For any other variant, fall through to legacy handling.
-                    // This path is unreachable in Phase 4a but guards Phase 4b.
-                    _ => {}
-                }
+                self.handle_ex_effect(bridge_ex_effect(eff));
+                return;
             }
         }
 
@@ -736,6 +647,15 @@ impl App {
         // appears stuck at its pre-`:` position even though the engine
         // moved it.
         self.sync_viewport_from_editor();
+        self.handle_ex_effect(effect);
+    }
+
+    /// Apply the side-effects encoded in a legacy [`ExEffect`] value.
+    ///
+    /// Extracted from `dispatch_ex` so both the host-registry path and the
+    /// editor-registry path can share identical effect handling without
+    /// duplicating the match arms.
+    fn handle_ex_effect(&mut self, effect: ExEffect) {
         match effect {
             ExEffect::None => {}
             ExEffect::Ok => {}
@@ -821,7 +741,7 @@ impl App {
     ///
     /// With no argument: duplicates the current window (same slot, same
     /// scroll).  With a filename: opens a new slot in the upper half.
-    fn do_split(&mut self, arg: &str) {
+    pub(super) fn do_split(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
         let cur_slot = self.windows[focused]
@@ -876,7 +796,7 @@ impl App {
     /// With no argument: duplicates the current window (same slot, same
     /// scroll).  With a filename: opens a new slot in the left half.
     /// New window goes on the left (vim convention).
-    fn do_vsplit(&mut self, arg: &str) {
+    pub(super) fn do_vsplit(&mut self, arg: &str) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
         let cur_slot = self.windows[focused]
@@ -1560,7 +1480,7 @@ impl App {
     ///
     /// No arg → move to end. `N` → absolute 0-based position. `+N`/`-N` →
     /// relative. Out-of-range positions are clamped silently.
-    fn do_tabmove(&mut self, arg: &str) {
+    pub(super) fn do_tabmove(&mut self, arg: &str) {
         let len = self.tabs.len();
         let target = if arg.is_empty() {
             // No arg: move to end.
@@ -1621,7 +1541,7 @@ impl App {
     /// Open a new tab. With a file argument: load the file into a new slot.
     /// Without: open an empty unnamed buffer. The new tab gets its own layout
     /// and focused window; windows and slots are shared globally.
-    fn do_tabnew(&mut self, arg: &str) {
+    pub(super) fn do_tabnew(&mut self, arg: &str) {
         use crate::app::STATUS_LINE_HEIGHT;
         use crate::app::window::{LayoutTree, Tab, Window};
         use crate::host::TuiHost;
@@ -1719,7 +1639,7 @@ impl App {
     }
 
     /// `:tabprev` / `:tabp` / `:tabN` — cycle to the previous tab (wraps).
-    fn do_tabprev(&mut self) {
+    pub(super) fn do_tabprev(&mut self) {
         if self.tabs.len() <= 1 {
             self.status_message = Some("only one tab".into());
             return;
@@ -1736,7 +1656,7 @@ impl App {
     ///
     /// Refuses when only one tab remains (E444). On success, drops all windows
     /// that belonged exclusively to this tab and adjusts `active_tab`.
-    fn do_tabclose(&mut self) {
+    pub(super) fn do_tabclose(&mut self) {
         if self.tabs.len() <= 1 {
             self.status_message = Some("E444: Cannot close last tab".into());
             return;
