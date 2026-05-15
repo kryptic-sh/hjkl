@@ -21,6 +21,7 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 mod buffer_ops;
 mod event_loop;
 mod ex_dispatch;
+pub(crate) mod ex_host_cmds;
 pub(crate) mod keymap;
 pub mod lsp_glue;
 mod picker_glue;

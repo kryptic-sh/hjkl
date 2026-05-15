@@ -10,7 +10,7 @@
 
 pub use effect::ExEffect;
 pub use range::{LineRange, parse_range};
-pub use registry::{ArgKind, ExCommand, Registry};
+pub use registry::{ArgKind, ExCommand, HostCmd, HostRegistry, Registry};
 
 mod builtins;
 mod effect;
@@ -54,6 +54,30 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
     let cmd = reg.resolve(name)?;
     // Handler may return None to defer this invocation to the legacy path.
     (cmd.run)(editor, args, range)
+}
+
+/// Try to dispatch `input` (without the leading `:`) through a host registry.
+///
+/// Returns `Some(ExEffect)` when a host command claimed the invocation,
+/// `None` when no command matched or the matched command deferred.
+///
+/// Unlike [`try_dispatch`] this function does not parse a range prefix — host
+/// commands in Phase 4 don't accept ranges.
+pub fn try_dispatch_host<Ctx>(
+    reg: &HostRegistry<Ctx>,
+    ctx: &mut Ctx,
+    input: &str,
+) -> Option<ExEffect> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let (name, args) = parse::split_name_args(input);
+    if name.is_empty() {
+        return None;
+    }
+    let cmd = reg.resolve(name)?;
+    cmd.run(ctx, args)
 }
 
 /// Handle bare `:N` (jump to line N) and bare `:{range}` (jump to range start).
@@ -1021,5 +1045,113 @@ mod tests {
         let result = try_dispatch(&reg, &mut editor, "set tabstop=4");
         assert_eq!(result, Some(ExEffect::Ok));
         assert_eq!(editor.settings().tabstop, 4);
+    }
+
+    // ---- try_dispatch_host tests -------------------------------------------
+
+    struct TestCtx {
+        counter: i32,
+    }
+
+    struct PingCmd;
+    impl HostCmd<TestCtx> for PingCmd {
+        fn name(&self) -> &'static str {
+            "ping"
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["pn"]
+        }
+        fn min_prefix(&self) -> usize {
+            2
+        }
+        fn run(&self, ctx: &mut TestCtx, _args: &str) -> Option<ExEffect> {
+            ctx.counter += 1;
+            Some(ExEffect::Ok)
+        }
+    }
+
+    struct EchoCmd;
+    impl HostCmd<TestCtx> for EchoCmd {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        fn min_prefix(&self) -> usize {
+            4
+        }
+        fn run(&self, _ctx: &mut TestCtx, args: &str) -> Option<ExEffect> {
+            if args.is_empty() {
+                None
+            } else {
+                Some(ExEffect::Info(args.to_string()))
+            }
+        }
+    }
+
+    fn make_host_registry() -> HostRegistry<TestCtx> {
+        let mut reg = HostRegistry::new();
+        reg.add(Box::new(PingCmd));
+        reg.add(Box::new(EchoCmd));
+        reg
+    }
+
+    #[test]
+    fn try_dispatch_host_claims_exact_name() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        let result = try_dispatch_host(&reg, &mut ctx, "ping");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(ctx.counter, 1);
+    }
+
+    #[test]
+    fn try_dispatch_host_claims_alias() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        let result = try_dispatch_host(&reg, &mut ctx, "pn");
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(ctx.counter, 1);
+    }
+
+    #[test]
+    fn try_dispatch_host_claims_prefix() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        // "pi" meets min_prefix=2 for "ping"
+        let result = try_dispatch_host(&reg, &mut ctx, "pi");
+        assert_eq!(result, Some(ExEffect::Ok));
+    }
+
+    #[test]
+    fn try_dispatch_host_returns_none_on_miss() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        let result = try_dispatch_host(&reg, &mut ctx, "unknown");
+        assert!(result.is_none());
+        assert_eq!(ctx.counter, 0);
+    }
+
+    #[test]
+    fn try_dispatch_host_returns_none_on_empty_input() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        assert!(try_dispatch_host(&reg, &mut ctx, "").is_none());
+        assert!(try_dispatch_host(&reg, &mut ctx, "   ").is_none());
+    }
+
+    #[test]
+    fn try_dispatch_host_passes_args() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        let result = try_dispatch_host(&reg, &mut ctx, "echo hello world");
+        assert_eq!(result, Some(ExEffect::Info("hello world".to_string())));
+    }
+
+    #[test]
+    fn try_dispatch_host_defers_when_command_returns_none() {
+        let reg = make_host_registry();
+        let mut ctx = TestCtx { counter: 0 };
+        // echo with no args returns None (defers)
+        let result = try_dispatch_host(&reg, &mut ctx, "echo");
+        assert!(result.is_none());
     }
 }

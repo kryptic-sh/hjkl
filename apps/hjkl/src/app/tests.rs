@@ -2597,6 +2597,31 @@ fn tabnext_wraps_at_end() {
     assert_eq!(app.active_tab, 0, "tabnext must wrap to the first tab");
 }
 
+// ── Phase 4a: host-registry tabnext tests ───────────────────────────────────
+
+#[test]
+fn colon_tabnext_via_host_registry() {
+    // Two-tab setup: verify tabnext advances active_tab via host registry.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 1);
+    // Go back to 0 so we can advance forward.
+    app.active_tab = 0;
+    app.dispatch_ex("tabnext");
+    assert_eq!(app.active_tab, 1, "tabnext must advance active_tab");
+}
+
+#[test]
+fn colon_tabn_alias_via_host_registry() {
+    // Same test using the `tabn` alias.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.active_tab, 1);
+    app.active_tab = 0;
+    app.dispatch_ex("tabn");
+    assert_eq!(app.active_tab, 1, "tabn alias must advance active_tab");
+}
+
 #[test]
 fn tabprev_wraps_at_start() {
     let mut app = App::new(None, false, None, None).unwrap();

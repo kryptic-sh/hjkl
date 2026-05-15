@@ -38,7 +38,7 @@ fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
     }
 }
 
-use super::{App, DiskState, keymap};
+use super::{App, DiskState, ex_host_cmds, keymap};
 use crate::keymap_actions::AppAction;
 
 /// Parse a resize argument string into a line/column delta.
@@ -500,11 +500,7 @@ impl App {
             return;
         }
 
-        // `:tabnext` / `:tabn`
-        if cmd == "tabnext" || cmd == "tabn" {
-            self.do_tabnext();
-            return;
-        }
+        // `:tabnext` / `:tabn` — migrated to Phase 4a host registry (ex_host_cmds.rs).
 
         // `:tabprev` / `:tabp` / `:tabN` (uppercase N = previous in vim)
         if cmd == "tabprev" || cmd == "tabp" || cmd == "tabN" {
@@ -653,6 +649,37 @@ impl App {
                 return;
             }
             _ => {}
+        }
+
+        // Phase 4a: try the app-level host registry first.
+        // TabNextCmd (and future Phase 4b–4e commands) live here so they can
+        // receive `&mut App` rather than `&mut Editor`.
+        // Only ExEffect::Ok is returned by Phase 4a commands; bridge the rest
+        // for future-proofing. Phase 4a simplification: sync viewport then
+        // return on Ok — no legacy effect match needed.
+        {
+            let host_reg = ex_host_cmds::build_host_registry();
+            if let Some(eff) = hjkl_ex::try_dispatch_host(&host_reg, self, cmd) {
+                self.sync_viewport_from_editor();
+                match eff {
+                    hjkl_ex::ExEffect::Ok => return,
+                    hjkl_ex::ExEffect::Info(msg) => {
+                        if msg.contains('\n') {
+                            self.info_popup = Some(msg);
+                        } else {
+                            self.status_message = Some(msg);
+                        }
+                        return;
+                    }
+                    hjkl_ex::ExEffect::Error(msg) => {
+                        self.status_message = Some(format!("E: {msg}"));
+                        return;
+                    }
+                    // For any other variant, fall through to legacy handling.
+                    // This path is unreachable in Phase 4a but guards Phase 4b.
+                    _ => {}
+                }
+            }
         }
 
         let active_slot = self.focused_slot_idx();
@@ -1678,7 +1705,7 @@ impl App {
     }
 
     /// `:tabnext` / `:tabn` — cycle to the next tab (wraps).
-    fn do_tabnext(&mut self) {
+    pub(super) fn do_tabnext(&mut self) {
         if self.tabs.len() <= 1 {
             self.status_message = Some("only one tab".into());
             return;

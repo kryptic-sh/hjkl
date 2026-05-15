@@ -101,6 +101,210 @@ impl<H: Host> Default for Registry<H> {
     }
 }
 
+// ── Host-side registry ────────────────────────────────────────────────────────
+//
+// `HostCmd<Ctx>` is agnostic of the editor stack.  `apps/hjkl` supplies its
+// `App` type as `Ctx`.  Commands here can mutate any application state, not
+// just the editor.
+//
+// Range support is intentionally omitted for Phase 4 — the host-side commands
+// migrating in 4b–4e (tab/window/picker/mapping ops) don't accept ranges.
+
+/// Application-side ex command.  `Ctx` is opaque to hjkl-ex — `apps/hjkl`
+/// supplies its `App` type.  Commands here can mutate any application state,
+/// not just the editor.
+pub trait HostCmd<Ctx>: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+    fn min_prefix(&self) -> usize {
+        1
+    }
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+    /// Returns `Some(effect)` to claim the invocation, `None` to defer.
+    fn run(&self, ctx: &mut Ctx, args: &str) -> Option<crate::effect::ExEffect>;
+}
+
+/// Registry of host-level ex commands, generic over an opaque context type.
+pub struct HostRegistry<Ctx> {
+    cmds: Vec<Box<dyn HostCmd<Ctx>>>,
+}
+
+impl<Ctx> HostRegistry<Ctx> {
+    pub fn new() -> Self {
+        Self { cmds: Vec::new() }
+    }
+
+    /// Register a command.  Returns `&mut Self` for chaining.
+    pub fn add(&mut self, cmd: Box<dyn HostCmd<Ctx>>) -> &mut Self {
+        self.cmds.push(cmd);
+        self
+    }
+
+    /// Resolve `name` to a registered host command.
+    ///
+    /// Priority:
+    /// 1. Exact match against `cmd.name()`
+    /// 2. Exact match against any alias in `cmd.aliases()`
+    /// 3. Unambiguous prefix match against `cmd.name()` (input length >= `min_prefix()`)
+    pub fn resolve(&self, name: &str) -> Option<&dyn HostCmd<Ctx>> {
+        if name.is_empty() {
+            return None;
+        }
+        // 1. Exact name match
+        if let Some(c) = self.cmds.iter().find(|c| c.name() == name) {
+            return Some(c.as_ref());
+        }
+        // 2. Exact alias match
+        if let Some(c) = self.cmds.iter().find(|c| c.aliases().contains(&name)) {
+            return Some(c.as_ref());
+        }
+        // 3. Unambiguous prefix match
+        let candidates: Vec<&dyn HostCmd<Ctx>> = self
+            .cmds
+            .iter()
+            .filter(|c| c.name().starts_with(name) && name.len() >= c.min_prefix())
+            .map(|c| c.as_ref())
+            .collect();
+        if candidates.len() == 1 {
+            Some(candidates[0])
+        } else {
+            None
+        }
+    }
+
+    /// Iterate over all registered host commands.
+    pub fn iter(&self) -> impl Iterator<Item = &dyn HostCmd<Ctx>> {
+        self.cmds.iter().map(|c| c.as_ref())
+    }
+}
+
+impl<Ctx> Default for HostRegistry<Ctx> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod host_registry_tests {
+    use super::*;
+    use crate::effect::ExEffect;
+
+    struct TestCtx {
+        value: i32,
+    }
+
+    struct IncrCmd;
+    impl HostCmd<TestCtx> for IncrCmd {
+        fn name(&self) -> &'static str {
+            "increment"
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["incr"]
+        }
+        fn min_prefix(&self) -> usize {
+            3
+        }
+        fn run(&self, ctx: &mut TestCtx, _args: &str) -> Option<ExEffect> {
+            ctx.value += 1;
+            Some(ExEffect::Ok)
+        }
+    }
+
+    struct ArgCmd;
+    impl HostCmd<TestCtx> for ArgCmd {
+        fn name(&self) -> &'static str {
+            "argcmd"
+        }
+        fn min_prefix(&self) -> usize {
+            6
+        }
+        fn run(&self, _ctx: &mut TestCtx, args: &str) -> Option<ExEffect> {
+            if args.is_empty() {
+                None
+            } else {
+                Some(ExEffect::Info(args.to_string()))
+            }
+        }
+    }
+
+    fn make_registry() -> HostRegistry<TestCtx> {
+        let mut reg = HostRegistry::new();
+        reg.add(Box::new(IncrCmd));
+        reg.add(Box::new(ArgCmd));
+        reg
+    }
+
+    #[test]
+    fn resolve_exact_name() {
+        let reg = make_registry();
+        assert!(reg.resolve("increment").is_some());
+        assert!(reg.resolve("argcmd").is_some());
+    }
+
+    #[test]
+    fn resolve_exact_alias() {
+        let reg = make_registry();
+        assert!(reg.resolve("incr").is_some());
+    }
+
+    #[test]
+    fn resolve_prefix() {
+        let reg = make_registry();
+        // "inc" meets min_prefix=3 for "increment" and is unambiguous
+        assert!(reg.resolve("inc").is_some());
+        assert_eq!(reg.resolve("inc").unwrap().name(), "increment");
+    }
+
+    #[test]
+    fn resolve_prefix_too_short() {
+        let reg = make_registry();
+        // "in" is shorter than min_prefix=3 for "increment"
+        assert!(reg.resolve("in").is_none());
+    }
+
+    #[test]
+    fn resolve_unknown_returns_none() {
+        let reg = make_registry();
+        assert!(reg.resolve("nonexistent").is_none());
+        assert!(reg.resolve("").is_none());
+    }
+
+    #[test]
+    fn run_mutates_context() {
+        let reg = make_registry();
+        let mut ctx = TestCtx { value: 0 };
+        let cmd = reg.resolve("increment").unwrap();
+        let eff = cmd.run(&mut ctx, "");
+        assert_eq!(eff, Some(ExEffect::Ok));
+        assert_eq!(ctx.value, 1);
+    }
+
+    #[test]
+    fn run_returns_none_to_defer() {
+        let reg = make_registry();
+        let mut ctx = TestCtx { value: 0 };
+        let cmd = reg.resolve("argcmd").unwrap();
+        // no args → defers
+        let eff = cmd.run(&mut ctx, "");
+        assert!(eff.is_none());
+        // with args → claims
+        let eff2 = cmd.run(&mut ctx, "hello");
+        assert_eq!(eff2, Some(ExEffect::Info("hello".to_string())));
+    }
+
+    #[test]
+    fn iter_yields_all_commands() {
+        let reg = make_registry();
+        let names: Vec<&str> = reg.iter().map(|c| c.name()).collect();
+        assert!(names.contains(&"increment"));
+        assert!(names.contains(&"argcmd"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
