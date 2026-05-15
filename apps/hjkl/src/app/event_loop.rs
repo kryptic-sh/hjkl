@@ -1002,16 +1002,24 @@ impl App {
                                 }
                             }
 
-                            // Left-click on the tab bar switches to that tab.
-                            if let mouse::Zone::TabBar { tab_idx } =
-                                mouse::hit_test_zone(self, me.column, me.row)
-                            {
-                                if tab_idx != self.active_tab {
-                                    self.sync_viewport_from_editor();
-                                    self.active_tab = tab_idx;
-                                    self.sync_viewport_to_editor();
+                            // Left-click on the tab bar / buffer line switches
+                            // to that tab or buffer.
+                            match mouse::hit_test_zone(self, me.column, me.row) {
+                                mouse::Zone::TabBar { tab_idx } => {
+                                    if tab_idx != self.active_tab {
+                                        self.sync_viewport_from_editor();
+                                        self.active_tab = tab_idx;
+                                        self.sync_viewport_to_editor();
+                                    }
+                                    continue;
                                 }
-                                continue;
+                                mouse::Zone::BufferLine { slot_idx } => {
+                                    if slot_idx != self.focused_slot_idx() {
+                                        self.switch_to(slot_idx);
+                                    }
+                                    continue;
+                                }
+                                _ => {}
                             }
 
                             if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
@@ -1110,6 +1118,17 @@ impl App {
                                         self.sync_viewport_from_editor();
                                         self.active_tab = tab_idx;
                                         self.sync_viewport_to_editor();
+                                    }
+                                    build_tab_menu(self.tabs.len() > 1)
+                                }
+                                mouse::Zone::BufferLine { slot_idx } => {
+                                    // Switch to the clicked buffer first so the
+                                    // tab menu's actions operate on it. Buffer
+                                    // line shares the tab menu for v1 — close /
+                                    // close-others / close-{left,right} have
+                                    // intuitive buffer-line semantics too.
+                                    if slot_idx != self.focused_slot_idx() {
+                                        self.switch_to(slot_idx);
                                     }
                                     build_tab_menu(self.tabs.len() > 1)
                                 }

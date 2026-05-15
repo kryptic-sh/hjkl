@@ -261,6 +261,10 @@ pub enum Zone {
     },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
+    /// On the buffer line (one entry per open slot) — shown when
+    /// `app.slots.len() > 1`. Sits at row 0 by itself, or at row 1
+    /// when the tab bar is also visible.
+    BufferLine { slot_idx: usize },
     /// Outside every known zone (e.g. the status line).
     None,
 }
@@ -317,35 +321,97 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
     ranges
 }
 
+/// Compute the x-position ranges for each entry on the buffer line — the
+/// one-row strip rendered above the editor when `app.slots.len() > 1`.
+///
+/// Mirrors `render::buffer_line` (separator `│` between entries, label
+/// formatted as ` name ` or ` name+ ` when dirty).
+pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
+    let max_width = bar_width as usize;
+    let mut ranges = Vec::new();
+    let mut used = 0usize;
+
+    for (i, slot) in app.slots().iter().enumerate() {
+        let base_name = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[No Name]");
+        let label = if slot.dirty {
+            format!(" {}+ ", base_name)
+        } else {
+            format!(" {} ", base_name)
+        };
+
+        let sep_len = if i == 0 { 0 } else { 1 }; // single '│' between entries
+        let entry_width = sep_len + label.len();
+
+        if used + entry_width > max_width {
+            break;
+        }
+
+        let start = (used + sep_len) as u16;
+        let end = (used + entry_width) as u16;
+        ranges.push((start, end));
+        used += entry_width;
+    }
+
+    ranges
+}
+
 /// Classify a terminal cell `(col, row)` into a [`Zone`].
 ///
 /// Resolution order:
-/// 1. If `row == 0` and `app.tabs.len() > 1` → tab bar row; map `col` to a
-///    tab index using the same geometry as the renderer.
-/// 2. Otherwise, try [`hit_test_window`] to find a containing window.
+/// 1. If on the tab bar row (only present when `app.tabs.len() > 1`) → map
+///    `col` to a tab index.
+/// 2. If on the buffer line row (only present when `app.slots.len() > 1`,
+///    sits below the tab bar when both are shown) → map `col` to a slot index.
+/// 3. Otherwise, try [`hit_test_window`] to find a containing window.
 ///    - If the click x-offset is inside the gutter → [`Zone::Gutter`].
 ///    - If the click translates to a doc position → [`Zone::Code`].
-/// 3. Fallback → [`Zone::None`].
+/// 4. Fallback → [`Zone::None`].
 pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
-    // ── 1. Tab bar ────────────────────────────────────────────────────────
-    if app.tabs.len() > 1 && row == 0 {
-        // Determine how wide the terminal is; use a generous fallback.
-        let bar_width = app
-            .windows
-            .iter()
-            .filter_map(|w| w.as_ref())
-            .filter_map(|w| w.last_rect)
-            .map(|r| r.width)
-            .max()
-            .unwrap_or(80);
+    let show_tab_bar = app.tabs.len() > 1;
+    let show_buffer_line = app.slots().len() > 1;
+    let tab_bar_row: Option<u16> = if show_tab_bar { Some(0) } else { None };
+    let buffer_line_row: Option<u16> = if show_buffer_line {
+        Some(if show_tab_bar { 1 } else { 0 })
+    } else {
+        None
+    };
 
+    // Terminal width fallback for bar-geometry math (windows publish their
+    // last_rect every frame; before the first render we use 80 as a safe
+    // default — the same value `render::frame` would compute from the area).
+    let bar_width = app
+        .windows
+        .iter()
+        .filter_map(|w| w.as_ref())
+        .filter_map(|w| w.last_rect)
+        .map(|r| r.width)
+        .max()
+        .unwrap_or(80);
+
+    // ── 1. Tab bar ────────────────────────────────────────────────────────
+    if Some(row) == tab_bar_row {
         let ranges = tab_x_ranges(app, bar_width);
         for (i, (start, end)) in ranges.iter().enumerate() {
             if col >= *start && col < *end {
                 return Zone::TabBar { tab_idx: i };
             }
         }
-        // Click on the tab bar but not on any label (gap / overflow).
+        return Zone::None;
+    }
+
+    // ── 2. Buffer line ────────────────────────────────────────────────────
+    if Some(row) == buffer_line_row {
+        let ranges = buffer_line_x_ranges(app, bar_width);
+        for (i, (start, end)) in ranges.iter().enumerate() {
+            if col >= *start && col < *end {
+                return Zone::BufferLine { slot_idx: i };
+            }
+        }
         return Zone::None;
     }
 
@@ -610,5 +676,102 @@ mod tests {
         // Click on the second text cell maps to col=1.
         let got2 = cell_to_doc(&app, 0, 5, 0);
         assert_eq!(got2, Some((0, 1)), "click on cell 5 should map to col 1");
+    }
+
+    // ── Buffer line zone ──────────────────────────────────────────────────────
+
+    /// Build an app with N tempfile-backed slots so the buffer line renders.
+    fn make_app_with_n_slots(n: usize) -> (App, Vec<std::path::PathBuf>) {
+        let mut paths = Vec::new();
+        for i in 0..n {
+            let p = std::env::temp_dir().join(format!("hjkl_mouse_bl_{i}_{}.txt", rand_suffix()));
+            std::fs::write(&p, "content\n").unwrap();
+            paths.push(p);
+        }
+        let mut app = App::new(Some(paths[0].clone()), false, None, None).unwrap();
+        for p in &paths[1..] {
+            app.dispatch_ex(&format!("e {}", p.display()));
+        }
+        // Window 0's last_rect — needed so hit_test_zone's bar_width fallback
+        // doesn't kick in for tests that exercise wide bars.
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+        }
+        (app, paths)
+    }
+
+    fn rand_suffix() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{nanos:x}")
+    }
+
+    fn cleanup_paths(paths: &[std::path::PathBuf]) {
+        for p in paths {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Three slots with predictable filenames; buffer_line_x_ranges must produce
+    /// one (start, end) entry per slot and the entries must be contiguous, with
+    /// a 1-cell `│` gap between them.
+    #[test]
+    fn buffer_line_x_ranges_three_slots() {
+        let (app, paths) = make_app_with_n_slots(3);
+        let ranges = buffer_line_x_ranges(&app, 200);
+        cleanup_paths(&paths);
+
+        assert_eq!(ranges.len(), 3, "one range per slot: got {ranges:?}");
+        // First entry starts at 0 (no leading separator).
+        assert_eq!(ranges[0].0, 0, "first entry starts at col 0");
+        // Subsequent entries leave a 1-cell gap for the `│` separator.
+        for i in 1..ranges.len() {
+            assert_eq!(
+                ranges[i].0,
+                ranges[i - 1].1 + 1,
+                "entry {i} must start one cell after the previous entry's end (separator gap)"
+            );
+        }
+    }
+
+    /// With multiple slots and no extra tabs, the buffer line sits at row 0 and
+    /// a click on a slot label returns `Zone::BufferLine { slot_idx }`.
+    #[test]
+    fn hit_test_zone_buffer_line_at_row_zero_when_no_tabs() {
+        let (app, paths) = make_app_with_n_slots(3);
+        let ranges = buffer_line_x_ranges(&app, 200);
+        // Click on the first cell of each slot's range.
+        for (i, (start, _)) in ranges.iter().enumerate() {
+            let zone = hit_test_zone(&app, *start, 0);
+            assert_eq!(
+                zone,
+                Zone::BufferLine { slot_idx: i },
+                "click at col {start}, row 0 should be BufferLine {{ slot_idx: {i} }} (got {zone:?})"
+            );
+        }
+        cleanup_paths(&paths);
+    }
+
+    /// With one slot and no extra tabs, row 0 is the editor — no buffer line.
+    #[test]
+    fn hit_test_zone_no_buffer_line_with_single_slot() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+        }
+        // Need viewport published so cell_to_doc has dims.
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.width = 80;
+            vp.height = 24;
+            vp.text_width = 80;
+        }
+        let zone = hit_test_zone(&app, 10, 0);
+        if let Zone::BufferLine { .. } = zone {
+            panic!("expected no buffer line zone for single-slot app");
+        }
     }
 }
