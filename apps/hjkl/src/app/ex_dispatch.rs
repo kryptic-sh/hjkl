@@ -134,18 +134,8 @@ impl App {
             cmd
         };
 
-        if cmd == "perf" {
-            self.perf_overlay = !self.perf_overlay;
-            self.recompute_hits = 0;
-            self.recompute_throttled = 0;
-            self.recompute_runs = 0;
-            self.status_message = Some(if self.perf_overlay {
-                "perf overlay: on (counters reset)".into()
-            } else {
-                "perf overlay: off".into()
-            });
-            return;
-        }
+        // `:perf` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
+
         if let Some(rest) = cmd.strip_prefix("set background=") {
             match rest.trim() {
                 "dark" => {
@@ -169,64 +159,16 @@ impl App {
             }
         }
 
-        if cmd == "picker" {
-            self.open_picker();
-            return;
-        }
-
-        // `:rg [pattern]` — open the ripgrep content-search picker.
-        if cmd == "rg" || cmd.starts_with("rg ") {
-            let pattern = cmd.strip_prefix("rg ").map(str::trim);
-            self.open_grep_picker(pattern);
-            return;
-        }
-
-        // E1 — `:b [num|name]` — must be matched BEFORE the `bn`/`bp` block.
-        if cmd == "b" || cmd.starts_with("b ") {
-            let arg = cmd.strip_prefix("b ").map(str::trim).unwrap_or("").trim();
-            if arg.is_empty() {
-                self.status_message = Some("E94: No matching buffer".into());
-            } else if arg.chars().all(|c| c.is_ascii_digit()) {
-                let n: usize = arg.parse().unwrap_or(0);
-                if n == 0 || n > self.slots.len() {
-                    self.status_message = Some(format!("E86: Buffer {n} does not exist"));
-                } else {
-                    self.switch_to(n - 1);
-                }
-            } else {
-                let arg_lower = arg.to_lowercase();
-                let matches: Vec<usize> = self
-                    .slots
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| {
-                        s.filename
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .map(|n| n.to_lowercase().contains(&arg_lower))
-                            .unwrap_or(false)
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                match matches.len() {
-                    0 => {
-                        self.status_message = Some(format!("E94: No matching buffer for {arg}"));
-                    }
-                    1 => {
-                        self.switch_to(matches[0]);
-                    }
-                    _ => {
-                        self.status_message = Some(format!("E93: More than one match for {arg}"));
-                    }
-                }
-            }
-            return;
-        }
+        // `:picker` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
+        // `:rg [pattern]` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
+        // `:b [num|name]` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
         // Multi-buffer commands — canonical names from COMMAND_NAMES table.
-        // NOTE: bnext, bprevious/bNext, bfirst, blast, buffers/ls/files, clipboard
-        // are handled by HostCmd impls in ex_host_cmds.rs (Phase 4c).
+        // NOTE: bnext, bprevious/bNext, bfirst, blast, buffers/ls/files, clipboard,
+        // bpicker, b <arg> are handled by HostCmd impls in ex_host_cmds.rs (Phase 4c/4d2).
+        // NOTE: wall/qall/qall!/wqall/wqall! are KEPT here — hjkl-ex returns
+        // single-buffer Save/Quit effects which diverge from the app's write_all /
+        // quit_all semantics that iterate all slots or set exit_requested directly.
         match cmd {
             // TODO(4c): `:b#` cannot be migrated — split_name_args treats the
             // trailing `#` as an arg, so the resolved name is never "b#".
@@ -256,18 +198,10 @@ impl App {
                 self.write_quit_all(true);
                 return;
             }
-            "bpicker" => {
-                self.open_buffer_picker();
-                return;
-            }
             _ => {}
         }
 
-        // `:checktime` — check all open buffers for changes on disk.
-        if cmd == "checktime" {
-            self.checktime_all();
-            return;
-        }
+        // `:checktime` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
         // `:write[!]` — intercept before the engine to enforce disk-state guard.
         if cmd == "write"
@@ -300,20 +234,9 @@ impl App {
         }
 
         // `:sp[lit]` / `:vsp[lit]` — migrated to Phase 4b host registry (ex_host_cmds.rs).
-
-        // `:vnew` — vertical split with a fresh empty unnamed buffer.
-        if cmd == "vnew" {
-            self.do_vnew();
-            return;
-        }
-
+        // `:vnew` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
         // `:close` / `:only` — migrated to Phase 4b host registry (ex_host_cmds.rs).
-
-        // `:new` — horizontal split with a fresh empty unnamed buffer.
-        if cmd == "new" {
-            self.do_new();
-            return;
-        }
+        // `:new` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
         // ─── Tab commands ────────────────────────────────────────────────────
 
@@ -321,18 +244,8 @@ impl App {
         // `:tabnext` / `:tabn` — migrated to Phase 4a host registry (ex_host_cmds.rs).
         // `:tabprev` / `:tabp` / `:tabN` — migrated to Phase 4b host registry (ex_host_cmds.rs).
         // `:tabclose` / `:tabc` — migrated to Phase 4b host registry (ex_host_cmds.rs).
-
-        // `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
-        if cmd == "tabfirst" || cmd == "tabrewind" || cmd == "tabr" {
-            self.do_tabfirst();
-            return;
-        }
-
-        // `:tablast` — jump to the last tab.
-        if cmd == "tablast" {
-            self.do_tablast();
-            return;
-        }
+        // `:tabfirst` / `:tabrewind` / `:tabr` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
+        // `:tablast` — migrated to Phase 4d2 host registry (ex_host_cmds.rs).
 
         // `:tabonly` / `:tabo` — close all tabs except the current one.
         if cmd == "tabonly" || cmd == "tabo" {
@@ -454,12 +367,11 @@ impl App {
             _ => {}
         }
 
-        // Phase 4a/4b: try the app-level host registry first.
-        // Phase 4b commands (split, vsplit, close, tabnew, tabprev, tabclose,
-        // tabmove, only) now live here alongside Phase 4a's TabNextCmd.
+        // Phase 4a–4d2: try the app-level host registry first.
+        // Commands live in ex_host_cmds.rs; see host_registry() for the full list.
         {
-            let host_reg = ex_host_cmds::build_host_registry();
-            if let Some(eff) = hjkl_ex::try_dispatch_host(&host_reg, self, cmd) {
+            let host_reg = ex_host_cmds::host_registry();
+            if let Some(eff) = hjkl_ex::try_dispatch_host(host_reg, self, cmd) {
                 self.sync_viewport_from_editor();
                 self.handle_ex_effect(bridge_ex_effect(eff));
                 return;
@@ -720,7 +632,7 @@ impl App {
     }
 
     /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
-    fn do_vnew(&mut self) {
+    pub(super) fn do_vnew(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
         let (top_row, top_col) = {
@@ -799,7 +711,7 @@ impl App {
     /// `:new` — open a horizontal split with a fresh empty unnamed buffer.
     ///
     /// New window appears on top (a), existing window stays below (b).
-    fn do_new(&mut self) {
+    pub(super) fn do_new(&mut self) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         let focused = self.focused_window();
         let (top_row, top_col) = {
@@ -1294,7 +1206,7 @@ impl App {
     // ─── Phase 2 Tab helpers ──────────────────────────────────────────────────
 
     /// `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
-    fn do_tabfirst(&mut self) {
+    pub(super) fn do_tabfirst(&mut self) {
         if self.active_tab == 0 {
             let m = self.tabs.len();
             self.status_message = Some(format!("tab 1/{m}"));
@@ -1308,7 +1220,7 @@ impl App {
     }
 
     /// `:tablast` — jump to the last tab.
-    fn do_tablast(&mut self) {
+    pub(super) fn do_tablast(&mut self) {
         let last = self.tabs.len() - 1;
         if self.active_tab == last {
             let m = self.tabs.len();

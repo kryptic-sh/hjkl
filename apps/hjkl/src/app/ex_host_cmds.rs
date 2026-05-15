@@ -1,6 +1,8 @@
-//! Phase 4a host-registry commands: app-level ex commands that need `&mut App`.
+//! Phase 4a–4d2 host-registry commands: app-level ex commands that need `&mut App`.
 //!
-//! Phase 4b–4e will add the bulk of app-level commands here.
+//! Phase 4e will add more commands here.
+
+use std::sync::LazyLock;
 
 use hjkl_ex::{ArgKind, ExEffect, HostCmd};
 
@@ -409,15 +411,327 @@ impl HostCmd<App> for ClipboardCmd {
     }
 }
 
-/// Build the host registry containing all Phase 4 app-level commands.
-/// Subsequent phases extend this function.
-///
-/// Phase 4a note: the registry is constructed per-dispatch call (cheap at 1
-/// command). Phase 4d-ish should cache via `std::sync::LazyLock` once command
-/// count grows.
-pub(crate) fn build_host_registry() -> hjkl_ex::HostRegistry<App> {
+// ── Phase 4d2 commands ───────────────────────────────────────────────────────
+
+/// `:perf` — toggle perf overlay and reset counters.
+pub(crate) struct PerfCmd;
+
+impl HostCmd<App> for PerfCmd {
+    fn name(&self) -> &'static str {
+        "perf"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.perf_overlay = !app.perf_overlay;
+        app.recompute_hits = 0;
+        app.recompute_throttled = 0;
+        app.recompute_runs = 0;
+        app.status_message = Some(if app.perf_overlay {
+            "perf overlay: on (counters reset)".into()
+        } else {
+            "perf overlay: off".into()
+        });
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:picker` — open the fuzzy file picker.
+pub(crate) struct PickerCmd;
+
+impl HostCmd<App> for PickerCmd {
+    fn name(&self) -> &'static str {
+        "picker"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        6
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.open_picker();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:rg [pattern]` — open the ripgrep content-search picker.
+pub(crate) struct RgCmd;
+
+impl HostCmd<App> for RgCmd {
+    fn name(&self) -> &'static str {
+        "rg"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        2
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Path
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let pattern = if args.is_empty() { None } else { Some(args) };
+        app.open_grep_picker(pattern);
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:b [num|name]` — switch to a buffer by 1-based index or filename fragment.
+pub(crate) struct BCmd;
+
+impl HostCmd<App> for BCmd {
+    fn name(&self) -> &'static str {
+        "b"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// min_prefix=1 so `:b <arg>` resolves; `:b#` is excluded by exact match
+    /// (the legacy arm keeps that).
+    fn min_prefix(&self) -> usize {
+        1
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Buffer
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let arg = args.trim();
+        if arg.is_empty() {
+            return Some(ExEffect::Error("E94: No matching buffer".into()));
+        }
+        if arg.chars().all(|c| c.is_ascii_digit()) {
+            let n: usize = arg.parse().unwrap_or(0);
+            if n == 0 || n > app.slots.len() {
+                return Some(ExEffect::Error(format!("E86: Buffer {n} does not exist")));
+            }
+            app.switch_to(n - 1);
+        } else {
+            let arg_lower = arg.to_lowercase();
+            let matches: Vec<usize> = app
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| {
+                    s.filename
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.to_lowercase().contains(&arg_lower))
+                        .unwrap_or(false)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            match matches.len() {
+                0 => {
+                    return Some(ExEffect::Error(format!(
+                        "E94: No matching buffer for {arg}"
+                    )));
+                }
+                1 => {
+                    app.switch_to(matches[0]);
+                }
+                _ => {
+                    return Some(ExEffect::Error(format!(
+                        "E93: More than one match for {arg}"
+                    )));
+                }
+            }
+        }
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:bpicker` — open the buffer picker.
+pub(crate) struct BpickerCmd;
+
+impl HostCmd<App> for BpickerCmd {
+    fn name(&self) -> &'static str {
+        "bpicker"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        6
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.open_buffer_picker();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:checktime` — reload buffers that changed on disk.
+pub(crate) struct ChecktimeCmd;
+
+impl HostCmd<App> for ChecktimeCmd {
+    fn name(&self) -> &'static str {
+        "checktime"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.checktime_all();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
+pub(crate) struct VnewCmd;
+
+impl HostCmd<App> for VnewCmd {
+    fn name(&self) -> &'static str {
+        "vnew"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_vnew();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:new` — open a horizontal split with a fresh empty unnamed buffer.
+pub(crate) struct NewCmd;
+
+impl HostCmd<App> for NewCmd {
+    fn name(&self) -> &'static str {
+        "new"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        3
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_new();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:tabfirst` / `:tabrewind` / `:tabr` — jump to the first tab.
+pub(crate) struct TabfirstCmd;
+
+impl HostCmd<App> for TabfirstCmd {
+    fn name(&self) -> &'static str {
+        "tabfirst"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["tabrewind", "tabr"]
+    }
+
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_tabfirst();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:tablast` — jump to the last tab.
+pub(crate) struct TablastCmd;
+
+impl HostCmd<App> for TablastCmd {
+    fn name(&self) -> &'static str {
+        "tablast"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        4
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.do_tablast();
+        Some(ExEffect::Ok)
+    }
+}
+
+// ── Registry ─────────────────────────────────────────────────────────────────
+
+fn build_registry() -> hjkl_ex::HostRegistry<App> {
     let mut reg = hjkl_ex::HostRegistry::new();
+    // Phase 4a
     reg.add(Box::new(TabNextCmd));
+    // Phase 4b
     reg.add(Box::new(SplitCmd));
     reg.add(Box::new(VsplitCmd));
     reg.add(Box::new(CloseCmd));
@@ -426,12 +740,31 @@ pub(crate) fn build_host_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(TabcloseCmd));
     reg.add(Box::new(TabmoveCmd));
     reg.add(Box::new(OnlyCmd));
-    // Phase 4c: buffer-nav commands.
+    // Phase 4c
     reg.add(Box::new(BnextCmd));
     reg.add(Box::new(BprevCmd));
     reg.add(Box::new(BfirstCmd));
     reg.add(Box::new(BlastCmd));
     reg.add(Box::new(BuffersCmd));
     reg.add(Box::new(ClipboardCmd));
+    // Phase 4d2
+    reg.add(Box::new(PerfCmd));
+    reg.add(Box::new(PickerCmd));
+    reg.add(Box::new(RgCmd));
+    reg.add(Box::new(BCmd));
+    reg.add(Box::new(BpickerCmd));
+    reg.add(Box::new(ChecktimeCmd));
+    reg.add(Box::new(VnewCmd));
+    reg.add(Box::new(NewCmd));
+    reg.add(Box::new(TabfirstCmd));
+    reg.add(Box::new(TablastCmd));
     reg
+}
+
+/// Static host registry — built once on first access, reused for every dispatch.
+static HOST_REGISTRY: LazyLock<hjkl_ex::HostRegistry<App>> = LazyLock::new(build_registry);
+
+/// Return a reference to the static host registry.
+pub(crate) fn host_registry() -> &'static hjkl_ex::HostRegistry<App> {
+    &HOST_REGISTRY
 }

@@ -11428,3 +11428,122 @@ fn colon_clipboard_via_host_registry() {
         .unwrap_or_default();
     assert!(!msg.is_empty(), ":clipboard must produce output");
 }
+
+// ── Phase 4d2: misc host-registry tests ──────────────────────────────────────
+
+#[test]
+fn colon_perf_toggles_overlay_on() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(!app.perf_overlay, "perf_overlay must start off");
+    app.dispatch_ex("perf");
+    assert!(app.perf_overlay, ":perf must enable perf_overlay");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("on"), ":perf status must say 'on'");
+}
+
+#[test]
+fn colon_perf_toggles_overlay_off() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.perf_overlay = true;
+    app.dispatch_ex("perf");
+    assert!(!app.perf_overlay, ":perf must disable perf_overlay");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("off"), ":perf status must say 'off'");
+}
+
+#[test]
+fn colon_picker_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none(), "picker must start None");
+    app.dispatch_ex("picker");
+    assert!(app.picker.is_some(), ":picker must open the picker");
+}
+
+#[test]
+fn colon_rg_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("rg");
+    assert!(app.picker.is_some(), ":rg must open the grep picker");
+}
+
+#[test]
+fn colon_rg_with_pattern_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("rg fn main");
+    assert!(
+        app.picker.is_some(),
+        ":rg <pattern> must open the grep picker"
+    );
+}
+
+#[test]
+fn colon_b_numeric_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    // slots are 0-indexed internally; :b 2 means slot index 1
+    app.dispatch_ex("b 2");
+    assert_eq!(app.active_index(), 1, ":b 2 must switch to slot index 1");
+}
+
+#[test]
+fn colon_b_nonexistent_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    app.dispatch_ex("b nonexistent_buffer_xyz");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("E94") || msg.contains("No matching"),
+        ":b nonexistent must set error status"
+    );
+}
+
+#[test]
+fn colon_bpicker_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    assert!(app.picker.is_none());
+    app.dispatch_ex("bpicker");
+    assert!(app.picker.is_some(), ":bpicker must open the buffer picker");
+}
+
+#[test]
+fn colon_checktime_via_host_registry() {
+    // checktime_all should not panic on a fresh app
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("checktime");
+    // no assertion beyond no-panic; status_message may or may not be set
+}
+
+#[test]
+fn colon_vnew_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.slots.len();
+    app.dispatch_ex("vnew");
+    assert!(app.slots.len() > before, ":vnew must add a new buffer slot");
+}
+
+#[test]
+fn colon_new_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let before = app.slots.len();
+    app.dispatch_ex("new");
+    assert!(app.slots.len() > before, ":new must add a new buffer slot");
+}
+
+#[test]
+fn colon_tabfirst_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // add a second tab so tabfirst has work to do
+    app.dispatch_ex("tabnew");
+    assert!(app.active_tab > 0 || app.tabs.len() > 1);
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0, ":tabfirst must jump to tab 0");
+}
+
+#[test]
+fn colon_tablast_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    app.dispatch_ex("tabfirst");
+    assert_eq!(app.active_tab, 0);
+    app.dispatch_ex("tablast");
+    let last = app.tabs.len() - 1;
+    assert_eq!(app.active_tab, last, ":tablast must jump to the last tab");
+}
