@@ -989,6 +989,15 @@ impl App {
                         MouseEventKind::Down(MouseButton::Left) => {
                             use crate::app::mouse;
 
+                            // Dismiss any LSP hover popup — the click obsoletes
+                            // the rest-on-symbol state. Without this, a popup
+                            // armed at the previous mouse position can leak its
+                            // cells over the post-click render (e.g. clicking a
+                            // menu's "Go to Definition" item leaves a stale
+                            // popup floating over the destination buffer).
+                            self.hover_popup = None;
+                            self.hover_timer = None;
+
                             // ── Phase 9: border-drag hit-test ─────────────────
                             // Check BEFORE context-menu and window-click logic so
                             // a border click never accidentally focuses a window.
@@ -1239,6 +1248,10 @@ impl App {
                             use crate::app::mouse;
                             use hjkl_clipboard::{Capabilities, MimeType, Selection};
 
+                            // Dismiss hover popup — same rationale as left-click.
+                            self.hover_popup = None;
+                            self.hover_timer = None;
+
                             // Find the target window + doc position.
                             let Some(win_id) = mouse::hit_test_window(self, me.column, me.row)
                             else {
@@ -1288,6 +1301,10 @@ impl App {
                         MouseEventKind::Down(MouseButton::Right) => {
                             use crate::app::mouse;
                             use crate::menu::{ContextMenu, build_code_menu, build_tab_menu};
+
+                            // Dismiss hover popup — same rationale as left-click.
+                            self.hover_popup = None;
+                            self.hover_timer = None;
                             let zone = mouse::hit_test_zone(self, me.column, me.row);
                             let items = match zone {
                                 mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
