@@ -49,3 +49,6 @@
 [submodule "crates/hjkl-picker-tui"]
 	path = crates/hjkl-picker-tui
 	url = https://github.com/kryptic-sh/hjkl-picker-tui.git
+[submodule "crates/hjkl-theme"]
+	path = crates/hjkl-theme
+	url = https://github.com/kryptic-sh/hjkl-theme.git
