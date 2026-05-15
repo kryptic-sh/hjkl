@@ -67,7 +67,7 @@
 "@markup.strong"                  = { fg = "$fg", modifiers = ["bold"] }
 "@markup.strikethrough"           = { fg = "$comment", modifiers = ["strikethrough"] }
 "@markup.raw"                     = { fg = "$string" }
-"@markup.raw.block"               = { fg = "$string" }
+"@markup.raw.block"               = { bg = "$codeblock_bg" }
 "@markup.link"                    = { fg = "$blue", modifiers = ["underline"] }
 "@markup.link.label"              = { fg = "$blue" }
 "@markup.link.url"                = { fg = "$comment", modifiers = ["underline"] }
@@ -93,13 +93,17 @@
 "@comment.marker.tail.warn"       = { fg = "$accent", modifiers = ["italic"] }
 
 [palette]
-bg          = "#0b0d10"
-fg          = "#e5e9f0"
-accent      = "#bb9af7"
-blue        = "#7aa2f7"
-orange      = "#ff9e64"
-keyword     = "#c792ea"
-string      = "#a3e88a"
-number      = "#f78c6c"
-comment     = "#8597a3"
-punctuation = "#8b95a7"
+bg           = "#0b0d10"
+fg           = "#e5e9f0"
+accent       = "#bb9af7"
+blue         = "#7aa2f7"
+orange       = "#ff9e64"
+keyword      = "#c792ea"
+string       = "#a3e88a"
+number       = "#f78c6c"
+comment      = "#8597a3"
+punctuation  = "#8b95a7"
+# Slightly elevated panel tint for fenced/indented code blocks. Sits two
+# steps off `bg` so it reads as "different layer" without fighting the
+# surrounding prose for attention.
+codeblock_bg = "#1a1f29"

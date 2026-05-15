@@ -314,6 +314,24 @@ mod tests {
     /// strikethrough modifier — hjkl-theme accepts the `"strikethrough"`
     /// token in `modifiers = […]`, an earlier draft of this theme used
     /// `"italic"` as a stand-in.
+    /// Regression: `@markup.raw.block` must carry a `bg` so the layered
+    /// resolver in `hjkl-buffer 0.6.1+` can tint markdown fenced/indented
+    /// code blocks underneath the injected language's `fg`-only spans.
+    /// Without a `bg`, the broad raw-block span contributes nothing and
+    /// code blocks look identical to surrounding prose.
+    #[test]
+    fn markup_raw_block_has_bg_for_code_block_tint() {
+        let theme = AppTheme::default_dark();
+        let spec = theme
+            .syntax
+            .style("@markup.raw.block")
+            .expect("must resolve");
+        assert!(
+            spec.bg.is_some(),
+            "@markup.raw.block must set a bg so layered resolver can tint code blocks"
+        );
+    }
+
     #[test]
     fn markup_strikethrough_uses_strikethrough_modifier() {
         let theme = AppTheme::default_dark();

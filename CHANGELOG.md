@@ -8,6 +8,31 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-05-16
+
+### Added
+
+- Markdown fenced/indented code blocks now render with a subtle tinted
+  background. `@markup.raw.block` carries `bg = $codeblock_bg` (a panel tint two
+  steps off the editor bg), and the layered resolver in `hjkl-buffer` 0.6.1 lets
+  that bg shine through under the injected language's `fg`-only spans. Same
+  visual as vim/Helix's layered hi-group model.
+
+### Changed
+
+- `crates/hjkl-buffer` bumped 0.6.0 → 0.6.1. `resolve_span_style` now layers
+  every overlapping span (broadest-first `Style::patch` merge) instead of
+  picking the single narrowest one. Narrower spans still win for every field
+  they set; unset fields fall through to broader spans. This is the contract
+  that makes the code-block tint possible without bloating every injected
+  language's captures.
+
+### Tests
+
+- `markup_raw_block_has_bg_for_code_block_tint` pins the requirement that the
+  theme entry sets `bg` (without which the new layered resolver has nothing to
+  layer).
+
 ## [0.18.1] - 2026-05-16
 
 ### Fixed
@@ -2171,7 +2196,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.2...HEAD
+[0.18.2]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...v0.17.1
