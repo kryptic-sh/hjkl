@@ -361,6 +361,88 @@ fn unmap_removes_from_trie() {
     assert_eq!(replay.len(), 1, "unbound key should be in replay");
 }
 
+// ── Phase 4d1: extracted handler smoke tests ────────────────────────────
+
+#[test]
+fn colon_nmap_via_extracted_handler() {
+    // dispatch_ex("nmap <leader>x :w<CR>") must store the binding in
+    // app_keymap and add a UserKeymapRecord.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap <leader>x :w<CR>");
+    assert!(
+        !app.user_keymap_records.is_empty(),
+        "record should be stored after nmap via extracted handler"
+    );
+    // Verify the trie picked it up: build the leader+x chord and look it up.
+    use crate::app::keymap::HjklMode as Mode;
+    use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    let leader = app.config.editor.leader;
+    let leader_ev = KmEvent::new(KmCode::Char(leader), KmMods::NONE);
+    let x_ev = KmEvent::new(KmCode::Char('x'), KmMods::NONE);
+    let mut replay = Vec::new();
+    // First key (<leader>) should be Pending.
+    let pending = app.dispatch_keymap_in_mode(leader_ev, 1, &mut replay, Mode::Normal);
+    assert!(
+        pending,
+        "<leader> should be pending (chord not yet complete)"
+    );
+    // Second key (x) should complete and be consumed.
+    let consumed = app.dispatch_keymap_in_mode(x_ev, 1, &mut replay, Mode::Normal);
+    assert!(consumed, "<leader>x should be consumed by trie");
+}
+
+#[test]
+fn colon_unmap_via_extracted_handler() {
+    // Register a mapping then unmap it; binding must be gone from the trie.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap a b");
+    app.dispatch_ex("unmap a");
+
+    use crate::app::keymap::HjklMode as Mode;
+    use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
+    let km_ev = KmEvent::new(KmCode::Char('a'), KmMods::NONE);
+    let mut replay = Vec::new();
+    let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
+    assert!(
+        !consumed,
+        "unmapped `a` should be unbound after unmap via extracted handler"
+    );
+}
+
+#[test]
+fn colon_mapclear_via_extracted_handler() {
+    // Register two Normal-mode bindings, then mapclear; both must be gone.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap a b");
+    app.dispatch_ex("nmap c d");
+    assert_eq!(
+        app.user_keymap_records.len(),
+        2,
+        "two records before mapclear"
+    );
+    app.dispatch_ex("mapclear");
+    assert!(
+        app.user_keymap_records.is_empty(),
+        "user_keymap_records should be empty after mapclear via extracted handler"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("cleared"), "status should confirm clear");
+}
+
+#[test]
+fn colon_map_list_via_extracted_handler() {
+    // Register a binding then dispatch bare `map`; info_popup must appear.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap p q");
+    app.dispatch_ex("map");
+    assert!(
+        app.info_popup.is_some(),
+        "info_popup should be set after bare `map` via extracted handler"
+    );
+    let popup = app.info_popup.as_deref().unwrap_or("");
+    assert!(popup.contains('p'), "popup should list the `p` binding");
+}
+
 // ── App::new tests ──────────────────────────────────────────────────────
 
 #[test]

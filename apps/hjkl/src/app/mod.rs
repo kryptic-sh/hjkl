@@ -24,6 +24,7 @@ mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
 pub(crate) mod keymap;
 pub mod lsp_glue;
+pub(crate) mod mappings_dispatch;
 mod picker_glue;
 mod prompt;
 mod syntax_glue;
