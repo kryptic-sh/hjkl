@@ -1002,6 +1002,18 @@ impl App {
                                 }
                             }
 
+                            // Left-click on the tab bar switches to that tab.
+                            if let mouse::Zone::TabBar { tab_idx } =
+                                mouse::hit_test_zone(self, me.column, me.row)
+                            {
+                                if tab_idx != self.active_tab {
+                                    self.sync_viewport_from_editor();
+                                    self.active_tab = tab_idx;
+                                    self.sync_viewport_to_editor();
+                                }
+                                continue;
+                            }
+
                             if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
                                 // Focus the clicked window if it differs.
                                 let current_focus = self.focused_window();
