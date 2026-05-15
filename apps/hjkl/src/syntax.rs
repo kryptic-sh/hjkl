@@ -122,14 +122,21 @@ enum Msg {
     Quit,
 }
 
-/// Shared slot the main thread drops new requests into. The worker
-/// pulls one message at a time; if a `Parse` is already pending and a
-/// new `Parse` arrives, the old one is replaced (latest-wins
-/// coalescing). Control messages (`SetLanguage`, `SetTheme`, `Reset`,
-/// `Quit`) are queued in `controls` so they aren't dropped.
+/// Maximum number of parse requests allowed in the queue at once.
+/// Per-buffer deduplication ensures this is rarely reached in practice
+/// (scroll spam replaces, not appends). The cap is a safety net.
+const PARSE_QUEUE_CAP: usize = 8;
+
+/// Shared slot the main thread drops new requests into. Parse requests
+/// are held in a FIFO per-buffer-deduped queue (latest-wins per buffer
+/// id, FIFO across buffer ids). Control messages (`SetLanguage`,
+/// `SetTheme`, `Reset`, `Quit`) are queued in `controls` so they are
+/// never dropped.
 struct Pending {
-    /// `Some` when a Parse is queued. Replaced on each new submit.
-    parse: Option<ParseRequest>,
+    /// FIFO of parse requests. Per-buffer deduped: submitting a request
+    /// for buffer A replaces any existing entry for A rather than
+    /// appending. Capped at [`PARSE_QUEUE_CAP`] total entries.
+    parse_queue: std::collections::VecDeque<ParseRequest>,
     /// FIFO of control messages (everything that is not a Parse).
     controls: std::collections::VecDeque<Msg>,
 }
@@ -137,13 +144,34 @@ struct Pending {
 impl Pending {
     fn new() -> Self {
         Self {
-            parse: None,
+            parse_queue: std::collections::VecDeque::new(),
             controls: std::collections::VecDeque::new(),
         }
     }
 
     fn has_work(&self) -> bool {
-        self.parse.is_some() || !self.controls.is_empty()
+        !self.parse_queue.is_empty() || !self.controls.is_empty()
+    }
+
+    /// Enqueue a parse request with per-buffer-id deduplication.
+    ///
+    /// - If a request for `req.buffer_id` is already in the queue,
+    ///   replace it in-place (latest wins for each buffer).
+    /// - If the queue is at capacity and there is no existing entry for
+    ///   this buffer, evict the oldest entry before pushing.
+    fn push_parse(&mut self, req: ParseRequest) {
+        // Replace existing entry for the same buffer id if present.
+        for slot in self.parse_queue.iter_mut() {
+            if slot.buffer_id == req.buffer_id {
+                *slot = req;
+                return;
+            }
+        }
+        // No existing entry — evict oldest if at cap.
+        if self.parse_queue.len() >= PARSE_QUEUE_CAP {
+            self.parse_queue.pop_front();
+        }
+        self.parse_queue.push_back(req);
     }
 }
 
@@ -200,12 +228,13 @@ impl SyntaxWorker {
         self.enqueue_control(Msg::SetTheme(theme));
     }
 
-    /// Submit a parse job. If a previous job is still pending, it's
-    /// replaced (latest-wins). Returns immediately.
+    /// Submit a parse job. Per-buffer deduplication: if a request for
+    /// the same buffer is already pending it is replaced in-place.
+    /// Across different buffers the queue is FIFO. Returns immediately.
     fn submit(&self, req: ParseRequest) {
         let (lock, cvar) = &*self.pending;
         let mut p = lock.lock().expect("syntax pending mutex poisoned");
-        p.parse = Some(req);
+        p.push_parse(req);
         cvar.notify_one();
     }
 
@@ -213,12 +242,34 @@ impl SyntaxWorker {
     /// one. Earlier results are discarded — they'd just be overwritten
     /// by the latest install anyway, and this keeps the install path
     /// O(1) per frame regardless of backlog depth.
+    #[allow(dead_code)]
     pub fn try_recv_latest(&self) -> Option<RenderOutput> {
         let mut latest: Option<RenderOutput> = None;
         while let Ok(out) = self.rx.try_recv() {
             latest = Some(out);
         }
         latest
+    }
+
+    /// Drain all available render results, returning them all (one per
+    /// buffer_id that completed). Unlike [`Self::try_recv_latest`] this
+    /// does not discard earlier results — required so pre-warmed results
+    /// for non-active buffers can be routed to the right slot cache.
+    pub fn try_recv_all(&self) -> Vec<RenderOutput> {
+        let mut results = Vec::new();
+        while let Ok(out) = self.rx.try_recv() {
+            // Keep the latest per buffer_id; if the same buffer produced
+            // multiple outputs since the last drain, only the last matters.
+            if let Some(existing) = results
+                .iter_mut()
+                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id)
+            {
+                *existing = out;
+            } else {
+                results.push(out);
+            }
+        }
+        results
     }
 
     /// Wait up to `timeout` for the next result, then drain anything
@@ -288,7 +339,11 @@ fn worker_loop(
             if let Some(c) = p.controls.pop_front() {
                 c
             } else {
-                Msg::Parse(p.parse.take().expect("has_work() implies parse present"))
+                Msg::Parse(
+                    p.parse_queue
+                        .pop_front()
+                        .expect("has_work() implies parse_queue non-empty"),
+                )
             }
         };
 
@@ -942,10 +997,27 @@ impl SyntaxLayer {
     /// Drain the most recent render result the worker has produced (if
     /// any). Older results are discarded — only the latest matters for
     /// install. Updates `last_perf` as a side effect.
+    ///
+    /// Kept for use in perf-smoke tests; production code drains via
+    /// [`Self::take_all_results`] so multi-buffer results are routed.
+    #[allow(dead_code)]
     pub fn take_result(&mut self) -> Option<RenderOutput> {
         let out = self.worker.try_recv_latest()?;
         self.last_perf = out.perf;
         Some(out)
+    }
+
+    /// Drain all render results the worker has produced since the last
+    /// drain (one per buffer_id that completed). Returns them in an
+    /// unspecified order. Updates `last_perf` from the last result in the
+    /// vec if any are present. Used when pre-warming non-active buffers so
+    /// each result can be routed to the correct slot cache.
+    pub fn take_all_results(&mut self) -> Vec<RenderOutput> {
+        let results = self.worker.try_recv_all();
+        if let Some(last) = results.last() {
+            self.last_perf = last.perf;
+        }
+        results
     }
 
     /// Block up to `timeout` for the worker's next result, then drain
