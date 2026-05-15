@@ -1392,6 +1392,85 @@ impl App {
         self.hover_timer = None;
     }
 
+    /// Dispatch a middle mouse button down at terminal cell `(col, row)`
+    /// based on the zone it lands in:
+    ///
+    /// - Code / Gutter → X11/Wayland primary-selection paste at the click
+    ///   position (silent no-op on platforms without primary selection).
+    /// - TabBar → close that tab (vim parity: `:tabclose` on the clicked tab).
+    /// - BufferLine → close that buffer (`:bdelete` on the clicked slot —
+    ///   refuses with a status message when the buffer is dirty).
+    /// - None → no-op.
+    pub(crate) fn middle_click(&mut self, col: u16, row: u16) {
+        match mouse::hit_test_zone(self, col, row) {
+            mouse::Zone::TabBar { tab_idx } => {
+                // Switch to the clicked tab so do_tabclose targets it,
+                // then close.
+                if tab_idx != self.active_tab {
+                    self.sync_viewport_from_editor();
+                    self.active_tab = tab_idx;
+                    self.sync_viewport_to_editor();
+                }
+                self.do_tabclose();
+            }
+            mouse::Zone::BufferLine { slot_idx } => {
+                // Switch to the clicked slot so buffer_delete targets it.
+                if slot_idx != self.focused_slot_idx() {
+                    self.switch_to(slot_idx);
+                }
+                self.buffer_delete(false);
+            }
+            mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
+                self.middle_click_paste_primary(col, row);
+            }
+            mouse::Zone::None => {}
+        }
+    }
+
+    /// Primary-selection paste at terminal cell `(col, row)`. Pulled out
+    /// of [`Self::middle_click`] so the Code-zone path is independently
+    /// expressible (and so the X11/Wayland-only branch is grep-able).
+    fn middle_click_paste_primary(&mut self, col: u16, row: u16) {
+        use hjkl_clipboard::{Capabilities, MimeType, Selection};
+
+        let Some(win_id) = mouse::hit_test_window(self, col, row) else {
+            return;
+        };
+        let Some((doc_row, doc_col)) = mouse::cell_to_doc(self, win_id, col, row) else {
+            return;
+        };
+
+        // Read primary selection BEFORE any mut borrows of self.
+        let primary_text: Option<String> = {
+            let cb = self.active().editor.host().clipboard();
+            cb.filter(|cb| {
+                cb.capabilities().contains(Capabilities::PRIMARY)
+                    && cb.capabilities().contains(Capabilities::READ)
+            })
+            .and_then(|cb| {
+                cb.get(Selection::Primary, MimeType::Text)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+            })
+        };
+
+        let current_focus = self.focused_window();
+        if win_id != current_focus {
+            self.sync_viewport_from_editor();
+            self.set_focused_window(win_id);
+            self.sync_viewport_to_editor();
+        }
+
+        self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+        self.sync_after_engine_mutation();
+
+        if let Some(text) = primary_text {
+            self.active_mut().editor.set_yank(text);
+            self.active_mut().editor.paste_after(1);
+            self.sync_after_engine_mutation();
+        }
+    }
+
     /// Focus the window under `(col, row)` and move its cursor to the
     /// clicked doc-position. Used at the top of the right-click handler
     /// so menu actions (Go to Definition, Rename, etc.) operate on the

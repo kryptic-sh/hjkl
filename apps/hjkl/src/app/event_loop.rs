@@ -1232,56 +1232,8 @@ impl App {
                         // selection; we silently no-op when the clipboard
                         // backend does not report `Capabilities::PRIMARY`.
                         MouseEventKind::Down(MouseButton::Middle) => {
-                            use crate::app::mouse;
-                            use hjkl_clipboard::{Capabilities, MimeType, Selection};
-
-                            // Dismiss hover popup — same rationale as left-click.
-                            self.hover_popup = None;
-                            self.hover_timer = None;
-
-                            // Find the target window + doc position.
-                            let Some(win_id) = mouse::hit_test_window(self, me.column, me.row)
-                            else {
-                                continue;
-                            };
-                            let Some((doc_row, doc_col)) =
-                                mouse::cell_to_doc(self, win_id, me.column, me.row)
-                            else {
-                                continue;
-                            };
-
-                            // Read primary selection first (before any mut borrows).
-                            // No-op when the backend does not support PRIMARY.
-                            let primary_text: Option<String> = {
-                                let cb = self.active().editor.host().clipboard();
-                                cb.filter(|cb| {
-                                    cb.capabilities().contains(Capabilities::PRIMARY)
-                                        && cb.capabilities().contains(Capabilities::READ)
-                                })
-                                .and_then(|cb| {
-                                    cb.get(Selection::Primary, MimeType::Text)
-                                        .ok()
-                                        .and_then(|b| String::from_utf8(b).ok())
-                                })
-                            };
-
-                            // Focus the clicked window if it differs.
-                            let current_focus = self.focused_window();
-                            if win_id != current_focus {
-                                self.sync_viewport_from_editor();
-                                self.set_focused_window(win_id);
-                                self.sync_viewport_to_editor();
-                            }
-
-                            // Move cursor to the click position.
-                            self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
-                            self.sync_after_engine_mutation();
-
-                            if let Some(text) = primary_text {
-                                self.active_mut().editor.set_yank(text);
-                                self.active_mut().editor.paste_after(1);
-                                self.sync_after_engine_mutation();
-                            }
+                            self.dismiss_hover_popup_on_click();
+                            self.middle_click(me.column, me.row);
                         }
 
                         // ── Right-click: open context menu (Phase 2, Round A) ─

@@ -12705,6 +12705,101 @@ mod border_drag_tests {
         );
     }
 
+    // ── middle-click zone dispatch ──────────────────────────────────────────
+
+    /// Middle-click on a buffer line entry closes that buffer (`:bdelete`
+    /// equivalent). Common terminal-app convention (browsers / IDEs all
+    /// middle-click-to-close tabs); pair with the existing X11 primary
+    /// paste behavior in the editor area.
+    #[test]
+    fn middle_click_on_buffer_line_closes_that_buffer() {
+        let path_a = std::env::temp_dir().join("hjkl_mclick_bl_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_mclick_bl_b.txt");
+        let path_c = std::env::temp_dir().join("hjkl_mclick_bl_c.txt");
+        for p in [&path_a, &path_b, &path_c] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        app.dispatch_ex(&format!("e {}", path_c.display()));
+        // Publish viewport dims so the bar geometry is meaningful and
+        // give window 0 a last_rect so hit_test_zone has the bar width.
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+        }
+        assert_eq!(app.slots.len(), 3);
+
+        // Mid-click on the FIRST buffer line entry (col 0, row 0 — buffer
+        // line sits at row 0 when no tab bar is shown).
+        let ranges = crate::app::mouse::buffer_line_x_ranges(&app, 200);
+        assert!(ranges.len() >= 3);
+        let first_col = ranges[0].0;
+        app.middle_click(first_col, 0);
+
+        assert_eq!(
+            app.slots.len(),
+            2,
+            "middle-click on buffer line entry must close that buffer"
+        );
+
+        for p in [&path_a, &path_b, &path_c] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Middle-click on a tab entry closes that tab (`:tabclose` equivalent).
+    #[test]
+    fn middle_click_on_tab_closes_that_tab() {
+        let path_a = std::env::temp_dir().join("hjkl_mclick_tab_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_mclick_tab_b.txt");
+        for p in [&path_a, &path_b] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        app.dispatch_ex(&format!("tabnew {}", path_b.display()));
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+        }
+        if let Some(Some(win)) = app.windows.get_mut(1) {
+            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+        }
+        assert_eq!(app.tabs.len(), 2);
+
+        // tab_x_ranges returns absolute screen columns (right-aligned in v2 bar).
+        let ranges = crate::app::mouse::tab_x_ranges(&app, 200);
+        assert_eq!(ranges.len(), 2);
+        // Click the first cell of the first tab.
+        let first_col = ranges[0].0;
+        app.middle_click(first_col, 0);
+
+        assert_eq!(
+            app.tabs.len(),
+            1,
+            "middle-click on tab entry must close that tab"
+        );
+
+        for p in [&path_a, &path_b] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// Middle-click outside any zone is a no-op.
+    #[test]
+    fn middle_click_outside_zones_is_noop() {
+        let mut app = make_app_with_window(
+            "alpha\nbeta\ngamma",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        let slots_before = app.slots.len();
+        let tabs_before = app.tabs.len();
+        // Row 30 is outside the 24-row screen entirely.
+        app.middle_click(10, 30);
+        assert_eq!(app.slots.len(), slots_before);
+        assert_eq!(app.tabs.len(), tabs_before);
+    }
+
     // ── overlay_active / hover-suppression regression tests ────────────────
 
     /// Regression: when a context menu is open, the LSP hover popup must NOT
