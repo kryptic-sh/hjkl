@@ -8,6 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-05-15
+
+### Fixed
+
+- Restore syntax highlighting in apps/hjkl. The 0.17.0 theme migration wired
+  `theme.style(span.capture())` against a TOML keyed by `@keyword` /
+  `@function.method`, but tree-sitter's `query.capture_names()` returns the bare
+  names (`keyword`, `function.method`) — every span silently dropped to the
+  `None` arm and rendered with no style. Lifted to bonsai 0.7.2 which prepends
+  `@` on lookup so both bare and `@`-prefixed inputs resolve.
+- Cursor shape now flips to `SteadyBar` when entering Insert via `i` / `I` / `a`
+  / `A` / `o` / `O` and back to `SteadyBlock` on `Esc` / `Ctrl-O`. The
+  app-keymap dispatch path for insert-entry actions and `dispatch_insert_key`
+  both bypassed `hjkl_vim::handle_key` (the canonical site for
+  `emit_cursor_shape_if_changed`); now called explicitly from
+  `sync_after_engine_mutation` and after `dispatch_insert_key`.
+- bonsai 0.7.1: `lua-match?` / `not-lua-match?` registered as built-in
+  predicates. Previously the unknown predicate was emitted permissively,
+  producing false-positive highlight spans on Lua files. Lua patterns are
+  translated to Rust `regex` via POSIX character classes (`%a` → `[[:alpha:]]`,
+  …); unsupported constructs (`%b`) fall back to permissive.
+
 ## [0.17.0] - 2026-05-15
 
 ### Added
@@ -2030,7 +2052,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/kryptic-sh/hjkl/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/kryptic-sh/hjkl/compare/v0.15.3...v0.16.0
 [0.15.3]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.15.3
