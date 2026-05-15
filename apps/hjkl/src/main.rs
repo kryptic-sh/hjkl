@@ -12,6 +12,7 @@ mod host;
 mod keymap_actions;
 mod keymap_translate;
 mod lang;
+pub(crate) mod menu;
 mod nvim_api;
 mod picker;
 mod picker_action;

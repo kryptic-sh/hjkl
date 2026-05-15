@@ -765,6 +765,11 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if app.info_popup.is_some() {
         info_popup_overlay(frame, app, buf_area);
     }
+
+    // Context menu (right-click, Phase 2 Round A) — floats above everything.
+    if let Some(ref menu) = app.context_menu {
+        menu.render(frame, area);
+    }
 }
 
 /// Render the vim-style tab bar. Only called when `app.tabs.len() > 1`.
