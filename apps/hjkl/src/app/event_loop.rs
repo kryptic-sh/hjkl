@@ -1109,7 +1109,7 @@ impl App {
                                             | VimMode::VisualLine
                                             | VimMode::VisualBlock
                                     );
-                                    build_code_menu(has_sel)
+                                    build_code_menu(has_sel, self.active_has_lsp())
                                 }
                                 mouse::Zone::TabBar { tab_idx } => {
                                     // Switch to the clicked tab first so that

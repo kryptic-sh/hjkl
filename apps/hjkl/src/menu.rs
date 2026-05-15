@@ -1,11 +1,11 @@
-//! Context menu widget for right-click interactions (Phase 2, Round A).
+//! Context menu widget for right-click interactions (Phase 2).
 //!
 //! Provides [`ContextMenu`] — a floating, keyboard- and mouse-navigable
 //! context menu rendered on top of the editor pane. Actions are represented
 //! by [`MenuAction`]; separators are `MenuAction::Separator`.
 //!
-//! LSP-specific actions (Go-to-def, References, Hover, Rename, Code Actions,
-//! Format) are intentionally omitted here and will arrive in Round B.
+//! Round A: clipboard + tab management.
+//! Round B: LSP actions (Go-to-def, References, Hover, Rename, Code Actions, Format).
 
 use ratatui::{
     Frame,
@@ -20,7 +20,6 @@ use ratatui::{
 /// Each selectable item in the context menu maps to one of these variants.
 ///
 /// `Separator` is a non-selectable divider rendered as a horizontal rule.
-/// LSP variants will be added in Round B.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     // ── Clipboard ──────────────────────────────────────────────────────────
@@ -32,6 +31,13 @@ pub enum MenuAction {
     TabCloseOthers,
     TabCloseRight,
     TabCloseLeft,
+    // ── LSP ────────────────────────────────────────────────────────────────
+    LspGotoDefinition,
+    LspGotoReferences,
+    LspHover,
+    LspRename,
+    LspCodeActions,
+    LspFormat,
     // ── Visual decoration ──────────────────────────────────────────────────
     /// A non-selectable horizontal separator.
     Separator,
@@ -298,23 +304,67 @@ impl ContextMenu {
 
 /// Build the context menu for a right-click in the Code or Gutter zone.
 ///
-/// Clipboard items are always shown; LSP items are intentionally omitted
-/// until Round B. Cut / Copy are enabled only when a visual selection is active.
-pub fn build_code_menu(has_selection: bool) -> Vec<MenuItem> {
+/// Cut / Copy are enabled only when a visual selection is active (`has_sel`).
+/// LSP items are shown but disabled when no language server is attached to
+/// the active buffer (`has_lsp = false`).
+pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
     vec![
+        // ── Clipboard ──────────────────────────────────────────────────────
         MenuItem {
             label: "Cut".into(),
             action: MenuAction::Cut,
-            enabled: has_selection,
+            enabled: has_sel,
             shortcut_hint: Some("x".into()),
         },
         MenuItem {
             label: "Copy".into(),
             action: MenuAction::Copy,
-            enabled: has_selection,
+            enabled: has_sel,
             shortcut_hint: Some("y".into()),
         },
         MenuItem::new("Paste", MenuAction::Paste, Some("p".into())),
+        // ── Separator ──────────────────────────────────────────────────────
+        MenuItem::separator(),
+        // ── LSP: navigation ────────────────────────────────────────────────
+        MenuItem {
+            label: "Go to Definition".into(),
+            action: MenuAction::LspGotoDefinition,
+            enabled: has_lsp,
+            shortcut_hint: Some("gd".into()),
+        },
+        MenuItem {
+            label: "Go to References".into(),
+            action: MenuAction::LspGotoReferences,
+            enabled: has_lsp,
+            shortcut_hint: Some("gr".into()),
+        },
+        MenuItem {
+            label: "Hover".into(),
+            action: MenuAction::LspHover,
+            enabled: has_lsp,
+            shortcut_hint: Some("K".into()),
+        },
+        // ── Separator ──────────────────────────────────────────────────────
+        MenuItem::separator(),
+        // ── LSP: edits ─────────────────────────────────────────────────────
+        MenuItem {
+            label: "Rename Symbol".into(),
+            action: MenuAction::LspRename,
+            enabled: has_lsp,
+            shortcut_hint: Some("<leader>rn".into()),
+        },
+        MenuItem {
+            label: "Code Actions".into(),
+            action: MenuAction::LspCodeActions,
+            enabled: has_lsp,
+            shortcut_hint: Some("<leader>ca".into()),
+        },
+        MenuItem {
+            label: "Format Document".into(),
+            action: MenuAction::LspFormat,
+            enabled: has_lsp,
+            shortcut_hint: Some(":LspFormat".into()),
+        },
     ]
 }
 
@@ -440,7 +490,7 @@ mod tests {
 
     #[test]
     fn build_code_menu_with_selection_enables_cut_copy() {
-        let items = build_code_menu(true);
+        let items = build_code_menu(true, false);
         assert!(items[0].enabled); // Cut
         assert!(items[1].enabled); // Copy
         assert!(items[2].enabled); // Paste
@@ -448,10 +498,102 @@ mod tests {
 
     #[test]
     fn build_code_menu_no_selection_disables_cut_copy() {
-        let items = build_code_menu(false);
+        let items = build_code_menu(false, false);
         assert!(!items[0].enabled); // Cut
         assert!(!items[1].enabled); // Copy
         assert!(items[2].enabled); // Paste always enabled
+    }
+
+    // ── build_code_menu LSP items ───────────────────────────────────────────
+
+    /// All 6 LSP items are present and enabled when `has_lsp = true`.
+    #[test]
+    fn build_code_menu_includes_lsp_items_when_lsp_attached() {
+        let items = build_code_menu(false, true);
+        let lsp_actions = [
+            MenuAction::LspGotoDefinition,
+            MenuAction::LspGotoReferences,
+            MenuAction::LspHover,
+            MenuAction::LspRename,
+            MenuAction::LspCodeActions,
+            MenuAction::LspFormat,
+        ];
+        for action in &lsp_actions {
+            let item = items
+                .iter()
+                .find(|it| &it.action == action)
+                .unwrap_or_else(|| panic!("{action:?} not found in menu"));
+            assert!(
+                item.enabled,
+                "{action:?} should be enabled when has_lsp=true"
+            );
+        }
+    }
+
+    /// All 6 LSP items are present but disabled when `has_lsp = false`.
+    #[test]
+    fn build_code_menu_disables_lsp_items_when_no_lsp() {
+        let items = build_code_menu(false, false);
+        let lsp_actions = [
+            MenuAction::LspGotoDefinition,
+            MenuAction::LspGotoReferences,
+            MenuAction::LspHover,
+            MenuAction::LspRename,
+            MenuAction::LspCodeActions,
+            MenuAction::LspFormat,
+        ];
+        for action in &lsp_actions {
+            let item = items
+                .iter()
+                .find(|it| &it.action == action)
+                .unwrap_or_else(|| panic!("{action:?} not found in menu"));
+            assert!(
+                !item.enabled,
+                "{action:?} should be disabled when has_lsp=false"
+            );
+        }
+    }
+
+    /// Menu order: Cut/Copy/Paste, sep, GotoDef/GotoRef/Hover, sep,
+    /// Rename/CodeActions/Format.
+    #[test]
+    fn build_code_menu_separator_layout() {
+        let items = build_code_menu(true, true);
+        // Flatten to action sequence ignoring separators, then re-check positions.
+        let expected_order = [
+            MenuAction::Cut,
+            MenuAction::Copy,
+            MenuAction::Paste,
+            MenuAction::LspGotoDefinition,
+            MenuAction::LspGotoReferences,
+            MenuAction::LspHover,
+            MenuAction::LspRename,
+            MenuAction::LspCodeActions,
+            MenuAction::LspFormat,
+        ];
+        let non_sep: Vec<&MenuAction> = items
+            .iter()
+            .filter(|it| it.action != MenuAction::Separator)
+            .map(|it| &it.action)
+            .collect();
+        assert_eq!(non_sep.len(), expected_order.len());
+        for (got, want) in non_sep.iter().zip(expected_order.iter()) {
+            assert_eq!(*got, want, "order mismatch");
+        }
+
+        // Verify two separators exist and that they appear after Paste and after Hover.
+        let sep_positions: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| it.action == MenuAction::Separator)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(sep_positions.len(), 2, "expected exactly 2 separators");
+        // sep after Paste (index 2), so sep at index 3.
+        assert_eq!(items[sep_positions[0]].action, MenuAction::Separator);
+        assert_eq!(items[sep_positions[0] - 1].action, MenuAction::Paste);
+        // sep after Hover, before Rename.
+        assert_eq!(items[sep_positions[1] + 1].action, MenuAction::LspRename);
     }
 
     // ── build_tab_menu ──────────────────────────────────────────────────────

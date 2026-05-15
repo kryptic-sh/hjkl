@@ -1958,6 +1958,19 @@ impl App {
             MenuAction::TabCloseOthers => self.do_tabonly(),
             MenuAction::TabCloseRight => self.close_tabs_to_right(),
             MenuAction::TabCloseLeft => self.close_tabs_to_left(),
+            // ── LSP actions (Phase 2, Round B) ───────────────────────────────
+            MenuAction::LspGotoDefinition => self.lsp_goto_definition(),
+            MenuAction::LspGotoReferences => self.lsp_goto_references(),
+            MenuAction::LspHover => self.lsp_hover(),
+            MenuAction::LspCodeActions => self.lsp_code_actions(),
+            MenuAction::LspFormat => self.lsp_format(),
+            // Rename needs a new name from the user.  The ex command
+            // `:Rename <newname>` is the supported entry point — mirror the
+            // same status-message prompt the `<leader>rn` keybind uses so the
+            // user knows how to proceed.
+            MenuAction::LspRename => {
+                self.status_message = Some("use :Rename <newname> to rename".into());
+            }
             MenuAction::Separator => {} // no-op
         }
     }
