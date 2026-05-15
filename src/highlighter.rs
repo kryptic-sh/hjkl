@@ -94,9 +94,6 @@ const DEFAULT_PARSE_TIMEOUT_MICROS: u64 = 0;
 // Child-highlighter cache
 // ---------------------------------------------------------------------------
 
-/// FNV-1a-inspired fast hash of a byte slice.  Standard library's
-/// `DefaultHasher` is good enough — all we need is collision resistance across
-/// typical code-block content, not cryptographic security.
 /// Sort highlight spans by `(byte_range.start asc, capture-depth desc)`.
 ///
 /// Two captures that cover the same byte range (e.g. tree-sitter-markdown
@@ -117,6 +114,9 @@ fn sort_by_start_then_depth(spans: &mut [HighlightSpan]) {
     });
 }
 
+/// FNV-1a-inspired fast hash of a byte slice.  Standard library's
+/// `DefaultHasher` is good enough — all we need is collision resistance across
+/// typical code-block content, not cryptographic security.
 fn hash_bytes(b: &[u8]) -> u64 {
     let mut h = DefaultHasher::new();
     b.hash(&mut h);
@@ -1186,10 +1186,7 @@ mod tests {
     /// (label colour), losing the dim-url distinction.
     #[test]
     fn sort_puts_deeper_capture_first_on_identical_range() {
-        let mut spans = vec![
-            span(10, 30, "markup.link"),
-            span(10, 30, "markup.link.url"),
-        ];
+        let mut spans = vec![span(10, 30, "markup.link"), span(10, 30, "markup.link.url")];
         sort_by_start_then_depth(&mut spans);
         assert_eq!(spans[0].capture, "markup.link.url");
         assert_eq!(spans[1].capture, "markup.link");
@@ -1199,10 +1196,7 @@ mod tests {
     /// AFTER the deeper one, the sort still places the deeper one first.
     #[test]
     fn sort_is_order_independent_on_identical_range() {
-        let mut spans = vec![
-            span(10, 30, "markup.link.url"),
-            span(10, 30, "markup.link"),
-        ];
+        let mut spans = vec![span(10, 30, "markup.link.url"), span(10, 30, "markup.link")];
         sort_by_start_then_depth(&mut spans);
         assert_eq!(spans[0].capture, "markup.link.url");
         assert_eq!(spans[1].capture, "markup.link");
