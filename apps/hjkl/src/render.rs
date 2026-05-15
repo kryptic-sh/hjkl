@@ -808,9 +808,9 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                     .unwrap_or(false)
             });
             let label = if tab_dirty {
-                format!("[{}: +{}]", i + 1, base_name)
+                format!(" {}: {}+ ", i + 1, base_name)
             } else {
-                format!("[{}: {}]", i + 1, base_name)
+                format!(" {}: {} ", i + 1, base_name)
             };
             let has_sep = i > 0;
             let entry_width = if has_sep { 1 } else { 0 } + label.len();

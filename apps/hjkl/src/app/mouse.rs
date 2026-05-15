@@ -294,9 +294,9 @@ pub fn tabs_total_width(app: &App) -> usize {
                 .unwrap_or(false)
         });
         let label = if tab_dirty {
-            format!("[{}: +{}]", i + 1, base_name)
+            format!(" {}: {}+ ", i + 1, base_name)
         } else {
-            format!("[{}: {}]", i + 1, base_name)
+            format!(" {}: {} ", i + 1, base_name)
         };
         let sep_len = if i == 0 { 0 } else { 1 }; // single space between tabs
         total += sep_len + label.len();
@@ -335,9 +335,9 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
                 .unwrap_or(false)
         });
         let label = if tab_dirty {
-            format!("[{}: +{}]", i + 1, base_name)
+            format!(" {}: {}+ ", i + 1, base_name)
         } else {
-            format!("[{}: {}]", i + 1, base_name)
+            format!(" {}: {} ", i + 1, base_name)
         };
         let sep_len = if i == 0 { 0 } else { 1 }; // single space between entries
         let entry_width = sep_len + label.len();
