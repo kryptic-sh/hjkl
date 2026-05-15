@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-05-15
+
+### Added
+
+- **DuckDB backend** (issue #27). Connect to DuckDB file-backed or in-memory
+  databases using `duckdb:/path/to/file.duckdb` or `duckdb::memory:`. CSV and
+  Parquet files are queryable out of the box — no extra setup required:
+  `SELECT * FROM 'data.csv'` or `SELECT * FROM read_csv_auto('data.csv')`.
+  Schema sidebar shows the `main` database and all tables via
+  `information_schema`. The `duckdb` feature is default-on in `sqeel-core`;
+  library consumers can opt out with `default-features = false` to avoid the
+  bundled DuckDB native library (~5 MB). `duckdb::memory:` and `duckdb:/path`
+  are accepted by the Add Connection URL validator. The URL hint row in the
+  Add/Edit Connection dialog now shows DuckDB scheme examples when the URL field
+  is focused. Backed by `sqeel-core 0.4.12` + `sqeel-tui 0.4.16` (Windows DuckDB
+  bundled build needs `rstrtmgr.lib`, wired via a build.rs in
+  `sqeel-core 0.4.12`).
+
 ## [0.4.17] - 2026-05-15
 
 ### Added
@@ -469,7 +487,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.17...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.18...HEAD
+[0.4.18]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.18
 [0.4.17]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.17
 [0.4.16]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.16
 [0.4.15]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.15
