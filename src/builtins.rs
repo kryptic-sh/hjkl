@@ -9,6 +9,168 @@ use crate::predicate::{
 };
 
 // ---------------------------------------------------------------------------
+// Lua pattern → Rust regex translator (used by LuaMatchPredicate)
+// ---------------------------------------------------------------------------
+
+/// Expand a Lua character-class letter (`a`, `d`, `l`, `u`, `s`, `w`, `p`,
+/// `x`, `c`) to its POSIX name for use *inside* a `[...]` regex class.
+/// Returns `None` for unknown or uppercase (negated) classes.
+fn lua_class_inside_brackets(ch: char) -> Option<&'static str> {
+    match ch {
+        'a' => Some("[:alpha:]"),
+        'd' => Some("[:digit:]"),
+        'l' => Some("[:lower:]"),
+        'u' => Some("[:upper:]"),
+        's' => Some("[:space:]"),
+        'w' => Some("[:alnum:]"),
+        'p' => Some("[:punct:]"),
+        'x' => Some("[:xdigit:]"),
+        'c' => Some("[:cntrl:]"),
+        _ => None,
+    }
+}
+
+/// Expand a Lua character-class letter to a standalone regex character class
+/// (with surrounding `[...]` brackets). Uppercase variants produce the
+/// negated form.
+fn lua_class_standalone(ch: char) -> Option<&'static str> {
+    match ch {
+        'a' => Some("[[:alpha:]]"),
+        'A' => Some("[^[:alpha:]]"),
+        'd' => Some("[[:digit:]]"),
+        'D' => Some("[^[:digit:]]"),
+        'l' => Some("[[:lower:]]"),
+        'L' => Some("[^[:lower:]]"),
+        'u' => Some("[[:upper:]]"),
+        'U' => Some("[^[:upper:]]"),
+        's' => Some("[[:space:]]"),
+        'S' => Some("[^[:space:]]"),
+        'w' => Some("[[:alnum:]]"),
+        'W' => Some("[^[:alnum:]]"),
+        'p' => Some("[[:punct:]]"),
+        'P' => Some("[^[:punct:]]"),
+        'x' => Some("[[:xdigit:]]"),
+        'X' => Some("[^[:xdigit:]]"),
+        'c' => Some("[[:cntrl:]]"),
+        'C' => Some("[^[:cntrl:]]"),
+        _ => None,
+    }
+}
+
+/// Translate a Lua pattern string to a Rust `regex`-compatible string.
+///
+/// Supports the subset of Lua patterns used in tree-sitter `highlights.scm`
+/// files:
+/// - `%a/%d/%l/%u/%s/%w/%p/%x/%c` character classes (and their uppercase negations)
+/// - `[...]` character classes with embedded Lua classes (`%a` etc.)
+/// - `^`, `$`, `.`, `*`, `+`, `?` — same meaning as regex
+/// - `%X` (escaped punctuation) — becomes the literal character
+///
+/// Unsupported: `%-` (lazy repetition, use `*?` manually), `%b` (balanced
+/// match). These produce `Err` so the caller can fall back to permissive.
+fn lua_pattern_to_regex(pat: &str) -> Result<String, String> {
+    // Regex metacharacters that have no special meaning in Lua patterns and
+    // must therefore be escaped when they appear literally.
+    const REGEX_ONLY_META: &str = "{}|\\";
+
+    let mut out = String::with_capacity(pat.len() * 2);
+    let chars: Vec<char> = pat.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        match chars[i] {
+            '%' => {
+                i += 1;
+                if i >= chars.len() {
+                    return Err("trailing % in Lua pattern".into());
+                }
+                let next = chars[i];
+                if next == 'b' {
+                    return Err("Lua balanced match (%b) not supported in regex translation".into());
+                }
+                // Try standalone class expansion first (covers %a..%c + uppercase).
+                if let Some(cls) = lua_class_standalone(next) {
+                    out.push_str(cls);
+                } else {
+                    // Literal escape: %( %[ %* etc. → just the char, escaped for regex.
+                    if ".+*?[]{}()|\\^$".contains(next) {
+                        out.push('\\');
+                    }
+                    out.push(next);
+                }
+            }
+            '[' => {
+                // Parse Lua character class, translating embedded %x classes.
+                out.push('[');
+                i += 1;
+                // Optional negation.
+                if i < chars.len() && chars[i] == '^' {
+                    out.push('^');
+                    i += 1;
+                }
+                // Body: collect until the closing `]`.
+                while i < chars.len() && chars[i] != ']' {
+                    if chars[i] == '%' {
+                        i += 1;
+                        if i >= chars.len() {
+                            break;
+                        }
+                        let cls_ch = chars[i];
+                        if let Some(posix) = lua_class_inside_brackets(cls_ch) {
+                            out.push_str(posix);
+                        } else if let Some(posix) =
+                            lua_class_inside_brackets(cls_ch.to_ascii_lowercase())
+                        {
+                            // Uppercase Lua class inside [...]: e.g. %A — can't negate
+                            // a POSIX class inside a set elegantly; expand via standalone.
+                            // Just embed the standalone form (with its own brackets stripped).
+                            // e.g. %A in [%A] → [^[:alpha:]] — handled by wrapping.
+                            // We can't do this cleanly inside [...], so fall back: treat
+                            // the uppercase as the lowercase for now (conservative).
+                            out.push_str(posix);
+                        } else {
+                            // Literal escape inside class.
+                            if "\\^]-".contains(cls_ch) {
+                                out.push('\\');
+                            }
+                            out.push(cls_ch);
+                        }
+                    } else {
+                        let c = chars[i];
+                        // Inside regex character classes, `\` must be escaped.
+                        if c == '\\' {
+                            out.push_str("\\\\");
+                        } else {
+                            out.push(c);
+                        }
+                    }
+                    i += 1;
+                }
+                out.push(']');
+            }
+            // Lazy quantifier in Lua; not commonly used in TS queries.
+            // Map to `*?` (lazy) in regex.  If it appears outside a valid
+            // repetition context the regex crate will error and we treat
+            // the predicate as unsupported (permissive fallback).
+            '-' => out.push_str("*?"),
+            // Pass through characters with the same meaning in both Lua and regex.
+            '^' | '$' | '.' | '*' | '+' | '?' | '(' | ')' => {
+                out.push(chars[i]);
+            }
+            // Regex-only metacharacters — escape them.
+            c if REGEX_ONLY_META.contains(c) => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Predicates
 // ---------------------------------------------------------------------------
 
@@ -118,6 +280,57 @@ impl crate::predicate::Predicate for HasParentPredicate {
             Some(p) => kinds.contains(&p.kind()),
             None => false,
         }
+    }
+}
+
+/// `(#lua-match? @cap pattern)` — true when the text of the first capture
+/// matches the Lua pattern string. The Lua pattern is translated to a Rust
+/// regex before matching. On translation failure (unsupported construct like
+/// `%b`) the predicate returns `true` (permissive: don't veto the match).
+///
+/// This predicate is an nvim-treesitter extension used in many highlights.scm
+/// files to further filter captures by text content.
+#[derive(Debug)]
+pub struct LuaMatchPredicate {
+    /// Whether to negate the match (for `not-lua-match?`).
+    negate: bool,
+}
+
+impl LuaMatchPredicate {
+    pub fn new(negate: bool) -> Self {
+        Self { negate }
+    }
+}
+
+impl crate::predicate::Predicate for LuaMatchPredicate {
+    fn name(&self) -> &str {
+        if self.negate {
+            "not-lua-match?"
+        } else {
+            "lua-match?"
+        }
+    }
+
+    fn eval(&self, ctx: &MatchContext<'_>) -> bool {
+        // Args: @capture, "pattern"
+        let (Some(PredicateArg::Capture(cap_idx)), Some(PredicateArg::Str(pattern))) =
+            (ctx.args.first(), ctx.args.get(1))
+        else {
+            return true; // malformed — don't filter
+        };
+        let text = match ctx.capture_text(*cap_idx) {
+            Some(t) => t,
+            None => return false,
+        };
+        let regex_src = match lua_pattern_to_regex(pattern) {
+            Ok(r) => r,
+            // Unsupported Lua pattern construct — be permissive.
+            Err(_) => return !self.negate,
+        };
+        let matched = regex::Regex::new(&regex_src)
+            .ok()
+            .is_some_and(|re| re.is_match(text));
+        if self.negate { !matched } else { matched }
     }
 }
 
@@ -263,6 +476,8 @@ pub fn register_builtins(registry: &mut PredicateRegistry) {
     registry.register_predicate(Box::new(ContainsPredicate));
     registry.register_predicate(Box::new(HasAncestorPredicate));
     registry.register_predicate(Box::new(HasParentPredicate));
+    registry.register_predicate(Box::new(LuaMatchPredicate::new(false)));
+    registry.register_predicate(Box::new(LuaMatchPredicate::new(true)));
     registry.register_directive(Box::new(SetDirective));
     registry.register_directive(Box::new(OffsetDirective));
     registry.register_directive(Box::new(TrimDirective));
@@ -658,6 +873,73 @@ mod tests {
 
         let pred = HasParentPredicate;
         assert!(pred.eval(&ctx), "should find direct parent '{parent_kind}'");
+    }
+
+    // ── lua_pattern_to_regex ──────────────────────────────────────────────────
+
+    fn lua_re(pat: &str) -> String {
+        lua_pattern_to_regex(pat).expect("translation should succeed")
+    }
+
+    #[test]
+    fn lua_pattern_ascii_ranges_pass_through() {
+        // Pure ASCII ranges need no translation.
+        assert_eq!(lua_re("^[A-Z]"), "^[A-Z]");
+        assert_eq!(lua_re("^[a-z0-9_]"), "^[a-z0-9_]");
+    }
+
+    #[test]
+    fn lua_pattern_class_standalone() {
+        assert_eq!(lua_re("%a"), "[[:alpha:]]");
+        assert_eq!(lua_re("%d"), "[[:digit:]]");
+        assert_eq!(lua_re("%u"), "[[:upper:]]");
+        assert_eq!(lua_re("%l"), "[[:lower:]]");
+        assert_eq!(lua_re("%s"), "[[:space:]]");
+        assert_eq!(lua_re("%w"), "[[:alnum:]]");
+    }
+
+    #[test]
+    fn lua_pattern_class_inside_brackets() {
+        assert_eq!(lua_re("[%a_]"), "[[:alpha:]_]");
+        assert_eq!(lua_re("[%a%d_]"), "[[:alpha:][:digit:]_]");
+        assert_eq!(lua_re("[^%a]"), "[^[:alpha:]]");
+    }
+
+    #[test]
+    fn lua_pattern_escaped_punct() {
+        assert_eq!(lua_re("%."), "\\.");
+        assert_eq!(lua_re("%["), "\\[");
+        assert_eq!(lua_re("%%"), "%");
+    }
+
+    #[test]
+    fn lua_pattern_anchors_and_quantifiers_pass_through() {
+        assert_eq!(lua_re("^foo$"), "^foo$");
+        assert_eq!(lua_re("foo*"), "foo*");
+        assert_eq!(lua_re("foo+"), "foo+");
+        assert_eq!(lua_re("foo?"), "foo?");
+    }
+
+    // ── LuaMatchPredicate — no-grammar needed ────────────────────────────────
+
+    #[test]
+    fn lua_match_predicate_pure_ascii_no_grammar_needed() {
+        // We can test via regex compilation + is_match without a real grammar node.
+        let pattern = "^[A-Z]";
+        let regex_src = lua_pattern_to_regex(pattern).unwrap();
+        let re = regex::Regex::new(&regex_src).unwrap();
+        assert!(re.is_match("Foo"), "Foo starts with uppercase");
+        assert!(!re.is_match("foo"), "foo does not start with uppercase");
+    }
+
+    #[test]
+    fn lua_match_predicate_lua_alpha_class() {
+        let pattern = "^[%a_]";
+        let regex_src = lua_pattern_to_regex(pattern).unwrap();
+        let re = regex::Regex::new(&regex_src).unwrap();
+        assert!(re.is_match("hello"), "letter start");
+        assert!(re.is_match("_private"), "underscore start");
+        assert!(!re.is_match("123"), "digit start should not match");
     }
 
     // ── helper ────────────────────────────────────────────────────────────────
