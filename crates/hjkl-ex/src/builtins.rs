@@ -5,6 +5,10 @@ use crate::{
 };
 use hjkl_engine::Host;
 
+// ---- folds / global / shell are in their own modules -----------------------
+use crate::folds::{apply_fold_indent, apply_fold_syntax};
+use crate::global::{global_match_handler, vglobal_handler};
+
 // ---- quit ------------------------------------------------------------------
 
 fn quit_handler<H: Host>(
@@ -75,21 +79,85 @@ fn edit_force_handler<H: Host>(
 
 // ---- read ------------------------------------------------------------------
 
-/// `:r <path>` / `:read <path>` — insert file contents below cursor row.
-/// Returns `None` when no path is given (vim errors; we defer to legacy).
+/// `:r <path>` / `:read <path>` / `:r !cmd` — insert file or shell output
+/// below the cursor row.
+///
+/// Replaces the Phase 2b stub that returned `ExEffect::ReadFile`. Now handles
+/// the operation fully in hjkl-ex so the app no longer round-trips through
+/// the legacy `ex::run("read {path}")` path.
+///
+/// Returns `None` when no path/cmd is given (vim errors on `:r` alone).
 fn read_handler<H: Host>(
-    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
-    _range: Option<LineRange>,
+    range: Option<LineRange>,
 ) -> Option<ExEffect> {
+    use hjkl_buffer::{Edit, Position};
+
     let path = args.trim();
     if path.is_empty() {
-        None
-    } else {
-        Some(ExEffect::ReadFile {
-            path: path.to_string(),
-        })
+        return None;
     }
+
+    // `:r !cmd` — run `cmd` through `sh -c` and capture stdout.
+    let content = if let Some(cmd) = path.strip_prefix('!') {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            return Some(ExEffect::Error(":r ! needs a shell command".into()));
+        }
+        match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
+            Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
+                Ok(s) => s,
+                Err(_) => return Some(ExEffect::Error("command output was not UTF-8".into())),
+            },
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let trimmed = stderr.trim();
+                let label = if trimmed.is_empty() {
+                    "no stderr".to_string()
+                } else {
+                    trimmed.to_string()
+                };
+                return Some(ExEffect::Error(format!(
+                    "command exited {} ({label})",
+                    out.status
+                        .code()
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "?".into())
+                )));
+            }
+            Err(e) => return Some(ExEffect::Error(format!("cannot run `{cmd}`: {e}"))),
+        }
+    } else {
+        match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => return Some(ExEffect::Error(format!("cannot read `{path}`: {e}"))),
+        }
+    };
+
+    // Vim's `:r` inserts after the current row (or range's last row if
+    // specified); trailing newline in file is dropped (vim does the same).
+    let trimmed = content.strip_suffix('\n').unwrap_or(&content);
+    editor.push_undo();
+    // Insert below range end if range given, else below cursor.
+    let row = match range {
+        Some(r) => r.end_one_based().saturating_sub(1),
+        None => editor.cursor().0,
+    };
+    let line_chars = editor
+        .buffer()
+        .line(row)
+        .map(|l| l.chars().count())
+        .unwrap_or(0);
+    let insert_text = format!("\n{trimmed}");
+    editor.mutate_edit(Edit::InsertStr {
+        at: Position::new(row, line_chars),
+        text: insert_text,
+    });
+    // Cursor lands on the first inserted row at col 0.
+    editor.jump_cursor(row + 1, 0);
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
 }
 
 // ---- bdelete / bwipeout ----------------------------------------------------
@@ -772,5 +840,44 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Setting,
         min_prefix: 2,
         run: set_handler::<H>,
+    });
+
+    // ---- Phase 8a ----------------------------------------------------------
+
+    // `:foldindent` (min_prefix=5; `:foldi` is the shortest unambiguous form)
+    reg.add(ExCommand {
+        name: "foldindent",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: |editor, args, range| apply_fold_indent(editor, args, range),
+    });
+
+    // `:foldsyntax` (min_prefix=5; `:folds` is shortest — same as foldindent)
+    reg.add(ExCommand {
+        name: "foldsyntax",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: |editor, args, range| apply_fold_syntax(editor, args, range),
+    });
+
+    // `:global` / `:g` (min_prefix=1; range-aware)
+    // `:global!/pat/cmd` is handled by global_match_handler (strips leading `!`).
+    reg.add(ExCommand {
+        name: "global",
+        aliases: &["g"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 1,
+        run: |editor, args, range| global_match_handler(editor, args, range),
+    });
+
+    // `:vglobal` / `:v` (min_prefix=1; range-aware)
+    reg.add(ExCommand {
+        name: "vglobal",
+        aliases: &["v"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 1,
+        run: |editor, args, range| vglobal_handler(editor, args, range),
     });
 }

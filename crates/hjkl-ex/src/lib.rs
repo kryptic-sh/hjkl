@@ -21,11 +21,14 @@ mod builtins;
 mod complete;
 mod effect;
 pub mod expand;
+mod folds;
+mod global;
 mod listings;
 mod parse;
 mod range;
 mod registry;
 mod setopt;
+mod shell;
 
 pub use setopt::all_setting_names;
 
@@ -49,11 +52,25 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return None;
     }
 
+    // Phase 8a: search-as-address `:/pat` / `:?pat`.
+    // Must be checked before parse_range because `/` and `?` are not valid
+    // range chars and parse_range would return None range + the original input.
+    if input.starts_with('/') || input.starts_with('?') {
+        return Some(handle_search_address(editor, input));
+    }
+
     // Parse a leading range (`5`, `5,10`, `.,$`, `%`, `'a,'b`).
     let (range, cmd_str) = match parse_range(input, editor) {
         Ok(pair) => pair,
         Err(e) => return Some(ExEffect::Error(e)),
     };
+
+    // Phase 8a: `:[range]!cmd` shell filter — special-case before split_name_args
+    // because `!` is not alphabetic and split_name_args would return ("", input).
+    if let Some(rest) = cmd_str.strip_prefix('!') {
+        let shell_cmd = rest.trim();
+        return Some(shell::shell_filter_handler(editor, shell_cmd, range));
+    }
 
     let (name, args) = parse::split_name_args(cmd_str);
     if name.is_empty() {
@@ -63,6 +80,49 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
     let cmd = reg.resolve(name)?;
     // Handler may return None to defer this invocation to the legacy path.
     (cmd.run)(editor, args, range)
+}
+
+/// Handle `:/pat` / `:?pat` — search-as-address.
+///
+/// Jumps the cursor forward (`/`) or backward (`?`) to the next line
+/// matching `pat`. Empty pattern reuses `editor.last_search()`.
+/// Ported from `hjkl_editor::ex::run` lines 149–181.
+fn handle_search_address<H: hjkl_engine::Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: &str,
+) -> ExEffect {
+    let forward = input.starts_with('/');
+    let delim = if forward { '/' } else { '?' };
+    let body = &input[1..];
+    let pat_str: String = match body.strip_suffix(delim).unwrap_or(body) {
+        "" => match editor.last_search() {
+            Some(p) if !p.is_empty() => p.to_string(),
+            _ => return ExEffect::Error("no previous search pattern".into()),
+        },
+        s => s.to_string(),
+    };
+    let s = editor.settings();
+    let case_insensitive =
+        s.ignore_case && !(s.smartcase && pat_str.chars().any(|c| c.is_uppercase()));
+    let compile_src: std::borrow::Cow<'_, str> = if case_insensitive {
+        std::borrow::Cow::Owned(format!("(?i){pat_str}"))
+    } else {
+        std::borrow::Cow::Borrowed(pat_str.as_str())
+    };
+    match regex::Regex::new(&compile_src) {
+        Ok(re) => {
+            editor.set_search_pattern(Some(re));
+            if forward {
+                editor.search_advance_forward(false);
+            } else {
+                editor.search_advance_backward(true);
+            }
+            editor.ensure_cursor_in_scrolloff();
+            editor.set_last_search(Some(pat_str), forward);
+            ExEffect::Ok
+        }
+        Err(e) => ExEffect::Error(format!("bad search pattern: {e}")),
+    }
 }
 
 /// Try to dispatch `input` (without the leading `:`) through a host registry.
@@ -548,30 +608,36 @@ mod tests {
         );
     }
 
-    // ---- Phase 2b: read ----------------------------------------------------
+    // ---- Phase 2b → 8a: read (now fully handled in hjkl-ex) ------------------
+    //
+    // Phase 8a: `:r` / `:read` now inserts file content directly.
+    // Old tests expected `ReadFile { path }` — updated to the new behavior
+    // (Ok on success, Error when file doesn't exist).
 
     #[test]
-    fn dispatch_r_with_path_returns_read_file() {
+    fn dispatch_r_with_path_inserts_content_phase8a() {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
-        assert_eq!(
-            try_dispatch(&reg, &mut editor, "r LICENSE"),
-            Some(ExEffect::ReadFile {
-                path: "LICENSE".into()
-            })
-        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "hello\n").unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let result = try_dispatch(&reg, &mut editor, &format!("r {path}"));
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        let lines = editor.buffer().lines().to_vec();
+        assert!(lines.contains(&"hello".to_string()), "lines: {lines:?}");
     }
 
     #[test]
-    fn dispatch_read_with_path_returns_read_file() {
+    fn dispatch_read_with_path_inserts_content_phase8a() {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
-        assert_eq!(
-            try_dispatch(&reg, &mut editor, "read LICENSE"),
-            Some(ExEffect::ReadFile {
-                path: "LICENSE".into()
-            })
-        );
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "world\n").unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let result = try_dispatch(&reg, &mut editor, &format!("read {path}"));
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        let lines = editor.buffer().lines().to_vec();
+        assert!(lines.contains(&"world".to_string()), "lines: {lines:?}");
     }
 
     #[test]
@@ -691,14 +757,16 @@ mod tests {
 
     // `:r` resolves to `:read` (min_prefix=1); `:re` also resolves to `:read`
     // since `:redo` requires min_prefix=3.
+    // Phase 8a: read_handler now acts immediately; non-existent path → Error.
     #[test]
     fn dispatch_r_resolves_to_read_not_redo() {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
-        // `:r foo` → ReadFile, confirming `:r` means `:read` not `:redo`.
-        assert_eq!(
-            try_dispatch(&reg, &mut editor, "r foo"),
-            Some(ExEffect::ReadFile { path: "foo".into() })
+        // `:r foo` → Error (file doesn't exist), confirming `:r` means `:read` not `:redo`.
+        let result = try_dispatch(&reg, &mut editor, "r /nonexistent_test_path");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            ":r of nonexistent file should be Error, got: {result:?}"
         );
     }
 
@@ -1216,6 +1284,207 @@ mod tests {
             result.candidates.contains(&"quit!".to_string()),
             "missing 'quit!': {:?}",
             result.candidates
+        );
+    }
+
+    // ---- Phase 8a: foldindent / foldsyntax -----------------------------------
+
+    #[test]
+    fn dispatch_foldindent_on_indented_buffer_returns_info() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor =
+            make_editor_with_lines(&["fn foo() {", "    let x = 1;", "    let y = 2;", "}"]);
+        let result = try_dispatch(&reg, &mut editor, "foldindent");
+        match result {
+            Some(ExEffect::Info(msg)) => {
+                assert!(msg.contains("fold"), "got: {msg}");
+            }
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_foldi_prefix_resolves_to_foldindent() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["fn foo() {", "    x;", "}"]);
+        // min_prefix=5: "foldi" is 5 chars → resolves
+        let result = try_dispatch(&reg, &mut editor, "foldi");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn dispatch_foldsyntax_no_ranges_returns_info() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["fn foo() {", "    bar();", "}"]);
+        let result = try_dispatch(&reg, &mut editor, "foldsyntax");
+        assert_eq!(
+            result,
+            Some(ExEffect::Info("no syntax block ranges available".into()))
+        );
+    }
+
+    // ---- Phase 8a: :read (full impl) ----------------------------------------
+
+    #[test]
+    fn dispatch_r_with_path_inserts_content() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["line1", "line2"]);
+        // Write a temp file.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "inserted\n").unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let result = try_dispatch(&reg, &mut editor, &format!("r {path}"));
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        let lines = editor.buffer().lines().to_vec();
+        assert!(lines.contains(&"inserted".to_string()), "lines: {lines:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_r_shell_cmd_inserts_output() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["line1"]);
+        let result = try_dispatch(&reg, &mut editor, "r !echo hello");
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        let lines = editor.buffer().lines().to_vec();
+        assert!(lines.contains(&"hello".to_string()), "lines: {lines:?}");
+    }
+
+    #[test]
+    fn dispatch_r_missing_file_returns_error() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["line1"]);
+        let result = try_dispatch(&reg, &mut editor, "r /nonexistent/path/xyz.txt");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    // ---- Phase 8a: :!cmd shell filter ----------------------------------------
+
+    #[test]
+    fn dispatch_shell_empty_cmd_returns_error() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["hello"]);
+        let result = try_dispatch(&reg, &mut editor, "!");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_shell_no_range_returns_info() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["hello"]);
+        let result = try_dispatch(&reg, &mut editor, "!echo hello");
+        match result {
+            Some(ExEffect::Info(msg)) => assert!(msg.contains("hello"), "got: {msg}"),
+            other => panic!("expected Some(Info(_)), got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_shell_range_filter() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["banana", "apple", "cherry"]);
+        let result = try_dispatch(&reg, &mut editor, "1,3!sort");
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        let lines = editor.buffer().lines().to_vec();
+        assert_eq!(lines[0], "apple");
+        assert_eq!(lines[1], "banana");
+        assert_eq!(lines[2], "cherry");
+    }
+
+    // ---- Phase 8a: :global / :vglobal ----------------------------------------
+
+    #[test]
+    fn dispatch_g_d_deletes_matching_lines() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "bar", "foo"]);
+        let result = try_dispatch(&reg, &mut editor, "g/foo/d");
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 2, .. })),
+            "got: {result:?}"
+        );
+        let lines = editor.buffer().lines().to_vec();
+        assert!(!lines.contains(&"foo".to_string()), "lines: {lines:?}");
+    }
+
+    #[test]
+    fn dispatch_v_d_deletes_non_matching_lines() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "bar", "baz"]);
+        let result = try_dispatch(&reg, &mut editor, "v/foo/d");
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { .. })),
+            "got: {result:?}"
+        );
+        let lines = editor.buffer().lines().to_vec();
+        assert!(!lines.contains(&"bar".to_string()));
+        assert!(!lines.contains(&"baz".to_string()));
+    }
+
+    #[test]
+    fn dispatch_global_full_name_works() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "bar"]);
+        let result = try_dispatch(&reg, &mut editor, "global/foo/d");
+        assert!(matches!(result, Some(ExEffect::Substituted { .. })));
+    }
+
+    #[test]
+    fn dispatch_vglobal_full_name_works() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "bar"]);
+        let result = try_dispatch(&reg, &mut editor, "vglobal/foo/d");
+        assert!(matches!(result, Some(ExEffect::Substituted { .. })));
+    }
+
+    // ---- Phase 8a: search-as-address -----------------------------------------
+
+    #[test]
+    fn dispatch_search_forward_jumps_to_line() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["apple", "banana", "cherry"]);
+        let result = try_dispatch(&reg, &mut editor, "/banana");
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        assert_eq!(editor.cursor().0, 1, "cursor should be on row 1 (banana)");
+    }
+
+    #[test]
+    fn dispatch_search_backward_jumps_to_line() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["apple", "banana", "cherry"]);
+        // Move cursor to row 2 (cherry) first.
+        editor.goto_line(3);
+        let result = try_dispatch(&reg, &mut editor, "?apple");
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        assert_eq!(editor.cursor().0, 0, "cursor should be on row 0 (apple)");
+    }
+
+    #[test]
+    fn dispatch_search_bad_pattern_returns_error() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "/[bad");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_search_empty_no_prior_returns_error() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "/");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
         );
     }
 }

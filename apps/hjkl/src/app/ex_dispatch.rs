@@ -32,8 +32,9 @@ fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
         Src::Error(s) => ExEffect::Error(s),
         // Phase 2b variants are intercepted in dispatch_ex before reaching
         // this bridge — they should never arrive here.
+        // Phase 8a: ReadFile is now dead code (hjkl-ex handles :read fully).
         Src::EditFile { .. } | Src::ReadFile { .. } | Src::BufferDelete { .. } => {
-            unreachable!("Phase 2b effects are handled before bridge_ex_effect")
+            unreachable!("Phase 2b/8a effects are handled before bridge_ex_effect")
         }
     }
 }
@@ -279,23 +280,11 @@ impl App {
                     self.do_edit(&path, force);
                     return;
                 }
-                hjkl_ex::ExEffect::ReadFile { path } => {
-                    // `:r <path>` — delegate to legacy ex::run which calls
-                    // apply_read_file. Reconstruct the canonical form so the
-                    // legacy dispatcher can parse it.
-                    let legacy_cmd = format!("read {path}");
-                    let read_effect = ex::run(&mut self.slots[active_slot].editor, &legacy_cmd);
-                    self.sync_viewport_from_editor();
-                    match read_effect {
-                        ExEffect::Ok => {}
-                        ExEffect::Info(msg) => {
-                            self.status_message = Some(msg);
-                        }
-                        ExEffect::Error(msg) => {
-                            self.status_message = Some(format!("E: {msg}"));
-                        }
-                        _ => {}
-                    }
+                hjkl_ex::ExEffect::ReadFile { .. } => {
+                    // Phase 8a: hjkl-ex read_handler now handles `:r <path>`
+                    // fully (returns Ok/Error/Info directly). This arm is dead
+                    // code; the ReadFile variant will be removed in Phase 8b.
+                    // Kept here only so the exhaustive match compiles.
                     return;
                 }
                 hjkl_ex::ExEffect::BufferDelete { force, wipe: _ } => {
