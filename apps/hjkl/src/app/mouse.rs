@@ -261,25 +261,60 @@ pub enum Zone {
     },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
-    /// On the buffer line (one entry per open slot) — shown when
-    /// `app.slots.len() > 1`. Sits at row 0 by itself, or at row 1
-    /// when the tab bar is also visible.
+    /// On the buffer-line region of the unified top bar (one entry per open
+    /// slot, left-aligned) — shown when `app.slots.len() > 1`. Always at
+    /// row 0; shares the row with `TabBar` entries (right-aligned).
     BufferLine { slot_idx: usize },
     /// Outside every known zone (e.g. the status line).
     None,
 }
 
-/// Compute the x-position ranges for each tab label on the tab bar.
+/// Compute the total cell width consumed by all tab labels in the unified top bar.
 ///
-/// Mirrors the layout logic in `render::tab_bar` so that click coordinates can
-/// be mapped to a tab index without exposing render internals.
+/// Tabs are right-aligned; this value is subtracted from the bar width to find
+/// where the tab region begins (i.e. `start_x = bar_width - tabs_total_width()`).
+pub fn tabs_total_width(app: &App) -> usize {
+    let mut total = 0usize;
+    for (i, tab) in app.tabs.iter().enumerate() {
+        let slot_idx = app.windows[tab.focused_window]
+            .as_ref()
+            .map(|w| w.slot)
+            .unwrap_or(0);
+        let slot = &app.slots()[slot_idx];
+        let base_name = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[No Name]");
+        let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
+            app.windows[wid]
+                .as_ref()
+                .map(|w| app.slots()[w.slot].dirty)
+                .unwrap_or(false)
+        });
+        let label = if tab_dirty {
+            format!("[{}: +{}]", i + 1, base_name)
+        } else {
+            format!("[{}: {}]", i + 1, base_name)
+        };
+        let sep_len = if i == 0 { 0 } else { 1 }; // single space between tabs
+        total += sep_len + label.len();
+    }
+    total
+}
+
+/// Compute the x-position ranges for each tab label on the unified top bar.
 ///
-/// Each tab occupies `[start, start + len)` cells. The returned `Vec` has one
-/// entry per tab; entries past the visible area are absent (truncation).
+/// Mirrors the layout logic in `render::top_bar` (right-aligned tabs).
+/// `start_x` is the column where tabs begin: `bar_width - tabs_total_width()`.
+///
+/// Each tab occupies `[start, end)` cells in absolute screen columns.
 pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
-    let max_width = bar_width as usize;
+    let total_tabs = tabs_total_width(app);
+    let start_x = (bar_width as usize).saturating_sub(total_tabs);
     let mut ranges = Vec::new();
-    let mut used = 0usize;
+    let mut used = start_x;
 
     for (i, tab) in app.tabs.iter().enumerate() {
         let slot_idx = app.windows[tab.focused_window]
@@ -304,30 +339,31 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
         } else {
             format!("[{}: {}]", i + 1, base_name)
         };
-
         let sep_len = if i == 0 { 0 } else { 1 }; // single space between entries
         let entry_width = sep_len + label.len();
 
-        if used + entry_width > max_width {
-            break;
-        }
-
-        let start = (used + sep_len) as u16;
-        let end = (used + entry_width) as u16;
-        ranges.push((start, end));
+        let entry_start = (used + sep_len) as u16;
+        let entry_end = (used + entry_width) as u16;
+        ranges.push((entry_start, entry_end));
         used += entry_width;
     }
 
     ranges
 }
 
-/// Compute the x-position ranges for each entry on the buffer line — the
-/// one-row strip rendered above the editor when `app.slots.len() > 1`.
+/// Compute the x-position ranges for each entry on the buffer-line region of
+/// the unified top bar. Buffers are left-aligned, starting at col 0.
 ///
-/// Mirrors `render::buffer_line` (separator `│` between entries, label
-/// formatted as ` name ` or ` name+ ` when dirty).
+/// `bar_width` is the full row width. `buf_budget` is the number of cells
+/// available to buffers (`bar_width - tabs_total_width` when tabs are shown,
+/// `bar_width` otherwise).
+///
+/// Mirrors `render::top_bar` (separator `│` between entries, label formatted
+/// as ` name ` or ` name+ ` when dirty).
 pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
-    let max_width = bar_width as usize;
+    let show_tabs = app.tabs.len() > 1;
+    let tabs_len = if show_tabs { tabs_total_width(app) } else { 0 };
+    let buf_budget = (bar_width as usize).saturating_sub(tabs_len);
     let mut ranges = Vec::new();
     let mut used = 0usize;
 
@@ -347,7 +383,7 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
         let sep_len = if i == 0 { 0 } else { 1 }; // single '│' between entries
         let entry_width = sep_len + label.len();
 
-        if used + entry_width > max_width {
+        if used + entry_width > buf_budget {
             break;
         }
 
@@ -363,23 +399,20 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
 /// Classify a terminal cell `(col, row)` into a [`Zone`].
 ///
 /// Resolution order:
-/// 1. If on the tab bar row (only present when `app.tabs.len() > 1`) → map
-///    `col` to a tab index.
-/// 2. If on the buffer line row (only present when `app.slots.len() > 1`,
-///    sits below the tab bar when both are shown) → map `col` to a slot index.
-/// 3. Otherwise, try [`hit_test_window`] to find a containing window.
+/// 1. If the unified top bar is visible (`app.tabs.len() > 1 ||
+///    app.slots().len() > 1`) and `row == 0`:
+///    - Right side (tab region): if `col` falls in a tab range → `Zone::TabBar`.
+///    - Left side (buffer region): if `col` falls in a buffer range →
+///      `Zone::BufferLine`.
+///    - Otherwise → `Zone::None`.
+/// 2. Otherwise, try [`hit_test_window`] to find a containing window.
 ///    - If the click x-offset is inside the gutter → [`Zone::Gutter`].
 ///    - If the click translates to a doc position → [`Zone::Code`].
-/// 4. Fallback → [`Zone::None`].
+/// 3. Fallback → [`Zone::None`].
 pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     let show_tab_bar = app.tabs.len() > 1;
     let show_buffer_line = app.slots().len() > 1;
-    let tab_bar_row: Option<u16> = if show_tab_bar { Some(0) } else { None };
-    let buffer_line_row: Option<u16> = if show_buffer_line {
-        Some(if show_tab_bar { 1 } else { 0 })
-    } else {
-        None
-    };
+    let show_top_bar = show_tab_bar || show_buffer_line;
 
     // Terminal width fallback for bar-geometry math (windows publish their
     // last_rect every frame; before the first render we use 80 as a safe
@@ -393,23 +426,25 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         .max()
         .unwrap_or(80);
 
-    // ── 1. Tab bar ────────────────────────────────────────────────────────
-    if Some(row) == tab_bar_row {
-        let ranges = tab_x_ranges(app, bar_width);
-        for (i, (start, end)) in ranges.iter().enumerate() {
-            if col >= *start && col < *end {
-                return Zone::TabBar { tab_idx: i };
+    // ── 1. Unified top bar (row 0) ────────────────────────────────────────
+    if show_top_bar && row == 0 {
+        // Check tab region first (right-aligned); tabs take priority over
+        // the padding between left and right sides.
+        if show_tab_bar {
+            let tab_ranges = tab_x_ranges(app, bar_width);
+            for (i, (start, end)) in tab_ranges.iter().enumerate() {
+                if col >= *start && col < *end {
+                    return Zone::TabBar { tab_idx: i };
+                }
             }
         }
-        return Zone::None;
-    }
-
-    // ── 2. Buffer line ────────────────────────────────────────────────────
-    if Some(row) == buffer_line_row {
-        let ranges = buffer_line_x_ranges(app, bar_width);
-        for (i, (start, end)) in ranges.iter().enumerate() {
-            if col >= *start && col < *end {
-                return Zone::BufferLine { slot_idx: i };
+        // Check buffer region (left-aligned).
+        if show_buffer_line {
+            let buf_ranges = buffer_line_x_ranges(app, bar_width);
+            for (i, (start, end)) in buf_ranges.iter().enumerate() {
+                if col >= *start && col < *end {
+                    return Zone::BufferLine { slot_idx: i };
+                }
             }
         }
         return Zone::None;
@@ -773,5 +808,186 @@ mod tests {
         if let Zone::BufferLine { .. } = zone {
             panic!("expected no buffer line zone for single-slot app");
         }
+    }
+
+    // ── Unified top bar tests (T3) ────────────────────────────────────────────
+
+    /// Helper: build an app with multiple slots (via `:e`) AND multiple tabs
+    /// (via `:tabnew`).  Note: `:tabnew` without args adds an anonymous slot,
+    /// so `app.slots().len()` will be `n_slots + n_extra_tabs`.
+    /// Window 0 gets `last_rect` set to a wide area so bar_width is correct.
+    fn make_app_with_slots_and_tabs(
+        n_slots: usize,
+        n_extra_tabs: usize,
+    ) -> (App, Vec<std::path::PathBuf>) {
+        assert!(n_slots >= 1);
+        let mut paths = Vec::new();
+        // Create temp files for all slots.
+        for i in 0..n_slots {
+            let p = std::env::temp_dir().join(format!("hjkl_unified_{i}_{}.txt", rand_suffix()));
+            std::fs::write(&p, "content\n").unwrap();
+            paths.push(p);
+        }
+        let mut app = App::new(Some(paths[0].clone()), false, None, None).unwrap();
+        // Open remaining slots.
+        for p in &paths[1..] {
+            app.dispatch_ex(&format!("e {}", p.display()));
+        }
+        // Open extra tabs (each adds 1 anonymous slot).
+        for _ in 0..n_extra_tabs {
+            app.dispatch_ex("tabnew");
+        }
+        // Wide window so bar geometry doesn't truncate anything in tests.
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+        }
+        (app, paths)
+    }
+
+    /// 3 slots + 2 tabs → unified bar at row 0.
+    /// Col 0 → BufferLine{0}; col near right edge → TabBar{last}.
+    #[test]
+    fn hit_test_zone_unified_bar_buffer_then_tab_horizontal() {
+        // 3 slots via :e + 1 extra tab via :tabnew = 4 slots, 2 tabs.
+        let (app, paths) = make_app_with_slots_and_tabs(3, 1);
+        assert!(app.slots().len() > 1, "expected multiple slots");
+        assert_eq!(app.tabs.len(), 2, "expected 2 tabs");
+
+        // Col 0 must be in the first buffer entry (left-aligned).
+        let zone0 = hit_test_zone(&app, 0, 0);
+        assert_eq!(
+            zone0,
+            Zone::BufferLine { slot_idx: 0 },
+            "col 0 row 0 should be BufferLine{{0}} (got {zone0:?})"
+        );
+
+        // The last tab label sits flush with col 199 (bar_width - 1).
+        // Find it via tab_x_ranges.
+        let tab_ranges = tab_x_ranges(&app, 200);
+        assert_eq!(tab_ranges.len(), 2, "expected 2 tab ranges");
+        let (last_start, last_end) = tab_ranges[1];
+        // Click somewhere inside the last tab's range.
+        let click_col = last_start + (last_end - last_start) / 2;
+        let zone_tab = hit_test_zone(&app, click_col, 0);
+        assert_eq!(
+            zone_tab,
+            Zone::TabBar { tab_idx: 1 },
+            "click at col {click_col} row 0 should be TabBar{{1}} (got {zone_tab:?})"
+        );
+
+        cleanup_paths(&paths);
+    }
+
+    /// 1 initial slot + 1 extra tab (via :tabnew which adds anon slot) = 2 slots, 2 tabs.
+    /// But what matters: tabs.len() > 1, and buffer region of first slot (slot 0,
+    /// which is NOT the active tab's slot) maps correctly.
+    /// Separately: test with a single-slot setup where no buffer line shows.
+    ///
+    /// Use `make_app_with_slots_and_tabs(1, 1)` → 2 slots (1 original + 1 anon), 2 tabs.
+    /// The active tab shows the anon slot; the buffer line will render (2 slots).
+    /// For "only tabs, no buffers" we need single-slot + multi-tab without extra slot creation.
+    /// We build that inline.
+    #[test]
+    fn hit_test_zone_unified_bar_only_tabs_no_buffers() {
+        // Build an app with only 1 slot but 2 tabs.
+        // Open a second tab by using tabnew with a temp file so no extra anon slot is added.
+        // Actually open_new_slot always pushes. Use a different approach:
+        // open second tab using `tabnew` then bdelete the anon slot.
+        // Simplest: just use make_app_with_n_slots(1) + manually inject a second tab
+        // pointing to the same slot.
+        use crate::app::window::{LayoutTree, Tab};
+        let mut app = App::new(None, false, None, None).unwrap();
+        // Manually add a second tab pointing to slot 0 (same as first tab).
+        let new_win_id = app.next_window_id;
+        app.next_window_id += 1;
+        app.windows.push(Some(crate::app::window::Window {
+            slot: 0,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: 0,
+            cursor_col: 0,
+            last_rect: None,
+        }));
+        app.tabs.push(Tab {
+            layout: LayoutTree::Leaf(new_win_id),
+            focused_window: new_win_id,
+        });
+        // Wide window for bar_width.
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+        }
+        assert_eq!(app.slots().len(), 1, "expected 1 slot");
+        assert_eq!(app.tabs.len(), 2, "expected 2 tabs");
+
+        // Col 0 is padding (buffer region empty) → Zone::None.
+        let zone_left = hit_test_zone(&app, 0, 0);
+        assert_eq!(
+            zone_left,
+            Zone::None,
+            "col 0 with no buffers should be Zone::None (got {zone_left:?})"
+        );
+
+        // Click inside the first tab range → TabBar{0}.
+        let tab_ranges = tab_x_ranges(&app, 200);
+        assert!(!tab_ranges.is_empty(), "tab_ranges must not be empty");
+        let (start0, end0) = tab_ranges[0];
+        let click_col = start0 + (end0 - start0) / 2;
+        let zone_tab = hit_test_zone(&app, click_col, 0);
+        assert_eq!(
+            zone_tab,
+            Zone::TabBar { tab_idx: 0 },
+            "click at col {click_col} row 0 should be TabBar{{0}} (got {zone_tab:?})"
+        );
+
+        // No paths to clean up (anonymous slot).
+    }
+
+    /// Single tab + 3 slots. Tab region is empty (no tabbar when 1 tab).
+    /// Click on buffers → BufferLine.
+    #[test]
+    fn hit_test_zone_unified_bar_only_buffers_no_tabs() {
+        // 3 slots via :e, 0 extra tabs → 3 slots, 1 tab.
+        let (app, paths) = make_app_with_slots_and_tabs(3, 0);
+        assert_eq!(app.slots().len(), 3, "expected 3 slots");
+        assert_eq!(app.tabs.len(), 1, "expected 1 tab");
+
+        let buf_ranges = buffer_line_x_ranges(&app, 200);
+        assert_eq!(buf_ranges.len(), 3, "expected 3 buffer ranges");
+
+        for (i, (start, _)) in buf_ranges.iter().enumerate() {
+            let zone = hit_test_zone(&app, *start, 0);
+            assert_eq!(
+                zone,
+                Zone::BufferLine { slot_idx: i },
+                "col {start} row 0 should be BufferLine{{{i}}} (got {zone:?})"
+            );
+        }
+
+        cleanup_paths(&paths);
+    }
+
+    /// Single tab + single slot → no top bar. Row 0 is the editor, not the bar.
+    #[test]
+    fn hit_test_zone_no_bar_at_all_when_single_tab_single_slot() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        // Set up window rect so hit_test_window can find it.
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+        }
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.width = 80;
+            vp.height = 24;
+            vp.text_width = 80;
+        }
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.slots().len(), 1);
+
+        // Row 0 must NOT be Zone::TabBar or Zone::BufferLine.
+        let zone = hit_test_zone(&app, 10, 0);
+        assert!(
+            !matches!(zone, Zone::TabBar { .. } | Zone::BufferLine { .. }),
+            "single tab + single slot: row 0 should be editor zone, got {zone:?}"
+        );
     }
 }
