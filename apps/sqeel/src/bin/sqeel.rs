@@ -436,8 +436,8 @@ fn main() -> anyhow::Result<()> {
             }
 
             if dirty && last_write.elapsed() >= std::time::Duration::from_millis(1000) {
-                if let Some(ref name) = pending_conn {
-                    let _ = save_session(
+                if let Some(ref name) = pending_conn
+                    && let Err(e) = save_session(
                         name,
                         pending_cursor,
                         pending_cursor_path.clone(),
@@ -448,7 +448,9 @@ fn main() -> anyhow::Result<()> {
                         pending_active_tab,
                         pending_result_tabs.clone(),
                         pending_active_result_tab,
-                    );
+                    )
+                {
+                    tracing::warn!(error = %e, "session save failed");
                 }
                 last_written_conn = pending_conn.clone();
                 last_written_cursor = pending_cursor;
@@ -521,6 +523,7 @@ fn saved_ref_from_tab(t: &ResultsTab) -> Option<sqeel_core::config::SavedResultR
         // …) whose summary loses meaning once the user reopens the
         // app and the rows_affected count no longer matches reality.
         P::Loading | P::Empty | P::NonQuery { .. } => None,
+        _ => None,
     }
 }
 
@@ -628,7 +631,9 @@ fn spawn_executor(
     // Databases (initial) → Tables(db) when a db is expanded → Columns(db,table)
     // when a table is expanded. Nothing is fetched unless the user opens that
     // level of the sidebar.
-    let (load_tx, load_rx) = tokio::sync::mpsc::unbounded_channel::<SchemaLoadRequest>();
+    // Bounded to 64 to prevent OOM from burst schema expansions. The
+    // in-flight dedup in `request_schema_load` prevents starvation.
+    let (load_tx, load_rx) = tokio::sync::mpsc::channel::<SchemaLoadRequest>(64);
     {
         let mut s = state.lock().unwrap();
         s.schema_load_tx = Some(load_tx.clone());
@@ -711,6 +716,8 @@ fn spawn_executor(
                             // Cancelled before the query completed.
                             s.finish_result_tab(tab_idx, ResultsPane::Cancelled);
                         }
+                        // Future ExecOutcome variants — treat as no-op for now.
+                        Some(Ok(_)) => {}
                     }
                     s.results_dirty = true;
                 }
@@ -780,6 +787,8 @@ fn spawn_executor(
                                     cancelled = true;
                                     (false, true)
                                 }
+                                // Future ExecOutcome variants — treat as no-op for now.
+                                Some(Ok(_)) => (false, false),
                             };
                             s.results_dirty = true;
                             (is_err, stop)
@@ -880,14 +889,18 @@ fn collect_expanded_load_requests(nodes: &[SchemaNode]) -> Vec<SchemaLoadRequest
 async fn schema_loader_task(
     conn: Arc<DbConnection>,
     state: Arc<std::sync::Mutex<AppState>>,
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<SchemaLoadRequest>,
-    tx: tokio::sync::mpsc::UnboundedSender<SchemaLoadRequest>,
+    mut rx: tokio::sync::mpsc::Receiver<SchemaLoadRequest>,
+    tx: tokio::sync::mpsc::Sender<SchemaLoadRequest>,
     session_schema_cursor: usize,
     session_schema_cursor_path: Option<String>,
     session_schema_expanded_paths: Vec<String>,
 ) {
-    const LOAD_CONCURRENCY: usize = 8;
-    let sem = Arc::new(tokio::sync::Semaphore::new(LOAD_CONCURRENCY));
+    // DuckDB exposes a single connection behind a Mutex; concurrent schema
+    // loads would all contend on that lock, producing no real parallelism and
+    // risking starvation. Cap to 1 for DuckDB; other engines can run up to 8
+    // concurrent loads because they have proper connection pools.
+    let load_concurrency: usize = if conn.is_duckdb() { 1 } else { 8 };
+    let sem = Arc::new(tokio::sync::Semaphore::new(load_concurrency));
     // On the first Databases response we also re-apply the user's saved
     // expansion (if any) so lazy fetches fire for nodes they had open.
     let mut databases_loaded = false;
@@ -937,7 +950,9 @@ async fn schema_loader_task(
                                     let follow_ups =
                                         collect_expanded_load_requests(&s.schema_nodes);
                                     for f in follow_ups {
-                                        let _ = req_tx.send(f);
+                                        if let Err(e) = req_tx.try_send(f) {
+                                            tracing::warn!("schema follow-up send failed: {e}");
+                                        }
                                     }
                                 }
                             }
@@ -968,7 +983,9 @@ async fn schema_loader_task(
                                     .collect()
                             };
                             for f in follow_ups {
-                                let _ = req_tx.send(f);
+                                if let Err(e) = req_tx.try_send(f) {
+                                    tracing::warn!("schema follow-up send failed: {e}");
+                                }
                             }
                         }
                         Err(e) => {
