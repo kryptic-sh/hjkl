@@ -12525,6 +12525,57 @@ mod border_drag_tests {
         );
     }
 
+    /// Regression: `screen_rect()` must include the top bar's row when the
+    /// top bar is visible (tabs > 1 OR slots > 1). The previous bug
+    /// counted only `vp.height + STATUS_LINE_HEIGHT`, undercounting total
+    /// terminal height by 1 row whenever the top bar was shown. That made
+    /// `ContextMenu::bounding_rect` think the screen was 1 row shorter
+    /// than reality, so it flipped popups near the bottom one row too
+    /// early — and the `Moved` handler's row→item math disagreed with
+    /// the renderer.
+    #[test]
+    fn screen_rect_includes_top_bar_when_multiple_slots() {
+        let path_a = std::env::temp_dir().join("hjkl_screen_rect_a.txt");
+        let path_b = std::env::temp_dir().join("hjkl_screen_rect_b.txt");
+        for p in [&path_a, &path_b] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+        let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+        // Set viewport to a known size so the math is predictable.
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.width = 80;
+            vp.height = 22; // 24-row terminal minus top + status
+        }
+        // Single-slot baseline: top bar hidden, height = vp.height + STATUS.
+        let single = app.screen_rect();
+        assert_eq!(
+            single.height,
+            22 + STATUS_LINE_HEIGHT,
+            "single-slot screen height must skip the (absent) top bar"
+        );
+
+        // Open a second slot → top bar becomes visible.
+        app.dispatch_ex(&format!("e {}", path_b.display()));
+        let active = app.focused_slot_idx();
+        {
+            let vp = app.slots_mut()[active].editor.host_mut().viewport_mut();
+            vp.width = 80;
+            vp.height = 22;
+        }
+        let multi = app.screen_rect();
+        assert_eq!(
+            multi.height,
+            TOP_BAR_HEIGHT + 22 + STATUS_LINE_HEIGHT,
+            "multi-slot screen height must include the top bar row \
+             (otherwise context-menu hover near the bottom maps to the wrong item)"
+        );
+
+        for p in [&path_a, &path_b] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
     #[test]
     fn dismiss_hover_popup_on_click_is_idempotent_when_no_popup() {
         let mut app = App::new(None, false, None, None).unwrap();

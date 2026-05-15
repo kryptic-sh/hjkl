@@ -1394,14 +1394,23 @@ impl App {
 
     /// Full-screen rect for clamping popups / context menus to the
     /// terminal area. Matches the layout `render::frame` computes:
-    /// editor viewport plus the bottom status line.
+    /// optional top bar (tabs + buffer line, when multiple slots OR
+    /// tabs are open) + editor viewport + bottom status line.
+    ///
+    /// MUST include the top bar when it's visible — otherwise this
+    /// underestimates total height by 1 row and a popup anchored near
+    /// the bottom flips one row too soon, putting the
+    /// `Moved`-handler's row→item math out of sync with what
+    /// `bounding_rect` produces at render time.
     pub(crate) fn screen_rect(&self) -> ratatui::layout::Rect {
         let vp = self.active().editor.host().viewport();
+        let show_top_bar = self.tabs.len() > 1 || self.slots.len() > 1;
+        let top_bar_h = if show_top_bar { TOP_BAR_HEIGHT } else { 0 };
         ratatui::layout::Rect {
             x: 0,
             y: 0,
             width: vp.width,
-            height: vp.height + STATUS_LINE_HEIGHT,
+            height: top_bar_h + vp.height + STATUS_LINE_HEIGHT,
         }
     }
 
