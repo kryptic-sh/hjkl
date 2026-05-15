@@ -367,6 +367,22 @@ pub enum Zone {
     /// slot, left-aligned) — shown when `app.slots.len() > 1`. Always at
     /// row 0; shares the row with `TabBar` entries (right-aligned).
     BufferLine { slot_idx: usize },
+    /// On the status line (bottom row when no prompt/command overlay is active).
+    StatusLine,
+    /// On a split border (the 1-cell divider between two panes).
+    SplitBorder {
+        /// Orientation of the split this border belongs to.
+        orientation: super::mouse::SplitOrientation,
+        /// Border cell in terminal coordinates (col, row).
+        border_cell: (u16, u16),
+        /// Origin of the split's `last_rect` (x for VSplit, y for HSplit).
+        split_origin: u16,
+        /// Total size of the split's `last_rect`.
+        split_total: u16,
+    },
+    /// On a visible row inside the picker overlay. `row_idx` is the
+    /// 0-based index into the picker's current filtered list.
+    PickerRow { row_idx: usize },
     /// Outside every known zone (e.g. the status line).
     None,
 }
@@ -498,20 +514,123 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
     ranges
 }
 
+/// Compute the picker overlay rect for the current viewport, mirroring the
+/// geometry in `render::picker_overlay` (80% width, 70% height, centered in
+/// buf_area).
+///
+/// Returns `None` when no picker is open or the viewport has not been
+/// initialised yet.
+pub fn picker_overlay_rect(app: &App) -> Option<Rect> {
+    app.picker.as_ref()?;
+    let vp = app.active().editor.host().viewport();
+    let show_top_bar = app.tabs.len() > 1 || app.slots().len() > 1;
+    let top_bar_h = if show_top_bar {
+        crate::app::TOP_BAR_HEIGHT
+    } else {
+        0
+    };
+    let buf_area = Rect {
+        x: 0,
+        y: top_bar_h,
+        width: vp.width,
+        height: vp.height,
+    };
+    // centered_rect(80, 70, buf_area)
+    let width = buf_area.width.saturating_mul(80) / 100;
+    let height = buf_area.height.saturating_mul(70) / 100;
+    let x = buf_area.x + (buf_area.width.saturating_sub(width)) / 2;
+    let y = buf_area.y + (buf_area.height.saturating_sub(height)) / 2;
+    Some(Rect {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+/// Hit-test a terminal cell against the picker's result list, returning the
+/// 0-based filtered-row index when the click lands on a list item.
+///
+/// Mirrors `render::render_picker_input_and_list` geometry:
+/// - The overlay area = `picker_overlay_rect`.
+/// - When the source has a preview AND `area.width >= 80`, the left half is
+///   the list side (split at 50%); otherwise the whole area is the list side.
+/// - Inside the list side: the first 3 rows are the input block; the remainder
+///   is the list block (with a 1-cell border on each side).
+/// - List row `i` is at absolute terminal row `list_area.y + 1 + i`.
+pub fn hit_test_picker_row(app: &App, col: u16, row: u16) -> Option<usize> {
+    let area = picker_overlay_rect(app)?;
+
+    let picker = app.picker.as_ref()?;
+    let has_preview = picker.has_preview();
+
+    // Determine the list side (left pane).
+    const PREVIEW_MIN_WIDTH: u16 = 80;
+    let left_area = if has_preview && area.width >= PREVIEW_MIN_WIDTH {
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width / 2,
+            height: area.height,
+        }
+    } else {
+        area
+    };
+
+    // Click must land in the left area.
+    if !rect_contains(left_area, col, row) {
+        return None;
+    }
+
+    // Input block occupies first 3 rows of left_area; list is the rest.
+    let input_h: u16 = 3;
+    if left_area.height <= input_h {
+        return None;
+    }
+    let list_y = left_area.y + input_h;
+    let list_h = left_area.height - input_h;
+
+    // The list block has a 1-cell border; inner rows start at list_y + 1.
+    if row <= list_y || row >= list_y + list_h {
+        return None;
+    }
+    let item_idx = (row - list_y - 1) as usize;
+
+    // Validate against the number of visible entries.
+    let entry_count = picker.visible_entries().len();
+    if item_idx >= entry_count {
+        return None;
+    }
+
+    Some(item_idx)
+}
+
 /// Classify a terminal cell `(col, row)` into a [`Zone`].
 ///
 /// Resolution order:
-/// 1. If the unified top bar is visible (`app.tabs.len() > 1 ||
+/// 1. **Picker exclusive**: when the picker is open, check `hit_test_picker_row`.
+///    Returns `Zone::PickerRow` or `Zone::None`; no other zones are tested.
+/// 2. If the unified top bar is visible (`app.tabs.len() > 1 ||
 ///    app.slots().len() > 1`) and `row == 0`:
 ///    - Right side (tab region): if `col` falls in a tab range → `Zone::TabBar`.
 ///    - Left side (buffer region): if `col` falls in a buffer range →
 ///      `Zone::BufferLine`.
 ///    - Otherwise → `Zone::None`.
-/// 2. Otherwise, try [`hit_test_window`] to find a containing window.
-///    - If the click x-offset is inside the gutter → [`Zone::Gutter`].
-///    - If the click translates to a doc position → [`Zone::Code`].
-/// 3. Fallback → [`Zone::None`].
+/// 3. Status line: bottom row when no overlay is active → `Zone::StatusLine`.
+/// 4. Split border: `hit_test_border` → `Zone::SplitBorder`.
+/// 5. Window hit-test:
+///    - Gutter → `Zone::Gutter`.
+///    - Text area → `Zone::Code`.
+/// 6. Fallback → `Zone::None`.
 pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
+    // ── 1. Picker is exclusive ────────────────────────────────────────────
+    if app.picker.is_some() {
+        return match hit_test_picker_row(app, col, row) {
+            Some(row_idx) => Zone::PickerRow { row_idx },
+            None => Zone::None,
+        };
+    }
+
     let show_tab_bar = app.tabs.len() > 1;
     let show_buffer_line = app.slots().len() > 1;
     let show_top_bar = show_tab_bar || show_buffer_line;
@@ -528,7 +647,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         .max()
         .unwrap_or(80);
 
-    // ── 1. Unified top bar (row 0) ────────────────────────────────────────
+    // ── 2. Unified top bar (row 0) ────────────────────────────────────────
     if show_top_bar && row == 0 {
         // Check tab region first (right-aligned); tabs take priority over
         // the padding between left and right sides.
@@ -552,7 +671,26 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         return Zone::None;
     }
 
-    // ── 2. Window hit-test ────────────────────────────────────────────────
+    // ── 3. Status line (bottom row, no overlay) ───────────────────────────
+    // The terminal height is the full screen rect height.
+    let screen = app.screen_rect();
+    let terminal_height = screen.height;
+    let is_status_row = row + 1 == terminal_height; // row is 0-based
+    if is_status_row && !app.overlay_active() {
+        return Zone::StatusLine;
+    }
+
+    // ── 4. Split border ───────────────────────────────────────────────────
+    if let Some(bh) = hit_test_border(app, col, row) {
+        return Zone::SplitBorder {
+            orientation: bh.orientation,
+            border_cell: bh.border_cell,
+            split_origin: bh.split_origin,
+            split_total: bh.split_total,
+        };
+    }
+
+    // ── 5. Window hit-test ────────────────────────────────────────────────
     let Some(win_id) = hit_test_window(app, col, row) else {
         return Zone::None;
     };
@@ -1294,5 +1432,118 @@ mod tests {
             !matches!(zone, Zone::TabBar { .. } | Zone::BufferLine { .. }),
             "single tab + single slot: row 0 should be editor zone, got {zone:?}"
         );
+    }
+
+    // ── Phase 7+8 zone tests ──────────────────────────────────────────────────
+
+    /// Helper: build a minimal App with viewport set to 80x24 (no top bar).
+    fn make_basic_app_80x24() -> App {
+        let mut app = App::new(None, false, None, None).unwrap();
+        if let Some(Some(win)) = app.windows.get_mut(0) {
+            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+        }
+        {
+            let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+            vp.width = 80;
+            vp.height = 24;
+            vp.text_width = 80;
+            vp.top_row = 0;
+            vp.top_col = 0;
+        }
+        app
+    }
+
+    /// Click on the last terminal row with no overlay active must return
+    /// `Zone::StatusLine`.
+    ///
+    /// With vp.height=24 and STATUS_LINE_HEIGHT=1 (no top bar):
+    /// screen height = 25; status row = 24.
+    #[test]
+    fn hit_test_zone_status_line_at_bottom() {
+        let app = make_basic_app_80x24();
+
+        // Confirm single tab + single slot → no top bar.
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.slots().len(), 1);
+
+        let screen = app.screen_rect();
+        // The status row is the last row (0-based: screen.height - 1).
+        let status_row = screen.height.saturating_sub(1);
+        let zone = hit_test_zone(&app, 10, status_row);
+        assert_eq!(
+            zone,
+            Zone::StatusLine,
+            "click at row={status_row} (last row, no overlay) should be Zone::StatusLine; got {zone:?}"
+        );
+    }
+
+    /// Click on a row ABOVE the status line must NOT return `Zone::StatusLine`.
+    #[test]
+    fn hit_test_zone_above_status_line_is_not_status_zone() {
+        let app = make_basic_app_80x24();
+        let screen = app.screen_rect();
+        let above_status = screen.height.saturating_sub(2);
+        let zone = hit_test_zone(&app, 10, above_status);
+        assert!(
+            !matches!(zone, Zone::StatusLine),
+            "row above status line must not be Zone::StatusLine; got {zone:?}"
+        );
+    }
+
+    /// When the picker is open, `hit_test_zone` must return `Zone::PickerRow` for
+    /// cells inside the picker list area, and `Zone::None` for cells outside the
+    /// picker overlay. No other zone should be returned regardless of what lies
+    /// underneath the overlay.
+    ///
+    /// Picker geometry (80x24 viewport, no top bar, no preview because source
+    /// has no preview):
+    ///   buf_area = {0, 0, 80, 24}  (top_bar_h=0)
+    ///   area = centered_rect(80, 70, buf_area)
+    ///       width=64, height=16, x=8, y=4
+    ///   left_area = area (no preview — has_preview=false keeps full area)
+    ///   input_area = {x:8, y:4, w:64, h:3}
+    ///   list_area  = {x:8, y:7, w:64, h:13}
+    ///   list items start at row 8 (list_area.y + 1 = 7+1 = 8)
+    #[test]
+    fn hit_test_zone_picker_is_exclusive() {
+        use crate::picker::Picker;
+        use crate::picker_sources::FileSourceWithOpen;
+
+        let mut app = make_basic_app_80x24();
+
+        // Open the file picker so `app.picker.is_some()`.
+        let cwd = std::env::temp_dir();
+        let source = Box::new(FileSourceWithOpen::new(cwd));
+        app.picker = Some(Picker::new(source));
+
+        // Compute expected picker rect.
+        let area = picker_overlay_rect(&app).expect("picker must be open");
+
+        // Input area takes the first 3 rows; list area is the rest.
+        let list_y = area.y + 3;
+        let list_inner_y = list_y + 1; // inside list block border
+
+        // A click inside the list content area.
+        let col_inside = area.x + 2;
+        let row_inside = list_inner_y;
+
+        let zone = hit_test_zone(&app, col_inside, row_inside);
+        assert!(
+            matches!(zone, Zone::PickerRow { .. }),
+            "click inside picker list (col={col_inside}, row={row_inside}) should be Zone::PickerRow; got {zone:?}"
+        );
+
+        // A click OUTSIDE the picker area entirely must be Zone::None.
+        // The picker left edge is at area.x; click to the left of that.
+        if area.x > 0 {
+            let col_outside = 0;
+            let row_outside = row_inside;
+            let zone_out = hit_test_zone(&app, col_outside, row_outside);
+            assert_eq!(
+                zone_out,
+                Zone::None,
+                "click outside picker overlay must be Zone::None; got {zone_out:?}"
+            );
+        }
     }
 }
