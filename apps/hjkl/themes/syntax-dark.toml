@@ -57,6 +57,26 @@
 
 "@identifier"                     = { fg = "$fg" }
 
+# Markdown (tree-sitter-markdown / markdown_inline capture names).
+# `@markup.foo.bar` falls back to `@markup.foo` if not present, so the
+# specific levels (.1–.6) inherit `@markup.heading` automatically.
+"@markup.heading"                 = { fg = "$accent", modifiers = ["bold"] }
+"@markup.heading.1"               = { fg = "$accent", modifiers = ["bold", "underline"] }
+"@markup.heading.2"               = { fg = "$blue", modifiers = ["bold"] }
+"@markup.italic"                  = { fg = "$fg", modifiers = ["italic"] }
+"@markup.strong"                  = { fg = "$fg", modifiers = ["bold"] }
+"@markup.strikethrough"           = { fg = "$comment", modifiers = ["italic"] }
+"@markup.raw"                     = { fg = "$string" }
+"@markup.raw.block"               = { fg = "$string" }
+"@markup.link"                    = { fg = "$blue", modifiers = ["underline"] }
+"@markup.link.label"              = { fg = "$blue" }
+"@markup.link.url"                = { fg = "$comment", modifiers = ["underline"] }
+"@markup.list"                    = { fg = "$keyword" }
+"@markup.list.checked"            = { fg = "$string", modifiers = ["bold"] }
+"@markup.list.unchecked"          = { fg = "$comment" }
+"@markup.quote"                   = { fg = "$comment", modifiers = ["italic"] }
+"@label"                          = { fg = "$blue", modifiers = ["italic"] }
+
 # Comment markers (TODO / FIXME / NOTE / WARN badges)
 # Label: coloured bg, dark fg, bold
 # Tail:  same colour as label bg, italic, no bg
