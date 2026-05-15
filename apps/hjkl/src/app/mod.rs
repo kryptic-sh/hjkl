@@ -461,6 +461,10 @@ pub struct App {
     pub(crate) last_ex_command: Option<String>,
     /// Double/triple-click state for mouse support (Phase 1 — issue #114).
     pub(crate) mouse_click_tracker: mouse::MouseClickTracker,
+    /// Active right-click context menu (Phase 2, Round A — issue #114).
+    /// `None` when no menu is open. Floated above all other content by the
+    /// renderer. Dismissed on Esc, click-outside, or action invocation.
+    pub(crate) context_menu: Option<crate::menu::ContextMenu>,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1791,6 +1795,7 @@ impl App {
             pending_state: None,
             last_ex_command: None,
             mouse_click_tracker: mouse::MouseClickTracker::new(),
+            context_menu: None,
         })
     }
 
@@ -1900,6 +1905,191 @@ impl App {
     pub fn dismiss_completion(&mut self) {
         self.completion = None;
         self.pending_ctrl_x = false;
+    }
+
+    // ── Context menu keyboard dispatch (Phase 2, Round A) ────────────────
+
+    /// Handle a keypress while the context menu is open.
+    ///
+    /// Returns `true` if the key was consumed by the menu (caller should
+    /// `continue` the event loop). Returns `false` when the key is not a
+    /// menu-nav key — caller should then dismiss the menu and fall through
+    /// to normal dispatch.
+    pub(crate) fn handle_context_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        match key.code {
+            // Navigation.
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut m) = self.context_menu {
+                    m.move_up();
+                }
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut m) = self.context_menu {
+                    m.move_down();
+                }
+                true
+            }
+            // Confirm.
+            KeyCode::Enter => {
+                let action = self.context_menu.as_ref().and_then(|m| m.selected_action());
+                self.context_menu = None;
+                if let Some(act) = action {
+                    self.invoke_menu_action(act);
+                }
+                true
+            }
+            // Dismiss.
+            KeyCode::Esc => {
+                self.context_menu = None;
+                true
+            }
+            // Any other key: caller dismisses and falls through.
+            _ => false,
+        }
+    }
+
+    /// Execute a [`crate::menu::MenuAction`] selected from the context menu.
+    pub(crate) fn invoke_menu_action(&mut self, action: crate::menu::MenuAction) {
+        use crate::menu::MenuAction;
+        match action {
+            MenuAction::Copy => self.menu_copy(),
+            MenuAction::Cut => self.menu_cut(),
+            MenuAction::Paste => self.menu_paste(),
+            MenuAction::TabClose => self.dispatch_ex("tabclose"),
+            MenuAction::TabCloseOthers => self.do_tabonly(),
+            MenuAction::TabCloseRight => self.close_tabs_to_right(),
+            MenuAction::TabCloseLeft => self.close_tabs_to_left(),
+            MenuAction::Separator => {} // no-op
+        }
+    }
+
+    // ── Menu clipboard actions (Phase 2, Round A) ─────────────────────────
+
+    /// Right-click Copy action.
+    ///
+    /// If a visual selection is active, yank the selection into the unnamed
+    /// register (which the engine already mirrors to the system clipboard via
+    /// `Host::write_clipboard`). If no selection is active, yank the current
+    /// line (same as `yy` / `Y` line-yank semantics).
+    pub(crate) fn menu_copy(&mut self) {
+        use hjkl_engine::{RangeKind, VimMode};
+        let vim_mode = self.active().editor.vim_mode();
+        match vim_mode {
+            VimMode::VisualBlock => {
+                if let Some((top_row, bot_row, left_col, right_col)) =
+                    self.active().editor.block_highlight()
+                {
+                    self.active_mut()
+                        .editor
+                        .yank_block(top_row, bot_row, left_col, right_col, '"');
+                }
+            }
+            VimMode::Visual => {
+                if let Some((start, end)) = self.active().editor.char_highlight() {
+                    self.active_mut()
+                        .editor
+                        .yank_range(start, end, RangeKind::Inclusive, '"');
+                }
+            }
+            VimMode::VisualLine => {
+                if let Some((top_row, bot_row)) = self.active().editor.line_highlight() {
+                    self.active_mut().editor.yank_range(
+                        (top_row, 0),
+                        (bot_row, usize::MAX),
+                        RangeKind::Linewise,
+                        '"',
+                    );
+                }
+            }
+            _ => {
+                // No selection — yank current line (yy semantics).
+                self.active_mut().editor.yank_to_eol(1);
+            }
+        }
+        self.sync_after_engine_mutation();
+    }
+
+    /// Right-click Cut action.
+    ///
+    /// Identical to [`menu_copy`] but also deletes the yanked region.
+    /// On a visual selection this calls the appropriate `delete_range` /
+    /// `delete_block` path. Without a selection it yanks and deletes the
+    /// current line (`dd` semantics).
+    pub(crate) fn menu_cut(&mut self) {
+        use hjkl_engine::{RangeKind, VimMode};
+        let vim_mode = self.active().editor.vim_mode();
+        match vim_mode {
+            VimMode::VisualBlock => {
+                if let Some((top_row, bot_row, left_col, right_col)) =
+                    self.active().editor.block_highlight()
+                {
+                    self.active_mut()
+                        .editor
+                        .delete_block(top_row, bot_row, left_col, right_col, '"');
+                    // Exit visual mode.
+                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    hjkl_vim::handle_key(
+                        &mut self.active_mut().editor,
+                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                    );
+                }
+            }
+            VimMode::Visual => {
+                if let Some((start, end)) = self.active().editor.char_highlight() {
+                    self.active_mut()
+                        .editor
+                        .delete_range(start, end, RangeKind::Inclusive, '"');
+                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    hjkl_vim::handle_key(
+                        &mut self.active_mut().editor,
+                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                    );
+                }
+            }
+            VimMode::VisualLine => {
+                if let Some((top_row, bot_row)) = self.active().editor.line_highlight() {
+                    self.active_mut().editor.delete_range(
+                        (top_row, 0),
+                        (bot_row, usize::MAX),
+                        RangeKind::Linewise,
+                        '"',
+                    );
+                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    hjkl_vim::handle_key(
+                        &mut self.active_mut().editor,
+                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                    );
+                }
+            }
+            _ => {
+                // No selection — delete current line (dd semantics):
+                // yank_to_eol then delete_to_eol is not quite right for full-line;
+                // use the engine's delete_range for the full current row.
+                let (row, _) = self.active().editor.cursor();
+                self.active_mut().editor.delete_range(
+                    (row, 0),
+                    (row, usize::MAX),
+                    hjkl_engine::RangeKind::Linewise,
+                    '"',
+                );
+            }
+        }
+        self.sync_after_engine_mutation();
+    }
+
+    /// Right-click Paste action.
+    ///
+    /// Reads the system clipboard into the unnamed register (so the engine's
+    /// `p` command sees fresh content) and then performs a `paste_after`.
+    pub(crate) fn menu_paste(&mut self) {
+        // Pull from system clipboard → unnamed register so paste_after uses it.
+        if let Some(text) = self.active_mut().editor.host_mut().read_clipboard() {
+            self.active_mut().editor.set_yank(text);
+        }
+        self.active_mut().editor.paste_after(1);
+        self.sync_after_engine_mutation();
     }
 
     /// Call whenever a chord prefix first enters the `app_keymap` pending buffer.
