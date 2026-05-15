@@ -295,6 +295,16 @@ impl App {
                         continue;
                     }
 
+                    // ── Context menu keyboard navigation (Phase 2, Round A) ───
+                    if self.context_menu.is_some() {
+                        let consumed = self.handle_context_menu_key(key);
+                        if consumed {
+                            continue;
+                        }
+                        // Any non-nav key dismisses the menu and falls through.
+                        self.context_menu = None;
+                    }
+
                     // ── Command palette (`:` prompt) ─────────────────────────
                     if self.command_field.is_some() {
                         self.handle_command_field_key(key);
@@ -951,6 +961,47 @@ impl App {
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
                             use crate::app::mouse;
+
+                            // ── Context-menu: click-inside → invoke / click-outside → dismiss
+                            if let Some(ref menu) = self.context_menu {
+                                let screen_size = ratatui::layout::Rect {
+                                    x: 0,
+                                    y: 0,
+                                    width: self.active().editor.host().viewport().width,
+                                    height: self.active().editor.host().viewport().height
+                                        + crate::app::STATUS_LINE_HEIGHT,
+                                };
+                                let rect = menu.bounding_rect(screen_size);
+                                let inside = me.column >= rect.x
+                                    && me.column < rect.x + rect.width
+                                    && me.row >= rect.y
+                                    && me.row < rect.y + rect.height;
+
+                                if inside {
+                                    // Check whether click landed on a selectable row.
+                                    if me.row > rect.y && me.row < rect.y + rect.height - 1 {
+                                        let item_idx = (me.row - rect.y - 1) as usize;
+                                        let action = menu
+                                            .items
+                                            .get(item_idx)
+                                            .filter(|it| {
+                                                it.enabled
+                                                    && it.action
+                                                        != crate::menu::MenuAction::Separator
+                                            })
+                                            .map(|it| it.action.clone());
+                                        self.context_menu = None;
+                                        if let Some(act) = action {
+                                            self.invoke_menu_action(act);
+                                        }
+                                    }
+                                    continue; // Don't fall through to editor click.
+                                } else {
+                                    self.context_menu = None;
+                                    // Fall through to normal editor click.
+                                }
+                            }
+
                             if let Some(win_id) = mouse::hit_test_window(self, me.column, me.row) {
                                 // Focus the clicked window if it differs.
                                 let current_focus = self.focused_window();
@@ -1024,6 +1075,71 @@ impl App {
                         }
                         // Up: vim stays in Visual after drag-release — no-op.
                         MouseEventKind::Up(MouseButton::Left) => {}
+
+                        // ── Right-click: open context menu (Phase 2, Round A) ─
+                        MouseEventKind::Down(MouseButton::Right) => {
+                            use crate::app::mouse;
+                            use crate::menu::{ContextMenu, build_code_menu, build_tab_menu};
+                            let zone = mouse::hit_test_zone(self, me.column, me.row);
+                            let items = match zone {
+                                mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
+                                    let has_sel = matches!(
+                                        self.active().editor.vim_mode(),
+                                        VimMode::Visual
+                                            | VimMode::VisualLine
+                                            | VimMode::VisualBlock
+                                    );
+                                    build_code_menu(has_sel)
+                                }
+                                mouse::Zone::TabBar { tab_idx } => {
+                                    // Switch to the clicked tab first so that
+                                    // Close-Tab / Close-Right / Close-Left operate on it.
+                                    if tab_idx != self.active_tab {
+                                        self.sync_viewport_from_editor();
+                                        self.active_tab = tab_idx;
+                                        self.sync_viewport_to_editor();
+                                    }
+                                    build_tab_menu(self.tabs.len() > 1)
+                                }
+                                mouse::Zone::None => continue,
+                            };
+                            self.context_menu = Some(ContextMenu::new(items, (me.column, me.row)));
+                        }
+
+                        // ── Mouse hover: update selected item ────────────────
+                        MouseEventKind::Moved => {
+                            if let Some(menu) = &mut self.context_menu {
+                                // Read viewport dims before borrowing menu mutably.
+                                // We need to do this in two steps to avoid borrow conflicts.
+                                let vp_width = menu.anchor.0.max(80); // fallback from anchor
+                                let vp_height = menu.anchor.1.max(24);
+                                let screen_size = ratatui::layout::Rect {
+                                    x: 0,
+                                    y: 0,
+                                    width: vp_width + 40, // generous: anchor + slack
+                                    height: vp_height + 20,
+                                };
+                                let rect = menu.bounding_rect(screen_size);
+                                // Inner area (strip border row/col).
+                                if me.row > rect.y
+                                    && me.row < rect.y + rect.height - 1
+                                    && me.column > rect.x
+                                    && me.column < rect.x + rect.width - 1
+                                {
+                                    // Row inside inner content; map to item index.
+                                    let item_idx = (me.row - rect.y - 1) as usize;
+                                    if item_idx < menu.items.len() {
+                                        let enabled = menu.items[item_idx].enabled
+                                            && menu.items[item_idx].action
+                                                != crate::menu::MenuAction::Separator;
+                                        if enabled {
+                                            menu.selected = item_idx;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         _ => {}
                     }
                 }
