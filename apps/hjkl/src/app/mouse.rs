@@ -1,10 +1,11 @@
-//! TUI mouse support for `apps/hjkl` — Phase 1 (issue #114).
+//! TUI mouse support for `apps/hjkl` — Phase 1 + Phase 2 (issue #114).
 //!
 //! This module owns:
 //!
 //! - [`cell_to_doc`] — cell-space → doc-space translator using the window's
 //!   stored `last_rect`, viewport, and gutter geometry.
 //! - [`hit_test_window`] — map a terminal cell to a `WindowId`.
+//! - [`hit_test_zone`] — classify a click into [`Zone`] (Code / Gutter / TabBar / None).
 //! - [`MouseClickTracker`] — double/triple-click state machine.
 //!
 //! The engine receives only doc-space coordinates via the host-agnostic
@@ -252,6 +253,171 @@ pub fn word_bounds(line: &str, col: usize) -> (usize, usize) {
 
 fn is_word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
+}
+
+// ── Zone hit-testing (Phase 2) ────────────────────────────────────────────────
+
+/// The semantic zone of a terminal cell — used by right-click dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Zone {
+    /// Inside the text area of a window.
+    Code {
+        win_id: window::WindowId,
+        doc_row: usize,
+        doc_col: usize,
+    },
+    /// Inside the gutter (line numbers / signs / fold column) of a window.
+    Gutter {
+        win_id: window::WindowId,
+        doc_row: usize,
+    },
+    /// On the vim-style tab bar at the top of the screen.
+    TabBar { tab_idx: usize },
+    /// Outside every known zone (e.g. the status line).
+    None,
+}
+
+/// Compute the x-position ranges for each tab label on the tab bar.
+///
+/// Mirrors the layout logic in `render::tab_bar` so that click coordinates can
+/// be mapped to a tab index without exposing render internals.
+///
+/// Each tab occupies `[start, start + len)` cells. The returned `Vec` has one
+/// entry per tab; entries past the visible area are absent (truncation).
+pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
+    let max_width = bar_width as usize;
+    let mut ranges = Vec::new();
+    let mut used = 0usize;
+
+    for (i, tab) in app.tabs.iter().enumerate() {
+        let slot_idx = app.windows[tab.focused_window]
+            .as_ref()
+            .map(|w| w.slot)
+            .unwrap_or(0);
+        let slot = &app.slots()[slot_idx];
+        let base_name = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("[No Name]");
+        let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
+            app.windows[wid]
+                .as_ref()
+                .map(|w| app.slots()[w.slot].dirty)
+                .unwrap_or(false)
+        });
+        let label = if tab_dirty {
+            format!("[{}: +{}]", i + 1, base_name)
+        } else {
+            format!("[{}: {}]", i + 1, base_name)
+        };
+
+        let sep_len = if i == 0 { 0 } else { 1 }; // single space between entries
+        let entry_width = sep_len + label.len();
+
+        if used + entry_width > max_width {
+            break;
+        }
+
+        let start = (used + sep_len) as u16;
+        let end = (used + entry_width) as u16;
+        ranges.push((start, end));
+        used += entry_width;
+    }
+
+    ranges
+}
+
+/// Classify a terminal cell `(col, row)` into a [`Zone`].
+///
+/// Resolution order:
+/// 1. If `row == 0` and `app.tabs.len() > 1` → tab bar row; map `col` to a
+///    tab index using the same geometry as the renderer.
+/// 2. Otherwise, try [`hit_test_window`] to find a containing window.
+///    - If the click x-offset is inside the gutter → [`Zone::Gutter`].
+///    - If the click translates to a doc position → [`Zone::Code`].
+/// 3. Fallback → [`Zone::None`].
+pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
+    // ── 1. Tab bar ────────────────────────────────────────────────────────
+    if app.tabs.len() > 1 && row == 0 {
+        // Determine how wide the terminal is; use a generous fallback.
+        let bar_width = app
+            .windows
+            .iter()
+            .filter_map(|w| w.as_ref())
+            .filter_map(|w| w.last_rect)
+            .map(|r| r.width)
+            .max()
+            .unwrap_or(80);
+
+        let ranges = tab_x_ranges(app, bar_width);
+        for (i, (start, end)) in ranges.iter().enumerate() {
+            if col >= *start && col < *end {
+                return Zone::TabBar { tab_idx: i };
+            }
+        }
+        // Click on the tab bar but not on any label (gap / overflow).
+        return Zone::None;
+    }
+
+    // ── 2. Window hit-test ────────────────────────────────────────────────
+    let Some(win_id) = hit_test_window(app, col, row) else {
+        return Zone::None;
+    };
+
+    let Some(Some(win)) = app.windows.get(win_id) else {
+        return Zone::None;
+    };
+    let Some(rect) = win.last_rect else {
+        return Zone::None;
+    };
+
+    let slot_idx = win.slot;
+    let Some(slot) = app.slots().get(slot_idx) else {
+        return Zone::None;
+    };
+
+    let s = slot.editor.settings();
+    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
+    let (scl, fdc) = (s.signcolumn, s.foldcolumn);
+    let line_count = slot.editor.buffer().line_count() as usize;
+
+    let vp = slot.editor.host().viewport();
+    let vp_top = vp.top_row;
+    let vp_bot = vp_top + rect.height as usize;
+    let has_visible_signs = slot
+        .diag_signs
+        .iter()
+        .chain(slot.diag_signs_lsp.iter())
+        .chain(slot.git_signs.iter())
+        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
+
+    let gw = full_gutter_width(line_count, nu, rnu, nuw, scl, fdc, has_visible_signs);
+
+    let rel_x = col.saturating_sub(rect.x);
+    let rel_y = row.saturating_sub(rect.y);
+
+    if rel_x < gw {
+        // Click is in the gutter — compute doc_row without char_col.
+        let doc_row = vp.top_row.saturating_add(rel_y as usize);
+        if doc_row < line_count {
+            return Zone::Gutter { win_id, doc_row };
+        }
+        return Zone::None;
+    }
+
+    // Click is in the text area — delegate to cell_to_doc for the full translation.
+    if let Some((doc_row, doc_col)) = cell_to_doc(app, win_id, col, row) {
+        return Zone::Code {
+            win_id,
+            doc_row,
+            doc_col,
+        };
+    }
+
+    // cell_to_doc returned None (past EOF or outside rect).
+    Zone::None
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
