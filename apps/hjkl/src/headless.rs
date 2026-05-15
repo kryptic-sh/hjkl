@@ -25,8 +25,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use hjkl_buffer::Buffer;
-use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options};
+use hjkl_ex::ExEffect;
 
 /// Run in headless (script) mode.
 ///
@@ -96,7 +96,9 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
             // Strip an optional leading `:` so both `-c ':wq'` and `-c 'wq'`
             // work — matches the `+:cmd` / `+cmd` tolerance for `+` tokens.
             let cmd = cmd.strip_prefix(':').unwrap_or(cmd);
-            let effect = ex::run(&mut editor, cmd);
+            let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
+            let effect = hjkl_ex::try_dispatch(&reg, &mut editor, cmd)
+                .unwrap_or(ExEffect::Unknown(cmd.to_string()));
             match effect {
                 ExEffect::None => {}
 
@@ -151,6 +153,26 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                         }
                     }
                     // Stop dispatching further commands for this file.
+                    break;
+                }
+
+                ExEffect::EditFile { path, .. } => {
+                    // In headless mode, treat :e as switching the current file target.
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            let content = content.strip_suffix('\n').unwrap_or(&content);
+                            hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
+                            current_filename = Some(PathBuf::from(&path));
+                        }
+                        Err(e) => {
+                            eprintln!("hjkl: {path}: {e}");
+                            exit_code = 1;
+                        }
+                    }
+                }
+
+                ExEffect::BufferDelete { .. } => {
+                    // No multi-buffer in headless mode — stop processing.
                     break;
                 }
             }

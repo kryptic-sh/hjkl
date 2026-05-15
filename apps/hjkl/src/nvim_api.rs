@@ -25,8 +25,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use hjkl_buffer::Buffer;
-use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options, VimMode};
+use hjkl_ex::ExEffect;
 use rmpv::Value;
 
 // ── ext-type tags (nvim wire protocol) ────────────────────────────────────────
@@ -383,7 +383,9 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
             let cmd = cmd_raw.strip_prefix(':').unwrap_or(&cmd_raw).to_string();
-            let effect = ex::run(editor, &cmd);
+            let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
+            let effect =
+                hjkl_ex::try_dispatch(&reg, editor, &cmd).unwrap_or(ExEffect::Unknown(cmd.clone()));
             match effect {
                 ExEffect::None
                 | ExEffect::Ok
@@ -410,6 +412,23 @@ fn dispatch(
                     if save && let Err(e) = write_buffer(editor, current_filename) {
                         return err(stdout, msgid, &e);
                     }
+                    *should_quit = true;
+                    ok(stdout, msgid, Value::Nil)
+                }
+                ExEffect::EditFile { path, .. } => {
+                    // Single-buffer nvim-api mode: treat :e as reload.
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            let content = content.strip_suffix('\n').unwrap_or(&content);
+                            hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
+                            *current_filename = Some(PathBuf::from(&path));
+                            ok(stdout, msgid, Value::Nil)
+                        }
+                        Err(e) => err(stdout, msgid, &format!("{path}: {e}")),
+                    }
+                }
+                ExEffect::BufferDelete { .. } => {
+                    // No multi-buffer in nvim-api mode — treat as quit.
                     *should_quit = true;
                     ok(stdout, msgid, Value::Nil)
                 }

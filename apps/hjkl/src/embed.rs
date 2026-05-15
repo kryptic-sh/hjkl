@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use hjkl_buffer::Buffer;
 use hjkl_editor::buffer::Position;
-use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{BufferEdit, DefaultHost, Editor, Options, VimMode};
+use hjkl_ex::ExEffect;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,9 @@ fn dispatch(
                 Err(msg) => return error_resp(id, ERR_INVALID_PARAMS, &msg),
             };
             let cmd = cmd.strip_prefix(':').unwrap_or(&cmd).to_string();
-            let effect = ex::run(editor, &cmd);
+            let reg = hjkl_ex::default_registry::<hjkl_engine::DefaultHost>();
+            let effect =
+                hjkl_ex::try_dispatch(&reg, editor, &cmd).unwrap_or(ExEffect::Unknown(cmd.clone()));
             match effect {
                 ExEffect::None
                 | ExEffect::Ok
@@ -145,6 +147,23 @@ fn dispatch(
                     if save && let Err(e) = write_buffer(editor, current_filename) {
                         return error_resp(id, ERR_EX_COMMAND, &e.to_string());
                     }
+                    *should_quit = true;
+                    success(id, Value::Null)
+                }
+                ExEffect::EditFile { path, .. } => {
+                    // Single-buffer embed mode: treat :e as a reload/open.
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            let content = content.strip_suffix('\n').unwrap_or(&content);
+                            hjkl_engine::BufferEdit::replace_all(editor.buffer_mut(), content);
+                            *current_filename = Some(PathBuf::from(&path));
+                            success(id, Value::Null)
+                        }
+                        Err(e) => error_resp(id, ERR_EX_COMMAND, &format!("{path}: {e}")),
+                    }
+                }
+                ExEffect::BufferDelete { .. } => {
+                    // No multi-buffer support in embed mode — treat as a no-op quit.
                     *should_quit = true;
                     success(id, Value::Null)
                 }

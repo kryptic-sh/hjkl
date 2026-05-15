@@ -1,43 +1,10 @@
 use hjkl_bonsai::DotFallbackTheme;
-use hjkl_editor::runtime::ex::{self, ExEffect};
 use hjkl_engine::{Host, Query};
+use hjkl_ex::ExEffect;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::host::TuiHost;
-
-/// Bridge a [`hjkl_ex::ExEffect`] into the legacy
-/// [`hjkl_editor::runtime::ex::ExEffect`] shape consumed by the match block
-/// below. The two enums are structurally identical; this conversion is the
-/// only thing keeping the `hjkl-ex` extraction from coupling to `hjkl-editor`
-/// while the legacy dispatcher still owns most commands. Phases 2+ migrate
-/// commands across; the final phase removes the legacy enum and this bridge.
-fn bridge_ex_effect(eff: hjkl_ex::ExEffect) -> ExEffect {
-    use hjkl_ex::ExEffect as Src;
-    match eff {
-        Src::None => ExEffect::None,
-        Src::Save => ExEffect::Save,
-        Src::SaveAs(p) => ExEffect::SaveAs(p),
-        Src::Quit { force, save } => ExEffect::Quit { force, save },
-        Src::Unknown(s) => ExEffect::Unknown(s),
-        Src::Substituted {
-            count,
-            lines_changed,
-        } => ExEffect::Substituted {
-            count,
-            lines_changed,
-        },
-        Src::Ok => ExEffect::Ok,
-        Src::Info(s) => ExEffect::Info(s),
-        Src::Error(s) => ExEffect::Error(s),
-        // Phase 2b variants are intercepted in dispatch_ex before reaching
-        // this bridge — they should never arrive here.
-        // Phase 8a: ReadFile is now dead code (hjkl-ex handles :read fully).
-        Src::EditFile { .. } | Src::ReadFile { .. } | Src::BufferDelete { .. } => {
-            unreachable!("Phase 2b/8a effects are handled before bridge_ex_effect")
-        }
-    }
-}
 
 use super::{App, DiskState, ex_host_cmds};
 
@@ -68,8 +35,30 @@ impl App {
             return;
         }
 
-        let canon = ex::canonical_command_name(cmd);
-        let cmd: &str = canon.as_ref();
+        // Resolve abbreviations via hjkl-ex registry (replaces legacy
+        // ex::canonical_command_name). Splits the first word, resolves it
+        // through the registry's prefix-match table, and reconstructs the
+        // full command with the canonical name so the local match arms see
+        // `"wall"` when the user typed `:wa`, etc.
+        let canon_buf: String;
+        let cmd: &str = {
+            let reg = hjkl_ex::default_registry::<TuiHost>();
+            let first_space = cmd.find(' ');
+            let first_word = first_space.map(|i| &cmd[..i]).unwrap_or(cmd);
+            if let Some(resolved) = reg.resolve(first_word) {
+                if resolved.name != first_word {
+                    canon_buf = match first_space {
+                        Some(i) => format!("{}{}", resolved.name, &cmd[i..]),
+                        None => resolved.name.to_string(),
+                    };
+                    &canon_buf
+                } else {
+                    cmd
+                }
+            } else {
+                cmd
+            }
+        };
 
         // App-level `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?`.
         // Mouse capture is a terminal-I/O concern, not an editor-engine
@@ -258,46 +247,47 @@ impl App {
         {
             let host_reg = ex_host_cmds::host_registry();
             if let Some(eff) = hjkl_ex::try_dispatch_host(host_reg, self, cmd) {
-                self.sync_viewport_from_editor();
-                self.handle_ex_effect(bridge_ex_effect(eff));
-                return;
+                match eff {
+                    ExEffect::EditFile { path, force } => {
+                        self.do_edit(&path, force);
+                        return;
+                    }
+                    ExEffect::BufferDelete { force, wipe: _ } => {
+                        self.buffer_delete(force);
+                        return;
+                    }
+                    other => {
+                        self.sync_viewport_from_editor();
+                        self.handle_ex_effect(other);
+                        return;
+                    }
+                }
             }
         }
 
         let active_slot = self.focused_slot_idx();
-        // Try the new hjkl-ex registry first. Phases 1–2 handle an expanding
-        // set of commands; everything else falls through to the legacy
-        // ex::run dispatcher. Each subsequent phase migrates more commands.
+        // hjkl-ex is the sole dispatcher — no legacy fallback.
         let new_reg = hjkl_ex::default_registry::<TuiHost>();
         let effect = if let Some(eff) =
             hjkl_ex::try_dispatch(&new_reg, &mut self.slots[active_slot].editor, cmd)
         {
-            // Phase 2b: intercept new effect variants that have no analog in
-            // the legacy ExEffect enum. Handle them here and return early so
-            // they never reach bridge_ex_effect or the match block below.
             match eff {
-                hjkl_ex::ExEffect::EditFile { path, force } => {
+                ExEffect::EditFile { path, force } => {
                     self.do_edit(&path, force);
                     return;
                 }
-                hjkl_ex::ExEffect::ReadFile { .. } => {
-                    // Phase 8a: hjkl-ex read_handler now handles `:r <path>`
-                    // fully (returns Ok/Error/Info directly). This arm is dead
-                    // code; the ReadFile variant will be removed in Phase 8b.
-                    // Kept here only so the exhaustive match compiles.
-                    return;
-                }
-                hjkl_ex::ExEffect::BufferDelete { force, wipe: _ } => {
+                ExEffect::BufferDelete { force, wipe: _ } => {
                     // `:bd[!]` / `:bw[!]` — wipe semantics not yet distinct
                     // from delete in the app layer; treat both as buffer_delete.
                     // TODO Phase 2c: differentiate wipe (discard swap, remove marks).
                     self.buffer_delete(force);
                     return;
                 }
-                other => bridge_ex_effect(other),
+                other => other,
             }
         } else {
-            ex::run(&mut self.slots[active_slot].editor, cmd)
+            // No command matched — surface as E492.
+            ExEffect::Unknown(cmd.to_string())
         };
         // ex commands like `:100` (goto-line), `:/pat` (search address),
         // and `:nohl` mutate engine cursor / viewport without flipping
@@ -309,7 +299,7 @@ impl App {
         self.handle_ex_effect(effect);
     }
 
-    /// Apply the side-effects encoded in a legacy [`ExEffect`] value.
+    /// Apply the side-effects encoded in an [`ExEffect`] value.
     ///
     /// Extracted from `dispatch_ex` so both the host-registry path and the
     /// editor-registry path can share identical effect handling without
@@ -392,6 +382,12 @@ impl App {
             }
             ExEffect::Unknown(c) => {
                 self.status_message = Some(format!("E492: Not an editor command: :{c}"));
+            }
+            ExEffect::EditFile { path, force } => {
+                self.do_edit(&path, force);
+            }
+            ExEffect::BufferDelete { force, wipe: _ } => {
+                self.buffer_delete(force);
             }
         }
     }

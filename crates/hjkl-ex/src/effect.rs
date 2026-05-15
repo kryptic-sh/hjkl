@@ -28,9 +28,6 @@ pub enum ExEffect {
     /// `:e <path>` / `:edit <path>` — open a different file in the current
     /// window. An empty `path` means reload the current buffer.
     EditFile { path: String, force: bool },
-    /// `:r <path>` / `:read <path>` — insert file contents below the
-    /// cursor row.
-    ReadFile { path: String },
     /// `:bd[!]` / `:bw[!]` — close the current buffer.
     /// `wipe = true` for `:bwipeout`; `force = true` when `!` was given.
     BufferDelete { force: bool, wipe: bool },
