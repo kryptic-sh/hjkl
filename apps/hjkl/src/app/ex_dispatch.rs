@@ -60,11 +60,14 @@ impl App {
             }
         };
 
-        // App-level `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?`.
+        // App-level `:set mouse` / `:set nomouse` / `:set mouse=<flags>` / etc.
         // Mouse capture is a terminal-I/O concern, not an editor-engine
         // setting, so the app intercepts these tokens here. Residual
         // tokens (if any) flow through to the engine as a rebuilt
         // `:set ...` line so combined forms like `:set nu nomouse` work.
+        //
+        // `:set mouse=<flags>` additionally updates `mouse_flags` to control
+        // per-mode event gating (P11.2 / issue #114).
         let rebuilt: String;
         let cmd: &str = if let Some(body) = cmd.strip_prefix("set ") {
             let body = body.trim();
@@ -77,25 +80,43 @@ impl App {
                     match tok {
                         "mouse" => {
                             self.set_mouse_capture(true);
+                            self.mouse_flags = crate::app::MouseFlags::all();
                             consumed_any = true;
                         }
                         "nomouse" => {
                             self.set_mouse_capture(false);
+                            self.mouse_flags = crate::app::MouseFlags::none();
                             consumed_any = true;
                         }
                         "mouse!" => {
-                            self.set_mouse_capture(!self.mouse_enabled);
+                            let new_on = !self.mouse_enabled;
+                            self.set_mouse_capture(new_on);
+                            self.mouse_flags = if new_on {
+                                crate::app::MouseFlags::all()
+                            } else {
+                                crate::app::MouseFlags::none()
+                            };
                             consumed_any = true;
                         }
                         "mouse?" => {
-                            self.status_message = Some(
-                                if self.mouse_enabled {
-                                    "mouse"
-                                } else {
-                                    "nomouse"
-                                }
-                                .into(),
-                            );
+                            let flags_str = self.mouse_flags.as_flags_str();
+                            self.status_message = Some(if self.mouse_enabled {
+                                format!("mouse={flags_str}")
+                            } else {
+                                "nomouse".to_string()
+                            });
+                            consumed_any = true;
+                        }
+                        other if other.starts_with("mouse=") => {
+                            let flags_str = &other["mouse=".len()..];
+                            let flags = crate::app::MouseFlags::from_flags(flags_str);
+                            let any_on = flags.normal
+                                || flags.visual
+                                || flags.insert
+                                || flags.command
+                                || flags.help;
+                            self.mouse_flags = flags;
+                            self.set_mouse_capture(any_on);
                             consumed_any = true;
                         }
                         other => remaining.push(other),

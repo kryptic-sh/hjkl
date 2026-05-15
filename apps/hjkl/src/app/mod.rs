@@ -97,6 +97,120 @@ fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
     (hasher.finish(), len)
 }
 
+/// Per-mode mouse-enable flags — mirrors Vim's `:set mouse=<flags>`.
+///
+/// Default (all enabled) corresponds to `mouse=a`.  Set individual fields to
+/// `false` to disable mouse in that mode.  The event loop checks
+/// [`App::mouse_flags`] via [`mouse_enabled_for`] before processing any mouse
+/// event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseFlags {
+    /// Mouse active in Normal mode (`n`).
+    pub normal: bool,
+    /// Mouse active in Visual / VisualLine / VisualBlock mode (`v`).
+    pub visual: bool,
+    /// Mouse active in Insert mode (`i`).
+    pub insert: bool,
+    /// Mouse active in Command-line / prompt mode (`c`).
+    pub command: bool,
+    /// Mouse active in Help buffers (`h`). Parsed for compatibility but unused today.
+    pub help: bool,
+}
+
+impl MouseFlags {
+    /// All modes enabled — equivalent to `mouse=a`.
+    pub fn all() -> Self {
+        Self {
+            normal: true,
+            visual: true,
+            insert: true,
+            command: true,
+            help: true,
+        }
+    }
+
+    /// All modes disabled — equivalent to `set nomouse` / `mouse=`.
+    pub fn none() -> Self {
+        Self {
+            normal: false,
+            visual: false,
+            insert: false,
+            command: false,
+            help: false,
+        }
+    }
+
+    /// Parse a Vim-style flags string (`"a"`, `"nvi"`, `""`, …).
+    ///
+    /// - `"a"` → all modes on.
+    /// - Each char `n/v/i/c/h` enables the corresponding mode.
+    /// - Unknown chars are silently ignored (forward-compat).
+    /// - Empty string → all modes off.
+    pub fn from_flags(s: &str) -> Self {
+        if s == "a" {
+            return Self::all();
+        }
+        let mut f = Self::none();
+        for c in s.chars() {
+            match c {
+                'n' => f.normal = true,
+                'v' => f.visual = true,
+                'i' => f.insert = true,
+                'c' => f.command = true,
+                'h' => f.help = true,
+                'a' => {
+                    // 'a' anywhere in string still means all.
+                    return Self::all();
+                }
+                _ => {}
+            }
+        }
+        f
+    }
+
+    /// Return a canonical flags string suitable for `:set mouse?` display.
+    pub fn as_flags_str(&self) -> String {
+        if self.normal && self.visual && self.insert && self.command && self.help {
+            return "a".into();
+        }
+        let mut s = String::new();
+        if self.normal {
+            s.push('n');
+        }
+        if self.visual {
+            s.push('v');
+        }
+        if self.insert {
+            s.push('i');
+        }
+        if self.command {
+            s.push('c');
+        }
+        if self.help {
+            s.push('h');
+        }
+        s
+    }
+}
+
+impl Default for MouseFlags {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+/// Return `true` when mouse events should be processed for the given Vim mode.
+///
+/// Used by the event loop at the top of `Event::Mouse` to gate events by mode.
+/// Extracted as a pure function so it can be unit-tested without a running App.
+pub fn mouse_enabled_for(mode: VimMode, flags: &MouseFlags) -> bool {
+    match mode {
+        VimMode::Normal => flags.normal,
+        VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => flags.visual,
+        VimMode::Insert => flags.insert,
+    }
+}
+
 /// Whether the on-disk file is in sync with what was last loaded/saved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiskState {
@@ -436,6 +550,9 @@ pub struct App {
     /// When false, wheel events fall through to the terminal as
     /// synthesised arrow keys.
     pub mouse_enabled: bool,
+    /// Per-mode mouse flags (`:set mouse=<flags>`). Controls which vim modes
+    /// process mouse events. Default: all modes enabled (`mouse=a`).
+    pub mouse_flags: MouseFlags,
     /// Application-level chord dispatch. Holds Normal-mode bindings for all
     /// leader / g / ] / [ / <C-w> sequences.
     pub(crate) app_keymap: Keymap<AppAction, keymap::HjklMode>,
@@ -1784,6 +1901,7 @@ impl App {
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
             mouse_enabled: crate::config::Config::default().editor.mouse,
+            mouse_flags: MouseFlags::all(),
             app_keymap: build_app_keymap(default_leader),
             anvil_pool: hjkl_anvil::InstallPool::new(),
             anvil_handles: HashMap::new(),
