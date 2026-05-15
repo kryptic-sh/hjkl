@@ -8,6 +8,57 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-05-16
+
+### Fixed
+
+- Markdown syntax highlighting in `apps/hjkl`. Three independent bugs combined
+  to leave most of a markdown buffer unstyled:
+  - `apps/hjkl/themes/syntax-dark.toml` lacked any `@markup.*` keys. The
+    capture-fallback chain truncates by dot
+    (`@markup.heading.1 → @markup.heading → @markup → None`), so block-level
+    constructs (`##` headers, lists, quotes, code spans, links) all rendered
+    unstyled. Added `@markup.heading{,.1..6}`, `@markup.italic`,
+    `@markup.strong`, `@markup.strikethrough`, `@markup.raw{,.block}`,
+    `@markup.link{,.label,.url}`, `@markup.list{,.checked,.unchecked}`,
+    `@markup.quote`, and `@label` (code-fence language tag).
+  - `hjkl-bonsai` 0.7.3 — injection walker now honours
+    `(#set! injection.language "lang")` directive form. Previously only the
+    `@injection.language` capture form was consumed, silently dropping every
+    directive-only injection. tree-sitter-markdown's `injections.scm` uses the
+    directive form for `(inline) → markdown_inline`, `(html_block) → html`,
+    `(minus_metadata) → yaml`, `(plus_metadata) → toml`, so paragraph-inline
+    content (`*italic*`, `**bold**`, `` `code` ``, links) never injected
+    `markdown_inline` and rendered without highlighting.
+  - `hjkl-bonsai` 0.7.4 — highlight-span order on identical byte ranges now
+    favours the more-specific capture. tree-sitter-markdown emits both
+    `@markup.link` and `@markup.link.url` on a `(link_destination)` node with
+    the same byte range; `hjkl-buffer`'s resolver keeps the first equal-length
+    match, so source-order in the .scm file decided the winner. Markdown's
+    `@markup.link` pattern is declared first, so URLs in `[label](url)` rendered
+    the same colour as `[label]` (label colour), losing vim/Helix's dim-URL
+    distinction. New `sort_by_start_then_depth` orders ties by capture depth
+    descending.
+
+### Changed
+
+- `crates/hjkl-anvil` bumped: `reqwest 0.12 → 0.13` (with feature rename
+  `rustls-tls` → `rustls + rustls-native-certs`), `sha2 0.10 → 0.11`,
+  `zip 2 → 8`.
+- `crates/hjkl-theme` bumped: `toml 0.8 → 1.1`.
+
+### Tests
+
+- `syntax_theme_covers_markdown_markup_captures` pins the 24 captures
+  tree-sitter-markdown emits; `markup_heading_renders_bold` and
+  `markup_strikethrough_uses_strikethrough_modifier` pin the visible-bug shape
+  from 0.18.0.
+- `hjkl-bonsai`: four `sort_*` unit tests pin the depth-aware sort semantics,
+  and `markdown_inline_injection_directive_form_fires_resolver` (+ scoped
+  variant) pin the directive-form injection regression. The pre-existing
+  `child_cache_avoids_repeated_parses` test now calls `parse_initial` explicitly
+  to seed the parent tree (it was silently failing before).
+
 ## [0.18.0] - 2026-05-16
 
 ### Added
@@ -2120,7 +2171,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/kryptic-sh/hjkl/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/kryptic-sh/hjkl/compare/v0.16.0...v0.17.0
