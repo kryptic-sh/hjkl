@@ -46,7 +46,18 @@ impl DotFallbackTheme {
 
 impl Theme for DotFallbackTheme {
     fn style(&self, capture: &str) -> Option<&hjkl_theme::StyleSpec> {
-        self.inner.captures.resolve(capture)
+        // Theme TOML keys mirror highlights.scm syntax (`@keyword`, `@function.method`).
+        // Tree-sitter's `query.capture_names()` returns bare names (no `@`), so the
+        // hot path here is prepending `@` to the bare name before lookup. Direct
+        // `@`-prefixed callers (tests, hand-written code) skip the prepend.
+        if capture.starts_with('@') {
+            self.inner.captures.resolve(capture)
+        } else {
+            let mut buf = String::with_capacity(capture.len() + 1);
+            buf.push('@');
+            buf.push_str(capture);
+            self.inner.captures.resolve(&buf)
+        }
     }
 }
 
@@ -126,6 +137,36 @@ mod tests {
                 "expected capture '{cap}' in default-dark.toml"
             );
         }
+    }
+
+    #[test]
+    fn theme_resolves_bare_capture_name_from_tree_sitter() {
+        // tree-sitter's `query.capture_names()` returns names without `@`,
+        // but theme TOML keys mirror `highlights.scm` syntax (`@keyword`).
+        // The Theme impl must prepend `@` so the runtime lookup hits.
+        let theme = DotFallbackTheme::dark();
+        let bare = theme.style("keyword");
+        let prefixed = theme.style("@keyword");
+        assert!(
+            bare.is_some(),
+            "bare 'keyword' (as returned by tree-sitter) must resolve via @-prepend"
+        );
+        assert_eq!(
+            bare.map(|s| s.fg),
+            prefixed.map(|s| s.fg),
+            "bare and @-prefixed lookups must yield the same StyleSpec"
+        );
+    }
+
+    #[test]
+    fn theme_resolves_bare_dotted_capture_via_fallback() {
+        // Bare dotted name like `function.method.builtin` — should match the
+        // most-specific present prefix (`@function`) after prepend + dot fallback.
+        let theme = DotFallbackTheme::dark();
+        assert!(
+            theme.style("function.method.builtin").is_some(),
+            "bare dotted capture must resolve via @-prepend + dot fallback"
+        );
     }
 
     #[test]

@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-15
+
+### Fixed
+
+- `DotFallbackTheme::style` now prepends `@` to bare capture names before
+  lookup. tree-sitter's `query.capture_names()` returns names without the `@`
+  prefix that `highlights.scm` (and the new theme TOML schema) use. The 0.7.0
+  migration broke runtime syntax highlighting in apps/hjkl: every span was
+  silently dropped because `theme.style("keyword")` could not find the
+  `@keyword` key. Lookup now succeeds for both bare (`keyword`) and prefixed
+  (`@keyword`) inputs.
+
 ## [0.7.1] - 2026-05-15
 
 ### Added
@@ -397,7 +409,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.6.1...v0.6.2
