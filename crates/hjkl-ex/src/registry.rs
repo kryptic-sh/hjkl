@@ -15,7 +15,15 @@ pub enum ArgKind {
 
 /// Type alias for a handler fn. Generic over `H` so a single `Registry<H>`
 /// instance can serve any concrete host.
-pub type ExHandler<H> = fn(&mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>, &str) -> ExEffect;
+///
+/// Returning `None` lets a handler opt out of a particular invocation — the
+/// dispatcher then treats the command as unhandled and the umbrella's caller
+/// falls back to its legacy ex path. This is how Phase 2a's bare-name
+/// commands defer their `<path>`-arg variants to Phase 2b without a hard
+/// `Unknown` error: e.g. `:w` returns `Some(Save)` but `:w foo` returns
+/// `None` so `apps/hjkl::dispatch_ex` lets the legacy `SaveAs` arm handle it.
+pub type ExHandler<H> =
+    fn(&mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>, &str) -> Option<ExEffect>;
 
 /// A single registered ex command.
 pub struct ExCommand<H: Host> {
@@ -99,8 +107,8 @@ mod tests {
     fn noop_handler(
         _editor: &mut Editor<hjkl_buffer::Buffer, DefaultHost>,
         _args: &str,
-    ) -> ExEffect {
-        ExEffect::Ok
+    ) -> Option<ExEffect> {
+        Some(ExEffect::Ok)
     }
 
     fn make_registry() -> Registry<DefaultHost> {
