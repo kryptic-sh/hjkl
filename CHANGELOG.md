@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-05-15
+
+### Fixed
+
+- X11 `INCR_RECV_CHUNK_TIMEOUT_SECS` bumped 10s → 30s (and total 30s → 60s).
+  `large_payload_self_loop` test on ubuntu-latest CI sporadically hit the full
+  10s budget waiting for `PROPERTY_NOTIFY` between chunks and timed out at
+  exactly 10.095s. Production usage on real X servers completes in &lt;1s; the
+  higher ceiling tolerates slow runners without changing the happy-path.
+
 ## [0.5.3] - 2026-05-05
 
 ### Fixed
@@ -385,7 +395,8 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.3
 [0.5.2]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.2
 [0.5.1]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.1

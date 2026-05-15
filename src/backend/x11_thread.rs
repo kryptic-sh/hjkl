@@ -61,10 +61,14 @@ const EVENT_LOOP_TICK_MS: u64 = 50;
 /// SELECTION_NOTIFY wait for do_get: how long to wait for the owner to reply.
 const SELECTION_NOTIFY_TIMEOUT_SECS: u64 = 5;
 /// INCR receive: per-chunk timeout. Sender must write the next chunk within
-/// this window or the receive is aborted.
-const INCR_RECV_CHUNK_TIMEOUT_SECS: u64 = 10;
+/// this window or the receive is aborted. 30s tolerates slow CI hosts —
+/// the `large_payload_self_loop` test on ubuntu-latest occasionally took
+/// the full 10s budget waiting for PROPERTY_NOTIFY between chunks and
+/// timed out at exactly 10.095s. Bumped to 30s; production usage on real
+/// X servers completes in <1s.
+const INCR_RECV_CHUNK_TIMEOUT_SECS: u64 = 30;
 /// INCR receive: total timeout across all chunks.
-const INCR_RECV_TOTAL_TIMEOUT_SECS: u64 = 30;
+const INCR_RECV_TOTAL_TIMEOUT_SECS: u64 = 60;
 /// SAVE_TARGETS handshake: how long to wait for the manager's initial
 /// SELECTION_NOTIFY before giving up silently.
 const SAVE_TARGETS_TIMEOUT_SECS: u64 = 5;
