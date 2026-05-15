@@ -50,6 +50,7 @@
 mod buffer;
 mod edit;
 mod folds;
+pub mod geom;
 mod motion;
 mod position;
 #[cfg(feature = "ratatui")]
@@ -62,6 +63,7 @@ pub mod wrap;
 pub use buffer::Buffer;
 pub use edit::{Edit, MotionKind};
 pub use folds::Fold;
+pub use geom::visual_col_to_char_col;
 pub use motion::is_keyword_char;
 pub use position::Position;
 #[cfg(feature = "ratatui")]

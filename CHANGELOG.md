@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-16
+
+### Added
+
+- `visual_col_to_char_col(line, visual_col, tab_width) -> usize` in the new
+  `geom` module (re-exported from the crate root). Inverse of `hjkl-engine`'s
+  internal `visual_col_for_char`: walks a line's chars accumulating tab-expanded
+  visual width and returns the char index where a mouse click at `visual_col`
+  lands. Tabs snap to the tab character itself (Vim behaviour). Past-EOL clicks
+  clamp to `char_count`. Enables host-driven mouse translation without baking
+  terminal-layout assumptions into the engine. See
+  `geom::visual_col_to_char_col` rustdoc for the full contract and wide-char
+  note.
+
 ## [0.6.1] - 2026-05-16
 
 ### Changed
@@ -126,7 +140,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.5.0
