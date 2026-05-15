@@ -65,7 +65,7 @@
 "@markup.heading.2"               = { fg = "$blue", modifiers = ["bold"] }
 "@markup.italic"                  = { fg = "$fg", modifiers = ["italic"] }
 "@markup.strong"                  = { fg = "$fg", modifiers = ["bold"] }
-"@markup.strikethrough"           = { fg = "$comment", modifiers = ["italic"] }
+"@markup.strikethrough"           = { fg = "$comment", modifiers = ["strikethrough"] }
 "@markup.raw"                     = { fg = "$string" }
 "@markup.raw.block"               = { fg = "$string" }
 "@markup.link"                    = { fg = "$blue", modifiers = ["underline"] }

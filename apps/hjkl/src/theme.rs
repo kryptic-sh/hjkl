@@ -243,6 +243,81 @@ mod tests {
         assert!(theme.syntax.style("@keyword").is_some());
     }
 
+    /// Regression: tree-sitter-markdown emits `@markup.*` capture names
+    /// (`@markup.heading.1`, `@markup.italic`, `@markup.raw`, …) which the
+    /// theme used to omit, so every markdown markup span rendered unstyled.
+    /// The capture-fallback chain right-truncates by dot, so each leaf is
+    /// expected to resolve to a non-empty StyleSpec — directly or via
+    /// fallback to its `@markup.<root>` ancestor.
+    #[test]
+    fn syntax_theme_covers_markdown_markup_captures() {
+        let theme = AppTheme::default_dark();
+        let must_resolve = [
+            "@markup.heading",
+            "@markup.heading.1",
+            "@markup.heading.2",
+            "@markup.heading.3",
+            "@markup.heading.4",
+            "@markup.heading.5",
+            "@markup.heading.6",
+            "@markup.italic",
+            "@markup.strong",
+            "@markup.strikethrough",
+            "@markup.raw",
+            "@markup.raw.block",
+            "@markup.link",
+            "@markup.link.label",
+            "@markup.link.url",
+            "@markup.list",
+            "@markup.list.checked",
+            "@markup.list.unchecked",
+            "@markup.quote",
+            "@label",
+            // Already-supported captures used by markdown.scm — pinned so a
+            // future theme-prune doesn't quietly regress them.
+            "@punctuation.special",
+            "@punctuation.delimiter",
+            "@string.escape",
+            "@keyword.directive",
+        ];
+        for cap in must_resolve {
+            assert!(
+                theme.syntax.style(cap).is_some(),
+                "syntax-dark.toml must resolve {cap} for tree-sitter-markdown highlighting"
+            );
+        }
+    }
+
+    /// Regression: `@markup.heading.1` must inherit bold from
+    /// `@markup.heading` (or override it) — markdown headings rendering as
+    /// plain text on terminals was the 0.18.0 user-visible bug that
+    /// motivated this test.
+    #[test]
+    fn markup_heading_renders_bold() {
+        let theme = AppTheme::default_dark();
+        let spec = theme.syntax.style("@markup.heading.1").expect("must resolve");
+        assert!(
+            spec.modifiers.bold,
+            "@markup.heading.1 must be bold so ## headers stand out"
+        );
+        let spec_h2 = theme.syntax.style("@markup.heading.2").expect("must resolve");
+        assert!(spec_h2.modifiers.bold, "@markup.heading.2 must be bold");
+    }
+
+    /// Regression: `@markup.strikethrough` must actually toggle the
+    /// strikethrough modifier — hjkl-theme accepts the `"strikethrough"`
+    /// token in `modifiers = […]`, an earlier draft of this theme used
+    /// `"italic"` as a stand-in.
+    #[test]
+    fn markup_strikethrough_uses_strikethrough_modifier() {
+        let theme = AppTheme::default_dark();
+        let spec = theme.syntax.style("@markup.strikethrough").expect("must resolve");
+        assert!(
+            spec.modifiers.strikethrough,
+            "@markup.strikethrough must actually strike through"
+        );
+    }
+
     #[test]
     fn parse_hex_rejects_short_string() {
         assert!(parse_hex("#fff").is_err());
