@@ -280,14 +280,13 @@ impl App {
         let height = union_bot - union_top;
 
         // T1: Over-provision the parse range to 3× the visible height
-        // (one viewport above + current + one viewport below). The extra
-        // rows are cached in the editor's span table so fast scroll
-        // stays within already-highlighted territory.
+        // (one viewport above + current + one viewport below). The
+        // math lives in `hjkl_buffer::over_provisioned_range` so future
+        // host crates (floem GUI, web …) compute the same range from
+        // their own viewport without re-deriving it.
         let line_count = self.active().editor.buffer().line_count() as usize;
-        let oversize_top = top.saturating_sub(height);
-        let oversize_height = height
-            .saturating_mul(3)
-            .min(line_count.saturating_sub(oversize_top));
+        let (oversize_top, oversize_height) =
+            hjkl_buffer::over_provisioned_range(top, height, line_count);
 
         let dg = self.active().editor.buffer().dirty_gen();
         let key = (dg, top, height);
@@ -347,12 +346,10 @@ impl App {
                 (vp.top_row, vp.height as usize)
             };
             // Over-provision the secondary slots too so switching into
-            // them is likely already covered.
+            // them is likely already covered. Same host-agnostic helper.
             let slot_line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
-            let slot_oversize_top = slot_top.saturating_sub(slot_height);
-            let slot_oversize_height = slot_height
-                .saturating_mul(3)
-                .min(slot_line_count.saturating_sub(slot_oversize_top));
+            let (slot_oversize_top, slot_oversize_height) =
+                hjkl_buffer::over_provisioned_range(slot_top, slot_height, slot_line_count);
             let buf = self.slots[slot_idx].editor.buffer();
             self.syntax
                 .submit_render(slot_buf_id, buf, slot_oversize_top, slot_oversize_height);
