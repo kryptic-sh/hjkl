@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.4.19] - 2026-05-15
+
+### Added
+
+- **TLS form fields in Add/Edit Connection** (issue #23 phase 1). New `CA Cert`,
+  `Clt Cert`, `Clt Key` path fields plus a `Verify` (`Full` / `Skip`) toggle
+  render conditionally for `mysql://`/`mariadb://`/`postgres://`/`postgresql://`
+  URLs. Tab cycles through TLS fields when present. Persisted in the `[tls]`
+  block of `~/.config/sqeel/conns/<name>.toml`; sqlx pools use
+  `MySqlConnectOptions` / `PgConnectOptions` with `ssl_mode` + `ssl_ca` /
+  `ssl_root_cert` + `ssl_client_cert` + `ssl_client_key` from the saved config.
+  Backed by `sqeel-config 0.2.8` + `sqeel-core 0.4.13` + `sqeel-tui 0.4.17`.
+  Phase 2 (SSH tunnel) tracked separately on the same issue.
+
 ## [0.4.18] - 2026-05-15
 
 ### Added
@@ -487,7 +501,8 @@ ratatui TUI + iced GUI from a shared `sqeel-core`.
 - Publish metadata added; `pre-hjkl-extraction` retained as a historical
   reference tag for the pre-split monorepo state.
 
-[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.18...HEAD
+[Unreleased]: https://github.com/kryptic-sh/sqeel/compare/v0.4.19...HEAD
+[0.4.19]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.19
 [0.4.18]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.18
 [0.4.17]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.17
 [0.4.16]: https://github.com/kryptic-sh/sqeel/releases/tag/v0.4.16

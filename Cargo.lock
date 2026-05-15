@@ -3366,7 +3366,7 @@ dependencies = [
 
 [[package]]
 name = "sqeel"
-version = "0.4.18"
+version = "0.4.19"
 dependencies = [
  "anyhow",
  "clap",
@@ -3380,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "sqeel-config"
-version = "0.2.6"
+version = "0.2.8"
 dependencies = [
  "anyhow",
  "hjkl-config",
@@ -3394,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "sqeel-core"
-version = "0.4.12"
+version = "0.4.13"
 dependencies = [
  "anyhow",
  "bigdecimal",
@@ -3405,6 +3405,7 @@ dependencies = [
  "hjkl-config",
  "hjkl-engine",
  "hjkl-lsp",
+ "keyring-core",
  "lsp-types",
  "pulldown-cmark",
  "serde",
@@ -3423,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "sqeel-tui"
-version = "0.4.16"
+version = "0.4.17"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3445,6 +3446,7 @@ dependencies = [
  "ratatui",
  "regex",
  "serde",
+ "sqeel-config",
  "sqeel-core",
  "tempfile",
  "tokio",

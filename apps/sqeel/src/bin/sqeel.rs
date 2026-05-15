@@ -539,7 +539,7 @@ async fn connect_and_spawn(
         let mut s = state.lock().unwrap();
         s.schema_connecting = true;
     }
-    match DbConnection::connect(url).await {
+    match DbConnection::connect(url, None).await {
         Ok(conn) => {
             {
                 let mut s = state.lock().unwrap();
