@@ -1132,6 +1132,51 @@ impl App {
         self.status_message = Some("tabonly".into());
     }
 
+    /// Close all tabs whose index is strictly greater than `active_tab`.
+    ///
+    /// After this call `self.tabs.len() == self.active_tab + 1`. No-op when
+    /// the active tab is already the last one.
+    pub(crate) fn close_tabs_to_right(&mut self) {
+        let active = self.active_tab;
+        if active + 1 >= self.tabs.len() {
+            // Already the last tab — nothing to close.
+            return;
+        }
+        self.sync_viewport_from_editor();
+        // Drop window slots for every tab that lives to the right.
+        for i in (active + 1)..self.tabs.len() {
+            for wid in self.tabs[i].layout.leaves() {
+                self.windows[wid] = None;
+            }
+        }
+        self.tabs.truncate(active + 1);
+        // active_tab index is unchanged; it still points to the same tab.
+        self.sync_viewport_to_editor();
+    }
+
+    /// Close all tabs whose index is strictly less than `active_tab`.
+    ///
+    /// After this call `self.tabs.len() == self.tabs.len() - active_tab`
+    /// and `active_tab == 0`. No-op when the active tab is already the first.
+    pub(crate) fn close_tabs_to_left(&mut self) {
+        let active = self.active_tab;
+        if active == 0 {
+            // Already the first tab — nothing to close.
+            return;
+        }
+        self.sync_viewport_from_editor();
+        // Drop window slots for every tab that lives to the left.
+        for i in 0..active {
+            for wid in self.tabs[i].layout.leaves() {
+                self.windows[wid] = None;
+            }
+        }
+        // Drain the prefix, shifting remaining tabs to the front.
+        self.tabs.drain(0..active);
+        self.active_tab = 0;
+        self.sync_viewport_to_editor();
+    }
+
     /// `:tabmove [N|+N|-N]` — reorder tabs.
     ///
     /// No arg → move to end. `N` → absolute 0-based position. `+N`/`-N` →

@@ -2984,6 +2984,67 @@ fn tabo_is_alias_for_tabonly() {
     assert_eq!(app.tabs.len(), 1);
 }
 
+// ── close_tabs_to_right / close_tabs_to_left ─────────────────────────────────
+
+#[test]
+fn close_tabs_to_right_leaves_active_and_earlier() {
+    // 4 tabs: 0, 1, 2, 3. Active = 2. After: tabs 0,1,2 remain; active still 2.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew"); // tab 1
+    app.dispatch_ex("tabnew"); // tab 2
+    app.dispatch_ex("tabnew"); // tab 3 (active)
+    assert_eq!(app.tabs.len(), 4);
+    // Navigate back to tab 2.
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 2);
+    app.close_tabs_to_right();
+    assert_eq!(app.tabs.len(), 3, "expected 3 tabs remaining (0, 1, 2)");
+    assert_eq!(app.active_tab, 2, "active_tab must stay at 2");
+}
+
+#[test]
+fn close_tabs_to_left_shifts_active_to_zero() {
+    // 4 tabs: 0, 1, 2, 3. Active = 2. After: tabs 2,3 remain; active = 0.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew"); // tab 1
+    app.dispatch_ex("tabnew"); // tab 2
+    app.dispatch_ex("tabnew"); // tab 3 (active)
+    // Navigate back to tab 2.
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 2);
+    app.close_tabs_to_left();
+    assert_eq!(
+        app.tabs.len(),
+        2,
+        "expected 2 tabs remaining (originally 2, 3)"
+    );
+    assert_eq!(app.active_tab, 0, "active_tab must shift to 0");
+}
+
+#[test]
+fn close_tabs_to_right_noop_on_last_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab, 1); // last tab
+    app.close_tabs_to_right();
+    assert_eq!(app.tabs.len(), 2, "no-op when already last");
+    assert_eq!(app.active_tab, 1);
+}
+
+#[test]
+fn close_tabs_to_left_noop_on_first_tab() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("tabnew");
+    assert_eq!(app.tabs.len(), 2);
+    // Go back to tab 0.
+    app.dispatch_ex("tabprev");
+    assert_eq!(app.active_tab, 0); // first tab
+    app.close_tabs_to_left();
+    assert_eq!(app.tabs.len(), 2, "no-op when already first");
+    assert_eq!(app.active_tab, 0);
+}
+
 #[test]
 fn tabmove_no_arg_moves_to_end() {
     let mut app = App::new(None, false, None, None).unwrap();
