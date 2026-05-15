@@ -13,8 +13,8 @@ homepage.workspace = true
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-hjkl-buffer = { version = "0.6", path = "../hjkl-buffer" }
-hjkl-engine = { version = "0.7", path = "../hjkl-engine" }
+hjkl-buffer = { version = "0.6" }
+hjkl-engine = { version = "0.7" }
 hjkl-vim = "0.19"
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }

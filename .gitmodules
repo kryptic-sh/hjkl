@@ -30,7 +30,7 @@
 	url = https://github.com/kryptic-sh/hjkl-splash.git
 [submodule "crates/hjkl-lsp"]
 	path = crates/hjkl-lsp
-	url = git@github.com:kryptic-sh/hjkl-lsp.git
+	url = https://github.com/kryptic-sh/hjkl-lsp.git
 [submodule "crates/hjkl-xdg"]
 	path = crates/hjkl-xdg
 	url = https://github.com/kryptic-sh/hjkl-xdg.git

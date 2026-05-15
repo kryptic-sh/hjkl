@@ -8,6 +8,40 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- Tests: `:write[!]` disk-state guard (2 cases), `:set background=` inline
+  dispatch (3 cases), `hjkl-gui` smoke tests (2 cases).
+
+### Changed
+
+- `hjkl-ex`: `all_setting_names()` now includes `"background"` and `"bg"` so
+  `:set <Tab>` surfaces the option. The host's inline
+  `set background=dark|light` dispatch in `ex_dispatch.rs` is unchanged; hjkl-ex
+  silently accepts the token if it reaches `apply_set_token`.
+- `apps/hjkl`: `hjkl-engine` dep range loosened `"0.7.0"` → `"0.7"` so the
+  patched 0.7.1 is in-range without manifest-side re-pin.
+- `apps/hjkl-gui`: `hjkl-editor` bumped `"0.4"` → `"0.5"` (stale post-0.5.0).
+- `.gitmodules`: `crates/hjkl-lsp` URL changed from SSH (`git@github.com:`) to
+  HTTPS (`https://github.com/kryptic-sh/hjkl-lsp.git`) for anonymous-clone
+  compatibility.
+- `hjkl-compat-oracle`: removed redundant `path =` segments from `hjkl-buffer`
+  and `hjkl-engine` deps; umbrella `[patch.crates-io]` resolves them.
+
+### Fixed
+
+- H1 (submodule context): `hjkl-clipboard` 0.5.4 — INCR chunk read timeout
+  raised from 10 s to 30 s, fixing clipboard hangs on slow Wayland compositors.
+- H2 (submodule context): `hjkl-engine` 0.7.1 — `editor.rs` `Key` import gated
+  behind the `crossterm` feature flag; previously compiled unconditionally and
+  broke headless builds.
+
+### Removed
+
+- Dead code: `AppAction::AnvilUninstall` and `AppAction::AnvilUpdate` enum
+  variants, `AnvilState::installed_version` and `AnvilState::registry_version`
+  fields, and the `backtab_event()` helper function (dc618e5).
+
 ## [0.17.1] - 2026-05-15
 
 ### Fixed
