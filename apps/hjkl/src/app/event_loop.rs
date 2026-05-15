@@ -891,6 +891,15 @@ impl App {
                     {
                         continue;
                     }
+                    // P11.3 — gate events by per-mode mouse flags.
+                    // Command-field overlay already handled above; here we gate
+                    // on the editor's vim mode for the remaining events.
+                    {
+                        let mode = self.active().editor.vim_mode();
+                        if !crate::app::mouse_enabled_for(mode, &self.mouse_flags) {
+                            continue;
+                        }
+                    }
                     // 3 lines/cols per wheel notch — vim's `mousescroll` default.
                     const WHEEL_TICKS: i16 = 3;
                     use crossterm::event::KeyModifiers;
@@ -1002,6 +1011,57 @@ impl App {
                                 }
                             }
 
+                            // ── P4.1: Ctrl+Left-click → goto-definition ──────
+                            if me.modifiers.contains(KeyModifiers::CONTROL) {
+                                if let mouse::Zone::Code {
+                                    win_id,
+                                    doc_row,
+                                    doc_col,
+                                } = mouse::hit_test_zone(self, me.column, me.row)
+                                {
+                                    // Focus window if needed.
+                                    let current_focus = self.focused_window();
+                                    if win_id != current_focus {
+                                        self.sync_viewport_from_editor();
+                                        self.set_focused_window(win_id);
+                                        self.sync_viewport_to_editor();
+                                    }
+                                    self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+                                    self.sync_after_engine_mutation();
+                                    self.lsp_goto_definition();
+                                }
+                                // Ctrl+click outside Code zone is a no-op.
+                                continue;
+                            }
+
+                            // ── P4.2: Shift+Left-click → extend visual selection
+                            if me.modifiers.contains(KeyModifiers::SHIFT) {
+                                if let mouse::Zone::Code {
+                                    win_id,
+                                    doc_row,
+                                    doc_col,
+                                } = mouse::hit_test_zone(self, me.column, me.row)
+                                {
+                                    // Focus window if needed.
+                                    let current_focus = self.focused_window();
+                                    if win_id != current_focus {
+                                        self.sync_viewport_from_editor();
+                                        self.set_focused_window(win_id);
+                                        self.sync_viewport_to_editor();
+                                    }
+                                    // Anchor at current cursor if not already visual.
+                                    if self.active().editor.vim_mode() != VimMode::Visual {
+                                        self.active_mut().editor.mouse_begin_drag();
+                                    }
+                                    self.active_mut()
+                                        .editor
+                                        .mouse_extend_drag_doc(doc_row, doc_col);
+                                    self.sync_after_engine_mutation();
+                                }
+                                // Shift+click outside Code zone is a no-op.
+                                continue;
+                            }
+
                             // Left-click on the tab bar / buffer line switches
                             // to that tab or buffer.
                             match mouse::hit_test_zone(self, me.column, me.row) {
@@ -1095,6 +1155,63 @@ impl App {
                         }
                         // Up: vim stays in Visual after drag-release — no-op.
                         MouseEventKind::Up(MouseButton::Left) => {}
+
+                        // ── P4.3: Middle-click → primary-selection paste ──────
+                        //
+                        // X11 / Wayland convention: middle-click pastes the
+                        // primary selection (whatever is currently highlighted
+                        // anywhere on screen, independent of the system
+                        // clipboard).  macOS / Windows have no primary
+                        // selection; we silently no-op when the clipboard
+                        // backend does not report `Capabilities::PRIMARY`.
+                        MouseEventKind::Down(MouseButton::Middle) => {
+                            use crate::app::mouse;
+                            use hjkl_clipboard::{Capabilities, MimeType, Selection};
+
+                            // Find the target window + doc position.
+                            let Some(win_id) = mouse::hit_test_window(self, me.column, me.row)
+                            else {
+                                continue;
+                            };
+                            let Some((doc_row, doc_col)) =
+                                mouse::cell_to_doc(self, win_id, me.column, me.row)
+                            else {
+                                continue;
+                            };
+
+                            // Read primary selection first (before any mut borrows).
+                            // No-op when the backend does not support PRIMARY.
+                            let primary_text: Option<String> = {
+                                let cb = self.active().editor.host().clipboard();
+                                cb.filter(|cb| {
+                                    cb.capabilities().contains(Capabilities::PRIMARY)
+                                        && cb.capabilities().contains(Capabilities::READ)
+                                })
+                                .and_then(|cb| {
+                                    cb.get(Selection::Primary, MimeType::Text)
+                                        .ok()
+                                        .and_then(|b| String::from_utf8(b).ok())
+                                })
+                            };
+
+                            // Focus the clicked window if it differs.
+                            let current_focus = self.focused_window();
+                            if win_id != current_focus {
+                                self.sync_viewport_from_editor();
+                                self.set_focused_window(win_id);
+                                self.sync_viewport_to_editor();
+                            }
+
+                            // Move cursor to the click position.
+                            self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+                            self.sync_after_engine_mutation();
+
+                            if let Some(text) = primary_text {
+                                self.active_mut().editor.set_yank(text);
+                                self.active_mut().editor.paste_after(1);
+                                self.sync_after_engine_mutation();
+                            }
+                        }
 
                         // ── Right-click: open context menu (Phase 2, Round A) ─
                         MouseEventKind::Down(MouseButton::Right) => {

@@ -1,5 +1,6 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hjkl_engine::VimMode;
 use std::time::Duration;
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -12043,4 +12044,223 @@ fn colon_other_key_during_completion_commits() {
         final_text.starts_with(&candidate_text),
         "field must start with committed candidate: candidate={candidate_text:?} final={final_text:?}"
     );
+}
+
+// ── P11: MouseFlags unit tests ─────────────────────────────────────────────
+
+#[test]
+fn mouse_flags_default_all_enabled() {
+    // Fresh App (and MouseFlags::default()) must have all 4 modes enabled.
+    let flags = MouseFlags::default();
+    assert!(flags.normal, "normal should be enabled by default");
+    assert!(flags.visual, "visual should be enabled by default");
+    assert!(flags.insert, "insert should be enabled by default");
+    assert!(flags.command, "command should be enabled by default");
+}
+
+#[test]
+fn mouse_flags_set_to_n_only_normal_active() {
+    let flags = MouseFlags::from_flags("n");
+    assert!(flags.normal, "n flag enables normal");
+    assert!(!flags.visual, "only n: visual must be off");
+    assert!(!flags.insert, "only n: insert must be off");
+    assert!(!flags.command, "only n: command must be off");
+}
+
+#[test]
+fn mouse_flags_set_empty_disables_all() {
+    let flags_empty = MouseFlags::from_flags("");
+    assert!(!flags_empty.normal, "empty string must disable normal");
+    assert!(!flags_empty.visual, "empty string must disable visual");
+    assert!(!flags_empty.insert, "empty string must disable insert");
+    assert!(!flags_empty.command, "empty string must disable command");
+
+    let flags_none = MouseFlags::none();
+    assert!(!flags_none.normal, "MouseFlags::none() must disable normal");
+    assert!(!flags_none.visual, "MouseFlags::none() must disable visual");
+    assert!(!flags_none.insert, "MouseFlags::none() must disable insert");
+    assert!(
+        !flags_none.command,
+        "MouseFlags::none() must disable command"
+    );
+}
+
+#[test]
+fn mouse_flags_a_is_all_enabled() {
+    let flags = MouseFlags::from_flags("a");
+    assert!(flags.normal && flags.visual && flags.insert && flags.command);
+}
+
+#[test]
+fn mouse_flags_nvi_multi_char() {
+    let flags = MouseFlags::from_flags("nvi");
+    assert!(flags.normal);
+    assert!(flags.visual);
+    assert!(flags.insert);
+    assert!(!flags.command);
+}
+
+#[test]
+fn mouse_enabled_for_normal_mode_flags() {
+    let all = MouseFlags::all();
+    assert!(mouse_enabled_for(VimMode::Normal, &all));
+
+    let mut none_normal = MouseFlags::all();
+    none_normal.normal = false;
+    assert!(!mouse_enabled_for(VimMode::Normal, &none_normal));
+}
+
+#[test]
+fn mouse_enabled_for_visual_mode_flags() {
+    let all = MouseFlags::all();
+    assert!(mouse_enabled_for(VimMode::Visual, &all));
+    assert!(mouse_enabled_for(VimMode::VisualLine, &all));
+    assert!(mouse_enabled_for(VimMode::VisualBlock, &all));
+
+    let mut no_visual = MouseFlags::all();
+    no_visual.visual = false;
+    assert!(!mouse_enabled_for(VimMode::Visual, &no_visual));
+    assert!(!mouse_enabled_for(VimMode::VisualLine, &no_visual));
+    assert!(!mouse_enabled_for(VimMode::VisualBlock, &no_visual));
+}
+
+#[test]
+fn mouse_enabled_for_insert_mode_flags() {
+    let all = MouseFlags::all();
+    assert!(mouse_enabled_for(VimMode::Insert, &all));
+
+    let mut no_insert = MouseFlags::all();
+    no_insert.insert = false;
+    assert!(!mouse_enabled_for(VimMode::Insert, &no_insert));
+}
+
+#[test]
+fn set_mouse_eq_flags_via_dispatch_ex() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Default is all enabled.
+    assert!(app.mouse_flags.normal && app.mouse_flags.visual && app.mouse_flags.insert);
+
+    // `:set mouse=n` disables all except normal.
+    app.dispatch_ex("set mouse=n");
+    assert!(app.mouse_flags.normal, "n: normal on");
+    assert!(!app.mouse_flags.visual, "n: visual off");
+    assert!(!app.mouse_flags.insert, "n: insert off");
+
+    // `:set nomouse` disables all + mouse_enabled=false.
+    app.dispatch_ex("set nomouse");
+    assert!(!app.mouse_flags.normal);
+    assert!(!app.mouse_flags.visual);
+    assert!(!app.mouse_flags.insert);
+
+    // `:set mouse` re-enables all.
+    app.dispatch_ex("set mouse");
+    assert!(app.mouse_flags.normal);
+    assert!(app.mouse_flags.visual);
+    assert!(app.mouse_flags.insert);
+}
+
+#[test]
+fn mouse_flags_as_flags_str_roundtrip() {
+    for s in ["a", "n", "v", "i", "c", "nvi", "nv", ""] {
+        let flags = MouseFlags::from_flags(s);
+        let got = flags.as_flags_str();
+        // Re-parse must be equal.
+        let reparsed = MouseFlags::from_flags(&got);
+        assert_eq!(
+            flags, reparsed,
+            "roundtrip failed for {s:?}: as_flags_str={got:?}"
+        );
+    }
+}
+
+// ── P4: Shift+click extends visual selection ──────────────────────────────
+
+#[test]
+fn shift_click_enters_visual_and_extends_selection() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Set up a multi-line buffer and window geometry.
+    {
+        use hjkl_engine::BufferEdit;
+        let buf = app.slots_mut()[0].editor.buffer_mut();
+        BufferEdit::replace_all(buf, "hello world\nsecond line\nthird\n");
+    }
+    if let Some(Some(win)) = app.windows.get_mut(0) {
+        win.last_rect = Some(Rect::new(0, 1, 80, 20)); // row 1: below a status bar
+        win.top_row = 0;
+        win.top_col = 0;
+    }
+    {
+        let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+        vp.top_row = 0;
+        vp.top_col = 0;
+        vp.tab_width = 4;
+    }
+
+    // Editor starts in Normal mode; cursor at (0,0).
+    assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
+
+    // Synthesise a Shift+Left-click at row=1 (screen), col=4 (text area).
+    // With no line numbers, gutter_width = 0; text starts at col 0.
+    // Disable line numbers so gutter = 0.
+    {
+        let opts = hjkl_engine::Options {
+            number: false,
+            relativenumber: false,
+            ..hjkl_engine::Options::default()
+        };
+        app.active_mut().editor.apply_options(&opts);
+    }
+
+    let click_screen_row: u16 = 2; // window starts at screen row 1, so doc_row = 1
+    let click_screen_col: u16 = 3; // doc_col = 3
+
+    let me = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: click_screen_col,
+        row: click_screen_row,
+        modifiers: KeyModifiers::SHIFT,
+    };
+
+    // Dispatch through the modifier-click path directly.
+    // Since we're unit-testing we call the zone + drag API path ourselves.
+    {
+        use crate::app::mouse;
+        let zone = mouse::hit_test_zone(&app, me.column, me.row);
+        if let mouse::Zone::Code {
+            win_id,
+            doc_row,
+            doc_col,
+        } = zone
+        {
+            let current_focus = app.focused_window();
+            if win_id != current_focus {
+                app.sync_viewport_from_editor();
+                app.set_focused_window(win_id);
+                app.sync_viewport_to_editor();
+            }
+            if app.active().editor.vim_mode() != VimMode::Visual {
+                app.active_mut().editor.mouse_begin_drag();
+            }
+            app.active_mut()
+                .editor
+                .mouse_extend_drag_doc(doc_row, doc_col);
+            app.sync_after_engine_mutation();
+
+            // After Shift+click the editor must be in Visual mode.
+            assert_eq!(
+                app.active().editor.vim_mode(),
+                VimMode::Visual,
+                "Shift+click must enter Visual mode"
+            );
+        } else {
+            panic!("expected Code zone, got {zone:?}");
+        }
+    }
 }
