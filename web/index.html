@@ -889,7 +889,7 @@
         <p class="tagline">No Electron. No JVM. No bullshit.</p>
         <p class="tagline" style="color: var(--fg-muted); font-size: 16px">
           Native Rust. Instant startup. Terminal-native. MySQL, Postgres,
-          SQLite.
+          SQLite, DuckDB.
         </p>
 
         <div class="cta">
@@ -980,11 +980,25 @@
           </div>
           <div class="feat">
             <div class="icon">04 — DB</div>
-            <h4>MySQL · Postgres · SQLite</h4>
-            <p>Powered by sqlx. Per-file TOML connections, live switcher.</p>
+            <h4>MySQL · Postgres · SQLite · DuckDB</h4>
+            <p>
+              Powered by sqlx + duckdb-rs. Per-file TOML connections, live
+              switcher. Query CSV / Parquet directly via DuckDB (<code
+                >SELECT * FROM 'data.csv'</code
+              >).
+            </p>
           </div>
           <div class="feat">
-            <div class="icon">05 — LSP</div>
+            <div class="icon">05 — SECRETS</div>
+            <h4>OS keyring credentials</h4>
+            <p>
+              Passwords land in Secret Service / Keychain / Credential Manager —
+              never plaintext on disk. <code>:migrate-secrets</code> walks
+              existing connections and moves inline passwords into the keyring.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">06 — LSP</div>
             <h4>sqls integration</h4>
             <p>
               Completions and diagnostics from any SQL LSP. Errors jump editor
@@ -992,20 +1006,32 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">06 — SYNTAX</div>
+            <div class="icon">07 — SYNTAX</div>
             <h4>tree-sitter highlighting</h4>
             <p>Dialect-aware. Fast, accurate, no regex soup.</p>
           </div>
           <div class="feat">
-            <div class="icon">07 — TABS</div>
-            <h4>Editor tabs</h4>
+            <div class="icon">08 — TABS</div>
+            <h4>Editor tabs + history picker</h4>
             <p>
-              Lazy load, 5-minute RAM eviction. Auto-save SQL buffers, result
-              history, query history.
+              Lazy load, 5-minute RAM eviction. Auto-save SQL buffers.
+              <kbd>&lt;leader&gt;h</kbd> opens a fuzzy picker over query
+              history; selection lands in a fresh scratch tab.
             </p>
           </div>
           <div class="feat">
-            <div class="icon">08 — PANES</div>
+            <div class="icon">09 — EX</div>
+            <h4>:export · :describe · :refresh</h4>
+            <p>
+              <code>:export csv|json [path]</code> writes the active result tab
+              to disk. <code>:describe &lt;table&gt;</code> dumps dialect-aware
+              column schema. <code>:refresh</code> /
+              <kbd>&lt;leader&gt;R</kbd> busts the schema cache without
+              reconnecting.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">10 — PANES</div>
             <h4>tmux-aware nav</h4>
             <p>
               <kbd>Ctrl+HJKL</kbd> across schema / editor / results. Mouse works
@@ -1013,11 +1039,20 @@
             </p>
           </div>
           <div class="feat">
-            <div class="icon">09 — SCHEMA</div>
+            <div class="icon">11 — SCHEMA</div>
             <h4>Schema browser</h4>
             <p>
               Expand DB → tables → columns with types inline. Click or keyboard,
               fuzzy search across objects.
+            </p>
+          </div>
+          <div class="feat">
+            <div class="icon">12 — CLI</div>
+            <h4><code>$DATABASE_URL</code> prompt</h4>
+            <p>
+              Bare <code>sqeel</code> with <code>$DATABASE_URL</code> set
+              prompts y/N (password masked) before opening the TUI. Skip the
+              picker when your shell already knows where to go.
             </p>
           </div>
         </div>
