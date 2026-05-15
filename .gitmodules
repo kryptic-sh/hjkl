@@ -52,3 +52,6 @@
 [submodule "crates/hjkl-theme"]
 	path = crates/hjkl-theme
 	url = https://github.com/kryptic-sh/hjkl-theme.git
+[submodule "crates/hjkl-theme-tui"]
+	path = crates/hjkl-theme-tui
+	url = https://github.com/kryptic-sh/hjkl-theme-tui.git
