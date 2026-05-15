@@ -333,32 +333,13 @@ impl App {
         }
 
         // Multi-buffer commands — canonical names from COMMAND_NAMES table.
+        // NOTE: bnext, bprevious/bNext, bfirst, blast, buffers/ls/files, clipboard
+        // are handled by HostCmd impls in ex_host_cmds.rs (Phase 4c).
         match cmd {
-            "bnext" => {
-                self.buffer_next();
-                return;
-            }
-            "bprevious" | "bNext" => {
-                self.buffer_prev();
-                return;
-            }
-            "bfirst" => {
-                self.switch_to(0);
-                return;
-            }
-            "blast" => {
-                let last = self.slots.len().saturating_sub(1);
-                self.switch_to(last);
-                return;
-            }
-            "buffers" | "ls" | "files" => {
-                self.status_message = Some(self.list_buffers());
-                return;
-            }
-            "clipboard" => {
-                self.status_message = Some(self.clipboard_status());
-                return;
-            }
+            // TODO(4c): `:b#` cannot be migrated — split_name_args treats the
+            // trailing `#` as an arg, so the resolved name is never "b#".
+            // Leave this legacy arm in place until parse::split_name_args is
+            // extended to accept a trailing `#` for buffer commands.
             "b#" => {
                 self.buffer_alt();
                 return;
@@ -1004,7 +985,7 @@ impl App {
 
     /// Format a one-line summary of the active clipboard backend for the
     /// status line. Used by `:clipboard`.
-    fn clipboard_status(&self) -> String {
+    pub(crate) fn clipboard_status(&self) -> String {
         let Some(cb) = self.active().editor.host().clipboard() else {
             return "clipboard: unavailable (probe failed)".into();
         };

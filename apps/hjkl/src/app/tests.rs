@@ -11245,3 +11245,104 @@ fn colon_only_via_host_registry() {
         ":only must leave exactly 1 leaf"
     );
 }
+
+// ── Phase 4c: buffer-nav host-registry tests ─────────────────────────────────
+
+fn setup_three_slot_app() -> App {
+    let path_a = std::env::temp_dir().join("hjkl_4c_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_4c_b.txt");
+    let path_c = std::env::temp_dir().join("hjkl_4c_c.txt");
+    for p in [&path_a, &path_b, &path_c] {
+        std::fs::write(p, "x\n").unwrap();
+    }
+    let mut app = App::new(Some(path_a), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    app.dispatch_ex(&format!("e {}", path_c.display()));
+    // active_index == 2
+    app
+}
+
+#[test]
+fn colon_bnext_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    assert_eq!(app.active_index(), 2);
+    app.dispatch_ex("bnext");
+    assert_eq!(app.active_index(), 0, ":bnext must wrap to first slot");
+}
+
+#[test]
+fn colon_bn_alias_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    assert_eq!(app.active_index(), 2);
+    app.dispatch_ex("bn");
+    assert_eq!(app.active_index(), 0, ":bn alias must wrap to first slot");
+}
+
+#[test]
+fn colon_bprevious_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    // Start at slot 2, go back to slot 1.
+    app.dispatch_ex("bprevious");
+    assert_eq!(app.active_index(), 1, ":bprevious must retreat one slot");
+}
+
+#[test]
+fn colon_bp_alias_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    app.dispatch_ex("bp");
+    assert_eq!(app.active_index(), 1, ":bp alias must retreat one slot");
+}
+
+#[test]
+fn colon_bfirst_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    assert_eq!(app.active_index(), 2);
+    app.dispatch_ex("bfirst");
+    assert_eq!(app.active_index(), 0, ":bfirst must jump to slot 0");
+}
+
+#[test]
+fn colon_blast_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    // Switch to first so blast has work to do.
+    app.dispatch_ex("bfirst");
+    assert_eq!(app.active_index(), 0);
+    app.dispatch_ex("blast");
+    assert_eq!(
+        app.active_index(),
+        app.slots.len() - 1,
+        ":blast must jump to the last slot"
+    );
+}
+
+#[test]
+fn colon_ls_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    app.dispatch_ex("ls");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(!msg.is_empty(), ":ls must produce a status message");
+}
+
+#[test]
+fn colon_buffers_via_host_registry() {
+    let mut app = setup_three_slot_app();
+    app.dispatch_ex("buffers");
+    let msg = app
+        .status_message
+        .clone()
+        .or_else(|| app.info_popup.clone())
+        .unwrap_or_default();
+    assert!(!msg.is_empty(), ":buffers must produce output");
+}
+
+#[test]
+fn colon_clipboard_via_host_registry() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("clipboard");
+    let msg = app
+        .status_message
+        .clone()
+        .or_else(|| app.info_popup.clone())
+        .unwrap_or_default();
+    assert!(!msg.is_empty(), ":clipboard must produce output");
+}
