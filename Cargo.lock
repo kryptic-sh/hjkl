@@ -2102,7 +2102,7 @@ dependencies = [
  "hjkl-clipboard",
  "hjkl-config",
  "hjkl-editor 0.5.0",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-ex",
  "hjkl-form",
  "hjkl-keymap",
@@ -2174,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-buffer"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "criterion",
  "proptest",
@@ -2201,7 +2201,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-vim",
  "nvim-rs",
  "serde",
@@ -2227,7 +2227,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "321b26a55b419b6bee54240f099a289b149238673b0e1feb21dfc0d57c6de931"
 dependencies = [
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.7.0",
  "regex",
 ]
 
@@ -2237,7 +2237,7 @@ version = "0.5.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
 ]
 
 [[package]]
@@ -2247,13 +2247,25 @@ dependencies = [
  "floem",
  "hjkl-buffer",
  "hjkl-editor 0.4.8",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-vim",
 ]
 
 [[package]]
 name = "hjkl-engine"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6eb6dd7ccc80c8782e88a8cc2a4eb7775ecc91d46f2d4806eb41b366f27136c7"
+dependencies = [
+ "bitflags 2.11.1",
+ "hjkl-buffer",
+ "regex",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-engine"
+version = "0.8.0"
 dependencies = [
  "bitflags 2.11.1",
  "crossterm",
@@ -2271,7 +2283,7 @@ name = "hjkl-ex"
 version = "0.1.0"
 dependencies = [
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "regex",
  "tempfile",
  "thiserror 2.0.18",
@@ -2282,7 +2294,7 @@ name = "hjkl-form"
 version = "0.3.7"
 dependencies = [
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-vim",
 ]
 
@@ -2295,7 +2307,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-editor 0.5.0",
  "hjkl-editor-gui",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-vim",
 ]
 
@@ -2327,7 +2339,7 @@ name = "hjkl-picker"
 version = "0.6.0"
 dependencies = [
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-form",
  "ignore",
  "regex",
@@ -2340,7 +2352,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-picker",
  "ratatui",
 ]
@@ -2350,7 +2362,7 @@ name = "hjkl-ratatui"
 version = "0.3.7"
 dependencies = [
  "crossterm",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "hjkl-form",
  "ratatui",
 ]
@@ -2385,7 +2397,7 @@ version = "0.19.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
- "hjkl-engine",
+ "hjkl-engine 0.8.0",
  "proptest",
  "ratatui",
 ]

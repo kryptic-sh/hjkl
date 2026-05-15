@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 hjkl-editor-gui = "0.1"
 hjkl-editor     = { version = "0.5", default-features = false }
-hjkl-engine     = { version = "0.7", default-features = false }
+hjkl-engine     = { version = "0.8", default-features = false }
 hjkl-buffer     = "0.6"
 hjkl-vim        = { version = "0.19", default-features = false }
 clap            = { version = "4", features = ["derive"] }
