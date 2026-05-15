@@ -8,11 +8,16 @@
 //! no-range terminal commands (`:w`, `:wq`, `:x`, `:wa`, `:wqa`, `:noh`,
 //! `:undo`, `:redo`, `:qall`, `:qall!`, `:wqall`, `:wqall!`).
 
+pub use complete::{
+    CompletionKind, Completions, collect_host_registry_names, collect_registry_names,
+    complete_command_from_names, longest_common_prefix,
+};
 pub use effect::ExEffect;
 pub use range::{LineRange, parse_range};
 pub use registry::{ArgKind, ExCommand, HostCmd, HostRegistry, Registry};
 
 mod builtins;
+mod complete;
 mod effect;
 mod listings;
 mod parse;
@@ -1153,5 +1158,60 @@ mod tests {
         // echo with no args returns None (defers)
         let result = try_dispatch_host(&reg, &mut ctx, "echo");
         assert!(result.is_none());
+    }
+
+    // ---- Phase 5a: collect_registry_names + completion integration -----------
+
+    fn noop_handler(
+        _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+        _args: &str,
+        _range: Option<crate::range::LineRange>,
+    ) -> Option<ExEffect> {
+        Some(ExEffect::Ok)
+    }
+
+    #[test]
+    fn collect_registry_names_includes_aliases() {
+        let mut reg = crate::Registry::<DefaultHost>::new();
+        reg.add(crate::ExCommand {
+            name: "test",
+            aliases: &["t1", "t2"],
+            arg_kind: crate::ArgKind::None,
+            min_prefix: 1,
+            run: noop_handler,
+        });
+        let names = collect_registry_names(&reg);
+        assert!(names.contains(&"test".to_string()));
+        assert!(names.contains(&"t1".to_string()));
+        assert!(names.contains(&"t2".to_string()));
+    }
+
+    #[test]
+    fn default_registry_includes_quit_and_q_bang() {
+        let reg = default_registry::<DefaultHost>();
+        let names = collect_registry_names(&reg);
+        assert!(
+            names.contains(&"quit".to_string()),
+            "missing 'quit': {names:?}"
+        );
+        assert!(names.contains(&"q!".to_string()), "missing 'q!': {names:?}");
+    }
+
+    #[test]
+    fn complete_through_default_registry() {
+        let reg = default_registry::<DefaultHost>();
+        let names = collect_registry_names(&reg);
+        let result = complete_command_from_names("qu", 2, &names);
+        assert_eq!(result.kind, CompletionKind::Command);
+        assert!(
+            result.candidates.contains(&"quit".to_string()),
+            "missing 'quit': {:?}",
+            result.candidates
+        );
+        assert!(
+            result.candidates.contains(&"quit!".to_string()),
+            "missing 'quit!': {:?}",
+            result.candidates
+        );
     }
 }
