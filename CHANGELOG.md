@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-16
+
+### Changed
+
+- `resolve_span_style` now layers every overlapping span instead of picking one.
+  Spans are sorted broadest-first, then `Style::patch`-merged so the narrower
+  span's set fields override the broader span's, but unset fields (e.g. a narrow
+  `@keyword` carrying only `fg`) inherit the broader span's values (e.g. a wide
+  `@markup.raw.block` carrying only `bg`). This matches vim and Helix's layered
+  hi-group model and lets hosts tint markdown code blocks (or any nested region)
+  without bloating every injected language's captures with the same background.
+
+  The pre-0.6.1 narrowest-wins-completely behaviour is preserved whenever the
+  narrower span sets every field — `Style::patch` only carries broader fields
+  through `None` slots.
+
+### Tests
+
+- `layered_spans_blend_broad_bg_with_narrow_fg` pins the new contract: broad
+  bg-only span + narrow fg-only span ⇒ cells carry both.
+- `narrow_span_with_explicit_bg_still_overrides_broad_bg` pins the override
+  case: a narrow span that DOES set bg overrides the broader bg.
+
 ## [0.6.0] - 2026-05-10
 
 ### Added
@@ -103,7 +126,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.4.0

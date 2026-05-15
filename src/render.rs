@@ -794,24 +794,37 @@ impl<R: StyleResolver> BufferView<'_, R> {
         }
     }
 
-    /// First span containing `byte_offset` wins. Buffer guarantees
-    /// non-overlapping sorted spans — vim.rs is responsible for that.
+    /// Resolve the final style for a byte by layering every span that
+    /// contains it, broadest first and narrowest last. `Style::patch` keeps
+    /// the broader span's fields when the narrower span doesn't override
+    /// them, so a wide `@markup.raw.block` carrying just `bg = codeblock`
+    /// shines through under a narrow `@keyword` carrying just `fg = mauve`,
+    /// matching vim/Helix's layered hi-group model.
+    ///
+    /// Pre-0.6.1 behaviour was narrowest-wins-completely: only one span's
+    /// style applied per byte, so broader-span backgrounds were dropped
+    /// whenever a narrower foreground span overlapped them. That made it
+    /// impossible to give markdown code blocks a tinted bg without also
+    /// burdening every injected language's captures with the same bg.
+    ///
+    /// Hosts that want the old behaviour can ensure their narrower spans
+    /// set every field explicitly — `Style::patch` only carries broader
+    /// fields through `None` slots.
     fn resolve_span_style(&self, row_spans: &[crate::Span], byte_offset: usize) -> Option<Style> {
-        // Return the *narrowest* span containing this byte. Hosts that
-        // overlay narrower spans on top of broader ones (e.g. TODO marker
-        // inside a comment span) rely on the more specific span winning;
-        // first-match-wins would let the broader span block the overlay.
-        let mut best: Option<&crate::Span> = None;
-        for span in row_spans {
-            if byte_offset >= span.start_byte && byte_offset < span.end_byte {
-                let len = span.end_byte - span.start_byte;
-                match best {
-                    Some(b) if (b.end_byte - b.start_byte) <= len => {}
-                    _ => best = Some(span),
-                }
-            }
+        // Collect every span containing this byte, sorted broadest first.
+        let mut overlapping: Vec<&crate::Span> = row_spans
+            .iter()
+            .filter(|s| byte_offset >= s.start_byte && byte_offset < s.end_byte)
+            .collect();
+        if overlapping.is_empty() {
+            return None;
         }
-        best.map(|s| self.resolver.resolve(s.style))
+        overlapping.sort_by_key(|s| std::cmp::Reverse(s.end_byte.saturating_sub(s.start_byte)));
+        let mut style = self.resolver.resolve(overlapping[0].style);
+        for s in &overlapping[1..] {
+            style = style.patch(self.resolver.resolve(s.style));
+        }
+        Some(style)
     }
 }
 
@@ -940,6 +953,122 @@ mod tests {
             assert_eq!(term.cell((x, 0)).unwrap().bg, Color::Blue);
         }
         assert!(term.cell((4, 0)).unwrap().bg != Color::Blue);
+    }
+
+    #[test]
+    fn layered_spans_blend_broad_bg_with_narrow_fg() {
+        // Regression: a wide `@markup.raw.block`-style span carrying only
+        // `bg = ...` must shine through a narrow `@keyword`-style span
+        // carrying only `fg = ...`. Pre-0.6.1 the narrow span won outright
+        // and dropped the broad bg, which made markdown code-block tinting
+        // impossible without bloating every injected language's captures.
+        use crate::Span;
+        let b = Buffer::from_str("fn main() {}");
+        let v = vp(20, 1);
+        // id=1 = broad code-block bg, id=2 = narrow keyword fg.
+        let spans = vec![vec![
+            Span::new(0, 12, 1), // bg-only, whole line
+            Span::new(0, 2, 2),  // fg-only, just "fn"
+        ]];
+        let resolver = |id: u32| -> Style {
+            match id {
+                1 => Style::default().bg(Color::DarkGray),
+                2 => Style::default().fg(Color::Magenta),
+                _ => Style::default(),
+            }
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &resolver,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &spans,
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+        };
+        let term = run_render(view, 20, 1);
+        // Cols 0-1 ("fn"): narrow fg + broad bg.
+        for x in 0u16..2 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert_eq!(cell.fg, Color::Magenta, "col {x}: fg from narrow span");
+            assert_eq!(cell.bg, Color::DarkGray, "col {x}: bg from broad span");
+        }
+        // Cols 2-11 (" main() {}"): broad bg only, no fg set.
+        for x in 2u16..12 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert_eq!(cell.bg, Color::DarkGray, "col {x}: bg from broad span");
+            assert_eq!(
+                cell.fg,
+                Color::Reset,
+                "col {x}: no fg set (broad span is bg-only)"
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_span_with_explicit_bg_still_overrides_broad_bg() {
+        // Regression: a narrow span that DOES set bg must override the
+        // broader span's bg. Earlier "narrowest-wins-completely" behaviour
+        // had this trivially; the new layered logic relies on
+        // `Style::patch` overriding only set fields, so we pin it.
+        use crate::Span;
+        let b = Buffer::from_str("hello world");
+        let v = vp(20, 1);
+        let spans = vec![vec![
+            Span::new(0, 11, 1), // broad bg = DarkGray
+            Span::new(6, 11, 2), // narrow bg = Red (overrides)
+        ]];
+        let resolver = |id: u32| -> Style {
+            match id {
+                1 => Style::default().bg(Color::DarkGray),
+                2 => Style::default().bg(Color::Red),
+                _ => Style::default(),
+            }
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &resolver,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &spans,
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+        };
+        let term = run_render(view, 20, 1);
+        // Cols 0-5 ("hello "): broad bg only.
+        for x in 0u16..6 {
+            assert_eq!(term.cell((x, 0)).unwrap().bg, Color::DarkGray);
+        }
+        // Cols 6-10 ("world"): narrow bg wins.
+        for x in 6u16..11 {
+            assert_eq!(
+                term.cell((x, 0)).unwrap().bg,
+                Color::Red,
+                "col {x}: narrow span's bg overrides broad bg"
+            );
+        }
     }
 
     #[test]
