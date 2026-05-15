@@ -376,6 +376,11 @@ pub struct App {
     pub recompute_hits: u64,
     pub recompute_throttled: u64,
     pub recompute_runs: u64,
+    /// Count of async syntax results dropped because their tagged
+    /// buffer_id no longer matches the active buffer (race: parse
+    /// queued before a tab/buffer switch). Surfaced in `:perf` and
+    /// asserted in the regression test on the install path.
+    pub syntax_stale_drops: u64,
     /// User config (bundled defaults + optional XDG overrides). Tests
     /// receive `Config::default()` (the bundled values); main wires the
     /// XDG-merged value via [`Self::with_config`] before entering the
@@ -1757,6 +1762,7 @@ impl App {
             recompute_hits: 0,
             recompute_throttled: 0,
             recompute_runs: 0,
+            syntax_stale_drops: 0,
             config: crate::config::Config::default(),
             start_screen,
             grammar_load_error: None,

@@ -36,7 +36,10 @@ pub type BufferId = u64;
 #[derive(Debug, Clone)]
 pub struct RenderOutput {
     /// Routes spans/signs back to the matching BufferSlot in App::slots.
-    #[allow(dead_code)] // Routing not yet wired; field is set by the worker.
+    /// Install path in `App::recompute_and_install` discards the result
+    /// when this doesn't match the now-active buffer (race fix: a parse
+    /// queued before a tab/buffer switch must not paint onto the new
+    /// active buffer).
     pub buffer_id: BufferId,
     pub spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     pub signs: Vec<Sign>,

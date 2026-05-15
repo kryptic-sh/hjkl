@@ -213,6 +213,30 @@ impl App {
         redraw
     }
 
+    /// Install a worker-produced `RenderOutput` onto the buffer it was
+    /// computed for. Returns `true` if the install ran, `false` if the
+    /// result was discarded as stale.
+    ///
+    /// Race fix: a parse submitted before a tab/buffer switch can land
+    /// here after the active buffer has changed. Painting the old
+    /// buffer's spans onto the now-active buffer produces cross-buffer
+    /// highlight contamination (visible under lag). The worker tags
+    /// every `RenderOutput` with the `buffer_id` it parsed against; we
+    /// drop the result if that no longer matches the active buffer.
+    /// Stale drops are counted in `syntax_stale_drops`.
+    pub(crate) fn install_render_result(&mut self, out: crate::syntax::RenderOutput) -> bool {
+        let active_id = self.active().buffer_id;
+        if out.buffer_id != active_id {
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+            return false;
+        }
+        self.active_mut()
+            .editor
+            .install_ratatui_syntax_spans(out.spans);
+        self.active_mut().diag_signs = out.signs;
+        true
+    }
+
     /// Submit a new viewport-scoped parse on the syntax worker and install
     /// whatever the worker has produced since the last frame.
     pub(crate) fn recompute_and_install(&mut self) {
@@ -293,11 +317,11 @@ impl App {
         let drained = self.syntax.take_result();
         let _ = prev_dirty_gen;
         if let Some(out) = drained {
-            self.active_mut()
-                .editor
-                .install_ratatui_syntax_spans(out.spans);
-            self.active_mut().diag_signs = out.signs;
-            self.last_install_us = t_install.elapsed().as_micros();
+            if self.install_render_result(out) {
+                self.last_install_us = t_install.elapsed().as_micros();
+            } else {
+                self.last_install_us = 0;
+            }
         } else {
             self.last_install_us = 0;
         }
@@ -537,6 +561,100 @@ mod tests {
              got {} spans: {:?}",
             rust_row.len(),
             rust_row
+        );
+    }
+
+    /// Regression catcher for the async-highlight cross-buffer bug
+    /// (https://github.com/kryptic-sh/hjkl/issues/...): a parse submitted
+    /// against buffer A could complete after the user switched to buffer B,
+    /// and `recompute_and_install` would paint A's spans onto B because
+    /// the install path ignored `RenderOutput::buffer_id`.
+    ///
+    /// Manifested as: under PC lag, hjkl shows the previous tab's syntax
+    /// colors on the now-active tab until the next keystroke.
+    ///
+    /// This test calls `install_render_result` with a synthetic output
+    /// whose `buffer_id` does not match the active buffer and verifies
+    /// the install is dropped and `syntax_stale_drops` increments.
+    #[test]
+    fn install_render_result_drops_stale_buffer_id() {
+        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use hjkl_buffer::Sign;
+        use ratatui::style::{Color, Style};
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let active_id = app.active().buffer_id;
+        let stale_id = active_id.wrapping_add(999);
+
+        // Seed a recognisable diag_sign on the active buffer so we can
+        // detect whether a (stale) install overwrote it.
+        let sentinel = Sign {
+            row: 0,
+            ch: '!',
+            style: Style::default(),
+            priority: 1,
+        };
+        app.active_mut().diag_signs = vec![sentinel];
+
+        // Stale: install carries a buffer_id the active buffer doesn't match.
+        let stale_signs = vec![Sign {
+            row: 0,
+            ch: 'X',
+            style: Style::default().fg(Color::Red),
+            priority: 9,
+        }];
+        let stale = RenderOutput {
+            buffer_id: stale_id,
+            spans: vec![vec![(0, 1, Style::default().fg(Color::Red))]],
+            signs: stale_signs,
+            key: (0, 0, 0),
+            perf: PerfBreakdown::default(),
+        };
+
+        let installed = app.install_render_result(stale);
+        assert!(
+            !installed,
+            "stale RenderOutput (mismatched buffer_id) must not install"
+        );
+        assert_eq!(
+            app.syntax_stale_drops, 1,
+            "stale_drops counter should increment when a result is dropped"
+        );
+        let signs = &app.active().diag_signs;
+        assert_eq!(
+            signs.len(),
+            1,
+            "active buffer's diag_signs must not be overwritten by stale install"
+        );
+        assert_eq!(
+            signs[0].ch, '!',
+            "sentinel sign survived: active buffer untouched"
+        );
+
+        // Matching install: same buffer_id as active — must apply.
+        let fresh = RenderOutput {
+            buffer_id: active_id,
+            spans: vec![vec![]],
+            signs: vec![Sign {
+                row: 0,
+                ch: 'G',
+                style: Style::default(),
+                priority: 5,
+            }],
+            key: (0, 0, 0),
+            perf: PerfBreakdown::default(),
+        };
+        let installed = app.install_render_result(fresh);
+        assert!(installed, "matching buffer_id must install");
+        assert_eq!(
+            app.syntax_stale_drops, 1,
+            "valid install must not bump stale_drops counter"
+        );
+        assert_eq!(
+            app.active().diag_signs[0].ch,
+            'G',
+            "fresh signs replaced the sentinel"
         );
     }
 }
