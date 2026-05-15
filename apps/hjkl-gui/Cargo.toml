@@ -1,0 +1,23 @@
+[package]
+name = "hjkl-gui"
+description = "Vim-modal floem GUI editor built on the hjkl engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hjkl-gui"
+path = "src/main.rs"
+
+[dependencies]
+hjkl-editor-gui = "0.1"
+hjkl-editor     = { version = "0.4", default-features = false }
+hjkl-engine     = { version = "0.7", default-features = false }
+hjkl-buffer     = "0.6"
+hjkl-vim        = { version = "0.19", default-features = false }
+clap            = { version = "4", features = ["derive"] }
+floem           = "0.2"
