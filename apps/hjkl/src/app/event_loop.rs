@@ -871,10 +871,9 @@ impl App {
                     self.recompute_and_install();
                 }
                 Event::Mouse(me) => {
-                    use crossterm::event::MouseEventKind;
-                    // Skip while overlays are active — let the
-                    // overlay's own key handling (or future mouse
-                    // handling) keep ownership of input.
+                    use crossterm::event::{MouseButton, MouseEventKind};
+                    // Skip while overlays are active — Phase 8 will handle
+                    // mouse in overlays.
                     if self.command_field.is_some()
                         || self.search_field.is_some()
                         || self.picker.is_some()
@@ -895,6 +894,87 @@ impl App {
                             self.sync_viewport_from_editor();
                             self.recompute_and_install();
                         }
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            use crate::app::mouse;
+                            if let Some(win_id) =
+                                mouse::hit_test_window(self, me.column, me.row)
+                            {
+                                // Focus the clicked window if it differs.
+                                let current_focus = self.focused_window();
+                                if win_id != current_focus {
+                                    self.sync_viewport_from_editor();
+                                    self.set_focused_window(win_id);
+                                    self.sync_viewport_to_editor();
+                                }
+                                if let Some((doc_row, doc_col)) =
+                                    mouse::cell_to_doc(self, win_id, me.column, me.row)
+                                {
+                                    let count = self
+                                        .mouse_click_tracker
+                                        .register(win_id, doc_row, doc_col);
+                                    match count {
+                                        1 => {
+                                            self.active_mut()
+                                                .editor
+                                                .mouse_click_doc(doc_row, doc_col);
+                                        }
+                                        2 => {
+                                            // Double-click: select word.
+                                            self.active_mut()
+                                                .editor
+                                                .mouse_click_doc(doc_row, doc_col);
+                                            let line = self
+                                                .active()
+                                                .editor
+                                                .buffer()
+                                                .line(doc_row)
+                                                .unwrap_or("")
+                                                .to_owned();
+                                            let (ws, we) =
+                                                mouse::word_bounds(&line, doc_col);
+                                            // Anchor at word start, cursor at word end - 1.
+                                            self.active_mut().editor.enter_visual_char();
+                                            self.active_mut()
+                                                .editor
+                                                .set_cursor_doc(doc_row, ws);
+                                            self.active_mut().editor.mouse_begin_drag();
+                                            self.active_mut().editor.set_cursor_doc(
+                                                doc_row,
+                                                we.saturating_sub(1).max(ws),
+                                            );
+                                        }
+                                        _ => {
+                                            // Triple-click (and count≥4 wraps to 1 in tracker,
+                                            // so this branch only fires at count==3).
+                                            self.active_mut()
+                                                .editor
+                                                .mouse_click_doc(doc_row, doc_col);
+                                            self.active_mut().editor.enter_visual_line();
+                                        }
+                                    }
+                                    self.sync_after_engine_mutation();
+                                }
+                            }
+                        }
+                        MouseEventKind::Drag(MouseButton::Left) => {
+                            use crate::app::mouse;
+                            let win_id = self.focused_window();
+                            if let Some((doc_row, doc_col)) =
+                                mouse::cell_to_doc(self, win_id, me.column, me.row)
+                            {
+                                // Begin drag on first drag event if not already in
+                                // visual mode.
+                                if self.active().editor.vim_mode() != VimMode::Visual {
+                                    self.active_mut().editor.mouse_begin_drag();
+                                }
+                                self.active_mut()
+                                    .editor
+                                    .mouse_extend_drag_doc(doc_row, doc_col);
+                                self.sync_after_engine_mutation();
+                            }
+                        }
+                        // Up: vim stays in Visual after drag-release — no-op.
+                        MouseEventKind::Up(MouseButton::Left) => {}
                         _ => {}
                     }
                 }

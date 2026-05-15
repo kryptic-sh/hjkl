@@ -25,6 +25,7 @@ pub(crate) mod ex_host_cmds;
 pub(crate) mod keymap;
 pub mod lsp_glue;
 pub(crate) mod mappings_dispatch;
+pub mod mouse;
 mod picker_glue;
 mod prompt;
 mod syntax_glue;
@@ -453,6 +454,8 @@ pub struct App {
     /// Last successfully-dispatched ex command (text body, no leading `:`),
     /// used by `@:` to repeat. Phase 5d of kryptic-sh/hjkl#71.
     pub(crate) last_ex_command: Option<String>,
+    /// Double/triple-click state for mouse support (Phase 1 — issue #114).
+    pub(crate) mouse_click_tracker: mouse::MouseClickTracker,
 }
 
 /// Resolve the cursor shape for an active prompt field (`command_field` or
@@ -1781,6 +1784,7 @@ impl App {
             anvil_registry: hjkl_anvil::Registry::embedded().ok(),
             pending_state: None,
             last_ex_command: None,
+            mouse_click_tracker: mouse::MouseClickTracker::new(),
         })
     }
 
