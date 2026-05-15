@@ -1381,6 +1381,30 @@ fn engine_input_to_key_event(input: hjkl_engine::Input) -> crossterm::event::Key
 }
 
 impl App {
+    /// Clear the LSP hover popup + its arming timer. Called by the
+    /// event loop at the top of every mouse-button-down arm so a click
+    /// obsoletes the rest-on-symbol state. Without this, a popup armed
+    /// at the previous mouse position can leak its cells over the
+    /// post-click render (e.g. clicking a menu's "Go to Definition"
+    /// item leaves a stale popup floating over the destination buffer).
+    pub(crate) fn dismiss_hover_popup_on_click(&mut self) {
+        self.hover_popup = None;
+        self.hover_timer = None;
+    }
+
+    /// Full-screen rect for clamping popups / context menus to the
+    /// terminal area. Matches the layout `render::frame` computes:
+    /// editor viewport plus the bottom status line.
+    pub(crate) fn screen_rect(&self) -> ratatui::layout::Rect {
+        let vp = self.active().editor.host().viewport();
+        ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: vp.width,
+            height: vp.height + STATUS_LINE_HEIGHT,
+        }
+    }
+
     // ── Tab accessors ──────────────────────────────────────────────────────
 
     /// Shared reference to the active tab's layout tree.

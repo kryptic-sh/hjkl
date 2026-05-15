@@ -12483,4 +12483,56 @@ mod border_drag_tests {
         // And border_drag stays None.
         assert!(app.border_drag.is_none());
     }
+
+    // ── dismiss_hover_popup_on_click regression ─────────────────────────────
+
+    /// Regression test for the "garbage text on the right edge after Go to
+    /// Definition" bug: a hover popup armed at the cursor's rest position
+    /// persisted across mouse-click events. When the user right-clicked to
+    /// open the context menu and then chose a menu action (e.g. Go to
+    /// Definition), the menu cleared but `hover_popup` did not — its render
+    /// pass overlaid stale text on the post-jump buffer.
+    ///
+    /// Fix: every mouse `Down` arm (Left / Right / Middle) calls
+    /// `App::dismiss_hover_popup_on_click()` at the top.
+    ///
+    /// This unit-tests the helper itself. The "arms call it" wiring is
+    /// enforced by code review — three call sites in `event_loop.rs`.
+    #[test]
+    fn dismiss_hover_popup_on_click_clears_state() {
+        use crate::hover_popup::HoverPopup;
+        use std::time::Instant;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        app.hover_popup = Some(HoverPopup::new("stale content".to_string(), (50, 5)));
+        app.hover_timer = Some(HoverTimer {
+            cell: (50, 5),
+            started_at: Instant::now(),
+            request_sent: true,
+        });
+
+        app.dismiss_hover_popup_on_click();
+
+        assert!(
+            app.hover_popup.is_none(),
+            "hover_popup must be cleared on mouse click — leaving stale popups \
+             causes the right-edge garbage bug (right-click → Go to Definition repro)"
+        );
+        assert!(
+            app.hover_timer.is_none(),
+            "hover_timer must also be cleared so a subsequent rest re-arms cleanly"
+        );
+    }
+
+    #[test]
+    fn dismiss_hover_popup_on_click_is_idempotent_when_no_popup() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        assert!(app.hover_popup.is_none());
+        assert!(app.hover_timer.is_none());
+        // Calling on an app with no popup state must not panic.
+        app.dismiss_hover_popup_on_click();
+        assert!(app.hover_popup.is_none());
+        assert!(app.hover_timer.is_none());
+    }
 }

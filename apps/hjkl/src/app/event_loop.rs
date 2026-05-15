@@ -989,14 +989,7 @@ impl App {
                         MouseEventKind::Down(MouseButton::Left) => {
                             use crate::app::mouse;
 
-                            // Dismiss any LSP hover popup — the click obsoletes
-                            // the rest-on-symbol state. Without this, a popup
-                            // armed at the previous mouse position can leak its
-                            // cells over the post-click render (e.g. clicking a
-                            // menu's "Go to Definition" item leaves a stale
-                            // popup floating over the destination buffer).
-                            self.hover_popup = None;
-                            self.hover_timer = None;
+                            self.dismiss_hover_popup_on_click();
 
                             // ── Phase 9: border-drag hit-test ─────────────────
                             // Check BEFORE context-menu and window-click logic so
@@ -1030,13 +1023,7 @@ impl App {
 
                             // ── Context-menu: click-inside → invoke / click-outside → dismiss
                             if let Some(ref menu) = self.context_menu {
-                                let screen_size = ratatui::layout::Rect {
-                                    x: 0,
-                                    y: 0,
-                                    width: self.active().editor.host().viewport().width,
-                                    height: self.active().editor.host().viewport().height
-                                        + crate::app::STATUS_LINE_HEIGHT,
-                                };
+                                let screen_size = self.screen_rect();
                                 let rect = menu.bounding_rect(screen_size);
                                 let inside = me.column >= rect.x
                                     && me.column < rect.x + rect.width
@@ -1344,17 +1331,16 @@ impl App {
 
                         // ── Mouse hover: update selected item ────────────────
                         MouseEventKind::Moved => {
+                            // Read viewport dims BEFORE borrowing menu mutably
+                            // (split-borrow workaround). The previous "anchor +
+                            // slack" approximation broke hover→item mapping for
+                            // menus anchored near the screen edges: when
+                            // `bounding_rect` flipped the popup upward to fit on
+                            // screen, this handler still used the original
+                            // anchor as the rect origin and mapped hovers to the
+                            // wrong items. Use the real terminal area instead.
+                            let screen_size = self.screen_rect();
                             if let Some(menu) = &mut self.context_menu {
-                                // Read viewport dims before borrowing menu mutably.
-                                // We need to do this in two steps to avoid borrow conflicts.
-                                let vp_width = menu.anchor.0.max(80); // fallback from anchor
-                                let vp_height = menu.anchor.1.max(24);
-                                let screen_size = ratatui::layout::Rect {
-                                    x: 0,
-                                    y: 0,
-                                    width: vp_width + 40, // generous: anchor + slack
-                                    height: vp_height + 20,
-                                };
                                 let rect = menu.bounding_rect(screen_size);
                                 // Inner area (strip border row/col).
                                 if me.row > rect.y

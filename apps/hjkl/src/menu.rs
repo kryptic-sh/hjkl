@@ -486,6 +486,97 @@ mod tests {
         assert_eq!(m.selected, 1);
     }
 
+    // ── bounding_rect screen clamping ───────────────────────────────────────
+
+    /// Regression: when the menu is anchored near the bottom of the screen and
+    /// the popup doesn't fit below the anchor, `bounding_rect` must shift the
+    /// popup upward so it stays fully visible. The previous Moved-handler bug
+    /// used a fake `screen_size` (`anchor + slack`) that artificially extended
+    /// the screen below the anchor — so the popup never flipped and the
+    /// hover-to-item mapping read the wrong rows.
+    #[test]
+    fn bounding_rect_anchored_near_bottom_flips_upward() {
+        // 24-row screen, anchor at row 22, popup has 6 items + 2 border = 8 rows.
+        // Popup height 8 > 24 - 22 = 2 rows remaining, must shift up.
+        let items: Vec<MenuItem> = (0..6)
+            .map(|i| MenuItem::new(format!("Item {i}"), MenuAction::Paste, None))
+            .collect();
+        let m = ContextMenu::new(items, (5, 22));
+        let screen = Rect::new(0, 0, 80, 24);
+        let rect = m.bounding_rect(screen);
+
+        let (_, popup_h) = (rect.width, rect.height);
+        assert_eq!(
+            popup_h, 8,
+            "popup height = 6 items + 2 border rows; got {popup_h}"
+        );
+        // Popup must FIT inside the screen.
+        assert!(
+            rect.y + rect.height <= screen.height,
+            "bottom edge of popup ({}+{}={}) must not exceed screen height ({}); rect={rect:?}",
+            rect.y,
+            rect.height,
+            rect.y + rect.height,
+            screen.height,
+        );
+        // And must have shifted up from the anchor.
+        assert!(
+            rect.y < 22,
+            "anchor was at y=22 but rect.y={} — popup did not flip upward",
+            rect.y,
+        );
+        assert_eq!(rect.y, 24 - 8, "expected popup to sit flush with bottom");
+    }
+
+    /// Mirror: anchor near the RIGHT edge should shift the popup leftward
+    /// rather than letting it overflow the screen.
+    #[test]
+    fn bounding_rect_anchored_near_right_shifts_left() {
+        let items = vec![
+            MenuItem::new("Reasonably Long Item Label", MenuAction::Paste, None),
+            MenuItem::new("Another Long Item Label", MenuAction::Copy, None),
+        ];
+        let m = ContextMenu::new(items, (75, 5));
+        let screen = Rect::new(0, 0, 80, 24);
+        let rect = m.bounding_rect(screen);
+
+        assert!(
+            rect.x + rect.width <= screen.width,
+            "right edge {} must not exceed screen width {}; rect={rect:?}",
+            rect.x + rect.width,
+            screen.width,
+        );
+        assert!(
+            rect.x < 75,
+            "popup must have shifted left from anchor=75; got rect.x={}",
+            rect.x,
+        );
+    }
+
+    /// Hover-on-item invariant: for a popup that has been shifted upward, the
+    /// row→item-index math the Moved handler uses (`row - rect.y - 1`) must
+    /// produce the right index for the row that visually corresponds to each
+    /// item. Pre-fix the Moved handler computed `rect` from a bogus screen
+    /// size so this index was off by the flip amount.
+    #[test]
+    fn row_to_item_index_correct_for_flipped_popup() {
+        let items: Vec<MenuItem> = (0..4)
+            .map(|i| MenuItem::new(format!("Item {i}"), MenuAction::Paste, None))
+            .collect();
+        let m = ContextMenu::new(items, (5, 22));
+        let screen = Rect::new(0, 0, 80, 24);
+        let rect = m.bounding_rect(screen);
+
+        // 4 items + 2 border = 6 rows; rect.y = 24-6 = 18.
+        // Item 0 visually sits at row 19 (rect.y + 1, just below the border).
+        assert_eq!(rect.y, 18);
+        let row0 = rect.y + 1;
+        let row3 = rect.y + 4;
+        // The Moved handler maps mouse row → item index as `row - rect.y - 1`.
+        assert_eq!((row0 - rect.y - 1) as usize, 0);
+        assert_eq!((row3 - rect.y - 1) as usize, 3);
+    }
+
     // ── build_code_menu ─────────────────────────────────────────────────────
 
     #[test]
