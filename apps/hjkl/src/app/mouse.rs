@@ -1550,13 +1550,55 @@ mod tests {
     #[test]
     fn hit_test_zone_picker_is_exclusive() {
         use crate::picker::Picker;
-        use crate::picker_sources::FileSourceWithOpen;
+        use hjkl_picker::{PickerAction, PickerLogic, RequeryMode};
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        // Synchronous in-memory stub source. The previous version used
+        // FileSourceWithOpen against std::env::temp_dir() which depends on
+        // background enumeration finishing within Picker::new's 30ms wait —
+        // racy on macOS/Windows CI runners (saw consistent failures pre-fix).
+        // A no-I/O stub makes the test deterministic everywhere.
+        struct StubSource(Vec<String>);
+        impl PickerLogic for StubSource {
+            fn title(&self) -> &str {
+                "stub"
+            }
+            fn item_count(&self) -> usize {
+                self.0.len()
+            }
+            fn label(&self, i: usize) -> String {
+                self.0[i].clone()
+            }
+            fn match_text(&self, i: usize) -> String {
+                self.0[i].clone()
+            }
+            fn has_preview(&self) -> bool {
+                false
+            }
+            fn select(&self, _i: usize) -> PickerAction {
+                PickerAction::None
+            }
+            fn requery_mode(&self) -> RequeryMode {
+                RequeryMode::FilterInMemory
+            }
+            fn enumerate(
+                &mut self,
+                _q: Option<&str>,
+                _c: Arc<AtomicBool>,
+            ) -> Option<std::thread::JoinHandle<()>> {
+                None
+            }
+        }
 
         let mut app = make_basic_app_80x24();
-
-        // Open the file picker so `app.picker.is_some()`.
-        let cwd = std::env::temp_dir();
-        let source = Box::new(FileSourceWithOpen::new(cwd));
+        let source = Box::new(StubSource(vec![
+            "a".into(),
+            "b".into(),
+            "c".into(),
+            "d".into(),
+            "e".into(),
+        ]));
         app.picker = Some(Picker::new(source));
 
         // Compute expected picker rect.
