@@ -554,7 +554,18 @@ impl App {
                         }
 
                         // ── Intercept `/` and `?` ─────────────────────────────
-                        if key.modifiers == KeyModifiers::NONE {
+                        // Skip the intercept when a chord prefix is pending
+                        // (e.g. <leader>/ for the grep picker) — otherwise the
+                        // `/` opens search instead of completing the chord.
+                        // Mirrors the `:` intercept above which gates on
+                        // pending_state for the same reason.
+                        if key.modifiers == KeyModifiers::NONE
+                            && self.pending_state.is_none()
+                            && self
+                                .app_keymap
+                                .pending(crate::app::keymap::HjklMode::Normal)
+                                .is_empty()
+                        {
                             if key.code == KeyCode::Char('/') {
                                 self.open_search_prompt(SearchDir::Forward);
                                 continue;
