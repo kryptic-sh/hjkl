@@ -13072,3 +13072,74 @@ fn visual_line_eq_reindents_selected_lines() {
         "must exit VisualLine after ="
     );
 }
+
+// ── IndentFlash app-level tests ───────────────────────────────────────────────
+
+#[test]
+fn indent_flash_active_returns_range_within_window() {
+    // Set a fresh IndentFlash — started_at = now — and confirm active() returns it.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.indent_flash = Some(IndentFlash {
+        top: 2,
+        bot: 5,
+        started_at: Instant::now(),
+    });
+    assert_eq!(
+        app.indent_flash_active(),
+        Some((2, 5)),
+        "indent_flash_active must return Some while within the 150 ms window"
+    );
+    // Field must still be set (not cleared yet — timer hasn't expired).
+    assert!(
+        app.indent_flash.is_some(),
+        "indent_flash field must survive while timer is active"
+    );
+}
+
+#[test]
+fn indent_flash_active_returns_none_after_expiry() {
+    // Set an IndentFlash with started_at > 150 ms in the past → must expire.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.indent_flash = Some(IndentFlash {
+        top: 0,
+        bot: 3,
+        started_at: Instant::now() - Duration::from_millis(200),
+    });
+    assert_eq!(
+        app.indent_flash_active(),
+        None,
+        "indent_flash_active must return None after INDENT_FLASH_DURATION elapses"
+    );
+    assert!(
+        app.indent_flash.is_none(),
+        "indent_flash field must be cleared on expiry"
+    );
+}
+
+#[test]
+fn auto_indent_op_sets_indent_flash() {
+    // Drive `==` through the real production chord path (route_chord_key)
+    // and assert indent_flash is armed afterwards.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "{\n  body\n}");
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_mut().editor.jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+
+    // First `=` arms the pending-state reducer (BeginPendingAfterOp).
+    app.route_chord_key(key(KeyCode::Char('=')));
+    // Second `=` commits ApplyOpDouble(AutoIndent) via route_chord_key_inner,
+    // which calls dispatch_action and drains take_last_indent_range.
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    assert!(
+        app.indent_flash.is_some(),
+        "indent_flash must be armed after == operator"
+    );
+    // The flash must point at row 1 (the only row touched by `==`).
+    if let Some(ref f) = app.indent_flash {
+        assert_eq!(f.top, 1, "flash top must match indented row");
+        assert_eq!(f.bot, 1, "flash bot must match indented row");
+    }
+}

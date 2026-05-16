@@ -104,6 +104,13 @@ pub struct UiTheme {
     // [recording]
     pub recording_bg: Color,
     pub recording_fg: Color,
+
+    // [indent_flash]
+    /// Background painted over rows touched by the `=` auto-indent operator
+    /// for [`crate::app::INDENT_FLASH_DURATION`] (150 ms). Instant on, instant
+    /// off — no fade. Defaults to a muted amber tint so it's distinct from the
+    /// search highlight without being jarring.
+    pub indent_flash_bg: Color,
 }
 
 impl UiTheme {
@@ -138,6 +145,7 @@ impl UiTheme {
             status_dirty_marker: parse_hex(&raw.status.dirty_marker)?,
             recording_bg: parse_hex(&raw.recording.bg)?,
             recording_fg: parse_hex(&raw.recording.fg)?,
+            indent_flash_bg: parse_hex(&raw.indent_flash.bg)?,
         })
     }
 }
@@ -153,6 +161,7 @@ struct RawUiTheme {
     form: RawForm,
     status: RawStatus,
     recording: RawRecording,
+    indent_flash: RawIndentFlash,
 }
 
 #[derive(Deserialize)]
@@ -216,6 +225,11 @@ struct RawRecording {
     fg: String,
 }
 
+#[derive(Deserialize)]
+struct RawIndentFlash {
+    bg: String,
+}
+
 fn parse_hex(s: &str) -> Result<Color> {
     let bytes = s.as_bytes();
     if bytes.len() != 7 || bytes[0] != b'#' {
@@ -239,6 +253,12 @@ mod tests {
         assert_eq!(theme.ui.text, Color::Rgb(0xe5, 0xe9, 0xf0));
         assert_eq!(theme.ui.mode_insert_bg, Color::Rgb(0x7e, 0xe7, 0x87));
         assert_eq!(theme.ui.cursor_line_bg, Color::Rgb(0x2a, 0x32, 0x40));
+        // indent_flash_bg must parse — muted amber tint.
+        assert_eq!(
+            theme.ui.indent_flash_bg,
+            Color::Rgb(0x2e, 0x28, 0x10),
+            "indent_flash_bg must match ui-dark.toml value"
+        );
         // Syntax theme must resolve a known capture.
         assert!(theme.syntax.style("@keyword").is_some());
     }

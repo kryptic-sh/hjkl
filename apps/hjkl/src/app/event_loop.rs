@@ -269,6 +269,9 @@ impl App {
                     self.hover_popup = None;
                     self.hover_timer = None;
                 }
+                // Expire the auto-indent flash even when no key is pressed.
+                // `indent_flash_active` clears the field when the timer lapses.
+                self.indent_flash_active();
                 continue;
             }
             match event::read()? {

@@ -608,6 +608,11 @@ pub struct App {
     /// Active split-border drag state (Phase 9). `Some` while the user is
     /// dragging a split border; `None` otherwise.
     pub(crate) border_drag: Option<BorderDrag>,
+    /// Brief visual flash painted over rows touched by the most recent
+    /// auto-indent (`=`) operator. `None` when no flash is pending or
+    /// after [`INDENT_FLASH_DURATION`] has elapsed. Drained by
+    /// [`Self::indent_flash_active`].
+    pub(crate) indent_flash: Option<IndentFlash>,
 }
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.
@@ -619,6 +624,19 @@ pub(crate) struct HoverTimer {
     pub started_at: Instant,
     /// `true` once we've fired the LSP hover RPC — prevents re-sending.
     pub request_sent: bool,
+}
+
+/// How long the auto-indent flash overlay stays visible. Instant on, instant
+/// off — no fade. Matches neovim's `vim.hl.on_yank` default duration.
+pub(crate) const INDENT_FLASH_DURATION: Duration = Duration::from_millis(150);
+
+/// Visual flash state set immediately after an `=` / `==` / `=G` / Visual-`=`
+/// auto-indent operation. The renderer paints a highlight bg over rows
+/// `[top, bot]` (inclusive) while `started_at.elapsed() < INDENT_FLASH_DURATION`.
+pub(crate) struct IndentFlash {
+    pub top: usize,
+    pub bot: usize,
+    pub started_at: Instant,
 }
 
 /// Minimum cell size for each side of a split when drag-resizing (Phase 9).
@@ -1736,6 +1754,23 @@ impl App {
         self.recompute_and_install();
     }
 
+    /// Return the active auto-indent flash row range `(top, bot)` if the
+    /// [`INDENT_FLASH_DURATION`] window has not yet elapsed, otherwise clear
+    /// the stored flash and return `None`.
+    ///
+    /// Called by the renderer on every frame (no-op when `None`) and by the
+    /// event-loop tick to expire the flash even when no key is pressed.
+    pub(crate) fn indent_flash_active(&mut self) -> Option<(usize, usize)> {
+        let expired = self
+            .indent_flash
+            .as_ref()
+            .is_some_and(|f| f.started_at.elapsed() >= INDENT_FLASH_DURATION);
+        if expired {
+            self.indent_flash = None;
+        }
+        self.indent_flash.as_ref().map(|f| (f.top, f.bot))
+    }
+
     // ── Count-prefix helpers ──────────────────────────────────────────────
 
     /// Drain the pending digit count and replay each digit to the active
@@ -2243,6 +2278,7 @@ impl App {
             hover_popup: None,
             hover_timer: None,
             border_drag: None,
+            indent_flash: None,
         })
     }
 
@@ -2833,6 +2869,15 @@ impl App {
                                 self.active_mut()
                                     .editor
                                     .auto_indent_range((top_row, 0), (bot_row, 0));
+                                if let Some((top, bot)) =
+                                    self.active_mut().editor.take_last_indent_range()
+                                {
+                                    self.indent_flash = Some(IndentFlash {
+                                        top,
+                                        bot,
+                                        started_at: Instant::now(),
+                                    });
+                                }
                             }
                             _ => return,
                         }
@@ -2880,6 +2925,15 @@ impl App {
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
                                 self.active_mut().editor.auto_indent_range(start, end);
+                                if let Some((top, bot)) =
+                                    self.active_mut().editor.take_last_indent_range()
+                                {
+                                    self.indent_flash = Some(IndentFlash {
+                                        top,
+                                        bot,
+                                        started_at: Instant::now(),
+                                    });
+                                }
                             }
                             _ => return,
                         }
@@ -2950,6 +3004,15 @@ impl App {
                                 self.active_mut()
                                     .editor
                                     .auto_indent_range((top_row, 0), (bot_row, 0));
+                                if let Some((top, bot)) =
+                                    self.active_mut().editor.take_last_indent_range()
+                                {
+                                    self.indent_flash = Some(IndentFlash {
+                                        top,
+                                        bot,
+                                        started_at: Instant::now(),
+                                    });
+                                }
                             }
                             _ => return,
                         }
@@ -3602,6 +3665,14 @@ impl App {
                             motion_key,
                             total_count,
                         );
+                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        {
+                            self.indent_flash = Some(IndentFlash {
+                                top,
+                                bot,
+                                started_at: Instant::now(),
+                            });
+                        }
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -3610,6 +3681,14 @@ impl App {
                         self.active_mut()
                             .editor
                             .apply_op_double(event_loop::op_kind_to_operator(op), total_count);
+                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        {
+                            self.indent_flash = Some(IndentFlash {
+                                top,
+                                bot,
+                                started_at: Instant::now(),
+                            });
+                        }
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -3626,6 +3705,14 @@ impl App {
                             inner,
                             total_count,
                         );
+                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        {
+                            self.indent_flash = Some(IndentFlash {
+                                top,
+                                bot,
+                                started_at: Instant::now(),
+                            });
+                        }
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -3640,6 +3727,14 @@ impl App {
                             ch,
                             total_count,
                         );
+                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        {
+                            self.indent_flash = Some(IndentFlash {
+                                top,
+                                bot,
+                                started_at: Instant::now(),
+                            });
+                        }
                         self.sync_after_engine_mutation();
                         return true;
                     }
@@ -3658,6 +3753,14 @@ impl App {
                             till,
                             total_count,
                         );
+                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
+                        {
+                            self.indent_flash = Some(IndentFlash {
+                                top,
+                                bot,
+                                started_at: Instant::now(),
+                            });
+                        }
                         self.sync_after_engine_mutation();
                         return true;
                     }

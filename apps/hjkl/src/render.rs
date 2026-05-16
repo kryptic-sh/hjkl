@@ -481,6 +481,42 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     };
     frame.render_widget(view, area);
 
+    // ── Auto-indent flash overlay ─────────────────────────────────────────
+    //
+    // Approach: post-render ratatui buffer walk. After `BufferView` has painted
+    // all cells, we overwrite the bg of every cell on flash rows that are
+    // currently visible. Instant on, instant off — no fade (per UX spec).
+    // The overlay is painted only on the focused window to avoid a visually
+    // confusing multi-pane flash.
+    //
+    // We call `indent_flash_active` on the shared App state here rather than
+    // passing a pre-computed value so the expiry check happens at render time
+    // (the same instant the user sees the frame).
+    if is_focused
+        && let Some((flash_top, flash_bot)) = app.indent_flash_active()
+    {
+        let flash_bg = app.theme.ui.indent_flash_bg;
+        let flash_style = Style::default().bg(flash_bg);
+        let buf = frame.buffer_mut();
+        let screen_top = area.y;
+        let screen_height = area.height;
+        // Clamp flash range to visible rows.
+        let vis_start = flash_top.max(vp_top);
+        let vis_end = flash_bot.min(vp_top + screen_height as usize - 1);
+        for buf_row in vis_start..=vis_end {
+            let screen_row = screen_top + (buf_row - vp_top) as u16;
+            if screen_row >= screen_top + screen_height {
+                break;
+            }
+            for col in area.x..area.x + area.width {
+                let cell = buf.cell_mut((col, screen_row));
+                if let Some(c) = cell {
+                    c.set_style(c.style().patch(flash_style));
+                }
+            }
+        }
+    }
+
     // Emit the terminal cursor only for the focused window.
     if show_cursor
         && let Some((cx, cy)) = app.slots_mut()[slot_idx]

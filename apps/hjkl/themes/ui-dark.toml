@@ -50,3 +50,6 @@ dirty_marker  = "#ff9e64"  # `[+]` modified-buffer marker
 [recording]
 bg            = "#bb9af7"  # `REC@r` macro-recording badge bg
 fg            = "#0b0d10"  # badge fg
+
+[indent_flash]
+bg            = "#2e2810"  # auto-indent (=) flash row highlight — muted amber, 150 ms
