@@ -386,77 +386,12 @@ impl App {
                     // ── Normal-mode app-level pre-routing ────────────────────
                     // These run BEFORE route_chord_key below. They may `continue`
                     // (consuming the key) or fall through to route_chord_key.
-                    // Out of scope for route_chord_key: H/L buffer cycle (Phase 3),
-                    // tmux-nav (Phase 3), count-prefix, Esc, which-key BS.
-                    // Migrated to keymap (issue #120 Phase 2): Ctrl-^, K, `:`, `/`, `?`.
+                    // Out of scope for route_chord_key: count-prefix, Esc, which-key BS.
+                    // Migrated to keymap (issue #120):
+                    //   Phase 2: Ctrl-^, K, `:`, `/`, `?`
+                    //   Phase 3: H/L buffer cycle (BufferCycleH/L),
+                    //            Ctrl-h/j/k/l window focus + tmux (TmuxNavigate)
                     if self.active().editor.vim_mode() == VimMode::Normal {
-                        // ── Shift-H / Shift-L cycle buffers ──────────────────
-                        // Only when more than one buffer is open; with a single
-                        // slot fall through to the engine's H/L viewport motions.
-                        if self.slots.len() > 1
-                            && (key.modifiers == KeyModifiers::SHIFT
-                                || key.modifiers == KeyModifiers::NONE)
-                        {
-                            if key.code == KeyCode::Char('H') {
-                                self.buffer_prev();
-                                continue;
-                            }
-                            if key.code == KeyCode::Char('L') {
-                                self.buffer_next();
-                                continue;
-                            }
-                        }
-
-                        // ── tmux-navigator: bare Ctrl-h/j/k/l ────────────────
-                        if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            let focused = self.focused_window();
-                            let is_ctrl_h =
-                                key.code == KeyCode::Char('h') || key.code == KeyCode::Backspace;
-                            let is_ctrl_j = key.code == KeyCode::Char('j');
-                            let is_ctrl_k = key.code == KeyCode::Char('k');
-                            let is_ctrl_l = key.code == KeyCode::Char('l');
-
-                            if is_ctrl_h || is_ctrl_j || is_ctrl_k || is_ctrl_l {
-                                let neighbour = if is_ctrl_h {
-                                    self.layout().neighbor_left(focused)
-                                } else if is_ctrl_j {
-                                    self.layout().neighbor_below(focused)
-                                } else if is_ctrl_k {
-                                    self.layout().neighbor_above(focused)
-                                } else {
-                                    self.layout().neighbor_right(focused)
-                                };
-
-                                if neighbour.is_some() {
-                                    if is_ctrl_h {
-                                        self.focus_left();
-                                    } else if is_ctrl_j {
-                                        self.focus_below();
-                                    } else if is_ctrl_k {
-                                        self.focus_above();
-                                    } else {
-                                        self.focus_right();
-                                    }
-                                } else {
-                                    if std::env::var("TMUX").is_ok() {
-                                        let flag = if is_ctrl_h {
-                                            "-L"
-                                        } else if is_ctrl_j {
-                                            "-D"
-                                        } else if is_ctrl_k {
-                                            "-U"
-                                        } else {
-                                            "-R"
-                                        };
-                                        let _ = std::process::Command::new("tmux")
-                                            .args(["select-pane", flag])
-                                            .status();
-                                    }
-                                }
-                                continue;
-                            }
-                        }
-
                         // ── App-level count prefix buffering ─────────────────
                         // Buffer digit keys so that count-aware chords (Ngt,
                         // N<C-w>+) can consume the count. When the non-digit key

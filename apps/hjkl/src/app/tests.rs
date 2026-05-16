@@ -13884,3 +13884,34 @@ fn ctrl_caret_triggers_buffer_alt_via_keymap() {
     // Just assert we didn't panic and the app is still alive.
     assert!(app.picker.is_none(), "ctrl-^ must not open picker");
 }
+
+// ── issue #120 Phase 3 regression tests ─────────────────────────────────────
+
+/// `H` with a single slot falls back to viewport-top motion (no buffer cycle).
+#[test]
+fn h_single_slot_fallback_to_viewport_top() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.slots.len(), 1, "test requires single slot");
+    // H should not crash and should be consumed by the keymap.
+    let consumed = app.route_chord_key(key(KeyCode::Char('H')));
+    assert!(consumed, "H must be consumed by keymap (BufferCycleH)");
+}
+
+/// `L` with a single slot falls back to viewport-bottom motion.
+#[test]
+fn l_single_slot_fallback_to_viewport_bottom() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.slots.len(), 1, "test requires single slot");
+    let consumed = app.route_chord_key(key(KeyCode::Char('L')));
+    assert!(consumed, "L must be consumed by keymap (BufferCycleL)");
+}
+
+/// `<C-h>` on a single-window layout triggers tmux path (no-op without TMUX).
+#[test]
+fn ctrl_h_single_window_no_tmux_no_panic() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // TMUX not set: TmuxNavigate falls through to no-op.
+    // Must not panic and must consume the key.
+    let consumed = app.route_chord_key(ctrl_key('h'));
+    assert!(consumed, "<C-h> must be consumed by keymap (TmuxNavigate)");
+}

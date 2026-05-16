@@ -234,6 +234,15 @@ pub enum SearchDir {
     Backward,
 }
 
+/// Cardinal direction for window navigation (`<C-h/j/k/l>` / `TmuxNavigate`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavDir {
+    Left,
+    Down,
+    Up,
+    Right,
+}
+
 /// LSP diagnostic severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiagSeverity {
@@ -1117,9 +1126,10 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         // Phase 3f: bracket-match motion.
         ("%", hjkl_vim::MotionKind::BracketMatch, "match bracket"),
         // Phase 3g: scroll / viewport motions.
-        ("H", hjkl_vim::MotionKind::ViewportTop, "viewport top"),
+        // NOTE: H and L are registered separately below (BufferCycleH/L for
+        // Normal mode; Motion::Viewport* for Visual modes). Removed from this
+        // array so they don't accidentally bind in Normal via the four-mode loop.
         ("M", hjkl_vim::MotionKind::ViewportMiddle, "viewport middle"),
-        ("L", hjkl_vim::MotionKind::ViewportBottom, "viewport bottom"),
         (
             "<C-d>",
             hjkl_vim::MotionKind::HalfPageDown,
@@ -1143,6 +1153,66 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
             if let Err(e) = km.add(mode, chord, action.clone(), desc) {
                 eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
             }
+        }
+    }
+
+    // ── H / L viewport motions for Visual modes (issue #120 Phase 3) ─────
+    // In Normal mode H/L are registered below as BufferCycleH/L (the action
+    // checks slots.len() at dispatch time). In all Visual modes H/L remain
+    // viewport motions — no buffer-cycle semantics in Visual.
+    for (chord, kind, desc) in [
+        ("H", hjkl_vim::MotionKind::ViewportTop, "viewport top"),
+        ("L", hjkl_vim::MotionKind::ViewportBottom, "viewport bottom"),
+    ] {
+        let action = AppAction::Motion { kind, count: 1 };
+        for mode in [Mode::Visual, Mode::VisualLine, Mode::VisualBlock] {
+            if let Err(e) = km.add(mode, chord, action.clone(), desc) {
+                eprintln!("hjkl: keymap.add({chord:?} visual) failed: {e}");
+            }
+        }
+    }
+
+    // ── H / L buffer cycle (Normal mode, issue #120 Phase 3) ─────────────
+    // BufferCycleH/L dispatch checks slots.len() at call time:
+    //   slots > 1  → buffer_prev / buffer_next
+    //   single slot → apply_motion(ViewportTop/Bottom, count) directly
+    // This replaces the inline H/L intercept that checked slots.len() before
+    // forwarding to the engine.
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "H",
+        AppAction::BufferCycleH,
+        "prev buffer or viewport top",
+    ) {
+        eprintln!("hjkl: keymap.add(H Normal) failed: {e}");
+    }
+    if let Err(e) = km.add(
+        Mode::Normal,
+        "L",
+        AppAction::BufferCycleL,
+        "next buffer or viewport bottom",
+    ) {
+        eprintln!("hjkl: keymap.add(L Normal) failed: {e}");
+    }
+
+    // ── <C-h/j/k/l> window focus + tmux fallback (issue #120 Phase 3) ───
+    // TmuxNavigate dispatch checks whether a neighbour exists:
+    //   neighbour present → focus_left/below/above/right
+    //   no neighbour, $TMUX set → tmux select-pane
+    //   no neighbour, no tmux → no-op
+    // <C-Backspace> is an alias for <C-h> on some terminals (mirrors the
+    // original inline intercept's `key.code == KeyCode::Backspace` arm).
+    for (chord, dir, desc) in [
+        ("<C-h>", NavDir::Left, "focus left or tmux left"),
+        ("<C-j>", NavDir::Down, "focus down or tmux down"),
+        ("<C-k>", NavDir::Up, "focus up or tmux up"),
+        ("<C-l>", NavDir::Right, "focus right or tmux right"),
+        // <C-BS> is the alias for <C-h> delivered by some terminals (crossterm
+        // decodes it as Backspace+CONTROL rather than Char('h')+CONTROL).
+        ("<C-BS>", NavDir::Left, "focus left or tmux left"),
+    ] {
+        if let Err(e) = km.add(Mode::Normal, chord, AppAction::TmuxNavigate(dir), desc) {
+            eprintln!("hjkl: keymap.add({chord:?}) failed: {e}");
         }
     }
 
@@ -2967,6 +3037,56 @@ impl App {
             }
             AppAction::BufferAlt => {
                 self.buffer_alt();
+            }
+            // ── Predicate-gated buffer/window navigation (Phase 3 — issue #120) ──
+            AppAction::BufferCycleH => {
+                if self.slots.len() > 1 {
+                    self.buffer_prev();
+                } else {
+                    // Single slot: fall back to viewport-top motion.
+                    let n = self.pending_count.take_or(1) as usize;
+                    self.active_mut()
+                        .editor
+                        .apply_motion(hjkl_vim::MotionKind::ViewportTop, n);
+                }
+            }
+            AppAction::BufferCycleL => {
+                if self.slots.len() > 1 {
+                    self.buffer_next();
+                } else {
+                    // Single slot: fall back to viewport-bottom motion.
+                    let n = self.pending_count.take_or(1) as usize;
+                    self.active_mut()
+                        .editor
+                        .apply_motion(hjkl_vim::MotionKind::ViewportBottom, n);
+                }
+            }
+            AppAction::TmuxNavigate(dir) => {
+                let focused = self.focused_window();
+                let neighbour = match dir {
+                    NavDir::Left => self.layout().neighbor_left(focused),
+                    NavDir::Down => self.layout().neighbor_below(focused),
+                    NavDir::Up => self.layout().neighbor_above(focused),
+                    NavDir::Right => self.layout().neighbor_right(focused),
+                };
+                if neighbour.is_some() {
+                    match dir {
+                        NavDir::Left => self.focus_left(),
+                        NavDir::Down => self.focus_below(),
+                        NavDir::Up => self.focus_above(),
+                        NavDir::Right => self.focus_right(),
+                    }
+                } else if std::env::var("TMUX").is_ok() {
+                    let flag = match dir {
+                        NavDir::Left => "-L",
+                        NavDir::Down => "-D",
+                        NavDir::Up => "-U",
+                        NavDir::Right => "-R",
+                    };
+                    let _ = std::process::Command::new("tmux")
+                        .args(["select-pane", flag])
+                        .status();
+                }
             }
             AppAction::BeginPendingReplace {
                 count: action_count,

@@ -82,6 +82,18 @@ pub enum AppAction {
     /// `<C-^>` / `<C-6>` — switch to the alternate buffer.
     BufferAlt,
 
+    // ── Predicate-gated buffer / window navigation (issue #120 Phase 3) ──
+    /// `H` in Normal mode — cycle to the previous buffer when multiple slots
+    /// are open; fall back to `Motion::ViewportTop` otherwise.
+    BufferCycleH,
+    /// `L` in Normal mode — cycle to the next buffer when multiple slots are
+    /// open; fall back to `Motion::ViewportBottom` otherwise.
+    BufferCycleL,
+    /// `<C-h/j/k/l>` — focus the neighbour window in the given direction.
+    /// When no neighbour exists, falls through to the tmux `select-pane`
+    /// fallback (if `$TMUX` is set).
+    TmuxNavigate(crate::app::NavDir),
+
     // ── Pending-state chords (hjkl-vim reducer) ───────────────────────
     /// `r<x>` — begin Replace pending state with the given count.
     /// The app stores `Some(hjkl_vim::PendingState::Replace { count })` and
