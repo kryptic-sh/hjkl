@@ -13420,3 +13420,68 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
         "no status error expected after successful format"
     );
 }
+
+/// `u` after a formatter pass restores the pre-format buffer. Regression for
+/// 2026-05-16: `set_content` cleared the undo stack so formatter changes
+/// could not be undone. Fixed by routing through `set_content_undoable`.
+#[test]
+fn auto_indent_format_result_is_undoable() {
+    use std::io::Write;
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_mangler_undo_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let ugly = "fn main(){let x=1;}\n";
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(ugly.as_bytes()).unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    // Drive `==` to trigger rustfmt.
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Wait for the async result to install.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let formatted = app.active().editor.buffer().as_string();
+    assert_ne!(
+        formatted, ugly.trim_end(),
+        "rustfmt must have changed the buffer (sanity)"
+    );
+
+    // Press `u` — must restore the pre-format buffer.
+    app.route_chord_key(key(KeyCode::Char('u')));
+    let after_undo = app.active().editor.buffer().as_string();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(
+        after_undo.trim_end(),
+        ugly.trim_end(),
+        "undo must restore pre-format content; got:\n{after_undo}"
+    );
+}

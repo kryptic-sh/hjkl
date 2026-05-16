@@ -1943,9 +1943,14 @@ impl App {
                         .strip_suffix('\n')
                         .unwrap_or(&formatted)
                         .to_owned();
-                    // set_content so the engine sets pending_content_reset = true,
-                    // which sync_after_engine_mutation picks up for the syntax layer.
-                    self.slots[slot_idx].editor.set_content(&content);
+                    // set_content_undoable so the engine pushes the pre-format
+                    // buffer state onto the undo stack first — the user can
+                    // press `u` to revert the formatter's changes as a single
+                    // undo step. pending_content_reset is set inside, which
+                    // sync_after_engine_mutation picks up for the syntax layer.
+                    self.slots[slot_idx]
+                        .editor
+                        .set_content_undoable(&content);
 
                     // Note: the indent flash was armed at submit time in
                     // `submit_external_format` so the user gets immediate
