@@ -204,8 +204,9 @@ impl App {
 
             // Compute the poll timeout: normally 120 ms (splash animation cadence),
             // but shortened to the soonest of (a) which-key popup deadline,
-            // (b) chord-timeout deadline (Ambiguous → timeout_resolve), whichever
-            // applies.
+            // (b) chord-timeout deadline (Ambiguous → timeout_resolve),
+            // (c) active indent-flash so each 75 ms phase paints (otherwise
+            // the second blink falls in a poll gap and isn't drawn).
             let poll_timeout = {
                 let base = Duration::from_millis(120);
                 let now = std::time::Instant::now();
@@ -223,6 +224,9 @@ impl App {
                         let deadline = prefix_at + self.app_keymap.timeout_duration();
                         t = t.min(deadline.saturating_duration_since(now));
                     }
+                }
+                if self.indent_flash.is_some() {
+                    t = t.min(Duration::from_millis(30));
                 }
                 t
             };
