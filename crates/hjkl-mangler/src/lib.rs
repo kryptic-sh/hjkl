@@ -198,7 +198,22 @@ pub trait Formatter: Send + Sync {
 /// caller can fall back to a dumb local algorithm without burning the
 /// worker.
 pub fn is_tool_installed(tool: &str) -> bool {
-    probe_tool(tool).is_ok()
+    // Treat "spawn succeeded" as installed, regardless of exit status.
+    // `probe_tool` runs `tool --version` and requires exit 0, which is
+    // fine for rustfmt/prettier/stylua/ruff but breaks for shells like
+    // dash that don't recognise `--version` (Ubuntu CI's `/bin/sh` is
+    // dash → `is_tool_installed("sh")` was returning false despite sh
+    // being present). The format dispatcher's only real question is
+    // "can we launch this binary?" — the worker reports real errors
+    // separately. Use `probe_tool` when you also need exit-code
+    // diagnostics.
+    Command::new(tool)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 /// Detailed availability probe. Returns `Ok(())` when the tool runs and
