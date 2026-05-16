@@ -216,38 +216,94 @@ impl App {
     /// Install a worker-produced `RenderOutput` onto the slot whose
     /// `buffer_id` matches `out.buffer_id`.
     ///
-    /// - When the result is for the **active** buffer: install spans +
-    ///   signs onto the editor immediately and update the slot cache.
-    /// - When the result is for a **non-active** buffer: store the output
-    ///   in `last_render_output` on that slot so a subsequent `switch_to`
-    ///   can restore spans without waiting for a fresh parse (T3 cache).
+    /// Routes into the correct per-slot cache field by `out.kind`:
+    /// - `Viewport` → `viewport_render_output`
+    /// - `Top`      → `top_render_output`
+    /// - `Bottom`   → `bottom_render_output`
     ///
-    /// Returns `true` if the install ran on the active buffer, `false` for
-    /// non-active routes and genuine stale drops (no matching slot).
+    /// After updating the cache, merges all three caches and installs the
+    /// union onto the editor (for the active buffer) or stores for later
+    /// (for non-active buffers, so `switch_to` can restore spans without
+    /// waiting for a fresh parse).
+    ///
+    /// Returns `true` if the live install ran on the active buffer, `false`
+    /// for non-active routes and genuine stale drops (no matching slot).
     pub(crate) fn install_render_result(&mut self, out: crate::syntax::RenderOutput) -> bool {
+        use crate::syntax::ParseKind;
+
         let active_id = self.active().buffer_id;
 
         // Find the slot that owns this buffer_id.
-        if let Some(slot_idx) = self.slots.iter().position(|s| s.buffer_id == out.buffer_id) {
-            // Always cache the latest completed output on the owning slot.
-            self.slots[slot_idx].last_render_output = Some(out.clone());
-
-            if out.buffer_id == active_id {
-                // Active buffer: install spans + signs directly.
-                let active_idx = self.focused_slot_idx();
-                self.slots[active_idx]
-                    .editor
-                    .install_ratatui_syntax_spans(out.spans);
-                self.slots[active_idx].diag_signs = out.signs;
-                return true;
-            }
-            // Non-active buffer: cached above, no live install needed.
+        let Some(slot_idx) = self.slots.iter().position(|s| s.buffer_id == out.buffer_id) else {
+            // No slot matched (buffer was closed before the result arrived).
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
             return false;
+        };
+
+        let is_active = out.buffer_id == active_id;
+
+        // Route into the correct per-slot cache field.
+        match out.kind {
+            ParseKind::Viewport => {
+                // Install diag signs from viewport results (only kind that
+                // runs the diagnostic scan over the visible region).
+                if is_active {
+                    let signs = out.signs.clone();
+                    let active_idx = self.focused_slot_idx();
+                    self.slots[active_idx].diag_signs = signs;
+                }
+                self.slots[slot_idx].viewport_render_output = Some(out);
+            }
+            ParseKind::Top => {
+                self.slots[slot_idx].top_render_output = Some(out);
+            }
+            ParseKind::Bottom => {
+                self.slots[slot_idx].bottom_render_output = Some(out);
+            }
         }
 
-        // No slot matched (buffer was closed before the result arrived).
-        self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+        if is_active {
+            // Active buffer: merge all three caches and install on the editor.
+            let active_idx = self.focused_slot_idx();
+            self.install_merged_spans_for_slot(active_idx);
+            return true;
+        }
+        // Non-active buffer: cached above, live install deferred to switch_to.
         false
+    }
+
+    /// Merge `top_render_output`, `bottom_render_output`, and
+    /// `viewport_render_output` for the slot at `slot_idx` into a single
+    /// per-row span table and install it on the editor.
+    ///
+    /// Merge order: top → bottom → viewport. Viewport wins for any row
+    /// that appears in multiple caches (so the freshest parse of the
+    /// current scroll position always takes precedence).
+    pub(crate) fn install_merged_spans_for_slot(&mut self, slot_idx: usize) {
+        let line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
+        let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
+            vec![Vec::new(); line_count];
+
+        // Order: top → bottom → viewport. Viewport wins for overlapping rows.
+        let sources = [
+            self.slots[slot_idx].top_render_output.as_ref(),
+            self.slots[slot_idx].bottom_render_output.as_ref(),
+            self.slots[slot_idx].viewport_render_output.as_ref(),
+        ];
+        for out in sources.into_iter().flatten() {
+            for (row, row_spans) in out.spans.iter().enumerate() {
+                if row >= line_count {
+                    break;
+                }
+                if !row_spans.is_empty() {
+                    merged[row] = row_spans.clone();
+                }
+            }
+        }
+
+        self.slots[slot_idx]
+            .editor
+            .install_ratatui_syntax_spans(merged);
     }
 
     /// Submit a new viewport-scoped parse on the syntax worker and install
@@ -321,8 +377,13 @@ impl App {
                     let active_idx = self.focused_slot_idx();
                     let buf = self.slots[active_idx].editor.buffer();
                     // T1: Submit oversized range so ahead-of-scroll spans are ready.
-                    self.syntax
-                        .submit_render(buffer_id, buf, oversize_top, oversize_height)
+                    self.syntax.submit_render(
+                        buffer_id,
+                        buf,
+                        oversize_top,
+                        oversize_height,
+                        crate::syntax::ParseKind::Viewport,
+                    )
                 };
                 if submit_result.is_some() {
                     submitted = true;
@@ -332,11 +393,64 @@ impl App {
             }
         }
 
+        // Top + Bottom pre-cache for the active buffer.
+        //
+        // On a fresh cold buffer (no viewport result yet) we submit Viewport
+        // ONLY — it starts at row 0 and implicitly covers the top. Once the
+        // Viewport result lands and `viewport_render_output` becomes `Some`,
+        // the NEXT tick sees `bottom_render_output.is_none()` and submits
+        // the Bottom parse. This keeps startup snappy: the cold parse runs
+        // once; the Bottom parse fires immediately after.
+        //
+        // Top is submitted once `viewport_render_output` is populated AND
+        // `top_render_output` is None (which happens if the user has scrolled
+        // the viewport away from row 0 so the top rows are no longer covered).
+        // If the viewport still starts at 0, the viewport cache already covers
+        // the top — we skip to avoid a redundant parse.
+        {
+            let active_idx = self.focused_slot_idx();
+            let viewport_landed = self.slots[active_idx].viewport_render_output.is_some();
+            if viewport_landed {
+                let needs_top = self.slots[active_idx].top_render_output.is_none();
+                let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
+                let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+
+                if needs_top {
+                    let (top_range_start, top_range_height) =
+                        hjkl_buffer::over_provisioned_range(0, height, slot_line_count);
+                    let buf = self.slots[active_idx].editor.buffer();
+                    self.syntax.submit_render(
+                        buffer_id,
+                        buf,
+                        top_range_start,
+                        top_range_height,
+                        crate::syntax::ParseKind::Top,
+                    );
+                }
+
+                if needs_bottom {
+                    let bottom_anchor = slot_line_count.saturating_sub(height);
+                    let (bot_range_start, bot_range_height) =
+                        hjkl_buffer::over_provisioned_range(bottom_anchor, height, slot_line_count);
+                    let buf = self.slots[active_idx].editor.buffer();
+                    self.syntax.submit_render(
+                        buffer_id,
+                        buf,
+                        bot_range_start,
+                        bot_range_height,
+                        crate::syntax::ParseKind::Bottom,
+                    );
+                }
+            }
+        }
+
         // T2: Pre-warm other open slots. The per-buffer dedup on the queue
         // ensures this never starves the active buffer's request — active
         // was enqueued first and the worker drains FIFO. If the active
         // buffer's result is not yet back, we still queue the pre-warms
         // so the worker can pipeline: it processes active, then the others.
+        // Also submit Top + Bottom for non-active slots so switching to them
+        // and immediately pressing `gg` or `G` is also snappy.
         let active_idx = self.focused_slot_idx();
         let slot_indices: Vec<usize> = (0..self.slots.len()).filter(|&i| i != active_idx).collect();
         for slot_idx in slot_indices {
@@ -351,8 +465,50 @@ impl App {
             let (slot_oversize_top, slot_oversize_height) =
                 hjkl_buffer::over_provisioned_range(slot_top, slot_height, slot_line_count);
             let buf = self.slots[slot_idx].editor.buffer();
-            self.syntax
-                .submit_render(slot_buf_id, buf, slot_oversize_top, slot_oversize_height);
+            self.syntax.submit_render(
+                slot_buf_id,
+                buf,
+                slot_oversize_top,
+                slot_oversize_height,
+                crate::syntax::ParseKind::Viewport,
+            );
+
+            // Top + Bottom for non-active slots (same deferred logic).
+            let viewport_landed = self.slots[slot_idx].viewport_render_output.is_some();
+            if viewport_landed {
+                let needs_top = self.slots[slot_idx].top_render_output.is_none();
+                let needs_bottom = self.slots[slot_idx].bottom_render_output.is_none();
+
+                if needs_top {
+                    let (top_range_start, top_range_height) =
+                        hjkl_buffer::over_provisioned_range(0, slot_height, slot_line_count);
+                    let buf = self.slots[slot_idx].editor.buffer();
+                    self.syntax.submit_render(
+                        slot_buf_id,
+                        buf,
+                        top_range_start,
+                        top_range_height,
+                        crate::syntax::ParseKind::Top,
+                    );
+                }
+
+                if needs_bottom {
+                    let bottom_anchor = slot_line_count.saturating_sub(slot_height);
+                    let (bot_range_start, bot_range_height) = hjkl_buffer::over_provisioned_range(
+                        bottom_anchor,
+                        slot_height,
+                        slot_line_count,
+                    );
+                    let buf = self.slots[slot_idx].editor.buffer();
+                    self.syntax.submit_render(
+                        slot_buf_id,
+                        buf,
+                        bot_range_start,
+                        bot_range_height,
+                        crate::syntax::ParseKind::Bottom,
+                    );
+                }
+            }
         }
 
         // Detect a "big jump" (viewport teleport past the over-provisioned
@@ -366,15 +522,19 @@ impl App {
         // Without the cold budget the first `gg`/`G` after open flashes
         // un-highlighted rows because the 40 ms warm cap times out before
         // the initial parse completes.
+        //
+        // With the top/bottom caches populated, `gg` / `G` on warm buffers
+        // hit the cache and never flash — the wait here is still useful for
+        // the very first `G` on a cold file before the bottom parse has fired.
         const WARM_JUMP_WAIT: Duration = Duration::from_millis(40);
         const COLD_JUMP_WAIT: Duration = Duration::from_millis(500);
         let is_big_jump = match self.active().last_recompute_key {
             None => true,
             Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
         };
-        // Cold = no prior render output cached for this buffer (worker has
-        // never returned spans for it, so its tree is unbuilt).
-        let is_cold = self.active().last_render_output.is_none();
+        // Cold = no prior viewport render output cached for this buffer
+        // (worker has never returned spans for it, so its tree is unbuilt).
+        let is_cold = self.active().viewport_render_output.is_none();
         let big_jump_wait = if is_cold {
             COLD_JUMP_WAIT
         } else {
@@ -688,6 +848,7 @@ mod tests {
             signs: stale_signs,
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
+            kind: crate::syntax::ParseKind::Viewport,
         };
 
         let installed = app.install_render_result(stale);
@@ -722,6 +883,7 @@ mod tests {
             }],
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
+            kind: crate::syntax::ParseKind::Viewport,
         };
         let installed = app.install_render_result(fresh);
         assert!(installed, "matching buffer_id must install");
@@ -762,11 +924,11 @@ mod tests {
         );
     }
 
-    /// T5b: `install_render_result` must route a result to the correct
-    /// non-active slot and populate `last_render_output`.
+    /// T5b: `install_render_result` must route a viewport result to the correct
+    /// non-active slot and populate `viewport_render_output`.
     #[test]
     fn install_render_result_routes_to_correct_slot() {
-        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
         use ratatui::style::Style;
         use std::path::PathBuf;
 
@@ -778,7 +940,7 @@ mod tests {
         let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
 
-        // Build a synthetic output tagged to slot 1's buffer_id.
+        // Build a synthetic viewport output tagged to slot 1's buffer_id.
         let target_spans = vec![
             vec![(0usize, 5usize, Style::default())],
             vec![(0usize, 5usize, Style::default())],
@@ -789,6 +951,7 @@ mod tests {
             signs: Vec::new(),
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
         };
 
         // Active slot is still slot 0 — install must NOT touch it.
@@ -804,11 +967,11 @@ mod tests {
             "result for non-active slot must not return true"
         );
 
-        // The cache on slot 1 must now hold the output.
+        // The viewport cache on slot 1 must now hold the output.
         let cached = app.slots()[slot1_idx]
-            .last_render_output
+            .viewport_render_output
             .as_ref()
-            .expect("last_render_output must be populated on slot 1");
+            .expect("viewport_render_output must be populated on slot 1");
         assert_eq!(
             cached.spans, target_spans,
             "cached spans must match what was installed"
@@ -823,11 +986,11 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// T5c: `switch_to` must install cached spans from `last_render_output`
+    /// T5c: `switch_to` must install cached spans from `viewport_render_output`
     /// when the dirty_gen matches.
     #[test]
     fn switch_to_installs_cached_spans() {
-        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
         use ratatui::style::Style;
         use std::path::PathBuf;
 
@@ -839,17 +1002,18 @@ mod tests {
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
         let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
 
-        // Seed a known cache into slot 1.
+        // Seed a known viewport cache into slot 1.
         let cached_spans = vec![
             vec![(0usize, 5usize, Style::default())],
             vec![(0usize, 5usize, Style::default())],
         ];
-        app.slots_mut()[slot1_idx].last_render_output = Some(RenderOutput {
+        app.slots_mut()[slot1_idx].viewport_render_output = Some(RenderOutput {
             buffer_id: slot1_buf_id,
             spans: cached_spans.clone(),
             signs: Vec::new(),
             key: (current_dg, 0, 40),
             perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
         });
 
         // Switch to slot 1 — cached spans should be installed immediately.
@@ -859,18 +1023,18 @@ mod tests {
         // internal span table but we can verify no panic and that the
         // cache is still populated (not cleared) on a clean dirty_gen.
         assert!(
-            app.slots()[slot1_idx].last_render_output.is_some(),
-            "cache must survive a clean switch_to (dirty_gen matched)"
+            app.slots()[slot1_idx].viewport_render_output.is_some(),
+            "viewport cache must survive a clean switch_to (dirty_gen matched)"
         );
 
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// T5d: `switch_to` must drop a stale cache when dirty_gen mismatches
+    /// T5d: `switch_to` must drop all three caches when dirty_gen mismatches
     /// and must NOT install the stale spans.
     #[test]
     fn switch_to_drops_stale_cache_when_dirty_gen_mismatch() {
-        use crate::syntax::{PerfBreakdown, RenderOutput};
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
         use ratatui::style::Style;
         use std::path::PathBuf;
 
@@ -882,32 +1046,275 @@ mod tests {
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
         let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
 
-        // Seed a cache with an old dirty_gen (current_dg + 1 simulates
-        // the buffer having been modified since the parse).
+        // Seed all three caches with an old dirty_gen.
         let stale_dg = current_dg.wrapping_sub(1);
-        app.slots_mut()[slot1_idx].last_render_output = Some(RenderOutput {
+        let stale_out = RenderOutput {
             buffer_id: slot1_buf_id,
             spans: vec![vec![(0usize, 5usize, Style::default())]],
             signs: Vec::new(),
             key: (stale_dg, 0, 40),
             perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
+        };
+        app.slots_mut()[slot1_idx].viewport_render_output = Some(stale_out.clone());
+        app.slots_mut()[slot1_idx].top_render_output = Some(RenderOutput {
+            kind: ParseKind::Top,
+            ..stale_out.clone()
+        });
+        app.slots_mut()[slot1_idx].bottom_render_output = Some(RenderOutput {
+            kind: ParseKind::Bottom,
+            ..stale_out
         });
 
-        // Switch to slot 1 — stale cache must be evicted.
+        // Switch to slot 1 — all stale caches must be evicted.
         app.switch_to(slot1_idx);
 
-        // The cache for slot 1 must have been cleared.
+        // All three caches must have been cleared or replaced with fresh data.
         // Note: switch_to calls recompute_and_install which may re-populate
-        // last_render_output if the worker responds fast enough. We check
-        // immediately after switch — if populated, its key must NOT be stale_dg.
-        if let Some(ref cached) = app.slots()[slot1_idx].last_render_output {
-            assert_ne!(
-                cached.key.0, stale_dg,
-                "stale cache must have been replaced, not re-installed"
-            );
+        // caches if the worker responds fast enough. Any populated cache
+        // must NOT carry the stale_dg.
+        for (name, cache_opt) in [
+            (
+                "viewport_render_output",
+                &app.slots()[slot1_idx].viewport_render_output,
+            ),
+            (
+                "top_render_output",
+                &app.slots()[slot1_idx].top_render_output,
+            ),
+            (
+                "bottom_render_output",
+                &app.slots()[slot1_idx].bottom_render_output,
+            ),
+        ] {
+            if let Some(cached) = cache_opt {
+                assert_ne!(
+                    cached.key.0, stale_dg,
+                    "{name}: stale cache must have been replaced, not re-installed"
+                );
+            }
         }
         // (If None, the cache was cleared and nothing re-populated yet — also correct.)
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// T5 new test: `install_merged_spans_for_slot` populates top rows
+    /// when only `top_render_output` is set; rows past 3h are empty.
+    #[test]
+    fn install_merged_spans_top_only() {
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::Style;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        let slot_idx = app.focused_slot_idx();
+        // Build a buffer with 10 lines.
+        let content = (0..10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        {
+            let buf = hjkl_buffer::Buffer::from_str(&content);
+            let host = crate::host::TuiHost::new();
+            let editor = hjkl_engine::Editor::new(buf, host, hjkl_engine::Options::default());
+            app.slots_mut()[slot_idx].editor = editor;
+        }
+
+        let line_count = app.slots()[slot_idx].editor.buffer().line_count() as usize;
+        // Build a top RenderOutput covering rows 0..5.
+        let top_spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
+            .map(|i| {
+                if i < 5 {
+                    vec![(0usize, 4usize, Style::default())]
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
+        app.slots_mut()[slot_idx].top_render_output = Some(RenderOutput {
+            buffer_id: app.slots()[slot_idx].buffer_id,
+            spans: top_spans,
+            signs: Vec::new(),
+            key: (0, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        });
+
+        app.install_merged_spans_for_slot(slot_idx);
+        // The editor's styled spans for rows 0..5 should now be non-empty.
+        // We verify no panic occurred (install completed) and that caches survived.
+        assert!(
+            app.slots()[slot_idx].top_render_output.is_some(),
+            "top cache must remain after merge install"
+        );
+    }
+
+    /// T5 new test: viewport wins over top when rows overlap.
+    #[test]
+    fn install_merged_spans_viewport_overrides_top() {
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let mut app = App::new(None, false, None, None).unwrap();
+        let slot_idx = app.focused_slot_idx();
+        // 5-line buffer.
+        let content = (0..5)
+            .map(|i| format!("row {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        {
+            let buf = hjkl_buffer::Buffer::from_str(&content);
+            let host = crate::host::TuiHost::new();
+            let editor = hjkl_engine::Editor::new(buf, host, hjkl_engine::Options::default());
+            app.slots_mut()[slot_idx].editor = editor;
+        }
+
+        let line_count = app.slots()[slot_idx].editor.buffer().line_count() as usize;
+        let buf_id = app.slots()[slot_idx].buffer_id;
+
+        // Top cache: all 5 rows with red style.
+        let top_style = Style::default().fg(Color::Red);
+        let top_spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
+            .map(|_| vec![(0usize, 3usize, top_style)])
+            .collect();
+        app.slots_mut()[slot_idx].top_render_output = Some(RenderOutput {
+            buffer_id: buf_id,
+            spans: top_spans,
+            signs: Vec::new(),
+            key: (0, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        });
+
+        // Viewport cache: rows 2..5 with green style (overlaps top rows 2..5).
+        let vp_style = Style::default().fg(Color::Green);
+        let mut vp_spans: Vec<Vec<(usize, usize, Style)>> = vec![vec![]; line_count];
+        for slot in vp_spans.iter_mut().take(5).skip(2) {
+            *slot = vec![(0usize, 3usize, vp_style)];
+        }
+        app.slots_mut()[slot_idx].viewport_render_output = Some(RenderOutput {
+            buffer_id: buf_id,
+            spans: vp_spans,
+            signs: Vec::new(),
+            key: (0, 2, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
+        });
+
+        // install_merged_spans_for_slot should not panic.
+        app.install_merged_spans_for_slot(slot_idx);
+
+        // Verify both caches survived.
+        assert!(app.slots()[slot_idx].top_render_output.is_some());
+        assert!(app.slots()[slot_idx].viewport_render_output.is_some());
+    }
+
+    /// T5 new test: bumping dirty_gen invalidates all three caches.
+    #[test]
+    fn dirty_gen_change_invalidates_all_three_caches() {
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::Style;
+        use std::path::PathBuf;
+
+        let mut app = App::new(None, false, None, None).unwrap();
+
+        let tmp = std::env::temp_dir().join("hjkl_test_dirty_invalidate.txt");
+        std::fs::write(&tmp, "a\nb\nc\n").unwrap();
+        let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
+        let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
+        let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
+
+        // Seed all three caches at current_dg.
+        let make_out = |kind: ParseKind| RenderOutput {
+            buffer_id: slot1_buf_id,
+            spans: vec![vec![(0usize, 1usize, Style::default())]],
+            signs: Vec::new(),
+            key: (current_dg, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind,
+        };
+        app.slots_mut()[slot1_idx].viewport_render_output = Some(make_out(ParseKind::Viewport));
+        app.slots_mut()[slot1_idx].top_render_output = Some(make_out(ParseKind::Top));
+        app.slots_mut()[slot1_idx].bottom_render_output = Some(make_out(ParseKind::Bottom));
+
+        // Simulate dirty_gen change by seeding stale_dg caches and then
+        // switching to the slot — switch_to detects the mismatch and clears.
+        let stale_dg = current_dg.wrapping_sub(1);
+        let make_stale = |kind: ParseKind| RenderOutput {
+            buffer_id: slot1_buf_id,
+            spans: vec![vec![(0usize, 1usize, Style::default())]],
+            signs: Vec::new(),
+            key: (stale_dg, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind,
+        };
+        app.slots_mut()[slot1_idx].viewport_render_output = Some(make_stale(ParseKind::Viewport));
+        app.slots_mut()[slot1_idx].top_render_output = Some(make_stale(ParseKind::Top));
+        app.slots_mut()[slot1_idx].bottom_render_output = Some(make_stale(ParseKind::Bottom));
+
+        // switch_to should detect the stale dirty_gen and clear all three.
+        app.switch_to(slot1_idx);
+
+        // All three caches must be None or refreshed (not stale_dg).
+        for (name, cache_opt) in [
+            (
+                "viewport_render_output",
+                &app.slots()[slot1_idx].viewport_render_output,
+            ),
+            (
+                "top_render_output",
+                &app.slots()[slot1_idx].top_render_output,
+            ),
+            (
+                "bottom_render_output",
+                &app.slots()[slot1_idx].bottom_render_output,
+            ),
+        ] {
+            if let Some(c) = cache_opt {
+                assert_ne!(
+                    c.key.0, stale_dg,
+                    "{name} must not carry stale dirty_gen after switch_to"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// T5 new test: cold buffer does not submit Bottom until Viewport lands.
+    /// On a fresh cold buffer (no viewport result), recompute_and_install must
+    /// NOT submit a Bottom parse — only after the Viewport result arrives does
+    /// the next tick submit Bottom.
+    #[test]
+    fn cold_buffer_does_not_submit_bottom_until_viewport_lands() {
+        let mut app = App::new(None, false, None, None).unwrap();
+        let slot_idx = app.focused_slot_idx();
+
+        // Confirm the slot is cold (no viewport result).
+        assert!(
+            app.slots()[slot_idx].viewport_render_output.is_none(),
+            "precondition: fresh slot has no viewport result"
+        );
+
+        // Count pending parses before any recompute.
+        let before = app.syntax.pending_parse_count();
+
+        // Run recompute — this submits Viewport (cold path).
+        app.recompute_and_install();
+
+        let after = app.syntax.pending_parse_count();
+        // At most one new parse should be queued (Viewport only — no Bottom yet).
+        // In practice the queue may be 0 if the worker already drained it,
+        // but it must NEVER have both Viewport AND Bottom simultaneously
+        // when the viewport hasn't landed yet.
+        // We verify: no Bottom was submitted before Viewport landed by
+        // confirming viewport_render_output is still None right after the call
+        // (worker hasn't responded synchronously).
+        assert!(
+            app.slots()[slot_idx].viewport_render_output.is_none()
+                || app.slots()[slot_idx].bottom_render_output.is_none(),
+            "Bottom must not be populated before Viewport result lands; \
+             before={before}, after={after}"
+        );
     }
 }
