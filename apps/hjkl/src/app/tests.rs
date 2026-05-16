@@ -1466,13 +1466,13 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
     writeln!(
         tmp,
         r#"
-[editor]
-leader = "\\"
-tab_width = 2
+        [editor]
+        leader = "\\"
+        tab_width = 2
 
-[theme]
-name = "dark"
-"#
+        [theme]
+        name = "dark"
+        "#
     )
     .unwrap();
 
@@ -3672,7 +3672,7 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
     assert_eq!(
         row1, 4,
         "after +/main, `n` must advance FORWARD to row 4 (got row {row1}); \
-         backward would land on row 0 (no match) or stay/regress"
+        backward would land on row 0 (no match) or stay/regress"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3695,7 +3695,7 @@ fn search_count_cursor_on_match_stays_on_match() {
         crate::render::search_count(&app),
         Some((1, 3)),
         "/<pat><CR> from cursor on a match must keep counter at 1/3, \
-         not advance to 2/3"
+        not advance to 2/3"
     );
 }
 
@@ -3747,7 +3747,7 @@ fn search_count_handles_multibyte_chars_before_match() {
         crate::render::search_count(&app),
         Some((1, 2)),
         "/main must land on M1 with counter 1/2, even when M1 sits \
-         behind a multi-byte char (em-dash) on its line"
+        behind a multi-byte char (em-dash) on its line"
     );
     // n -> M2 -> 2/2.
     app.active_mut().editor.search_advance_forward(true);
@@ -4215,7 +4215,7 @@ fn lsp_request_works_with_relative_filename() {
         app.lsp_pending.len(),
         1,
         "relative-path goto must produce a pending request, not the \
-         'no file open' error path"
+        'no file open' error path"
     );
     if let Some(mgr) = app.lsp.take() {
         mgr.shutdown();
@@ -12518,7 +12518,7 @@ mod border_drag_tests {
         assert!(
             app.hover_popup.is_none(),
             "hover_popup must be cleared on mouse click — leaving stale popups \
-             causes the right-edge garbage bug (right-click → Go to Definition repro)"
+                causes the right-edge garbage bug (right-click → Go to Definition repro)"
         );
         assert!(
             app.hover_timer.is_none(),
@@ -12569,7 +12569,7 @@ mod border_drag_tests {
             multi.height,
             TOP_BAR_HEIGHT + 22 + STATUS_LINE_HEIGHT,
             "multi-slot screen height must include the top bar row \
-             (otherwise context-menu hover near the bottom maps to the wrong item)"
+                (otherwise context-menu hover near the bottom maps to the wrong item)"
         );
 
         for p in [&path_a, &path_b] {

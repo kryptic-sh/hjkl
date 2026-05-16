@@ -360,16 +360,25 @@ impl App {
         // Without this, the new viewport lands on un-highlighted rows because
         // the pre-warm cache only covers the previous viewport ±1×.
         //
-        // Threshold: any move greater than `height` (one viewport) is past
-        // the 3× over-provisioned range and forces a fresh parse. Block up to
-        // BIG_JUMP_WAIT for it so the next frame paints highlighted.
-        //
-        // First frame after construction (no prior key) also counts as a
-        // big jump so the splash → editor transition isn't blank.
-        const BIG_JUMP_WAIT: Duration = Duration::from_millis(40);
+        // Wait budget scales with whether the worker has a retained tree for
+        // this buffer (warm) or not (cold). Warm parses on retained trees
+        // are ~1-5ms; cold initial parses on big files can take hundreds.
+        // Without the cold budget the first `gg`/`G` after open flashes
+        // un-highlighted rows because the 40 ms warm cap times out before
+        // the initial parse completes.
+        const WARM_JUMP_WAIT: Duration = Duration::from_millis(40);
+        const COLD_JUMP_WAIT: Duration = Duration::from_millis(500);
         let is_big_jump = match self.active().last_recompute_key {
             None => true,
             Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
+        };
+        // Cold = no prior render output cached for this buffer (worker has
+        // never returned spans for it, so its tree is unbuilt).
+        let is_cold = self.active().last_render_output.is_none();
+        let big_jump_wait = if is_cold {
+            COLD_JUMP_WAIT
+        } else {
+            WARM_JUMP_WAIT
         };
         let _ = prev_dirty_gen;
 
@@ -379,7 +388,7 @@ impl App {
         // queue) then drain everything else. `wait_all_results` returns
         // every per-buffer result so pre-warm hits also reach their caches.
         let all_results = if is_big_jump && submitted {
-            self.syntax.wait_all_results(BIG_JUMP_WAIT)
+            self.syntax.wait_all_results(big_jump_wait)
         } else {
             self.syntax.take_all_results()
         };
