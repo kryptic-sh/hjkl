@@ -114,13 +114,21 @@ pub trait Formatter: Send + Sync {
 /// caller can fall back to a dumb local algorithm without burning the
 /// worker.
 pub fn is_tool_installed(tool: &str) -> bool {
-    Command::new(tool)
+    // Require BOTH spawn success and a 0 exit status. A script with a
+    // missing shebang interpreter (e.g. `#!/usr/bin/env node` when node
+    // is absent) spawns fine but exits non-zero — without the success
+    // check we'd say "installed" and the worker would then surface the
+    // exec failure as a confusing syntax error.
+    match Command::new(tool)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .is_ok()
+    {
+        Ok(status) => status.success(),
+        Err(_) => false,
+    }
 }
 
 // ── Shared subprocess helper ──────────────────────────────────────────────────
