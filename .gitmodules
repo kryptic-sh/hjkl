@@ -55,3 +55,6 @@
 [submodule "crates/hjkl-theme-tui"]
 	path = crates/hjkl-theme-tui
 	url = https://github.com/kryptic-sh/hjkl-theme-tui.git
+[submodule "crates/hjkl-mangler"]
+	path = crates/hjkl-mangler
+	url = https://github.com/kryptic-sh/hjkl-mangler.git
