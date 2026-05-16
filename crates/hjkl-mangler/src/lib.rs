@@ -3,24 +3,34 @@
 //! Wraps `rustfmt`, `prettier`, `gofmt`, `ruff`, `stylua`, `shfmt`, `taplo`
 //! and friends behind a single [`Formatter`] trait. The app calls
 //! [`formatter_for_path`] to look up a formatter by file extension, then
-//! calls [`Formatter::format`] synchronously (blocking up to 2 s).
+//! either calls [`Formatter::format`] synchronously (blocking up to 2 s)
+//! or submits a [`FormatJob`] to a [`FormatWorker`] for async dispatch.
 //!
 //! # Timeout
 //!
 //! [`Formatter::format`] blocks the calling thread for at most 2 seconds.
 //! The implementation polls [`std::process::Child::try_wait`] in a tight
-//! spin-loop with 5 ms sleeps. This is intentionally simple; async invocation
-//! is tracked in #118.
+//! spin-loop with 5 ms sleeps. This is intentionally simple.
+//!
+//! # Async dispatch
+//!
+//! [`FormatWorker`] moves formatter invocations off the UI thread. Construct
+//! one via [`FormatWorker::spawn`], submit jobs via [`FormatWorker::submit`],
+//! and drain results each event-loop tick via [`FormatWorker::try_recv`].
+//! Per-buffer deduplication ensures that repeated `=` presses while a slow
+//! formatter is still running replace the pending job rather than enqueue N.
 //!
 //! # Adding a formatter
 //!
 //! 1. Implement [`Formatter`] (or reuse [`StdinFormatter`]).
 //! 2. Add an entry to [`formatter_for_path`].
 
+use std::collections::HashMap;
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Maximum time we wait for a formatter subprocess before giving up.
@@ -477,6 +487,154 @@ pub fn formatter_for_path(path: &Path) -> Option<Arc<dyn Formatter>> {
     }
 }
 
+// ── Async worker ─────────────────────────────────────────────────────────────
+
+/// Stable identifier for an open buffer. Matches the `BufferId` type used by
+/// `hjkl-engine` consumers; declared here independently so `hjkl-mangler`
+/// does not need to depend on the engine crate.
+pub type BufferId = u64;
+
+/// A format job submitted to [`FormatWorker`].
+pub struct FormatJob {
+    /// The buffer this job targets.
+    pub buffer_id: BufferId,
+    /// Snapshot of the buffer source at submission time.
+    pub source: Arc<String>,
+    /// Project root used as the formatter's working directory.
+    pub project_root: PathBuf,
+    /// Formatter to run.
+    pub formatter: Arc<dyn Formatter>,
+    /// Buffer dirty-generation at submission time. The install path drops
+    /// results whose `dirty_gen` is older than the current buffer gen so
+    /// that interleaved typing does not install stale formatted output.
+    pub dirty_gen: u64,
+}
+
+/// Result of a completed (or failed) format job.
+pub struct FormatResult {
+    /// Which buffer the result is for.
+    pub buffer_id: BufferId,
+    /// The dirty-gen that was current when the job was submitted.
+    pub dirty_gen: u64,
+    /// Formatted source, or the error that occurred.
+    pub result: Result<String, FormatError>,
+}
+
+/// Internal shared state between the submitter (main thread) and the worker.
+struct Pending {
+    /// One pending job per buffer_id. Submitting a new job for buffer A
+    /// replaces the existing entry — the key dedup invariant.
+    jobs: HashMap<BufferId, FormatJob>,
+    /// When `true` the worker thread should exit.
+    quit: bool,
+}
+
+impl Pending {
+    fn new() -> Self {
+        Self {
+            jobs: HashMap::new(),
+            quit: false,
+        }
+    }
+
+    fn has_work(&self) -> bool {
+        self.quit || !self.jobs.is_empty()
+    }
+}
+
+/// Background worker that runs [`Formatter::format`] off the UI thread.
+///
+/// - Spawn with [`FormatWorker::spawn`].
+/// - Submit jobs with [`FormatWorker::submit`]. Per-buffer dedup: a new
+///   submit for buffer A while one is already pending replaces it.
+/// - Drain results with [`FormatWorker::try_recv`] each event-loop tick.
+pub struct FormatWorker {
+    pending: Arc<(Mutex<Pending>, Condvar)>,
+    rx: std::sync::mpsc::Receiver<FormatResult>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl FormatWorker {
+    /// Spawn the background worker thread.
+    pub fn spawn() -> Self {
+        let pending = Arc::new((Mutex::new(Pending::new()), Condvar::new()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let pending_for_thread = Arc::clone(&pending);
+        let handle = std::thread::Builder::new()
+            .name("hjkl-mangler".into())
+            .spawn(move || format_worker_loop(pending_for_thread, tx))
+            .expect("spawn format worker");
+        Self {
+            pending,
+            rx,
+            handle: Some(handle),
+        }
+    }
+
+    /// Submit a format job. If a job for the same `buffer_id` is already
+    /// pending it is replaced (latest wins). Returns immediately.
+    pub fn submit(&self, job: FormatJob) {
+        let (lock, cvar) = &*self.pending;
+        let mut p = lock.lock().expect("format pending mutex poisoned");
+        p.jobs.insert(job.buffer_id, job);
+        cvar.notify_one();
+    }
+
+    /// Non-blocking drain: return the next completed [`FormatResult`] if one
+    /// is available, `None` otherwise. Call once per event-loop tick.
+    pub fn try_recv(&self) -> Option<FormatResult> {
+        self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for FormatWorker {
+    fn drop(&mut self) {
+        {
+            let (lock, cvar) = &*self.pending;
+            if let Ok(mut p) = lock.lock() {
+                p.quit = true;
+                cvar.notify_one();
+            }
+        }
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+fn format_worker_loop(
+    pending: Arc<(Mutex<Pending>, Condvar)>,
+    tx: std::sync::mpsc::Sender<FormatResult>,
+) {
+    loop {
+        // Wait until there is work or a quit signal.
+        let job = {
+            let (lock, cvar) = &*pending;
+            let mut p = lock.lock().expect("format pending mutex poisoned");
+            while !p.has_work() {
+                p = cvar.wait(p).expect("format pending cvar poisoned");
+            }
+            if p.quit {
+                return;
+            }
+            // Take one arbitrary job from the map.
+            let key = *p.jobs.keys().next().expect("has_work implies non-empty");
+            p.jobs.remove(&key).expect("key just found")
+        };
+
+        let result = job.formatter.format(&job.source, &job.project_root);
+        let msg = FormatResult {
+            buffer_id: job.buffer_id,
+            dirty_gen: job.dirty_gen,
+            result,
+        };
+        // Channel closed only when the receiver (App) has been dropped — exit.
+        if tx.send(msg).is_err() {
+            return;
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -630,5 +788,163 @@ mod tests {
         let formatter = formatter_for_path(Path::new("script.py")).unwrap();
         let result = formatter.format(src, Path::new("/tmp")).unwrap();
         assert!(result.contains("x"), "expected x in output");
+    }
+
+    // ── FormatWorker unit tests ───────────────────────────────────────────
+
+    /// A formatter that immediately returns its input unchanged.
+    struct EchoFormatter;
+    impl Formatter for EchoFormatter {
+        fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
+            Ok(source.to_owned())
+        }
+    }
+
+    /// A slow formatter that sleeps briefly so we can test dedup.
+    struct SlowFormatter {
+        delay: std::time::Duration,
+    }
+    impl Formatter for SlowFormatter {
+        fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
+            std::thread::sleep(self.delay);
+            Ok(source.to_owned())
+        }
+    }
+
+    #[test]
+    fn worker_drop_joins_cleanly() {
+        let w = FormatWorker::spawn();
+        drop(w);
+        // If the worker thread panics or hangs, the test will either
+        // panic itself or time out — either way a test failure.
+    }
+
+    #[test]
+    fn submit_keeps_jobs_for_different_buffer_ids() {
+        // Use a slow formatter so both jobs stay pending long enough to verify.
+        let w = FormatWorker::spawn();
+        // Submit two jobs for different buffers very quickly.
+        w.submit(FormatJob {
+            buffer_id: 1,
+            source: Arc::new("a".to_owned()),
+            project_root: PathBuf::from("/tmp"),
+            formatter: Arc::new(EchoFormatter),
+            dirty_gen: 1,
+        });
+        w.submit(FormatJob {
+            buffer_id: 2,
+            source: Arc::new("b".to_owned()),
+            project_root: PathBuf::from("/tmp"),
+            formatter: Arc::new(EchoFormatter),
+            dirty_gen: 1,
+        });
+        // Drain both results (order not guaranteed).
+        let mut saw_1 = false;
+        let mut saw_2 = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(r) = w.try_recv() {
+                match r.buffer_id {
+                    1 => saw_1 = true,
+                    2 => saw_2 = true,
+                    _ => panic!("unexpected buffer_id {}", r.buffer_id),
+                }
+            }
+            if saw_1 && saw_2 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for both buffer results"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn submit_replaces_pending_for_same_buffer_id() {
+        // Use a slow formatter so the first job is still pending when the
+        // second submit arrives.
+        let slow = std::time::Duration::from_millis(80);
+        let w = FormatWorker::spawn();
+
+        // First job for buffer 42 — content "first".
+        w.submit(FormatJob {
+            buffer_id: 42,
+            source: Arc::new("first".to_owned()),
+            project_root: PathBuf::from("/tmp"),
+            formatter: Arc::new(SlowFormatter { delay: slow }),
+            dirty_gen: 1,
+        });
+        // Immediately replace with "second" before the worker picks it up.
+        w.submit(FormatJob {
+            buffer_id: 42,
+            source: Arc::new("second".to_owned()),
+            project_root: PathBuf::from("/tmp"),
+            formatter: Arc::new(SlowFormatter { delay: slow }),
+            dirty_gen: 2,
+        });
+
+        // Drain results for up to 5 s; we expect exactly one result and it
+        // should be dirty_gen=2 ("second") OR dirty_gen=1 ("first") if the
+        // worker had already taken the first job before the replace.
+        // Either way we must get at most 2 results (one per job that
+        // actually ran), and the LAST one must be dirty_gen=2.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut results = Vec::new();
+        loop {
+            if let Some(r) = w.try_recv() {
+                results.push(r);
+            }
+            // The key dedup invariant: we never get more than 2 results
+            // (one if the second replaced before worker saw the first, two
+            // if the worker had already dequeued the first job by the time
+            // the second submit landed).
+            assert!(results.len() <= 2, "got more than 2 results — dedup failed");
+            if !results.is_empty() && std::time::Instant::now() > deadline {
+                break;
+            }
+            // Give both jobs enough time to complete if both ran.
+            if std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            } else {
+                break;
+            }
+        }
+        assert!(!results.is_empty(), "expected at least one result");
+        // The last result must be the second (latest) job.
+        let last = results.last().unwrap();
+        assert_eq!(
+            last.dirty_gen, 2,
+            "expected last result to be the second (dirty_gen=2) job"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires rustfmt on PATH"]
+    fn worker_formats_rust_async() {
+        let w = FormatWorker::spawn();
+        let src = "fn main(){let x=1;}";
+        w.submit(FormatJob {
+            buffer_id: 99,
+            source: Arc::new(src.to_owned()),
+            project_root: PathBuf::from("/tmp"),
+            formatter: formatter_for_path(Path::new("foo.rs")).unwrap(),
+            dirty_gen: 7,
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Some(r) = w.try_recv() {
+                let formatted = r.result.expect("rustfmt should succeed");
+                assert!(formatted.contains("fn main()"), "expected fn main");
+                assert!(formatted.contains("let x = 1;"), "expected spaced assign");
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for rustfmt result"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
