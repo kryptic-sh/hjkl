@@ -416,6 +416,16 @@ pub struct BufferSlot {
     /// (`line_count - min(3*h, line_count)..line_count`). Populated after
     /// the cold viewport parse so `G` never flashes un-highlighted rows.
     pub(crate) bottom_render_output: Option<crate::syntax::RenderOutput>,
+    /// Per-row edit log: each entry is `(dirty_gen, row_range)` where
+    /// `dirty_gen` is the buffer's `dirty_gen` AFTER the edit landed and
+    /// `row_range` is the inclusive row range touched by that edit.
+    ///
+    /// Used by `merge_render_outputs` so rows untouched since a cache's
+    /// parse are still painted from the cache, avoiding the "white flash"
+    /// where ALL spans vanish until the background worker returns.
+    ///
+    /// Capped at 256 entries to bound memory on long sessions.
+    pub(crate) dirty_rows_log: Vec<(u64, std::ops::RangeInclusive<usize>)>,
 }
 
 impl BufferSlot {
@@ -809,6 +819,7 @@ pub(super) fn build_slot(
         viewport_render_output: None,
         top_render_output: None,
         bottom_render_output: None,
+        dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
     Ok(slot)
@@ -1850,6 +1861,27 @@ impl App {
         let edits = self.active_mut().editor.take_content_edits();
         if !edits.is_empty() {
             self.syntax.apply_edits(buffer_id, &edits);
+            // Record which rows were touched by this batch of edits so the
+            // merger can keep untouched cache rows visible while the worker
+            // parses the new content.  The dirty_gen AFTER the edit is the
+            // current one — any cache older than this gen is stale for these
+            // rows and should show blank until the worker returns.
+            let new_dg = self.active().editor.buffer().dirty_gen();
+            for edit in &edits {
+                let start_row = edit.start_position.0 as usize;
+                let end_row =
+                    (edit.old_end_position.0 as usize).max(edit.new_end_position.0 as usize);
+                self.active_mut()
+                    .dirty_rows_log
+                    .push((new_dg, start_row..=end_row));
+            }
+            // Cap to 256 entries to avoid unbounded growth.
+            const DIRTY_LOG_CAP: usize = 256;
+            let log = &mut self.active_mut().dirty_rows_log;
+            if log.len() > DIRTY_LOG_CAP {
+                let drain_count = log.len() - DIRTY_LOG_CAP;
+                log.drain(..drain_count);
+            }
         }
         self.lsp_notify_change_active();
         self.recompute_and_install();

@@ -795,6 +795,7 @@ fn build_scratch_slot(
         viewport_render_output: None,
         top_render_output: None,
         bottom_render_output: None,
+        dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
     Ok(slot)

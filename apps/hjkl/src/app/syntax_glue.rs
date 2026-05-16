@@ -284,12 +284,13 @@ impl App {
         // without an Editor.)
         let line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
         let current_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let dirty_rows_log = &self.slots[slot_idx].dirty_rows_log;
         let sources = [
             self.slots[slot_idx].top_render_output.as_ref(),
             self.slots[slot_idx].bottom_render_output.as_ref(),
             self.slots[slot_idx].viewport_render_output.as_ref(),
         ];
-        let merged = merge_render_outputs(line_count, current_dg, sources);
+        let merged = merge_render_outputs(line_count, current_dg, dirty_rows_log, sources);
         self.slots[slot_idx]
             .editor
             .install_ratatui_syntax_spans(merged);
@@ -701,32 +702,51 @@ impl App {
 ///
 /// 1. `spans.len() != line_count` — buffer was resized (visual delete,
 ///    paste, undo of either) and the cached row indices no longer match.
-/// 2. `key.0 != current_dirty_gen` — buffer was edited within the same
-///    line count (e.g. undo restored line count but content differs at
-///    byte level). Painting stale-byte spans onto fresh content paints
-///    colors at wrong byte offsets within each row.
+///    Wholesale rejection: row indices are wrong for the whole cache.
 ///
-/// Both reported 2026-05-16: highlights for deleted lines "stuck" and broke
-/// rows below; tightened on the same day after a delete+undo+delete+undo
-/// cycle reproduced the bug with line counts matching but bytes shifted.
+/// **Per-row dirty tracking** — when a cache has the right row count but
+/// `key.0 < current_dirty_gen` (stale from an edit), we no longer reject
+/// it wholesale. Instead, for each row we check whether that row was touched
+/// by any edit that arrived after the cache's parse (i.e. any log entry with
+/// `dirty_gen > cache_key.0`). Touched rows are left blank so the fresh
+/// worker result can fill them in; untouched rows keep their cached spans.
+///
+/// This eliminates the "white flash" where ALL rows briefly go blank after
+/// a single keystroke because the whole-cache rejection fired before the
+/// background worker returned.
+///
+/// Blanket dirty-gen rejection was removed as of 2026-05-16 in favour of
+/// per-row tracking. The `spans.len() != line_count` guard (row-count shift)
+/// is still in place — that case invalidates row indices for the whole cache.
 pub(crate) fn merge_render_outputs<'a>(
     line_count: usize,
     current_dirty_gen: u64,
+    dirty_rows_log: &[(u64, std::ops::RangeInclusive<usize>)],
     sources: impl IntoIterator<Item = Option<&'a crate::syntax::RenderOutput>>,
 ) -> Vec<Vec<(usize, usize, ratatui::style::Style)>> {
     let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> = vec![Vec::new(); line_count];
     for out in sources.into_iter().flatten() {
+        // Reject wholesale when the row count shifted (insertion/deletion of
+        // whole lines). Row indices in the cache no longer map correctly.
         if out.spans.len() != line_count {
             continue;
         }
-        if out.key.0 != current_dirty_gen {
-            continue;
-        }
+        let cache_dg = out.key.0;
         for (row, row_spans) in out.spans.iter().enumerate() {
             if row >= line_count {
                 break;
             }
-            if !row_spans.is_empty() {
+            if row_spans.is_empty() {
+                continue;
+            }
+            // Check whether this row was touched by any edit that landed
+            // AFTER this cache was parsed (dirty_gen > cache_dg).
+            // If so, the cached bytes no longer match the live buffer at
+            // this row — leave blank and let the worker fill it in.
+            let row_is_dirty = dirty_rows_log.iter().any(|(dg, range)| {
+                *dg > cache_dg && *dg <= current_dirty_gen && range.contains(&row)
+            });
+            if !row_is_dirty {
                 merged[row] = row_spans.clone();
             }
         }
@@ -1302,7 +1322,7 @@ mod tests {
         // Buffer shrank to 3 rows; stale top reflects pre-delete 8 rows.
         // current_dirty_gen matches the stale cache's gen so the only
         // rejection reason here is the spans.len() mismatch.
-        let merged = merge_render_outputs(3, 0, [Some(&stale_top), None, None]);
+        let merged = merge_render_outputs(3, 0, &[], [Some(&stale_top), None, None]);
 
         assert_eq!(merged.len(), 3, "merged length must match line_count");
         for (row, spans) in merged.iter().enumerate() {
@@ -1313,19 +1333,18 @@ mod tests {
         }
     }
 
-    /// Regression: cached output with matching row count but stale dirty_gen
-    /// (e.g. delete + undo cycle restored line count but bytes shifted)
-    /// must also be skipped — otherwise spans paint at wrong byte offsets
-    /// within each row. Reported 2026-05-16 (second pass).
+    /// Per-row dirty tracking: rows explicitly recorded in the dirty_rows_log
+    /// are blanked even when the cache has a matching row count.  Rows NOT in
+    /// the log keep their cached spans (the "no white flash" property).
     #[test]
-    fn merge_render_outputs_skips_stale_dirty_gen_cache() {
+    fn merge_render_outputs_per_row_dirty_blanks_logged_rows_only() {
         use crate::app::syntax_glue::merge_render_outputs;
         use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
         use ratatui::style::{Color, Style};
 
         let buf_id = 42;
         let stale_style = Style::default().fg(Color::Red);
-        // Same row count (5) as current buffer, but dirty_gen differs.
+        // Cache has row count 5, parsed at dirty_gen=7.
         let stale_spans: Vec<Vec<(usize, usize, Style)>> = (0..5)
             .map(|_| vec![(0usize, 3usize, stale_style)])
             .collect();
@@ -1333,19 +1352,29 @@ mod tests {
             buffer_id: buf_id,
             spans: stale_spans,
             signs: Vec::new(),
-            key: (7, 0, 40), // stale dirty_gen = 7
+            key: (7, 0, 40), // cache dirty_gen = 7
             perf: PerfBreakdown::default(),
             kind: ParseKind::Top,
         };
 
-        // Current dirty_gen is 12 — does NOT match the cache's 7.
-        let merged = merge_render_outputs(5, 12, [Some(&stale_top), None, None]);
+        // Edit landed at gen=8, touching row 2 only.
+        // Current dirty_gen is 8 (one edit since cache was parsed).
+        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(8, 2..=2)];
+        let merged = merge_render_outputs(5, 8, log, [Some(&stale_top), None, None]);
 
         assert_eq!(merged.len(), 5);
-        for (row, spans) in merged.iter().enumerate() {
+        // Row 2 was edited — must be blank.
+        assert!(
+            merged[2].is_empty(),
+            "row 2 (edited) must be blank; got {:?}",
+            merged[2]
+        );
+        // Rows 0, 1, 3, 4 were NOT edited — must keep cached spans.
+        for row in [0, 1, 3, 4] {
             assert!(
-                spans.is_empty(),
-                "row {row} must not carry dirty_gen-stale spans; got {spans:?}"
+                !merged[row].is_empty(),
+                "row {row} (untouched) must keep cached spans; got {:?}",
+                merged[row]
             );
         }
     }
@@ -1369,7 +1398,7 @@ mod tests {
             kind: ParseKind::Top,
         };
 
-        let merged = merge_render_outputs(3, 5, [Some(&fresh), None, None]);
+        let merged = merge_render_outputs(3, 5, &[], [Some(&fresh), None, None]);
 
         assert_eq!(merged.len(), 3);
         for spans in &merged {
@@ -1449,18 +1478,17 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// Regression: a stale-dirty_gen top/bottom cache (`Some` but key.0 ≠ current_dg)
-    /// must be treated the same as `None` for the re-submit decision — otherwise
-    /// top/bottom highlights are never refreshed after any edit.
+    /// A stale-dirty_gen top/bottom cache whose rows are all logged as dirty
+    /// must have ALL rows blanked — this models a delete+undo cycle where
+    /// bytes shifted for every row even though line count stayed the same.
     ///
-    /// This is the secondary cause of the delete+undo staleness bug: the old
-    /// `needs_top = is_none()` check left stale caches in place indefinitely,
-    /// meaning the top/bottom regions stayed un-highlighted after any edit.
+    /// Also verifies that a cache for rows NOT in the dirty log keeps its
+    /// spans visible (the "no white flash" property for untouched rows).
     ///
-    /// The test seeds a stale top/bottom cache whose dirty_gen doesn't match the
-    /// current buffer, then verifies that `merge_render_outputs` with the current
-    /// dirty_gen rejects those spans — confirming that a re-submit IS necessary
-    /// and the old `is_none()` guard was insufficient.
+    /// The `needs_top`/`needs_bottom` re-submit guard in `recompute_and_install`
+    /// still fires on `key.0 != current_dg` — this test focuses on what the
+    /// merger shows to the user DURING the latency window before the fresh
+    /// parse arrives.
     #[test]
     fn stale_dg_top_bottom_cache_is_rejected_by_merger_and_needs_resubmit() {
         use crate::app::syntax_glue::merge_render_outputs;
@@ -1500,30 +1528,31 @@ mod tests {
             kind: ParseKind::Bottom,
         };
 
+        // Dirty log: all rows touched (simulates delete+undo where bytes shifted
+        // everywhere even though line count stayed the same).  Two edit batches:
+        // dg=2 touched rows 0..=4, dg=3 also touched rows 0..=4.
+        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(2, 0..=4), (3, 0..=4)];
+
         // No viewport cache yet (fresh buffer state after undo).
         let merged = merge_render_outputs(
             line_count,
             current_dg,
+            log,
             [Some(&stale_top), Some(&stale_bottom), None],
         );
 
-        // Merger must reject both stale caches — every row must be empty.
-        // This proves that the stale caches are useless AND a re-submit is
-        // required to produce fresh spans.  Before the fix, `needs_top` was
-        // `is_none()` → false → no re-submit → top/bottom rows stayed blank
-        // forever after any edit.  After the fix, a stale-dg cache triggers
-        // re-submission (needs_top = key.0 != current_dg).
+        // All rows touched → merger must blank them so byte-offset-wrong spans
+        // are never painted.  Worker re-submit (driven by needs_top=key.0!=dg)
+        // will fill them in when the fresh parse arrives.
         assert_eq!(merged.len(), line_count);
         for (row, spans) in merged.iter().enumerate() {
             assert!(
                 spans.is_empty(),
-                "row {row}: stale-dg top/bottom caches must NOT be painted; \
-                 got {spans:?} — this would produce highlights at wrong byte offsets \
-                 after a delete+undo cycle"
+                "row {row}: all-dirty log must blank stale-dg spans; got {spans:?}"
             );
         }
 
-        // Confirm: a FRESH top cache (dg=current_dg) IS accepted.
+        // Confirm: a FRESH top cache (dg=current_dg) IS accepted even with log.
         let fresh_style = Style::default().fg(Color::Green);
         let fresh_spans: Vec<Vec<(usize, usize, Style)>> =
             (0..line_count).map(|_| vec![(0, 4, fresh_style)]).collect();
@@ -1535,12 +1564,138 @@ mod tests {
             perf: PerfBreakdown::default(),
             kind: ParseKind::Top,
         };
+        // Fresh cache key.0 == current_dg → no log entry has dg > current_dg,
+        // so the row-dirty check is false for every row → spans installed.
         let merged_fresh =
-            merge_render_outputs(line_count, current_dg, [Some(&fresh_top), None, None]);
+            merge_render_outputs(line_count, current_dg, log, [Some(&fresh_top), None, None]);
         for (row, spans) in merged_fresh.iter().enumerate() {
             assert!(
                 !spans.is_empty(),
                 "row {row}: fresh top cache must be installed"
+            );
+        }
+    }
+
+    /// Per-row dirty tracking: unchanged rows keep their cached spans.
+    ///
+    /// Cache covers rows 0..10 with red spans, parsed at dirty_gen=5.
+    /// Edit log records (6, 3..=3) — row 3 was edited at gen 6.
+    /// After merge: rows 0-2, 4-9 keep red spans; row 3 is blank.
+    #[test]
+    fn merge_partial_keeps_unchanged_row_spans() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let red = Style::default().fg(Color::Red);
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..10).map(|_| vec![(0usize, 1usize, red)]).collect();
+        let cache = RenderOutput {
+            buffer_id: 1,
+            spans,
+            signs: Vec::new(),
+            key: (5, 0, 40), // parsed at dirty_gen=5
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        // Row 3 was edited at gen=6.
+        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(6, 3..=3)];
+        let merged = merge_render_outputs(10, 6, log, [Some(&cache), None, None]);
+
+        assert_eq!(merged.len(), 10);
+        // Row 3 was touched — must be blank.
+        assert!(
+            merged[3].is_empty(),
+            "row 3 (edited at gen 6) must be blank; got {:?}",
+            merged[3]
+        );
+        // All other rows must keep their cached red spans.
+        for row in (0..10).filter(|&r| r != 3) {
+            assert!(
+                !merged[row].is_empty(),
+                "row {row} (untouched) must keep red spans; got {:?}",
+                merged[row]
+            );
+        }
+    }
+
+    /// Per-row dirty tracking: multiple edits at different gens blank
+    /// all affected rows and leave the rest intact.
+    ///
+    /// Cache at dirty_gen=5 with spans on rows 0..10.
+    /// Log: [(6, 2..=4), (7, 0..=0)]. Current dg=7.
+    /// Assert: rows 0, 2, 3, 4 blank; rows 1, 5, 6, 7, 8, 9 keep spans.
+    #[test]
+    fn merge_partial_blanks_all_edited_rows() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let blue = Style::default().fg(Color::Blue);
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..10).map(|_| vec![(0usize, 1usize, blue)]).collect();
+        let cache = RenderOutput {
+            buffer_id: 2,
+            spans,
+            signs: Vec::new(),
+            key: (5, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
+        };
+
+        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(6, 2..=4), (7, 0..=0)];
+        let merged = merge_render_outputs(10, 7, log, [None, None, Some(&cache)]);
+
+        assert_eq!(merged.len(), 10);
+        let dirty_rows = [0usize, 2, 3, 4];
+        let clean_rows = [1usize, 5, 6, 7, 8, 9];
+
+        for row in dirty_rows {
+            assert!(
+                merged[row].is_empty(),
+                "row {row} (edited) must be blank; got {:?}",
+                merged[row]
+            );
+        }
+        for row in clean_rows {
+            assert!(
+                !merged[row].is_empty(),
+                "row {row} (untouched) must keep blue spans; got {:?}",
+                merged[row]
+            );
+        }
+    }
+
+    /// Row-count mismatch still causes wholesale cache rejection regardless
+    /// of the dirty_rows_log content.
+    #[test]
+    fn merge_partial_full_row_count_mismatch_still_rejects() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let green = Style::default().fg(Color::Green);
+        // Cache has 8 spans but current line_count is 5.
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..8).map(|_| vec![(0usize, 1usize, green)]).collect();
+        let cache = RenderOutput {
+            buffer_id: 3,
+            spans,
+            signs: Vec::new(),
+            key: (10, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        // Even with an empty log the cache must be rejected (row indices wrong).
+        let merged = merge_render_outputs(5, 10, &[], [Some(&cache), None, None]);
+
+        assert_eq!(merged.len(), 5, "merged must have line_count rows");
+        for (row, spans) in merged.iter().enumerate() {
+            assert!(
+                spans.is_empty(),
+                "row {row}: row-count mismatch must blank all rows; got {spans:?}"
             );
         }
     }

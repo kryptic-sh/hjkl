@@ -14138,3 +14138,46 @@ fn dispatch_action_stays_small() {
         "dispatch_action must be < 100 lines, got {line_count}"
     );
 }
+
+/// `sync_after_engine_mutation` must append entries to `dirty_rows_log` whose
+/// `dirty_gen` matches the buffer's current gen and whose row range contains
+/// the row that was edited.
+#[test]
+fn sync_appends_edit_log_with_correct_dirty_gen() {
+    // Open a 5-line buffer.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc\nd\ne");
+    // Flush any edits from seeding so we start with a clean log.
+    app.sync_after_engine_mutation();
+    app.active_mut().dirty_rows_log.clear();
+
+    // Enter Insert mode on row 2 and type 'x' — this produces a ContentEdit
+    // with start_position.0 == 2.
+    app.active_mut().editor.jump_cursor(2, 0);
+    app.sync_viewport_from_editor();
+    enter_insert(&mut app);
+    dik(
+        &mut app,
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    // After sync the log must have at least one entry whose row range
+    // contains row 2, and whose dirty_gen matches the buffer's current gen.
+    let current_dg = app.active().editor.buffer().dirty_gen();
+    let log = &app.active().dirty_rows_log;
+    assert!(
+        !log.is_empty(),
+        "dirty_rows_log must have at least one entry after an edit"
+    );
+    let entry_for_row2 = log
+        .iter()
+        .find(|(dg, range)| *dg == current_dg && range.contains(&2));
+    assert!(
+        entry_for_row2.is_some(),
+        "dirty_rows_log must have an entry with dirty_gen={current_dg} containing row 2; \
+         log={log:?}"
+    );
+}
