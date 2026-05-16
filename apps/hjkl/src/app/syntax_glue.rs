@@ -280,27 +280,15 @@ impl App {
     /// that appears in multiple caches (so the freshest parse of the
     /// current scroll position always takes precedence).
     pub(crate) fn install_merged_spans_for_slot(&mut self, slot_idx: usize) {
+        // (see free fn `merge_render_outputs` below — pure helper, testable
+        // without an Editor.)
         let line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
-        let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
-            vec![Vec::new(); line_count];
-
-        // Order: top → bottom → viewport. Viewport wins for overlapping rows.
         let sources = [
             self.slots[slot_idx].top_render_output.as_ref(),
             self.slots[slot_idx].bottom_render_output.as_ref(),
             self.slots[slot_idx].viewport_render_output.as_ref(),
         ];
-        for out in sources.into_iter().flatten() {
-            for (row, row_spans) in out.spans.iter().enumerate() {
-                if row >= line_count {
-                    break;
-                }
-                if !row_spans.is_empty() {
-                    merged[row] = row_spans.clone();
-                }
-            }
-        }
-
+        let merged = merge_render_outputs(line_count, sources);
         self.slots[slot_idx]
             .editor
             .install_ratatui_syntax_spans(merged);
@@ -678,6 +666,41 @@ impl App {
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)
     }
+}
+
+/// Merge per-row span tables from up to three cached [`RenderOutput`]s into
+/// a single `line_count`-sized table.
+///
+/// Order: `sources` is consumed left-to-right; later sources overwrite
+/// earlier ones for any row that is non-empty in both. App passes
+/// `[top, bottom, viewport]` so the freshest (viewport) wins.
+///
+/// **Stale-shape rejection**: a cached `RenderOutput` whose `spans.len()`
+/// no longer matches `line_count` is silently skipped. After a visual-mode
+/// delete shrinks the buffer, the stale row-7 spans of the pre-delete top
+/// cache would otherwise paint onto whatever now-shorter row happens to
+/// share index 7 — the bug reported 2026-05-16 (highlights for deleted
+/// lines "stick" and break highlighting below the deletion).
+pub(crate) fn merge_render_outputs<'a>(
+    line_count: usize,
+    sources: impl IntoIterator<Item = Option<&'a crate::syntax::RenderOutput>>,
+) -> Vec<Vec<(usize, usize, ratatui::style::Style)>> {
+    let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
+        vec![Vec::new(); line_count];
+    for out in sources.into_iter().flatten() {
+        if out.spans.len() != line_count {
+            continue;
+        }
+        for (row, row_spans) in out.spans.iter().enumerate() {
+            if row >= line_count {
+                break;
+            }
+            if !row_spans.is_empty() {
+                merged[row] = row_spans.clone();
+            }
+        }
+    }
+    merged
 }
 
 /// Number of off-screen rows above/below the visible window to include in the
@@ -1219,6 +1242,42 @@ mod tests {
         // Verify both caches survived.
         assert!(app.slots()[slot_idx].top_render_output.is_some());
         assert!(app.slots()[slot_idx].viewport_render_output.is_some());
+    }
+
+    /// Regression: a cached render output whose row count no longer matches
+    /// the current buffer (e.g. after a visual-mode delete shrank line
+    /// count) must NOT have its spans painted at the old row indices.
+    /// Reported 2026-05-16 — "highlights for deleted lines stay so
+    /// highlights for anything below break".
+    #[test]
+    fn merge_render_outputs_skips_stale_row_count_cache() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let buf_id = 42;
+        let stale_style = Style::default().fg(Color::Red);
+        let mut stale_spans: Vec<Vec<(usize, usize, Style)>> = vec![vec![]; 8];
+        stale_spans[7] = vec![(0usize, 1usize, stale_style)];
+        let stale_top = RenderOutput {
+            buffer_id: buf_id,
+            spans: stale_spans,
+            signs: Vec::new(),
+            key: (0, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        // Buffer shrank to 3 rows; stale top reflects pre-delete 8 rows.
+        let merged = merge_render_outputs(3, [Some(&stale_top), None, None]);
+
+        assert_eq!(merged.len(), 3, "merged length must match line_count");
+        for (row, spans) in merged.iter().enumerate() {
+            assert!(
+                spans.is_empty(),
+                "row {row} must not carry stale-cache spans; got {spans:?}"
+            );
+        }
     }
 
     /// T5 new test: bumping dirty_gen invalidates all three caches.
