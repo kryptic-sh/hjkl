@@ -283,12 +283,13 @@ impl App {
         // (see free fn `merge_render_outputs` below — pure helper, testable
         // without an Editor.)
         let line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
+        let current_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
         let sources = [
             self.slots[slot_idx].top_render_output.as_ref(),
             self.slots[slot_idx].bottom_render_output.as_ref(),
             self.slots[slot_idx].viewport_render_output.as_ref(),
         ];
-        let merged = merge_render_outputs(line_count, sources);
+        let merged = merge_render_outputs(line_count, current_dg, sources);
         self.slots[slot_idx]
             .editor
             .install_ratatui_syntax_spans(merged);
@@ -675,20 +676,30 @@ impl App {
 /// earlier ones for any row that is non-empty in both. App passes
 /// `[top, bottom, viewport]` so the freshest (viewport) wins.
 ///
-/// **Stale-shape rejection**: a cached `RenderOutput` whose `spans.len()`
-/// no longer matches `line_count` is silently skipped. After a visual-mode
-/// delete shrinks the buffer, the stale row-7 spans of the pre-delete top
-/// cache would otherwise paint onto whatever now-shorter row happens to
-/// share index 7 — the bug reported 2026-05-16 (highlights for deleted
-/// lines "stick" and break highlighting below the deletion).
+/// **Staleness rejection** — a cached `RenderOutput` is silently skipped when:
+///
+/// 1. `spans.len() != line_count` — buffer was resized (visual delete,
+///    paste, undo of either) and the cached row indices no longer match.
+/// 2. `key.0 != current_dirty_gen` — buffer was edited within the same
+///    line count (e.g. undo restored line count but content differs at
+///    byte level). Painting stale-byte spans onto fresh content paints
+///    colors at wrong byte offsets within each row.
+///
+/// Both reported 2026-05-16: highlights for deleted lines "stuck" and broke
+/// rows below; tightened on the same day after a delete+undo+delete+undo
+/// cycle reproduced the bug with line counts matching but bytes shifted.
 pub(crate) fn merge_render_outputs<'a>(
     line_count: usize,
+    current_dirty_gen: u64,
     sources: impl IntoIterator<Item = Option<&'a crate::syntax::RenderOutput>>,
 ) -> Vec<Vec<(usize, usize, ratatui::style::Style)>> {
     let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
         vec![Vec::new(); line_count];
     for out in sources.into_iter().flatten() {
         if out.spans.len() != line_count {
+            continue;
+        }
+        if out.key.0 != current_dirty_gen {
             continue;
         }
         for (row, row_spans) in out.spans.iter().enumerate() {
@@ -1269,7 +1280,9 @@ mod tests {
         };
 
         // Buffer shrank to 3 rows; stale top reflects pre-delete 8 rows.
-        let merged = merge_render_outputs(3, [Some(&stale_top), None, None]);
+        // current_dirty_gen matches the stale cache's gen so the only
+        // rejection reason here is the spans.len() mismatch.
+        let merged = merge_render_outputs(3, 0, [Some(&stale_top), None, None]);
 
         assert_eq!(merged.len(), 3, "merged length must match line_count");
         for (row, spans) in merged.iter().enumerate() {
@@ -1277,6 +1290,69 @@ mod tests {
                 spans.is_empty(),
                 "row {row} must not carry stale-cache spans; got {spans:?}"
             );
+        }
+    }
+
+    /// Regression: cached output with matching row count but stale dirty_gen
+    /// (e.g. delete + undo cycle restored line count but bytes shifted)
+    /// must also be skipped — otherwise spans paint at wrong byte offsets
+    /// within each row. Reported 2026-05-16 (second pass).
+    #[test]
+    fn merge_render_outputs_skips_stale_dirty_gen_cache() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let buf_id = 42;
+        let stale_style = Style::default().fg(Color::Red);
+        // Same row count (5) as current buffer, but dirty_gen differs.
+        let stale_spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..5).map(|_| vec![(0usize, 3usize, stale_style)]).collect();
+        let stale_top = RenderOutput {
+            buffer_id: buf_id,
+            spans: stale_spans,
+            signs: Vec::new(),
+            key: (7, 0, 40), // stale dirty_gen = 7
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        // Current dirty_gen is 12 — does NOT match the cache's 7.
+        let merged = merge_render_outputs(5, 12, [Some(&stale_top), None, None]);
+
+        assert_eq!(merged.len(), 5);
+        for (row, spans) in merged.iter().enumerate() {
+            assert!(
+                spans.is_empty(),
+                "row {row} must not carry dirty_gen-stale spans; got {spans:?}"
+            );
+        }
+    }
+
+    /// Sanity: matching row count AND matching dirty_gen → spans installed.
+    #[test]
+    fn merge_render_outputs_accepts_fresh_cache() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        let style = Style::default().fg(Color::Green);
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..3).map(|_| vec![(0usize, 1usize, style)]).collect();
+        let fresh = RenderOutput {
+            buffer_id: 1,
+            spans,
+            signs: Vec::new(),
+            key: (5, 0, 40),
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        let merged = merge_render_outputs(3, 5, [Some(&fresh), None, None]);
+
+        assert_eq!(merged.len(), 3);
+        for spans in &merged {
+            assert!(!spans.is_empty(), "fresh cache spans must be installed");
         }
     }
 
