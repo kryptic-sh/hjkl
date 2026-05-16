@@ -394,11 +394,22 @@ impl App {
         // Per-(buffer_id, kind) queue dedup means re-submitting the same
         // kind on subsequent ticks just replaces the in-flight request.
         // We skip the submit when the cache for that kind is already populated
-        // for the current dirty_gen (avoid redundant work).
+        // AND fresh for the current dirty_gen (avoid redundant work).
+        // A cache that is `Some` but carries a stale dirty_gen is treated
+        // the same as `None` — the merger will reject its spans anyway, so
+        // we must re-submit to get a fresh result.  Not checking this was
+        // the secondary cause of the delete+undo staleness bug: a stale-dg
+        // top/bottom cache prevented re-submission indefinitely.
         {
             let active_idx = self.focused_slot_idx();
-            let needs_top = self.slots[active_idx].top_render_output.is_none();
-            let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
+            let needs_top = self.slots[active_idx]
+                .top_render_output
+                .as_ref()
+                .map_or(true, |o| o.key.0 != dg);
+            let needs_bottom = self.slots[active_idx]
+                .bottom_render_output
+                .as_ref()
+                .map_or(true, |o| o.key.0 != dg);
             let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
 
             if needs_top {
@@ -460,8 +471,18 @@ impl App {
 
             // Top + Bottom for non-active slots — submit alongside Viewport,
             // worker handles FIFO + per-(buffer, kind) dedup.
-            let needs_top = self.slots[slot_idx].top_render_output.is_none();
-            let needs_bottom = self.slots[slot_idx].bottom_render_output.is_none();
+            // Use the same stale-dg check as for the active slot: a cache
+            // that exists but was computed for an old dirty_gen is useless
+            // (merger rejects it) and must be refreshed.
+            let slot_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+            let needs_top = self.slots[slot_idx]
+                .top_render_output
+                .as_ref()
+                .map_or(true, |o| o.key.0 != slot_dg);
+            let needs_bottom = self.slots[slot_idx]
+                .bottom_render_output
+                .as_ref()
+                .map_or(true, |o| o.key.0 != slot_dg);
 
             if needs_top {
                 let (top_range_start, top_range_height) =
@@ -693,8 +714,7 @@ pub(crate) fn merge_render_outputs<'a>(
     current_dirty_gen: u64,
     sources: impl IntoIterator<Item = Option<&'a crate::syntax::RenderOutput>>,
 ) -> Vec<Vec<(usize, usize, ratatui::style::Style)>> {
-    let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
-        vec![Vec::new(); line_count];
+    let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> = vec![Vec::new(); line_count];
     for out in sources.into_iter().flatten() {
         if out.spans.len() != line_count {
             continue;
@@ -1306,8 +1326,9 @@ mod tests {
         let buf_id = 42;
         let stale_style = Style::default().fg(Color::Red);
         // Same row count (5) as current buffer, but dirty_gen differs.
-        let stale_spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..5).map(|_| vec![(0usize, 3usize, stale_style)]).collect();
+        let stale_spans: Vec<Vec<(usize, usize, Style)>> = (0..5)
+            .map(|_| vec![(0usize, 3usize, stale_style)])
+            .collect();
         let stale_top = RenderOutput {
             buffer_id: buf_id,
             spans: stale_spans,
@@ -1426,5 +1447,192 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Regression: a stale-dirty_gen top/bottom cache (`Some` but key.0 ≠ current_dg)
+    /// must be treated the same as `None` for the re-submit decision — otherwise
+    /// top/bottom highlights are never refreshed after any edit.
+    ///
+    /// This is the secondary cause of the delete+undo staleness bug: the old
+    /// `needs_top = is_none()` check left stale caches in place indefinitely,
+    /// meaning the top/bottom regions stayed un-highlighted after any edit.
+    ///
+    /// The test seeds a stale top/bottom cache whose dirty_gen doesn't match the
+    /// current buffer, then verifies that `merge_render_outputs` with the current
+    /// dirty_gen rejects those spans — confirming that a re-submit IS necessary
+    /// and the old `is_none()` guard was insufficient.
+    #[test]
+    fn stale_dg_top_bottom_cache_is_rejected_by_merger_and_needs_resubmit() {
+        use crate::app::syntax_glue::merge_render_outputs;
+        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
+        use ratatui::style::{Color, Style};
+
+        // Simulate: buffer has line_count=5, current_dg=3.
+        // Top cache was computed at dg=1 (two edits ago).
+        // Bottom cache was computed at dg=2 (one edit ago).
+        // Both have the right span count (5) — only dirty_gen differs.
+        let line_count = 5usize;
+        let current_dg = 3u64;
+
+        let stale_style = Style::default().fg(Color::Magenta);
+
+        // Top cache: correct length, STALE dg.
+        let top_spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..line_count).map(|_| vec![(0, 4, stale_style)]).collect();
+        let stale_top = RenderOutput {
+            buffer_id: 7,
+            spans: top_spans,
+            signs: Vec::new(),
+            key: (1, 0, 40), // dg=1 ≠ current_dg=3
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+
+        // Bottom cache: correct length, STALE dg.
+        let bot_spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..line_count).map(|_| vec![(0, 4, stale_style)]).collect();
+        let stale_bottom = RenderOutput {
+            buffer_id: 7,
+            spans: bot_spans,
+            signs: Vec::new(),
+            key: (2, 0, 40), // dg=2 ≠ current_dg=3
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Bottom,
+        };
+
+        // No viewport cache yet (fresh buffer state after undo).
+        let merged = merge_render_outputs(
+            line_count,
+            current_dg,
+            [Some(&stale_top), Some(&stale_bottom), None],
+        );
+
+        // Merger must reject both stale caches — every row must be empty.
+        // This proves that the stale caches are useless AND a re-submit is
+        // required to produce fresh spans.  Before the fix, `needs_top` was
+        // `is_none()` → false → no re-submit → top/bottom rows stayed blank
+        // forever after any edit.  After the fix, a stale-dg cache triggers
+        // re-submission (needs_top = key.0 != current_dg).
+        assert_eq!(merged.len(), line_count);
+        for (row, spans) in merged.iter().enumerate() {
+            assert!(
+                spans.is_empty(),
+                "row {row}: stale-dg top/bottom caches must NOT be painted; \
+                 got {spans:?} — this would produce highlights at wrong byte offsets \
+                 after a delete+undo cycle"
+            );
+        }
+
+        // Confirm: a FRESH top cache (dg=current_dg) IS accepted.
+        let fresh_style = Style::default().fg(Color::Green);
+        let fresh_spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..line_count).map(|_| vec![(0, 4, fresh_style)]).collect();
+        let fresh_top = RenderOutput {
+            buffer_id: 7,
+            spans: fresh_spans,
+            signs: Vec::new(),
+            key: (current_dg, 0, 40), // dg=3 == current_dg ✓
+            perf: PerfBreakdown::default(),
+            kind: ParseKind::Top,
+        };
+        let merged_fresh =
+            merge_render_outputs(line_count, current_dg, [Some(&fresh_top), None, None]);
+        for (row, spans) in merged_fresh.iter().enumerate() {
+            assert!(
+                !spans.is_empty(),
+                "row {row}: fresh top cache must be installed"
+            );
+        }
+    }
+
+    /// Regression: worker must not re-apply stale InputEdits when the retained
+    /// tree already represents the requested dirty_gen.
+    ///
+    /// Without the fix, submitting Top before Viewport for the same dirty_gen
+    /// (which happens when Top replaces an old in-flight entry in the front of
+    /// the parse queue while Viewport is appended at the back) causes:
+    ///   1. Top is processed first: cold-parses from the new source → correct tree.
+    ///   2. Viewport is processed second: `!edits.is_empty()` was true →
+    ///      `tree.edit()` applied with positions from the OLD source → tree
+    ///      corruption → highlight spans with wrong byte offsets.
+    ///
+    /// This test cannot run without a real grammar (the worker drops requests
+    /// with no language attached), so it is gated `#[ignore]`.  Run with
+    /// `cargo test -p hjkl --bin hjkl worker_ordering -- --ignored --nocapture`
+    /// on a machine with grammars installed.
+    #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
+    fn worker_ordering_stale_edits_do_not_corrupt_spans() {
+        use crate::syntax::{BufferId, ParseKind, default_layer};
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::ContentEdit;
+        use std::path::Path;
+        use std::time::Duration;
+
+        const TID: BufferId = 0;
+
+        // Source: a simple rust snippet where the highlight spans have distinct
+        // token boundaries we can check.
+        let initial_src = "fn main() {}\n";
+        let edited_src = "fn xmain() {}\n"; // insert 'x' at byte 3
+
+        let initial_buf = Buffer::from_str(initial_src.trim_end_matches('\n'));
+        let edited_buf = Buffer::from_str(edited_src.trim_end_matches('\n'));
+
+        let edit = ContentEdit {
+            start_byte: 3,
+            old_end_byte: 3,
+            new_end_byte: 4,
+            start_position: (0, 3),
+            old_end_position: (0, 3),
+            new_end_position: (0, 4),
+        };
+
+        // --- Baseline: Viewport-first ordering (correct) ---
+        let mut layer_correct = default_layer();
+        layer_correct.set_language_for_path(TID, Path::new("a.rs"));
+
+        // Initial parse.
+        layer_correct.submit_render(TID, &initial_buf, 0, 40, ParseKind::Viewport);
+        let _ = layer_correct.wait_all_results(Duration::from_secs(5));
+
+        // Apply edit, submit Viewport first (normal production order).
+        layer_correct.apply_edits(TID, &[edit.clone()]);
+        layer_correct.submit_render(TID, &edited_buf, 0, 40, ParseKind::Viewport);
+        let r_viewport_first = layer_correct
+            .wait_all_results(Duration::from_secs(5))
+            .into_iter()
+            .find(|r| r.kind == ParseKind::Viewport)
+            .expect("viewport result");
+
+        // --- Bug path: Top-first ordering (triggers the race) ---
+        let mut layer_buggy = default_layer();
+        layer_buggy.set_language_for_path(TID, Path::new("a.rs"));
+
+        // Initial parse.
+        layer_buggy.submit_render(TID, &initial_buf, 0, 40, ParseKind::Viewport);
+        let _ = layer_buggy.wait_all_results(Duration::from_secs(5));
+
+        // Simulate the race: apply edits, then submit Top FIRST (taking the
+        // edits), then Viewport (empty edits — same as in the real queue race).
+        layer_buggy.apply_edits(TID, &[edit.clone()]);
+        // Top submit consumes the edits.
+        layer_buggy.submit_render(TID, &edited_buf, 0, 40, ParseKind::Top);
+        // Viewport submit gets empty edits (already taken by Top).
+        layer_buggy.submit_render(TID, &edited_buf, 0, 40, ParseKind::Viewport);
+        let results = layer_buggy.wait_all_results(Duration::from_secs(5));
+        let r_top_first = results
+            .into_iter()
+            .find(|r| r.kind == ParseKind::Viewport)
+            .expect("viewport result from top-first ordering");
+
+        // Both orderings must produce identical viewport spans.
+        // Before the worker fix, r_top_first had wrong byte offsets because
+        // Viewport's edits were applied to the tree already built by Top.
+        assert_eq!(
+            r_viewport_first.spans, r_top_first.spans,
+            "Viewport spans must be identical regardless of whether Top or Viewport \
+             was processed first by the worker — stale edits must not corrupt the tree"
+        );
     }
 }

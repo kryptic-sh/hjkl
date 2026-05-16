@@ -446,9 +446,16 @@ fn worker_loop(
                     h.reset();
                     state.last_parsed_dirty_gen = None;
                 }
-                let needs_parse = !req.edits.is_empty()
-                    || h.tree().is_none()
-                    || state.last_parsed_dirty_gen != Some(req.dirty_gen);
+                // Only (re-)parse if the retained tree does not already
+                // represent this dirty_gen.  Non-empty `edits` are applied
+                // below when a parse IS needed; if the tree is already current
+                // they are stale (a prior request for the same dirty_gen
+                // already processed them) and must be discarded — applying
+                // them again would corrupt the tree's node positions, causing
+                // highlight spans with wrong byte offsets for subsequent
+                // requests (the root cause of the delete+undo ordering bug).
+                let needs_parse =
+                    h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
                 if needs_parse {
                     for e in &req.edits {
                         h.edit(e);
