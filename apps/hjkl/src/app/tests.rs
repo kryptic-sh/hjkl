@@ -13383,6 +13383,26 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
     app.route_chord_key(key(KeyCode::Char('=')));
     app.route_chord_key(key(KeyCode::Char('=')));
 
+    // Flash must be armed *immediately* at submit time (before formatter runs).
+    // Top is the viewport's top row, which for a fresh single-line buffer is 0.
+    assert!(
+        app.indent_flash.as_ref().is_some_and(|f| f.top == 0),
+        "flash must be armed at submit time with viewport top = 0"
+    );
+
+    // Format is async — poll until the result lands (cap 5 s).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     // Formatter replaced the buffer — content must differ from original.
     let formatted = app.active().editor.buffer().as_string();
     assert_ne!(
@@ -13393,11 +13413,6 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
     assert!(
         formatted.contains("let x = 1;"),
         "rustfmt output must have spaced assignment, got: {formatted}"
-    );
-    // Flash must cover the whole buffer (top = 0).
-    assert!(
-        app.indent_flash.as_ref().is_some_and(|f| f.top == 0),
-        "flash top must be 0 (whole-buffer) after external format"
     );
     // No error in status message.
     assert!(

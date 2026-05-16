@@ -1874,6 +1874,22 @@ impl App {
 
         self.format_pending.insert(buffer_id);
         self.status_message = Some(format!("{tool_name}: formatting\u{2026}"));
+
+        // Arm the visual flash *immediately* on submit — the user sees
+        // confirmation that `=` was accepted without waiting for the
+        // (possibly multi-second) formatter to complete. Range is the
+        // currently-visible viewport rows, so it covers whatever the
+        // user is looking at.
+        let vp = self.active().editor.host().viewport();
+        let line_count = self.active().editor.buffer().row_count();
+        let top = vp.top_row as usize;
+        let height = vp.height as usize;
+        let bot = (top + height.saturating_sub(1)).min(line_count.saturating_sub(1));
+        self.indent_flash = Some(IndentFlash {
+            top,
+            bot,
+            started_at: Instant::now(),
+        });
         true
     }
 
@@ -1931,14 +1947,10 @@ impl App {
                     // which sync_after_engine_mutation picks up for the syntax layer.
                     self.slots[slot_idx].editor.set_content(&content);
 
-                    // Flash the whole buffer as visual confirmation.
-                    let line_count = self.slots[slot_idx].editor.buffer().row_count();
-                    let bot = line_count.saturating_sub(1);
-                    self.indent_flash = Some(IndentFlash {
-                        top: 0,
-                        bot,
-                        started_at: Instant::now(),
-                    });
+                    // Note: the indent flash was armed at submit time in
+                    // `submit_external_format` so the user gets immediate
+                    // feedback. We don't re-arm here — that would push the
+                    // flash window past the formatter latency on big files.
 
                     // Clear the "formatting…" status.
                     if self
