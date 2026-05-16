@@ -532,9 +532,27 @@ impl App {
             None => true,
             Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
         };
-        // Cold = no prior viewport render output cached for this buffer
-        // (worker has never returned spans for it, so its tree is unbuilt).
-        let is_cold = self.active().viewport_render_output.is_none();
+        // Cold = the DESTINATION region of the jump has no cached spans.
+        // Three sub-cases:
+        // - Jump to top (vp_top < h): need top_render_output.
+        // - Jump to bottom (vp_top + h >= line_count): need bottom_render_output.
+        // - Jump to mid: need viewport_render_output (it's about to be
+        //   replaced, but its presence proves the worker has a warm tree).
+        //
+        // Pre-fix this only checked viewport_render_output, so the first `G`
+        // after open detected as warm (top viewport just installed) and used
+        // the 40 ms cap — bottom parse hadn't completed yet → flash.
+        let active_line_count = self.active().editor.buffer().line_count() as usize;
+        let jumps_to_top = top < height;
+        let jumps_to_bottom = top + height >= active_line_count;
+        let destination_cached = if jumps_to_top {
+            self.active().top_render_output.is_some()
+        } else if jumps_to_bottom {
+            self.active().bottom_render_output.is_some()
+        } else {
+            self.active().viewport_render_output.is_some()
+        };
+        let is_cold = !destination_cached;
         let big_jump_wait = if is_cold {
             COLD_JUMP_WAIT
         } else {
