@@ -492,9 +492,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // We call `indent_flash_active` on the shared App state here rather than
     // passing a pre-computed value so the expiry check happens at render time
     // (the same instant the user sees the frame).
-    if is_focused
-        && let Some((flash_top, flash_bot)) = app.indent_flash_active()
-    {
+    if is_focused && let Some((flash_top, flash_bot)) = app.indent_flash_active() {
         let flash_bg = app.theme.ui.indent_flash_bg;
         let flash_style = Style::default().bg(flash_bg);
         let buf = frame.buffer_mut();

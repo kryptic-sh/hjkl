@@ -626,9 +626,14 @@ pub(crate) struct HoverTimer {
     pub request_sent: bool,
 }
 
-/// How long the auto-indent flash overlay stays visible. Instant on, instant
-/// off — no fade. Matches neovim's `vim.hl.on_yank` default duration.
-pub(crate) const INDENT_FLASH_DURATION: Duration = Duration::from_millis(150);
+/// Duration of one phase of the auto-indent flash. Two on-phases separated
+/// by one off-phase produce the visible "blink twice" pattern. Total visible
+/// time is `INDENT_FLASH_PHASE * 4` (on, off, on, off→cleared). Instant
+/// transitions — no fade.
+pub(crate) const INDENT_FLASH_PHASE: Duration = Duration::from_millis(75);
+
+/// Total flash lifetime — on, off, on, off-and-clear (4 × phase = 300 ms).
+pub(crate) const INDENT_FLASH_DURATION: Duration = Duration::from_millis(300);
 
 /// Visual flash state set immediately after an `=` / `==` / `=G` / Visual-`=`
 /// auto-indent operation. The renderer paints a highlight bg over rows
@@ -1754,19 +1759,27 @@ impl App {
         self.recompute_and_install();
     }
 
-    /// Return the active auto-indent flash row range `(top, bot)` if the
-    /// [`INDENT_FLASH_DURATION`] window has not yet elapsed, otherwise clear
-    /// the stored flash and return `None`.
+    /// Return the active auto-indent flash row range `(top, bot)` ONLY
+    /// during the visible "on" phases of the blink pattern.
     ///
-    /// Called by the renderer on every frame (no-op when `None`) and by the
-    /// event-loop tick to expire the flash even when no key is pressed.
+    /// Pattern (4 × [`INDENT_FLASH_PHASE`] = [`INDENT_FLASH_DURATION`]):
+    /// - phase 0: on  ← rendered
+    /// - phase 1: off ← not rendered (gap)
+    /// - phase 2: on  ← rendered (second blink)
+    /// - phase 3: off → flash cleared at end
+    ///
+    /// Renderer calls this every frame; event-loop tick also calls it to
+    /// expire the flash even when no key is pressed.
     pub(crate) fn indent_flash_active(&mut self) -> Option<(usize, usize)> {
-        let expired = self
-            .indent_flash
-            .as_ref()
-            .is_some_and(|f| f.started_at.elapsed() >= INDENT_FLASH_DURATION);
-        if expired {
+        let elapsed = self.indent_flash.as_ref().map(|f| f.started_at.elapsed())?;
+        if elapsed >= INDENT_FLASH_DURATION {
             self.indent_flash = None;
+            return None;
+        }
+        let phase = elapsed.as_millis() / INDENT_FLASH_PHASE.as_millis();
+        // On-phases: 0 and 2. Off-phases: 1 and 3.
+        if !phase.is_multiple_of(2) {
+            return None;
         }
         self.indent_flash.as_ref().map(|f| (f.top, f.bot))
     }

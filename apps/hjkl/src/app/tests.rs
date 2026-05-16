@@ -13076,8 +13076,8 @@ fn visual_line_eq_reindents_selected_lines() {
 // ── IndentFlash app-level tests ───────────────────────────────────────────────
 
 #[test]
-fn indent_flash_active_returns_range_within_window() {
-    // Set a fresh IndentFlash — started_at = now — and confirm active() returns it.
+fn indent_flash_active_returns_range_within_first_on_phase() {
+    // Set a fresh IndentFlash — started_at = now → in the first on-phase.
     let mut app = App::new(None, false, None, None).unwrap();
     app.indent_flash = Some(IndentFlash {
         top: 2,
@@ -13087,23 +13087,55 @@ fn indent_flash_active_returns_range_within_window() {
     assert_eq!(
         app.indent_flash_active(),
         Some((2, 5)),
-        "indent_flash_active must return Some while within the 150 ms window"
+        "indent_flash_active must return Some during the first on-phase"
     );
-    // Field must still be set (not cleared yet — timer hasn't expired).
     assert!(
         app.indent_flash.is_some(),
-        "indent_flash field must survive while timer is active"
+        "indent_flash field must survive while flash is alive"
     );
 }
 
 #[test]
-fn indent_flash_active_returns_none_after_expiry() {
-    // Set an IndentFlash with started_at > 150 ms in the past → must expire.
+fn indent_flash_active_returns_none_during_off_phase() {
+    // Phase math: 0..75ms = on, 75..150ms = off, 150..225ms = on, 225..300ms = off.
+    // Pick mid-off-phase: 100ms elapsed → off (returns None) but field still alive.
     let mut app = App::new(None, false, None, None).unwrap();
     app.indent_flash = Some(IndentFlash {
         top: 0,
         bot: 3,
-        started_at: Instant::now() - Duration::from_millis(200),
+        started_at: Instant::now() - Duration::from_millis(100),
+    });
+    assert_eq!(
+        app.indent_flash_active(),
+        None,
+        "indent_flash_active must return None during the off-phase between blinks"
+    );
+    assert!(
+        app.indent_flash.is_some(),
+        "indent_flash field must NOT be cleared during the off-gap"
+    );
+}
+
+#[test]
+fn indent_flash_active_returns_some_during_second_on_phase() {
+    // 175ms elapsed → second on-phase.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.indent_flash = Some(IndentFlash {
+        top: 1,
+        bot: 4,
+        started_at: Instant::now() - Duration::from_millis(175),
+    });
+    assert_eq!(app.indent_flash_active(), Some((1, 4)));
+}
+
+#[test]
+fn indent_flash_active_returns_none_after_total_expiry() {
+    // Set started_at > INDENT_FLASH_DURATION (300ms) in the past → fully expired.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.indent_flash = Some(IndentFlash {
+        top: 0,
+        bot: 3,
+        started_at: Instant::now() - Duration::from_millis(400),
     });
     assert_eq!(
         app.indent_flash_active(),
@@ -13112,7 +13144,7 @@ fn indent_flash_active_returns_none_after_expiry() {
     );
     assert!(
         app.indent_flash.is_none(),
-        "indent_flash field must be cleared on expiry"
+        "indent_flash field must be cleared on full expiry"
     );
 }
 
