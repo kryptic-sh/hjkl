@@ -199,7 +199,11 @@ fn parse_edition_from_cargo_toml(text: &str) -> Option<String> {
             current_table = rest.trim().to_string();
             continue;
         }
+        // Match `edition = "..."` ONLY. Reject `edition.workspace = true`
+        // (the workspace-inheritance shorthand) — that would parse as
+        // edition=true and rustfmt rejects "Invalid value for --edition".
         if let Some(rest) = line.strip_prefix("edition")
+            && rest.starts_with(|c: char| c.is_whitespace() || c == '=')
             && let Some(eq_idx) = rest.find('=')
         {
             let val = rest[eq_idx + 1..]
@@ -269,6 +273,41 @@ name = "x"
 edition = "2024"
 "#;
         assert_eq!(parse_edition_from_cargo_toml(toml).as_deref(), Some("2024"));
+    }
+
+    /// Regression: `edition.workspace = true` is the workspace-inheritance
+    /// shorthand (used by every member crate in a workspace) and must NOT be
+    /// matched as `edition = true` — rustfmt rejects "Invalid value for --edition".
+    #[test]
+    fn parse_edition_ignores_dot_workspace_shorthand() {
+        let toml = r#"
+[package]
+name = "x"
+edition.workspace = true
+"#;
+        assert_eq!(
+            parse_edition_from_cargo_toml(toml),
+            None,
+            "edition.workspace shorthand must NOT match the bare `edition = ...` rule"
+        );
+    }
+
+    /// And when both a member crate's Cargo.toml has the shorthand AND a
+    /// workspace root has a real `[workspace.package].edition`, the walk-up
+    /// must skip the shorthand-only file and find the real value above.
+    #[test]
+    fn parse_edition_workspace_inheritance_resolves_to_workspace_edition() {
+        let member = r#"
+[package]
+name = "member"
+edition.workspace = true
+"#;
+        let root = r#"
+[workspace.package]
+edition = "2024"
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(member), None);
+        assert_eq!(parse_edition_from_cargo_toml(root).as_deref(), Some("2024"));
     }
 }
 
