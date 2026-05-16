@@ -13221,6 +13221,19 @@ fn auto_indent_gg_eq_g_invokes_rustfmt() {
     app.route_chord_key(key(KeyCode::Char('=')));
     app.route_chord_key(key(KeyCode::Char('G')));
 
+    // Format is now async — poll until the result lands (cap 5 s).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     let after = app.active().editor.buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
@@ -13266,6 +13279,19 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
     // Drive `==` via the production chord path.
     app.route_chord_key(key(KeyCode::Char('=')));
     app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Format is now async — poll until the result lands (cap 5 s).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 
     let after = app.active().editor.buffer().as_string();
     let _ = std::fs::remove_file(&path);

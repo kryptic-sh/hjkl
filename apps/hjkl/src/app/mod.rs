@@ -17,6 +17,7 @@ use crate::keymap_actions::AppAction;
 use crate::git_worker::GitSignsWorker;
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
+use std::collections::HashSet;
 
 mod buffer_ops;
 mod event_loop;
@@ -480,6 +481,14 @@ pub struct App {
     syntax: SyntaxLayer,
     /// Background worker for git diff-sign computation.
     git_worker: GitSignsWorker,
+    /// Background worker for external formatter invocations (`=` / `==`).
+    /// Moves blocking subprocess calls off the UI thread (#118).
+    pub(crate) format_worker: hjkl_mangler::FormatWorker,
+    /// Buffer ids for which a format job is currently in-flight.
+    /// Used to show a "formatting…" status indicator and to skip redundant
+    /// submits (the worker's per-buffer dedup is the hard guarantee; this
+    /// set is advisory UI state).
+    pub(crate) format_pending: HashSet<BufferId>,
     /// Shared grammar resolver. `Arc` so the syntax layer and every picker
     /// source point at the same in-memory `Grammar` cache (one dlopen +
     /// query parse per language, app-wide).
@@ -1807,17 +1816,17 @@ impl App {
     /// synchronous subprocess invocation.  Async invocation is tracked in #118.
     ///
     /// Returns `true` if the formatter ran successfully and the buffer was
-    /// replaced; `false` means the caller should fall back to the dumb
-    /// `auto_indent_range` algo.
+    /// Submit an async format job for the active buffer.
     ///
-    /// On success the indent flash is set to cover the whole buffer so the
-    /// user gets the same visual confirmation as the dumb-algo path.
+    /// Returns `true` when a formatter was found and the job was submitted
+    /// (caller should skip the dumb `auto_indent_range` fallback and wait
+    /// for `poll_format_results` to install the result).
     ///
-    /// On error a status message is set and the buffer is left unchanged.
-    pub(crate) fn try_external_format(&mut self) -> bool {
+    /// Returns `false` when no formatter is registered for the active
+    /// buffer's extension — caller should run the dumb fallback immediately.
+    pub(crate) fn submit_external_format(&mut self) -> bool {
         use hjkl_mangler::formatter_for_path;
 
-        // Snapshot filename before borrowing active_mut.
         let filename = self.active().filename.clone();
         let Some(ref path) = filename else {
             return false;
@@ -1827,10 +1836,20 @@ impl App {
             return false;
         };
 
-        // Snapshot buffer content.
-        let source = self.active().editor.buffer().as_string();
+        let tool_name = {
+            // Peek at the formatter's tool name via the FormatError::NotInstalled
+            // path — a quick probe that never spawns a subprocess.
+            // Simpler: derive from the path extension for the status message.
+            path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("formatter")
+                .to_owned()
+        };
 
-        // Determine project root from the file's parent dir.
+        let source = std::sync::Arc::new(self.active().editor.buffer().as_string());
+        let dirty_gen = self.active().editor.buffer().dirty_gen();
+        let buffer_id = self.active().buffer_id;
+
         let parent = path
             .parent()
             .map(|p| p.to_owned())
@@ -1840,41 +1859,118 @@ impl App {
         tracing::debug!(
             file = %path.display(),
             root = %project_root.display(),
-            "trying external formatter"
+            buffer_id,
+            dirty_gen,
+            "submitting async format job"
         );
 
-        match formatter.format(&source, &project_root) {
-            Ok(formatted) => {
-                // Strip trailing newline that many formatters add — the
-                // buffer does not store a trailing newline (same as load).
-                let content = formatted.strip_suffix('\n').unwrap_or(&formatted);
-                // Use set_content (not BufferEdit::replace_all on the raw buffer)
-                // so the engine sets pending_content_reset = true, which
-                // sync_after_engine_mutation picks up to notify the syntax layer.
-                self.active_mut().editor.set_content(content);
-                // Set the flash to cover the whole buffer.
-                let line_count = self.active().editor.buffer().row_count();
-                let bot = line_count.saturating_sub(1);
-                self.indent_flash = Some(IndentFlash {
-                    top: 0,
-                    bot,
-                    started_at: Instant::now(),
-                });
-                // Propagate dirty/syntax/LSP state.  Must be called here
-                // because the visual-op dispatch arms that call us don't
-                // call sync_after_engine_mutation themselves.
-                self.sync_after_engine_mutation();
-                true
+        self.format_worker.submit(hjkl_mangler::FormatJob {
+            buffer_id,
+            source,
+            project_root,
+            formatter,
+            dirty_gen,
+        });
+
+        self.format_pending.insert(buffer_id);
+        self.status_message = Some(format!("{tool_name}: formatting\u{2026}"));
+        true
+    }
+
+    /// Drain completed format results from the worker and install them.
+    ///
+    /// Called once per event-loop tick alongside `poll_git_signs` /
+    /// `drain_lsp_events`. Returns `true` when at least one result was
+    /// installed and a redraw is needed.
+    pub(crate) fn poll_format_results(&mut self) -> bool {
+        let mut redraw = false;
+        while let Some(result) = self.format_worker.try_recv() {
+            self.format_pending.remove(&result.buffer_id);
+
+            // Find the slot — may have been closed since submit; drop if so.
+            let Some(slot_idx) = self
+                .slots
+                .iter()
+                .position(|s| s.buffer_id == result.buffer_id)
+            else {
+                tracing::debug!(
+                    buffer_id = result.buffer_id,
+                    "format result for closed buffer; dropping"
+                );
+                continue;
+            };
+
+            // Stale check: if the buffer was mutated after the job was
+            // submitted, drop the result — the user will re-trigger `=`.
+            let current_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+            if current_dg != result.dirty_gen {
+                tracing::debug!(
+                    buffer_id = result.buffer_id,
+                    submitted_gen = result.dirty_gen,
+                    current_gen = current_dg,
+                    "format result stale; dropping"
+                );
+                // Clear the "formatting…" status only if it's still ours.
+                if self
+                    .status_message
+                    .as_deref()
+                    .is_some_and(|m| m.ends_with("formatting\u{2026}"))
+                {
+                    self.status_message = None;
+                }
+                continue;
             }
-            Err(hjkl_mangler::FormatError::NotInstalled(name)) => {
-                self.status_message = Some(format!("{name}: not installed"));
-                false
-            }
-            Err(e) => {
-                self.status_message = Some(format!("formatter: {e}"));
-                false
+
+            match result.result {
+                Ok(formatted) => {
+                    let content = formatted
+                        .strip_suffix('\n')
+                        .unwrap_or(&formatted)
+                        .to_owned();
+                    // set_content so the engine sets pending_content_reset = true,
+                    // which sync_after_engine_mutation picks up for the syntax layer.
+                    self.slots[slot_idx].editor.set_content(&content);
+
+                    // Flash the whole buffer as visual confirmation.
+                    let line_count = self.slots[slot_idx].editor.buffer().row_count();
+                    let bot = line_count.saturating_sub(1);
+                    self.indent_flash = Some(IndentFlash {
+                        top: 0,
+                        bot,
+                        started_at: Instant::now(),
+                    });
+
+                    // Clear the "formatting…" status.
+                    if self
+                        .status_message
+                        .as_deref()
+                        .is_some_and(|m| m.ends_with("formatting\u{2026}"))
+                    {
+                        self.status_message = None;
+                    }
+
+                    // Propagate dirty/syntax/LSP state — same as the old sync path.
+                    // Only do this when the formatted slot is the active one,
+                    // otherwise we'd pollute the active editor's syntax state.
+                    let active_bid = self.active().buffer_id;
+                    if result.buffer_id == active_bid {
+                        self.sync_after_engine_mutation();
+                    }
+
+                    redraw = true;
+                    tracing::debug!(buffer_id = result.buffer_id, "format result installed");
+                }
+                Err(hjkl_mangler::FormatError::NotInstalled(name)) => {
+                    self.status_message = Some(format!("{name}: not installed"));
+                    redraw = true;
+                }
+                Err(e) => {
+                    self.status_message = Some(format!("formatter: {e}"));
+                    redraw = true;
+                }
             }
         }
+        redraw
     }
 
     // ── Count-prefix helpers ──────────────────────────────────────────────
@@ -2338,6 +2434,8 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             syntax,
             git_worker: GitSignsWorker::new(),
+            format_worker: hjkl_mangler::FormatWorker::spawn(),
+            format_pending: HashSet::new(),
             directory,
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -2972,9 +3070,9 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-block =: try external formatter first.
-                                // BLOCKS up to 2 s (sync subprocess — see #118).
-                                if !self.try_external_format() {
+                                // Visual-block =: submit async formatter; fall back
+                                // to dumb algo when no formatter is registered.
+                                if !self.submit_external_format() {
                                     self.active_mut()
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
@@ -3034,9 +3132,9 @@ impl App {
                                     .indent_range(start, end, -(n as i32), 0);
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-charwise =: try external formatter first.
-                                // BLOCKS up to 2 s (sync subprocess — see #118).
-                                if !self.try_external_format() {
+                                // Visual-charwise =: submit async formatter; fall back
+                                // to dumb algo when no formatter is registered.
+                                if !self.submit_external_format() {
                                     self.active_mut().editor.auto_indent_range(start, end);
                                     if let Some((top, bot)) =
                                         self.active_mut().editor.take_last_indent_range()
@@ -3115,9 +3213,9 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-line =: try external formatter first.
-                                // BLOCKS up to 2 s (sync subprocess — see #118).
-                                if !self.try_external_format() {
+                                // Visual-line =: submit async formatter; fall back
+                                // to dumb algo when no formatter is registered.
+                                if !self.submit_external_format() {
                                     self.active_mut()
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
@@ -3778,10 +3876,10 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
-                        // AutoIndent with motion (=<motion>): try external formatter first.
-                        // BLOCKS up to 2 s (sync subprocess — see #118 for async).
-                        let used_formatter =
-                            op == hjkl_vim::OperatorKind::AutoIndent && self.try_external_format();
+                        // AutoIndent with motion (=<motion>): submit async formatter.
+                        // Falls back to dumb algo when no formatter is registered.
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent
+                            && self.submit_external_format();
                         if !used_formatter {
                             self.active_mut().editor.apply_op_motion(
                                 event_loop::op_kind_to_operator(op),
@@ -3803,10 +3901,10 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
                         self.pending_state = None;
-                        // AutoIndent (==): try external formatter first.
-                        // BLOCKS up to 2 s (sync subprocess — see #118 for async).
-                        let used_formatter =
-                            op == hjkl_vim::OperatorKind::AutoIndent && self.try_external_format();
+                        // AutoIndent (==): submit async formatter.
+                        // Falls back to dumb algo when no formatter is registered.
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent
+                            && self.submit_external_format();
                         if !used_formatter {
                             self.active_mut()
                                 .editor

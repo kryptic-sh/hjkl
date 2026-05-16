@@ -199,6 +199,9 @@ impl App {
             // them up; we don't force a dedicated redraw here to avoid a busy loop.
             let _ = self.poll_git_signs();
 
+            // Install any completed async format results (#118).
+            let _ = self.poll_format_results();
+
             // Poll any in-flight anvil install jobs and surface status toasts.
             let _ = self.poll_anvil_jobs();
 
