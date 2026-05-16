@@ -328,15 +328,25 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .chain(app.slots()[slot_idx].git_signs.iter())
         .any(|s| s.row >= pre_vp_top && s.row < pre_vp_bot);
 
-    let gw = full_gutter_width(
+    let sign_w: u16 = match scl {
+        hjkl_engine::types::SignColumnMode::Yes => 1,
+        hjkl_engine::types::SignColumnMode::No => 0,
+        hjkl_engine::types::SignColumnMode::Auto => {
+            if has_visible_signs {
+                1
+            } else {
+                0
+            }
+        }
+    };
+    let fold_w = fdc.min(12) as u16;
+    let num_gw_for_text = gutter_width(
         app.slots()[slot_idx].editor.buffer().line_count() as usize,
         nu,
         rnu,
         nuw,
-        scl,
-        fdc,
-        has_visible_signs,
     );
+    let gw = sign_w + num_gw_for_text + fold_w;
     let text_width = area.width.saturating_sub(gw);
 
     // For the focused window: publish viewport dims into the engine so
@@ -360,19 +370,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         (false, true) => GutterNumbers::Relative { cursor_row },
         (true, true) => GutterNumbers::Hybrid { cursor_row },
     };
-    // Number-column width only (gutter widget doesn't know about sign/fold cells).
+    // Number-column width only (sign/fold widths are tracked separately).
     let num_gw = gutter_width(
         app.slots()[slot_idx].editor.buffer().line_count() as usize,
         nu,
         rnu,
         nuw,
     );
-    let gutter = if num_gw > 0 {
+    let gutter = if num_gw > 0 || sign_w > 0 {
         Some(Gutter {
             width: num_gw,
             style: Style::default().fg(app.theme.ui.gutter),
             line_offset: 0,
             numbers,
+            sign_column_width: sign_w,
         })
     } else {
         None
@@ -500,17 +511,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let screen_height = area.height;
         // Constrain to the TEXT area only — the flash overlay must not bleed
         // into the gutter. The buffer renderer paints text starting at
-        // `area.x + num_gw` (signs overlay the gutter cell, fold column is
-        // reserved but never painted), so the flash must start there too.
+        // `area.x + sign_w + num_gw` (dedicated sign column + number column).
         // Without this, the gutter and text area share the same flash bg
         // and the cursor visually appears to sit "in the gutter".
-        let num_gw = gutter_width(
-            app.slots()[slot_idx].editor.buffer().line_count() as usize,
-            nu,
-            rnu,
-            nuw,
-        );
-        let text_x = area.x + num_gw;
+        let text_x = area.x + sign_w + num_gw;
         let text_right = area.x + area.width;
         // Clamp flash range to visible rows.
         let vis_start = flash_top.max(vp_top);
@@ -530,10 +534,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // Emit the terminal cursor only for the focused window.
+    // extra_gutter_width = sign_w + fold_w (cells left of number column).
     if show_cursor
         && let Some((cx, cy)) = app.slots_mut()[slot_idx]
             .editor
-            .cursor_screen_pos_in_rect(area)
+            .cursor_screen_pos_in_rect(area, sign_w + fold_w)
     {
         frame.set_cursor_position((cx, cy));
     }

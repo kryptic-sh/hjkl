@@ -160,28 +160,44 @@ fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwid
     needed.max(numberwidth) as u16
 }
 
+fn sign_column_width(
+    signcolumn: hjkl_engine::types::SignColumnMode,
+    has_visible_signs: bool,
+) -> u16 {
+    match signcolumn {
+        hjkl_engine::types::SignColumnMode::Yes => 1,
+        hjkl_engine::types::SignColumnMode::No => 0,
+        hjkl_engine::types::SignColumnMode::Auto => {
+            if has_visible_signs {
+                1
+            } else {
+                0
+            }
+        }
+    }
+}
+
 /// Width of the non-text region on the left edge of a window — the cells the
 /// renderer reserves before the first text cell.
 ///
-/// Despite hjkl's `full_gutter_width` accounting model in `apps/hjkl/src/render.rs`
-/// (which reserves `num + sign + fold` cells), the actual `BufferWidget` renderer
-/// in `hjkl-buffer/src/render.rs:222` paints text starting at `area.x + num_gw`
-/// — signs OVERLAY the leftmost gutter cell (`paint_signs` paints at `area.x`),
-/// they do not push text right. The fold column is reserved in width math but
-/// never actually painted.
+/// With the dedicated sign column layout, text starts at
+/// `area.x + sign_w + num_gw` (sign column to the far left, then number
+/// column, then text). The fold column is reserved in width math but
+/// never actually painted, so it is not included here.
 ///
-/// `cell_to_doc` must use this — NOT the renderer's accounting `full_gutter_width`
-/// — or clicks land off-by-`sign_w + fold_w` when a sign is visible or
-/// `foldcolumn > 0`.
-///
-/// Regression test: `cell_to_doc_with_visible_sign_first_text_cell_still_maps_to_col_zero`.
+/// `cell_to_doc` and `hit_test_zone` must use this so mouse clicks map
+/// to the correct document coordinates.
 fn text_start_offset(
     line_count: usize,
     number: bool,
     relativenumber: bool,
     numberwidth: usize,
+    signcolumn: hjkl_engine::types::SignColumnMode,
+    has_visible_signs: bool,
 ) -> u16 {
-    gutter_width(line_count, number, relativenumber, numberwidth)
+    let num_w = gutter_width(line_count, number, relativenumber, numberwidth);
+    let sign_w = sign_column_width(signcolumn, has_visible_signs);
+    num_w + sign_w
 }
 
 // ── cell_to_doc ───────────────────────────────────────────────────────────────
@@ -216,7 +232,17 @@ pub fn cell_to_doc(
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
-    let gw = text_start_offset(line_count, nu, rnu, nuw);
+    // Compute sign-column visibility for this window's viewport.
+    let vp_top = vp.top_row;
+    let vp_bot = vp_top + rect.height as usize;
+    let has_visible_signs = slot
+        .diag_signs
+        .iter()
+        .chain(slot.diag_signs_lsp.iter())
+        .chain(slot.git_signs.iter())
+        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
+
+    let gw = text_start_offset(line_count, nu, rnu, nuw, s.signcolumn, has_visible_signs);
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -712,7 +738,17 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
-    let gw = text_start_offset(line_count, nu, rnu, nuw);
+    // Compute sign-column visibility for this window.
+    let vp_top = vp.top_row;
+    let vp_bot = vp_top + rect.height as usize;
+    let has_visible_signs = slot
+        .diag_signs
+        .iter()
+        .chain(slot.diag_signs_lsp.iter())
+        .chain(slot.git_signs.iter())
+        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
+
+    let gw = text_start_offset(line_count, nu, rnu, nuw, s.signcolumn, has_visible_signs);
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
@@ -912,17 +948,19 @@ mod tests {
         );
     }
 
-    /// Regression: when a sign is visible in the viewport, the renderer paints
-    /// the sign char at `area.x` (overwriting the first gutter digit) — text
-    /// still renders at `area.x + num_gw`. Pre-fix, `cell_to_doc` included
-    /// `sign_w` in its gutter computation and treated the first text cell as
-    /// gutter (returning `None` or mapping clicks +1 char to the right).
+    /// With the dedicated sign-column layout, when a sign is visible, the
+    /// sign occupies a SEPARATE column to the left of the number column.
+    /// num_gw=4 (5-line buffer, numberwidth=4), sign_w=1 (auto + visible sign)
+    /// → text starts at cell 5 (sign_w + num_gw = 1 + 4).
     ///
-    /// User-visible symptom: "buffer with less than 100 lines, clicks are off
-    /// by 1 char to the right" — small buffers more often have a visible LSP
-    /// diagnostic sign (auto signcolumn = visible when any sign in viewport).
+    /// Pre-fix (overlay model): signs painted at area.x, text still at
+    /// area.x + num_gw (cell 4). A click on cell 4 was already text col 0.
+    ///
+    /// Post-fix (dedicated column): the sign has its own cell (x=0); text
+    /// starts at x=5, so a click on cell 4 is now IN the gutter and
+    /// returns None, and a click on cell 5 is the first text cell (col 0).
     #[test]
-    fn cell_to_doc_with_visible_sign_first_text_cell_still_maps_to_col_zero() {
+    fn cell_to_doc_with_visible_sign_first_text_cell_is_at_sign_w_plus_num_gw() {
         use hjkl_buffer::Sign;
         use ratatui::style::Style;
 
@@ -937,20 +975,25 @@ mod tests {
             priority: 10,
         });
 
-        // num_gw = 4. With a visible sign, the renderer STILL paints text at
-        // cell 4 (signs overpaint the gutter, they don't push text right).
-        let got = cell_to_doc(&app, 0, 4, 0);
+        // sign_w=1 (auto + visible sign), num_gw=4 → text starts at cell 5.
+        // Click on cell 4 is inside the gutter → None.
+        let got_gutter = cell_to_doc(&app, 0, 4, 0);
+        assert_eq!(
+            got_gutter, None,
+            "cell 4 is in the gutter (sign col=0, num col=1..4, spacer=4); got {got_gutter:?}"
+        );
+
+        // Click on cell 5 is the first text cell → (row=0, col=0).
+        let got = cell_to_doc(&app, 0, 5, 0);
         assert_eq!(
             got,
             Some((0, 0)),
-            "click on the first text cell (col=4) with a visible sign should still map to (row=0, col=0); \
-             got {got:?} — if Some((0, 1)) or None, the mouse code is including sign_w in the gutter offset \
-             but the renderer paints signs as an overlay (paint_signs at area.x in hjkl-buffer/src/render.rs:530)"
+            "click on the first text cell (col=5 = sign_w+num_gw) should map to (row=0, col=0); got {got:?}"
         );
 
-        // Click on the second text cell maps to col=1.
-        let got2 = cell_to_doc(&app, 0, 5, 0);
-        assert_eq!(got2, Some((0, 1)), "click on cell 5 should map to col 1");
+        // Click on cell 6 maps to col=1.
+        let got2 = cell_to_doc(&app, 0, 6, 0);
+        assert_eq!(got2, Some((0, 1)), "click on cell 6 should map to col 1");
     }
 
     // ── Buffer line zone ──────────────────────────────────────────────────────
