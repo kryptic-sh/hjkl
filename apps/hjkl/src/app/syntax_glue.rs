@@ -406,11 +406,11 @@ impl App {
             let needs_top = self.slots[active_idx]
                 .top_render_output
                 .as_ref()
-                .map_or(true, |o| o.key.0 != dg);
+                .is_none_or(|o| o.key.0 != dg);
             let needs_bottom = self.slots[active_idx]
                 .bottom_render_output
                 .as_ref()
-                .map_or(true, |o| o.key.0 != dg);
+                .is_none_or(|o| o.key.0 != dg);
             let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
 
             if needs_top {
@@ -479,11 +479,11 @@ impl App {
             let needs_top = self.slots[slot_idx]
                 .top_render_output
                 .as_ref()
-                .map_or(true, |o| o.key.0 != slot_dg);
+                .is_none_or(|o| o.key.0 != slot_dg);
             let needs_bottom = self.slots[slot_idx]
                 .bottom_render_output
                 .as_ref()
-                .map_or(true, |o| o.key.0 != slot_dg);
+                .is_none_or(|o| o.key.0 != slot_dg);
 
             if needs_top {
                 let (top_range_start, top_range_height) =
