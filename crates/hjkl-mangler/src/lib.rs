@@ -33,6 +33,19 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+// ── Range types ───────────────────────────────────────────────────────────────
+
+/// Row range for partial-file install after formatting (inclusive on both ends).
+///
+/// Row indices are 0-based and refer to the buffer's line numbering. Both
+/// fields are public so callers can construct values directly without a
+/// constructor. The range is semantically closed: `start_row..=end_row`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeSpec {
+    pub start_row: usize,
+    pub end_row: usize,
+}
+
 /// Maximum time we wait for a formatter subprocess before giving up.
 /// 30 s is generous enough for rustfmt on very large files (10k+ LOC)
 /// without making a hung formatter feel permanent.
@@ -133,7 +146,10 @@ pub fn probe_tool(tool: &str) -> Result<(), String> {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!(
             "spawned but exited {}",
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".into())
         )),
         Err(e) => Err(format!("spawn failed: {} ({:?})", e, e.kind())),
     }
@@ -590,6 +606,11 @@ pub struct FormatJob {
     /// results whose `dirty_gen` is older than the current buffer gen so
     /// that interleaved typing does not install stale formatted output.
     pub dirty_gen: u64,
+    /// Row range the user operated on. When `Some`, the installer applies
+    /// only in-range diff hunks via [`apply_in_range`]. `None` keeps the
+    /// whole-file replace behaviour (legacy path, and the explicit
+    /// gg=G / full-file submit path).
+    pub range: Option<RangeSpec>,
 }
 
 /// Result of a completed (or failed) format job.
@@ -600,6 +621,9 @@ pub struct FormatResult {
     pub dirty_gen: u64,
     /// Formatted source, or the error that occurred.
     pub result: Result<String, FormatError>,
+    /// Mirrors [`FormatJob::range`] so the installer knows whether to do a
+    /// whole-file replace or a range-gated splice via [`apply_in_range`].
+    pub range: Option<RangeSpec>,
 }
 
 /// Internal shared state between the submitter (main thread) and the worker.
@@ -709,12 +733,84 @@ fn format_worker_loop(
             buffer_id: job.buffer_id,
             dirty_gen: job.dirty_gen,
             result,
+            range: job.range,
         };
         // Channel closed only when the receiver (App) has been dropped — exit.
         if tx.send(msg).is_err() {
             return;
         }
     }
+}
+
+// ── Range-gated diff splice ───────────────────────────────────────────────────
+
+/// Merge formatter output back into the original, accepting only diff hunks
+/// whose original-side lines fall inside `range` (inclusive).
+///
+/// The formatter always receives and returns the **whole file** — no partial
+/// stdin/stdout gymnastics. After it returns, this function walks the
+/// `similar` line diff and accepts inserts/deletes only when they touch rows
+/// `[range.start_row, range.end_row]`. Out-of-range changes are silently
+/// discarded, leaving those lines byte-for-byte identical to the original.
+///
+/// Trailing-newline preservation: the result ends with `\n` iff `original`
+/// does.
+pub fn apply_in_range(original: &str, formatted: &str, range: RangeSpec) -> String {
+    use similar::{ChangeTag, TextDiff};
+
+    let trailing_newline = original.ends_with('\n');
+
+    // Work on the content without the trailing newline so line indexing is
+    // consistent with the engine's row numbering (line N = index N in the
+    // `\n`-split array, no phantom empty line at the end).
+    let orig_body = original.trim_end_matches('\n');
+    let fmt_body = formatted.trim_end_matches('\n');
+
+    let diff = TextDiff::from_lines(orig_body, fmt_body);
+
+    let mut out = String::with_capacity(formatted.len());
+    // Tracks which line in the original we are currently "at" — used to
+    // decide whether an Insert's anchor is inside the range.
+    let mut orig_cursor: usize = 0;
+
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Equal => {
+                out.push_str(change.value());
+                orig_cursor += 1;
+            }
+            ChangeTag::Delete => {
+                // A line present in original but absent in formatted.
+                // Accept the delete (skip emit) only when the original line
+                // index falls inside the requested range. Otherwise keep it.
+                let in_range = orig_cursor >= range.start_row && orig_cursor <= range.end_row;
+                if !in_range {
+                    out.push_str(change.value());
+                }
+                orig_cursor += 1;
+            }
+            ChangeTag::Insert => {
+                // A line absent in original, present in formatted. The
+                // anchor is `orig_cursor` — the position in the original
+                // stream where this insertion would land (i.e. the next
+                // original line's index, or "past the end").
+                // Accept when the anchor is within [start_row, end_row+1]
+                // (the +1 allows insertions that follow the last in-range
+                // original line).
+                let anchor = orig_cursor;
+                let in_range = anchor >= range.start_row && anchor <= range.end_row + 1;
+                if in_range {
+                    out.push_str(change.value());
+                }
+                // orig_cursor does NOT advance for inserts — inserts have no
+                // original-side position.
+            }
+        }
+    }
+
+    // Restore trailing newline to match the original's convention.
+    let out = out.trim_end_matches('\n').to_owned();
+    if trailing_newline { out + "\n" } else { out }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -936,6 +1032,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             formatter: Arc::new(EchoFormatter),
             dirty_gen: 1,
+            range: None,
         });
         w.submit(FormatJob {
             buffer_id: 2,
@@ -943,6 +1040,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             formatter: Arc::new(EchoFormatter),
             dirty_gen: 1,
+            range: None,
         });
         // Drain both results (order not guaranteed).
         let mut saw_1 = false;
@@ -981,6 +1079,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             formatter: Arc::new(SlowFormatter { delay: slow }),
             dirty_gen: 1,
+            range: None,
         });
         // Immediately replace with "second" before the worker picks it up.
         w.submit(FormatJob {
@@ -989,6 +1088,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             formatter: Arc::new(SlowFormatter { delay: slow }),
             dirty_gen: 2,
+            range: None,
         });
 
         // Drain results for up to 5 s; we expect exactly one result and it
@@ -1037,6 +1137,7 @@ mod tests {
             project_root: PathBuf::from("/tmp"),
             formatter: formatter_for_path(Path::new("foo.rs")).unwrap(),
             dirty_gen: 7,
+            range: None,
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
@@ -1052,5 +1153,97 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    // ── apply_in_range unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn apply_in_range_all_changes_inside_range_equals_formatted() {
+        let original = "line0\nline1\nline2\n";
+        let formatted = "LINE0\nLINE1\nLINE2\n";
+        let range = RangeSpec {
+            start_row: 0,
+            end_row: 2,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert_eq!(result, formatted);
+    }
+
+    #[test]
+    fn apply_in_range_all_changes_outside_range_equals_original() {
+        let original = "line0\nline1\nline2\n";
+        let formatted = "LINE0\nLINE1\nLINE2\n";
+        // Range covers none of the changed rows.
+        let range = RangeSpec {
+            start_row: 5,
+            end_row: 10,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert_eq!(result, original);
+    }
+
+    #[test]
+    fn apply_in_range_mixed_only_in_range_changes_accepted() {
+        let original = "A\nB\nC\nD\n";
+        // Formatter changes rows 0 and 3.
+        let formatted = "a\nB\nC\nd\n";
+        // Range covers only row 0.
+        let range = RangeSpec {
+            start_row: 0,
+            end_row: 0,
+        };
+        let result = apply_in_range(original, formatted, range);
+        // Row 0 is changed, row 3 is NOT changed (out of range).
+        assert_eq!(result, "a\nB\nC\nD\n");
+    }
+
+    #[test]
+    fn apply_in_range_whole_file_range_equals_formatted() {
+        let original = "foo\nbar\nbaz\n";
+        let formatted = "FOO\nBAR\nBAZ\n";
+        let range = RangeSpec {
+            start_row: 0,
+            end_row: 2,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert_eq!(result, formatted);
+    }
+
+    #[test]
+    fn apply_in_range_single_line_whitespace_change() {
+        // Typical `==` use-case: only the current line has changed indentation.
+        let original = "fn foo() {\n    let x=1;\n    let y=2;\n}\n";
+        // Formatter "fixes" row 1 only.
+        let formatted = "fn foo() {\n    let x = 1;\n    let y=2;\n}\n";
+        let range = RangeSpec {
+            start_row: 1,
+            end_row: 1,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert_eq!(result, "fn foo() {\n    let x = 1;\n    let y=2;\n}\n");
+    }
+
+    #[test]
+    fn apply_in_range_preserves_trailing_newline_when_original_has_one() {
+        let original = "a\nb\n";
+        let formatted = "A\nB\n";
+        let range = RangeSpec {
+            start_row: 0,
+            end_row: 1,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert!(result.ends_with('\n'), "result must end with \\n");
+    }
+
+    #[test]
+    fn apply_in_range_no_trailing_newline_when_original_lacks_one() {
+        let original = "a\nb";
+        let formatted = "A\nB";
+        let range = RangeSpec {
+            start_row: 0,
+            end_row: 1,
+        };
+        let result = apply_in_range(original, formatted, range);
+        assert!(!result.ends_with('\n'), "result must NOT end with \\n");
     }
 }

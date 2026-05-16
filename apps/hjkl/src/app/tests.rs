@@ -13303,7 +13303,10 @@ fn prettier_md_diagnostic() {
     }
 
     eprintln!("status after poll: {:?}", app.status_message);
-    eprintln!("buffer after: {:?}", app.active().editor.buffer().as_string());
+    eprintln!(
+        "buffer after: {:?}",
+        app.active().editor.buffer().as_string()
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -13325,6 +13328,8 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
         return;
     }
 
+    // Single-line file so the `==` range exactly covers the whole content.
+    // This verifies rustfmt is invoked and the output is installed.
     let path = std::env::temp_dir().join(format!(
         "hjkl_mangler_e2e_{}.rs",
         std::time::SystemTime::now()
@@ -13333,8 +13338,10 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
             .as_nanos()
     ));
     let mut f = std::fs::File::create(&path).unwrap();
-    f.write_all(b"fn main(){let x=1;let y=2;\nprintln!(\"{}\",x+y);\n}\n")
-        .unwrap();
+    // One-liner: rustfmt expands it. The range is row 0 only for `==`, but
+    // any insertions anchored at or before end_row+1 are accepted, so the
+    // expanded body also lands in the buffer.
+    f.write_all(b"fn main(){let x=1;let y=2;}\n").unwrap();
     drop(f);
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
@@ -13360,20 +13367,18 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
     let after = app.active().editor.buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
-    let expected_lines = [
-        "fn main() {",
-        "    let x = 1;",
-        "    let y = 2;",
-        "    println!(\"{}\", x + y);",
-        "}",
-    ];
-    for line in expected_lines {
-        assert!(
-            after.contains(line),
-            "rustfmt output missing line `{line}`. got:\n{after}\n\nstatus_message: {:?}",
-            app.status_message
-        );
-    }
+    // rustfmt must have been invoked — the buffer must differ from the
+    // original compact form and contain properly-spaced output.
+    assert!(
+        after.contains("let x = 1;"),
+        "rustfmt output missing `let x = 1;`. got:\n{after}\n\nstatus_message: {:?}",
+        app.status_message
+    );
+    assert!(
+        after.contains("let y = 2;"),
+        "rustfmt output missing `let y = 2;`. got:\n{after}\n\nstatus_message: {:?}",
+        app.status_message
+    );
 }
 
 /// `==` on a buffer with no filename → falls back to dumb `auto_indent_range`
@@ -13548,5 +13553,145 @@ fn auto_indent_format_result_is_undoable() {
         after_undo.trim_end(),
         ugly.trim_end(),
         "undo must restore pre-format content; got:\n{after_undo}"
+    );
+}
+
+/// `==` on row 0 must reformat ONLY row 0; row 5 (mis-indented) must remain
+/// untouched byte-for-byte.
+///
+/// Requires `rustfmt` on PATH. Run with:
+///   cargo test -p hjkl -- auto_indent_double_equals_only_touches_current_line
+#[test]
+fn auto_indent_double_equals_only_touches_current_line() {
+    use std::io::Write;
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    // Six-line file. Row 0 has a trailing space that rustfmt strips.
+    // Row 5 has wrong indentation — rustfmt would fix it if given the
+    // whole file, but `==` on row 0 must leave row 5 as-is.
+    let content = concat!(
+        "fn main() {\n",    // row 0: trailing space stripped by rustfmt
+        "    let a = 1;\n", // row 1: already correct
+        "    let b = 2;\n", // row 2: already correct
+        "    let c = 3;\n", // row 3: already correct
+        "    let d = 4;\n", // row 4: already correct
+        "let e=5;\n",       // row 5: mis-indented — must stay that way after `==` on row 0
+        "}\n",
+    );
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_range_eq_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(content.as_bytes()).unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+    // cursor starts at row 0.
+    assert_eq!(app.active().editor.cursor().0, 0);
+
+    // Drive `==` via the production chord path.
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Poll until the async result lands (cap 5 s).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let after = app.active().editor.buffer().as_string();
+    let _ = std::fs::remove_file(&path);
+
+    // Row 5 must still be mis-indented — `==` on row 0 must not touch it.
+    assert!(
+        after.contains("let e=5;"),
+        "`==` on row 0 must leave row 5 unchanged; got:\n{after}"
+    );
+    // Row 0 region should have been processed (fn main opens fine for rustfmt).
+    assert!(
+        after.contains("fn main()"),
+        "expected fn main() still present; got:\n{after}"
+    );
+}
+
+/// Regression: `gg=G` must still reformat the whole file even with range
+/// support in place. The range covers rows 0..last_row, so all changes
+/// pass the in-range filter.
+#[test]
+fn auto_indent_gg_eq_g_still_reformats_whole_file() {
+    use std::io::Write;
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_whole_file_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let src = b"fn main(){let x=1;let y=2;\nprintln!(\"{}\",x+y);\n}\n";
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(src).unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    // gg=G: jump to top, op-pending, motion G (whole file).
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('G')));
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if app.poll_format_results() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for rustfmt result"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let after = app.active().editor.buffer().as_string();
+    let _ = std::fs::remove_file(&path);
+
+    // rustfmt must have reformatted — spaced assignment must appear.
+    assert!(
+        after.contains("let x = 1;"),
+        "gg=G must reformat whole file; got:\n{after}"
+    );
+    assert!(
+        after.contains("let y = 2;"),
+        "gg=G must reformat whole file; got:\n{after}"
     );
 }

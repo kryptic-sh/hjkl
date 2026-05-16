@@ -1824,7 +1824,10 @@ impl App {
     ///
     /// Returns `false` when no formatter is registered for the active
     /// buffer's extension — caller should run the dumb fallback immediately.
-    pub(crate) fn submit_external_format(&mut self) -> bool {
+    pub(crate) fn submit_external_format(
+        &mut self,
+        range: Option<hjkl_mangler::RangeSpec>,
+    ) -> bool {
         use hjkl_mangler::{formatter_for_path, probe_tool};
 
         let filename = self.active().filename.clone();
@@ -1877,6 +1880,7 @@ impl App {
             project_root,
             formatter,
             dirty_gen,
+            range,
         });
 
         self.format_pending.insert(buffer_id);
@@ -1946,18 +1950,23 @@ impl App {
 
             match result.result {
                 Ok(formatted) => {
-                    let content = formatted
-                        .strip_suffix('\n')
-                        .unwrap_or(&formatted)
-                        .to_owned();
+                    let merged = if let Some(range) = result.range {
+                        // Range-gated install: diff original vs formatted and
+                        // accept only hunks whose rows fall inside the user's
+                        // operator range. Out-of-range changes are dropped so
+                        // `==` on row 3 never touches row 0.
+                        let original = self.slots[slot_idx].editor.buffer().as_string();
+                        hjkl_mangler::apply_in_range(&original, &formatted, range)
+                    } else {
+                        formatted
+                    };
+                    let content = merged.strip_suffix('\n').unwrap_or(&merged).to_owned();
                     // set_content_undoable so the engine pushes the pre-format
                     // buffer state onto the undo stack first — the user can
                     // press `u` to revert the formatter's changes as a single
                     // undo step. pending_content_reset is set inside, which
                     // sync_after_engine_mutation picks up for the syntax layer.
-                    self.slots[slot_idx]
-                        .editor
-                        .set_content_undoable(&content);
+                    self.slots[slot_idx].editor.set_content_undoable(&content);
 
                     // Note: the indent flash was armed at submit time in
                     // `submit_external_format` so the user gets immediate
@@ -3094,9 +3103,13 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-block =: submit async formatter; fall back
-                                // to dumb algo when no formatter is registered.
-                                if !self.submit_external_format() {
+                                // Visual-block =: submit async formatter with the
+                                // visual selection row range; fall back to dumb algo.
+                                let range = hjkl_mangler::RangeSpec {
+                                    start_row: top_row,
+                                    end_row: bot_row,
+                                };
+                                if !self.submit_external_format(Some(range)) {
                                     self.active_mut()
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
@@ -3156,9 +3169,14 @@ impl App {
                                     .indent_range(start, end, -(n as i32), 0);
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-charwise =: submit async formatter; fall back
-                                // to dumb algo when no formatter is registered.
-                                if !self.submit_external_format() {
+                                // Visual-charwise =: submit async formatter with the
+                                // visual selection row range; fall back to dumb algo.
+                                let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
+                                let range = hjkl_mangler::RangeSpec {
+                                    start_row: min_r,
+                                    end_row: max_r,
+                                };
+                                if !self.submit_external_format(Some(range)) {
                                     self.active_mut().editor.auto_indent_range(start, end);
                                     if let Some((top, bot)) =
                                         self.active_mut().editor.take_last_indent_range()
@@ -3237,9 +3255,13 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-line =: submit async formatter; fall back
-                                // to dumb algo when no formatter is registered.
-                                if !self.submit_external_format() {
+                                // Visual-line =: submit async formatter with the
+                                // visual selection row range; fall back to dumb algo.
+                                let range = hjkl_mangler::RangeSpec {
+                                    start_row: top_row,
+                                    end_row: bot_row,
+                                };
+                                if !self.submit_external_format(Some(range)) {
                                     self.active_mut()
                                         .editor
                                         .auto_indent_range((top_row, 0), (bot_row, 0));
@@ -3900,10 +3922,20 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
-                        // AutoIndent with motion (=<motion>): submit async formatter.
+                        // AutoIndent with motion (=<motion>): dry-run the motion to
+                        // find the row range, then submit the async formatter.
                         // Falls back to dumb algo when no formatter is registered.
-                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent
-                            && self.submit_external_format();
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
+                            let range = self
+                                .active_mut()
+                                .editor
+                                .range_for_op_motion(motion_key, total_count)
+                                .map(|(r0, r1)| hjkl_mangler::RangeSpec {
+                                    start_row: r0,
+                                    end_row: r1,
+                                });
+                            self.submit_external_format(range)
+                        };
                         if !used_formatter {
                             self.active_mut().editor.apply_op_motion(
                                 event_loop::op_kind_to_operator(op),
@@ -3925,10 +3957,17 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
                         self.pending_state = None;
-                        // AutoIndent (==): submit async formatter.
+                        // AutoIndent (==): submit async formatter with cursor-row range.
                         // Falls back to dumb algo when no formatter is registered.
-                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent
-                            && self.submit_external_format();
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
+                            let cursor_row = self.active().editor.cursor().0;
+                            let end_row = cursor_row.saturating_add(total_count).saturating_sub(1);
+                            let range = hjkl_mangler::RangeSpec {
+                                start_row: cursor_row,
+                                end_row,
+                            };
+                            self.submit_external_format(Some(range))
+                        };
                         if !used_formatter {
                             self.active_mut()
                                 .editor
@@ -3953,6 +3992,23 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
+                        // AutoIndent text-obj (=ap, =i{, etc): dry-run text-object
+                        // range query, then submit the async formatter if applicable.
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
+                            let range = self
+                                .active()
+                                .editor
+                                .range_for_op_text_obj(ch, inner, total_count)
+                                .map(|(r0, r1)| hjkl_mangler::RangeSpec {
+                                    start_row: r0,
+                                    end_row: r1,
+                                });
+                            self.submit_external_format(range)
+                        };
+                        if used_formatter {
+                            self.sync_after_engine_mutation();
+                            return true;
+                        }
                         self.active_mut().editor.apply_op_text_obj(
                             event_loop::op_kind_to_operator(op),
                             ch,
@@ -3976,6 +4032,23 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
+                        // AutoIndent g-motion (=gg, =gj, etc): dry-run g-motion range
+                        // query, then submit the async formatter if applicable.
+                        let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {
+                            let range = self
+                                .active_mut()
+                                .editor
+                                .range_for_op_g(ch, total_count)
+                                .map(|(r0, r1)| hjkl_mangler::RangeSpec {
+                                    start_row: r0,
+                                    end_row: r1,
+                                });
+                            self.submit_external_format(range)
+                        };
+                        if used_formatter {
+                            self.sync_after_engine_mutation();
+                            return true;
+                        }
                         self.active_mut().editor.apply_op_g(
                             event_loop::op_kind_to_operator(op),
                             ch,
