@@ -13794,3 +13794,93 @@ fn auto_indent_gg_eq_g_still_reformats_whole_file() {
         "gg=G must reformat whole file; got:\n{after}"
     );
 }
+
+// ── issue #120 Phase 2 regression tests ─────────────────────────────────────
+//
+// These tests verify that `:`, `/`, `?`, `K`, and `<C-^>` are dispatched
+// through the keymap trie (route_chord_key) rather than inline intercepts.
+//
+// Critical regression: `<leader>/` must open the grep picker, NOT the
+// search prompt. The `leader_slash_no_inline_intercept_regression` test
+// would fail if a bare `/` intercept fired before the trie consumed the
+// second key of the `<leader>/` chord.
+//
+// How to verify the test gates the old bug: temporarily add an inline
+// `/` intercept in event_loop.rs that fires BEFORE route_chord_key —
+// the test will fail because the search prompt opens instead of the picker.
+
+/// `<leader>/` opens the grep picker, not the search prompt.
+///
+/// This is the canonical regression for 1ed6e7b: an inline `/` intercept
+/// that fires before the keymap trie is consumed would swallow the `/` and
+/// open the search prompt instead of completing the `<leader>/` chord.
+/// Because there is no longer an inline intercept, the trie handles `/`
+/// entirely and this test catches any regression that re-introduces one.
+#[test]
+fn leader_slash_no_inline_intercept_regression() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none(), "picker must start None");
+    assert!(app.search_field.is_none(), "search_field must start None");
+
+    // Feed <leader> (Space) + `/` through route_chord_key.
+    // The keymap trie has `<leader>/` → OpenGrepPicker and bare `/` →
+    // OpenSearchPrompt(Forward). The trie must resolve to the longer chord.
+    app.route_chord_key(key(KeyCode::Char(' ')));
+    app.route_chord_key(key(KeyCode::Char('/')));
+
+    assert!(
+        app.picker.is_some(),
+        "<leader>/ must open the grep picker, not the search prompt"
+    );
+    assert!(
+        app.search_field.is_none(),
+        "<leader>/ must NOT open the search prompt"
+    );
+}
+
+/// Bare `:` opens the command prompt via the keymap trie.
+#[test]
+fn colon_opens_command_prompt_via_keymap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.command_field.is_none());
+    app.route_chord_key(key(KeyCode::Char(':')));
+    assert!(
+        app.command_field.is_some(),
+        "`:` must open the command prompt via keymap dispatch"
+    );
+}
+
+/// Bare `/` opens the forward search prompt via the keymap trie.
+#[test]
+fn slash_opens_search_prompt_forward_via_keymap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.search_field.is_none());
+    app.route_chord_key(key(KeyCode::Char('/')));
+    assert!(
+        app.search_field.is_some(),
+        "`/` must open the search prompt via keymap dispatch"
+    );
+}
+
+/// Bare `?` opens the backward search prompt via the keymap trie.
+#[test]
+fn question_opens_search_prompt_backward_via_keymap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.search_field.is_none());
+    app.route_chord_key(key(KeyCode::Char('?')));
+    assert!(
+        app.search_field.is_some(),
+        "`?` must open the search prompt via keymap dispatch"
+    );
+}
+
+/// `<C-^>` triggers buffer alt via the keymap trie.
+/// With a single slot it's a no-op (status message), not an error.
+#[test]
+fn ctrl_caret_triggers_buffer_alt_via_keymap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Single slot: buffer_alt sets a status message; no panic.
+    app.route_chord_key(ctrl_key('^'));
+    // Just assert we didn't panic and the app is still alive.
+    assert!(app.picker.is_none(), "ctrl-^ must not open picker");
+}

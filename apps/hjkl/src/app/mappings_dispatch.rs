@@ -53,6 +53,7 @@ impl App {
                         action: action.clone(),
                         desc: "user runtime map".to_string(),
                         recursive,
+                        condition: None,
                     };
                     // Re-parse to get canonical Chord, then add_chord.
                     if let Ok(chord) = hjkl_keymap::Chord::parse(&notation, leader) {

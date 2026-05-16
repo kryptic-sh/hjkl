@@ -10,7 +10,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
 use std::time::Duration;
 
-use super::{App, STATUS_LINE_HEIGHT, SearchDir, prompt_cursor_shape};
+use super::{App, STATUS_LINE_HEIGHT, prompt_cursor_shape};
 use crate::render;
 
 /// How long the mouse must rest on a Code zone before the LSP hover RPC fires.
@@ -386,17 +386,10 @@ impl App {
                     // ── Normal-mode app-level pre-routing ────────────────────
                     // These run BEFORE route_chord_key below. They may `continue`
                     // (consuming the key) or fall through to route_chord_key.
-                    // Out of scope for route_chord_key: Ctrl-^, H/L buffer cycle,
-                    // tmux-nav, count-prefix, LSP K, `:`, `/`, Esc, which-key BS.
+                    // Out of scope for route_chord_key: H/L buffer cycle (Phase 3),
+                    // tmux-nav (Phase 3), count-prefix, Esc, which-key BS.
+                    // Migrated to keymap (issue #120 Phase 2): Ctrl-^, K, `:`, `/`, `?`.
                     if self.active().editor.vim_mode() == VimMode::Normal {
-                        // ── Alt-buffer toggle (Ctrl-^ / Ctrl-6) ─────────────
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && (key.code == KeyCode::Char('^') || key.code == KeyCode::Char('6'))
-                        {
-                            self.buffer_alt();
-                            continue;
-                        }
-
                         // ── Shift-H / Shift-L cycle buffers ──────────────────
                         // Only when more than one buffer is open; with a single
                         // slot fall through to the engine's H/L viewport motions.
@@ -530,49 +523,6 @@ impl App {
                                 && matches!(key.code, KeyCode::Char(_));
                             if !is_ctrl_char && !self.pending_count.is_empty() {
                                 self.flush_pending_count_to_engine();
-                            }
-                        }
-
-                        // ── LSP hover (`K`) ───────────────────────────────────
-                        if key.code == KeyCode::Char('K')
-                            && (key.modifiers == KeyModifiers::NONE
-                                || key.modifiers == KeyModifiers::SHIFT)
-                        {
-                            self.lsp_hover();
-                            continue;
-                        }
-
-                        // ── Intercept `:` ─────────────────────────────────────
-                        // Skip when a pending_state chord is waiting for its
-                        // second key — e.g. `@:` (PlayMacroTarget expects ':').
-                        if key.code == KeyCode::Char(':')
-                            && key.modifiers == KeyModifiers::NONE
-                            && self.pending_state.is_none()
-                        {
-                            self.open_command_prompt();
-                            continue;
-                        }
-
-                        // ── Intercept `/` and `?` ─────────────────────────────
-                        // Skip the intercept when a chord prefix is pending
-                        // (e.g. <leader>/ for the grep picker) — otherwise the
-                        // `/` opens search instead of completing the chord.
-                        // Mirrors the `:` intercept above which gates on
-                        // pending_state for the same reason.
-                        if key.modifiers == KeyModifiers::NONE
-                            && self.pending_state.is_none()
-                            && self
-                                .app_keymap
-                                .pending(crate::app::keymap::HjklMode::Normal)
-                                .is_empty()
-                        {
-                            if key.code == KeyCode::Char('/') {
-                                self.open_search_prompt(SearchDir::Forward);
-                                continue;
-                            }
-                            if key.code == KeyCode::Char('?') {
-                                self.open_search_prompt(SearchDir::Backward);
-                                continue;
                             }
                         }
 

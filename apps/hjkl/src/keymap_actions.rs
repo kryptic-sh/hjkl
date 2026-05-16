@@ -72,6 +72,16 @@ pub enum AppAction {
     // ── App lifecycle ─────────────────────────────────────────────────
     QuitOrClose,
 
+    // ── Prompt / overlay entry (issue #120) ───────────────────────────
+    /// `:` — open the ex command prompt.
+    OpenCommandPrompt,
+    /// `/` / `?` — open the incremental search prompt.
+    OpenSearchPrompt(crate::app::SearchDir),
+    /// `K` — trigger LSP hover at the cursor position.
+    LspHover,
+    /// `<C-^>` / `<C-6>` — switch to the alternate buffer.
+    BufferAlt,
+
     // ── Pending-state chords (hjkl-vim reducer) ───────────────────────
     /// `r<x>` — begin Replace pending state with the given count.
     /// The app stores `Some(hjkl_vim::PendingState::Replace { count })` and

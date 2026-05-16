@@ -815,6 +815,26 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
     km.set_timeout(Duration::from_millis(500));
 
     let bindings: &[(&str, AppAction, &str)] = &[
+        // ── Prompt / overlay entry (Phase 2 — issue #120) ─────────────────
+        // These chords are registered in the keymap trie and dispatched via
+        // dispatch_action, removing the need for inline intercepts in run().
+        // `:` in Normal mode is gated on pending_state.is_none() at the
+        // dispatch site (see dispatch_action arm) to preserve `@:` behaviour.
+        (":", AppAction::OpenCommandPrompt, "open command prompt"),
+        (
+            "/",
+            AppAction::OpenSearchPrompt(SearchDir::Forward),
+            "search forward",
+        ),
+        (
+            "?",
+            AppAction::OpenSearchPrompt(SearchDir::Backward),
+            "search backward",
+        ),
+        ("K", AppAction::LspHover, "lsp hover"),
+        ("<C-^>", AppAction::BufferAlt, "alt buffer"),
+        // <C-6> is the ASCII-terminal alias for <C-^> on some terminals.
+        ("<C-6>", AppAction::BufferAlt, "alt buffer"),
         // ── File / buffer / grep pickers ──────────────────────────────────
         ("<leader><leader>", AppAction::OpenFilePicker, "file picker"),
         ("<leader>f", AppAction::OpenFilePicker, "file picker"),
@@ -1893,7 +1913,7 @@ impl App {
         // user is looking at.
         let vp = self.active().editor.host().viewport();
         let line_count = self.active().editor.buffer().row_count();
-        let top = vp.top_row as usize;
+        let top = vp.top_row;
         let height = vp.height as usize;
         let bot = (top + height.saturating_sub(1)).min(line_count.saturating_sub(1));
         self.indent_flash = Some(IndentFlash {
@@ -2927,6 +2947,27 @@ impl App {
                     self.exit_requested = true;
                 }
             }
+            // ── Prompt / overlay entry (Phase 2 — issue #120) ─────────────────
+            AppAction::OpenCommandPrompt => {
+                // Guard: `@:` chord expects `:` as the register name, so
+                // pending_state.is_some() means this key is already claimed by
+                // the pending-state reducer (route_chord_key dispatched here via
+                // dispatch_keymap_in_mode). In that scenario the keymap itself
+                // should not have matched `:` (pending_state blocks the Normal
+                // trie path in route_chord_key), so this guard is defensive.
+                if self.pending_state.is_none() {
+                    self.open_command_prompt();
+                }
+            }
+            AppAction::OpenSearchPrompt(dir) => {
+                self.open_search_prompt(dir);
+            }
+            AppAction::LspHover => {
+                self.lsp_hover();
+            }
+            AppAction::BufferAlt => {
+                self.buffer_alt();
+            }
             AppAction::BeginPendingReplace {
                 count: action_count,
             } => {
@@ -3701,14 +3742,17 @@ impl App {
     ///   - picker overlay (`self.picker.is_some()`)
     ///   - info-popup dismissal
     ///   - Visual-mode `:` intercept (must precede pending_state reducer)
-    ///   - LSP hover (`K`)
-    ///   - `:` and `/` intercepts (Normal-mode only)
     ///   - Insert-mode completion handling
-    ///   - tmux-navigator Ctrl-h/j/k/l
+    ///   - tmux-navigator Ctrl-h/j/k/l (Phase 3 — issue #120)
     ///   - count-prefix buffering (digits `0`–`9` in Normal mode)
-    ///   - Ctrl-^/Ctrl-6 alt-buffer toggle
-    ///   - Shift-H / Shift-L buffer cycle
+    ///   - Shift-H / Shift-L buffer cycle (Phase 3 — issue #120)
     ///   - Esc chord-reset and which-key Backspace navigate-up
+    ///
+    /// Migrated to keymap trie (issue #120 Phase 2 — now dispatch_action arms):
+    ///   - `K` → `AppAction::LspHover`
+    ///   - `:` → `AppAction::OpenCommandPrompt`
+    ///   - `/` / `?` → `AppAction::OpenSearchPrompt`
+    ///   - `<C-^>` / `<C-6>` → `AppAction::BufferAlt`
     pub(crate) fn route_chord_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
         // Snapshot recording state BEFORE dispatch so we can detect the moment
         // a new recording starts (StartMacroRecord arm) — the register-name key
