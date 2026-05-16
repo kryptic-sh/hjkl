@@ -3,12 +3,12 @@
 //! Wraps `rustfmt`, `prettier`, `gofmt`, `ruff`, `stylua`, `shfmt`, `taplo`
 //! and friends behind a single [`Formatter`] trait. The app calls
 //! [`formatter_for_path`] to look up a formatter by file extension, then
-//! either calls [`Formatter::format`] synchronously (blocking up to 2 s)
+//! either calls [`Formatter::format`] synchronously (blocking up to 30 s)
 //! or submits a [`FormatJob`] to a [`FormatWorker`] for async dispatch.
 //!
 //! # Timeout
 //!
-//! [`Formatter::format`] blocks the calling thread for at most 2 seconds.
+//! [`Formatter::format`] blocks the calling thread for at most 30 seconds.
 //! The implementation polls [`std::process::Child::try_wait`] in a tight
 //! spin-loop with 5 ms sleeps. This is intentionally simple.
 //!
@@ -34,7 +34,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Maximum time we wait for a formatter subprocess before giving up.
-const FORMAT_TIMEOUT: Duration = Duration::from_secs(2);
+/// 30 s is generous enough for rustfmt on very large files (10k+ LOC)
+/// without making a hung formatter feel permanent.
+const FORMAT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Poll interval inside the wait loop.
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
@@ -46,7 +48,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 pub enum FormatError {
     /// Tool is not installed / not on `PATH`. Carries the tool name.
     NotInstalled(String),
-    /// Formatter exceeded the 2-second timeout.
+    /// Formatter exceeded the [`FORMAT_TIMEOUT`].
     Timeout,
     /// Formatter exited with non-zero status. Carries captured stderr text.
     SyntaxError(String),
@@ -58,7 +60,7 @@ impl std::fmt::Display for FormatError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FormatError::NotInstalled(name) => write!(f, "{name}: not installed"),
-            FormatError::Timeout => write!(f, "formatter timed out (>2 s)"),
+            FormatError::Timeout => write!(f, "formatter timed out (>30 s)"),
             FormatError::SyntaxError(msg) => write!(f, "formatter error: {msg}"),
             FormatError::Io(e) => write!(f, "I/O error: {e}"),
         }
@@ -82,7 +84,7 @@ impl std::error::Error for FormatError {
 /// - Spawn the tool as a child process with `cwd = project_root`.
 /// - Pipe `source` to the child's stdin.
 /// - Read the formatted result from stdout.
-/// - Return [`FormatError::Timeout`] if the child does not complete within 2 s.
+/// - Return [`FormatError::Timeout`] if the child does not complete within 30 s.
 /// - Return [`FormatError::SyntaxError`] on non-zero exit status.
 /// - Return [`FormatError::NotInstalled`] when `spawn` returns `NotFound`.
 ///
@@ -323,7 +325,7 @@ edition = "2024"
 
 // ── Core subprocess runner ────────────────────────────────────────────────────
 
-/// Spawn the formatter, pipe `source` to stdin, wait up to 2 s, return stdout.
+/// Spawn the formatter, pipe `source` to stdin, wait up to 30 s, return stdout.
 ///
 /// `static_args` are the compile-time arg list (including argv[0] = program).
 /// `extra_args` are appended after `static_args` (e.g. the file path for
@@ -371,11 +373,34 @@ fn run_formatter(
         Err(e) => return Err(FormatError::Io(e)),
     };
 
+    // Drain stdout / stderr concurrently in background threads.
+    //
+    // CRITICAL: without this, a formatter whose output (or the partial
+    // output before it errors) exceeds the OS pipe buffer (typically
+    // 64 KiB on Linux) deadlocks — the child blocks writing stdout, we
+    // block in `try_wait` waiting for the child to exit, neither side
+    // moves. Read pipes in dedicated threads so they always drain.
+    use std::io::Read as _;
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut s = stdout;
+        s.read_to_end(&mut buf)?;
+        Ok(buf)
+    });
+    let stderr_handle = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut s = stderr;
+        s.read_to_end(&mut buf)?;
+        Ok(buf)
+    });
+
     // Write source to stdin, then close it so the formatter sees EOF.
     // Tolerate `BrokenPipe` — the child may have already errored and closed
     // its end before we finished writing (e.g. rustfmt rejecting a bad flag,
     // shfmt parser hitting an error mid-stream). The real error is in stderr;
-    // we'll surface it from `wait_with_output` below.
+    // the reader threads will surface it.
     if let Some(mut stdin) = child.stdin.take() {
         match stdin.write_all(source.as_bytes()) {
             Ok(()) => {}
@@ -390,30 +415,13 @@ fn run_formatter(
         // Drop closes the handle — formatter sees EOF.
     }
 
-    // Poll until done or timeout.
+    // Poll for child exit with deadline. Reader threads drain pipes the
+    // whole time so the child can never block on a full stdout buffer.
     let deadline = Instant::now() + FORMAT_TIMEOUT;
-    loop {
+    let status = loop {
         match child.try_wait().map_err(FormatError::Io)? {
-            Some(status) => {
-                // Child finished — collect output.
-                let output = child.wait_with_output().map_err(FormatError::Io)?;
-                if status.success() {
-                    let formatted = String::from_utf8(output.stdout).map_err(|e| {
-                        FormatError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            e.to_string(),
-                        ))
-                    })?;
-                    tracing::debug!(tool = tool_name, "formatter succeeded");
-                    return Ok(formatted);
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                    tracing::debug!(tool = tool_name, %stderr, "formatter failed");
-                    return Err(FormatError::SyntaxError(stderr));
-                }
-            }
+            Some(s) => break s,
             None => {
-                // Still running.
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     tracing::warn!(tool = tool_name, "formatter timed out");
@@ -422,6 +430,31 @@ fn run_formatter(
                 std::thread::sleep(POLL_INTERVAL);
             }
         }
+    };
+
+    // Child exited — join reader threads to get the bytes.
+    let stdout_bytes = stdout_handle
+        .join()
+        .expect("stdout reader thread panicked")
+        .map_err(FormatError::Io)?;
+    let stderr_bytes = stderr_handle
+        .join()
+        .expect("stderr reader thread panicked")
+        .map_err(FormatError::Io)?;
+
+    if status.success() {
+        let formatted = String::from_utf8(stdout_bytes).map_err(|e| {
+            FormatError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e.to_string(),
+            ))
+        })?;
+        tracing::debug!(tool = tool_name, "formatter succeeded");
+        Ok(formatted)
+    } else {
+        let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+        tracing::debug!(tool = tool_name, %stderr, "formatter failed");
+        Err(FormatError::SyntaxError(stderr))
     }
 }
 
