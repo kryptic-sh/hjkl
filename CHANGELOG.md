@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-05-16
+
+### Changed
+
+- Promoted hjkl-mangler to its own kryptic-sh/hjkl-mangler submodule. Mangler
+  0.1.0 is now live on crates.io, unblocking the publish-crates CI job that
+  failed on v0.19.1 with "no matching package named hjkl-mangler found". Local
+  builds continue to use the workspace [patch.crates-io] table; downstream
+  crates.io consumers now get the published version.
+
 ## [0.19.1] - 2026-05-16
 
 ### Fixed
@@ -2296,7 +2306,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.19.2...HEAD
+[0.19.2]: https://github.com/kryptic-sh/hjkl/compare/v0.19.1...v0.19.2
 [0.19.1]: https://github.com/kryptic-sh/hjkl/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/kryptic-sh/hjkl/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...v0.18.2
