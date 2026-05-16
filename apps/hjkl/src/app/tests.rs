@@ -13915,3 +13915,80 @@ fn ctrl_h_single_window_no_tmux_no_panic() {
     let consumed = app.route_chord_key(ctrl_key('h'));
     assert!(consumed, "<C-h> must be consumed by keymap (TmuxNavigate)");
 }
+
+// ── issue #120 Phase 4 regression tests ─────────────────────────────────────
+// These tests call handle_keypress directly (the extracted method) to verify
+// the full key dispatch path including overlay and prefix handling.
+
+/// `handle_keypress` returns Break on Ctrl-C with no overlay active.
+#[test]
+fn handle_keypress_ctrl_c_breaks() {
+    use crate::app::event_loop::KeyOutcome;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let outcome = app.handle_keypress(ctrl_key('c'));
+    assert!(
+        matches!(outcome, KeyOutcome::Break),
+        "Ctrl-C with no overlay must return Break"
+    );
+}
+
+/// `handle_keypress` returns Continue (dismisses command field) on Ctrl-C with command field open.
+#[test]
+fn handle_keypress_ctrl_c_dismisses_command_field() {
+    use crate::app::event_loop::KeyOutcome;
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    assert!(app.command_field.is_some());
+    let outcome = app.handle_keypress(ctrl_key('c'));
+    assert!(
+        matches!(outcome, KeyOutcome::Continue),
+        "Ctrl-C with command field open must dismiss and return Continue"
+    );
+    assert!(app.command_field.is_none());
+}
+
+/// `handle_keypress` routes `:` to the command prompt (via keymap trie).
+#[test]
+fn handle_keypress_colon_opens_command_prompt() {
+    use crate::app::event_loop::KeyOutcome;
+    let mut app = App::new(None, false, None, None).unwrap();
+    let outcome = app.handle_keypress(key(KeyCode::Char(':')));
+    assert!(
+        matches!(outcome, KeyOutcome::Continue),
+        "`:` must return Continue after opening command prompt"
+    );
+    assert!(
+        app.command_field.is_some(),
+        "`:` must open the command prompt"
+    );
+}
+
+/// `<leader>/` via handle_keypress opens the grep picker, not the search prompt.
+///
+/// This is the Phase 4 variant of `leader_slash_no_inline_intercept_regression`:
+/// it exercises the full handle_keypress path rather than the inner route_chord_key.
+#[test]
+fn handle_keypress_leader_slash_opens_grep_picker() {
+    use crate::app::event_loop::KeyOutcome;
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Feed <leader> (Space) — returns Continue (chord in flight).
+    let o1 = app.handle_keypress(key(KeyCode::Char(' ')));
+    assert!(
+        matches!(o1, KeyOutcome::Continue),
+        "<leader> first key must return Continue"
+    );
+    // Feed `/` — trie resolves to OpenGrepPicker.
+    let o2 = app.handle_keypress(key(KeyCode::Char('/')));
+    assert!(
+        matches!(o2, KeyOutcome::Continue),
+        "<leader>/ second key must return Continue"
+    );
+    assert!(
+        app.picker.is_some(),
+        "<leader>/ via handle_keypress must open grep picker"
+    );
+    assert!(
+        app.search_field.is_none(),
+        "<leader>/ via handle_keypress must NOT open search prompt"
+    );
+}
