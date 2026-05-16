@@ -395,52 +395,48 @@ impl App {
 
         // Top + Bottom pre-cache for the active buffer.
         //
-        // On a fresh cold buffer (no viewport result yet) we submit Viewport
-        // ONLY — it starts at row 0 and implicitly covers the top. Once the
-        // Viewport result lands and `viewport_render_output` becomes `Some`,
-        // the NEXT tick sees `bottom_render_output.is_none()` and submits
-        // the Bottom parse. This keeps startup snappy: the cold parse runs
-        // once; the Bottom parse fires immediately after.
+        // Submit alongside the Viewport request — worker processes FIFO so
+        // Viewport runs first (cold parse builds tree), then Top + Bottom
+        // ride along on the same retained tree (incremental highlight, ~1-5 ms
+        // each). Startup latency is unchanged: viewport blocking wait is
+        // the only thing that gates the first paint. Top + Bottom land soon
+        // after with no extra user-perceived delay.
         //
-        // Top is submitted once `viewport_render_output` is populated AND
-        // `top_render_output` is None (which happens if the user has scrolled
-        // the viewport away from row 0 so the top rows are no longer covered).
-        // If the viewport still starts at 0, the viewport cache already covers
-        // the top — we skip to avoid a redundant parse.
+        // Per-(buffer_id, kind) queue dedup means re-submitting the same
+        // kind on subsequent ticks just replaces the in-flight request.
+        // We skip the submit when the cache for that kind is already populated
+        // for the current dirty_gen (avoid redundant work).
         {
             let active_idx = self.focused_slot_idx();
-            let viewport_landed = self.slots[active_idx].viewport_render_output.is_some();
-            if viewport_landed {
-                let needs_top = self.slots[active_idx].top_render_output.is_none();
-                let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
-                let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+            let needs_top = self.slots[active_idx].top_render_output.is_none();
+            let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
+            let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
 
-                if needs_top {
-                    let (top_range_start, top_range_height) =
-                        hjkl_buffer::over_provisioned_range(0, height, slot_line_count);
-                    let buf = self.slots[active_idx].editor.buffer();
-                    self.syntax.submit_render(
-                        buffer_id,
-                        buf,
-                        top_range_start,
-                        top_range_height,
-                        crate::syntax::ParseKind::Top,
-                    );
-                }
+            if needs_top {
+                let (top_range_start, top_range_height) =
+                    hjkl_buffer::over_provisioned_range(0, height, slot_line_count);
+                let buf = self.slots[active_idx].editor.buffer();
+                self.syntax.submit_render(
+                    buffer_id,
+                    buf,
+                    top_range_start,
+                    top_range_height,
+                    crate::syntax::ParseKind::Top,
+                );
+            }
 
-                if needs_bottom {
-                    let bottom_anchor = slot_line_count.saturating_sub(height);
-                    let (bot_range_start, bot_range_height) =
-                        hjkl_buffer::over_provisioned_range(bottom_anchor, height, slot_line_count);
-                    let buf = self.slots[active_idx].editor.buffer();
-                    self.syntax.submit_render(
-                        buffer_id,
-                        buf,
-                        bot_range_start,
-                        bot_range_height,
-                        crate::syntax::ParseKind::Bottom,
-                    );
-                }
+            if needs_bottom {
+                let bottom_anchor = slot_line_count.saturating_sub(height);
+                let (bot_range_start, bot_range_height) =
+                    hjkl_buffer::over_provisioned_range(bottom_anchor, height, slot_line_count);
+                let buf = self.slots[active_idx].editor.buffer();
+                self.syntax.submit_render(
+                    buffer_id,
+                    buf,
+                    bot_range_start,
+                    bot_range_height,
+                    crate::syntax::ParseKind::Bottom,
+                );
             }
         }
 
@@ -473,41 +469,39 @@ impl App {
                 crate::syntax::ParseKind::Viewport,
             );
 
-            // Top + Bottom for non-active slots (same deferred logic).
-            let viewport_landed = self.slots[slot_idx].viewport_render_output.is_some();
-            if viewport_landed {
-                let needs_top = self.slots[slot_idx].top_render_output.is_none();
-                let needs_bottom = self.slots[slot_idx].bottom_render_output.is_none();
+            // Top + Bottom for non-active slots — submit alongside Viewport,
+            // worker handles FIFO + per-(buffer, kind) dedup.
+            let needs_top = self.slots[slot_idx].top_render_output.is_none();
+            let needs_bottom = self.slots[slot_idx].bottom_render_output.is_none();
 
-                if needs_top {
-                    let (top_range_start, top_range_height) =
-                        hjkl_buffer::over_provisioned_range(0, slot_height, slot_line_count);
-                    let buf = self.slots[slot_idx].editor.buffer();
-                    self.syntax.submit_render(
-                        slot_buf_id,
-                        buf,
-                        top_range_start,
-                        top_range_height,
-                        crate::syntax::ParseKind::Top,
-                    );
-                }
+            if needs_top {
+                let (top_range_start, top_range_height) =
+                    hjkl_buffer::over_provisioned_range(0, slot_height, slot_line_count);
+                let buf = self.slots[slot_idx].editor.buffer();
+                self.syntax.submit_render(
+                    slot_buf_id,
+                    buf,
+                    top_range_start,
+                    top_range_height,
+                    crate::syntax::ParseKind::Top,
+                );
+            }
 
-                if needs_bottom {
-                    let bottom_anchor = slot_line_count.saturating_sub(slot_height);
-                    let (bot_range_start, bot_range_height) = hjkl_buffer::over_provisioned_range(
-                        bottom_anchor,
-                        slot_height,
-                        slot_line_count,
-                    );
-                    let buf = self.slots[slot_idx].editor.buffer();
-                    self.syntax.submit_render(
-                        slot_buf_id,
-                        buf,
-                        bot_range_start,
-                        bot_range_height,
-                        crate::syntax::ParseKind::Bottom,
-                    );
-                }
+            if needs_bottom {
+                let bottom_anchor = slot_line_count.saturating_sub(slot_height);
+                let (bot_range_start, bot_range_height) = hjkl_buffer::over_provisioned_range(
+                    bottom_anchor,
+                    slot_height,
+                    slot_line_count,
+                );
+                let buf = self.slots[slot_idx].editor.buffer();
+                self.syntax.submit_render(
+                    slot_buf_id,
+                    buf,
+                    bot_range_start,
+                    bot_range_height,
+                    crate::syntax::ParseKind::Bottom,
+                );
             }
         }
 
@@ -1297,42 +1291,5 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&tmp);
-    }
-
-    /// T5 new test: cold buffer does not submit Bottom until Viewport lands.
-    /// On a fresh cold buffer (no viewport result), recompute_and_install must
-    /// NOT submit a Bottom parse — only after the Viewport result arrives does
-    /// the next tick submit Bottom.
-    #[test]
-    fn cold_buffer_does_not_submit_bottom_until_viewport_lands() {
-        let mut app = App::new(None, false, None, None).unwrap();
-        let slot_idx = app.focused_slot_idx();
-
-        // Confirm the slot is cold (no viewport result).
-        assert!(
-            app.slots()[slot_idx].viewport_render_output.is_none(),
-            "precondition: fresh slot has no viewport result"
-        );
-
-        // Count pending parses before any recompute.
-        let before = app.syntax.pending_parse_count();
-
-        // Run recompute — this submits Viewport (cold path).
-        app.recompute_and_install();
-
-        let after = app.syntax.pending_parse_count();
-        // At most one new parse should be queued (Viewport only — no Bottom yet).
-        // In practice the queue may be 0 if the worker already drained it,
-        // but it must NEVER have both Viewport AND Bottom simultaneously
-        // when the viewport hasn't landed yet.
-        // We verify: no Bottom was submitted before Viewport landed by
-        // confirming viewport_render_output is still None right after the call
-        // (worker hasn't responded synchronously).
-        assert!(
-            app.slots()[slot_idx].viewport_render_output.is_none()
-                || app.slots()[slot_idx].bottom_render_output.is_none(),
-            "Bottom must not be populated before Viewport result lands; \
-             before={before}, after={after}"
-        );
     }
 }

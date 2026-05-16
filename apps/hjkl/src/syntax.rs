@@ -1058,17 +1058,6 @@ impl SyntaxLayer {
         Some(source_build_us)
     }
 
-    /// Returns the number of pending parse requests in the queue.
-    /// Used by tests to verify queue state without draining the channel.
-    #[cfg(test)]
-    pub fn pending_parse_count(&self) -> usize {
-        let (lock, _) = &*self.worker.pending;
-        lock.lock()
-            .expect("syntax pending mutex poisoned")
-            .parse_queue
-            .len()
-    }
-
     /// Drain the most recent render result the worker has produced (if
     /// any). Older results are discarded — only the latest matters for
     /// install. Updates `last_perf` as a side effect.
