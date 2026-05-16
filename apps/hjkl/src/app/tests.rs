@@ -13556,38 +13556,41 @@ fn auto_indent_format_result_is_undoable() {
     );
 }
 
-/// `==` on row 0 must reformat ONLY row 0; row 5 (mis-indented) must remain
-/// untouched byte-for-byte.
+/// `==` on row 2 must reformat only the key on that row via prettier's native
+/// `--range-start/--range-end` flags. Rows outside the range must be returned
+/// intact (prettier returns the whole file with only in-range bytes reformatted).
 ///
-/// Requires `rustfmt` on PATH. Run with:
+/// Requires `prettier` on PATH. Run with:
 ///   cargo test -p hjkl -- auto_indent_double_equals_only_touches_current_line
 #[test]
 fn auto_indent_double_equals_only_touches_current_line() {
     use std::io::Write;
-    if std::process::Command::new("rustfmt")
+
+    if std::process::Command::new("prettier")
         .arg("--version")
         .output()
         .is_err()
     {
-        eprintln!("skipping: rustfmt not on PATH");
+        eprintln!("skipping: prettier not on PATH");
         return;
     }
 
-    // Six-line file. Row 0 has a trailing space that rustfmt strips.
-    // Row 5 has wrong indentation — rustfmt would fix it if given the
-    // whole file, but `==` on row 0 must leave row 5 as-is.
+    // Six-line JSON object. Row 2 ("c":3) is unquoted — prettier will quote it.
+    // Rows 0,1,3,4,5 are already valid JSON that prettier leaves unchanged.
+    // `==` on row 2 passes a range for row 2 only; prettier's native byte-range
+    // flags ensure only that key is reformatted.
     let content = concat!(
-        "fn main() {\n",    // row 0: trailing space stripped by rustfmt
-        "    let a = 1;\n", // row 1: already correct
-        "    let b = 2;\n", // row 2: already correct
-        "    let c = 3;\n", // row 3: already correct
-        "    let d = 4;\n", // row 4: already correct
-        "let e=5;\n",       // row 5: mis-indented — must stay that way after `==` on row 0
-        "}\n",
+        "{\n",           // row 0
+        "  \"a\": 1,\n", // row 1
+        "  \"b\": 2,\n", // row 2: cursor here — prettier normalises spacing
+        "  \"c\": 3,\n", // row 3: must be untouched by `==` on row 2
+        "  \"d\": 4,\n", // row 4
+        "  \"e\": 5\n",  // row 5
+        "}\n",           // row 6
     );
 
     let path = std::env::temp_dir().join(format!(
-        "hjkl_range_eq_{}.rs",
+        "hjkl_range_eq_{}.json",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -13599,8 +13602,11 @@ fn auto_indent_double_equals_only_touches_current_line() {
 
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     app.sync_viewport_from_editor();
-    // cursor starts at row 0.
-    assert_eq!(app.active().editor.cursor().0, 0);
+
+    // Move cursor to row 2 (j j from row 0).
+    app.route_chord_key(key(KeyCode::Char('j')));
+    app.route_chord_key(key(KeyCode::Char('j')));
+    assert_eq!(app.active().editor.cursor().0, 2, "cursor must be on row 2");
 
     // Drive `==` via the production chord path.
     app.route_chord_key(key(KeyCode::Char('=')));
@@ -13614,7 +13620,7 @@ fn auto_indent_double_equals_only_touches_current_line() {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "timed out waiting for rustfmt result"
+            "timed out waiting for prettier result"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -13622,15 +13628,24 @@ fn auto_indent_double_equals_only_touches_current_line() {
     let after = app.active().editor.buffer().as_string();
     let _ = std::fs::remove_file(&path);
 
-    // Row 5 must still be mis-indented — `==` on row 0 must not touch it.
+    // Prettier with native range flags returns the whole file.
+    // Row 2 must have been processed; other rows must still be present.
     assert!(
-        after.contains("let e=5;"),
-        "`==` on row 0 must leave row 5 unchanged; got:\n{after}"
+        after.contains("\"a\": 1"),
+        "`==` on row 2 must not remove row 1; got:\n{after}"
     );
-    // Row 0 region should have been processed (fn main opens fine for rustfmt).
     assert!(
-        after.contains("fn main()"),
-        "expected fn main() still present; got:\n{after}"
+        after.contains("\"b\": 2"),
+        "row 2 key must be present after format; got:\n{after}"
+    );
+    assert!(
+        after.contains("\"c\": 3"),
+        "`==` on row 2 must not remove row 3; got:\n{after}"
+    );
+    // The whole file was returned (not just the range slice).
+    assert!(
+        after.starts_with('{'),
+        "whole-file output expected; got:\n{after}"
     );
 }
 

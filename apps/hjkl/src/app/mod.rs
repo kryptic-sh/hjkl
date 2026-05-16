@@ -1950,17 +1950,14 @@ impl App {
 
             match result.result {
                 Ok(formatted) => {
-                    let merged = if let Some(range) = result.range {
-                        // Range-gated install: diff original vs formatted and
-                        // accept only hunks whose rows fall inside the user's
-                        // operator range. Out-of-range changes are dropped so
-                        // `==` on row 3 never touches row 0.
-                        let original = self.slots[slot_idx].editor.buffer().as_string();
-                        hjkl_mangler::apply_in_range(&original, &formatted, range)
-                    } else {
-                        formatted
-                    };
-                    let content = merged.strip_suffix('\n').unwrap_or(&merged).to_owned();
+                    // Native-range formatters (prettier, stylua, ruff) return the whole
+                    // file with only the in-range region reformatted. Whole-file formatters
+                    // return the fully-reformatted file. Either way install directly — no
+                    // diff-splice post-processing needed.
+                    let content = formatted
+                        .strip_suffix('\n')
+                        .unwrap_or(&formatted)
+                        .to_owned();
                     // set_content_undoable so the engine pushes the pre-format
                     // buffer state onto the undo stack first — the user can
                     // press `u` to revert the formatter's changes as a single

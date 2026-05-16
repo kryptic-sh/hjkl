@@ -6,6 +6,17 @@
 //! either calls [`Formatter::format`] synchronously (blocking up to 30 s)
 //! or submits a [`FormatJob`] to a [`FormatWorker`] for async dispatch.
 //!
+//! # Range support
+//!
+//! Formatters that have native range arguments (`prettier`, `stylua`, `ruff`)
+//! honour an optional [`RangeSpec`] passed to [`Formatter::format`].  All
+//! three tools return the **whole file** with only the in-range region
+//! reformatted, so the install path is a simple `set_content_undoable` for
+//! every formatter — no diff-splice post-processing needed.
+//!
+//! Formatters without native range support (`rustfmt`, `gofmt`, `shfmt`,
+//! `taplo`) ignore the `range` argument and always reformat the whole file.
+//!
 //! # Timeout
 //!
 //! [`Formatter::format`] blocks the calling thread for at most 30 seconds.
@@ -35,7 +46,7 @@ use std::time::{Duration, Instant};
 
 // ── Range types ───────────────────────────────────────────────────────────────
 
-/// Row range for partial-file install after formatting (inclusive on both ends).
+/// Row range for partial-file formatting (inclusive on both ends).
 ///
 /// Row indices are 0-based and refer to the buffer's line numbering. Both
 /// fields are public so callers can construct values directly without a
@@ -44,6 +55,48 @@ use std::time::{Duration, Instant};
 pub struct RangeSpec {
     pub start_row: usize,
     pub end_row: usize,
+}
+
+/// Convert a row range (0-based, inclusive) to byte offsets into `source`.
+///
+/// Returns `(start_byte, end_byte)` where:
+/// - `start_byte` is the byte offset of the first byte of `start_row`.
+/// - `end_byte` is the byte offset just past the last byte of `end_row`
+///   (i.e. the position after `end_row`'s trailing `\n`, or `source.len()`
+///   when the row is the last and has no trailing newline).
+///
+/// Rows beyond the last line are clamped to `source.len()`.
+pub fn row_range_to_byte_range(source: &str, range: RangeSpec) -> (usize, usize) {
+    let mut start_byte = 0usize;
+    let mut end_byte = source.len();
+    let mut row = 0usize;
+    let mut byte_pos = 0usize;
+    let bytes = source.as_bytes();
+
+    while byte_pos <= bytes.len() {
+        // Find the end of the current row (exclusive — position after '\n').
+        let row_end = bytes[byte_pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|nl| byte_pos + nl + 1) // include the '\n'
+            .unwrap_or(bytes.len());
+
+        if row == range.start_row {
+            start_byte = byte_pos;
+        }
+        if row == range.end_row {
+            end_byte = row_end;
+            break;
+        }
+
+        row += 1;
+        byte_pos = row_end;
+        if byte_pos >= bytes.len() {
+            break;
+        }
+    }
+
+    (start_byte, end_byte)
 }
 
 /// Maximum time we wait for a formatter subprocess before giving up.
@@ -91,7 +144,7 @@ impl std::error::Error for FormatError {
 
 // ── Formatter trait ───────────────────────────────────────────────────────────
 
-/// Formats whole-file source by invoking an external subprocess.
+/// Formats source by invoking an external subprocess.
 ///
 /// Implementations are expected to:
 /// - Spawn the tool as a child process with `cwd = project_root`.
@@ -101,15 +154,33 @@ impl std::error::Error for FormatError {
 /// - Return [`FormatError::SyntaxError`] on non-zero exit status.
 /// - Return [`FormatError::NotInstalled`] when `spawn` returns `NotFound`.
 ///
+/// When `range` is `Some`, implementations that have native range support
+/// (`prettier`, `stylua`, `ruff`) will emit the appropriate range flags.
+/// All of these tools return the **whole file** with only in-range lines
+/// reformatted — the output is safe to install directly via
+/// `set_content_undoable`.
+///
+/// Implementations without native range support ignore `range` and always
+/// reformat the whole file (same as `range = None`).
+///
 /// **This call blocks the calling thread.** Do not invoke on a UI thread
 /// without wrapping in a background task. Async dispatch is tracked in #118.
 pub trait Formatter: Send + Sync {
-    /// Format whole-file `source`. Returns formatted bytes or an error.
+    /// Format `source`. Returns the formatted whole-file content or an error.
     ///
     /// `project_root` is used as the working directory so formatters that
     /// walk up looking for config files (e.g. `prettier`, `rustfmt`) find
     /// the project's config.
-    fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError>;
+    ///
+    /// `range` is an optional hint to restrict formatting to a row range.
+    /// Formatters with native range support (`prettier`, `stylua`, `ruff`)
+    /// honour it; others ignore it and always reformat the whole file.
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        range: Option<RangeSpec>,
+    ) -> Result<String, FormatError>;
 
     /// Human-readable name of the underlying tool (e.g. `"rustfmt"`,
     /// `"prettier"`). Used by callers to probe availability via
@@ -157,11 +228,11 @@ pub fn probe_tool(tool: &str) -> Result<(), String> {
 
 // ── Shared subprocess helper ──────────────────────────────────────────────────
 
-/// A formatter that pipes stdin → stdout.
+/// A formatter that pipes stdin → stdout with no range support.
 ///
 /// `args[0]` is the program name; `args[1..]` are its arguments.
 /// The caller supplies `args` as a `&'static [&'static str]` so no allocation
-/// is needed per call.
+/// is needed per call. Range is always ignored — the whole file is reformatted.
 ///
 /// For prettier-style `--stdin-filepath`, the path must be supplied at
 /// format-call time. Use [`PrettierFormatter`] instead which accepts the
@@ -174,7 +245,12 @@ pub struct StdinFormatter {
 }
 
 impl Formatter for StdinFormatter {
-    fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError> {
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        _range: Option<RangeSpec>,
+    ) -> Result<String, FormatError> {
         run_formatter(self.tool_name, self.args, &[], source, project_root)
     }
     fn tool_name(&self) -> &str {
@@ -182,32 +258,137 @@ impl Formatter for StdinFormatter {
     }
 }
 
-/// A formatter that injects the buffer file path as an extra argument.
+/// A prettier formatter that injects the buffer file path and optional byte-range flags.
 ///
-/// Used for `prettier --stdin-filepath <path>` and similar tools where the
-/// path affects which config is applied.
-pub struct FormatterWithPath {
-    /// Base program + args (e.g. `["prettier", "--stdin-filepath"]`).
-    pub base_args: &'static [&'static str],
-    /// The file path to append as the last argument.
-    pub file_path: std::path::PathBuf,
-    /// Human-readable tool name.
-    pub tool_name: &'static str,
+/// Used for `prettier --stdin-filepath <path> [--range-start <s> --range-end <e>]`.
+/// When `range` is `Some`, emits `--range-start` and `--range-end` as byte offsets
+/// derived from the row range. Prettier returns the **whole file** with only
+/// in-range content reformatted, so the output is safe to install directly.
+pub struct PrettierFormatter {
+    /// The file path to pass as `--stdin-filepath`.
+    pub file_path: PathBuf,
 }
 
-impl Formatter for FormatterWithPath {
-    fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError> {
-        let path_arg = self.file_path.to_string_lossy().into_owned();
-        run_formatter(
-            self.tool_name,
-            self.base_args,
-            &[path_arg.as_str()],
-            source,
-            project_root,
-        )
+impl Formatter for PrettierFormatter {
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        range: Option<RangeSpec>,
+    ) -> Result<String, FormatError> {
+        let path_str = self.file_path.to_string_lossy().into_owned();
+        let base_args: &[&str] = &["prettier", "--stdin-filepath"];
+
+        if let Some(range) = range {
+            let (start_byte, end_byte) = row_range_to_byte_range(source, range);
+            let start_str = start_byte.to_string();
+            let end_str = end_byte.to_string();
+            run_formatter(
+                "prettier",
+                base_args,
+                &[
+                    path_str.as_str(),
+                    "--range-start",
+                    start_str.as_str(),
+                    "--range-end",
+                    end_str.as_str(),
+                ],
+                source,
+                project_root,
+            )
+        } else {
+            run_formatter(
+                "prettier",
+                base_args,
+                &[path_str.as_str()],
+                source,
+                project_root,
+            )
+        }
     }
     fn tool_name(&self) -> &str {
-        self.tool_name
+        "prettier"
+    }
+}
+
+/// A stylua formatter with native byte-range support.
+///
+/// When `range` is `Some`, emits `--range-start <s> --range-end <e>` as byte
+/// offsets. Stylua returns the **whole file** with only in-range content
+/// reformatted. When `range` is `None`, reformats the whole file.
+pub struct StyluaFormatter;
+
+impl Formatter for StyluaFormatter {
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        range: Option<RangeSpec>,
+    ) -> Result<String, FormatError> {
+        let base_args: &[&str] = &["stylua", "-"];
+
+        if let Some(range) = range {
+            let (start_byte, end_byte) = row_range_to_byte_range(source, range);
+            let start_str = start_byte.to_string();
+            let end_str = end_byte.to_string();
+            run_formatter(
+                "stylua",
+                base_args,
+                &[
+                    "--range-start",
+                    start_str.as_str(),
+                    "--range-end",
+                    end_str.as_str(),
+                ],
+                source,
+                project_root,
+            )
+        } else {
+            run_formatter("stylua", base_args, &[], source, project_root)
+        }
+    }
+    fn tool_name(&self) -> &str {
+        "stylua"
+    }
+}
+
+/// A ruff formatter with native line:col range support.
+///
+/// When `range` is `Some`, emits `--range <start_line>:<start_col>-<end_line>:<end_col>`
+/// using 1-based line numbers. The end line is `end_row + 2` (exclusive) so that the
+/// inclusive 0-based `end_row` is fully covered. Ruff returns the **whole file** with
+/// only in-range content reformatted. When `range` is `None`, reformats the whole file.
+pub struct RuffFormatter;
+
+impl Formatter for RuffFormatter {
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        range: Option<RangeSpec>,
+    ) -> Result<String, FormatError> {
+        let base_args: &[&str] = &["ruff", "format", "-"];
+
+        if let Some(range) = range {
+            // Ruff uses 1-based line numbers. start_row is 0-based, so start
+            // line is start_row + 1. The end is exclusive in ruff's semantics,
+            // so to cover the inclusive end_row (0-based), end line is end_row + 2.
+            let start_line = range.start_row + 1;
+            let end_line = range.end_row + 2;
+            let range_str = format!("{start_line}:1-{end_line}:1");
+            run_formatter(
+                "ruff",
+                base_args,
+                &["--range", range_str.as_str()],
+                source,
+                project_root,
+            )
+        } else {
+            run_formatter("ruff", base_args, &[], source, project_root)
+        }
+    }
+    fn tool_name(&self) -> &str {
+        "ruff"
     }
 }
 
@@ -221,10 +402,17 @@ impl Formatter for FormatterWithPath {
 /// 1. `[package].edition` in the nearest `Cargo.toml` (walks up `project_root`).
 /// 2. `[workspace.package].edition` if no package edition.
 /// 3. Defaults to `2024` — the current stable edition.
+///
+/// Range is always ignored — rustfmt has no stable range flag.
 pub struct RustFormatter;
 
 impl Formatter for RustFormatter {
-    fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError> {
+    fn format(
+        &self,
+        source: &str,
+        project_root: &Path,
+        _range: Option<RangeSpec>,
+    ) -> Result<String, FormatError> {
         let edition = detect_rust_edition(project_root).unwrap_or_else(|| "2024".to_string());
         let edition_arg = format!("--edition={edition}");
         run_formatter(
@@ -532,44 +720,38 @@ fn run_formatter(
 /// [`Formatter::format`]; it does **not** verify the tool is installed until
 /// format time.
 ///
-/// | Extension | Tool |
-/// |---|---|
-/// | `.rs` | `rustfmt --emit stdout` |
-/// | `.ts .tsx .js .jsx .mjs .cjs .json .md .yaml .yml` | `prettier --stdin-filepath <path>` |
-/// | `.py` | `ruff format -` |
-/// | `.go` | `gofmt` |
-/// | `.lua` | `stylua -` |
-/// | `.sh .bash` | `shfmt` |
-/// | `.toml` | `taplo fmt -` |
+/// | Extension | Tool | Native range |
+/// |---|---|---|
+/// | `.rs` | `rustfmt --emit stdout` | none (whole-file always) |
+/// | `.ts .tsx .js .jsx .mjs .cjs .json .md .yaml .yml` | `prettier --stdin-filepath <path>` | `--range-start/--range-end` (bytes) |
+/// | `.py` | `ruff format -` | `--range <L:C>-<L:C>` (1-based line:col) |
+/// | `.go` | `gofmt` | none |
+/// | `.lua` | `stylua -` | `--range-start/--range-end` (bytes) |
+/// | `.sh .bash` | `shfmt` | none |
+/// | `.toml` | `taplo fmt -` | none |
 pub fn formatter_for_path(path: &Path) -> Option<Arc<dyn Formatter>> {
     let ext = path.extension()?.to_str()?;
     match ext {
         "rs" => Some(Arc::new(RustFormatter)),
 
         // Prettier handles many types; pass the real path so it reads the
-        // correct prettier config rules.
+        // correct prettier config rules. Supports native byte-range flags.
         "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "json" | "md" | "yaml" | "yml" => {
-            Some(Arc::new(FormatterWithPath {
-                base_args: &["prettier", "--stdin-filepath"],
+            Some(Arc::new(PrettierFormatter {
                 file_path: path.to_owned(),
-                tool_name: "prettier",
             }))
         }
 
-        "py" => Some(Arc::new(StdinFormatter {
-            args: &["ruff", "format", "-"],
-            tool_name: "ruff",
-        })),
+        // Ruff supports native line:col range formatting.
+        "py" => Some(Arc::new(RuffFormatter)),
 
         "go" => Some(Arc::new(StdinFormatter {
             args: &["gofmt"],
             tool_name: "gofmt",
         })),
 
-        "lua" => Some(Arc::new(StdinFormatter {
-            args: &["stylua", "-"],
-            tool_name: "stylua",
-        })),
+        // Stylua supports native byte-range formatting.
+        "lua" => Some(Arc::new(StyluaFormatter)),
 
         "sh" | "bash" => Some(Arc::new(StdinFormatter {
             args: &["shfmt"],
@@ -606,10 +788,9 @@ pub struct FormatJob {
     /// results whose `dirty_gen` is older than the current buffer gen so
     /// that interleaved typing does not install stale formatted output.
     pub dirty_gen: u64,
-    /// Row range the user operated on. When `Some`, the installer applies
-    /// only in-range diff hunks via [`apply_in_range`]. `None` keeps the
-    /// whole-file replace behaviour (legacy path, and the explicit
-    /// gg=G / full-file submit path).
+    /// Row range the user operated on. Formatters with native range support
+    /// (`prettier`, `stylua`, `ruff`) pass this through as native flags.
+    /// Formatters without range support ignore it and reformat the whole file.
     pub range: Option<RangeSpec>,
 }
 
@@ -620,9 +801,15 @@ pub struct FormatResult {
     /// The dirty-gen that was current when the job was submitted.
     pub dirty_gen: u64,
     /// Formatted source, or the error that occurred.
+    ///
+    /// For formatters with native range support, this is the **whole file**
+    /// with only the in-range region reformatted. For formatters without range
+    /// support, this is the whole file reformatted. In both cases, install
+    /// via `set_content_undoable` without any further post-processing.
     pub result: Result<String, FormatError>,
-    /// Mirrors [`FormatJob::range`] so the installer knows whether to do a
-    /// whole-file replace or a range-gated splice via [`apply_in_range`].
+    /// Mirrors [`FormatJob::range`] for informational purposes. The installer
+    /// does not need to use this for diff-splicing — the formatter output is
+    /// already ready to install directly.
     pub range: Option<RangeSpec>,
 }
 
@@ -728,7 +915,9 @@ fn format_worker_loop(
             p.jobs.remove(&key).expect("key just found")
         };
 
-        let result = job.formatter.format(&job.source, &job.project_root);
+        let result = job
+            .formatter
+            .format(&job.source, &job.project_root, job.range);
         let msg = FormatResult {
             buffer_id: job.buffer_id,
             dirty_gen: job.dirty_gen,
@@ -740,77 +929,6 @@ fn format_worker_loop(
             return;
         }
     }
-}
-
-// ── Range-gated diff splice ───────────────────────────────────────────────────
-
-/// Merge formatter output back into the original, accepting only diff hunks
-/// whose original-side lines fall inside `range` (inclusive).
-///
-/// The formatter always receives and returns the **whole file** — no partial
-/// stdin/stdout gymnastics. After it returns, this function walks the
-/// `similar` line diff and accepts inserts/deletes only when they touch rows
-/// `[range.start_row, range.end_row]`. Out-of-range changes are silently
-/// discarded, leaving those lines byte-for-byte identical to the original.
-///
-/// Trailing-newline preservation: the result ends with `\n` iff `original`
-/// does.
-pub fn apply_in_range(original: &str, formatted: &str, range: RangeSpec) -> String {
-    use similar::{ChangeTag, TextDiff};
-
-    let trailing_newline = original.ends_with('\n');
-
-    // Work on the content without the trailing newline so line indexing is
-    // consistent with the engine's row numbering (line N = index N in the
-    // `\n`-split array, no phantom empty line at the end).
-    let orig_body = original.trim_end_matches('\n');
-    let fmt_body = formatted.trim_end_matches('\n');
-
-    let diff = TextDiff::from_lines(orig_body, fmt_body);
-
-    let mut out = String::with_capacity(formatted.len());
-    // Tracks which line in the original we are currently "at" — used to
-    // decide whether an Insert's anchor is inside the range.
-    let mut orig_cursor: usize = 0;
-
-    for change in diff.iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Equal => {
-                out.push_str(change.value());
-                orig_cursor += 1;
-            }
-            ChangeTag::Delete => {
-                // A line present in original but absent in formatted.
-                // Accept the delete (skip emit) only when the original line
-                // index falls inside the requested range. Otherwise keep it.
-                let in_range = orig_cursor >= range.start_row && orig_cursor <= range.end_row;
-                if !in_range {
-                    out.push_str(change.value());
-                }
-                orig_cursor += 1;
-            }
-            ChangeTag::Insert => {
-                // A line absent in original, present in formatted. The
-                // anchor is `orig_cursor` — the position in the original
-                // stream where this insertion would land (i.e. the next
-                // original line's index, or "past the end").
-                // Accept when the anchor is within [start_row, end_row+1]
-                // (the +1 allows insertions that follow the last in-range
-                // original line).
-                let anchor = orig_cursor;
-                let in_range = anchor >= range.start_row && anchor <= range.end_row + 1;
-                if in_range {
-                    out.push_str(change.value());
-                }
-                // orig_cursor does NOT advance for inserts — inserts have no
-                // original-side position.
-            }
-        }
-    }
-
-    // Restore trailing newline to match the original's convention.
-    let out = out.trim_end_matches('\n').to_owned();
-    if trailing_newline { out + "\n" } else { out }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -906,6 +1024,82 @@ mod tests {
         assert!(formatter_for_path(&path).is_some());
     }
 
+    // ── row_range_to_byte_range unit tests ────────────────────────────────
+
+    #[test]
+    fn prettier_range_flag_emission_byte_offsets() {
+        // Source: 12 lines; verify byte offsets for rows 5..=10.
+        let mut source = String::new();
+        for i in 0..12 {
+            source.push_str(&format!("line{i}\n"));
+        }
+
+        let range = RangeSpec {
+            start_row: 5,
+            end_row: 10,
+        };
+        let (start_byte, end_byte) = row_range_to_byte_range(&source, range);
+
+        // Each "lineN\n" is 6 bytes for N 0..=9 (5 chars + \n).
+        // But "line10\n" is 7 bytes. Rows 0..=4 are "line0\n".."line4\n" = 5*6=30 bytes.
+        let expected_start: usize = (0..5).map(|i: usize| format!("line{i}\n").len()).sum();
+        let expected_end: usize = (0..=10).map(|i: usize| format!("line{i}\n").len()).sum();
+
+        assert_eq!(
+            start_byte, expected_start,
+            "start_byte must be the offset of row 5"
+        );
+        assert_eq!(
+            end_byte, expected_end,
+            "end_byte must be just past the trailing \\n of row 10"
+        );
+    }
+
+    #[test]
+    fn row_range_to_byte_range_single_row() {
+        // "abc\ndef\nghi\n" — rows 0="abc\n", 1="def\n", 2="ghi\n"
+        let source = "abc\ndef\nghi\n";
+        let (s, e) = row_range_to_byte_range(
+            source,
+            RangeSpec {
+                start_row: 1,
+                end_row: 1,
+            },
+        );
+        // Row 1 starts at byte 4, ends at byte 8 (past '\n' of "def\n").
+        assert_eq!(s, 4);
+        assert_eq!(e, 8);
+    }
+
+    #[test]
+    fn row_range_to_byte_range_whole_file() {
+        let source = "abc\ndef\n";
+        let (s, e) = row_range_to_byte_range(
+            source,
+            RangeSpec {
+                start_row: 0,
+                end_row: 1,
+            },
+        );
+        assert_eq!(s, 0);
+        assert_eq!(e, source.len());
+    }
+
+    #[test]
+    fn row_range_to_byte_range_no_trailing_newline() {
+        let source = "abc\ndef";
+        let (s, e) = row_range_to_byte_range(
+            source,
+            RangeSpec {
+                start_row: 1,
+                end_row: 1,
+            },
+        );
+        // Row 1 starts at byte 4, ends at source.len() (no trailing newline).
+        assert_eq!(s, 4);
+        assert_eq!(e, source.len());
+    }
+
     // ── Subprocess tests (require tools installed) ────────────────────────
     //
     // Run these with:
@@ -918,7 +1112,7 @@ mod tests {
     fn rustfmt_formats_simple_function() {
         let src = "fn main(){let x=1;}";
         let formatter = formatter_for_path(Path::new("foo.rs")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         // rustfmt adds proper spacing and newlines.
         assert!(result.contains("fn main()"), "expected fn main in output");
         assert!(result.contains("let x = 1;"), "expected spaced assignment");
@@ -929,7 +1123,7 @@ mod tests {
     fn prettier_formats_json() {
         let src = r#"{"a":1,"b":2}"#;
         let formatter = formatter_for_path(Path::new("test.json")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         // prettier pretty-prints with newlines.
         assert!(
             result.contains('\n'),
@@ -939,11 +1133,33 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires prettier on PATH"]
+    fn prettier_range_formats_only_specified_rows() {
+        // A two-key JSON object. Format only row 1 ("b":2) — row 0 is already
+        // well-formed ("a": 1). Prettier must return the whole file with only
+        // the in-range bytes reformatted.
+        let src = "{\n  \"a\": 1,\n\"b\":2\n}\n";
+        let formatter = formatter_for_path(Path::new("test.json")).unwrap();
+        // Row 2 (0-based) is the `"b":2` line.
+        let range = RangeSpec {
+            start_row: 2,
+            end_row: 2,
+        };
+        let result = formatter
+            .format(src, Path::new("/tmp"), Some(range))
+            .unwrap();
+        // Must still contain "a": 1 (untouched row).
+        assert!(result.contains("\"a\""), "row 0 must be preserved");
+        // The whole file is returned, not just the range.
+        assert!(result.contains('{'), "whole-file output expected");
+    }
+
+    #[test]
     #[ignore = "requires gofmt on PATH"]
     fn gofmt_formats_go_source() {
         let src = "package main\nfunc main(){x:=1;_ = x}";
         let formatter = formatter_for_path(Path::new("main.go")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         assert!(
             result.contains("func main()"),
             "expected func main in output"
@@ -955,7 +1171,7 @@ mod tests {
     fn shfmt_formats_shell_script() {
         let src = "#!/bin/sh\nif [ 1 -eq 1 ];then echo hi;fi";
         let formatter = formatter_for_path(Path::new("run.sh")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         assert!(result.contains("echo"), "expected echo in output");
     }
 
@@ -964,7 +1180,7 @@ mod tests {
     fn stylua_formats_lua() {
         let src = "local x=1;print(x)";
         let formatter = formatter_for_path(Path::new("init.lua")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         assert!(result.contains("local"), "expected local in output");
     }
 
@@ -973,7 +1189,7 @@ mod tests {
     fn taplo_formats_toml() {
         let src = "[package]\nname=\"test\"\nversion=\"0.1.0\"";
         let formatter = formatter_for_path(Path::new("Cargo.toml")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         assert!(result.contains("[package]"), "expected [package] in output");
     }
 
@@ -982,7 +1198,7 @@ mod tests {
     fn ruff_formats_python() {
         let src = "x=1+2\nprint(x)";
         let formatter = formatter_for_path(Path::new("script.py")).unwrap();
-        let result = formatter.format(src, Path::new("/tmp")).unwrap();
+        let result = formatter.format(src, Path::new("/tmp"), None).unwrap();
         assert!(result.contains("x"), "expected x in output");
     }
 
@@ -991,7 +1207,12 @@ mod tests {
     /// A formatter that immediately returns its input unchanged.
     struct EchoFormatter;
     impl Formatter for EchoFormatter {
-        fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
+        fn format(
+            &self,
+            source: &str,
+            _root: &Path,
+            _range: Option<RangeSpec>,
+        ) -> Result<String, FormatError> {
             Ok(source.to_owned())
         }
         fn tool_name(&self) -> &str {
@@ -1004,7 +1225,12 @@ mod tests {
         delay: std::time::Duration,
     }
     impl Formatter for SlowFormatter {
-        fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
+        fn format(
+            &self,
+            source: &str,
+            _root: &Path,
+            _range: Option<RangeSpec>,
+        ) -> Result<String, FormatError> {
             std::thread::sleep(self.delay);
             Ok(source.to_owned())
         }
@@ -1153,97 +1379,5 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-    }
-
-    // ── apply_in_range unit tests ─────────────────────────────────────────
-
-    #[test]
-    fn apply_in_range_all_changes_inside_range_equals_formatted() {
-        let original = "line0\nline1\nline2\n";
-        let formatted = "LINE0\nLINE1\nLINE2\n";
-        let range = RangeSpec {
-            start_row: 0,
-            end_row: 2,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert_eq!(result, formatted);
-    }
-
-    #[test]
-    fn apply_in_range_all_changes_outside_range_equals_original() {
-        let original = "line0\nline1\nline2\n";
-        let formatted = "LINE0\nLINE1\nLINE2\n";
-        // Range covers none of the changed rows.
-        let range = RangeSpec {
-            start_row: 5,
-            end_row: 10,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert_eq!(result, original);
-    }
-
-    #[test]
-    fn apply_in_range_mixed_only_in_range_changes_accepted() {
-        let original = "A\nB\nC\nD\n";
-        // Formatter changes rows 0 and 3.
-        let formatted = "a\nB\nC\nd\n";
-        // Range covers only row 0.
-        let range = RangeSpec {
-            start_row: 0,
-            end_row: 0,
-        };
-        let result = apply_in_range(original, formatted, range);
-        // Row 0 is changed, row 3 is NOT changed (out of range).
-        assert_eq!(result, "a\nB\nC\nD\n");
-    }
-
-    #[test]
-    fn apply_in_range_whole_file_range_equals_formatted() {
-        let original = "foo\nbar\nbaz\n";
-        let formatted = "FOO\nBAR\nBAZ\n";
-        let range = RangeSpec {
-            start_row: 0,
-            end_row: 2,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert_eq!(result, formatted);
-    }
-
-    #[test]
-    fn apply_in_range_single_line_whitespace_change() {
-        // Typical `==` use-case: only the current line has changed indentation.
-        let original = "fn foo() {\n    let x=1;\n    let y=2;\n}\n";
-        // Formatter "fixes" row 1 only.
-        let formatted = "fn foo() {\n    let x = 1;\n    let y=2;\n}\n";
-        let range = RangeSpec {
-            start_row: 1,
-            end_row: 1,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert_eq!(result, "fn foo() {\n    let x = 1;\n    let y=2;\n}\n");
-    }
-
-    #[test]
-    fn apply_in_range_preserves_trailing_newline_when_original_has_one() {
-        let original = "a\nb\n";
-        let formatted = "A\nB\n";
-        let range = RangeSpec {
-            start_row: 0,
-            end_row: 1,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert!(result.ends_with('\n'), "result must end with \\n");
-    }
-
-    #[test]
-    fn apply_in_range_no_trailing_newline_when_original_lacks_one() {
-        let original = "a\nb";
-        let formatted = "A\nB";
-        let range = RangeSpec {
-            start_row: 0,
-            end_row: 1,
-        };
-        let result = apply_in_range(original, formatted, range);
-        assert!(!result.ends_with('\n'), "result must NOT end with \\n");
     }
 }
