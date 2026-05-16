@@ -97,6 +97,30 @@ pub trait Formatter: Send + Sync {
     /// walk up looking for config files (e.g. `prettier`, `rustfmt`) find
     /// the project's config.
     fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError>;
+
+    /// Human-readable name of the underlying tool (e.g. `"rustfmt"`,
+    /// `"prettier"`). Used by callers to probe availability via
+    /// [`is_tool_installed`] before spending a worker slot on a job
+    /// that would fail with [`FormatError::NotInstalled`].
+    fn tool_name(&self) -> &str;
+}
+
+/// Return `true` when `tool` resolves on `PATH`. Implemented as a
+/// `Command::new(tool).arg("--version")` probe so it works uniformly
+/// across rustfmt / prettier / gofmt / ruff / shfmt / stylua / taplo.
+///
+/// Cheap (~few ms when the binary exists, errors instantly when not).
+/// Call from the UI thread before submitting a [`FormatJob`] so the
+/// caller can fall back to a dumb local algorithm without burning the
+/// worker.
+pub fn is_tool_installed(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok()
 }
 
 // ── Shared subprocess helper ──────────────────────────────────────────────────
@@ -120,6 +144,9 @@ pub struct StdinFormatter {
 impl Formatter for StdinFormatter {
     fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError> {
         run_formatter(self.tool_name, self.args, &[], source, project_root)
+    }
+    fn tool_name(&self) -> &str {
+        self.tool_name
     }
 }
 
@@ -147,6 +174,9 @@ impl Formatter for FormatterWithPath {
             project_root,
         )
     }
+    fn tool_name(&self) -> &str {
+        self.tool_name
+    }
 }
 
 /// Rust-specific formatter — invokes `rustfmt` with `--edition` set from the
@@ -172,6 +202,9 @@ impl Formatter for RustFormatter {
             source,
             project_root,
         )
+    }
+    fn tool_name(&self) -> &str {
+        "rustfmt"
     }
 }
 
@@ -687,6 +720,24 @@ mod tests {
     }
 
     #[test]
+    fn is_tool_installed_returns_true_for_sh() {
+        // `sh` is on every POSIX system; can't run mangler tests where it's
+        // absent so this is a safe positive assertion.
+        assert!(
+            is_tool_installed("sh"),
+            "sh must resolve on PATH for the probe to function"
+        );
+    }
+
+    #[test]
+    fn is_tool_installed_returns_false_for_missing_tool() {
+        assert!(
+            !is_tool_installed("hjkl-mangler-definitely-not-a-real-tool-xyz"),
+            "probe must return false for a tool not on PATH"
+        );
+    }
+
+    #[test]
     fn formatter_for_path_returns_none_for_unknown_ext() {
         let path = PathBuf::from("foo.xyz");
         assert!(
@@ -831,6 +882,9 @@ mod tests {
         fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
             Ok(source.to_owned())
         }
+        fn tool_name(&self) -> &str {
+            "echo"
+        }
     }
 
     /// A slow formatter that sleeps briefly so we can test dedup.
@@ -841,6 +895,9 @@ mod tests {
         fn format(&self, source: &str, _root: &Path) -> Result<String, FormatError> {
             std::thread::sleep(self.delay);
             Ok(source.to_owned())
+        }
+        fn tool_name(&self) -> &str {
+            "slow"
         }
     }
 

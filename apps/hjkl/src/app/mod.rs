@@ -1825,7 +1825,7 @@ impl App {
     /// Returns `false` when no formatter is registered for the active
     /// buffer's extension — caller should run the dumb fallback immediately.
     pub(crate) fn submit_external_format(&mut self) -> bool {
-        use hjkl_mangler::formatter_for_path;
+        use hjkl_mangler::{formatter_for_path, is_tool_installed};
 
         let filename = self.active().filename.clone();
         let Some(ref path) = filename else {
@@ -1836,15 +1836,15 @@ impl App {
             return false;
         };
 
-        let tool_name = {
-            // Peek at the formatter's tool name via the FormatError::NotInstalled
-            // path — a quick probe that never spawns a subprocess.
-            // Simpler: derive from the path extension for the status message.
-            path.extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("formatter")
-                .to_owned()
-        };
+        // Probe binary availability up-front so a missing formatter
+        // (prettier on a fresh box opening a .md, etc.) silently falls
+        // through to the dumb-algo path instead of dispatching a worker
+        // job that would surface as a noisy "prettier: not installed".
+        let tool_name = formatter.tool_name().to_owned();
+        if !is_tool_installed(&tool_name) {
+            tracing::debug!(tool = %tool_name, "formatter not installed; falling back to dumb algo");
+            return false;
+        }
 
         let source = std::sync::Arc::new(self.active().editor.buffer().as_string());
         let dirty_gen = self.active().editor.buffer().dirty_gen();

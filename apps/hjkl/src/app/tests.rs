@@ -13470,7 +13470,8 @@ fn auto_indent_format_result_is_undoable() {
 
     let formatted = app.active().editor.buffer().as_string();
     assert_ne!(
-        formatted, ugly.trim_end(),
+        formatted,
+        ugly.trim_end(),
         "rustfmt must have changed the buffer (sanity)"
     );
 
