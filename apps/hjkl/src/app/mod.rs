@@ -1825,7 +1825,7 @@ impl App {
     /// Returns `false` when no formatter is registered for the active
     /// buffer's extension — caller should run the dumb fallback immediately.
     pub(crate) fn submit_external_format(&mut self) -> bool {
-        use hjkl_mangler::{formatter_for_path, is_tool_installed};
+        use hjkl_mangler::{formatter_for_path, probe_tool};
 
         let filename = self.active().filename.clone();
         let Some(ref path) = filename else {
@@ -1841,8 +1841,15 @@ impl App {
         // through to the dumb-algo path instead of dispatching a worker
         // job that would surface as a noisy "prettier: not installed".
         let tool_name = formatter.tool_name().to_owned();
-        if !is_tool_installed(&tool_name) {
-            tracing::debug!(tool = %tool_name, "formatter not installed; falling back to dumb algo");
+        if let Err(why) = probe_tool(&tool_name) {
+            tracing::debug!(
+                tool = %tool_name,
+                reason = %why,
+                "formatter probe failed; falling back to dumb algo"
+            );
+            // Surface the *real* reason so the user can tell apart
+            // "binary not on PATH" from "wrapper script exits non-zero".
+            self.status_message = Some(format!("{tool_name} probe: {why}"));
             return false;
         }
 

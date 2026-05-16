@@ -13244,6 +13244,70 @@ fn auto_indent_gg_eq_g_invokes_rustfmt() {
     );
 }
 
+/// Headless repro of user-reported "prettier: not installed" on .md files
+/// (2026-05-16). Prints every observable: PATH, direct subprocess probe,
+/// hjkl-mangler::probe_tool, App status message after gg=G. Always passes —
+/// pure diagnostic. Run with:
+///   cargo test -p hjkl --bin hjkl prettier_md_diagnostic -- --nocapture --ignored
+#[test]
+#[ignore = "diagnostic harness — run manually with --nocapture"]
+fn prettier_md_diagnostic() {
+    use std::io::Write;
+
+    eprintln!("=== PATH ===");
+    eprintln!("{}", std::env::var("PATH").unwrap_or_default());
+
+    eprintln!("\n=== Direct Command::new(\"prettier\") --version ===");
+    let r = std::process::Command::new("prettier")
+        .arg("--version")
+        .output();
+    eprintln!("{:?}", r);
+
+    eprintln!("\n=== hjkl_mangler::probe_tool ===");
+    eprintln!("{:?}", hjkl_mangler::probe_tool("prettier"));
+
+    eprintln!("\n=== App flow: create .md, gg=G, poll, observe status ===");
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_mangler_md_diag_{}.md",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"# hello\n*world*  with   bad whitespace\n")
+        .unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('G')));
+
+    eprintln!("status right after submit: {:?}", app.status_message);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if app.poll_format_results() {
+            eprintln!("poll_format_results returned true");
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            eprintln!("polling timed out after 10s");
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    eprintln!("status after poll: {:?}", app.status_message);
+    eprintln!("buffer after: {:?}", app.active().editor.buffer().as_string());
+
+    let _ = std::fs::remove_file(&path);
+}
+
 /// END-TO-END: open a real `.rs` file, drive `==` via the chord path, assert
 /// the buffer was reformatted by rustfmt (not dumb algo). Regression for the
 /// "user reports formatter not invoked" diagnosis on 2026-05-16.

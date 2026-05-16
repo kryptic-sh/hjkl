@@ -114,11 +114,15 @@ pub trait Formatter: Send + Sync {
 /// caller can fall back to a dumb local algorithm without burning the
 /// worker.
 pub fn is_tool_installed(tool: &str) -> bool {
-    // Require BOTH spawn success and a 0 exit status. A script with a
-    // missing shebang interpreter (e.g. `#!/usr/bin/env node` when node
-    // is absent) spawns fine but exits non-zero — without the success
-    // check we'd say "installed" and the worker would then surface the
-    // exec failure as a confusing syntax error.
+    probe_tool(tool).is_ok()
+}
+
+/// Detailed availability probe. Returns `Ok(())` when the tool runs and
+/// exits 0 on `--version`, otherwise an error string describing what
+/// went wrong (spawn failure with kind, or non-zero exit code). Use this
+/// when the caller wants to surface diagnostics; [`is_tool_installed`]
+/// is the convenience wrapper.
+pub fn probe_tool(tool: &str) -> Result<(), String> {
     match Command::new(tool)
         .arg("--version")
         .stdin(Stdio::null())
@@ -126,8 +130,12 @@ pub fn is_tool_installed(tool: &str) -> bool {
         .stderr(Stdio::null())
         .status()
     {
-        Ok(status) => status.success(),
-        Err(_) => false,
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!(
+            "spawned but exited {}",
+            status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+        )),
+        Err(e) => Err(format!("spawn failed: {} ({:?})", e, e.kind())),
     }
 }
 
