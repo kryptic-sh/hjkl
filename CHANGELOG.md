@@ -8,6 +8,94 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-05-16
+
+### Added
+
+- `hjkl-mangler` crate: `Formatter` trait + 8 built-in formatter impls (rustfmt,
+  prettier, gofmt, black, isort, clang-format, stylua, shfmt). Detects Rust
+  edition from `Cargo.toml` (handles `edition.workspace` shorthand). Probes tool
+  availability up-front with exit-success check; falls back gracefully when
+  missing.
+- `FormatWorker`: async per-buffer format dispatch in `hjkl-mangler`; wired into
+  `apps/hjkl` as non-blocking `=` with deferred tool install. Drain
+  stdout/stderr in threads so large files no longer deadlock.
+- Range-only formatting for `=` operator (#119): native per-formatter range
+  flags, `similar` dep dropped.
+- `=` operator wired to `hjkl-mangler` with dumb-algo fallback; formatter result
+  is undoable (routed through `set_content_undoable`).
+- Keymap predicate intercepts (#120): phases 2–4 migrate static inline
+  intercepts and predicate-gated intercepts into the keymap trie;
+  `handle_keypress` / `handle_mouse` extracted from `run()`.
+- `App::dispatch_action` split by domain (#121): 780-LOC monolith broken into
+  focused domain handlers.
+- Mouse Phase 1: click-to-cursor, drag-select, double/triple-click (#114).
+- `ContextMenu` widget + render integration; right-click dispatch (clipboard +
+  tab menus); `menu_copy` / `menu_cut` / `menu_paste` action wrappers.
+- Left-click on tab bar switches to that tab; click on buffer line switches
+  buffer.
+- `mouse::hit_test_zone` (Code / Gutter / TabBar / None); unified top-bar layout
+  (tab bar + buffer line merged into single top row).
+- `Zone::StatusLine` / `SplitBorder` / `PickerRow` + hit-test routing;
+  right-click menus for status line, split borders, and picker overlay.
+- Middle-click zone dispatch (paste / close tab / close buffer). Ctrl+click
+  goto-def, Shift+click extend visual, middle-click primary-paste.
+- Drag-resize splits + double-click equalize; `hit_test_border` + `BorderHit`
+  type.
+- `:set mouse=<flags>` per-mode toggle.
+- `HoverPopup` widget; LSP hover popup on mouse-rest (500ms); LSP items wired
+  into right-click Code menu; `App::active_has_lsp` helper for menu
+  enable/disable.
+- Per-slot top/bottom/viewport span caches with merged install; pre-cache top +
+  bottom spans per buffer (bottom deferred for snappy startup).
+- `ParseKind` tag on parse requests + results for syntax worker.
+- Syntax over-provision: viewport requests 3× height for ahead-of-scroll spans;
+  pre-warm parse for all open buffers; per-slot span cache for instant buffer
+  switch.
+- Per-row dirty tracking to eliminate white-text flash after edits.
+- Brief flash highlight on `=` / auto-indent operator; auto-indent flash blinks
+  twice at 2× speed.
+- `<leader>/` regression test (grep picker flow).
+- Visual-selection empty-line placeholders: `hjkl-buffer` paints selection
+  placeholder on empty rows, spanning full block width.
+- Web: add pikr to siblings nav + sitemap.
+
+### Changed
+
+- Dep bumps (L0–L2 cascade): `hjkl-engine` 0.8 → 0.9, `hjkl-buffer` 0.6 → 0.7,
+  `hjkl-keymap` 0.2 → 0.3, `hjkl-vim` 0.19.0 → 0.20, `hjkl-editor` 0.5 → 0.6,
+  `hjkl-ex` 0.1 → 0.2, `hjkl-form` 0.3 → 0.4, `hjkl-picker` 0.6 → 0.7,
+  `hjkl-ratatui` 0.3 → 0.4, `hjkl-picker-tui` 0.1 → 0.2. Applied to `apps/hjkl`,
+  `apps/hjkl-gui`, `crates/hjkl-editor-gui`, and `crates/hjkl-compat-oracle`.
+- Tab labels: dropped `[]` brackets, use flanking-space style.
+- `mangler`: `probe_tool` returns diagnostic `Err` instead of `bool`.
+- Refactor: `hjkl_buffer::over_provisioned_range` used for syntax pre-warm.
+
+### Fixed
+
+- `/ ?` intercept now gated on no-pending-chord so `<leader>/` works correctly.
+- Formatter: `BrokenPipe` tolerated when writing to formatter stdin; edition
+  parser ignores `edition.workspace` shorthand.
+- Auto-indent flash clamped to text area; armed at submit time (not
+  format-install); single 75ms flash (reverted blink-twice).
+- Mouse `cell_to_doc` + render updated for new sign-column layout; off-by-1
+  click corrected when sign column is active.
+- `screen_rect` includes top bar height; menu hover→item mapping wrong near
+  screen edges (fixed + tests).
+- Right-click now moves cursor to click position. Hover popup suppressed while
+  overlays are open; dismissed on any mouse click. Backspace on empty `:/?/`
+  prompt dismisses it.
+- Cold-open: `Top` + `Bottom` submitted alongside `Viewport`; cold-detect by
+  destination region (not viewport-only); adaptive big-jump wait — 500ms cold,
+  40ms warm; briefly blocks on big-jump parse to avoid `gg/G` white-text flash.
+- Worker tree corruption and stale top/bottom cache re-submit fixed; stale
+  dirty-gen caches skipped for delete+undo cycles; stale row-count caches
+  skipped in span merge.
+- Picker hit-test determinism + Windows-aware grep parser (fixed in tests).
+- `is_tool_installed` treats spawn-success as installed (mangler probe fix).
+- Clippy: silence `saturating-sub`, `collapsible-if`, `cloned-ref-to-slice`
+  warnings; CI all-features clippy/test unblocked on main.
+
 ## [0.18.2] - 2026-05-16
 
 ### Added
@@ -2196,7 +2284,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.18.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/kryptic-sh/hjkl/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/kryptic-sh/hjkl/compare/v0.17.1...v0.18.0
