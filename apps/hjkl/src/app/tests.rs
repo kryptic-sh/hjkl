@@ -13134,3 +13134,99 @@ fn auto_indent_op_sets_indent_flash() {
         assert_eq!(f.bot, 1, "flash bot must match indented row");
     }
 }
+
+// ── hjkl-mangler: auto-indent formatter dispatch tests ──────────────────────
+
+/// `==` on a buffer with no filename → falls back to dumb `auto_indent_range`
+/// (no formatter lookup, no panic, indent_flash is armed by the dumb algo).
+#[test]
+fn auto_indent_falls_back_to_dumb_for_unknown_ext() {
+    // No filename set → formatter_for_path never called → dumb algo runs.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "{\nbody\n}");
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_mut().editor.settings_mut().expandtab = true;
+    // cursor on row 1
+    app.active_mut().editor.jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Dumb algo fires: flash must be set (row 1 for single-line `==`).
+    assert!(
+        app.indent_flash.is_some(),
+        "dumb auto_indent_range must arm indent_flash when no formatter matches"
+    );
+    // Status message must NOT contain a formatter error.
+    assert!(
+        app.status_message
+            .as_deref()
+            .is_none_or(|m| !m.contains("not installed")),
+        "no formatter-error status for unknown-ext fallback"
+    );
+}
+
+/// `==` on a `.xyz` file also falls back to dumb algo: a filename with an
+/// unrecognised extension means `formatter_for_path` returns `None`.
+#[test]
+fn auto_indent_falls_back_to_dumb_for_no_registered_formatter() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello\nworld");
+    // Give the slot a filename with an extension hjkl-mangler does not handle.
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test_file.xyz"));
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Dumb algo arms the flash; no formatter error in status.
+    assert!(
+        app.indent_flash.is_some(),
+        "dumb auto_indent_range must arm indent_flash for unrecognised extension"
+    );
+}
+
+/// `==` on a `.rs` file with rustfmt installed: buffer content is replaced by
+/// the formatter output and the flash covers the whole buffer (top=0).
+///
+/// Requires `rustfmt` on PATH. Run with:
+///   cargo test -p hjkl -- --ignored auto_indent_dispatches_to_formatter_for_known_ext
+#[test]
+#[ignore = "requires rustfmt on PATH"]
+fn auto_indent_dispatches_to_formatter_for_known_ext() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Deliberately un-formatted Rust source — rustfmt will add spacing.
+    let ugly = "fn main(){let x=1;}";
+    seed_buffer(&mut app, ugly);
+    // Assign a .rs filename so formatter_for_path picks rustfmt.
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/hjkl_mangler_test.rs"));
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    // Formatter replaced the buffer — content must differ from original.
+    let formatted = app.active().editor.buffer().as_string();
+    assert_ne!(
+        formatted, ugly,
+        "rustfmt must have changed the buffer content"
+    );
+    // Formatted output should contain proper spacing.
+    assert!(
+        formatted.contains("let x = 1;"),
+        "rustfmt output must have spaced assignment, got: {formatted}"
+    );
+    // Flash must cover the whole buffer (top = 0).
+    assert!(
+        app.indent_flash.as_ref().is_some_and(|f| f.top == 0),
+        "flash top must be 0 (whole-buffer) after external format"
+    );
+    // No error in status message.
+    assert!(
+        app.status_message.is_none(),
+        "no status error expected after successful format"
+    );
+}

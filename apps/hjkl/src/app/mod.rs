@@ -1769,6 +1769,114 @@ impl App {
         self.indent_flash.as_ref().map(|f| (f.top, f.bot))
     }
 
+    // ── External formatter dispatch (hjkl-mangler) ───────────────────────
+
+    /// Walk up from `start` looking for a project-root marker file.
+    ///
+    /// Markers: `.git`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`,
+    /// `setup.py`, `composer.json`, `.hg`.  Returns the first directory that
+    /// contains one of these files, or `start` itself as a fallback.
+    fn find_project_root(start: &std::path::Path) -> std::path::PathBuf {
+        const MARKERS: &[&str] = &[
+            ".git",
+            "Cargo.toml",
+            "package.json",
+            "go.mod",
+            "pyproject.toml",
+            "setup.py",
+            "composer.json",
+            ".hg",
+        ];
+        let mut dir = start.to_owned();
+        loop {
+            for marker in MARKERS {
+                if dir.join(marker).exists() {
+                    return dir;
+                }
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_owned(),
+                None => return start.to_owned(),
+            }
+        }
+    }
+
+    /// Try to format the active buffer using an external formatter.
+    ///
+    /// **BLOCKS the calling thread for up to 2 seconds.**  This is a
+    /// synchronous subprocess invocation.  Async invocation is tracked in #118.
+    ///
+    /// Returns `true` if the formatter ran successfully and the buffer was
+    /// replaced; `false` means the caller should fall back to the dumb
+    /// `auto_indent_range` algo.
+    ///
+    /// On success the indent flash is set to cover the whole buffer so the
+    /// user gets the same visual confirmation as the dumb-algo path.
+    ///
+    /// On error a status message is set and the buffer is left unchanged.
+    pub(crate) fn try_external_format(&mut self) -> bool {
+        use hjkl_mangler::formatter_for_path;
+
+        // Snapshot filename before borrowing active_mut.
+        let filename = self.active().filename.clone();
+        let Some(ref path) = filename else {
+            return false;
+        };
+
+        let Some(formatter) = formatter_for_path(path) else {
+            return false;
+        };
+
+        // Snapshot buffer content.
+        let source = self.active().editor.buffer().as_string();
+
+        // Determine project root from the file's parent dir.
+        let parent = path
+            .parent()
+            .map(|p| p.to_owned())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let project_root = Self::find_project_root(&parent);
+
+        tracing::debug!(
+            file = %path.display(),
+            root = %project_root.display(),
+            "trying external formatter"
+        );
+
+        match formatter.format(&source, &project_root) {
+            Ok(formatted) => {
+                // Strip trailing newline that many formatters add — the
+                // buffer does not store a trailing newline (same as load).
+                let content = formatted.strip_suffix('\n').unwrap_or(&formatted);
+                // Use set_content (not BufferEdit::replace_all on the raw buffer)
+                // so the engine sets pending_content_reset = true, which
+                // sync_after_engine_mutation picks up to notify the syntax layer.
+                self.active_mut().editor.set_content(content);
+                // Set the flash to cover the whole buffer.
+                let line_count = self.active().editor.buffer().row_count();
+                let bot = line_count.saturating_sub(1);
+                self.indent_flash = Some(IndentFlash {
+                    top: 0,
+                    bot,
+                    started_at: Instant::now(),
+                });
+                // Propagate dirty/syntax/LSP state.  Must be called here
+                // because the visual-op dispatch arms that call us don't
+                // call sync_after_engine_mutation themselves.
+                self.sync_after_engine_mutation();
+                true
+            }
+            Err(hjkl_mangler::FormatError::NotInstalled(name)) => {
+                self.status_message = Some(format!("{name}: not installed"));
+                false
+            }
+            Err(e) => {
+                self.status_message = Some(format!("formatter: {e}"));
+                false
+            }
+        }
+    }
+
     // ── Count-prefix helpers ──────────────────────────────────────────────
 
     /// Drain the pending digit count and replay each digit to the active
@@ -2864,17 +2972,21 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                self.active_mut()
-                                    .editor
-                                    .auto_indent_range((top_row, 0), (bot_row, 0));
-                                if let Some((top, bot)) =
-                                    self.active_mut().editor.take_last_indent_range()
-                                {
-                                    self.indent_flash = Some(IndentFlash {
-                                        top,
-                                        bot,
-                                        started_at: Instant::now(),
-                                    });
+                                // Visual-block =: try external formatter first.
+                                // BLOCKS up to 2 s (sync subprocess — see #118).
+                                if !self.try_external_format() {
+                                    self.active_mut()
+                                        .editor
+                                        .auto_indent_range((top_row, 0), (bot_row, 0));
+                                    if let Some((top, bot)) =
+                                        self.active_mut().editor.take_last_indent_range()
+                                    {
+                                        self.indent_flash = Some(IndentFlash {
+                                            top,
+                                            bot,
+                                            started_at: Instant::now(),
+                                        });
+                                    }
                                 }
                             }
                             _ => return,
@@ -2922,15 +3034,19 @@ impl App {
                                     .indent_range(start, end, -(n as i32), 0);
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                self.active_mut().editor.auto_indent_range(start, end);
-                                if let Some((top, bot)) =
-                                    self.active_mut().editor.take_last_indent_range()
-                                {
-                                    self.indent_flash = Some(IndentFlash {
-                                        top,
-                                        bot,
-                                        started_at: Instant::now(),
-                                    });
+                                // Visual-charwise =: try external formatter first.
+                                // BLOCKS up to 2 s (sync subprocess — see #118).
+                                if !self.try_external_format() {
+                                    self.active_mut().editor.auto_indent_range(start, end);
+                                    if let Some((top, bot)) =
+                                        self.active_mut().editor.take_last_indent_range()
+                                    {
+                                        self.indent_flash = Some(IndentFlash {
+                                            top,
+                                            bot,
+                                            started_at: Instant::now(),
+                                        });
+                                    }
                                 }
                             }
                             _ => return,
@@ -2999,17 +3115,21 @@ impl App {
                                 );
                             }
                             hjkl_vim::OperatorKind::AutoIndent => {
-                                self.active_mut()
-                                    .editor
-                                    .auto_indent_range((top_row, 0), (bot_row, 0));
-                                if let Some((top, bot)) =
-                                    self.active_mut().editor.take_last_indent_range()
-                                {
-                                    self.indent_flash = Some(IndentFlash {
-                                        top,
-                                        bot,
-                                        started_at: Instant::now(),
-                                    });
+                                // Visual-line =: try external formatter first.
+                                // BLOCKS up to 2 s (sync subprocess — see #118).
+                                if !self.try_external_format() {
+                                    self.active_mut()
+                                        .editor
+                                        .auto_indent_range((top_row, 0), (bot_row, 0));
+                                    if let Some((top, bot)) =
+                                        self.active_mut().editor.take_last_indent_range()
+                                    {
+                                        self.indent_flash = Some(IndentFlash {
+                                            top,
+                                            bot,
+                                            started_at: Instant::now(),
+                                        });
+                                    }
                                 }
                             }
                             _ => return,
@@ -3658,34 +3778,48 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.apply_op_motion(
-                            event_loop::op_kind_to_operator(op),
-                            motion_key,
-                            total_count,
-                        );
-                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
-                        {
-                            self.indent_flash = Some(IndentFlash {
-                                top,
-                                bot,
-                                started_at: Instant::now(),
-                            });
+                        // AutoIndent with motion (=<motion>): try external formatter first.
+                        // BLOCKS up to 2 s (sync subprocess — see #118 for async).
+                        let used_formatter =
+                            op == hjkl_vim::OperatorKind::AutoIndent && self.try_external_format();
+                        if !used_formatter {
+                            self.active_mut().editor.apply_op_motion(
+                                event_loop::op_kind_to_operator(op),
+                                motion_key,
+                                total_count,
+                            );
+                            if let Some((top, bot)) =
+                                self.active_mut().editor.take_last_indent_range()
+                            {
+                                self.indent_flash = Some(IndentFlash {
+                                    top,
+                                    bot,
+                                    started_at: Instant::now(),
+                                });
+                            }
                         }
                         self.sync_after_engine_mutation();
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
                         self.pending_state = None;
-                        self.active_mut()
-                            .editor
-                            .apply_op_double(event_loop::op_kind_to_operator(op), total_count);
-                        if let Some((top, bot)) = self.active_mut().editor.take_last_indent_range()
-                        {
-                            self.indent_flash = Some(IndentFlash {
-                                top,
-                                bot,
-                                started_at: Instant::now(),
-                            });
+                        // AutoIndent (==): try external formatter first.
+                        // BLOCKS up to 2 s (sync subprocess — see #118 for async).
+                        let used_formatter =
+                            op == hjkl_vim::OperatorKind::AutoIndent && self.try_external_format();
+                        if !used_formatter {
+                            self.active_mut()
+                                .editor
+                                .apply_op_double(event_loop::op_kind_to_operator(op), total_count);
+                            if let Some((top, bot)) =
+                                self.active_mut().editor.take_last_indent_range()
+                            {
+                                self.indent_flash = Some(IndentFlash {
+                                    top,
+                                    bot,
+                                    started_at: Instant::now(),
+                                });
+                            }
                         }
                         self.sync_after_engine_mutation();
                         return true;
