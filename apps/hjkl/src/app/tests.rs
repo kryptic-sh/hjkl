@@ -11720,6 +11720,90 @@ fn colon_rg_with_pattern_via_host_registry() {
 }
 
 #[test]
+fn leader_slash_opens_grep_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none(), "picker must start None");
+    app.route_chord_key(key(KeyCode::Char(' ')));
+    app.route_chord_key(key(KeyCode::Char('/')));
+    assert!(
+        app.picker.is_some(),
+        "<leader>/ must open the grep picker; status={:?}",
+        app.status_message
+    );
+}
+
+/// End-to-end leader-slash → type a query → confirm the rg-backed picker
+/// enumerates items. Skips when rg / grep / findstr are all absent.
+#[test]
+fn leader_slash_grep_picker_populates_items() {
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .output()
+        .is_err()
+        && std::process::Command::new("grep")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        eprintln!("skipping: no rg or grep on PATH");
+        return;
+    }
+
+    // Seed a tmp dir with a known match.
+    let dir = std::env::temp_dir().join(format!(
+        "hjkl_grep_picker_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("findme.txt");
+    std::fs::write(&file, "alpha\nUNIQUE_NEEDLE_42\nomega\n").unwrap();
+
+    // App's cwd drives the grep root.
+    let orig_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&dir).unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.route_chord_key(key(KeyCode::Char(' ')));
+    app.route_chord_key(key(KeyCode::Char('/')));
+    assert!(app.picker.is_some(), "<leader>/ must open the picker");
+
+    // Type query, then poll until rg returns the seeded match.
+    for c in "UNIQUE_NEEDLE_42".chars() {
+        app.handle_picker_key(key(KeyCode::Char(c)));
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut got_match = false;
+    while std::time::Instant::now() < deadline {
+        // Drive both refresh (schedules requery) and tick (fires the
+        // debounced rg spawn). In production, render.rs does this every frame.
+        if let Some(p) = app.picker.as_mut() {
+            let _ = p.refresh();
+            p.tick(std::time::Instant::now());
+            let _ = p.refresh();
+        }
+        let count = app.picker.as_ref().map(|p| p.matched()).unwrap_or(0);
+        if count > 0 {
+            got_match = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    std::env::set_current_dir(&orig_cwd).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        got_match,
+        "rg-backed grep picker must return at least one match for the seeded UNIQUE_NEEDLE_42; \
+         status={:?}",
+        app.status_message
+    );
+}
+
+#[test]
 fn colon_b_numeric_via_host_registry() {
     let mut app = setup_three_slot_app();
     // slots are 0-indexed internally; :b 2 means slot index 1
