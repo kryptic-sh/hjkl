@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-05-16
+
+### Fixed
+
+- Submodule pointers at v0.19.0 were stale (pre-BCTP SHAs), causing
+  `cargo zigbuild --locked` to reject the lockfile on all 7 release-build
+  targets. Advances pointers to the matching tagged submodule commits
+  (hjkl-engine v0.9.1, hjkl-buffer v0.7.0, hjkl-keymap v0.3.0, hjkl-vim v0.20.0,
+  hjkl-editor v0.6.0, hjkl-ex v0.2.0, hjkl-form v0.4.0, hjkl-picker v0.7.0,
+  hjkl-ratatui v0.4.0, hjkl-picker-tui v0.2.0). No user-visible behavior change
+  beyond unblocking the release pipeline.
+
 ## [0.19.0] - 2026-05-16
 
 ### Added
@@ -2284,7 +2296,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/kryptic-sh/hjkl/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/kryptic-sh/hjkl/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/kryptic-sh/hjkl/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/kryptic-sh/hjkl/compare/v0.18.0...v0.18.1
