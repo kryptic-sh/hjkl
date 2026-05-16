@@ -498,6 +498,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let buf = frame.buffer_mut();
         let screen_top = area.y;
         let screen_height = area.height;
+        // Constrain to the TEXT area only — the flash overlay must not bleed
+        // into the gutter. The buffer renderer paints text starting at
+        // `area.x + num_gw` (signs overlay the gutter cell, fold column is
+        // reserved but never painted), so the flash must start there too.
+        // Without this, the gutter and text area share the same flash bg
+        // and the cursor visually appears to sit "in the gutter".
+        let num_gw = gutter_width(
+            app.slots()[slot_idx].editor.buffer().line_count() as usize,
+            nu,
+            rnu,
+            nuw,
+        );
+        let text_x = area.x + num_gw;
+        let text_right = area.x + area.width;
         // Clamp flash range to visible rows.
         let vis_start = flash_top.max(vp_top);
         let vis_end = flash_bot.min(vp_top + screen_height as usize - 1);
@@ -506,7 +520,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             if screen_row >= screen_top + screen_height {
                 break;
             }
-            for col in area.x..area.x + area.width {
+            for col in text_x..text_right {
                 let cell = buf.cell_mut((col, screen_row));
                 if let Some(c) = cell {
                     c.set_style(c.style().patch(flash_style));
