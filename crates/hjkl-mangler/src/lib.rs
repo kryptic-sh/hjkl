@@ -173,12 +173,11 @@ fn detect_rust_edition(start: &Path) -> Option<String> {
     let mut cur = start.to_owned();
     loop {
         let manifest = cur.join("Cargo.toml");
-        if manifest.is_file() {
-            if let Ok(text) = std::fs::read_to_string(&manifest) {
-                if let Some(ed) = parse_edition_from_cargo_toml(&text) {
-                    return Some(ed);
-                }
-            }
+        if manifest.is_file()
+            && let Ok(text) = std::fs::read_to_string(&manifest)
+            && let Some(ed) = parse_edition_from_cargo_toml(&text)
+        {
+            return Some(ed);
         }
         if !cur.pop() {
             return None;
