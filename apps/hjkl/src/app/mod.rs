@@ -391,11 +391,19 @@ pub struct BufferSlot {
     pub disk_len: Option<u64>,
     /// Whether the on-disk file is in sync, changed, or deleted.
     pub disk_state: DiskState,
-    /// Most recent completed `RenderOutput` for this buffer. Cached so
-    /// that a buffer switch can immediately re-install the last known
+    /// Most recent completed viewport-scoped `RenderOutput` for this buffer.
+    /// Cached so a buffer switch can immediately re-install the last known
     /// spans while a fresh parse runs in the background (T3 — per-slot
-    /// span cache). `None` until the first parse result arrives.
-    pub(crate) last_render_output: Option<crate::syntax::RenderOutput>,
+    /// span cache). `None` until the first viewport parse result arrives.
+    pub(crate) viewport_render_output: Option<crate::syntax::RenderOutput>,
+    /// Pre-cached spans for the top of the file (`0..min(3*h, line_count)`).
+    /// Populated after the first cold viewport parse so `gg` never flashes
+    /// un-highlighted rows even on large files.
+    pub(crate) top_render_output: Option<crate::syntax::RenderOutput>,
+    /// Pre-cached spans for the bottom of the file
+    /// (`line_count - min(3*h, line_count)..line_count`). Populated after
+    /// the cold viewport parse so `G` never flashes un-highlighted rows.
+    pub(crate) bottom_render_output: Option<crate::syntax::RenderOutput>,
 }
 
 impl BufferSlot {
@@ -720,7 +728,13 @@ pub(super) fn build_slot(
     if let Some(out) = syntax.preview_render(buffer_id, editor.buffer(), vp_top, vp_height) {
         editor.install_ratatui_syntax_spans(out.spans);
     }
-    syntax.submit_render(buffer_id, editor.buffer(), vp_top, vp_height);
+    syntax.submit_render(
+        buffer_id,
+        editor.buffer(),
+        vp_top,
+        vp_height,
+        crate::syntax::ParseKind::Viewport,
+    );
     let initial_dg = editor.buffer().dirty_gen();
     let (key, signs) = if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150))
     {
@@ -754,7 +768,9 @@ pub(super) fn build_slot(
         disk_mtime,
         disk_len,
         disk_state: DiskState::Synced,
-        last_render_output: None,
+        viewport_render_output: None,
+        top_render_output: None,
+        bottom_render_output: None,
     };
     slot.snapshot_saved();
     Ok(slot)

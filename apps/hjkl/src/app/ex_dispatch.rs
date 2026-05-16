@@ -571,7 +571,9 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                last_render_output: None,
+                viewport_render_output: None,
+                top_render_output: None,
+                bottom_render_output: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -651,7 +653,9 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                last_render_output: None,
+                viewport_render_output: None,
+                top_render_output: None,
+                bottom_render_output: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -1310,7 +1314,9 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                last_render_output: None,
+                viewport_render_output: None,
+                top_render_output: None,
+                bottom_render_output: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
