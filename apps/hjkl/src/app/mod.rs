@@ -20,6 +20,7 @@ use crate::syntax::{self, BufferId, SyntaxLayer};
 use std::collections::HashSet;
 
 mod buffer_ops;
+mod engine_actions;
 mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
@@ -27,6 +28,7 @@ pub(crate) mod keymap;
 pub mod lsp_glue;
 pub(crate) mod mappings_dispatch;
 pub mod mouse;
+mod pending_actions;
 mod picker_glue;
 mod prompt;
 mod syntax_glue;
@@ -2950,66 +2952,96 @@ impl App {
     /// Dispatch an [`AppAction`] with an optional repeat count.
     ///
     /// This is the single authoritative dispatch site for all chord-triggered
-    /// app actions. Count is applied where meaningful (resize, tab navigation).
+    /// app actions. Routing by domain — each cluster delegates to a focused
+    /// sub-dispatcher that lives in the corresponding glue module:
+    ///   - picker opens    → inline (3 one-liners)
+    ///   - git actions     → `picker_glue::dispatch_git_action`
+    ///   - LSP actions     → `lsp_glue::dispatch_lsp_action`
+    ///   - window actions  → `window::dispatch_window_action` (incl. TmuxNavigate)
+    ///   - buffer actions  → `buffer_ops::dispatch_buffer_action`
+    ///   - prompt actions  → `prompt::dispatch_prompt_action`
+    ///   - pending-state   → `pending_actions::dispatch_pending_state_action`
+    ///   - engine actions  → `engine_actions::dispatch_engine_action`
+    ///   - QuitOrClose     → inline (app-lifecycle, 5 LOC)
     pub fn dispatch_action(&mut self, action: AppAction, count: u32) {
         let count = count.max(1) as usize;
         match action {
+            // ── File / buffer pickers (open) ───────────────────────────────
             AppAction::OpenFilePicker => self.open_picker(),
             AppAction::OpenBufferPicker => self.open_buffer_picker(),
             AppAction::OpenGrepPicker => self.open_grep_picker(None),
-            AppAction::GitStatus => self.open_git_status_picker(),
-            AppAction::GitLog => self.open_git_log_picker(),
-            AppAction::GitBranch => self.open_git_branch_picker(),
-            AppAction::GitFileHistory => self.open_git_file_history_picker(),
-            AppAction::GitStashes => self.open_git_stash_picker(),
-            AppAction::GitTags => self.open_git_tags_picker(),
-            AppAction::GitRemotes => self.open_git_remotes_picker(),
-            AppAction::ShowDiagAtCursor => self.show_diag_at_cursor(),
-            AppAction::LspCodeActions => self.lsp_code_actions(),
-            AppAction::LspRename => {
-                // Phase 5 MVP: prompt user to use :Rename <newname>.
-                self.status_message = Some("use :Rename <newname> to rename".into());
+
+            // ── Git picker openers ─────────────────────────────────────────
+            AppAction::GitStatus
+            | AppAction::GitLog
+            | AppAction::GitBranch
+            | AppAction::GitFileHistory
+            | AppAction::GitStashes
+            | AppAction::GitTags
+            | AppAction::GitRemotes => self.dispatch_git_action(action),
+
+            // ── LSP + diagnostic navigation ────────────────────────────────
+            AppAction::ShowDiagAtCursor
+            | AppAction::LspCodeActions
+            | AppAction::LspRename
+            | AppAction::LspGotoDef
+            | AppAction::LspGotoDecl
+            | AppAction::LspGotoRef
+            | AppAction::LspGotoImpl
+            | AppAction::LspGotoTypeDef
+            | AppAction::LspHover
+            | AppAction::DiagNext
+            | AppAction::DiagPrev
+            | AppAction::DiagNextError
+            | AppAction::DiagPrevError => self.dispatch_lsp_action(action),
+
+            // ── Window / layout management ─────────────────────────────────
+            AppAction::FocusLeft
+            | AppAction::FocusBelow
+            | AppAction::FocusAbove
+            | AppAction::FocusRight
+            | AppAction::FocusNext
+            | AppAction::FocusPrev
+            | AppAction::CloseFocusedWindow
+            | AppAction::OnlyFocusedWindow
+            | AppAction::SwapWithSibling
+            | AppAction::MoveWindowToNewTab
+            | AppAction::NewSplit
+            | AppAction::ResizeHeight(_)
+            | AppAction::ResizeWidth(_)
+            | AppAction::EqualizeLayout
+            | AppAction::MaximizeHeight
+            | AppAction::MaximizeWidth
+            | AppAction::TmuxNavigate(_) => self.dispatch_window_action(action, count),
+
+            // ── Buffer / tab navigation ────────────────────────────────────
+            AppAction::Tabnext
+            | AppAction::Tabprev
+            | AppAction::BufferNext
+            | AppAction::BufferPrev
+            | AppAction::BufferAlt
+            | AppAction::BufferCycleH
+            | AppAction::BufferCycleL => self.dispatch_buffer_action(action, count),
+
+            // ── Prompt / overlay entry ─────────────────────────────────────
+            AppAction::OpenCommandPrompt | AppAction::OpenSearchPrompt(_) => {
+                self.dispatch_prompt_action(action)
             }
-            AppAction::LspGotoDef => self.lsp_goto_definition(),
-            AppAction::LspGotoDecl => self.lsp_goto_declaration(),
-            AppAction::LspGotoRef => self.lsp_goto_references(),
-            AppAction::LspGotoImpl => self.lsp_goto_implementation(),
-            AppAction::LspGotoTypeDef => self.lsp_goto_type_definition(),
-            AppAction::Tabnext => {
-                for _ in 0..count {
-                    self.dispatch_ex("tabnext");
-                }
-            }
-            AppAction::Tabprev => {
-                for _ in 0..count {
-                    self.dispatch_ex("tabprev");
-                }
-            }
-            AppAction::BufferNext => self.buffer_next(),
-            AppAction::BufferPrev => self.buffer_prev(),
-            AppAction::DiagNext => self.dispatch_ex("lnext"),
-            AppAction::DiagPrev => self.dispatch_ex("lprev"),
-            AppAction::DiagNextError => self.lnext_severity(Some(DiagSeverity::Error)),
-            AppAction::DiagPrevError => self.lprev_severity(Some(DiagSeverity::Error)),
-            AppAction::FocusLeft => self.focus_left(),
-            AppAction::FocusBelow => self.focus_below(),
-            AppAction::FocusAbove => self.focus_above(),
-            AppAction::FocusRight => self.focus_right(),
-            AppAction::FocusNext => self.focus_next(),
-            AppAction::FocusPrev => self.focus_previous(),
-            AppAction::CloseFocusedWindow => self.close_focused_window(),
-            AppAction::OnlyFocusedWindow => self.only_focused_window(),
-            AppAction::SwapWithSibling => self.swap_with_sibling(),
-            AppAction::MoveWindowToNewTab => match self.move_window_to_new_tab() {
-                Ok(()) => self.status_message = Some("moved window to new tab".into()),
-                Err(msg) => self.status_message = Some(msg.to_string()),
-            },
-            AppAction::NewSplit => self.dispatch_ex("new"),
-            AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
-            AppAction::ResizeWidth(delta) => self.resize_width(delta * count as i32),
-            AppAction::EqualizeLayout => self.equalize_layout(),
-            AppAction::MaximizeHeight => self.maximize_height(),
-            AppAction::MaximizeWidth => self.maximize_width(),
+
+            // ── Pending-state chords ───────────────────────────────────────
+            AppAction::BeginPendingReplace { .. }
+            | AppAction::BeginPendingFind { .. }
+            | AppAction::BeginPendingAfterG { .. }
+            | AppAction::BeginPendingAfterZ { .. }
+            | AppAction::BeginPendingAfterOp { .. }
+            | AppAction::BeginPendingSelectRegister
+            | AppAction::BeginPendingSetMark
+            | AppAction::BeginPendingGotoMarkLine
+            | AppAction::BeginPendingGotoMarkChar
+            | AppAction::QChord { .. }
+            | AppAction::BeginPendingPlayMacro { .. } => self.dispatch_pending_state_action(action),
+
+            // ── App lifecycle ──────────────────────────────────────────────
             AppAction::QuitOrClose => {
                 if self.layout().leaves().len() > 1 {
                     self.close_focused_window();
@@ -3017,718 +3049,9 @@ impl App {
                     self.exit_requested = true;
                 }
             }
-            // ── Prompt / overlay entry (Phase 2 — issue #120) ─────────────────
-            AppAction::OpenCommandPrompt => {
-                // Guard: `@:` chord expects `:` as the register name, so
-                // pending_state.is_some() means this key is already claimed by
-                // the pending-state reducer (route_chord_key dispatched here via
-                // dispatch_keymap_in_mode). In that scenario the keymap itself
-                // should not have matched `:` (pending_state blocks the Normal
-                // trie path in route_chord_key), so this guard is defensive.
-                if self.pending_state.is_none() {
-                    self.open_command_prompt();
-                }
-            }
-            AppAction::OpenSearchPrompt(dir) => {
-                self.open_search_prompt(dir);
-            }
-            AppAction::LspHover => {
-                self.lsp_hover();
-            }
-            AppAction::BufferAlt => {
-                self.buffer_alt();
-            }
-            // ── Predicate-gated buffer/window navigation (Phase 3 — issue #120) ──
-            AppAction::BufferCycleH => {
-                if self.slots.len() > 1 {
-                    self.buffer_prev();
-                } else {
-                    // Single slot: fall back to viewport-top motion.
-                    let n = self.pending_count.take_or(1) as usize;
-                    self.active_mut()
-                        .editor
-                        .apply_motion(hjkl_vim::MotionKind::ViewportTop, n);
-                }
-            }
-            AppAction::BufferCycleL => {
-                if self.slots.len() > 1 {
-                    self.buffer_next();
-                } else {
-                    // Single slot: fall back to viewport-bottom motion.
-                    let n = self.pending_count.take_or(1) as usize;
-                    self.active_mut()
-                        .editor
-                        .apply_motion(hjkl_vim::MotionKind::ViewportBottom, n);
-                }
-            }
-            AppAction::TmuxNavigate(dir) => {
-                let focused = self.focused_window();
-                let neighbour = match dir {
-                    NavDir::Left => self.layout().neighbor_left(focused),
-                    NavDir::Down => self.layout().neighbor_below(focused),
-                    NavDir::Up => self.layout().neighbor_above(focused),
-                    NavDir::Right => self.layout().neighbor_right(focused),
-                };
-                if neighbour.is_some() {
-                    match dir {
-                        NavDir::Left => self.focus_left(),
-                        NavDir::Down => self.focus_below(),
-                        NavDir::Up => self.focus_above(),
-                        NavDir::Right => self.focus_right(),
-                    }
-                } else if std::env::var("TMUX").is_ok() {
-                    let flag = match dir {
-                        NavDir::Left => "-L",
-                        NavDir::Down => "-D",
-                        NavDir::Up => "-U",
-                        NavDir::Right => "-R",
-                    };
-                    let _ = std::process::Command::new("tmux")
-                        .args(["select-pane", flag])
-                        .status();
-                }
-            }
-            AppAction::BeginPendingReplace {
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state = Some(hjkl_vim::PendingState::Replace { count: n });
-            }
-            AppAction::BeginPendingFind {
-                forward,
-                till,
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state = Some(hjkl_vim::PendingState::Find {
-                    count: n,
-                    forward,
-                    till,
-                });
-            }
-            AppAction::BeginPendingAfterG {
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state = Some(hjkl_vim::PendingState::AfterG { count: n });
-            }
-            AppAction::BeginPendingAfterZ {
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state = Some(hjkl_vim::PendingState::AfterZ { count: n });
-            }
-            AppAction::BeginPendingAfterOp {
-                op,
-                count1: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
-                    op,
-                    count1: n,
-                    inner_count: 0,
-                });
-            }
-            AppAction::BeginPendingSelectRegister => {
-                // `"<reg>` register-prefix chord. The register char is captured
-                // by the second key. Do NOT reset pending_count here — a count
-                // typed before `"` (e.g. `5"add`) must survive through register
-                // selection so the subsequent operator (`d`) can consume it.
-                // Example: `5"add` → pending_count=5, `"` → SelectRegister (count
-                // preserved), `a` → SetPendingRegister, `dd` → delete 5 lines
-                // into register `a`.
-                self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
-            }
-            AppAction::BeginPendingSetMark => {
-                // `m<x>` mark-set chord. No count consumed — char captured by
-                // second key. Discard any buffered count (not meaningful here).
-                self.pending_count.reset();
-                self.pending_state = Some(hjkl_vim::PendingState::SetMark);
-            }
-            AppAction::BeginPendingGotoMarkLine => {
-                // `'<x>` mark-goto-line chord. No count consumed.
-                self.pending_count.reset();
-                self.pending_state = Some(hjkl_vim::PendingState::GotoMarkLine);
-            }
-            AppAction::BeginPendingGotoMarkChar => {
-                // `` `<x> `` mark-goto-char chord. No count consumed.
-                self.pending_count.reset();
-                self.pending_state = Some(hjkl_vim::PendingState::GotoMarkChar);
-            }
-            AppAction::QChord { .. } => {
-                // `q` in Normal mode. Branch: stop recording if active, else
-                // open the RecordMacroTarget chord to wait for the register char.
-                self.pending_count.reset();
-                if self.active().editor.is_recording_macro() {
-                    // Bare `q` ends the active recording.
-                    self.active_mut().editor.stop_macro_record();
-                } else {
-                    self.pending_state = Some(hjkl_vim::PendingState::RecordMacroTarget);
-                }
-            }
-            AppAction::BeginPendingPlayMacro {
-                count: action_count,
-            } => {
-                // `@` in Normal mode. Capture count and wait for register char.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.pending_state =
-                    Some(hjkl_vim::PendingState::PlayMacroTarget { count: n.max(1) });
-            }
-            AppAction::DotRepeat {
-                count: action_count,
-            } => {
-                // `.` dot-repeat. Combine pending count prefix with action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.replay_last_change(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::Motion {
-                kind,
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action count.
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.apply_motion(kind, n);
-            }
-            AppAction::VisualOp {
-                op,
-                count: action_count,
-            } => {
-                // Use buffered count-prefix if present, otherwise the action default.
-                let n = self.pending_count.take_or(action_count) as usize;
-                // Resolve the active visual range from the engine. The RangeKind
-                // must match the visual mode so the range-mutation primitives apply
-                // the correct inclusion semantics.
-                //
-                // Phase 4e follow-ups: all three visual modes now route through the
-                // public range-mutation primitives rather than falling back to the
-                // engine FSM:
-                //   - Visual: pending_register now read from engine getter (gap fixed)
-                //   - VisualLine: guard fix in run_operator_over_range allows single-
-                //     row linewise, so FSM fallback for d/y/c is removed
-                //   - VisualBlock: delete_block / yank_block / change_block / indent_block
-                //     now exposed (gap fixed), FSM fallback removed
-                use hjkl_engine::{RangeKind, VimMode};
-                let vim_mode = self.active().editor.vim_mode();
-                // Read the user's pending register selection BEFORE the match so all
-                // three mode arms can use it. pending_register() does not clear the
-                // selection — the engine clears it when the next operator fires.
-                let register = self.active().editor.pending_register().unwrap_or('"');
-                match vim_mode {
-                    VimMode::VisualBlock => {
-                        // Rectangular selection — use block-shape primitives.
-                        let Some((top_row, bot_row, left_col, right_col)) =
-                            self.active().editor.block_highlight()
-                        else {
-                            return;
-                        };
-                        match op {
-                            hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut()
-                                    .editor
-                                    .delete_block(top_row, bot_row, left_col, right_col, register);
-                            }
-                            hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut()
-                                    .editor
-                                    .yank_block(top_row, bot_row, left_col, right_col, register);
-                            }
-                            hjkl_vim::OperatorKind::Change => {
-                                self.active_mut()
-                                    .editor
-                                    .change_block(top_row, bot_row, left_col, right_col, register);
-                                // change_block enters Insert (BlockChange reason);
-                                // no Esc needed.
-                                return;
-                            }
-                            hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut()
-                                    .editor
-                                    .indent_block(top_row, bot_row, left_col, right_col, n as i32);
-                            }
-                            hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut().editor.indent_block(
-                                    top_row,
-                                    bot_row,
-                                    left_col,
-                                    right_col,
-                                    -(n as i32),
-                                );
-                            }
-                            hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-block =: submit async formatter with the
-                                // visual selection row range; fall back to dumb algo.
-                                let range = hjkl_mangler::RangeSpec {
-                                    start_row: top_row,
-                                    end_row: bot_row,
-                                };
-                                if !self.submit_external_format(Some(range)) {
-                                    self.active_mut()
-                                        .editor
-                                        .auto_indent_range((top_row, 0), (bot_row, 0));
-                                    if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
-                                    {
-                                        self.indent_flash = Some(IndentFlash {
-                                            top,
-                                            bot,
-                                            started_at: Instant::now(),
-                                        });
-                                    }
-                                }
-                            }
-                            _ => return,
-                        }
-                        // Exit visual mode after the op (except Change above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
-                            &mut self.active_mut().editor,
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-                        );
-                    }
-                    VimMode::Visual => {
-                        // Charwise visual selection — inclusive on both ends.
-                        let Some((start, end)) = self.active().editor.char_highlight() else {
-                            return;
-                        };
-                        let kind = RangeKind::Inclusive;
-                        match op {
-                            hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut()
-                                    .editor
-                                    .delete_range(start, end, kind, register);
-                            }
-                            hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut()
-                                    .editor
-                                    .yank_range(start, end, kind, register);
-                            }
-                            hjkl_vim::OperatorKind::Change => {
-                                self.active_mut()
-                                    .editor
-                                    .change_range(start, end, kind, register);
-                                // change_range transitions to Insert via
-                                // begin_insert_noundo — no explicit mode-set needed.
-                                return;
-                            }
-                            hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut()
-                                    .editor
-                                    .indent_range(start, end, n as i32, 0);
-                            }
-                            hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut()
-                                    .editor
-                                    .indent_range(start, end, -(n as i32), 0);
-                            }
-                            hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-charwise =: submit async formatter with the
-                                // visual selection row range; fall back to dumb algo.
-                                let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
-                                let range = hjkl_mangler::RangeSpec {
-                                    start_row: min_r,
-                                    end_row: max_r,
-                                };
-                                if !self.submit_external_format(Some(range)) {
-                                    self.active_mut().editor.auto_indent_range(start, end);
-                                    if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
-                                    {
-                                        self.indent_flash = Some(IndentFlash {
-                                            top,
-                                            bot,
-                                            started_at: Instant::now(),
-                                        });
-                                    }
-                                }
-                            }
-                            _ => return,
-                        }
-                        // Exit visual mode after the op (except Change, which already
-                        // transitioned to Insert above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
-                            &mut self.active_mut().editor,
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-                        );
-                    }
-                    VimMode::VisualLine => {
-                        // Linewise visual selection — full rows.
-                        // Option (a): pass (top_row, 0) and (bot_row, usize::MAX)
-                        // with RangeKind::Linewise. The engine's run_operator_over_range
-                        // handles Linewise semantics; read_vim_range / cut_vim_range
-                        // snap to full line boundaries regardless of the col values.
-                        // The Phase 4e guard fix allows single-row (top==bot) Linewise
-                        // ranges, so this path works for both single and multi-line.
-                        let Some((top_row, bot_row)) = self.active().editor.line_highlight() else {
-                            return;
-                        };
-                        let kind = RangeKind::Linewise;
-                        match op {
-                            hjkl_vim::OperatorKind::Delete => {
-                                self.active_mut().editor.delete_range(
-                                    (top_row, 0),
-                                    (bot_row, usize::MAX),
-                                    kind,
-                                    register,
-                                );
-                            }
-                            hjkl_vim::OperatorKind::Yank => {
-                                self.active_mut().editor.yank_range(
-                                    (top_row, 0),
-                                    (bot_row, usize::MAX),
-                                    kind,
-                                    register,
-                                );
-                            }
-                            hjkl_vim::OperatorKind::Change => {
-                                self.active_mut().editor.change_range(
-                                    (top_row, 0),
-                                    (bot_row, usize::MAX),
-                                    kind,
-                                    register,
-                                );
-                                // change_range enters Insert mode.
-                                return;
-                            }
-                            hjkl_vim::OperatorKind::Indent => {
-                                self.active_mut().editor.indent_range(
-                                    (top_row, 0),
-                                    (bot_row, 0),
-                                    n as i32,
-                                    0,
-                                );
-                            }
-                            hjkl_vim::OperatorKind::Outdent => {
-                                self.active_mut().editor.indent_range(
-                                    (top_row, 0),
-                                    (bot_row, 0),
-                                    -(n as i32),
-                                    0,
-                                );
-                            }
-                            hjkl_vim::OperatorKind::AutoIndent => {
-                                // Visual-line =: submit async formatter with the
-                                // visual selection row range; fall back to dumb algo.
-                                let range = hjkl_mangler::RangeSpec {
-                                    start_row: top_row,
-                                    end_row: bot_row,
-                                };
-                                if !self.submit_external_format(Some(range)) {
-                                    self.active_mut()
-                                        .editor
-                                        .auto_indent_range((top_row, 0), (bot_row, 0));
-                                    if let Some((top, bot)) =
-                                        self.active_mut().editor.take_last_indent_range()
-                                    {
-                                        self.indent_flash = Some(IndentFlash {
-                                            top,
-                                            bot,
-                                            started_at: Instant::now(),
-                                        });
-                                    }
-                                }
-                            }
-                            _ => return,
-                        }
-                        // Exit visual mode after the op (except Change above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
-                            &mut self.active_mut().editor,
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-                        );
-                    }
-                    _ => {
-                        // Not in a visual mode — keymap bound VisualOp but
-                        // engine is in Normal/Insert/etc. Shouldn't happen;
-                        // bail silently.
-                    }
-                }
-            }
-            // ── Phase 6.4: insert-mode entry ──────────────────────────────
-            AppAction::EnterInsertI {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_i(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterInsertShiftI {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_shift_i(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterInsertA {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_a(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterInsertShiftA {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_insert_shift_a(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterInsertO {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.open_line_below(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterInsertShiftO {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.open_line_above(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::EnterReplace {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.enter_replace_mode(n.max(1));
-                self.sync_after_engine_mutation();
-            }
 
-            // ── Phase 6.4: char / line mutation ops ───────────────────────
-            AppAction::DeleteCharForward {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.delete_char_forward(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::DeleteCharBackward {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.delete_char_backward(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::SubstituteChar {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.substitute_char(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::SubstituteLine {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.substitute_line(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::DeleteToEol => {
-                self.pending_count.reset();
-                self.active_mut().editor.delete_to_eol();
-                self.sync_after_engine_mutation();
-            }
-            AppAction::ChangeToEol => {
-                self.pending_count.reset();
-                self.active_mut().editor.change_to_eol();
-                self.sync_after_engine_mutation();
-            }
-            AppAction::YankToEol {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.yank_to_eol(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::JoinLine {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                // Vim join default is 2 (join current + 1 following line).
-                self.active_mut().editor.join_line(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::ToggleCase {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.toggle_case_at_cursor(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::PasteAfter {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.paste_after(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::PasteBefore {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.paste_before(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-
-            // ── Phase 6.4: undo / redo ────────────────────────────────────
-            AppAction::Undo => {
-                self.pending_count.reset();
-                self.active_mut().editor.undo();
-                self.sync_after_engine_mutation();
-            }
-            AppAction::Redo => {
-                self.pending_count.reset();
-                self.active_mut().editor.redo();
-                self.sync_after_engine_mutation();
-            }
-
-            // ── Phase 6.4: jumplist ───────────────────────────────────────
-            AppAction::JumpBack {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.jump_back(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::JumpForward {
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.jump_forward(n.max(1));
-                self.sync_after_engine_mutation();
-            }
-
-            // ── Phase 6.4: scroll ops ──────────────────────────────────────
-            AppAction::ScrollFullPage {
-                dir,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_full_page(dir, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::ScrollHalfPage {
-                dir,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_half_page(dir, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::ScrollLine {
-                dir,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.scroll_line(dir, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-
-            // ── Phase 6.4: search repeat ───────────────────────────────────
-            AppAction::SearchRepeat {
-                forward,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut().editor.search_repeat(forward, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-            AppAction::WordSearch {
-                forward,
-                whole_word,
-                count: action_count,
-            } => {
-                let n = self.pending_count.take_or(action_count) as usize;
-                self.active_mut()
-                    .editor
-                    .word_search(forward, whole_word, n.max(1));
-                self.sync_after_engine_mutation();
-            }
-
-            // ── Phase 6.4: visual entry / toggle ──────────────────────────
-            AppAction::EnterVisualChar => {
-                self.pending_count.reset();
-                self.active_mut().editor.enter_visual_char();
-            }
-            AppAction::EnterVisualLine => {
-                self.pending_count.reset();
-                self.active_mut().editor.enter_visual_line();
-            }
-            AppAction::EnterVisualBlock => {
-                self.pending_count.reset();
-                self.active_mut().editor.enter_visual_block();
-            }
-            AppAction::ReenterLastVisual => {
-                self.pending_count.reset();
-                self.active_mut().editor.reenter_last_visual();
-                self.sync_viewport_from_editor();
-            }
-            AppAction::VisualToggleAnchor => {
-                self.pending_count.reset();
-                self.active_mut().editor.visual_o_toggle();
-                self.sync_viewport_from_editor();
-            }
-
-            AppAction::Replay { keys, recursive } => {
-                if recursive {
-                    // Re-feed each key through the chord FSM. The queue is
-                    // processed FIFO so we use a VecDeque.
-                    //
-                    // Two guards against runaway recursion:
-                    //   - `steps` caps the queue iteration count per frame —
-                    //     catches horizontal cycles (`:nmap a bbbbb…` etc).
-                    //   - `replay_depth` caps re-entrant dispatch_action stack
-                    //     depth — catches vertical cycles (`:nmap a a`) which
-                    //     would otherwise stack-overflow.
-                    use std::collections::VecDeque;
-                    const MAX_STEPS: usize = 1024;
-                    // Vertical recursion depth cap. Sized to fit comfortably
-                    // within macOS's 512 KB per-thread stack default (cargo
-                    // nextest spawns tests on non-main threads): each frame
-                    // of this arm carries a VecDeque, sub_replay Vec, and the
-                    // recursive call into dispatch_action. 128 frames is far
-                    // beyond any realistic nested-map depth and leaves plenty
-                    // of stack headroom on all platforms.
-                    const MAX_DEPTH: usize = 128;
-                    if self.replay_depth >= MAX_DEPTH {
-                        self.status_message = Some("E223: recursive mapping (depth limit)".into());
-                        return;
-                    }
-                    self.replay_depth += 1;
-                    let mut queue: VecDeque<hjkl_keymap::KeyEvent> = keys.into();
-                    let mut steps = 0usize;
-                    while let Some(ev) = queue.pop_front() {
-                        steps += 1;
-                        if steps > MAX_STEPS {
-                            self.status_message =
-                                Some("E223: recursive mapping (1024-step limit)".into());
-                            break;
-                        }
-                        let mode = current_km_mode(self);
-                        let Some(mode) = mode else {
-                            continue;
-                        };
-                        let mut sub_replay = Vec::new();
-                        let consumed = self.dispatch_keymap_in_mode(ev, 1, &mut sub_replay, mode);
-                        if !consumed && sub_replay.len() <= 1 {
-                            self.replay_km_events_to_engine(&sub_replay);
-                        }
-                    }
-                    self.replay_depth -= 1;
-                } else {
-                    // Non-recursive: bypass the trie and go straight to the engine.
-                    for ev in keys {
-                        self.replay_km_events_to_engine(std::slice::from_ref(&ev));
-                    }
-                }
-            }
+            // ── Engine-mutating actions ────────────────────────────────────
+            _ => self.dispatch_engine_action(action, count),
         }
     }
 

@@ -242,4 +242,56 @@ impl App {
         self.lsp_attach_buffer(idx);
         Ok(idx)
     }
+
+    /// Dispatch a buffer-navigation [`crate::keymap_actions::AppAction`].
+    ///
+    /// Handles variants:
+    ///   - BufferNext / BufferPrev / BufferAlt
+    ///   - BufferCycleH / BufferCycleL (predicate-gated: fall back to viewport motion)
+    ///   - Tabnext / Tabprev (delegated through dispatch_ex)
+    pub(crate) fn dispatch_buffer_action(
+        &mut self,
+        action: crate::keymap_actions::AppAction,
+        count: usize,
+    ) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            AppAction::Tabnext => {
+                for _ in 0..count {
+                    self.dispatch_ex("tabnext");
+                }
+            }
+            AppAction::Tabprev => {
+                for _ in 0..count {
+                    self.dispatch_ex("tabprev");
+                }
+            }
+            AppAction::BufferNext => self.buffer_next(),
+            AppAction::BufferPrev => self.buffer_prev(),
+            AppAction::BufferAlt => self.buffer_alt(),
+            AppAction::BufferCycleH => {
+                if self.slots.len() > 1 {
+                    self.buffer_prev();
+                } else {
+                    // Single slot: fall back to viewport-top motion.
+                    let n = self.pending_count.take_or(1) as usize;
+                    self.active_mut()
+                        .editor
+                        .apply_motion(hjkl_vim::MotionKind::ViewportTop, n);
+                }
+            }
+            AppAction::BufferCycleL => {
+                if self.slots.len() > 1 {
+                    self.buffer_next();
+                } else {
+                    // Single slot: fall back to viewport-bottom motion.
+                    let n = self.pending_count.take_or(1) as usize;
+                    self.active_mut()
+                        .editor
+                        .apply_motion(hjkl_vim::MotionKind::ViewportBottom, n);
+                }
+            }
+            _ => {}
+        }
+    }
 }

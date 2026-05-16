@@ -439,4 +439,29 @@ impl App {
             }
         }
     }
+
+    /// Dispatch a prompt-opening [`crate::keymap_actions::AppAction`].
+    ///
+    /// Handles variants:
+    ///   - OpenCommandPrompt (`:` — open the ex command prompt)
+    ///   - OpenSearchPrompt  (`/` / `?` — open incremental search)
+    pub(crate) fn dispatch_prompt_action(&mut self, action: crate::keymap_actions::AppAction) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            // Guard: `@:` chord expects `:` as the register name, so
+            // pending_state.is_some() means this key is already claimed by
+            // the pending-state reducer (route_chord_key dispatched here via
+            // dispatch_keymap_in_mode). In that scenario the keymap itself
+            // should not have matched `:` (pending_state blocks the Normal
+            // trie path in route_chord_key), so this guard is defensive.
+            AppAction::OpenCommandPrompt if self.pending_state.is_none() => {
+                self.open_command_prompt();
+            }
+            AppAction::OpenCommandPrompt => {}
+            AppAction::OpenSearchPrompt(dir) => {
+                self.open_search_prompt(dir);
+            }
+            _ => {}
+        }
+    }
 }

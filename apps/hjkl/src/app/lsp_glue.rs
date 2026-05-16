@@ -1615,3 +1615,35 @@ fn strip_markdown(s: &str) -> String {
     }
     out
 }
+
+impl App {
+    /// Dispatch an LSP-related [`crate::keymap_actions::AppAction`].
+    ///
+    /// Handles variants:
+    ///   - ShowDiagAtCursor, LspCodeActions, LspRename
+    ///   - LspGotoDef, LspGotoDecl, LspGotoRef, LspGotoImpl, LspGotoTypeDef
+    ///   - LspHover
+    ///   - DiagNext, DiagPrev, DiagNextError, DiagPrevError
+    pub(crate) fn dispatch_lsp_action(&mut self, action: crate::keymap_actions::AppAction) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            AppAction::ShowDiagAtCursor => self.show_diag_at_cursor(),
+            AppAction::LspCodeActions => self.lsp_code_actions(),
+            AppAction::LspRename => {
+                // Phase 5 MVP: prompt user to use :Rename <newname>.
+                self.status_message = Some("use :Rename <newname> to rename".into());
+            }
+            AppAction::LspGotoDef => self.lsp_goto_definition(),
+            AppAction::LspGotoDecl => self.lsp_goto_declaration(),
+            AppAction::LspGotoRef => self.lsp_goto_references(),
+            AppAction::LspGotoImpl => self.lsp_goto_implementation(),
+            AppAction::LspGotoTypeDef => self.lsp_goto_type_definition(),
+            AppAction::LspHover => self.lsp_hover(),
+            AppAction::DiagNext => self.dispatch_ex("lnext"),
+            AppAction::DiagPrev => self.dispatch_ex("lprev"),
+            AppAction::DiagNextError => self.lnext_severity(Some(super::DiagSeverity::Error)),
+            AppAction::DiagPrevError => self.lprev_severity(Some(super::DiagSeverity::Error)),
+            _ => {}
+        }
+    }
+}

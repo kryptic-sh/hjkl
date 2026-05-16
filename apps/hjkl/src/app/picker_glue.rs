@@ -799,3 +799,28 @@ fn build_scratch_slot(
     slot.snapshot_saved();
     Ok(slot)
 }
+
+impl App {
+    /// Dispatch a git-picker [`crate::keymap_actions::AppAction`].
+    ///
+    /// Handles variants:
+    ///   - GitStatus, GitLog, GitBranch, GitFileHistory
+    ///   - GitStashes, GitTags, GitRemotes
+    ///
+    /// All arms open a fuzzy picker populated from git data. The git/picker
+    /// boundary is intentional: these variants live here because their
+    /// implementations (`open_git_*_picker`) are in this file.
+    pub(crate) fn dispatch_git_action(&mut self, action: crate::keymap_actions::AppAction) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            AppAction::GitStatus => self.open_git_status_picker(),
+            AppAction::GitLog => self.open_git_log_picker(),
+            AppAction::GitBranch => self.open_git_branch_picker(),
+            AppAction::GitFileHistory => self.open_git_file_history_picker(),
+            AppAction::GitStashes => self.open_git_stash_picker(),
+            AppAction::GitTags => self.open_git_tags_picker(),
+            AppAction::GitRemotes => self.open_git_remotes_picker(),
+            _ => {}
+        }
+    }
+}

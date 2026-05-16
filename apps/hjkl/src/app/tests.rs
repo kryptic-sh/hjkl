@@ -13992,3 +13992,149 @@ fn handle_keypress_leader_slash_opens_grep_picker() {
         "<leader>/ via handle_keypress must NOT open search prompt"
     );
 }
+
+// ── Sub-dispatcher canary tests (issue #121) ─────────────────────────────────
+
+#[test]
+fn dispatch_picker_action_opens_file_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.picker.is_none(), "picker starts closed");
+    app.dispatch_action(AppAction::OpenFilePicker, 1);
+    assert!(app.picker.is_some(), "OpenFilePicker must open picker");
+}
+
+#[test]
+fn dispatch_picker_action_opens_buffer_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::OpenBufferPicker, 1);
+    assert!(app.picker.is_some(), "OpenBufferPicker must open picker");
+}
+
+#[test]
+fn dispatch_git_action_status_sets_picker_or_status_message() {
+    // Without a git repo the picker may or may not open (implementation
+    // detail), but the call must not panic.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::GitStatus, 1);
+    // Either a picker opened or a status message was set — both are valid.
+    let reacted = app.picker.is_some() || app.status_message.is_some();
+    assert!(reacted, "GitStatus must open picker or set status message");
+}
+
+#[test]
+fn dispatch_lsp_action_lsp_rename_sets_status_message() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::LspRename, 1);
+    assert!(
+        app.status_message.is_some(),
+        "LspRename must set status_message"
+    );
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("Rename"),
+        "LspRename status must mention :Rename, got: {msg}"
+    );
+}
+
+#[test]
+fn dispatch_window_action_focus_left_on_single_window_no_panic() {
+    // Single window — FocusLeft is a no-op but must not panic.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::FocusLeft, 1);
+}
+
+#[test]
+fn dispatch_buffer_action_buffer_next_single_slot_sets_message() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // With a single slot buffer_next is a no-op that sets a status message.
+    app.dispatch_action(AppAction::BufferNext, 1);
+    assert!(
+        app.status_message.is_some(),
+        "BufferNext on single slot must set status_message"
+    );
+}
+
+#[test]
+fn dispatch_prompt_action_open_command_prompt_opens_command_field() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::OpenCommandPrompt, 1);
+    assert!(
+        app.command_field.is_some(),
+        "OpenCommandPrompt must open command_field"
+    );
+}
+
+#[test]
+fn dispatch_prompt_action_open_search_prompt_opens_search_field() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::OpenSearchPrompt(SearchDir::Forward), 1);
+    assert!(
+        app.search_field.is_some(),
+        "OpenSearchPrompt must open search_field"
+    );
+}
+
+#[test]
+fn dispatch_pending_state_action_begin_pending_replace_sets_state() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(app.pending_state.is_none(), "pending_state starts None");
+    app.dispatch_action(AppAction::BeginPendingReplace { count: 1 }, 1);
+    assert!(
+        app.pending_state.is_some(),
+        "BeginPendingReplace must set pending_state"
+    );
+    assert!(
+        matches!(
+            app.pending_state,
+            Some(hjkl_vim::PendingState::Replace { .. })
+        ),
+        "pending_state must be Replace variant"
+    );
+}
+
+#[test]
+fn dispatch_engine_action_dot_repeat_no_panic_on_empty_buffer() {
+    // Empty buffer, no last change — DotRepeat must not panic.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
+}
+
+#[test]
+fn dispatch_action_stays_small() {
+    // Regression: dispatch_action body must stay under 100 lines.
+    // We locate the function by its signature and count until the first
+    // `^    }$` line (the closing brace at 4-space indent).
+    let src = include_str!("mod.rs");
+    let start = src
+        .find("pub fn dispatch_action")
+        .expect("dispatch_action must exist in mod.rs");
+    let rest = &src[start..];
+    // Count lines until and including the closing brace.
+    let mut brace_depth = 0usize;
+    let mut line_count = 0usize;
+    let mut found_open = false;
+    for line in rest.lines() {
+        line_count += 1;
+        for ch in line.chars() {
+            match ch {
+                '{' => {
+                    brace_depth += 1;
+                    found_open = true;
+                }
+                '}' => {
+                    if brace_depth > 0 {
+                        brace_depth -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if found_open && brace_depth == 0 {
+            break;
+        }
+    }
+    assert!(
+        line_count < 100,
+        "dispatch_action must be < 100 lines, got {line_count}"
+    );
+}

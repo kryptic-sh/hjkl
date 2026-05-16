@@ -941,3 +941,84 @@ mod tests {
         assert_eq!(tree.prev_leaf(2), Some(1));
     }
 }
+
+// ── App window-action dispatcher ──────────────────────────────────────────────
+
+use super::App;
+
+impl App {
+    /// Dispatch a window-management [`crate::keymap_actions::AppAction`].
+    ///
+    /// Handles variants:
+    ///   - FocusLeft / FocusBelow / FocusAbove / FocusRight
+    ///   - FocusNext / FocusPrev
+    ///   - CloseFocusedWindow / OnlyFocusedWindow
+    ///   - SwapWithSibling / MoveWindowToNewTab
+    ///   - NewSplit
+    ///   - ResizeHeight / ResizeWidth
+    ///   - EqualizeLayout / MaximizeHeight / MaximizeWidth
+    ///   - TmuxNavigate (focus neighbour or fall through to tmux select-pane)
+    pub(crate) fn dispatch_window_action(
+        &mut self,
+        action: crate::keymap_actions::AppAction,
+        count: usize,
+    ) {
+        use crate::keymap_actions::AppAction;
+        match action {
+            AppAction::FocusLeft => self.focus_left(),
+            AppAction::FocusBelow => self.focus_below(),
+            AppAction::FocusAbove => self.focus_above(),
+            AppAction::FocusRight => self.focus_right(),
+            AppAction::FocusNext => self.focus_next(),
+            AppAction::FocusPrev => self.focus_previous(),
+            AppAction::CloseFocusedWindow => self.close_focused_window(),
+            AppAction::OnlyFocusedWindow => self.only_focused_window(),
+            AppAction::SwapWithSibling => self.swap_with_sibling(),
+            AppAction::MoveWindowToNewTab => match self.move_window_to_new_tab() {
+                Ok(()) => self.status_message = Some("moved window to new tab".into()),
+                Err(msg) => self.status_message = Some(msg.to_string()),
+            },
+            AppAction::NewSplit => self.dispatch_ex("new"),
+            AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
+            AppAction::ResizeWidth(delta) => self.resize_width(delta * count as i32),
+            AppAction::EqualizeLayout => self.equalize_layout(),
+            AppAction::MaximizeHeight => self.maximize_height(),
+            AppAction::MaximizeWidth => self.maximize_width(),
+            AppAction::TmuxNavigate(dir) => self.dispatch_tmux_navigate(dir),
+            _ => {}
+        }
+    }
+
+    /// `<C-h/j/k/l>` — focus the neighbour window or fall through to tmux.
+    ///
+    /// When a window neighbour exists in `dir`, focuses it. When no neighbour
+    /// exists and `$TMUX` is set, forwards to `tmux select-pane`.
+    pub(crate) fn dispatch_tmux_navigate(&mut self, dir: super::NavDir) {
+        use super::NavDir;
+        let focused = self.focused_window();
+        let neighbour = match dir {
+            NavDir::Left => self.layout().neighbor_left(focused),
+            NavDir::Down => self.layout().neighbor_below(focused),
+            NavDir::Up => self.layout().neighbor_above(focused),
+            NavDir::Right => self.layout().neighbor_right(focused),
+        };
+        if neighbour.is_some() {
+            match dir {
+                NavDir::Left => self.focus_left(),
+                NavDir::Down => self.focus_below(),
+                NavDir::Up => self.focus_above(),
+                NavDir::Right => self.focus_right(),
+            }
+        } else if std::env::var("TMUX").is_ok() {
+            let flag = match dir {
+                NavDir::Left => "-L",
+                NavDir::Down => "-D",
+                NavDir::Up => "-U",
+                NavDir::Right => "-R",
+            };
+            let _ = std::process::Command::new("tmux")
+                .args(["select-pane", flag])
+                .status();
+        }
+    }
+}
