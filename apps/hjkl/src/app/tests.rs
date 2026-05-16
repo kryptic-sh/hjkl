@@ -14122,9 +14122,7 @@ fn dispatch_action_stays_small() {
                     found_open = true;
                 }
                 '}' => {
-                    if brace_depth > 0 {
-                        brace_depth -= 1;
-                    }
+                    brace_depth = brace_depth.saturating_sub(1);
                 }
                 _ => {}
             }

@@ -1752,7 +1752,7 @@ mod tests {
         let _ = layer_correct.wait_all_results(Duration::from_secs(5));
 
         // Apply edit, submit Viewport first (normal production order).
-        layer_correct.apply_edits(TID, &[edit.clone()]);
+        layer_correct.apply_edits(TID, std::slice::from_ref(&edit));
         layer_correct.submit_render(TID, &edited_buf, 0, 40, ParseKind::Viewport);
         let r_viewport_first = layer_correct
             .wait_all_results(Duration::from_secs(5))
@@ -1770,7 +1770,7 @@ mod tests {
 
         // Simulate the race: apply edits, then submit Top FIRST (taking the
         // edits), then Viewport (empty edits — same as in the real queue race).
-        layer_buggy.apply_edits(TID, &[edit.clone()]);
+        layer_buggy.apply_edits(TID, std::slice::from_ref(&edit));
         // Top submit consumes the edits.
         layer_buggy.submit_render(TID, &edited_buf, 0, 40, ParseKind::Top);
         // Viewport submit gets empty edits (already taken by Top).
