@@ -912,6 +912,11 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("c", hjkl_vim::OperatorKind::Change, "change operator"),
         ("<gt>", hjkl_vim::OperatorKind::Indent, "indent operator"),
         ("<lt>", hjkl_vim::OperatorKind::Outdent, "outdent operator"),
+        (
+            "=",
+            hjkl_vim::OperatorKind::AutoIndent,
+            "auto-indent operator",
+        ),
     ] {
         let action = AppAction::BeginPendingAfterOp { op, count1: 1 };
         if let Err(e) = km.add(Mode::Normal, key, action, desc) {
@@ -934,6 +939,11 @@ fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMode> {
         ("c", hjkl_vim::OperatorKind::Change, "change selection"),
         ("<gt>", hjkl_vim::OperatorKind::Indent, "indent selection"),
         ("<lt>", hjkl_vim::OperatorKind::Outdent, "outdent selection"),
+        (
+            "=",
+            hjkl_vim::OperatorKind::AutoIndent,
+            "auto-indent selection",
+        ),
     ] {
         let action = AppAction::VisualOp { op, count: 1 };
         if let Err(e) = km.add(Mode::Visual, key, action, desc) {
@@ -2803,6 +2813,11 @@ impl App {
                                     -(n as i32),
                                 );
                             }
+                            hjkl_vim::OperatorKind::AutoIndent => {
+                                self.active_mut()
+                                    .editor
+                                    .auto_indent_range((top_row, 0), (bot_row, 0));
+                            }
                             _ => return,
                         }
                         // Exit visual mode after the op (except Change above).
@@ -2846,6 +2861,9 @@ impl App {
                                 self.active_mut()
                                     .editor
                                     .indent_range(start, end, -(n as i32), 0);
+                            }
+                            hjkl_vim::OperatorKind::AutoIndent => {
+                                self.active_mut().editor.auto_indent_range(start, end);
                             }
                             _ => return,
                         }
@@ -2911,6 +2929,11 @@ impl App {
                                     -(n as i32),
                                     0,
                                 );
+                            }
+                            hjkl_vim::OperatorKind::AutoIndent => {
+                                self.active_mut()
+                                    .editor
+                                    .auto_indent_range((top_row, 0), (bot_row, 0));
                             }
                             _ => return,
                         }

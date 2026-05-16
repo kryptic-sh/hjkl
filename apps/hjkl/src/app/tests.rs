@@ -18,6 +18,7 @@ fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
         hjkl_vim::OperatorKind::Lowercase => hjkl_engine::Operator::Lowercase,
         hjkl_vim::OperatorKind::ToggleCase => hjkl_engine::Operator::ToggleCase,
         hjkl_vim::OperatorKind::Reflow => hjkl_engine::Operator::Reflow,
+        hjkl_vim::OperatorKind::AutoIndent => hjkl_engine::Operator::AutoIndent,
     }
 }
 fn ctrl_key(c: char) -> KeyEvent {
@@ -12965,4 +12966,109 @@ mod border_drag_tests {
         assert!(app.hover_popup.is_none());
         assert!(app.hover_timer.is_none());
     }
+}
+
+// ── AutoIndent (=) operator app-level integration tests ──────────────────────
+//
+// These drive the full app keymap path — `route_chord_key` / `drive_key` —
+// and verify the buffer state after reindent.
+
+#[test]
+fn equal_equal_in_normal_reindents_current_line() {
+    // `==` on the second line of "{\n  body\n}" must normalise the indent
+    // to shiftwidth=4 spaces (one level deep, inside the opening brace).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "{\n  body\n}");
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_mut().editor.settings_mut().expandtab = true;
+    // Move cursor to row 1 ("  body").
+    app.active_mut().editor.jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+
+    // Drive `==` through the normal keymap path.
+    drive_chars(&mut app, "==");
+    assert!(app.pending_state.is_none(), "pending must clear after ==");
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["{", "    body", "}"],
+        "== must reindent line 1 to 4 spaces; got {lines:?}"
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must stay in Normal after =="
+    );
+}
+
+#[test]
+fn eq_g_from_top_reindents_entire_buffer() {
+    // `=G` from row 0 covers the whole buffer (top → last line).
+    // Buffer: "{\nbody\n}" where "body" has wrong zero indent.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "{\nbody\n}");
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_mut().editor.settings_mut().expandtab = true;
+    // Cursor at row 0.
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Drive `=G`: = → BeginPendingAfterOp(AutoIndent), G → ApplyOpMotion.
+    drive_chars(&mut app, "=G");
+    assert!(app.pending_state.is_none(), "pending must clear after =G");
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines,
+        vec!["{", "    body", "}"],
+        "=G must reindent whole buffer; got {lines:?}"
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must stay in Normal after =G"
+    );
+}
+
+#[test]
+fn visual_line_eq_reindents_selected_lines() {
+    // Enter VisualLine on row 1, press `=` — only "body" should be reindented.
+    // Surrounding braces are NOT in the selection.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "{\nbody\n}");
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_mut().editor.jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+
+    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+
+    // Enter VisualLine via `V`.
+    hjkl_vim::handle_key(
+        &mut app.active_mut().editor,
+        CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::VisualLine,
+        "must be in VisualLine after V"
+    );
+
+    // Dispatch `=` via keymap (VisualOp path).
+    let consumed = app.route_chord_key(CtKeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE));
+    assert!(consumed, "= in VisualLine must be consumed");
+
+    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    // Row 1 is one level deep (depth=1 accumulated from row 0 `{`).
+    assert_eq!(
+        lines,
+        vec!["{", "    body", "}"],
+        "V= must reindent the selected line; got {lines:?}"
+    );
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        hjkl_engine::VimMode::Normal,
+        "must exit VisualLine after ="
+    );
 }
