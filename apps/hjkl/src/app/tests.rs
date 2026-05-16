@@ -13137,6 +13137,107 @@ fn auto_indent_op_sets_indent_flash() {
 
 // ── hjkl-mangler: auto-indent formatter dispatch tests ──────────────────────
 
+/// END-TO-END `gg=G`: user-reported repro on 2026-05-16. Open `.rs` file,
+/// `gg` to top, `=G` to format whole buffer. Asserts rustfmt was actually
+/// invoked (not dumb algo).
+#[test]
+fn auto_indent_gg_eq_g_invokes_rustfmt() {
+    use std::io::Write;
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_mangler_gg_eq_g_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"fn main(){let x=1;let y=2;\nprintln!(\"{}\",x+y);\n}\n")
+        .unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    // gg=G: g → g-prefix, g → jump to top, = → op-pending, G → ApplyOpMotion.
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('G')));
+
+    let after = app.active().editor.buffer().as_string();
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        after.contains("let x = 1;"),
+        "rustfmt output expected (`let x = 1;`); got:\n{after}\n\nstatus: {:?}",
+        app.status_message
+    );
+}
+
+/// END-TO-END: open a real `.rs` file, drive `==` via the chord path, assert
+/// the buffer was reformatted by rustfmt (not dumb algo). Regression for the
+/// "user reports formatter not invoked" diagnosis on 2026-05-16.
+#[test]
+fn auto_indent_invokes_rustfmt_for_rs_files() {
+    use std::io::Write;
+
+    // Skip if rustfmt isn't on PATH (CI sandboxes without rustup).
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_mangler_e2e_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"fn main(){let x=1;let y=2;\nprintln!(\"{}\",x+y);\n}\n")
+        .unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    // Drive `==` via the production chord path.
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+
+    let after = app.active().editor.buffer().as_string();
+    let _ = std::fs::remove_file(&path);
+
+    let expected_lines = [
+        "fn main() {",
+        "    let x = 1;",
+        "    let y = 2;",
+        "    println!(\"{}\", x + y);",
+        "}",
+    ];
+    for line in expected_lines {
+        assert!(
+            after.contains(line),
+            "rustfmt output missing line `{line}`. got:\n{after}\n\nstatus_message: {:?}",
+            app.status_message
+        );
+    }
+}
+
 /// `==` on a buffer with no filename → falls back to dumb `auto_indent_range`
 /// (no formatter lookup, no panic, indent_flash is armed by the dumb algo).
 #[test]

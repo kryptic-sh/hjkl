@@ -137,6 +137,142 @@ impl Formatter for FormatterWithPath {
     }
 }
 
+/// Rust-specific formatter — invokes `rustfmt` with `--edition` set from the
+/// project's `Cargo.toml`. Necessary because `rustfmt` reading from stdin
+/// can't auto-discover `rustfmt.toml` (no file path → no config search root)
+/// and defaults to edition 2015, which rejects modern syntax (let chains,
+/// async closures, etc).
+///
+/// Resolution order for the edition:
+/// 1. `[package].edition` in the nearest `Cargo.toml` (walks up `project_root`).
+/// 2. `[workspace.package].edition` if no package edition.
+/// 3. Defaults to `2024` — the current stable edition.
+pub struct RustFormatter;
+
+impl Formatter for RustFormatter {
+    fn format(&self, source: &str, project_root: &Path) -> Result<String, FormatError> {
+        let edition = detect_rust_edition(project_root).unwrap_or_else(|| "2024".to_string());
+        let edition_arg = format!("--edition={edition}");
+        run_formatter(
+            "rustfmt",
+            &["rustfmt", "--emit", "stdout"],
+            &[edition_arg.as_str()],
+            source,
+            project_root,
+        )
+    }
+}
+
+/// Walk up from `start` looking for `Cargo.toml` and parse `[package].edition`
+/// (or `[workspace.package].edition`). Returns `None` when no `Cargo.toml` is
+/// found or the file has no edition field.
+///
+/// Tiny TOML parser — only looks for `edition = "20XX"` under the right table
+/// header. Avoids pulling in the `toml` crate just for this one field.
+fn detect_rust_edition(start: &Path) -> Option<String> {
+    let mut cur = start.to_owned();
+    loop {
+        let manifest = cur.join("Cargo.toml");
+        if manifest.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                if let Some(ed) = parse_edition_from_cargo_toml(&text) {
+                    return Some(ed);
+                }
+            }
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn parse_edition_from_cargo_toml(text: &str) -> Option<String> {
+    let mut current_table = String::new();
+    let mut package_edition: Option<String> = None;
+    let mut workspace_package_edition: Option<String> = None;
+
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            current_table = rest.trim().to_string();
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("edition")
+            && let Some(eq_idx) = rest.find('=')
+        {
+            let val = rest[eq_idx + 1..]
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'');
+            match current_table.as_str() {
+                "package" => package_edition = Some(val.to_string()),
+                "workspace.package" => workspace_package_edition = Some(val.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    package_edition.or(workspace_package_edition)
+}
+
+#[cfg(test)]
+mod edition_tests {
+    use super::*;
+
+    #[test]
+    fn parse_edition_finds_package_edition() {
+        let toml = r#"
+[package]
+name = "x"
+edition = "2024"
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(toml).as_deref(), Some("2024"));
+    }
+
+    #[test]
+    fn parse_edition_finds_workspace_package_edition() {
+        let toml = r#"
+[workspace.package]
+edition = "2021"
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(toml).as_deref(), Some("2021"));
+    }
+
+    #[test]
+    fn parse_edition_returns_none_when_missing() {
+        let toml = r#"
+[package]
+name = "x"
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(toml), None);
+    }
+
+    #[test]
+    fn parse_edition_handles_single_quotes() {
+        let toml = r#"
+[package]
+edition = '2024'
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(toml).as_deref(), Some("2024"));
+    }
+
+    #[test]
+    fn parse_edition_skips_edition_in_other_tables() {
+        // `edition` under `[dependencies.foo]` etc must NOT be picked up.
+        let toml = r#"
+[dependencies.foo]
+edition = "2021"
+
+[package]
+name = "x"
+edition = "2024"
+"#;
+        assert_eq!(parse_edition_from_cargo_toml(toml).as_deref(), Some("2024"));
+    }
+}
+
 // ── Core subprocess runner ────────────────────────────────────────────────────
 
 /// Spawn the formatter, pipe `source` to stdin, wait up to 2 s, return stdout.
@@ -251,10 +387,7 @@ fn run_formatter(
 pub fn formatter_for_path(path: &Path) -> Option<Arc<dyn Formatter>> {
     let ext = path.extension()?.to_str()?;
     match ext {
-        "rs" => Some(Arc::new(StdinFormatter {
-            args: &["rustfmt", "--emit", "stdout"],
-            tool_name: "rustfmt",
-        })),
+        "rs" => Some(Arc::new(RustFormatter)),
 
         // Prettier handles many types; pass the real path so it reads the
         // correct prettier config rules.
