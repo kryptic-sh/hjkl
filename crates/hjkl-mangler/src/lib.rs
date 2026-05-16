@@ -323,10 +323,21 @@ fn run_formatter(
     };
 
     // Write source to stdin, then close it so the formatter sees EOF.
+    // Tolerate `BrokenPipe` — the child may have already errored and closed
+    // its end before we finished writing (e.g. rustfmt rejecting a bad flag,
+    // shfmt parser hitting an error mid-stream). The real error is in stderr;
+    // we'll surface it from `wait_with_output` below.
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(source.as_bytes())
-            .map_err(FormatError::Io)?;
+        match stdin.write_all(source.as_bytes()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                tracing::debug!(
+                    tool = tool_name,
+                    "stdin closed early; child likely errored — reading stderr"
+                );
+            }
+            Err(e) => return Err(FormatError::Io(e)),
+        }
         // Drop closes the handle — formatter sees EOF.
     }
 

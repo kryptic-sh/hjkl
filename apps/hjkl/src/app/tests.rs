@@ -13137,6 +13137,54 @@ fn auto_indent_op_sets_indent_flash() {
 
 // ── hjkl-mangler: auto-indent formatter dispatch tests ──────────────────────
 
+/// END-TO-END `gg=G` on a LARGE real source file (~8000 LOC). Regression for
+/// `formatter: I/O error: Broken pipe` reported on 2026-05-16. Large stdin
+/// payloads can race with rustfmt closing its pipe early on errors.
+#[test]
+fn auto_indent_gg_eq_g_on_large_file_does_not_break_pipe() {
+    use std::io::Write;
+    if std::process::Command::new("rustfmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: rustfmt not on PATH");
+        return;
+    }
+
+    // Use the engine's editor.rs as a real workload — 8k LOC, modern Rust
+    // syntax (let chains, async closures), already cargo-fmt'd so rustfmt
+    // should accept it and return identical output.
+    let src = include_str!("../../../../crates/hjkl-engine/src/editor.rs");
+
+    let path = std::env::temp_dir().join(format!(
+        "hjkl_mangler_large_{}.rs",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(src.as_bytes()).unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.sync_viewport_from_editor();
+
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('G')));
+
+    let _ = std::fs::remove_file(&path);
+
+    assert!(
+        app.status_message.is_none() || !app.status_message.as_ref().unwrap().contains("pipe"),
+        "expected no broken-pipe error; got status: {:?}",
+        app.status_message
+    );
+}
+
 /// END-TO-END `gg=G`: user-reported repro on 2026-05-16. Open `.rs` file,
 /// `gg` to top, `=G` to format whole buffer. Asserts rustfmt was actually
 /// invoked (not dumb algo).
