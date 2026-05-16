@@ -28,6 +28,21 @@ use crate::lang::{GrammarRequest, LanguageDirectory};
 /// per-buffer tree state (helix-style).
 pub type BufferId = u64;
 
+/// Discriminates the purpose of a parse request / result so the App can
+/// route it to the correct per-slot cache field.
+///
+/// - `Viewport` — the current visible region (already existed; default).
+/// - `Top` — rows `0..min(3*h, line_count)` pre-cached so `gg` never
+///   flashes un-highlighted rows.
+/// - `Bottom` — rows `line_count - min(3*h, line_count)..line_count`
+///   pre-cached so `G` never flashes un-highlighted rows.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ParseKind {
+    Viewport,
+    Top,
+    Bottom,
+}
+
 /// Per-frame output of [`SyntaxLayer::take_result`]: the styled span
 /// table, diagnostic signs for the gutter (one per row with a tree-sitter
 /// ERROR / MISSING node intersecting the viewport), the cache key the
@@ -47,11 +62,15 @@ pub struct RenderOutput {
     /// uses for its own cache key. Pair the result with this on receive.
     pub key: (u64, usize, usize),
     pub perf: PerfBreakdown,
+    /// Which region this result covers — used by `install_render_result`
+    /// to route into the correct per-slot cache field.
+    pub kind: ParseKind,
 }
 
 impl PartialEq for RenderOutput {
     fn eq(&self, other: &Self) -> bool {
-        self.spans == other.spans
+        self.kind == other.kind
+            && self.spans == other.spans
             && self.signs.len() == other.signs.len()
             && self
                 .signs
@@ -103,6 +122,9 @@ struct ParseRequest {
     /// When `true` the worker drops its retained tree before parsing.
     /// Used after `:e` reload / theme swap so the next parse is cold.
     reset: bool,
+    /// Purpose of this parse — threaded into `RenderOutput::kind` so the
+    /// App can route the result to the correct per-slot cache field.
+    kind: ParseKind,
 }
 
 /// Control + data messages the worker thread waits on.
@@ -153,16 +175,18 @@ impl Pending {
         !self.parse_queue.is_empty() || !self.controls.is_empty()
     }
 
-    /// Enqueue a parse request with per-buffer-id deduplication.
+    /// Enqueue a parse request with per-(buffer_id, kind) deduplication.
     ///
-    /// - If a request for `req.buffer_id` is already in the queue,
-    ///   replace it in-place (latest wins for each buffer).
+    /// - If a request for the same `(buffer_id, kind)` pair is already in
+    ///   the queue, replace it in-place (latest wins). Requests with the
+    ///   same buffer_id but different kinds (Viewport / Top / Bottom)
+    ///   coexist in the queue so all three regions can be pre-cached.
     /// - If the queue is at capacity and there is no existing entry for
-    ///   this buffer, evict the oldest entry before pushing.
+    ///   this `(buffer_id, kind)`, evict the oldest entry before pushing.
     fn push_parse(&mut self, req: ParseRequest) {
-        // Replace existing entry for the same buffer id if present.
+        // Replace existing entry for the same (buffer_id, kind) pair if present.
         for slot in self.parse_queue.iter_mut() {
-            if slot.buffer_id == req.buffer_id {
+            if slot.buffer_id == req.buffer_id && slot.kind == req.kind {
                 *slot = req;
                 return;
             }
@@ -252,17 +276,19 @@ impl SyntaxWorker {
     }
 
     /// Drain all available render results, returning them all (one per
-    /// buffer_id that completed). Unlike [`Self::try_recv_latest`] this
-    /// does not discard earlier results — required so pre-warmed results
-    /// for non-active buffers can be routed to the right slot cache.
+    /// `(buffer_id, kind)` pair that completed). Unlike
+    /// [`Self::try_recv_latest`] this does not discard earlier results —
+    /// required so pre-warmed results for non-active buffers can be routed
+    /// to the right slot cache. Different kinds (Viewport / Top / Bottom)
+    /// for the same buffer are kept distinct so each populates its own
+    /// per-slot cache field.
     pub fn try_recv_all(&self) -> Vec<RenderOutput> {
         let mut results = Vec::new();
         while let Ok(out) = self.rx.try_recv() {
-            // Keep the latest per buffer_id; if the same buffer produced
-            // multiple outputs since the last drain, only the last matters.
+            // Keep the latest per (buffer_id, kind).
             if let Some(existing) = results
                 .iter_mut()
-                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id)
+                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id && r.kind == out.kind)
             {
                 *existing = out;
             } else {
@@ -289,8 +315,8 @@ impl SyntaxWorker {
 
     /// Wait up to `timeout` for the first result to arrive, then drain
     /// every additional result already in the channel. Returns ALL
-    /// results in arrival order (latest per buffer_id, same coalescing as
-    /// [`Self::try_recv_all`]).
+    /// results in arrival order (latest per `(buffer_id, kind)`, same
+    /// coalescing as [`Self::try_recv_all`]).
     ///
     /// Unlike [`Self::wait_for_latest`] this does NOT discard earlier
     /// results — required when pre-warming non-active buffers, because
@@ -306,7 +332,7 @@ impl SyntaxWorker {
         while let Ok(out) = self.rx.try_recv() {
             if let Some(existing) = results
                 .iter_mut()
-                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id)
+                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id && r.kind == out.kind)
             {
                 *existing = out;
             } else {
@@ -475,6 +501,7 @@ fn worker_loop(
                     signs,
                     key,
                     perf,
+                    kind: req.kind,
                 });
             }
         }
@@ -894,6 +921,7 @@ impl SyntaxLayer {
             signs: Vec::new(),
             key: (buffer.dirty_gen(), viewport_top, viewport_height),
             perf: PerfBreakdown::default(),
+            kind: ParseKind::Viewport,
         })
     }
 
@@ -938,6 +966,11 @@ impl SyntaxLayer {
     /// worker. Returns immediately. Drain the result with
     /// [`Self::take_result`].
     ///
+    /// `kind` tags the request so the App can route the result to the
+    /// correct per-slot cache field (`viewport_render_output`,
+    /// `top_render_output`, or `bottom_render_output`). Pass
+    /// [`ParseKind::Viewport`] for normal scroll-driven parses.
+    ///
     /// Returns `None` and submits nothing when no language is attached.
     /// Returns `Some(source_build_us)` when a request was submitted —
     /// `0` means the cache was reused.
@@ -947,6 +980,7 @@ impl SyntaxLayer {
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
+        kind: ParseKind,
     ) -> Option<u128> {
         use std::time::Instant;
         let c = self.client_mut(id);
@@ -1018,9 +1052,21 @@ impl SyntaxLayer {
             row_count,
             dirty_gen: dg,
             reset,
+            kind,
         });
 
         Some(source_build_us)
+    }
+
+    /// Returns the number of pending parse requests in the queue.
+    /// Used by tests to verify queue state without draining the channel.
+    #[cfg(test)]
+    pub fn pending_parse_count(&self) -> usize {
+        let (lock, _) = &*self.worker.pending;
+        lock.lock()
+            .expect("syntax pending mutex poisoned")
+            .parse_queue
+            .len()
     }
 
     /// Drain the most recent render result the worker has produced (if
@@ -1123,7 +1169,7 @@ mod tests {
         top: usize,
         height: usize,
     ) -> Option<RenderOutput> {
-        layer.submit_render(TID, buf, top, height)?;
+        layer.submit_render(TID, buf, top, height, ParseKind::Viewport)?;
         layer.wait_for_result(Duration::from_secs(5))
     }
 
@@ -1159,7 +1205,11 @@ mod tests {
                 .set_language_for_path(TID, Path::new("a.unknownext"))
                 .is_known()
         );
-        assert!(layer.submit_render(TID, &buf, 0, 10).is_none());
+        assert!(
+            layer
+                .submit_render(TID, &buf, 0, 10, ParseKind::Viewport)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1415,7 +1465,7 @@ mod perf_smoke {
         assert!(layer.set_language_for_path(TID, path).is_known());
 
         let t0 = Instant::now();
-        layer.submit_render(TID, &buf, 0, 50);
+        layer.submit_render(TID, &buf, 0, 50, ParseKind::Viewport);
         let main_t = t0.elapsed();
         let out = layer.wait_for_result(Duration::from_secs(10));
         eprintln!(
@@ -1431,7 +1481,7 @@ mod perf_smoke {
         let mut main_total = Duration::ZERO;
         for top in 0..100 {
             let s = Instant::now();
-            layer.submit_render(TID, &buf, top * 100, 50);
+            layer.submit_render(TID, &buf, top * 100, 50, ParseKind::Viewport);
             main_total += s.elapsed();
         }
         // Drain whatever the worker produced.
@@ -1462,7 +1512,7 @@ mod perf_smoke {
             }],
         );
         let t = Instant::now();
-        layer.submit_render(TID, &post, 0, 50);
+        layer.submit_render(TID, &post, 0, 50, ParseKind::Viewport);
         let main_us = t.elapsed();
         let out = layer.wait_for_result(Duration::from_secs(10));
         eprintln!(
