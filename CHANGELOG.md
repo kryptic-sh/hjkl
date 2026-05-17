@@ -8,6 +8,44 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.20] - 2026-05-18
+
+### Added
+
+- **`hjkl-tabs` 0.1.0** — renderer-agnostic tab bar data model (closes #13).
+  Public surface: `Tab<Id>` (`#[non_exhaustive]`, fields: `id`, `title`,
+  `dirty`; methods: `new()`, `display_label()` — prepends `●` when dirty,
+  `cell_width()`); `TabBar<Id>` (`#[non_exhaustive]`, fields: `tabs`, `active`;
+  methods: `new()`, `Default`, `len()`, `is_empty()`, `open(id, title)` —
+  upsert + focus, `close(&id)` — removes tab and resets focus to nearest,
+  `focus_next()` / `focus_prev()` — wrap-around cycle, `focus(&id)`,
+  `active() -> Option<&Tab>`, `active_mut()`, `active_index()`,
+  `visible(max_width: u16) -> (Vec<&Tab>, bool, bool)` — active-tab-centred
+  scroll window with left/right overflow flags). Generic over `Id: Eq + Clone`.
+  Zero renderer dependencies. Note: distinct from `hjkl_layout::Tab`
+  (window-split tree); see module doc for disambiguation. 24 unit tests + 10
+  doctests.
+- **`hjkl-tabs-tui` 0.1.0** — ratatui adapter for `hjkl-tabs` (closes #13).
+  Public surface: `TabBarTheme` (`#[non_exhaustive]`, fields: `active_fg`,
+  `active_bg`, `inactive_fg`, `sep_fg`, `overflow_fg`; `new()` constructor,
+  `Default` dark/catppuccin palette); `pub fn render(frame, area, bar, theme)` —
+  renders one-row tab strip with bold active tab, `●` dirty prefix, `│`
+  separators, `<`/`>` overflow indicators;
+  `pub fn build_line(width, bar, theme) -> Line<'static>` — same output without
+  requiring a `Frame`, useful for embedding or testing. 12 unit tests + 1
+  doctest.
+
+### Changed
+
+- **`apps/hjkl` tab-bar migration**: `top_bar()` in `render.rs` now builds a
+  `hjkl_tabs::TabBar<usize>` from `app.tabs` (layout tabs) and delegates the
+  right-side tab rendering to `hjkl_tabs_tui::build_line`. The inline `TabEntry`
+  struct + manual span loop (~40 LOC) is replaced by a shim that populates the
+  data model and extracts spans from the crate. Behaviour is identical: same
+  labels (`{n}: {name}`), same dirty marker, same active-tab highlight.
+  Buffer-line left side unchanged.
+- **`hjkl-app` 0.4.9 → 0.4.10**: patch bump for workspace alignment.
+
 ## [0.21.19] - 2026-05-18
 
 ### Changed
@@ -2889,7 +2927,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.19...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.20...HEAD
+[0.21.20]: https://github.com/kryptic-sh/hjkl/compare/v0.21.19...v0.21.20
 [0.21.19]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...v0.21.19
 [0.21.18]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...v0.21.18
 [0.21.17]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...v0.21.17
