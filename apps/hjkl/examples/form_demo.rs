@@ -6,12 +6,12 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::{execute, terminal};
+use hjkl_editor_tui::form::{FormPalette, draw_form};
 use hjkl_engine::Input;
 use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormEvent, SelectField, SubmitField, SubmitOutcome,
     TextFieldEditor,
 };
-use hjkl_editor_tui::form::{FormPalette, draw_form};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::sync::Arc;

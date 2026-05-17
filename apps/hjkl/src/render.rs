@@ -1374,7 +1374,11 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let names = app.directory.in_flight_names();
         match names.len() {
             0 => String::new(),
-            1 => format!(" {} grammar:{} ", hjkl_editor_tui::spinner::frame(), names[0]),
+            1 => format!(
+                " {} grammar:{} ",
+                hjkl_editor_tui::spinner::frame(),
+                names[0]
+            ),
             n => format!(
                 " {} grammar:{} +{} ",
                 hjkl_editor_tui::spinner::frame(),

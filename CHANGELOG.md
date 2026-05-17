@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-05-17
+
+### Fixed
+
+- `cargo fmt --all --check` rejected two files left unformatted after the #100
+  `hjkl_ratatui` → `hjkl_editor_tui` source substitution lengthened
+  import/format lines past rustfmt's wrap point
+  (`apps/hjkl/examples/form_demo.rs`, `apps/hjkl/src/render.rs:1374`). Applied
+  formatter; v0.21.1's tag-CI rustfmt check failed before the publish step could
+  run.
+
 ## [0.21.1] - 2026-05-17
 
 ### Fixed
@@ -2439,7 +2450,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.2...HEAD
+[0.21.2]: https://github.com/kryptic-sh/hjkl/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/kryptic-sh/hjkl/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...v0.21.0
 [0.20.4]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...v0.20.4
