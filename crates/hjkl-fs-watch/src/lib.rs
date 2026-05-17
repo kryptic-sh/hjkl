@@ -361,7 +361,7 @@ fn worker(
                     Err(_) => break, // Watcher dropped, channel closed.
                     Ok(Err(_)) => continue, // notify error, ignore.
                     Ok(Ok(event)) => {
-                        if paused.load(Ordering::Relaxed) {
+                        if paused.load(Ordering::SeqCst) {
                             continue;
                         }
                         handle_event(event, &mut pending, filter.as_ref());
@@ -611,17 +611,17 @@ impl Watcher {
     /// # }
     /// ```
     pub fn pause(&self) {
-        self.paused.store(true, Ordering::Relaxed);
+        self.paused.store(true, Ordering::SeqCst);
     }
 
     /// Resume event delivery after a [`pause`](Self::pause).
     pub fn resume(&self) {
-        self.paused.store(false, Ordering::Relaxed);
+        self.paused.store(false, Ordering::SeqCst);
     }
 
     /// Return `true` if the watcher is currently paused.
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::Relaxed)
+        self.paused.load(Ordering::SeqCst)
     }
 
     /// Try to receive a single event without blocking.
@@ -762,11 +762,12 @@ mod tests {
     #[test]
     fn create_file_emits_created_event() {
         let dir = tempfile::tempdir().unwrap();
-        let mut watcher = default_watcher(dir.path());
+        let root = dir.path().canonicalize().unwrap();
+        let mut watcher = default_watcher(&root);
         // Let the watcher settle.
         std::thread::sleep(Duration::from_millis(50));
 
-        let file = dir.path().join("hello.txt");
+        let file = root.join("hello.txt");
         fs::write(&file, b"hi").unwrap();
 
         let ev = poll_event(&mut watcher, Duration::from_secs(3)).expect("expected Created event");
@@ -782,10 +783,11 @@ mod tests {
     #[test]
     fn modify_file_emits_modified_event() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("data.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("data.txt");
         fs::write(&file, b"initial").unwrap();
 
-        let mut watcher = default_watcher(dir.path());
+        let mut watcher = default_watcher(&root);
         std::thread::sleep(Duration::from_millis(100));
 
         fs::write(&file, b"updated").unwrap();
@@ -802,17 +804,19 @@ mod tests {
     #[test]
     fn delete_file_emits_removed_event() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("gone.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("gone.txt");
         fs::write(&file, b"bye").unwrap();
 
-        let mut watcher = default_watcher(dir.path());
+        let mut watcher = default_watcher(&root);
         std::thread::sleep(Duration::from_millis(100));
 
         fs::remove_file(&file).unwrap();
 
         let ev = poll_event(&mut watcher, Duration::from_secs(3)).expect("expected Removed event");
+        // macOS FSEvents may report unlink as Modified rather than Removed.
         assert!(
-            matches!(&ev, FsEvent::Removed(p) if p == &file),
+            matches!(&ev, FsEvent::Removed(p) | FsEvent::Modified(p) if p == &file),
             "unexpected event: {ev:?}"
         );
     }
@@ -831,7 +835,7 @@ mod tests {
 
         fs::rename(&src, &dst).unwrap();
 
-        let events = collect_events(&mut watcher, Duration::from_secs(3));
+        let events = collect_events(&mut watcher, Duration::from_secs(10));
         assert!(
             !events.is_empty(),
             "expected at least one event after rename"
@@ -926,16 +930,17 @@ mod tests {
     #[test]
     fn filter_allows_matching_files() {
         let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
 
         let mut watcher = WatcherBuilder::new()
-            .root(dir.path().to_path_buf())
+            .root(root.clone())
             .debounce(Duration::from_millis(50))
             .filter(|p| p.extension().map(|e| e == "rs").unwrap_or(false))
             .build()
             .unwrap();
         std::thread::sleep(Duration::from_millis(100));
 
-        let rs_file = dir.path().join("main.rs");
+        let rs_file = root.join("main.rs");
         fs::write(&rs_file, b"fn main() {}").unwrap();
 
         let ev =
@@ -958,6 +963,9 @@ mod tests {
 
         watcher.pause();
         assert!(watcher.is_paused());
+        // Settle so the worker sees the SeqCst store, then drain stale events.
+        std::thread::sleep(Duration::from_millis(300));
+        while watcher.try_recv().is_some() {}
 
         fs::write(&file, b"silent").unwrap();
         std::thread::sleep(Duration::from_millis(200));
@@ -1017,6 +1025,9 @@ mod tests {
     fn recv_timeout_returns_none_on_timeout() {
         let dir = tempfile::tempdir().unwrap();
         let mut watcher = default_watcher(dir.path());
+        // Let any init-time events settle before asserting silence.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        while watcher.try_recv().is_some() {}
         let result = watcher.recv_timeout(Duration::from_millis(50));
         assert!(result.is_none());
     }

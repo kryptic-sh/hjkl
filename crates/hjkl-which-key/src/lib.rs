@@ -158,6 +158,16 @@ pub fn should_show(
 ///
 /// Cap: at most [`MAX_POPUP_ROWS`] content rows; excess entries are dropped.
 pub fn layout(entries: &[Entry], width: u16) -> PopupLayout {
+    if entries.is_empty() {
+        return PopupLayout {
+            cols: 1,
+            rows: 0,
+            col_width: 0,
+            popup_h: 3,
+            popup_w: width,
+            visible: vec![],
+        };
+    }
     let entry_width = entries
         .iter()
         .map(|e| e.key.len() + 1 + e.desc.len()) // key + space + desc

@@ -8,6 +8,31 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.28] - 2026-05-18
+
+### Fixed
+
+- **`hjkl-which-key::layout()` early-return for empty entries** —
+  `layout(&[], width)` previously returned `cols=7` (an artefact of the
+  `unwrap_or(8)+2` sentinel path) instead of `cols=1, rows=0, popup_h=3`. The
+  long-standing CI test `layout_empty_entries_gives_one_col` now passes on
+  Ubuntu and Windows.
+- **`hjkl-fs-watch` macOS test compatibility** — path canonicalization prevents
+  symlink-prefix mismatches on `/var` → `/private/var`; delete-event assertion
+  accepts `Modified` as well as `Removed` (FSEvents behaviour); init-event
+  settle
+  - drain loop before `recv_timeout` assertion; `pause()` / `resume()` / worker
+    load upgraded to `Ordering::SeqCst` with a post-pause drain loop;
+    rename-event collection timeout raised to 10 s.
+
+### Changed
+
+- **`hjkl-engine` 0.11.1** — `jump_cursor` sticky_col fix is now published to
+  crates.io (was 4 commits ahead of the v0.11.0 tag; version bump required for
+  publish).
+- **`hjkl-clipboard` 0.5.5** — corrects botched v0.5.4 where the tag was pushed
+  while the manifest still read `0.5.3`, blocking crates.io publish.
+
 ## [0.21.27] - 2026-05-18
 
 ### Fixed
@@ -3139,7 +3164,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...HEAD
+[0.21.28]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...v0.21.28
 [0.21.27]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...v0.21.27
 [0.21.26]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...v0.21.26
 [0.21.25]: https://github.com/kryptic-sh/hjkl/compare/v0.21.24...v0.21.25
