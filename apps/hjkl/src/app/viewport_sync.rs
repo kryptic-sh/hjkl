@@ -18,8 +18,8 @@ impl App {
             let vp = self.active_mut().editor.host_mut().viewport_mut();
             vp.top_row = top_row;
             vp.top_col = top_col;
-            vp.width = rect.width;
-            vp.height = rect.height;
+            vp.width = rect.w;
+            vp.height = rect.h;
         }
         self.active_mut().editor.jump_cursor(cursor_row, cursor_col);
     }

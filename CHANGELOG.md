@@ -8,6 +8,32 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.17] - 2026-05-18
+
+### Added
+
+- **`hjkl-layout` 0.1.0** — renderer-agnostic window/split layout machinery
+  extracted from `apps/hjkl/src/app/window.rs` (closes #140). Public surface:
+  `LayoutRect { x, y, w, h: u16 }` (`#[non_exhaustive]`, `new`, `Default`);
+  `SplitDir` (`#[non_exhaustive]` — `Horizontal`, `Vertical`); `LayoutTree`
+  (`Leaf(WindowId)` | `Split { dir, ratio, a, b, last_rect }`, methods:
+  `leaves`, `next_leaf`, `prev_leaf`, `contains`, `replace_leaf`,
+  `neighbor_below/above/left/right`, `enclosing_split_mut`, `equalize_all`,
+  `for_each_ancestor`, `swap_with_sibling`, `remove_leaf`); `Window`
+  (`#[non_exhaustive]`, `new`, `with_scroll`, `Default`); `Tab`
+  (`#[non_exhaustive]`, `new`, `Default`); `WindowId` type alias. 47 tests (30+
+  unit + 2 doctests).
+
+### Changed
+
+- **`apps/hjkl/src/app/window.rs`** shrunk to thin wrapper (~310 LOC):
+  re-exports
+  `hjkl_layout::{LayoutRect, LayoutTree, SplitDir, Tab, Window, WindowId}`, adds
+  `rect_to_layout` / `layout_to_rect` conversion helpers, and retains all `App`
+  window-action `impl` methods.
+- `ratatui::layout::Rect` field accesses (`width`/`height`) replaced with
+  `LayoutRect` fields (`w`/`h`) throughout `apps/hjkl`.
+
 ## [0.21.16] - 2026-05-18
 
 ### Added
@@ -2789,7 +2815,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...HEAD
+[0.21.17]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...v0.21.17
 [0.21.16]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.21.16
 [0.21.15]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...v0.21.15
 [0.21.14]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...v0.21.14

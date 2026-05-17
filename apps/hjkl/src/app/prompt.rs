@@ -200,7 +200,11 @@ impl App {
             let n = comp.candidates.len();
             let new_idx = match comp.selected {
                 None => {
-                    if forward { 0 } else { n - 1 }
+                    if forward {
+                        0
+                    } else {
+                        n - 1
+                    }
                 }
                 Some(i) if forward => (i + 1) % n,
                 Some(i) => (i + n - 1) % n,
@@ -611,14 +615,13 @@ impl App {
         let focused = self.focused_window();
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: slot_idx,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: history.len().saturating_sub(1),
-            cursor_col: 0,
-            last_rect: None,
-        }));
+        self.windows.push(Some(Window::with_scroll(
+            slot_idx,
+            0,
+            0,
+            history.len().saturating_sub(1),
+            0,
+        )));
 
         let total_h = crossterm::terminal::size()
             .map(|(_, h)| h as usize)

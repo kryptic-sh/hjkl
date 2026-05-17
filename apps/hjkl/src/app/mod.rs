@@ -1090,23 +1090,13 @@ impl App {
             let vp = slot.editor.host().viewport();
             (vp.top_row, vp.top_col)
         };
-        let initial_window = window::Window {
-            slot: 0,
-            top_row: initial_top_row,
-            top_col: initial_top_col,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        };
+        let initial_window = window::Window::with_scroll(0, initial_top_row, initial_top_col, 0, 0);
 
         let default_leader = hjkl_app::config::Config::default().editor.leader;
         Ok(Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
-            tabs: vec![window::Tab {
-                layout: window::LayoutTree::Leaf(0),
-                focused_window: 0,
-            }],
+            tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,
             next_window_id: 1,
             next_buffer_id: 1,

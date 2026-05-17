@@ -339,7 +339,7 @@ impl App {
                 && let Some(rect) = w.last_rect
             {
                 union_top = union_top.min(w.top_row);
-                union_bot = union_bot.max(w.top_row + rect.height as usize);
+                union_bot = union_bot.max(w.top_row + rect.h as usize);
             }
         }
         let top = union_top;

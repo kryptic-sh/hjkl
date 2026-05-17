@@ -132,7 +132,6 @@ fn mouse_flags_as_flags_str_roundtrip() {
 #[test]
 fn shift_click_enters_visual_and_extends_selection() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-    use ratatui::layout::Rect;
 
     let mut app = App::new(None, false, None, None).unwrap();
 
@@ -143,7 +142,7 @@ fn shift_click_enters_visual_and_extends_selection() {
         BufferEdit::replace_all(buf, "hello world\nsecond line\nthird\n");
     }
     if let Some(Some(win)) = app.windows.get_mut(0) {
-        win.last_rect = Some(Rect::new(0, 1, 80, 20)); // row 1: below a status bar
+        win.last_rect = Some(window::LayoutRect::new(0, 1, 80, 20)); // row 1: below a status bar
         win.top_row = 0;
         win.top_col = 0;
     }
@@ -226,78 +225,63 @@ mod border_drag_tests {
     use super::*;
     use crate::app::mouse::SplitOrientation;
     use crate::app::{App, SPLIT_MIN_SIZE_COLS, SPLIT_MIN_SIZE_ROWS};
-    use ratatui::layout::Rect;
 
     /// Set up a VSplit app with `last_rect` pre-filled so resize_split_to works.
     fn make_vsplit_with_rect(ratio: f32, total_w: u16, total_h: u16) -> App {
-        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
+        use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
         let mut app = App::new(None, false, None, None).unwrap();
         let win1 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
-        let area = Rect::new(0, 0, total_w, total_h);
+        app.windows.push(Some(Window::new(0)));
+        let area = LayoutRect::new(0, 0, total_w, total_h);
         // a_w = round(total_w * ratio), clamped. Separator at a_w - 1.
         let a_w = ((total_w as f32) * ratio).round() as u16;
         let a_w = a_w.clamp(1, total_w.saturating_sub(1).max(1));
         if let Some(Some(w)) = app.windows.get_mut(0) {
-            w.last_rect = Some(Rect::new(0, 0, a_w.saturating_sub(1), total_h));
+            w.last_rect = Some(LayoutRect::new(0, 0, a_w.saturating_sub(1), total_h));
         }
         if let Some(Some(w)) = app.windows.get_mut(win1) {
-            w.last_rect = Some(Rect::new(a_w, 0, total_w - a_w, total_h));
+            w.last_rect = Some(LayoutRect::new(a_w, 0, total_w - a_w, total_h));
         }
-        app.tabs[0] = Tab {
-            layout: LayoutTree::Split {
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
                 dir: SplitDir::Vertical,
                 ratio,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(area),
             },
-            focused_window: 0,
-        };
+            0,
+        );
         app
     }
 
     /// Set up an HSplit app with `last_rect` pre-filled.
     fn make_hsplit_with_rect(ratio: f32, total_w: u16, total_h: u16) -> App {
-        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
+        use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
         let mut app = App::new(None, false, None, None).unwrap();
         let win1 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
-        let area = Rect::new(0, 0, total_w, total_h);
+        app.windows.push(Some(Window::new(0)));
+        let area = LayoutRect::new(0, 0, total_w, total_h);
         let a_h = ((total_h as f32) * ratio).round() as u16;
         let a_h = a_h.clamp(1, total_h.saturating_sub(1).max(1));
         if let Some(Some(w)) = app.windows.get_mut(0) {
-            w.last_rect = Some(Rect::new(0, 0, total_w, a_h.saturating_sub(1)));
+            w.last_rect = Some(LayoutRect::new(0, 0, total_w, a_h.saturating_sub(1)));
         }
         if let Some(Some(w)) = app.windows.get_mut(win1) {
-            w.last_rect = Some(Rect::new(0, a_h, total_w, total_h - a_h));
+            w.last_rect = Some(LayoutRect::new(0, a_h, total_w, total_h - a_h));
         }
-        app.tabs[0] = Tab {
-            layout: LayoutTree::Split {
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(area),
             },
-            focused_window: 0,
-        };
+            0,
+        );
         app
     }
 
@@ -545,7 +529,7 @@ mod border_drag_tests {
             BufferEdit::replace_all(buf, content);
         }
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(area);
+            win.last_rect = Some(window::rect_to_layout(area));
             win.top_row = 0;
             win.top_col = 0;
         }
@@ -741,7 +725,7 @@ mod border_drag_tests {
         // Publish viewport dims so the bar geometry is meaningful and
         // give window 0 a last_rect so hit_test_zone has the bar width.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         assert_eq!(app.slots.len(), 3);
 
@@ -775,10 +759,10 @@ mod border_drag_tests {
         let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
         app.dispatch_ex(&format!("tabnew {}", path_b.display()));
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         if let Some(Some(win)) = app.windows.get_mut(1) {
-            win.last_rect = Some(ratatui::layout::Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         assert_eq!(app.tabs.len(), 2);
 

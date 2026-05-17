@@ -447,6 +447,7 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
             };
             (rect_a, rect_b)
         }
+        _ => unreachable!("unknown SplitDir variant"),
     }
 }
 
@@ -467,6 +468,7 @@ fn draw_separator(
     let (glyph, glyph_width) = match dir {
         window::SplitDir::Vertical => ("│", 1u16),
         window::SplitDir::Horizontal => ("─", 1u16),
+        _ => unreachable!("unknown SplitDir variant"),
     };
     let buf = frame.buffer_mut();
     match dir {
@@ -494,6 +496,7 @@ fn draw_separator(
                 }
             }
         }
+        _ => {}
     }
 }
 
@@ -512,7 +515,7 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
         } => {
             // Record the FULL rect (pre-separator) so that resize commands
             // can convert line/column deltas to ratio updates correctly.
-            *last_rect = Some(area);
+            *last_rect = Some(window::rect_to_layout(area));
 
             let (rect_a, rect_b) = split_rect(area, *dir, *ratio);
 
@@ -560,6 +563,7 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
                         (a_shrunk, Some(sep), rect_b)
                     }
                 }
+                _ => unreachable!("unknown SplitDir variant"),
             };
 
             render_layout(frame, app, rect_a, a);
@@ -578,7 +582,7 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
 fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::WindowId) {
     // Record the rendered rect for Phase 2+ direction navigation.
     if let Some(win) = app.windows[win_id].as_mut() {
-        win.last_rect = Some(area);
+        win.last_rect = Some(window::rect_to_layout(area));
     }
 
     // Extract window metadata (then drop the borrow so we can access slots).

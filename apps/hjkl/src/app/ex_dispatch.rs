@@ -458,14 +458,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: new_slot,
-            top_row,
-            top_col,
-            cursor_row,
-            cursor_col,
-            last_rect: None,
-        }));
+        self.windows.push(Some(Window::with_scroll(
+            new_slot, top_row, top_col, cursor_row, cursor_col,
+        )));
         // Replace the focused leaf with a horizontal split:
         // new window on top (a), existing window below (b).
         self.layout_mut()
@@ -513,14 +508,9 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: new_slot,
-            top_row,
-            top_col,
-            cursor_row,
-            cursor_col,
-            last_rect: None,
-        }));
+        self.windows.push(Some(Window::with_scroll(
+            new_slot, top_row, top_col, cursor_row, cursor_col,
+        )));
         // Replace the focused leaf with a vertical split:
         // new window on the left (a), existing window on the right (b).
         self.layout_mut()
@@ -595,14 +585,13 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: new_slot_idx,
+        self.windows.push(Some(Window::with_scroll(
+            new_slot_idx,
             top_row,
             top_col,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
+            0,
+            0,
+        )));
         // New window on the left (a), existing on the right (b).
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
@@ -678,14 +667,13 @@ impl App {
 
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: new_slot_idx,
+        self.windows.push(Some(Window::with_scroll(
+            new_slot_idx,
             top_row,
             top_col,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
+            0,
+            0,
+        )));
         // New window on top (a), existing window below (b).
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
@@ -1349,20 +1337,11 @@ impl App {
         // Allocate a new window for the new tab.
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
-        self.windows.push(Some(Window {
-            slot: new_slot_idx,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
+        self.windows.push(Some(Window::new(new_slot_idx)));
 
         // Push the new tab and switch to it.
-        self.tabs.push(Tab {
-            layout: LayoutTree::Leaf(new_win_id),
-            focused_window: new_win_id,
-        });
+        self.tabs
+            .push(Tab::new(LayoutTree::Leaf(new_win_id), new_win_id));
         self.active_tab = self.tabs.len() - 1;
 
         // Sync viewport for the new tab's editor.

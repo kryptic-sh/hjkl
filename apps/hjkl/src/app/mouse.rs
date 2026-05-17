@@ -83,37 +83,38 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
             // Compute the separator position from ratio (matches render::split_rect).
             let hit = match dir {
                 window::SplitDir::Vertical => {
-                    let a_w = ((area.width as f32) * ratio).round() as u16;
-                    let a_w = a_w.clamp(1, area.width.saturating_sub(1).max(1));
+                    let a_w = ((area.w as f32) * ratio).round() as u16;
+                    let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
                     // Separator column: rightmost cell of rect_a (before shrinking).
                     let sep_col = area.x + a_w.saturating_sub(1);
-                    if col == sep_col && row >= area.y && row < area.y + area.height {
+                    if col == sep_col && row >= area.y && row < area.y + area.h {
                         Some(BorderHit {
                             orientation: SplitOrientation::Vertical,
                             border_cell: (col, row),
                             split_origin: area.x,
-                            split_total: area.width,
+                            split_total: area.w,
                         })
                     } else {
                         None
                     }
                 }
                 window::SplitDir::Horizontal => {
-                    let a_h = ((area.height as f32) * ratio).round() as u16;
-                    let a_h = a_h.clamp(1, area.height.saturating_sub(1).max(1));
+                    let a_h = ((area.h as f32) * ratio).round() as u16;
+                    let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
                     // Separator row: bottom row of rect_a (before shrinking).
                     let sep_row = area.y + a_h.saturating_sub(1);
-                    if row == sep_row && col >= area.x && col < area.x + area.width {
+                    if row == sep_row && col >= area.x && col < area.x + area.w {
                         Some(BorderHit {
                             orientation: SplitOrientation::Horizontal,
                             border_cell: (col, row),
                             split_origin: area.y,
-                            split_total: area.height,
+                            split_total: area.h,
                         })
                     } else {
                         None
                     }
                 }
+                _ => None,
             };
             // Return this split's hit if found; otherwise recurse into children.
             if hit.is_some() {
@@ -146,8 +147,8 @@ pub fn hit_test_window(app: &App, col: u16, row: u16) -> Option<window::WindowId
     None
 }
 
-fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
-    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+fn rect_contains(rect: window::LayoutRect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.w && row >= rect.y && row < rect.y + rect.h
 }
 
 fn sign_column_width(
@@ -220,7 +221,7 @@ pub fn cell_to_doc(
 
     // Compute sign-column visibility for this window's viewport.
     let vp_top = vp.top_row;
-    let vp_bot = vp_top + rect.height as usize;
+    let vp_bot = vp_top + rect.h as usize;
     let has_visible_signs = slot
         .diag_signs
         .iter()
@@ -590,7 +591,7 @@ pub fn hit_test_picker_row(app: &App, col: u16, row: u16) -> Option<usize> {
     };
 
     // Click must land in the left area.
-    if !rect_contains(left_area, col, row) {
+    if !rect_contains(window::rect_to_layout(left_area), col, row) {
         return None;
     }
 
@@ -655,7 +656,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         .iter()
         .filter_map(|w| w.as_ref())
         .filter_map(|w| w.last_rect)
-        .map(|r| r.width)
+        .map(|r| r.w)
         .max()
         .unwrap_or(80);
 
@@ -725,7 +726,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
 
     // Compute sign-column visibility for this window.
     let vp_top = vp.top_row;
-    let vp_bot = vp_top + rect.height as usize;
+    let vp_bot = vp_top + rect.h as usize;
     let has_visible_signs = slot
         .diag_signs
         .iter()
@@ -916,7 +917,7 @@ mod tests {
 
     #[test]
     fn rect_contains_basic() {
-        let r = Rect::new(5, 10, 20, 5);
+        let r = window::LayoutRect::new(5, 10, 20, 5);
         assert!(rect_contains(r, 5, 10)); // top-left
         assert!(rect_contains(r, 24, 14)); // bottom-right
         assert!(!rect_contains(r, 4, 10)); // left of
@@ -942,9 +943,9 @@ mod tests {
         }
 
         // Set window 0's last_rect (the renderer writes this every frame;
-        // tests must supply it manually).
+        // tests must supply it manually). Convert from ratatui Rect.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(area);
+            win.last_rect = Some(window::rect_to_layout(area));
             win.top_row = 0;
             win.top_col = 0;
         }
@@ -1046,7 +1047,7 @@ mod tests {
         // Window 0's last_rect — needed so hit_test_zone's bar_width fallback
         // doesn't kick in for tests that exercise wide bars.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         (app, paths)
     }
@@ -1111,7 +1112,7 @@ mod tests {
     fn hit_test_zone_no_buffer_line_with_single_slot() {
         let mut app = App::new(None, false, None, None).unwrap();
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 80, 24));
         }
         // Need viewport published so cell_to_doc has dims.
         {
@@ -1155,7 +1156,7 @@ mod tests {
         }
         // Wide window so bar geometry doesn't truncate anything in tests.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         (app, paths)
     }
@@ -1216,21 +1217,12 @@ mod tests {
         // Manually add a second tab pointing to slot 0 (same as first tab).
         let new_win_id = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(crate::app::window::Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
-        app.tabs.push(Tab {
-            layout: LayoutTree::Leaf(new_win_id),
-            focused_window: new_win_id,
-        });
+        app.windows.push(Some(crate::app::window::Window::new(0)));
+        app.tabs
+            .push(Tab::new(LayoutTree::Leaf(new_win_id), new_win_id));
         // Wide window for bar_width.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 200, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 200, 24));
         }
         assert_eq!(app.slots().len(), 1, "expected 1 slot");
         assert_eq!(app.tabs.len(), 2, "expected 2 tabs");
@@ -1287,83 +1279,67 @@ mod tests {
     /// Helper: build an app with two windows in a VSplit, pre-fill last_rects
     /// so hit_test_border can operate without a live renderer.
     fn make_vsplit_app() -> App {
-        use crate::app::window::{LayoutTree, Tab, Window};
-        use ratatui::layout::Rect;
+        use crate::app::window::{LayoutRect, LayoutTree, Tab, Window};
 
         let mut app = App::new(None, false, None, None).unwrap();
 
         // Add a second window.
         let win1 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
+        app.windows.push(Some(Window::new(0)));
 
         // Build: VSplit(ratio=0.5, Leaf(0), Leaf(1)), total area 80x24.
         // With ratio=0.5 and width=80: a_w = round(80*0.5)=40
         // sep_col = 0 + 40 - 1 = 39
-        let split_area = Rect::new(0, 0, 80, 24);
-        app.tabs[0] = Tab {
-            layout: LayoutTree::Split {
+        let split_area = LayoutRect::new(0, 0, 80, 24);
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
                 dir: crate::app::window::SplitDir::Vertical,
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(split_area),
             },
-            focused_window: 0,
-        };
+            0,
+        );
         // Fill window last_rects.
         if let Some(Some(w)) = app.windows.get_mut(0) {
-            w.last_rect = Some(Rect::new(0, 0, 39, 24)); // left pane (shrunk by 1)
+            w.last_rect = Some(LayoutRect::new(0, 0, 39, 24)); // left pane (shrunk by 1)
         }
         if let Some(Some(w)) = app.windows.get_mut(win1) {
-            w.last_rect = Some(Rect::new(40, 0, 40, 24)); // right pane
+            w.last_rect = Some(LayoutRect::new(40, 0, 40, 24)); // right pane
         }
         app
     }
 
     /// Helper: build an app with two windows in an HSplit, pre-fill last_rects.
     fn make_hsplit_app() -> App {
-        use crate::app::window::{LayoutTree, Tab, Window};
-        use ratatui::layout::Rect;
+        use crate::app::window::{LayoutRect, LayoutTree, Tab, Window};
 
         let mut app = App::new(None, false, None, None).unwrap();
 
         let win1 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: None,
-        }));
+        app.windows.push(Some(Window::new(0)));
 
         // HSplit(ratio=0.5, Leaf(0), Leaf(1)), area 80x24
         // a_h = round(24*0.5) = 12; sep_row = 0 + 12 - 1 = 11
-        let split_area = Rect::new(0, 0, 80, 24);
-        app.tabs[0] = Tab {
-            layout: LayoutTree::Split {
+        let split_area = LayoutRect::new(0, 0, 80, 24);
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
                 dir: crate::app::window::SplitDir::Horizontal,
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Leaf(0)),
                 b: Box::new(LayoutTree::Leaf(win1)),
                 last_rect: Some(split_area),
             },
-            focused_window: 0,
-        };
+            0,
+        );
         if let Some(Some(w)) = app.windows.get_mut(0) {
-            w.last_rect = Some(Rect::new(0, 0, 80, 11));
+            w.last_rect = Some(LayoutRect::new(0, 0, 80, 11));
         }
         if let Some(Some(w)) = app.windows.get_mut(win1) {
-            w.last_rect = Some(Rect::new(0, 12, 80, 12));
+            w.last_rect = Some(LayoutRect::new(0, 12, 80, 12));
         }
         app
     }
@@ -1413,8 +1389,7 @@ mod tests {
 
     #[test]
     fn hit_test_border_with_nested_splits() {
-        use crate::app::window::{LayoutTree, SplitDir, Tab, Window};
-        use ratatui::layout::Rect;
+        use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
 
         // Layout: HSplit(
         //   a = VSplit(Leaf(0), Leaf(1))   — top row, two columns
@@ -1428,31 +1403,25 @@ mod tests {
 
         let win1 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: Some(Rect::new(40, 0, 40, 11)),
-        }));
+        {
+            let mut w = Window::new(0);
+            w.last_rect = Some(LayoutRect::new(40, 0, 40, 11));
+            app.windows.push(Some(w));
+        }
         let win2 = app.next_window_id;
         app.next_window_id += 1;
-        app.windows.push(Some(Window {
-            slot: 0,
-            top_row: 0,
-            top_col: 0,
-            cursor_row: 0,
-            cursor_col: 0,
-            last_rect: Some(Rect::new(0, 12, 80, 12)),
-        }));
-
-        if let Some(Some(w)) = app.windows.get_mut(0) {
-            w.last_rect = Some(Rect::new(0, 0, 39, 11));
+        {
+            let mut w = Window::new(0);
+            w.last_rect = Some(LayoutRect::new(0, 12, 80, 12));
+            app.windows.push(Some(w));
         }
 
-        app.tabs[0] = Tab {
-            layout: LayoutTree::Split {
+        if let Some(Some(w)) = app.windows.get_mut(0) {
+            w.last_rect = Some(LayoutRect::new(0, 0, 39, 11));
+        }
+
+        app.tabs[0] = Tab::new(
+            LayoutTree::Split {
                 dir: SplitDir::Horizontal,
                 ratio: 0.5,
                 a: Box::new(LayoutTree::Split {
@@ -1460,13 +1429,13 @@ mod tests {
                     ratio: 0.5,
                     a: Box::new(LayoutTree::Leaf(0)),
                     b: Box::new(LayoutTree::Leaf(win1)),
-                    last_rect: Some(Rect::new(0, 0, 80, 12)),
+                    last_rect: Some(LayoutRect::new(0, 0, 80, 12)),
                 }),
                 b: Box::new(LayoutTree::Leaf(win2)),
-                last_rect: Some(Rect::new(0, 0, 80, 24)),
+                last_rect: Some(LayoutRect::new(0, 0, 80, 24)),
             },
-            focused_window: 0,
-        };
+            0,
+        );
 
         // Click on the vertical divider inside the top VSplit (col=39, row=5).
         let hit_v = hit_test_border(&app, 39, 5);
@@ -1491,7 +1460,7 @@ mod tests {
         let mut app = App::new(None, false, None, None).unwrap();
         // Set up window rect so hit_test_window can find it.
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 80, 24));
         }
         {
             let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();
@@ -1516,7 +1485,7 @@ mod tests {
     fn make_basic_app_80x24() -> App {
         let mut app = App::new(None, false, None, None).unwrap();
         if let Some(Some(win)) = app.windows.get_mut(0) {
-            win.last_rect = Some(Rect::new(0, 0, 80, 24));
+            win.last_rect = Some(window::LayoutRect::new(0, 0, 80, 24));
         }
         {
             let vp = app.slots_mut()[0].editor.host_mut().viewport_mut();

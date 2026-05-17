@@ -55,12 +55,13 @@ fn inject_split_rect(
     id: window::WindowId,
     rect: ratatui::layout::Rect,
 ) {
+    let lr = window::rect_to_layout(rect);
     if let window::LayoutTree::Split {
         a, b, last_rect, ..
     } = layout
         && (a.contains(id) || b.contains(id))
     {
-        *last_rect = Some(rect);
+        *last_rect = Some(lr);
         if let window::LayoutTree::Split { .. } = a.as_mut() {
             inject_split_rect(a, id, rect);
         }
