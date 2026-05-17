@@ -32,6 +32,7 @@ use floem::{
     reactive::{RwSignal, SignalGet, SignalUpdate},
     views::{Decorators, container, label, v_stack},
 };
+use hjkl_app::{config, editorconfig};
 use hjkl_buffer::Buffer;
 use hjkl_editor::runtime::{DefaultHost, Editor, Options};
 use hjkl_editor_gui::{EditorHandle, editor_view, floem_key_to_input};
@@ -50,6 +51,17 @@ struct Cli {
 fn main() {
     let args = Cli::parse();
 
+    // Load user config (hjkl-app shared with TUI). Failure is non-fatal — we
+    // continue with defaults — but the read happens early so a future status
+    // bar can surface the source path.
+    let _config = match config::load() {
+        Ok((cfg, _src)) => Some(cfg),
+        Err(e) => {
+            eprintln!("hjkl-gui: config load skipped: {e}");
+            None
+        }
+    };
+
     // Build buffer from file or empty.
     let (buffer, open_path) = if let Some(p) = args.path {
         let contents = std::fs::read_to_string(&p).unwrap_or_default();
@@ -58,7 +70,14 @@ fn main() {
         (Buffer::new(), None)
     };
 
-    let editor = Editor::new(buffer, DefaultHost::new(), Options::default());
+    // Apply .editorconfig overlay (indent style/size, max line len) when we
+    // opened a real file — matches the TUI's behavior on file open.
+    let mut opts = Options::default();
+    if let Some(p) = open_path.as_ref() {
+        editorconfig::overlay_for_path(&mut opts, p);
+    }
+
+    let editor = Editor::new(buffer, DefaultHost::new(), opts);
     let handle = EditorHandle::new(editor);
     let save_path = Rc::new(RefCell::new(open_path));
 
@@ -172,33 +191,31 @@ fn app_view(handle: EditorHandle, save_path: Rc<RefCell<Option<PathBuf>>>) -> im
 /// Dispatch a completed ex command.
 fn execute_ex(cmd: &str, handle: &EditorHandle, save_path: &Rc<RefCell<Option<PathBuf>>>) {
     match cmd {
-        "q" | "q!" => {
-            floem::quit_app();
-        }
+        "q" | "q!" => floem::quit_app(),
         "w" => {
-            let content = handle.with(|ed| ed.content());
-            if let Some(path) = save_path.borrow().as_ref() {
-                if let Err(e) = std::fs::write(path, content.as_bytes()) {
-                    eprintln!("hjkl-gui: write error: {e}");
-                }
-            } else {
-                eprintln!("hjkl-gui: no file path; use :w <path> or open a file");
-            }
+            write_buf(handle, save_path);
         }
         "wq" => {
-            let content = handle.with(|ed| ed.content());
-            if let Some(path) = save_path.borrow().as_ref() {
-                if let Err(e) = std::fs::write(path, content.as_bytes()) {
-                    eprintln!("hjkl-gui: write error: {e}");
-                }
-            } else {
-                eprintln!("hjkl-gui: no file path set");
-            }
+            write_buf(handle, save_path);
             floem::quit_app();
         }
         _ => {
             // Unknown command — silently ignore (Phase A).
         }
+    }
+}
+
+/// Write the current buffer to `save_path`. Logs to stderr on failure or
+/// when no path is set; the caller decides what to do next (e.g. `:wq`
+/// quits regardless).
+fn write_buf(handle: &EditorHandle, save_path: &Rc<RefCell<Option<PathBuf>>>) {
+    let Some(path) = save_path.borrow().clone() else {
+        eprintln!("hjkl-gui: no file path; use :w <path> or open a file");
+        return;
+    };
+    let content = handle.with(|ed| ed.content());
+    if let Err(e) = std::fs::write(&path, content.as_bytes()) {
+        eprintln!("hjkl-gui: write error: {e}");
     }
 }
 
