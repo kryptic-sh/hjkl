@@ -1157,7 +1157,15 @@ impl App {
             // before crossterm capture is enabled.
             mouse_enabled: hjkl_app::config::Config::default().editor.mouse,
             mouse_flags: MouseFlags::all(),
-            app_keymap: keymap_build::build_app_keymap(default_leader),
+            app_keymap: {
+                let mut km = keymap_build::build_app_keymap(default_leader);
+                // Chord timeout MUST exceed the default which-key delay
+                // (500 ms) or the same loop iteration that activates the
+                // popup also auto-resolves the chord and clears it. 1000 ms
+                // matches vim's `timeoutlen` default.
+                km.set_timeout(std::time::Duration::from_millis(1000));
+                km
+            },
             anvil_pool: hjkl_anvil::InstallPool::new(),
             anvil_handles: HashMap::new(),
             anvil_log: HashMap::new(),
@@ -1223,8 +1231,14 @@ impl App {
         self.which_key_enabled = config.which_key.enabled;
         self.which_key_delay = std::time::Duration::from_millis(config.which_key.delay_ms);
         // Rebuild the app keymap with the configured leader and timeout.
+        //
+        // Chord timeout (vim `timeoutlen`) must be strictly greater than
+        // `which_key.delay_ms`, otherwise the same event-loop iteration
+        // that activates the popup also resolves the chord and clears it
+        // — the popup never paints. Add 500 ms headroom so the popup gets
+        // at least one render frame before auto-resolve.
         let leader = config.editor.leader;
-        let timeout = Duration::from_millis(config.which_key.delay_ms);
+        let timeout = Duration::from_millis(config.which_key.delay_ms + 500);
         self.app_keymap = keymap_build::build_app_keymap(leader);
         self.app_keymap.set_timeout(timeout);
         self.config = config;
