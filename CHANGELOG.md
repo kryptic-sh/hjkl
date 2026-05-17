@@ -8,6 +8,23 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.21] - 2026-05-18
+
+### Added
+
+- **`hjkl-fs-watch` 0.1.0** — debounced filesystem watcher wrapper around
+  `notify` (closes #16). Public surface: `Watcher` (owns the OS watcher +
+  debounce thread; `try_recv()`, `recv_timeout()`, `events()` drain iterator,
+  `pause()`/`resume()`/`is_paused()`), `FsEvent` (`#[non_exhaustive]` —
+  `Created`, `Modified`, `Removed`, `Renamed { from, to }`), `WatcherBuilder`
+  (`root()`, `filter()`, `debounce()`, `recursive()`, `build()`), and
+  `WatchError` (`Notify`, `Io`, `MissingRoot`). Tokio-free: sync `std::thread`
+  - `crossbeam-channel` backend; no async runtime required. Rename events use
+    `notify`'s `RenameMode` hints with best-effort debounce-window merging; see
+    `FsEvent` doc for platform caveats. No consumer migration in this release;
+    available for `sqeel-tui`, `hjkl-picker`, and `hjkl-editor` when needed. 26
+    unit + integration tests.
+
 ## [0.21.20] - 2026-05-18
 
 ### Added
@@ -2927,7 +2944,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.20...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.21...HEAD
+[0.21.21]: https://github.com/kryptic-sh/hjkl/compare/v0.21.20...v0.21.21
 [0.21.20]: https://github.com/kryptic-sh/hjkl/compare/v0.21.19...v0.21.20
 [0.21.19]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...v0.21.19
 [0.21.18]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...v0.21.18
