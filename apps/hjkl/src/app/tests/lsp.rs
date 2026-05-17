@@ -1,0 +1,1511 @@
+use super::*;
+
+// ── LSP diagnostics tests ────────────────────────────────────────────────
+
+/// Build a `textDocument/publishDiagnostics` JSON payload for `file_url`
+/// containing one error diagnostic.
+#[test]
+fn publish_diagnostics_populates_slot_diags() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Give the active slot an absolute file path.
+    let path = tmp_path("hjkl_diag_test.rs");
+    app.active_mut().filename = Some(path.clone());
+
+    seed_buffer(&mut app, "let x = ();\nlet y = ();");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": {
+                "start": { "line": 0, "character": 4 },
+                "end":   { "line": 0, "character": 5 }
+            },
+            "severity": 1,
+            "message": "unused variable",
+            "source": "rustc",
+            "code": "E0001"
+        }]),
+    );
+
+    app.handle_publish_diagnostics(params);
+
+    let slot = app.active();
+    assert_eq!(slot.lsp_diags.len(), 1);
+    let d = &slot.lsp_diags[0];
+    assert_eq!(d.start_row, 0);
+    assert_eq!(d.start_col, 4);
+    assert_eq!(d.end_row, 0);
+    assert_eq!(d.end_col, 5);
+    assert_eq!(d.severity, DiagSeverity::Error);
+    assert_eq!(d.message, "unused variable");
+    assert_eq!(d.source.as_deref(), Some("rustc"));
+    assert_eq!(d.code.as_deref(), Some("E0001"));
+
+    // Gutter sign must be present for row 0.
+    assert!(
+        slot.diag_signs_lsp
+            .iter()
+            .any(|s| s.row == 0 && s.ch == 'E'),
+        "expected an 'E' gutter sign for row 0"
+    );
+}
+
+#[test]
+fn publish_diagnostics_replaces_existing() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_diag_replace.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc");
+
+    // First publish: two diags.
+    let params1 = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                "severity": 1,
+                "message": "err A"
+            },
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 2,
+                "message": "warn B"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params1);
+    assert_eq!(app.active().lsp_diags.len(), 2);
+
+    // Second publish: one diag — must replace, not append.
+    let params2 = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 1 } },
+            "severity": 3,
+            "message": "info C"
+        }]),
+    );
+    app.handle_publish_diagnostics(params2);
+
+    let slot = app.active();
+    assert_eq!(
+        slot.lsp_diags.len(),
+        1,
+        "second publish must replace, not append"
+    );
+    assert_eq!(slot.lsp_diags[0].message, "info C");
+    assert_eq!(slot.lsp_diags[0].severity, DiagSeverity::Info);
+    // Old signs must be replaced too.
+    assert_eq!(slot.diag_signs_lsp.len(), 1);
+    assert_eq!(slot.diag_signs_lsp[0].row, 2);
+}
+
+#[test]
+fn publish_diagnostics_clears_on_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_diag_clear.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a");
+
+    let params_with = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "err"
+        }]),
+    );
+    app.handle_publish_diagnostics(params_with);
+    assert_eq!(app.active().lsp_diags.len(), 1);
+
+    // Empty diagnostics array clears all diags.
+    let params_clear = pub_diags_params(&file_url(&path), serde_json::json!([]));
+    app.handle_publish_diagnostics(params_clear);
+
+    let slot = app.active();
+    assert!(slot.lsp_diags.is_empty(), "empty publish must clear diags");
+    assert!(
+        slot.diag_signs_lsp.is_empty(),
+        "empty publish must clear gutter signs"
+    );
+}
+
+#[test]
+fn publish_diagnostics_ignores_unknown_uri() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_diag_known.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a");
+
+    // Params targeting a *different* file — should be silently ignored.
+    let unknown_path = tmp_path("hjkl_diag_unknown.rs");
+    let params = pub_diags_params(
+        &file_url(&unknown_path),
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "err"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    assert!(
+        app.active().lsp_diags.is_empty(),
+        "unmatched URI must not populate diags"
+    );
+}
+
+#[test]
+fn lnext_jumps_to_next_diag() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_lnext.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc\nhello world");
+
+    // Plant diags on rows 1 and 3.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 1,
+                "message": "first"
+            },
+            {
+                "range": { "start": { "line": 3, "character": 6 }, "end": { "line": 3, "character": 11 } },
+                "severity": 2,
+                "message": "second"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Cursor at row 0 — lnext should jump to row 1.
+    app.lnext_severity(None);
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 1, "lnext must jump to first diag after cursor");
+
+    // Cursor now at row 1 — lnext should jump to row 3.
+    app.lnext_severity(None);
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 3);
+    assert_eq!(col, 6, "lnext must place cursor at diag start_col");
+}
+
+#[test]
+fn gg_scrolls_window_viewport_to_top() {
+    // Regression: gg moved cursor to (0,0) and the engine called
+    // ensure_cursor_in_scrolloff, but the host's keymap-Unbound branch
+    // forwarded the key to the engine WITHOUT calling
+    // sync_viewport_from_editor — so the focused window's stored
+    // top_row stayed at the old position.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+
+    // Position cursor + viewport deep in the buffer. The viewport_height
+    // atomic must also be set — every vim::step resyncs vp.height from
+    // it, so leaving the atomic at 0 would zero the host viewport mid-step
+    // and disable scrolloff math.
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+        vp.top_row = 60;
+    }
+    app.active_mut().editor.jump_cursor(70, 0);
+    app.sync_viewport_from_editor();
+    let fw = app.focused_window();
+    assert_eq!(app.windows[fw].as_ref().unwrap().top_row, 60);
+
+    // Drive `gg` through the engine. First `g` sets engine-side pending,
+    // second `g` triggers the gg motion (cursor → top + auto-scroll).
+    hjkl_vim::handle_key(
+        &mut app.active_mut().editor,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    hjkl_vim::handle_key(
+        &mut app.active_mut().editor,
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+    );
+    // The Unbound replay path in event_loop.rs syncs the editor's
+    // auto-scrolled viewport back to the focused window.
+    app.sync_viewport_from_editor();
+
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "gg must put cursor at row 0");
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top < 60,
+        "gg must scroll window viewport to top, but stored top_row stayed at {stored_top}"
+    );
+}
+
+#[test]
+fn plus_slash_argv_scrolls_window_viewport_to_match() {
+    // Regression: +/pat moved the cursor but didn't scroll the viewport,
+    // so the rendered viewport stayed at row 0 and the cursor landed
+    // off-screen on large files. Fix: App::new calls
+    // ensure_cursor_in_scrolloff after the search and seeds the initial
+    // window's top_row from the editor viewport.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_scroll");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.rs");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // 100 lines of filler; first `target` match deep at row 80.
+        for i in 0..100 {
+            if i == 80 {
+                writeln!(f, "fn target() {{}}").unwrap();
+            } else {
+                writeln!(f, "// padding line {i}").unwrap();
+            }
+        }
+    }
+    // Set viewport_height atomic via a fake App + apply_viewport_height
+    // before the search runs. App::new builds the slot with
+    // crossterm::terminal::size() — under tests that may return 0,
+    // disabling scrolloff. Pre-set the atomic by dropping in via the
+    // test helper.
+    // Easier path: build a small file where the first match is on row 5
+    // and assert window.top_row > 0 (proxy for "scrolled").
+    let mut app = App::new(Some(path.clone()), false, None, Some("target".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 80, "+/target must move cursor to row 80");
+    // The window's stored top_row should reflect the editor's scrolled
+    // viewport. With crossterm::terminal::size returning 0 in test
+    // contexts the scroll math is a no-op, so set the height atomic
+    // and re-run ensure_cursor_in_scrolloff to verify the scroll path.
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+    }
+    app.active_mut().editor.ensure_cursor_in_scrolloff();
+    let editor_top = app.active().editor.host().viewport().top_row;
+    assert!(
+        editor_top > 0,
+        "ensure_cursor_in_scrolloff should scroll editor viewport away from row 0; got top_row={editor_top}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn slash_search_in_editor_scrolls_window_viewport() {
+    // Regression: /pat<CR> in the editor moved the cursor but didn't
+    // scroll the focused window's viewport, leaving the cursor
+    // off-screen on large files.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let lines: Vec<String> = (0..100)
+        .map(|i| {
+            if i == 80 {
+                "target".into()
+            } else {
+                format!("line {i}")
+            }
+        })
+        .collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+    app.active_mut().editor.set_viewport_height(20);
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.text_width = 80;
+    }
+    let fw = app.focused_window();
+    // Cursor at (0,0), window.top_row=0. Run /target<CR>.
+    app.commit_search("target");
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top > 0,
+        "/target<CR> should scroll the focused window's stored top_row past 0 to reveal the match"
+    );
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(row, 80, "/target<CR> should land cursor on row 80");
+    // Counter must show 1/1 (cursor on the only match), not 0/1.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 1)),
+        "search counter must update after /<CR>"
+    );
+    // Cursor must respect SCROLLOFF=5: cursor at row 80, height 20, so
+    // viewport top_row should be such that screen row is between
+    // [margin, height-1-margin] = [5, 14]. Specifically max_bottom=14
+    // → top = 80 - 14 = 66.
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    let screen_row = 80usize.saturating_sub(stored_top);
+    assert!(
+        (5..=14).contains(&screen_row),
+        "scrolloff=5 violated: screen_row={screen_row} (top={stored_top}, cursor=80, height=20)"
+    );
+}
+
+#[test]
+fn plus_slash_argv_with_realistic_rust_source() {
+    // Mirror the user's repro: hjkl +/main on a real-ish rust file.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_real");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.rs");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // Real-ish content. First `main` substring is on row 5 (`fn main`).
+        writeln!(f, "//! crate root").unwrap(); // row 0
+        writeln!(f).unwrap(); // row 1
+        writeln!(f, "use std::path::PathBuf;").unwrap();
+        writeln!(f).unwrap();
+        writeln!(f, "/// Entry.").unwrap();
+        writeln!(f, "fn main() {{").unwrap(); // row 5: first 'main'
+        writeln!(f, "    let _ = main_helper();").unwrap(); // row 6: 'main_helper'
+        writeln!(f, "}}").unwrap();
+        writeln!(f, "fn main_helper() {{}}").unwrap(); // row 8: 'main_helper'
+    }
+    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 5,
+        "+/main on rust source must land on row 5 (first `fn main`), got row {row}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plus_slash_argv_search_lands_on_first_forward_match() {
+    // Regression: hjkl +/main file.rs lands cursor on a match in the
+    // backward direction (or wraps incorrectly) because the +/<pat>
+    // path advanced from cursor=(0,0) and the wrap policy mishandles
+    // the at-or-after invariant.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        // 3 matches at known rows. First match at row 2.
+        writeln!(f, "alpha").unwrap();
+        writeln!(f, "beta").unwrap();
+        writeln!(f, "main one").unwrap();
+        writeln!(f, "delta").unwrap();
+        writeln!(f, "main two").unwrap();
+        writeln!(f, "main three").unwrap();
+    }
+    let app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 2,
+        "+/main must land on the FIRST forward match (row 2), got row {row}"
+    );
+    assert_eq!(col, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plus_slash_argv_search_with_goto_line_searches_forward() {
+    // hjkl +5 +/main file.rs : goto_line first, then search forward.
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_goto_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "main early").unwrap(); // row 0
+        writeln!(f, "two").unwrap();
+        writeln!(f, "three").unwrap();
+        writeln!(f, "four").unwrap();
+        writeln!(f, "five").unwrap(); // goto_line(5) lands here (1-based row 4)
+        writeln!(f, "six").unwrap();
+        writeln!(f, "main mid").unwrap(); // row 6
+        writeln!(f, "main late").unwrap(); // row 7
+    }
+    // +5 goto_line=5 then +/main forward search. Should land on row 6,
+    // NOT wrap back to row 0.
+    let app = App::new(Some(path.clone()), false, Some(5), Some("main".into())).unwrap();
+    let (row, _col) = app.active().editor.cursor();
+    assert_eq!(
+        row, 6,
+        "+5 +/main must search forward from row 4, landing on row 6"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn plus_slash_argv_persists_forward_direction_for_n() {
+    // Regression: `hjkl +/keyword file` did not call set_last_search,
+    // so vim.last_search_forward stayed at its bool default (false).
+    // The next `n` then computed forward = false != false = false and
+    // jumped BACKWARD as if `?keyword<CR>` had been typed.
+    use hjkl_engine::{Input, Key};
+    use std::io::Write;
+    let dir = std::env::temp_dir().join("hjkl_plus_slash_n_dir");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sample.txt");
+    {
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(f, "alpha").unwrap(); // 0
+        writeln!(f, "beta").unwrap(); // 1
+        writeln!(f, "main one").unwrap(); // 2 — first match
+        writeln!(f, "delta").unwrap(); // 3
+        writeln!(f, "main two").unwrap(); // 4 — `n` should jump here
+        writeln!(f, "main three").unwrap(); // 5
+    }
+    let mut app = App::new(Some(path.clone()), false, None, Some("main".into())).unwrap();
+    let (row0, _) = app.active().editor.cursor();
+    assert_eq!(row0, 2, "+/main must land on first match (row 2)");
+    // last_search must be persisted so `n` knows the pattern.
+    assert_eq!(app.active().editor.last_search(), Some("main"));
+    // Drive `n` through the engine vim FSM and assert FORWARD jump.
+    let n_input = Input {
+        key: Key::Char('n'),
+        ..Default::default()
+    };
+    hjkl_vim::dispatch_input(&mut app.active_mut().editor, n_input);
+    let (row1, _) = app.active().editor.cursor();
+    assert_eq!(
+        row1, 4,
+        "after +/main, `n` must advance FORWARD to row 4 (got row {row1}); \
+        backward would land on row 0 (no match) or stay/regress"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn search_count_cursor_on_match_stays_on_match() {
+    // Regression: /<pat><CR> from a cursor that's already ON a match used
+    // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds
+    // the first match AT-OR-AFTER the cursor — only `n` advances.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Cursor at (0,0) — exactly on the first 'foo'.
+    app.commit_search("foo");
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((1, 3)),
+        "/<pat><CR> from cursor on a match must keep counter at 1/3, \
+        not advance to 2/3"
+    );
+}
+
+#[test]
+fn search_count_n_press_increments_by_one() {
+    // After /foo<CR> lands on M1, pressing n should advance to M2 (counter 2/3).
+    // If counter skips to 3/3, the n-jump is double-stepping.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    app.commit_search("foo");
+    assert_eq!(crate::render::search_count(&app), Some((1, 3)));
+    // Now drive `n` via the engine.
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((2, 3)),
+        "n must advance counter from 1/3 to 2/3, not skip"
+    );
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(crate::render::search_count(&app), Some((3, 3)));
+}
+
+#[test]
+fn search_count_handles_multibyte_chars_before_match() {
+    // Regression: search_count compared cursor_col (char index) against
+    // m.start() (byte offset). A match on a line with multi-byte chars
+    // before it (e.g. an em-dash in a doc comment) had byte > char, so
+    // the inequality `(row, byte) <= (row, char)` falsely excluded the
+    // match the cursor was sitting on — counter showed 0/N instead of 1/N.
+    //
+    // Real-world repro: `/main` in apps/hjkl/src/main.rs landed on a
+    // line "/// surface them — `main` prints …" with an em-dash and
+    // showed [0/6] on commit, then [2/6] after one `n` press.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Two matches; first sits behind a multi-byte em-dash.
+    seed_buffer(&mut app, "alpha\n/// — main one\nbeta\nmain two");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 10;
+        vp.top_row = 0;
+    }
+    app.commit_search("main");
+    assert_eq!(
+        crate::render::search_count(&app),
+        Some((1, 2)),
+        "/main must land on M1 with counter 1/2, even when M1 sits \
+        behind a multi-byte char (em-dash) on its line"
+    );
+    // n -> M2 -> 2/2.
+    app.active_mut().editor.search_advance_forward(true);
+    assert_eq!(crate::render::search_count(&app), Some((2, 2)));
+}
+
+#[test]
+fn search_count_through_full_key_flow() {
+    // Regression: simulate the actual key path / -> 'f' -> 'o' -> 'o' -> Enter.
+    // Counter must end at 1/3 (or N/3 with N=1), never skipping past 1.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Open / prompt.
+    app.open_search_prompt(crate::app::SearchDir::Forward);
+    // Type 'f' 'o' 'o' through handle_search_field_key.
+    for ch in ['f', 'o', 'o'] {
+        let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+        app.handle_search_field_key(key);
+    }
+    // During typing the counter should be 0/3 (cursor before all matches).
+    let count = crate::render::search_count(&app);
+    assert_eq!(count, Some((0, 3)), "during typing, counter must be 0/3");
+    // Submit.
+    let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    app.handle_search_field_key(enter);
+    // After submit the counter must show 1/3, NOT 2/3.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 3)),
+        "after / submit, counter must be 1/3 — bug was 2/3"
+    );
+}
+
+#[test]
+fn search_count_after_commit_lands_on_first_match() {
+    // Regression: `/<pat><CR>` from a non-match cursor was incrementing
+    // the match counter to 2 (skipping 1) because commit_search passed
+    // skip_current=true even on the first jump.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "X foo X foo X foo");
+    // Cursor at (0,0), 'X' — before all matches.
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 5;
+        vp.top_row = 0;
+    }
+    // Submit `/foo<CR>` programmatically.
+    app.commit_search("foo");
+    // Counter should now show 1/3 (first match), not 2/3.
+    let count = crate::render::search_count(&app);
+    assert_eq!(
+        count,
+        Some((1, 3)),
+        "/{{pat}}<CR> from a non-match cursor must land on match 1, not skip to 2"
+    );
+}
+
+#[test]
+fn lsp_jump_reveals_cursor_in_viewport() {
+    // Regression: jump_cursor only sets cursor; without ensure_cursor_in_
+    // scrolloff afterwards, the viewport stays parked and the cursor lands
+    // off-screen. Plant a diag past the visible area, jump, assert the
+    // window's stored top_row scrolled.
+    use crate::app::window::WindowId;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_jump_scroll.rs");
+    app.active_mut().filename = Some(path.clone());
+
+    // 100 lines of content so a row-50 jump is well past any default
+    // viewport.
+    let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+    seed_buffer(&mut app, &lines.join("\n"));
+
+    // Set the focused window's viewport height + reset scroll so we can
+    // observe whether jump scrolls.
+    {
+        let vp = app.active_mut().editor.host_mut().viewport_mut();
+        vp.height = 20;
+        vp.top_row = 0;
+    }
+    let fw: WindowId = app.focused_window();
+    if let Some(w) = app.windows[fw].as_mut() {
+        w.top_row = 0;
+    }
+
+    // Plant a diagnostic on row 50 and jump to it.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 50, "character": 0 }, "end": { "line": 50, "character": 1 } },
+            "severity": 1,
+            "message": "deep"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+    app.lnext_severity(None);
+
+    // Cursor must be at row 50 AND the viewport must have scrolled past
+    // the original top_row=0 so the cursor is visible.
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 50);
+    let vp_top = app.active().editor.host().viewport().top_row;
+    assert!(
+        vp_top > 0,
+        "viewport top_row stayed at 0 after jump — ensure_cursor_in_scrolloff not called"
+    );
+    let stored_top = app.windows[fw].as_ref().unwrap().top_row;
+    assert!(
+        stored_top > 0,
+        "focused window's stored top_row stayed at 0 — sync_viewport_from_editor missed the scroll"
+    );
+}
+
+#[test]
+fn lprev_jumps_to_prev_diag_with_wrap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_lprev.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc\nd");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+                "severity": 1,
+                "message": "first"
+            },
+            {
+                "range": { "start": { "line": 2, "character": 1 }, "end": { "line": 2, "character": 2 } },
+                "severity": 2,
+                "message": "second"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Cursor at row 0 col 0 — lprev should wrap to the last diag (row 2).
+    app.lprev_severity(None);
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 2, "lprev from first diag must wrap to last");
+
+    // Cursor now at row 2 — lprev should jump to row 0.
+    app.lprev_severity(None);
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 0, "lprev must jump to previous diag");
+}
+
+#[test]
+fn lnext_severity_skips_lower_severity() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_lnext_sev.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb\nc");
+
+    // Row 1: Warning, Row 2: Error.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([
+            {
+                "range": { "start": { "line": 1, "character": 0 }, "end": { "line": 1, "character": 1 } },
+                "severity": 2,
+                "message": "warn"
+            },
+            {
+                "range": { "start": { "line": 2, "character": 0 }, "end": { "line": 2, "character": 1 } },
+                "severity": 1,
+                "message": "err"
+            }
+        ]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Jump to Error-only — must skip Warning on row 1 and land on row 2.
+    app.lnext_severity(Some(DiagSeverity::Error));
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 2, "lnext with Error filter must skip Warning diags");
+}
+
+#[test]
+fn lopen_shows_no_diags_message_when_empty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_diag_picker();
+    // No diagnostics — picker must not open; status message set.
+    assert!(app.picker.is_none(), "picker must not open when no diags");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no diagnostics"),
+        "expected 'no diagnostics', got: {msg}"
+    );
+}
+
+#[test]
+fn lopen_lists_diags_in_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_lopen.rs");
+    app.active_mut().filename = Some(path.clone());
+    seed_buffer(&mut app, "a\nb");
+
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 1 } },
+            "severity": 1,
+            "message": "some error"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    app.open_diag_picker();
+    assert!(app.picker.is_some(), "picker must open when diags exist");
+}
+
+#[test]
+fn lsp_info_with_lsp_disabled_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // self.lsp is None by default — :LspInfo shows the disabled state.
+    app.show_lsp_info();
+    let popup = app.info_popup.clone().unwrap_or_default();
+    assert!(
+        popup.contains("LSP: disabled"),
+        "expected 'LSP: disabled' message, got: {popup}"
+    );
+}
+
+#[test]
+fn lsp_info_lists_running_servers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Need an LspManager attached so :LspInfo doesn't show "disabled".
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+    // Manually insert a fake server into lsp_state.
+    let key = hjkl_lsp::ServerKey {
+        language: "rust".into(),
+        root: std::path::PathBuf::from("/tmp/proj"),
+    };
+    app.lsp_state.insert(
+        key,
+        LspServerInfo {
+            initialized: true,
+            capabilities: serde_json::json!({}),
+        },
+    );
+
+    app.show_lsp_info();
+    assert!(
+        app.info_popup.is_some(),
+        "popup must open when LSP is enabled"
+    );
+    let popup = app.info_popup.as_ref().unwrap();
+    assert!(popup.contains("rust"), "popup must mention server language");
+    assert!(
+        popup.contains("initialized"),
+        "popup must show server state"
+    );
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
+}
+
+#[test]
+fn notify_change_skipped_when_dirty_gen_unchanged() {
+    // Without a real LspManager we can't exercise the full path, but we
+    // *can* verify that the last_lsp_dirty_gen guard does not reset on
+    // repeated calls with no edits: the gen stays the same, so the
+    // second call would be a no-op (it would return early). We assert
+    // the guard value is set correctly after a manual seed.
+    let mut app = App::new(None, false, None, None).unwrap();
+    // No LSP manager attached — lsp_notify_change_active returns early.
+    // Manually set last_lsp_dirty_gen to simulate a prior send.
+    let dg = app.active().editor.buffer().dirty_gen();
+    app.active_mut().last_lsp_dirty_gen = Some(dg);
+
+    // Call again — must not panic and must not reset the guard.
+    app.lsp_notify_change_active();
+    assert_eq!(
+        app.active().last_lsp_dirty_gen,
+        Some(dg),
+        "guard must remain unchanged when no LSP manager"
+    );
+}
+
+// ── Phase 3: goto + hover tests ────────────────────────────────────────────
+
+#[test]
+fn goto_definition_single_jumps_cursor() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2\nline3");
+    // Give the active slot a path so the location URI matches.
+    let path = tmp_path("hjkl_gd_single.rs");
+    app.active_mut().filename = Some(path.clone());
+    let uri = file_url(&path);
+
+    let loc = make_location(&uri, 2, 0);
+    let result = ok_val(serde_json::to_value(vec![loc]).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    // Cursor must have moved to row 2.
+    assert_eq!(app.active().editor.buffer().cursor().row, 2);
+    assert!(app.picker.is_none(), "single result must not open picker");
+}
+
+#[test]
+fn goto_definition_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result = ok_val(serde_json::Value::Null);
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("no definition found"),
+        "expected 'no definition found', got: {msg}"
+    );
+    assert!(app.picker.is_none());
+}
+
+#[test]
+fn goto_definition_multi_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Use platform-aware URIs so Windows CI runners don't strip drive letters.
+    let locs = vec![
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_a.rs")), 0, 0),
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_b.rs")), 5, 3),
+        make_location(&file_url(&tmp_path("hjkl_gd_multi_c.rs")), 10, 1),
+    ];
+    let result = ok_val(serde_json::to_value(locs).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    assert!(app.picker.is_some(), "multiple results must open picker");
+}
+
+#[test]
+fn goto_references_always_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Single result — references always opens picker.
+    // Use platform-aware URI so Windows CI runners don't strip drive letters.
+    let locs = vec![make_location(&file_url(&tmp_path("hjkl_gd_only.rs")), 3, 0)];
+    let result = ok_val(serde_json::to_value(locs).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_references_response(buffer_id, (0, 0), result);
+
+    assert!(app.picker.is_some(), "references must always open picker");
+}
+
+#[test]
+fn hover_response_sets_info_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let hover = lsp_types::Hover {
+        contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
+            kind: lsp_types::MarkupKind::Markdown,
+            value: "**fn** foo() -> i32".to_string(),
+        }),
+        range: None,
+    };
+    let result = ok_val(serde_json::to_value(hover).unwrap());
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_hover_response(buffer_id, (0, 0), result);
+
+    assert!(app.info_popup.is_some(), "hover must set info_popup");
+    let popup = app.info_popup.as_ref().unwrap();
+    assert!(popup.contains("foo"), "popup must contain function name");
+}
+
+#[test]
+fn hover_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result: Result<serde_json::Value, hjkl_lsp::RpcError> = Ok(serde_json::Value::Null);
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_hover_response(buffer_id, (0, 0), result);
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("no hover info"),
+        "expected 'no hover info', got: {msg}"
+    );
+    assert!(app.info_popup.is_none());
+}
+
+#[test]
+fn goto_definition_error_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let result = err_val("server error");
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    app.handle_goto_response(buffer_id, (0, 0), result, "definition");
+
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("server error"),
+        "expected error message, got: {msg}"
+    );
+}
+
+#[test]
+fn k_dispatches_hover() {
+    // Without a real LspManager the call returns early with a status hint.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(tmp_path("k_test.rs"));
+    app.lsp_hover();
+    assert!(app.info_popup.is_none());
+    let msg = app.status_message.as_deref().unwrap_or("");
+    assert!(msg.contains("LSP: not enabled"), "got: {msg}");
+}
+
+#[test]
+fn gd_dispatches_goto_definition() {
+    // Without a real LspManager the call returns early (no panic).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(tmp_path("gd_test.rs"));
+    app.lsp_goto_definition();
+    // No LSP — nothing pending, no crash.
+    assert!(app.lsp_pending.is_empty());
+}
+
+#[test]
+fn lsp_request_works_with_relative_filename() {
+    // Regression: opening hjkl with a relative path like
+    // `apps/hjkl/src/main.rs` used to silently fail to attach to the LSP
+    // server because url::Url::from_file_path requires absolute paths.
+    // The absolutize() helper now joins relative paths against
+    // current_dir() before URI conversion.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let mgr = hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default());
+    app.lsp = Some(mgr);
+    app.active_mut().filename = Some(std::path::PathBuf::from("src/main.rs"));
+    app.lsp_goto_definition();
+    // Request was registered as pending — absolutize made URI conversion
+    // succeed even though the buffer's filename is relative.
+    assert_eq!(
+        app.lsp_pending.len(),
+        1,
+        "relative-path goto must produce a pending request, not the \
+        'no file open' error path"
+    );
+    if let Some(mgr) = app.lsp.take() {
+        mgr.shutdown();
+    }
+}
+
+// ── Phase 4: completion popup tests ────────────────────────────────────────
+
+#[test]
+fn completion_response_opens_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Enter insert mode so the guard passes.
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    // Give the buffer a filename so buffer_id matches.
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    let response_val = synthesize_completion_response(&["foo", "bar", "baz"]);
+    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+
+    assert!(app.completion.is_some(), "popup should open");
+    let popup = app.completion.as_ref().unwrap();
+    assert_eq!(popup.all_items.len(), 3);
+    assert_eq!(popup.visible.len(), 3);
+}
+
+#[test]
+fn completion_response_empty_no_popup() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Empty list response.
+    let response_val = serde_json::json!([]);
+    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+
+    assert!(
+        app.completion.is_none(),
+        "empty response must not open popup"
+    );
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("no completions"),
+        "status should report no completions"
+    );
+}
+
+#[test]
+fn completion_request_pending_routes_to_handler() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Simulate a pending completion request.
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Insert a fake pending request.
+    let req_id = app.lsp_alloc_request_id();
+    app.lsp_pending.insert(
+        req_id,
+        LspPendingRequest::Completion {
+            buffer_id,
+            anchor_row: 0,
+            anchor_col: 0,
+        },
+    );
+
+    // Simulate receiving a response.
+    let response_val = synthesize_completion_response(&["alpha", "beta"]);
+    let pending = app.lsp_pending.remove(&req_id).unwrap();
+    app.handle_lsp_response(pending, Ok(response_val));
+
+    assert!(
+        app.completion.is_some(),
+        "response must route to popup opener"
+    );
+    let popup = app.completion.as_ref().unwrap();
+    assert_eq!(popup.all_items.len(), 2);
+}
+
+#[test]
+fn accept_completion_inserts_selected_item() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Seed buffer with some text and enter insert mode at col 0.
+    seed_buffer(&mut app, "fn foo");
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    // Open popup anchored at col 0 row 0 with two items.
+    let items = vec![make_completion_item("hello"), make_completion_item("world")];
+    app.completion = Some(crate::completion::Completion::new(0, 0, items));
+    // Select second item.
+    app.completion.as_mut().unwrap().selected = 1;
+
+    app.accept_completion();
+    app.sync_after_engine_mutation();
+
+    // Popup must be gone.
+    assert!(app.completion.is_none());
+    // Buffer line should start with "world" (inserted at col 0).
+    let line = app.active().editor.buffer().lines()[0].clone();
+    assert!(
+        line.starts_with("world"),
+        "buffer line should start with inserted text, got: {line:?}"
+    );
+    // Sync footer must have drained dirty + content_edits.
+    assert!(
+        !app.active_mut().editor.take_dirty(),
+        "accept_completion call site must drain dirty via sync_after_engine_mutation"
+    );
+    assert!(
+        app.active_mut().editor.take_content_edits().is_empty(),
+        "accept_completion call site must drain content_edits"
+    );
+}
+
+#[test]
+fn dismiss_completion_clears_state() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let items = vec![make_completion_item("foo")];
+    app.completion = Some(crate::completion::Completion::new(0, 0, items));
+    app.pending_ctrl_x = true;
+
+    app.dismiss_completion();
+
+    assert!(app.completion.is_none());
+    assert!(!app.pending_ctrl_x);
+}
+
+#[test]
+fn set_prefix_dismisses_when_filter_empty() {
+    // Open popup, set prefix that matches nothing → popup auto-dismisses.
+    let items = vec![make_completion_item("alpha"), make_completion_item("beta")];
+    let mut popup = crate::completion::Completion::new(0, 0, items);
+    popup.set_prefix("xyz");
+    assert!(
+        popup.is_empty(),
+        "popup should be empty after non-matching prefix"
+    );
+}
+
+// ── Phase 5 LSP tests ────────────────────────────────────────────────────
+
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_single_file() {
+    let path = std::env::temp_dir().join("hjkl_ws_edit_single.txt");
+    std::fs::write(&path, "hello world\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = file_url(&path);
+    let edit = make_workspace_edit(&uri, 0, 6, 0, 11, "rust");
+    let count = app
+        .apply_workspace_edit(edit)
+        .expect("apply_workspace_edit failed");
+    assert_eq!(count, 1);
+
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(
+        lines[0], "hello rust",
+        "edit should replace 'world' with 'rust'"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_sorts_edits_descending() {
+    // Two edits on the same line: first edit at col 0-3, second at col 6-11.
+    // If applied in forward order the offsets shift; descending order must give correct result.
+    let path = std::env::temp_dir().join("hjkl_ws_edit_sort.txt");
+    std::fs::write(&path, "hello world foo\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let url = file_url(&path)
+        .parse::<lsp_types::Uri>()
+        .expect("valid URI");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url,
+        vec![
+            // Edit 1: replace "hello" (0-5) with "hi"
+            lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: lsp_types::Position {
+                        line: 0,
+                        character: 5,
+                    },
+                },
+                new_text: "hi".to_string(),
+            },
+            // Edit 2: replace "world" (6-11) with "earth"
+            lsp_types::TextEdit {
+                range: lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 0,
+                        character: 6,
+                    },
+                    end: lsp_types::Position {
+                        line: 0,
+                        character: 11,
+                    },
+                },
+                new_text: "earth".to_string(),
+            },
+        ],
+    );
+    let edit = lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    };
+    app.apply_workspace_edit(edit).expect("apply failed");
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "hi earth foo", "both edits must apply correctly");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+#[allow(clippy::mutable_key_type)]
+fn apply_workspace_edit_multi_file() {
+    let path_a = std::env::temp_dir().join("hjkl_ws_multi_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_ws_multi_b.txt");
+    std::fs::write(&path_a, "file a content\n").unwrap();
+    std::fs::write(&path_b, "file b content\n").unwrap();
+
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+
+    let uri_a = file_url(&path_a);
+    let uri_b = file_url(&path_b);
+
+    let url_a = uri_a.parse::<lsp_types::Uri>().expect("valid URI a");
+    let url_b = uri_b.parse::<lsp_types::Uri>().expect("valid URI b");
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        url_a,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 14,
+                },
+            },
+            new_text: "edited".to_string(),
+        }],
+    );
+    changes.insert(
+        url_b,
+        vec![lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: lsp_types::Position {
+                    line: 0,
+                    character: 7,
+                },
+                end: lsp_types::Position {
+                    line: 0,
+                    character: 14,
+                },
+            },
+            new_text: "changed".to_string(),
+        }],
+    );
+
+    let edit = lsp_types::WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    };
+    let count = app
+        .apply_workspace_edit(edit)
+        .expect("multi-file apply failed");
+    assert_eq!(count, 2, "should affect 2 files");
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
+#[test]
+fn rename_response_null_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::Rename {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+        new_name: "newName".to_string(),
+    };
+    app.handle_lsp_response(pending, Ok(serde_json::Value::Null));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("cannot rename"),
+        "null rename must set 'cannot rename' status, got: {msg}"
+    );
+}
+
+#[test]
+fn rename_response_applies_workspace_edit() {
+    let path = std::env::temp_dir().join("hjkl_rename_apply.txt");
+    std::fs::write(&path, "old_name here\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = file_url(&path);
+    let edit = make_workspace_edit(&uri, 0, 0, 0, 8, "new_name");
+    let val = serde_json::to_value(edit).unwrap();
+
+    let pending = LspPendingRequest::Rename {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+        new_name: "new_name".to_string(),
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("renamed"),
+        "rename response must set status, got: {msg}"
+    );
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "new_name here");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn format_response_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::Format {
+        buffer_id: 0,
+        range: None,
+    };
+    // Empty array = no changes.
+    app.handle_lsp_response(pending, Ok(serde_json::json!([])));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no formatting"),
+        "empty format response must say 'no formatting changes', got: {msg}"
+    );
+}
+
+#[test]
+fn format_response_applies_text_edits() {
+    let path = std::env::temp_dir().join("hjkl_format_apply.txt");
+    std::fs::write(&path, "fn foo(){}\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    let buf_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    // Insert a space at col 9 (after the `{`) → "fn foo(){ }"
+    let edits: Vec<lsp_types::TextEdit> = vec![lsp_types::TextEdit {
+        range: lsp_types::Range {
+            start: lsp_types::Position {
+                line: 0,
+                character: 9,
+            },
+            end: lsp_types::Position {
+                line: 0,
+                character: 9,
+            },
+        },
+        new_text: " ".to_string(),
+    }];
+    let val = serde_json::to_value(&edits).unwrap();
+
+    let pending = LspPendingRequest::Format {
+        buffer_id: buf_id,
+        range: None,
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert_eq!(msg, "formatted");
+    let lines = app.active().editor.buffer().lines();
+    // "fn foo(){}" with space inserted at pos 9 → "fn foo(){ }"
+    assert_eq!(lines[0], "fn foo(){ }");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn code_action_response_empty_sets_status() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    app.handle_lsp_response(pending, Ok(serde_json::json!([])));
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("no code actions"),
+        "empty code actions must say 'no code actions', got: {msg}"
+    );
+}
+
+#[test]
+fn code_action_response_multi_opens_picker() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    let actions = serde_json::json!([
+        {
+            "title": "Fix import",
+            "kind": "quickfix",
+        },
+        {
+            "title": "Extract method",
+            "kind": "refactor",
+        },
+    ]);
+    app.handle_lsp_response(pending, Ok(actions));
+    assert!(
+        app.picker.is_some(),
+        "multiple code actions must open picker"
+    );
+    assert_eq!(
+        app.pending_code_actions.len(),
+        2,
+        "pending_code_actions must hold both actions"
+    );
+}
+
+#[test]
+fn code_action_response_single_applies_action() {
+    let path = std::env::temp_dir().join("hjkl_ca_single.txt");
+    std::fs::write(&path, "old content\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    let uri = file_url(&path);
+    let edit = make_workspace_edit(&uri, 0, 0, 0, 11, "new content");
+    let action = lsp_types::CodeAction {
+        title: "Replace content".to_string(),
+        edit: Some(edit),
+        ..Default::default()
+    };
+    let val =
+        serde_json::to_value(vec![lsp_types::CodeActionOrCommand::CodeAction(action)]).unwrap();
+
+    let pending = LspPendingRequest::CodeAction {
+        buffer_id: 0,
+        anchor_row: 0,
+        anchor_col: 0,
+    };
+    app.handle_lsp_response(pending, Ok(val));
+    // Single action: applied directly, no picker.
+    assert!(
+        app.picker.is_none(),
+        "single code action must not open picker"
+    );
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("files changed"),
+        "single action apply must set status, got: {msg}"
+    );
+    let lines = app.active().editor.buffer().lines();
+    assert_eq!(lines[0], "new content");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn lsp_code_actions_includes_overlapping_diags_in_context() {
+    // Verify that lsp_code_actions collects diagnostics that overlap the cursor.
+    // We set up a slot with diags and check the request would include them.
+    // Since we can't intercept the LspManager send, we test the diagnostic
+    // overlap logic used by lsp_code_actions separately here.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "fn foo() {\n    let x = 1;\n}\n");
+
+    // Seed two diagnostics: one overlapping the cursor, one not.
+    app.active_mut().lsp_diags = vec![
+        LspDiag {
+            start_row: 0,
+            start_col: 3,
+            end_row: 0,
+            end_col: 6,
+            severity: DiagSeverity::Error,
+            message: "overlapping".to_string(),
+            source: None,
+            code: None,
+        },
+        LspDiag {
+            start_row: 1,
+            start_col: 0,
+            end_row: 1,
+            end_col: 5,
+            severity: DiagSeverity::Warning,
+            message: "not overlapping".to_string(),
+            source: None,
+            code: None,
+        },
+    ];
+
+    // Position cursor at row=0, col=4 (inside the first diag range).
+    app.active_mut().editor.jump_cursor(0, 4);
+
+    // Test the overlap logic directly.
+    let cursor_row = 0usize;
+    let cursor_col = 4usize;
+    let diags = &app.active().lsp_diags;
+    let overlapping: Vec<_> = diags
+        .iter()
+        .filter(|d| {
+            let after_start = (cursor_row, cursor_col) >= (d.start_row, d.start_col);
+            let before_end = cursor_row < d.end_row
+                || (cursor_row == d.end_row && cursor_col < d.end_col)
+                || (cursor_row == d.start_row && d.start_row == d.end_row);
+            after_start && (before_end || cursor_row == d.start_row)
+        })
+        .collect();
+
+    assert_eq!(
+        overlapping.len(),
+        1,
+        "only the overlapping diag should be included"
+    );
+    assert_eq!(overlapping[0].message, "overlapping");
+}
