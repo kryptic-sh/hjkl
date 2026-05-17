@@ -1,26 +1,16 @@
 use crossterm::event::{KeyCode, KeyModifiers};
-use hjkl_buffer::Buffer;
-use hjkl_engine::{
-    BufferEdit, CursorShape, Editor, Host, Input as EngineInput, Key as EngineKey, Options, VimMode,
-};
+use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
 use hjkl_form::TextFieldEditor;
+pub(crate) use hjkl_prompt::CommandCompletion;
+use hjkl_prompt::{history_next, history_prev, push_history};
 
 use super::{App, CmdLineKind, CmdLineWindow, STATUS_LINE_HEIGHT, SearchDir};
 
-/// Walk backwards from `caret` to find the start of the token under the
-/// caret. A token starts at the beginning of the string or after any
-/// ASCII whitespace character.
-fn find_token_start(line: &str, caret: usize) -> usize {
-    let bytes = line.as_bytes();
-    let mut i = caret;
-    while i > 0 {
-        let b = bytes[i - 1];
-        if b.is_ascii_whitespace() {
-            break;
-        }
-        i -= 1;
-    }
-    i
+/// Replace the full text of a TextFieldEditor, leaving cursor at the end in
+/// Insert mode.
+fn set_field_text(field: &mut TextFieldEditor, text: &str) {
+    field.set_text(text);
+    field.enter_insert_at_end();
 }
 
 /// Build an [`hjkl_ex::ExpandContext`] from app state for tab-time inline
@@ -41,27 +31,20 @@ fn build_inline_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
     }
 }
 
-/// Active wildmenu state for the command-line prompt. `None` outside
-/// completion (no Tab pressed yet, or after acceptance/cancel).
-#[derive(Clone, Debug)]
-pub(crate) struct CommandCompletion {
-    /// Original typed text the user can revert to with <Esc>.
-    pub original: String,
-    /// Sorted, dedup'd candidate strings.
-    pub candidates: Vec<String>,
-    /// Currently selected candidate index, or None on initial Tab when
-    /// we replaced with the longest common prefix (no specific selection yet).
-    pub selected: Option<usize>,
-    /// Byte range in the field text that the candidate replaces.
-    pub replace_range: std::ops::Range<usize>,
-}
-
-/// Replace the full text of a TextFieldEditor, leaving cursor at the end in
-/// Insert mode. Uses the public `set_text` method (rebuilds the inner editor)
-/// then calls `enter_insert_at_end`.
-fn set_field_text(field: &mut TextFieldEditor, text: &str) {
-    field.set_text(text);
-    field.enter_insert_at_end();
+/// Walk backwards from `caret` to find the start of the token under the
+/// caret. A token starts at the beginning of the string or after any
+/// ASCII whitespace character.
+fn find_token_start(line: &str, caret: usize) -> usize {
+    let bytes = line.as_bytes();
+    let mut i = caret;
+    while i > 0 {
+        let b = bytes[i - 1];
+        if b.is_ascii_whitespace() {
+            break;
+        }
+        i -= 1;
+    }
+    i
 }
 
 impl App {
@@ -91,7 +74,6 @@ impl App {
 
     pub(crate) fn handle_command_field_key(&mut self, key: crossterm::event::KeyEvent) {
         // Intercept Tab / S-Tab BEFORE converting to EngineInput.
-        // crossterm sends KeyCode::BackTab for Shift+Tab (terminal sends \x1b[Z).
         if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
             self.advance_command_completion(true);
             return;
@@ -101,7 +83,7 @@ impl App {
             return;
         }
 
-        // Phase 2 (#37): Ctrl-P / Up → previous history entry.
+        // Ctrl-P / Up → previous history entry.
         let is_ctrl_p = key.code == KeyCode::Up
             || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
         let is_ctrl_n = key.code == KeyCode::Down
@@ -121,18 +103,9 @@ impl App {
                 }
                 let len = history.len();
                 let new_idx = if is_ctrl_p {
-                    match self.prompt_history_index {
-                        None => Some(len - 1),
-                        Some(0) => Some(0), // clamp at oldest
-                        Some(i) => Some(i - 1),
-                    }
+                    history_prev(self.prompt_history_index, len)
                 } else {
-                    // Ctrl-N
-                    match self.prompt_history_index {
-                        None => None,
-                        Some(i) if i + 1 >= len => None, // past newest → restore
-                        Some(i) => Some(i + 1),
-                    }
+                    history_next(self.prompt_history_index, len)
                 };
                 self.prompt_history_index = new_idx;
                 let text = match new_idx {
@@ -164,7 +137,6 @@ impl App {
 
         if input.key == EngineKey::Esc {
             if let Some(comp) = self.command_completion.take() {
-                // Revert field text to the original typed text.
                 let field = self.command_field.as_mut().unwrap();
                 set_field_text(field, &comp.original);
                 return;
@@ -184,8 +156,7 @@ impl App {
             return;
         }
 
-        // Backspace on an empty prompt dismisses it (vim/neovim parity:
-        // the leading `:` itself counts as the dismissable prefix).
+        // Backspace on an empty prompt dismisses it.
         if input.key == EngineKey::Backspace
             && self
                 .command_field
@@ -205,8 +176,7 @@ impl App {
             self.prompt_user_input = None;
         }
 
-        // Any other key while completion is active: commit current candidate
-        // (field text already has it) and clear completion state.
+        // Any other key while completion is active: commit current candidate.
         if self.command_completion.is_some() {
             self.command_completion = None;
         }
@@ -230,11 +200,7 @@ impl App {
             let n = comp.candidates.len();
             let new_idx = match comp.selected {
                 None => {
-                    if forward {
-                        0
-                    } else {
-                        n - 1
-                    }
+                    if forward { 0 } else { n - 1 }
                 }
                 Some(i) if forward => (i + 1) % n,
                 Some(i) => (i + n - 1) % n,
@@ -254,12 +220,9 @@ impl App {
             let field = self.command_field.as_ref().unwrap();
             field.text()
         };
-        let caret = line.len(); // caret at end for completion
+        let caret = line.len();
 
-        // Phase 7: tab-time inline expansion. If the token under the caret
-        // starts with a filename-expansion prefix (`%`, `#`, `<cword>`,
-        // `<cWORD>`), expand it in place so the user sees the literal path
-        // before pressing Enter.
+        // Tab-time inline expansion.
         {
             let token_start = find_token_start(&line, caret);
             let token = &line[token_start..caret];
@@ -274,7 +237,7 @@ impl App {
                         format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
                     let field = self.command_field.as_mut().unwrap();
                     set_field_text(field, &new_text);
-                    return; // don't fall through to candidate completion
+                    return;
                 }
             }
         }
@@ -282,7 +245,6 @@ impl App {
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
 
-        // Build arg sources.
         let cwd = std::env::current_dir().ok();
         let settings: Vec<String> = hjkl_ex::all_setting_names();
         let buffers: Vec<String> = self
@@ -297,7 +259,6 @@ impl App {
                 if name.is_empty() { None } else { Some(name) }
             })
             .collect();
-        // TODO(phase6): wire register names from live editor state.
         let registers: Vec<String> = {
             let r = self.active().editor.registers();
             let mut regs: Vec<String> = Vec::new();
@@ -338,14 +299,12 @@ impl App {
         }
         let original = line.clone();
         if comp.candidates.len() == 1 {
-            // Single match — insert fully, close menu.
             let cand = comp.candidates[0].clone();
             let new_text = format!("{}{}", &line[..comp.replace_range.start], cand);
             let field = self.command_field.as_mut().unwrap();
             set_field_text(field, &new_text);
-            return; // no command_completion stored — menu stays closed
+            return;
         }
-        // Multiple matches — replace with longest common prefix and store state.
         let lcp = hjkl_ex::longest_common_prefix(&comp.candidates);
         let prefix_text = if lcp.len() > comp.replace_range.len() {
             format!("{}{}", &line[..comp.replace_range.start], lcp)
@@ -356,12 +315,11 @@ impl App {
             let field = self.command_field.as_mut().unwrap();
             set_field_text(field, &prefix_text);
         }
-        self.command_completion = Some(CommandCompletion {
+        self.command_completion = Some(CommandCompletion::new(
             original,
-            candidates: comp.candidates,
-            selected: None,
-            replace_range: comp.replace_range,
-        });
+            comp.candidates,
+            comp.replace_range,
+        ));
     }
 
     pub(crate) fn open_search_prompt(&mut self, dir: SearchDir) {
@@ -388,7 +346,6 @@ impl App {
     }
 
     pub(crate) fn handle_search_field_key(&mut self, key: crossterm::event::KeyEvent) {
-        // Phase 2 (#37): Ctrl-P / Up → previous history entry.
         let is_ctrl_p = key.code == KeyCode::Up
             || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
         let is_ctrl_n = key.code == KeyCode::Down
@@ -411,17 +368,9 @@ impl App {
                 }
                 let len = history.len();
                 let new_idx = if is_ctrl_p {
-                    match self.prompt_history_index {
-                        None => Some(len - 1),
-                        Some(0) => Some(0),
-                        Some(i) => Some(i - 1),
-                    }
+                    history_prev(self.prompt_history_index, len)
                 } else {
-                    match self.prompt_history_index {
-                        None => None,
-                        Some(i) if i + 1 >= len => None,
-                        Some(i) => Some(i + 1),
-                    }
+                    history_next(self.prompt_history_index, len)
                 };
                 self.prompt_history_index = new_idx;
                 let text = match new_idx {
@@ -468,8 +417,7 @@ impl App {
             return;
         }
 
-        // Backspace on an empty prompt dismisses it (vim/neovim parity:
-        // the leading `/` or `?` itself counts as the dismissable prefix).
+        // Backspace on an empty prompt dismisses it.
         if input.key == EngineKey::Backspace && field.text().is_empty() {
             self.prompt_history_index = None;
             self.prompt_user_input = None;
@@ -533,36 +481,20 @@ impl App {
             Ok(re) => {
                 self.active_mut().editor.set_search_pattern(Some(re));
                 let forward = self.search_dir == SearchDir::Forward;
-                // Vim semantics for the / and ? prompts are asymmetric:
-                //   /<pat><CR> — searches AT-OR-AFTER the cursor (cursor
-                //                stays on the match if it's already on one)
-                //   ?<pat><CR> — searches strictly BEFORE the cursor
-                //                (always moves to a previous match)
-                // skip_current=false on forward prevents /<CR> from
-                // double-stepping past the cursor's match (counter went
-                // 0/3 → 2/3 because the cursor advanced past M1).
-                // skip_current=true on backward keeps the existing /?:
-                // behavior of jumping to the previous match.
                 if forward {
                     self.active_mut().editor.search_advance_forward(false);
                 } else {
                     self.active_mut().editor.search_advance_backward(true);
                 }
-                // search_advance_* moves the cursor without going through
-                // the engine's vim::step end-of-step hook, so the viewport
-                // doesn't auto-scroll. Reveal the cursor + sync the
-                // focused window's stored top_row so the next render
-                // shows the match instead of the old viewport.
                 self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 self.active_mut()
                     .editor
                     .set_last_search(Some(p.clone()), forward);
-                // Phase 1 (#37): push to search history ring.
                 if forward {
-                    App::push_history(&mut self.search_history_forward, &p);
+                    push_history(&mut self.search_history_forward, &p);
                 } else {
-                    App::push_history(&mut self.search_history_backward, &p);
+                    push_history(&mut self.search_history_backward, &p);
                 }
             }
             Err(e) => {
@@ -580,12 +512,6 @@ impl App {
     pub(crate) fn dispatch_prompt_action(&mut self, action: crate::keymap_actions::AppAction) {
         use crate::keymap_actions::AppAction;
         match action {
-            // Guard: `@:` chord expects `:` as the register name, so
-            // pending_state.is_some() means this key is already claimed by
-            // the pending-state reducer (route_chord_key dispatched here via
-            // dispatch_keymap_in_mode). In that scenario the keymap itself
-            // should not have matched `:` (pending_state blocks the Normal
-            // trie path in route_chord_key), so this guard is defensive.
             AppAction::OpenCommandPrompt if self.pending_state.is_none() => {
                 self.open_command_prompt();
             }
@@ -611,18 +537,13 @@ pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
 
 impl App {
     /// Open the command-line window for `kind` (`q:` / `q/` / `q?`).
-    ///
-    /// - Builds a transient buffer whose content is the relevant history.
-    /// - Opens a horizontal split below the current window sized to
-    ///   `min(7, history.len() + 1)` lines (enforced by the layout ratio).
-    /// - Cursor lands on the last (empty) line.
-    /// - Stores `CmdLineWindow` so `<CR>` knows how to re-dispatch.
     pub(crate) fn open_cmdline_window(&mut self, kind: CmdLineKind) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::{BufferEdit, Editor, Host, Options};
         use std::time::Instant;
 
-        // Already open — no-op (don't nest).
         if self.cmdline_win.is_some() {
             return;
         }
@@ -633,11 +554,8 @@ impl App {
             CmdLineKind::SearchBackward => self.search_history_backward.clone(),
         };
 
-        // Build the transient buffer content: history lines (oldest first) +
-        // one trailing empty line.
         let content = history.join("\n");
 
-        // Create the slot.
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
         let host = TuiHost::new();
@@ -654,7 +572,6 @@ impl App {
         if !content.is_empty() {
             BufferEdit::replace_all(editor.buffer_mut(), &content);
         }
-        // Move cursor to the last line (the empty line after history, or line 0).
         let line_count = editor.buffer().row_count();
         editor.jump_cursor(line_count.saturating_sub(1), 0);
         let _ = editor.take_content_edits();
@@ -689,10 +606,8 @@ impl App {
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;
 
-        // Determine window height: clamp to [1, 7] rows.
         let win_rows = (history.len() + 1).clamp(1, 7);
 
-        // Build the split: current window on top (a), cmdline below (b).
         let focused = self.focused_window();
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
@@ -705,12 +620,10 @@ impl App {
             last_rect: None,
         }));
 
-        // Compute ratio: cmdline gets `win_rows` rows of total height.
-        // We don't know exact height here, use a heuristic: cap 7/24 ≈ 0.29.
         let total_h = crossterm::terminal::size()
             .map(|(_, h)| h as usize)
             .unwrap_or(24)
-            .saturating_sub(1); // status line
+            .saturating_sub(1);
         let ratio_b = (win_rows as f32 / total_h as f32).clamp(0.05, 0.45);
         let ratio_a = 1.0 - ratio_b;
 
@@ -735,19 +648,15 @@ impl App {
     }
 
     /// Close the command-line window (without executing the current line).
-    ///
-    /// Used by `:q` / `<C-c>` from within the cmdline window.
     pub(crate) fn close_cmdline_window(&mut self) {
         let Some(cw) = self.cmdline_win.take() else {
             return;
         };
-        // Remove the window from the layout.
         let new_focus = match self.layout_mut().remove_leaf(cw.win_id) {
             Ok(f) => f,
-            Err(_) => return, // can't remove last window
+            Err(_) => return,
         };
         self.windows[cw.win_id] = None;
-        // Remove the transient slot. Fix up window slot pointers.
         let slot_idx = cw.slot_idx;
         if slot_idx < self.slots.len() {
             self.slots.remove(slot_idx);
@@ -766,14 +675,10 @@ impl App {
     }
 
     /// Execute the line at the cursor in the command-line window, then close it.
-    ///
-    /// For `q:` windows: dispatches the line as an ex command.
-    /// For `q/` / `q?` windows: commits the line as a search pattern.
     pub(crate) fn commit_cmdline_window(&mut self) {
         let Some(cw) = self.cmdline_win.clone() else {
             return;
         };
-        // Read the line at the cursor position.
         let line_text = {
             let slot = &self.slots[cw.slot_idx];
             let (row, _) = slot.editor.cursor();
@@ -784,7 +689,6 @@ impl App {
                 .cloned()
                 .unwrap_or_default()
         };
-        // Close first, then dispatch (so dispatch sees the previous focused window).
         self.close_cmdline_window();
 
         let text = line_text.trim().to_string();

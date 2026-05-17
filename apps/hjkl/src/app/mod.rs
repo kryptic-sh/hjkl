@@ -167,7 +167,7 @@ pub struct App {
     pub command_field: Option<TextFieldEditor>,
     /// Active wildmenu state for the command-line prompt. `None` outside
     /// completion (no Tab pressed yet, or after acceptance/cancel).
-    pub(crate) command_completion: Option<crate::app::prompt::CommandCompletion>,
+    pub(crate) command_completion: Option<hjkl_prompt::CommandCompletion>,
     /// Active `/` (forward) / `?` (backward) search prompt.
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
@@ -1539,18 +1539,9 @@ impl App {
     // km_to_crossterm, replay_to_engine, route_chord_key, route_chord_key_inner moved to chord_routing.rs
 
     /// Push `entry` into a history ring (cap 100, skip consecutive duplicates).
+    /// Delegates to [`hjkl_prompt::push_history`].
     pub(crate) fn push_history(ring: &mut Vec<String>, entry: &str) {
-        if entry.is_empty() {
-            return;
-        }
-        if ring.last().is_some_and(|last| last == entry) {
-            return; // consecutive duplicate — skip
-        }
-        ring.push(entry.to_string());
-        const HISTORY_CAP: usize = 100;
-        if ring.len() > HISTORY_CAP {
-            ring.remove(0);
-        }
+        hjkl_prompt::push_history(ring, entry);
     }
 
     /// `@:` — replay the last ex command. No-op when nothing has been

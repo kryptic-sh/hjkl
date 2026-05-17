@@ -1,0 +1,22 @@
+[package]
+name = "hjkl-prompt"
+description = "Renderer-agnostic ex/search prompt bar state machine for the hjkl editor stack. Covers `:`, `/`, and `?` prompts with history navigation and wildmenu completion model."
+keywords = ["prompt", "editor", "ex", "search", "tui"]
+categories = ["text-editors"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-form = "0.6"
+hjkl-engine = { version = "0.11", default-features = false }
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

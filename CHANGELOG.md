@@ -8,6 +8,44 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.16] - 2026-05-18
+
+### Added
+
+- **`hjkl-prompt` 0.1.0** — renderer-agnostic ex/search prompt bar state machine
+  (closes #131 partially). Public surface: `PromptKind` (`#[non_exhaustive]` —
+  `Command`, `SearchForward`, `SearchBackward`, `prefix_char()`);
+  `CommandCompletion` (`#[non_exhaustive]`,
+  `original`/`candidates`/`selected`/`replace_range`, `new` constructor);
+  `PromptOutcome` (`#[non_exhaustive]` — `Continue`, `Submit`, `Cancel`,
+  `TabForward`, `TabBackward`, `HistoryPrev`, `HistoryNext`, `Dirty`);
+  `PromptState` (`#[non_exhaustive]`, `new`/`with_prefill`/`default`, `text()`,
+  `cursor()`, `vim_mode()`, `cursor_shape()`, `handle_input()`,
+  `apply_history_nav()`, `advance_completion()`); `pub fn push_history`,
+  `pub fn history_prev`, `pub fn history_next`. 24 unit tests + 4 doctests.
+- **`hjkl-prompt-tui` 0.1.0** — ratatui adapter for `hjkl-prompt` (closes #131
+  partially). Public surface: `PromptTheme` (`#[non_exhaustive]`, insert/normal
+  bg, text, tag fg, wildmenu bg/fg/selection, `Default` dark fallback, `new`
+  constructor); `pub fn render_prompt_line(frame, prompt, theme, area)` —
+  renders `:{text}` / `/{text}` / `?{text}` with `[I]`/`[N]` tag and positions
+  terminal cursor at insertion point;
+  `pub fn render_wildmenu(frame, prompt, theme, area)` — renders candidate strip
+  with `+N more` overflow;
+  `pub fn build_prompt_line(content, mode, theme, width) -> Line`;
+  `pub fn has_wildmenu(prompt) -> bool`;
+  `pub fn is_search_prompt( prompt) -> bool`. 9 unit tests + 1 doctest.
+
+### Changed
+
+- **`apps/hjkl/src/app/prompt.rs`** `CommandCompletion` struct and
+  `push_history` logic moved to `hjkl-prompt`; prompt.rs now re-exports
+  `hjkl_prompt::CommandCompletion` and delegates `history_prev`/`history_next`
+  to the new crate. Event-loop wiring and App method bodies remain in-tree.
+- **`apps/hjkl/src/app/mod.rs`** `command_completion` field type changed from
+  `crate::app::prompt::CommandCompletion` to `hjkl_prompt::CommandCompletion`.
+  `App::push_history` delegates to `hjkl_prompt::push_history`.
+- **`hjkl-app` 0.4.7 → 0.4.8** (courtesy bump, always-bump policy #136).
+
 ## [0.21.15] - 2026-05-18
 
 ### Added
@@ -2751,7 +2789,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.15...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...HEAD
+[0.21.16]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.21.16
 [0.21.15]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...v0.21.15
 [0.21.14]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...v0.21.14
 [0.21.13]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...v0.21.13

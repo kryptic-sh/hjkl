@@ -1,0 +1,23 @@
+[package]
+name = "hjkl-prompt-tui"
+description = "Ratatui adapter for hjkl-prompt: renders the ex/search prompt bar (`:`, `/`, `?`) as a bottom-bar status row with wildmenu completion strip."
+keywords = ["prompt", "tui", "ratatui", "editor", "ex"]
+categories = ["text-editors", "command-line-interface"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-prompt = "0.1"
+hjkl-form = "0.6"
+ratatui = "0.30"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
