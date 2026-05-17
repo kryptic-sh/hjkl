@@ -64,6 +64,44 @@ tab_width = 2
 See [`apps/hjkl/src/config.toml`](apps/hjkl/src/config.toml) for the full schema
 with comments.
 
+## Development
+
+```bash
+git clone git@github.com:kryptic-sh/hjkl.git
+cd hjkl
+rustup toolchain install stable    # rust-toolchain.toml pins this for you
+cargo test --workspace
+```
+
+Each `hjkl-*` crate lives in its own submodule and ships independently to
+crates.io. `#![deny(missing_docs)]` is enforced on `hjkl-engine` — new public
+API needs rustdoc.
+
+Performance budgets are documented in [`MIGRATION.md`](MIGRATION.md). CI fails
+if a criterion bench regresses past budget.
+
+### Fuzzing
+
+The only `cargo fuzz` target today is `hjkl-engine/fuzz :: handle_key` — feeds
+an arbitrary keystroke stream into a fresh `Editor` and asserts no panics. Local
+reproduction:
+
+```bash
+cd crates/hjkl-engine/fuzz
+cargo +nightly fuzz run handle_key
+```
+
+## Contributing
+
+See the org-wide
+[CONTRIBUTING guide](https://github.com/kryptic-sh/.github/blob/main/.github/CONTRIBUTING.md)
+for PR conventions, BCTP release flow, snapshot test workflow, and supported
+language toolchains. Project-specific dev setup lives above in **Development**.
+
+For security issues, see the org-wide
+[SECURITY policy](https://github.com/kryptic-sh/.github/blob/main/.github/SECURITY.md)
+— do not file public issues.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
