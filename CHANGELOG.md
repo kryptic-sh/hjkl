@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-05-18
+
+### Changed
+
+- Bumped `hjkl-theme` dependency from `0.1` to `0.2` (additive `loader` module;
+  no API removals, pin update required due to 0.x caret-minor semantics).
+
 ## [0.7.4] - 2026-05-16
 
 ### Fixed
@@ -452,7 +459,8 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.1...v0.7.2
