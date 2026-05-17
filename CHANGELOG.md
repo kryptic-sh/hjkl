@@ -8,6 +8,34 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.30] - 2026-05-18
+
+### Fixed
+
+- **`move_screen_vertical` (`gj`/`gk` in wrap mode) preserves `sticky_col`
+  across empty and short visual segments** — `sticky_col` was overwritten with
+  the clamped cursor column after each motion, breaking subsequent `gj`/`gk`
+  presses when crossing empty or narrow doc lines. Fixed by snapshotting `want`
+  at entry and omitting the post-loop overwrite, matching `move_vertical` / vim
+  curswant semantics.
+- **Add READMEs to 21 in-tree crates** so `cargo publish` succeeds for all
+  workspace members: `hjkl-editor-gui`, `hjkl-fs-watch`, `hjkl-holler`,
+  `hjkl-holler-tui`, `hjkl-hover`, `hjkl-hover-tui`, `hjkl-info-popup`,
+  `hjkl-info-popup-tui`, `hjkl-layout`, `hjkl-markdown`, `hjkl-markdown-tui`,
+  `hjkl-menu`, `hjkl-menu-tui`, `hjkl-prompt`, `hjkl-prompt-tui`, `hjkl-syntax`,
+  `hjkl-syntax-tui`, `hjkl-tabs`, `hjkl-tabs-tui`, `hjkl-which-key`,
+  `hjkl-which-key-tui`.
+
+### Added
+
+- **5 cursor-position regression tests** covering `j`/`k`/`gj` through empty and
+  short lines:
+  - `move_down_preserves_sticky_col_across_empty_row` (hjkl-engine)
+  - `j_through_empty_line_preserves_want` (hjkl-vim)
+  - `j_through_multiple_empty_lines_preserves_want` (hjkl-vim)
+  - `k_through_empty_line_preserves_want` (hjkl-vim)
+  - `gj_through_empty_line_preserves_want_in_wrap_mode` (hjkl-vim)
+
 ## [0.21.29] - 2026-05-18
 
 ### Fixed
@@ -3179,7 +3207,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...HEAD
+[0.21.30]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...v0.21.30
 [0.21.29]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...v0.21.29
 [0.21.28]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...v0.21.28
 [0.21.27]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...v0.21.27
