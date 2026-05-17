@@ -718,9 +718,11 @@ jobs:
             # Extract `version = "X.Y.Z"`. If the manifest uses workspace
             # inheritance (`version.workspace = true`, no quoted value),
             # fall back to the workspace version in the root Cargo.toml.
-            version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' "$manifest" | head -1 | cut -d'"' -f2)
+            # `|| true` swallows grep's exit-1-on-no-match, which would
+            # otherwise trip `set -e -o pipefail` before the fallback runs.
+            version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' "$manifest" | head -1 | cut -d'"' -f2 || true)
             if [ -z "$version" ]; then
-              version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' Cargo.toml | head -1 | cut -d'"' -f2)
+              version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' Cargo.toml | head -1 | cut -d'"' -f2 || true)
             fi
             if [ -z "$version" ]; then
               echo "::error::could not resolve version for $crate"; exit 1

@@ -8,6 +8,19 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.20.4] - 2026-05-17
+
+### Fixed
+
+- `publish-crates` workflow step exited 1 silently right after the
+  `hjkl-app already on crates.io` skip on the v0.20.3 tag. The
+  `grep | head | cut` pipeline that extracts the manifest version returned exit
+  1 (no match) for `apps/hjkl/Cargo.toml`'s `version.workspace = true` line.
+  With `set -e -o pipefail`, the pipeline failure killed the script before the
+  workspace-version fallback ran. Added `|| true` to both grep pipelines so the
+  empty result threads through to the existing fallback. v0.20.3 was tagged but
+  `hjkl@0.20.3` never reached crates.io; v0.20.4 restores publish.
+
 ## [0.20.3] - 2026-05-17
 
 ### Fixed
@@ -2384,7 +2397,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...HEAD
+[0.20.4]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/kryptic-sh/hjkl/compare/v0.20.0...v0.20.1
