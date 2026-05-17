@@ -799,9 +799,7 @@ impl App {
 
         let current_focus = self.focused_window();
         if win_id != current_focus {
-            self.sync_viewport_from_editor();
-            self.set_focused_window(win_id);
-            self.sync_viewport_to_editor();
+            self.switch_focus(win_id);
         }
 
         self.active_mut().editor.mouse_click_doc(doc_row, doc_col);

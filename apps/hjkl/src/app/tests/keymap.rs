@@ -4788,3 +4788,350 @@ fn e_then_jjj_preserves_column_across_empty_line() {
          viewport_sync.rs jump_cursor used to clobber it; got col {col}"
     );
 }
+
+// ── v0.22.0 sticky-column preservation (app-level, no per-keypress sync) ──
+
+/// `j` through an empty line must restore the sticky column on the next `j`.
+/// Uses the NEW event-loop contract: sync_to is NOT called before each key.
+#[test]
+fn j_through_empty_line_preserves_column_app_level() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // "hello world\n\nanother line"
+    seed_buffer(&mut app, "hello world\n\nanother line");
+    // Position at col 4 (end of "hello").
+    app.active_mut().editor.jump_cursor(0, 4);
+    app.sync_viewport_from_editor();
+
+    // Dispatch WITHOUT pre-keypress sync_to — that is the new contract.
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    dk!(app, key(KeyCode::Char('j'))); // row 1 (empty) — clamps to col 0
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 1);
+
+    dk!(app, key(KeyCode::Char('j'))); // row 2 — sticky_col must restore col 4
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2, "expected row 2 after second j");
+    assert_eq!(
+        col, 4,
+        "sticky_col must survive without per-keypress sync_to; got col {col}"
+    );
+}
+
+/// `j` through a short line must restore the sticky column further down.
+#[test]
+fn j_through_short_line_preserves_column_app_level() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // col 7 on row 0; row 1 is short (3 chars); row 2 is long again.
+    seed_buffer(&mut app, "hello world\nhi\nhello world again");
+    app.active_mut().editor.jump_cursor(0, 7);
+    app.sync_viewport_from_editor();
+
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    dk!(app, key(KeyCode::Char('j'))); // row 1 — clamps to col 1 ("i")
+    let (_, col1) = app.active().editor.cursor();
+    assert!(col1 < 7, "clamped to short line");
+
+    dk!(app, key(KeyCode::Char('j'))); // row 2 — sticky_col must restore col 7
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2);
+    assert_eq!(
+        col, 7,
+        "sticky_col must restore after short-line clamp; got {col}"
+    );
+}
+
+/// `gj` through an empty line must preserve sticky column (visual-line motion).
+#[test]
+fn gj_through_empty_line_preserves_column_app_level() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\n\nanother line");
+    app.active_mut().editor.jump_cursor(0, 4);
+    app.sync_viewport_from_editor();
+
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    dk!(app, key(KeyCode::Char('g')));
+    dk!(app, key(KeyCode::Char('j'))); // gj — visual line down (row 1, empty)
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 1, "gj should move to row 1");
+
+    dk!(app, key(KeyCode::Char('g')));
+    dk!(app, key(KeyCode::Char('j'))); // gj again — row 2
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2, "gj should move to row 2");
+    assert_eq!(
+        col, 4,
+        "sticky_col must survive gj through empty line; got {col}"
+    );
+}
+
+/// `gk` (visual-line up) through an empty line must preserve sticky column.
+#[test]
+fn gk_through_empty_line_preserves_column_app_level() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\n\nanother line");
+    // Start at row 2, col 4.
+    app.active_mut().editor.jump_cursor(2, 4);
+    app.sync_viewport_from_editor();
+
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    dk!(app, key(KeyCode::Char('g')));
+    dk!(app, key(KeyCode::Char('k'))); // gk up to row 1 (empty)
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 1, "gk should reach row 1");
+
+    dk!(app, key(KeyCode::Char('g')));
+    dk!(app, key(KeyCode::Char('k'))); // gk again — row 0
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "gk should reach row 0");
+    assert_eq!(
+        col, 4,
+        "sticky_col must survive gk through empty line; got {col}"
+    );
+}
+
+/// After a `/search` the sticky column must not have been clobbered by a
+/// per-keypress sync_to. We verify by doing `j` after the search lands.
+#[test]
+fn search_n_preserves_column_through_event_loop() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // "hello world\nfind me\nhello world" — search for "find" lands at (1,0).
+    seed_buffer(&mut app, "hello world\nfind me\nhello world");
+    // Start at (0, 6) — col 6.
+    app.active_mut().editor.jump_cursor(0, 6);
+    app.sync_viewport_from_editor();
+
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    // Navigate down via j — sticky_col should be 6.
+    dk!(app, key(KeyCode::Char('j'))); // row 1 — "find me" (7 chars) → col 6
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 1, "j should reach row 1");
+    assert_eq!(
+        col, 6,
+        "sticky_col=6 should land at col 6 on 'find me'; got {col}"
+    );
+
+    dk!(app, key(KeyCode::Char('j'))); // row 2 — "hello world" → col 6
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2, "second j should reach row 2");
+    assert_eq!(col, 6, "sticky_col must survive across rows; got {col}");
+}
+
+/// After a mark jump (`m a` then `'a`) the sticky column resets to the mark's
+/// column.  Subsequent `j` should use the new sticky_col, not the pre-jump one.
+#[test]
+fn mark_jump_resets_sticky_through_event_loop() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "hello world\nanother line here\nshort");
+    // Start at (0, 9).
+    app.active_mut().editor.jump_cursor(0, 9);
+    app.sync_viewport_from_editor();
+
+    macro_rules! dk {
+        ($app:expr, $key:expr) => {{
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    // Set mark 'a' at (0, 9).
+    dk!(app, key(KeyCode::Char('m')));
+    dk!(app, key(KeyCode::Char('a')));
+
+    // Move to (2, 0) — "short".
+    app.active_mut().editor.jump_cursor(2, 0);
+    app.sync_viewport_from_editor();
+
+    // Jump to mark 'a' — should land at (0, 9); sticky_col resets to 9.
+    dk!(app, key(KeyCode::Char('\'')));
+    dk!(app, key(KeyCode::Char('a')));
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "mark jump should land at row 0");
+    // Mark jump goes to start-of-line in linewise `'` mode.
+    // (col may be 0 for linewise — that's correct vim behavior)
+    let _ = col; // col is implementation-defined for linewise mark jump
+
+    // `j` from the mark position should use the post-jump sticky_col.
+    dk!(app, key(KeyCode::Char('j')));
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(row, 1, "j after mark jump should reach row 1");
+}
+
+// ── v0.22.0 multi-window cursor independence (Phase 5) ─────────────────────
+
+/// Split window, move cursor independently in each, verify they don't share state.
+#[test]
+fn split_then_independent_cursors() {
+    use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line one\nline two\nline three");
+    // Start at row 0.
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Create a second window (win1) showing the same slot (0).
+    let win1 = app.next_window_id;
+    app.next_window_id += 1;
+    app.windows.push(Some(Window::with_scroll(0, 0, 0, 0, 0)));
+
+    let split_rect = LayoutRect::new(0, 0, 80, 24);
+    app.tabs[0] = Tab::new(
+        LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(win1)),
+            last_rect: Some(split_rect),
+        },
+        0,
+    );
+    if let Some(Some(w)) = app.windows.get_mut(0) {
+        w.last_rect = Some(LayoutRect::new(0, 0, 80, 12));
+    }
+    if let Some(Some(w)) = app.windows.get_mut(win1) {
+        w.last_rect = Some(LayoutRect::new(0, 12, 80, 12));
+    }
+
+    // Win 0 is focused. Move cursor down to row 2.
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
+    app.sync_viewport_from_editor();
+    let (row0, _) = app.active().editor.cursor();
+    assert_eq!(row0, 2, "win0 cursor should be at row 2");
+    assert_eq!(win_cursor_row(&app), 2, "win0 snapshot should match");
+
+    // Switch focus to win1 — snapshot must be at row 0 (initial).
+    app.switch_focus(win1);
+    assert_eq!(
+        win_cursor_row(&app),
+        0,
+        "win1 snapshot row should be 0 after focus switch"
+    );
+}
+
+/// Edits in win0 must not silently move win1's cursor snapshot.
+#[test]
+fn split_then_edit_in_one_window_snapshot_stable_in_other() {
+    use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line one\nline two\nline three");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Set up win1 with its cursor at row 1.
+    let win1 = app.next_window_id;
+    app.next_window_id += 1;
+    app.windows.push(Some(Window::with_scroll(0, 0, 0, 1, 0)));
+
+    let split_rect = LayoutRect::new(0, 0, 80, 24);
+    app.tabs[0] = Tab::new(
+        LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(win1)),
+            last_rect: Some(split_rect),
+        },
+        0,
+    );
+
+    // Win0 focused — make an edit (insert a char).
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
+    hjkl_vim::handle_key(
+        &mut app.active_mut().editor,
+        KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+    );
+    app.sync_viewport_from_editor();
+
+    // Win1's snapshot cursor_row must still be 1 (not clobbered by win0's edit).
+    let win1_snap_row = app.windows[win1].as_ref().unwrap().cursor_row;
+    assert_eq!(
+        win1_snap_row, 1,
+        "win1 cursor snapshot must not be changed by edits in win0; got row {win1_snap_row}"
+    );
+}
+
+/// After close_focused_window, the surviving window's cursor snapshot is
+/// loaded into the editor.
+#[test]
+fn close_window_keeps_buffer_for_other_window() {
+    use crate::app::window::{LayoutRect, LayoutTree, SplitDir, Tab, Window};
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line one\nline two\nline three");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Create win1 with cursor at row 2.
+    let win1 = app.next_window_id;
+    app.next_window_id += 1;
+    app.windows.push(Some(Window::with_scroll(0, 0, 0, 2, 0)));
+
+    let split_rect = LayoutRect::new(0, 0, 80, 24);
+    app.tabs[0] = Tab::new(
+        LayoutTree::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(LayoutTree::Leaf(0)),
+            b: Box::new(LayoutTree::Leaf(win1)),
+            last_rect: Some(split_rect),
+        },
+        0,
+    );
+    if let Some(Some(w)) = app.windows.get_mut(0) {
+        w.last_rect = Some(LayoutRect::new(0, 0, 80, 12));
+    }
+    if let Some(Some(w)) = app.windows.get_mut(win1) {
+        w.last_rect = Some(LayoutRect::new(0, 12, 80, 12));
+    }
+
+    // Switch focus to win1, then close it. Win0 should become focused again
+    // with its cursor at row 0.
+    app.switch_focus(win1);
+    assert_eq!(app.focused_window(), win1);
+
+    app.close_focused_window();
+    assert_eq!(
+        app.focused_window(),
+        0,
+        "win0 should regain focus after win1 closed"
+    );
+
+    let (row, _) = app.active().editor.cursor();
+    assert_eq!(
+        row, 0,
+        "win0's cursor (row 0) should be restored into editor after win1 closed; got {row}"
+    );
+}

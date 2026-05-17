@@ -117,9 +117,12 @@ pub use hjkl_app::keymap_actions::SearchDir;
 pub struct App {
     /// All open buffer slots. Never empty — always at least one slot.
     slots: Vec<BufferSlot>,
-    /// Window list. Indexed by `WindowId`. Entries are `Option<Window>`;
+    /// Window list. Indexed by `WindowId`. Entries are `Option<AppWindow>`;
     /// closed windows are set to `None` so ids stay stable.
-    pub windows: Vec<Option<window::Window>>,
+    /// Each `AppWindow` stores the per-window cursor/scroll snapshot
+    /// (authoritative at all times). The slot editor's cursor/scroll are only
+    /// synced on focus changes, not before every keypress.
+    pub windows: Vec<Option<window::AppWindow>>,
     /// All open tabs. Each tab owns its own layout tree + focused window.
     /// Never empty — always at least one tab.
     pub tabs: Vec<window::Tab>,
@@ -532,9 +535,7 @@ impl App {
                 // Switch to the clicked tab so do_tabclose targets it,
                 // then close.
                 if tab_idx != self.active_tab {
-                    self.sync_viewport_from_editor();
-                    self.active_tab = tab_idx;
-                    self.sync_viewport_to_editor();
+                    self.switch_tab(tab_idx);
                 }
                 self.do_tabclose();
             }
@@ -581,9 +582,7 @@ impl App {
         };
         let current_focus = self.focused_window();
         if win_id != current_focus {
-            self.sync_viewport_from_editor();
-            self.set_focused_window(win_id);
-            self.sync_viewport_to_editor();
+            self.switch_focus(win_id);
         }
         let target = match zone {
             mouse::Zone::Code {
@@ -671,11 +670,27 @@ impl App {
     // ── Core helpers ──────────────────────────────────────────────────────
 
     /// Slot index for the focused window.
-    fn focused_slot_idx(&self) -> usize {
+    pub fn focused_slot_idx(&self) -> usize {
         self.windows[self.focused_window()]
             .as_ref()
             .expect("focused_window must point to an open window")
             .slot
+    }
+
+    /// Return a shared reference to the focused [`AppWindow`].
+    pub fn active_window(&self) -> &window::AppWindow {
+        let fw = self.focused_window();
+        self.windows[fw]
+            .as_ref()
+            .expect("focused_window must point to an open window")
+    }
+
+    /// Return a mutable reference to the focused [`AppWindow`].
+    pub fn active_window_mut(&mut self) -> &mut window::AppWindow {
+        let fw = self.focused_window();
+        self.windows[fw]
+            .as_mut()
+            .expect("focused_window must point to an open window")
     }
 
     /// Return a shared reference to the active buffer slot.
@@ -685,6 +700,17 @@ impl App {
 
     /// Return a mutable reference to the active buffer slot.
     pub fn active_mut(&mut self) -> &mut BufferSlot {
+        let slot_idx = self.focused_slot_idx();
+        &mut self.slots[slot_idx]
+    }
+
+    /// Return a shared reference to the active buffer slot.
+    pub fn active_slot(&self) -> &BufferSlot {
+        &self.slots[self.focused_slot_idx()]
+    }
+
+    /// Return a mutable reference to the active buffer slot.
+    pub fn active_slot_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();
         &mut self.slots[slot_idx]
     }

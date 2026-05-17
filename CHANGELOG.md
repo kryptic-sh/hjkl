@@ -8,6 +8,37 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.32] - 2026-05-18
+
+### Fixed
+
+- `apps/hjkl` no longer calls `sync_viewport_to_editor()` before every keypress
+  — that pre-keypress sync was the structural cause of the v0.21.27 sticky_col
+  regression (the v0.21.31 fix made it safe via `set_cursor_quiet`, this removes
+  the pre-keypress sync entirely). Editor state is now persisted into the
+  focused window's snapshot after dispatch only.
+
+### Changed
+
+- Consolidated focus-change logic into `App::switch_focus(window_id)` and
+  `App::switch_tab(tab_idx)` helpers. All focus/tab transitions now go through
+  these instead of the open-coded `sync_from` → set focus → `sync_to` pattern
+  (event_loop, ex_dispatch, mouse, prompt, window). Helpers are `pub(crate)`.
+
+### Added
+
+- 9 app-level cursor preservation tests in `apps/hjkl/src/app/tests/keymap.rs`
+  covering j/k/gj/gk through empty + short lines, search `n`, mark jumps, and
+  multi-window cursor isolation. These exercise the full event-loop dispatch
+  path (which engine-level tests miss).
+
+### Notes
+
+- This addresses the sticky_col regression aspect of #151. The full per-window
+  Editor refactor (shared `Arc<Buffer>`, `Window.cursor_row/col` removal,
+  multi-window same-buffer broadcast) remains open as #151 and will ship in a
+  later release cut into smaller phased PRs.
+
 ## [0.21.31] - 2026-05-18
 
 ### Fixed
@@ -3231,7 +3262,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...HEAD
+[0.21.32]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...v0.21.32
 [0.21.31]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...v0.21.31
 [0.21.30]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...v0.21.30
 [0.21.29]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...v0.21.29

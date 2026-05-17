@@ -1119,9 +1119,7 @@ impl App {
             self.bus.info(format!("tab 1/{m}"));
             return;
         }
-        self.sync_viewport_from_editor();
-        self.active_tab = 0;
-        self.sync_viewport_to_editor();
+        self.switch_tab(0);
         let m = self.tabs.len();
         self.bus.info(format!("tab 1/{m}"));
     }
@@ -1134,9 +1132,7 @@ impl App {
             self.bus.info(format!("tab {m}/{m}"));
             return;
         }
-        self.sync_viewport_from_editor();
-        self.active_tab = last;
-        self.sync_viewport_to_editor();
+        self.switch_tab(last);
         let m = self.tabs.len();
         self.bus.info(format!("tab {m}/{m}"));
     }
@@ -1147,8 +1143,6 @@ impl App {
             self.bus.info("tabonly");
             return;
         }
-        self.sync_viewport_from_editor();
-
         // Collect window ids from all tabs except the active one and drop them.
         for (i, tab) in self.tabs.iter().enumerate() {
             if i == self.active_tab {
@@ -1164,7 +1158,6 @@ impl App {
         self.tabs = vec![active_tab];
         self.active_tab = 0;
 
-        self.sync_viewport_to_editor();
         self.bus.info("tabonly");
     }
 
@@ -1178,7 +1171,6 @@ impl App {
             // Already the last tab — nothing to close.
             return;
         }
-        self.sync_viewport_from_editor();
         // Drop window slots for every tab that lives to the right.
         for i in (active + 1)..self.tabs.len() {
             for wid in self.tabs[i].layout.leaves() {
@@ -1187,7 +1179,6 @@ impl App {
         }
         self.tabs.truncate(active + 1);
         // active_tab index is unchanged; it still points to the same tab.
-        self.sync_viewport_to_editor();
     }
 
     /// Close all tabs whose index is strictly less than `active_tab`.
@@ -1200,7 +1191,6 @@ impl App {
             // Already the first tab — nothing to close.
             return;
         }
-        self.sync_viewport_from_editor();
         // Drop window slots for every tab that lives to the left.
         for i in 0..active {
             for wid in self.tabs[i].layout.leaves() {
@@ -1210,7 +1200,6 @@ impl App {
         // Drain the prefix, shifting remaining tabs to the front.
         self.tabs.drain(0..active);
         self.active_tab = 0;
-        self.sync_viewport_to_editor();
     }
 
     /// `:tabmove [N|+N|-N]` — reorder tabs.
@@ -1238,11 +1227,9 @@ impl App {
             return;
         }
 
-        self.sync_viewport_from_editor();
         let tab = self.tabs.remove(self.active_tab);
         self.tabs.insert(target, tab);
         self.active_tab = target;
-        self.sync_viewport_to_editor();
         self.bus.info("tabmove");
     }
 
@@ -1362,9 +1349,8 @@ impl App {
             self.bus.warn("only one tab");
             return;
         }
-        self.sync_viewport_from_editor();
-        self.active_tab = (self.active_tab + 1) % self.tabs.len();
-        self.sync_viewport_to_editor();
+        let new_tab = (self.active_tab + 1) % self.tabs.len();
+        self.switch_tab(new_tab);
         let n = self.active_tab + 1;
         let m = self.tabs.len();
         self.bus.info(format!("tab {n}/{m}"));
@@ -1376,9 +1362,8 @@ impl App {
             self.bus.warn("only one tab");
             return;
         }
-        self.sync_viewport_from_editor();
-        self.active_tab = (self.active_tab + self.tabs.len() - 1) % self.tabs.len();
-        self.sync_viewport_to_editor();
+        let new_tab = (self.active_tab + self.tabs.len() - 1) % self.tabs.len();
+        self.switch_tab(new_tab);
         let n = self.active_tab + 1;
         let m = self.tabs.len();
         self.bus.info(format!("tab {n}/{m}"));
@@ -1393,8 +1378,6 @@ impl App {
             self.bus.error("E444: Cannot close last tab");
             return;
         }
-        self.sync_viewport_from_editor();
-
         // Collect window ids in the closing tab.
         let closing_leaves = self.tabs[self.active_tab].layout.leaves();
         // Drop those windows.
@@ -1410,6 +1393,7 @@ impl App {
             self.active_tab = self.tabs.len() - 1;
         }
 
+        // Restore the new active tab's cursor/scroll into the editor.
         self.sync_viewport_to_editor();
         let n = self.active_tab + 1;
         let m = self.tabs.len();

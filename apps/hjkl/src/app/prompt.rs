@@ -630,6 +630,7 @@ impl App {
         let ratio_b = (win_rows as f32 / total_h as f32).clamp(0.05, 0.45);
         let ratio_a = 1.0 - ratio_b;
 
+        // Save current window's state before the layout changes.
         self.sync_viewport_from_editor();
         self.layout_mut()
             .replace_leaf(focused, move |id| LayoutTree::Split {
@@ -640,6 +641,7 @@ impl App {
                 last_rect: None,
             });
 
+        // Focus the new cmdline window and restore its snapshot.
         self.set_focused_window(new_win_id);
         self.sync_viewport_to_editor();
 
@@ -673,6 +675,7 @@ impl App {
                 win.slot = win.slot.min(slot_count.saturating_sub(1));
             }
         }
+        // The closed cmdline window is already gone; just restore the new focus.
         self.set_focused_window(new_focus);
         self.sync_viewport_to_editor();
     }

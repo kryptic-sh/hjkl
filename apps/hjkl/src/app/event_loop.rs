@@ -735,9 +735,7 @@ impl App {
             if let Some(win_id) = mouse::hit_test_window(app, col, row) {
                 let current_focus = app.focused_window();
                 if win_id != current_focus {
-                    app.sync_viewport_from_editor();
-                    app.set_focused_window(win_id);
-                    app.sync_viewport_to_editor();
+                    app.switch_focus(win_id);
                 }
                 true
             } else {
@@ -861,9 +859,7 @@ impl App {
                         // Focus window if needed.
                         let current_focus = self.focused_window();
                         if win_id != current_focus {
-                            self.sync_viewport_from_editor();
-                            self.set_focused_window(win_id);
-                            self.sync_viewport_to_editor();
+                            self.switch_focus(win_id);
                         }
                         self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
                         self.sync_after_engine_mutation();
@@ -884,9 +880,7 @@ impl App {
                         // Focus window if needed.
                         let current_focus = self.focused_window();
                         if win_id != current_focus {
-                            self.sync_viewport_from_editor();
-                            self.set_focused_window(win_id);
-                            self.sync_viewport_to_editor();
+                            self.switch_focus(win_id);
                         }
                         // Anchor at current cursor if not already visual.
                         if self.active().editor.vim_mode() != VimMode::Visual {
@@ -906,9 +900,7 @@ impl App {
                 match mouse::hit_test_zone(self, me.column, me.row) {
                     mouse::Zone::TabBar { tab_idx } => {
                         if tab_idx != self.active_tab {
-                            self.sync_viewport_from_editor();
-                            self.active_tab = tab_idx;
-                            self.sync_viewport_to_editor();
+                            self.switch_tab(tab_idx);
                         }
                         return MouseOutcome::Continue;
                     }
@@ -925,9 +917,7 @@ impl App {
                     // Focus the clicked window if it differs.
                     let current_focus = self.focused_window();
                     if win_id != current_focus {
-                        self.sync_viewport_from_editor();
-                        self.set_focused_window(win_id);
-                        self.sync_viewport_to_editor();
+                        self.switch_focus(win_id);
                     }
                     if let Some((doc_row, doc_col)) =
                         mouse::cell_to_doc(self, win_id, me.column, me.row)
@@ -1048,9 +1038,7 @@ impl App {
                         // Switch to the clicked tab first so that
                         // Close-Tab / Close-Right / Close-Left operate on it.
                         if tab_idx != self.active_tab {
-                            self.sync_viewport_from_editor();
-                            self.active_tab = tab_idx;
-                            self.sync_viewport_to_editor();
+                            self.switch_tab(tab_idx);
                         }
                         build_tab_menu(self.tabs.len() > 1)
                     }
@@ -1162,7 +1150,10 @@ impl App {
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             // ── Per-tick setup ────────────────────────────────────
-            self.sync_viewport_to_editor();
+            // NOTE: sync_viewport_to_editor() is NOT called here — it is
+            // called only on focus change (switch_focus / close_focused_window
+            // / move_window_to_new_tab).  Calling it before every keypress
+            // clobbered sticky_col and broke j/k column preservation (#151).
             self.drain_lsp_events();
             {
                 let size = terminal.size()?;

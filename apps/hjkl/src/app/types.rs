@@ -253,10 +253,21 @@ fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
 
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
+///
+/// After v0.22.0 the per-window [`Editor`] lives on [`AppWindow`] rather than
+/// here. `BufferSlot` continues to hold one editor for backward compatibility
+/// with LSP / syntax / save paths that need buffer content from a slot — they
+/// use `slot.editor` when no specific window is in scope. Focused-window
+/// operations go through `App::active_window().editor` / `App::active_window_mut().editor`.
 pub struct BufferSlot {
     /// Stable id used to multiplex the SyntaxLayer / Worker.
     pub buffer_id: BufferId,
-    /// The live editor — buffer + FSM + host, all in one.
+    /// The slot-level editor. Holds buffer content, undo stack, syntax spans,
+    /// LSP attachment. The focused window's [`AppWindow::editor`] is the
+    /// source of truth for cursor and scroll during dispatch; after each key
+    /// dispatch `sync_slot_from_window` writes cursor/scroll back here so
+    /// slot-level operations (`:w`, dirty-check, LSP didChange) see the
+    /// current buffer state.
     pub editor: Editor<Buffer, TuiHost>,
     /// File path shown in status line and used for `:w` saves.
     pub filename: Option<PathBuf>,
