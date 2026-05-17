@@ -390,4 +390,21 @@ pub enum AppAction {
         keys: Vec<hjkl_keymap::KeyEvent>,
         recursive: bool,
     },
+
+    // ── Command-line window (issue #37) ───────────────────────────────────
+    /// `q:` / `q/` / `q?` — open the command-line window for the given
+    /// history kind. Splits the current window horizontally (below) and
+    /// populates the transient buffer with the relevant history entries.
+    OpenCmdLineWindow(CmdLineWindowKind),
+}
+
+/// Which history ring to show in the command-line window (issue #37).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmdLineWindowKind {
+    /// `q:` — ex command history.
+    Ex,
+    /// `q/` — forward-search history.
+    SearchForward,
+    /// `q?` — backward-search history.
+    SearchBackward,
 }

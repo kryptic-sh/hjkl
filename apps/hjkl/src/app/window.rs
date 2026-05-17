@@ -1142,7 +1142,16 @@ impl App {
     /// Close the focused window.  Fails (with status message) when only one
     /// window remains.  On success the layout collapses and focus moves to the
     /// sibling that took over.
+    ///
+    /// When the focused window is the command-line window (issue #37), the
+    /// transient slot is cleaned up via `close_cmdline_window` instead of the
+    /// normal path to avoid leaving orphaned slots.
     pub fn close_focused_window(&mut self) {
+        // Cmdline window: delegate to its own cleanup.
+        if self.is_cmdline_win_focused() {
+            self.close_cmdline_window();
+            return;
+        }
         let focused = self.focused_window();
         match self.layout_mut().remove_leaf(focused) {
             Err(_) => {

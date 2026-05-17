@@ -141,6 +141,28 @@ impl App {
         // Must precede the Non-Normal trie dispatch so the second key of a
         // chord (e.g. second `g` of `gg` in VisualLine) reaches the commit
         // arm instead of re-firing BeginPendingAfterG via the trie.
+
+        // Issue #37: q: / q/ / q? — intercept before hjkl_vim::step sees the
+        // register-name key, so `:`, `/`, `?` open the cmdline window instead
+        // of starting a macro.  Must precede the generic pending_state block.
+        if matches!(
+            self.pending_state,
+            Some(hjkl_vim::PendingState::RecordMacroTarget)
+        ) && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            let kind = match key.code {
+                KeyCode::Char(':') => Some(crate::app::CmdLineKind::Ex),
+                KeyCode::Char('/') => Some(crate::app::CmdLineKind::SearchForward),
+                KeyCode::Char('?') => Some(crate::app::CmdLineKind::SearchBackward),
+                _ => None,
+            };
+            if let Some(ck) = kind {
+                self.pending_state = None;
+                self.open_cmdline_window(ck);
+                return true;
+            }
+        }
+
         if let Some(state) = self.pending_state {
             let vim_key = match key.code {
                 KeyCode::Char(c) => Some(VimKey::Char(c)),

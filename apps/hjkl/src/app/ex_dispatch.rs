@@ -20,6 +20,9 @@ impl App {
         // The literal user text is stored; replay re-runs through dispatch_ex so
         // behavior is identical.
         self.last_ex_command = Some(raw.to_string());
+        // Phase 1 (#37): push to ex history ring.
+        let raw_owned = raw.to_string();
+        App::push_history(&mut self.ex_history, &raw_owned);
 
         // Phase 7: expand `%`, `#`, `<cword>`, `<cWORD>` tokens in the command
         // line BEFORE dispatch so commands see literal paths.

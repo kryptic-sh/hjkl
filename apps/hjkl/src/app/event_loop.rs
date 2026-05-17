@@ -227,7 +227,27 @@ impl App {
                 self.cancel_search_prompt();
                 return KeyOutcome::Continue;
             }
+            // <C-c> in the cmdline window closes it.
+            if self.is_cmdline_win_focused() {
+                self.close_cmdline_window();
+                return KeyOutcome::Continue;
+            }
             return KeyOutcome::Break;
+        }
+
+        // ── Cmdline window <CR> intercept (issue #37) ─────────────
+        // Must run BEFORE normal-mode routing so `<Enter>` in the
+        // cmdline window commits the line rather than opening a new line
+        // below (o) or doing nothing in Normal mode.
+        if self.is_cmdline_win_focused()
+            && key.code == KeyCode::Enter
+            && key.modifiers == KeyModifiers::NONE
+        {
+            self.commit_cmdline_window();
+            if self.exit_requested {
+                return KeyOutcome::Break;
+            }
+            return KeyOutcome::Continue;
         }
 
         // Dismiss the start screen on any non-Ctrl-C keypress and

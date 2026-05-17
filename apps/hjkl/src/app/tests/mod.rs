@@ -561,6 +561,7 @@ fn shift_tab_key() -> KeyEvent {
     KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
 }
 
+pub mod cmdline_window;
 pub mod ex;
 pub mod formatter;
 pub mod keymap;

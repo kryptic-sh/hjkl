@@ -1,8 +1,11 @@
 use crossterm::event::{KeyCode, KeyModifiers};
-use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
+use hjkl_buffer::Buffer;
+use hjkl_engine::{
+    BufferEdit, CursorShape, Editor, Host, Input as EngineInput, Key as EngineKey, Options, VimMode,
+};
 use hjkl_form::TextFieldEditor;
 
-use super::{App, SearchDir};
+use super::{App, CmdLineKind, CmdLineWindow, STATUS_LINE_HEIGHT, SearchDir};
 
 /// Walk backwards from `caret` to find the start of the token under the
 /// caret. A token starts at the beginning of the string or after any
@@ -98,6 +101,51 @@ impl App {
             return;
         }
 
+        // Phase 2 (#37): Ctrl-P / Up → previous history entry.
+        let is_ctrl_p = key.code == KeyCode::Up
+            || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
+        let is_ctrl_n = key.code == KeyCode::Down
+            || (key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
+
+        if is_ctrl_p || is_ctrl_n {
+            let history = self.ex_history.clone();
+            if !history.is_empty() {
+                // Save current typed input on first history nav.
+                if self.prompt_history_index.is_none() {
+                    let cur = self
+                        .command_field
+                        .as_ref()
+                        .map(|f| f.text())
+                        .unwrap_or_default();
+                    self.prompt_user_input = Some(cur);
+                }
+                let len = history.len();
+                let new_idx = if is_ctrl_p {
+                    match self.prompt_history_index {
+                        None => Some(len - 1),
+                        Some(0) => Some(0), // clamp at oldest
+                        Some(i) => Some(i - 1),
+                    }
+                } else {
+                    // Ctrl-N
+                    match self.prompt_history_index {
+                        None => None,
+                        Some(i) if i + 1 >= len => None, // past newest → restore
+                        Some(i) => Some(i + 1),
+                    }
+                };
+                self.prompt_history_index = new_idx;
+                let text = match new_idx {
+                    Some(i) => history[i].clone(),
+                    None => self.prompt_user_input.clone().unwrap_or_default(),
+                };
+                if let Some(f) = self.command_field.as_mut() {
+                    set_field_text(f, &text);
+                }
+            }
+            return;
+        }
+
         let input: EngineInput = key.into();
         let field = match self.command_field.as_mut() {
             Some(f) => f,
@@ -108,6 +156,8 @@ impl App {
             let text = field.text();
             self.command_field = None;
             self.command_completion = None;
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
             self.dispatch_ex(text.trim());
             return;
         }
@@ -122,10 +172,14 @@ impl App {
             let field = self.command_field.as_mut().unwrap();
             if field.text().is_empty() {
                 self.command_field = None;
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
             } else if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
             }
             return;
         }
@@ -140,7 +194,15 @@ impl App {
         {
             self.command_field = None;
             self.command_completion = None;
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
             return;
+        }
+
+        // Any key that isn't Ctrl-P/N resets history navigation position.
+        if self.prompt_history_index.is_some() {
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
         }
 
         // Any other key while completion is active: commit current candidate
@@ -326,6 +388,54 @@ impl App {
     }
 
     pub(crate) fn handle_search_field_key(&mut self, key: crossterm::event::KeyEvent) {
+        // Phase 2 (#37): Ctrl-P / Up → previous history entry.
+        let is_ctrl_p = key.code == KeyCode::Up
+            || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
+        let is_ctrl_n = key.code == KeyCode::Down
+            || (key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
+
+        if is_ctrl_p || is_ctrl_n {
+            let history = if self.search_dir == SearchDir::Forward {
+                self.search_history_forward.clone()
+            } else {
+                self.search_history_backward.clone()
+            };
+            if !history.is_empty() {
+                if self.prompt_history_index.is_none() {
+                    let cur = self
+                        .search_field
+                        .as_ref()
+                        .map(|f| f.text())
+                        .unwrap_or_default();
+                    self.prompt_user_input = Some(cur);
+                }
+                let len = history.len();
+                let new_idx = if is_ctrl_p {
+                    match self.prompt_history_index {
+                        None => Some(len - 1),
+                        Some(0) => Some(0),
+                        Some(i) => Some(i - 1),
+                    }
+                } else {
+                    match self.prompt_history_index {
+                        None => None,
+                        Some(i) if i + 1 >= len => None,
+                        Some(i) => Some(i + 1),
+                    }
+                };
+                self.prompt_history_index = new_idx;
+                let text = match new_idx {
+                    Some(i) => history[i].clone(),
+                    None => self.prompt_user_input.clone().unwrap_or_default(),
+                };
+                if let Some(f) = self.search_field.as_mut() {
+                    set_field_text(f, &text);
+                }
+                self.live_preview_search();
+            }
+            return;
+        }
+
         let input: EngineInput = key.into();
         let field = match self.search_field.as_mut() {
             Some(f) => f,
@@ -335,18 +445,24 @@ impl App {
         if input.key == EngineKey::Enter {
             let pattern = field.text();
             self.search_field = None;
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
             self.commit_search(&pattern);
             return;
         }
 
         if input.key == EngineKey::Esc {
             if field.text().is_empty() {
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
                 self.cancel_search_prompt();
                 return;
             }
             if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
                 self.cancel_search_prompt();
             }
             return;
@@ -355,8 +471,16 @@ impl App {
         // Backspace on an empty prompt dismisses it (vim/neovim parity:
         // the leading `/` or `?` itself counts as the dismissable prefix).
         if input.key == EngineKey::Backspace && field.text().is_empty() {
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
             self.cancel_search_prompt();
             return;
+        }
+
+        // Any non-history key resets history navigation.
+        if self.prompt_history_index.is_some() {
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
         }
 
         let dirty = field.handle_input(input);
@@ -431,7 +555,15 @@ impl App {
                 // shows the match instead of the old viewport.
                 self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
-                self.active_mut().editor.set_last_search(Some(p), forward);
+                self.active_mut()
+                    .editor
+                    .set_last_search(Some(p.clone()), forward);
+                // Phase 1 (#37): push to search history ring.
+                if forward {
+                    App::push_history(&mut self.search_history_forward, &p);
+                } else {
+                    App::push_history(&mut self.search_history_backward, &p);
+                }
             }
             Err(e) => {
                 self.active_mut().editor.set_search_pattern(None);
@@ -472,5 +604,212 @@ pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
     match field.vim_mode() {
         hjkl_form::VimMode::Insert => CursorShape::Bar,
         _ => CursorShape::Block,
+    }
+}
+
+// ── Command-line window (issue #37) ──────────────────────────────────────────
+
+impl App {
+    /// Open the command-line window for `kind` (`q:` / `q/` / `q?`).
+    ///
+    /// - Builds a transient buffer whose content is the relevant history.
+    /// - Opens a horizontal split below the current window sized to
+    ///   `min(7, history.len() + 1)` lines (enforced by the layout ratio).
+    /// - Cursor lands on the last (empty) line.
+    /// - Stores `CmdLineWindow` so `<CR>` knows how to re-dispatch.
+    pub(crate) fn open_cmdline_window(&mut self, kind: CmdLineKind) {
+        use crate::app::window::{LayoutTree, SplitDir, Window};
+        use crate::host::TuiHost;
+        use std::time::Instant;
+
+        // Already open — no-op (don't nest).
+        if self.cmdline_win.is_some() {
+            return;
+        }
+
+        let history: Vec<String> = match kind {
+            CmdLineKind::Ex => self.ex_history.clone(),
+            CmdLineKind::SearchForward => self.search_history_forward.clone(),
+            CmdLineKind::SearchBackward => self.search_history_backward.clone(),
+        };
+
+        // Build the transient buffer content: history lines (oldest first) +
+        // one trailing empty line.
+        let content = history.join("\n");
+
+        // Create the slot.
+        let buffer_id = self.next_buffer_id;
+        self.next_buffer_id += 1;
+        let host = TuiHost::new();
+        let mut editor = Editor::new(Buffer::new(), host, Options::default());
+        if let Ok(size) = crossterm::terminal::size() {
+            let h = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+            {
+                let vp = editor.host_mut().viewport_mut();
+                vp.width = size.0;
+                vp.height = h;
+            }
+            editor.set_viewport_height(h);
+        }
+        if !content.is_empty() {
+            BufferEdit::replace_all(editor.buffer_mut(), &content);
+        }
+        // Move cursor to the last line (the empty line after history, or line 0).
+        let line_count = editor.buffer().row_count();
+        editor.jump_cursor(line_count.saturating_sub(1), 0);
+        let _ = editor.take_content_edits();
+        let _ = editor.take_content_reset();
+
+        let slot = super::BufferSlot {
+            buffer_id,
+            editor,
+            filename: None,
+            dirty: false,
+            is_new_file: true,
+            is_untracked: false,
+            diag_signs: Vec::new(),
+            diag_signs_lsp: Vec::new(),
+            lsp_diags: Vec::new(),
+            last_lsp_dirty_gen: None,
+            git_signs: Vec::new(),
+            last_git_dirty_gen: None,
+            last_git_refresh_at: Instant::now(),
+            last_recompute_at: Instant::now(),
+            last_recompute_key: None,
+            saved_hash: 0,
+            saved_len: 0,
+            disk_mtime: None,
+            disk_len: None,
+            disk_state: crate::app::DiskState::Synced,
+            viewport_render_output: None,
+            top_render_output: None,
+            bottom_render_output: None,
+            dirty_rows_log: Vec::new(),
+        };
+        self.slots.push(slot);
+        let slot_idx = self.slots.len() - 1;
+
+        // Determine window height: clamp to [1, 7] rows.
+        let win_rows = (history.len() + 1).clamp(1, 7);
+
+        // Build the split: current window on top (a), cmdline below (b).
+        let focused = self.focused_window();
+        let new_win_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Some(Window {
+            slot: slot_idx,
+            top_row: 0,
+            top_col: 0,
+            cursor_row: history.len().saturating_sub(1),
+            cursor_col: 0,
+            last_rect: None,
+        }));
+
+        // Compute ratio: cmdline gets `win_rows` rows of total height.
+        // We don't know exact height here, use a heuristic: cap 7/24 ≈ 0.29.
+        let total_h = crossterm::terminal::size()
+            .map(|(_, h)| h as usize)
+            .unwrap_or(24)
+            .saturating_sub(1); // status line
+        let ratio_b = (win_rows as f32 / total_h as f32).clamp(0.05, 0.45);
+        let ratio_a = 1.0 - ratio_b;
+
+        self.sync_viewport_from_editor();
+        self.layout_mut()
+            .replace_leaf(focused, move |id| LayoutTree::Split {
+                dir: SplitDir::Horizontal,
+                ratio: ratio_a,
+                a: Box::new(LayoutTree::Leaf(id)),
+                b: Box::new(LayoutTree::Leaf(new_win_id)),
+                last_rect: None,
+            });
+
+        self.set_focused_window(new_win_id);
+        self.sync_viewport_to_editor();
+
+        self.cmdline_win = Some(CmdLineWindow {
+            win_id: new_win_id,
+            slot_idx,
+            kind,
+        });
+    }
+
+    /// Close the command-line window (without executing the current line).
+    ///
+    /// Used by `:q` / `<C-c>` from within the cmdline window.
+    pub(crate) fn close_cmdline_window(&mut self) {
+        let Some(cw) = self.cmdline_win.take() else {
+            return;
+        };
+        // Remove the window from the layout.
+        let new_focus = match self.layout_mut().remove_leaf(cw.win_id) {
+            Ok(f) => f,
+            Err(_) => return, // can't remove last window
+        };
+        self.windows[cw.win_id] = None;
+        // Remove the transient slot. Fix up window slot pointers.
+        let slot_idx = cw.slot_idx;
+        if slot_idx < self.slots.len() {
+            self.slots.remove(slot_idx);
+            let slot_count = self.slots.len();
+            for win in self.windows.iter_mut().flatten() {
+                if win.slot == slot_idx {
+                    win.slot = 0;
+                } else if win.slot > slot_idx {
+                    win.slot -= 1;
+                }
+                win.slot = win.slot.min(slot_count.saturating_sub(1));
+            }
+        }
+        self.set_focused_window(new_focus);
+        self.sync_viewport_to_editor();
+    }
+
+    /// Execute the line at the cursor in the command-line window, then close it.
+    ///
+    /// For `q:` windows: dispatches the line as an ex command.
+    /// For `q/` / `q?` windows: commits the line as a search pattern.
+    pub(crate) fn commit_cmdline_window(&mut self) {
+        let Some(cw) = self.cmdline_win.clone() else {
+            return;
+        };
+        // Read the line at the cursor position.
+        let line_text = {
+            let slot = &self.slots[cw.slot_idx];
+            let (row, _) = slot.editor.cursor();
+            slot.editor
+                .buffer()
+                .lines()
+                .get(row)
+                .cloned()
+                .unwrap_or_default()
+        };
+        // Close first, then dispatch (so dispatch sees the previous focused window).
+        self.close_cmdline_window();
+
+        let text = line_text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        match cw.kind {
+            CmdLineKind::Ex => {
+                self.dispatch_ex(&text);
+            }
+            CmdLineKind::SearchForward => {
+                self.search_dir = SearchDir::Forward;
+                self.commit_search(&text);
+            }
+            CmdLineKind::SearchBackward => {
+                self.search_dir = SearchDir::Backward;
+                self.commit_search(&text);
+            }
+        }
+    }
+
+    /// Returns `true` if the currently focused window is the command-line window.
+    pub(crate) fn is_cmdline_win_focused(&self) -> bool {
+        self.cmdline_win
+            .as_ref()
+            .is_some_and(|cw| cw.win_id == self.focused_window())
     }
 }

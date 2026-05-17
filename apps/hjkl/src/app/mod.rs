@@ -50,6 +50,40 @@ pub use types::{
 /// Height reserved for the status line at the bottom of the screen.
 pub const STATUS_LINE_HEIGHT: u16 = 1;
 
+/// Which history ring feeds a command-line window (issue #37).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmdLineKind {
+    /// `q:` — ex command history.
+    Ex,
+    /// `q/` — forward-search history.
+    SearchForward,
+    /// `q?` — backward-search history.
+    SearchBackward,
+}
+
+/// Transient state attached to an open command-line window.
+/// Keeps the window-id and kind so `<CR>` can re-dispatch correctly.
+#[derive(Debug, Clone)]
+pub struct CmdLineWindow {
+    /// The `WindowId` of the cmdline window in the active tab's layout.
+    pub win_id: window::WindowId,
+    /// The slot index that backs the transient buffer.
+    pub slot_idx: usize,
+    /// Which history ring this window shows.
+    pub kind: CmdLineKind,
+}
+
+impl From<crate::keymap_actions::CmdLineWindowKind> for CmdLineKind {
+    fn from(k: crate::keymap_actions::CmdLineWindowKind) -> Self {
+        use crate::keymap_actions::CmdLineWindowKind as K;
+        match k {
+            K::Ex => Self::Ex,
+            K::SearchForward => Self::SearchForward,
+            K::SearchBackward => Self::SearchBackward,
+        }
+    }
+}
+
 /// How long a grammar-load failure stays visible in the status line before
 /// auto-expiring.
 const GRAMMAR_ERR_TTL: Duration = Duration::from_secs(5);
@@ -270,6 +304,22 @@ pub struct App {
     /// Last successfully-dispatched ex command (text body, no leading `:`),
     /// used by `@:` to repeat. Phase 5d of kryptic-sh/hjkl#71.
     pub(crate) last_ex_command: Option<String>,
+    /// Ex command history ring (Phase 1, issue #37). Capped at 100 entries
+    /// (oldest dropped). Consecutive duplicates are collapsed (vim semantics).
+    pub ex_history: Vec<String>,
+    /// Forward-search (`/`) history ring. Capped at 100, deduplicated.
+    pub search_history_forward: Vec<String>,
+    /// Backward-search (`?`) history ring. Capped at 100, deduplicated.
+    pub search_history_backward: Vec<String>,
+    /// Index into the active prompt's history ring while `<C-p>`/`<C-n>`
+    /// history recall is active. `None` = not scrolling history.
+    pub(crate) prompt_history_index: Option<usize>,
+    /// The text the user had typed before the first `<C-p>` press — restored
+    /// on `<C-n>` past the most-recent entry.
+    pub(crate) prompt_user_input: Option<String>,
+    /// Cmdline-window state: when `Some`, the focused window is a `q:`/`q/`/`q?`
+    /// transient buffer. Carries the kind so `<CR>` knows how to re-dispatch.
+    pub(crate) cmdline_win: Option<CmdLineWindow>,
     /// Double/triple-click state for mouse support (Phase 1 — issue #114).
     pub(crate) mouse_click_tracker: mouse::MouseClickTracker,
     /// Active right-click context menu (Phase 2, Round A — issue #114).
@@ -1114,6 +1164,12 @@ impl App {
             anvil_registry: hjkl_anvil::Registry::embedded().ok(),
             pending_state: None,
             last_ex_command: None,
+            ex_history: Vec::new(),
+            search_history_forward: Vec::new(),
+            search_history_backward: Vec::new(),
+            prompt_history_index: None,
+            prompt_user_input: None,
+            cmdline_win: None,
             mouse_click_tracker: mouse::MouseClickTracker::new(),
             context_menu: None,
             hover_popup: None,
@@ -1465,6 +1521,21 @@ impl App {
     }
 
     // km_to_crossterm, replay_to_engine, route_chord_key, route_chord_key_inner moved to chord_routing.rs
+
+    /// Push `entry` into a history ring (cap 100, skip consecutive duplicates).
+    pub(crate) fn push_history(ring: &mut Vec<String>, entry: &str) {
+        if entry.is_empty() {
+            return;
+        }
+        if ring.last().is_some_and(|last| last == entry) {
+            return; // consecutive duplicate — skip
+        }
+        ring.push(entry.to_string());
+        const HISTORY_CAP: usize = 100;
+        if ring.len() > HISTORY_CAP {
+            ring.remove(0);
+        }
+    }
 
     /// `@:` — replay the last ex command. No-op when nothing has been
     /// dispatched yet. Phase 5d of kryptic-sh/hjkl#71.

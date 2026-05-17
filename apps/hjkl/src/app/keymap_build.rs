@@ -429,6 +429,10 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
         eprintln!("hjkl: keymap.add(q) failed: {e}");
     }
 
+    // ── Issue #37: q: / q/ / q? are handled inside the QChord pending ────
+    // dispatch (pending_actions.rs) to avoid making bare `q` Ambiguous.
+    // No trie entries needed here.
+
     // `@` — begin play-macro chord. Normal-mode only.
     // Engine FSM arms for `@` are kept for macro-replay defensive coverage.
     if let Err(e) = km.add(
