@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.27] - 2026-05-18
+
+### Fixed
+
+- **`Editor::jump_cursor()` now resets `sticky_col` (vim curswant).** Fixes
+  column-snap on `]d`/`[d`, LSP goto, picker jumps, marks, search hits, and ~30
+  other call sites that delegated to the engine primitive. Previously
+  `jump_cursor` moved the cursor but left `sticky_col` stale, so the next
+  `j`/`k` snapped back to the old column.
+
+- **`gg` / `{N}gg` now update `sticky_col` to first-non-blank col** per vim
+  semantics. `apply_sticky_col` in `vim.rs` now uses the raw `buf_set_cursor_rc`
+  primitive directly (instead of `jump_cursor`) so the un-clamped `want` column
+  is correctly preserved across short lines during `j`/`k` vertical motion.
+
 ## [0.21.26] - 2026-05-18
 
 ### Changed
@@ -3124,7 +3139,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...HEAD
+[0.21.27]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...v0.21.27
 [0.21.26]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...v0.21.26
 [0.21.25]: https://github.com/kryptic-sh/hjkl/compare/v0.21.24...v0.21.25
 [0.21.24]: https://github.com/kryptic-sh/hjkl/compare/v0.21.23...v0.21.24

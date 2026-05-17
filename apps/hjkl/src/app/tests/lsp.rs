@@ -1517,3 +1517,63 @@ fn lsp_code_actions_includes_overlapping_diags_in_context() {
     );
     assert_eq!(overlapping[0].message, "overlapping");
 }
+
+/// After `lnext_severity` jumps to a diagnostic at col 5, pressing `j`
+/// must aim for col 5 on the next row (or clamp) — not snap to the stale
+/// pre-jump column. Validates that `jump_cursor` inside `lnext_severity`
+/// now resets `sticky_col`.
+#[test]
+fn lnext_then_j_preserves_diag_col() {
+    use hjkl_engine::{Input, Key};
+    let mut app = App::new(None, false, None, None).unwrap();
+    let path = tmp_path("hjkl_lnext_sticky.rs");
+    app.active_mut().filename = Some(path.clone());
+    // Row 0: "hello"          (5 chars)
+    // Row 1: "world"          (5 chars)
+    // Row 2: "abcde fghij"    (11 chars) — diag at col 5
+    // Row 3: "0123456789"     (10 chars) — j should land at col 5
+    seed_buffer(&mut app, "hello\nworld\nabcde fghij\n0123456789\n");
+
+    // Plant a diagnostic at row 2, col 5.
+    let params = pub_diags_params(
+        &file_url(&path),
+        serde_json::json!([{
+            "range": {
+                "start": { "line": 2, "character": 5 },
+                "end":   { "line": 2, "character": 10 }
+            },
+            "severity": 1,
+            "message": "sticky col test diag"
+        }]),
+    );
+    app.handle_publish_diagnostics(params);
+
+    // Cursor starts at (0, 0) — lnext must jump to row 2, col 5.
+    app.lnext_severity(None);
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2, "lnext must jump to row 2");
+    assert_eq!(col, 5, "lnext must place cursor at diag col 5");
+    assert_eq!(
+        app.active().editor.sticky_col(),
+        Some(5),
+        "lnext must reset sticky_col to 5 via jump_cursor"
+    );
+
+    // Press j — must aim for col 5 on row 3 ("0123456789" has 10 chars).
+    hjkl_vim::dispatch_input(
+        &mut app.active_mut().editor,
+        Input {
+            key: Key::Char('j'),
+            ctrl: false,
+            alt: false,
+            shift: false,
+        },
+    );
+    let (row2, col2) = app.active().editor.cursor();
+    assert_eq!(row2, 3, "j must move to row 3");
+    assert_eq!(
+        col2, 5,
+        "j after lnext must aim for col 5 (set by jump_cursor); got col {col2} — \
+         sticky_col may not have been reset by lnext_severity"
+    );
+}
