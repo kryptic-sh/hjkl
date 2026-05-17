@@ -1,4 +1,4 @@
-//! Background worker for git diff-sign computation.
+//! Background worker for git diff-change computation.
 //!
 //! Moves the `git2::Diff` + `is_untracked` work off the UI thread.
 //! The worker owns a single background thread. Jobs are submitted via
@@ -14,9 +14,9 @@ use std::path::PathBuf;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
-use hjkl_buffer::Sign;
 
-use crate::syntax::BufferId;
+use crate::BufferId;
+use crate::git::GitChange;
 
 /// A git diff job submitted to the worker.
 pub struct GitJob {
@@ -30,11 +30,11 @@ pub struct GitJob {
 pub struct GitResult {
     pub buffer_id: BufferId,
     pub dirty_gen: u64,
-    pub signs: Vec<Sign>,
+    pub changes: Vec<GitChange>,
     pub is_untracked: bool,
 }
 
-/// Background worker that computes git diff signs off the UI thread.
+/// Background worker that computes git diff changes off the UI thread.
 ///
 /// One background thread services all submissions. Jobs are coalesced
 /// per buffer_id (latest-wins) so a burst of buffer switches or edits
@@ -76,7 +76,7 @@ impl GitSignsWorker {
     pub fn submit(&self, job: GitJob) {
         // Ignore send errors — if the channel is disconnected (worker
         // panicked and was cleaned up), silently drop the job. The UI
-        // will simply not receive updated git signs.
+        // will simply not receive updated git changes.
         let _ = self.tx.send(job);
     }
 
@@ -84,6 +84,12 @@ impl GitSignsWorker {
     /// Call repeatedly per tick to process all queued results.
     pub fn try_recv(&self) -> Option<GitResult> {
         self.rx.try_recv().ok()
+    }
+}
+
+impl Default for GitSignsWorker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -131,13 +137,13 @@ fn worker_loop(job_rx: Receiver<GitJob>, res_tx: Sender<GitResult>) {
                 None => continue, // already consumed by a duplicate entry
             };
 
-            let signs = crate::git::signs_for_bytes(&job.path, &job.bytes);
+            let changes = crate::git::changes_for_bytes(&job.path, &job.bytes);
             let is_untracked = crate::git::is_untracked(&job.path);
 
             let result = GitResult {
                 buffer_id: job.buffer_id,
                 dirty_gen: job.dirty_gen,
-                signs,
+                changes,
                 is_untracked,
             };
 
@@ -155,7 +161,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// Worker with a nonexistent path and empty bytes must return
-    /// `is_untracked = true` and `signs = []` because there is no git
+    /// `is_untracked = true` and `changes = []` because there is no git
     /// repo at /tmp/nonexistent_hjkl_git_test_path. The test is bounded
     /// to 500 ms to catch any accidental blocking.
     #[test]
@@ -184,18 +190,18 @@ mod tests {
         assert_eq!(result.buffer_id, 42);
         assert_eq!(result.dirty_gen, 7);
         assert!(
-            result.signs.is_empty(),
-            "expected empty signs for nonexistent path; got {:?}",
-            result.signs
+            result.changes.is_empty(),
+            "expected empty changes for nonexistent path; got {:?}",
+            result.changes
         );
         // `is_untracked` returns false on I/O error (no repo / no such file);
         // the important invariant is that the worker returns a result at all
-        // and that signs is empty. is_untracked may be false for a path that
+        // and that changes is empty. is_untracked may be false for a path that
         // doesn't exist on disk because git2::Repository::discover fails first.
         assert!(
-            !result.is_untracked || result.signs.is_empty(),
-            "unexpected signs for nonexistent path: {:?}",
-            result.signs
+            !result.is_untracked || result.changes.is_empty(),
+            "unexpected changes for nonexistent path: {:?}",
+            result.changes
         );
     }
 

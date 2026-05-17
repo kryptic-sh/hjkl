@@ -14,7 +14,9 @@ publish = false   # in-tree until Stage 4 promotes to a submodule
 
 [dependencies]
 anyhow = "1"
+crossbeam-channel = "0.5"
 ec4rs = "1"
+git2 = { version = "0.20", default-features = false }
 hjkl-bonsai = "0.7"
 hjkl-config = "0.2"
 hjkl-engine = { version = "0.9", default-features = false }

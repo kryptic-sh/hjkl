@@ -14,9 +14,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::keymap_actions::AppAction;
 
-use crate::git_worker::GitSignsWorker;
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
+use hjkl_app::git_worker::GitSignsWorker;
 use std::collections::HashSet;
 
 mod buffer_ops;

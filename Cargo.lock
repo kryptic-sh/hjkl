@@ -2160,7 +2160,9 @@ name = "hjkl-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "ec4rs",
+ "git2",
  "hjkl-bonsai",
  "hjkl-config",
  "hjkl-engine",

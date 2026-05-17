@@ -6,12 +6,31 @@ use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::PreviewSpans;
 
+use hjkl_app::git::{GitChange, GitChangeKind};
+use hjkl_app::git_worker::GitJob;
 use hjkl_app::lang::GrammarRequest;
+use hjkl_buffer::Sign;
+use ratatui::style::{Color, Style};
 
-use crate::git_worker::GitJob;
 use crate::syntax::LoadEvent;
 
 use super::App;
+
+/// Convert a host-agnostic [`GitChange`] into a ratatui-flavored [`Sign`]
+/// with the canonical gutter characters and colours.
+fn change_to_sign(c: GitChange) -> Sign {
+    let (ch, style) = match c.kind {
+        GitChangeKind::Add => ('+', Style::default().fg(Color::Green)),
+        GitChangeKind::Modify => ('~', Style::default().fg(Color::Yellow)),
+        GitChangeKind::Delete => ('_', Style::default().fg(Color::Red)),
+    };
+    Sign {
+        row: c.row,
+        ch,
+        style,
+        priority: 50,
+    }
+}
 
 impl App {
     /// Queue a git diff-sign refresh for the current buffer (throttled).
@@ -90,7 +109,7 @@ impl App {
                     .last_git_dirty_gen
                     .is_none_or(|dg| dg <= result.dirty_gen)
                 {
-                    slot.git_signs = result.signs;
+                    slot.git_signs = result.changes.into_iter().map(change_to_sign).collect();
                     slot.is_untracked = result.is_untracked;
                     slot.last_git_dirty_gen = Some(result.dirty_gen);
                     redraw = true;

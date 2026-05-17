@@ -3,8 +3,6 @@
 mod app;
 mod completion;
 mod embed;
-mod git;
-mod git_worker;
 mod headless;
 mod host;
 pub(crate) mod hover_popup;

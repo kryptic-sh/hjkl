@@ -26,7 +26,7 @@ use hjkl_app::lang::{GrammarRequest, LanguageDirectory};
 /// Stable identifier for an open buffer. Assigned by the App; carried
 /// through every syntax-pipeline message so the worker can multiplex
 /// per-buffer tree state (helix-style).
-pub type BufferId = u64;
+pub use hjkl_app::BufferId;
 
 /// Discriminates the purpose of a parse request / result so the App can
 /// route it to the correct per-slot cache field.
