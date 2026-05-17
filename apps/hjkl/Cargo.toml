@@ -17,7 +17,7 @@ name = "hjkl"
 path = "src/main.rs"
 
 [dependencies]
-hjkl-app = "0.1"
+hjkl-app = "0.2"
 hjkl-anvil = "0.2"
 hjkl-keymap = "0.3"
 hjkl-vim = { version = "0.22", default-features = false, features = ["crossterm"] }

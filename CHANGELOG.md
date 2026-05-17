@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.3] - 2026-05-17
+
+### Fixed
+
+- `cargo publish -p hjkl --locked` on v0.21.2 failed with a wall of
+  `the trait bound 'hjkl_app::picker_sources::DiagSource: PickerLogic' is not satisfied`
+  errors. Root cause: hjkl-app's deps were flipped in v0.21.0 (engine 0.11,
+  picker 0.9) but hjkl-app's own version stayed at 0.1.0. Publishing hjkl pulls
+  hjkl-app@0.1.0 from crates.io, which pins old hjkl-picker 0.7 — its
+  `PickerLogic` trait signature doesn't match what the current source expects.
+  Bumped hjkl-app 0.1.0 → 0.2.0 (MINOR — breaking dep change). The publish job
+  now ships hjkl-app@0.2.0 first, then hjkl@0.21.3 resolves it correctly.
+- Updated `apps/hjkl` and `apps/hjkl-gui` pins `hjkl-app = "0.1"` → `"0.2"` to
+  track the bump.
+
 ## [0.21.2] - 2026-05-17
 
 ### Fixed
@@ -2450,7 +2465,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.3...HEAD
+[0.21.3]: https://github.com/kryptic-sh/hjkl/compare/v0.21.2...v0.21.3
 [0.21.2]: https://github.com/kryptic-sh/hjkl/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/kryptic-sh/hjkl/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...v0.21.0
