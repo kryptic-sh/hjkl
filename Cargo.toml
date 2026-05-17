@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.21.12"
+version = "0.21.13"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -40,6 +40,7 @@ hjkl-statusline = { path = "crates/hjkl-statusline" }
 hjkl-statusline-tui = { path = "crates/hjkl-statusline-tui" }
 hjkl-which-key = { path = "crates/hjkl-which-key" }
 hjkl-which-key-tui = { path = "crates/hjkl-which-key-tui" }
+hjkl-completion-tui = { path = "crates/hjkl-completion-tui" }
 hjkl-app = { path = "crates/hjkl-app" }
 
 [profile.release]

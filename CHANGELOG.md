@@ -8,6 +8,29 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.13] - 2026-05-18
+
+### Added
+
+- **`hjkl-completion-tui` 0.1.0** — ratatui adapter for `hjkl-app` completion
+  (closes #129). Extracts `apps/hjkl/src/render.rs::completion_popup` (~150 LOC)
+  into `crates/hjkl-completion-tui/`. Public surface:
+  `pub struct CompletionTheme` (`#[non_exhaustive]`,
+  border/selected_bg/normal_fg/detail_fg color slots; `CompletionTheme::new` and
+  `Default`);
+  `pub fn popup(frame, completion, theme, anchor: Rect, viewport: Rect)` —
+  positions the popup below/above the cursor anchor with overflow-flip handling,
+  paints the list. 6 new tests (smoke theme, to_rcolor, empty no-op, 2
+  positioning).
+
+### Changed
+
+- **`apps/hjkl/src/render.rs::completion_popup`** reduced to a thin wrapper:
+  computes gutter width and cursor-cell `Rect`, builds `CompletionTheme` from
+  `app.theme.ui`, delegates to `hjkl_completion_tui::popup`. ~115 LOC moved to
+  crate. Pixel-identical output.
+- **`hjkl-app` 0.4.4 → 0.4.5** (courtesy bump, always-bump policy #136).
+
 ## [0.21.12] - 2026-05-18
 
 ### Added
@@ -2653,7 +2676,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...HEAD
+[0.21.13]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...v0.21.13
 [0.21.12]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...v0.21.12
 [0.21.11]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...v0.21.11
 [0.21.10]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...v0.21.10

@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.12"
+version = "0.21.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2099,6 +2099,7 @@ dependencies = [
  "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-clipboard",
+ "hjkl-completion-tui",
  "hjkl-config",
  "hjkl-editor",
  "hjkl-editor-tui",
@@ -2114,6 +2115,7 @@ dependencies = [
  "hjkl-splash",
  "hjkl-statusline",
  "hjkl-statusline-tui",
+ "hjkl-theme",
  "hjkl-theme-tui",
  "hjkl-vim",
  "hjkl-which-key",
@@ -2158,7 +2160,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2234,6 +2236,15 @@ dependencies = [
  "serde",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "hjkl-completion-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-app",
+ "hjkl-theme",
+ "ratatui",
 ]
 
 [[package]]
@@ -2313,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.12"
+version = "0.21.13"
 dependencies = [
  "clap",
  "floem",

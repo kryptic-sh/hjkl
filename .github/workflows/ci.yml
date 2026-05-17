@@ -703,10 +703,11 @@ jobs:
           # The hjkl-* library crates listed as submodules ship from their
           # own kryptic-sh/hjkl-* repos on their own cadence. This workflow
           # publishes the in-tree crates that the workspace owns:
-          #   1. hjkl-statusline     — renderer-agnostic statusline model.
-          #   2. hjkl-statusline-tui — ratatui adapter (depends on #1).
-          #   3. hjkl-app            — host-agnostic application layer.
-          #   4. hjkl                — the TUI binary (depends on #3).
+          #   1. hjkl-statusline        — renderer-agnostic statusline model.
+          #   2. hjkl-statusline-tui    — ratatui adapter (depends on #1).
+          #   3. hjkl-completion-tui    — ratatui completion popup (depends on hjkl-app).
+          #   4. hjkl-app               — host-agnostic application layer.
+          #   5. hjkl                   — the TUI binary (depends on #4).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -755,5 +756,6 @@ jobs:
           publish_if_missing hjkl-keymap-crossterm
           publish_if_missing hjkl-which-key
           publish_if_missing hjkl-which-key-tui
+          publish_if_missing hjkl-completion-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl
