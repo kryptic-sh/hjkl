@@ -13,6 +13,7 @@ pub mod git_worker;
 pub mod keymap_actions;
 pub mod lang;
 pub mod picker_action;
+pub mod picker_git;
 pub mod picker_sources;
 
 /// Stable per-buffer identifier carried through async pipelines
