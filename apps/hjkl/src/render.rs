@@ -6,6 +6,11 @@
 
 use hjkl_buffer::{BufferView, DiagOverlay, Gutter, GutterNumbers, Viewport};
 use hjkl_engine::{Host, Query};
+use hjkl_statusline::{
+    Bar, Color as SlColor, Segment as SlSegment, StatusTheme, Style as SlStyle, dirty_segment,
+    filename_segment, loading_segment, mode_segment, pending_segment, recording_segment,
+    search_count_segment, truncate_filename,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -15,6 +20,298 @@ use ratatui::{
 };
 
 use crate::app::{App, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TOP_BAR_HEIGHT, window};
+
+/// Convert a `ratatui::style::Color::Rgb` to `hjkl_statusline::Color`.
+/// Named/indexed colors fall back to white.
+fn ratatui_rgb_to_sl(c: Color) -> SlColor {
+    match c {
+        Color::Rgb(r, g, b) => SlColor::rgb(r, g, b),
+        _ => SlColor::rgb(0xff, 0xff, 0xff),
+    }
+}
+
+/// Build a `StatusTheme` from the app's `UiTheme`.
+fn app_status_theme(app: &App) -> StatusTheme {
+    let ui = &app.theme.ui;
+    StatusTheme {
+        bg: ratatui_rgb_to_sl(ui.surface_bg),
+        fg: ratatui_rgb_to_sl(ui.text),
+        fill_bg: ratatui_rgb_to_sl(ui.panel_bg),
+        mode_normal_bg: ratatui_rgb_to_sl(ui.mode_normal_bg),
+        mode_normal_fg: ratatui_rgb_to_sl(ui.on_accent),
+        mode_insert_bg: ratatui_rgb_to_sl(ui.mode_insert_bg),
+        mode_insert_fg: ratatui_rgb_to_sl(ui.on_accent),
+        mode_visual_bg: ratatui_rgb_to_sl(ui.mode_visual_bg),
+        mode_visual_fg: ratatui_rgb_to_sl(ui.on_accent),
+        dirty_fg: ratatui_rgb_to_sl(ui.status_dirty_marker),
+        readonly_fg: ratatui_rgb_to_sl(ui.text),
+        new_file_fg: ratatui_rgb_to_sl(ui.text),
+        recording_bg: ratatui_rgb_to_sl(ui.recording_bg),
+        recording_fg: ratatui_rgb_to_sl(ui.recording_fg),
+    }
+}
+
+/// Build the normal-mode status bar as an agnostic `Bar`.
+///
+/// Populates left/right segments from app state. The caller converts
+/// to ratatui via `hjkl_statusline_tui::to_line`.
+pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
+    let theme = app_status_theme(app);
+    let ui = &app.theme.ui;
+    let mode = app.mode_label();
+
+    let mut bar = Bar {
+        fill_style: SlStyle::default_style()
+            .bg(ratatui_rgb_to_sl(ui.panel_bg))
+            .fg(ratatui_rgb_to_sl(ui.text)),
+        ..Default::default()
+    };
+
+    // ── Left side ────────────────────────────────────────────────────────────
+    bar.left.push(mode_segment(mode, &theme));
+
+    if let Some(reg) = app.active().editor.recording_register() {
+        bar.left.push(recording_segment(reg, &theme));
+    }
+
+    {
+        let pc = app.active().editor.pending_count();
+        let po = app.active().editor.pending_op();
+        let po_str = po.map(|s| s.to_string());
+        if let Some(seg) = pending_segment(pc.map(|n| n as u64), po_str.as_deref(), &theme) {
+            bar.left.push(seg);
+        }
+    }
+
+    // Filename with tags.
+    let ro_tag = if app.active().editor.is_readonly() {
+        " [RO]"
+    } else {
+        ""
+    };
+    let new_tag = if app.active().is_new_file {
+        " [New File]"
+    } else {
+        ""
+    };
+    let disk_tag = match app.active().disk_state {
+        DiskState::DeletedOnDisk => " [deleted]",
+        DiskState::ChangedOnDisk => " [changed on disk]",
+        DiskState::Synced => "",
+    };
+    let untracked_tag = if app.active().is_untracked && !app.active().is_new_file {
+        " [Untracked]"
+    } else {
+        ""
+    };
+    let raw_filename: String = app
+        .active()
+        .filename
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .unwrap_or("[No Name]")
+        .to_owned();
+    let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
+
+    // Reserve space for all right-side blocks + filename padding + suffix
+    // to determine how many chars the filename itself can occupy.
+    // We use char counts to stay consistent with Bar::layout.
+    let (row, col) = app.active().editor.cursor();
+    let line_count = app.active().editor.buffer().line_count() as usize;
+
+    let pos_content = format!(" {}:{} ", row + 1, col + 1);
+    let pct_content = {
+        let pct = ((row + 1) * 100).checked_div(line_count).unwrap_or(0);
+        format!(" {pct}% ")
+    };
+
+    // Build loading label (used both for reservation + actual segment).
+    let loading_label: String = if !app.lsp_pending.is_empty() {
+        let label = app
+            .lsp_pending
+            .values()
+            .next()
+            .map(|p| match p {
+                crate::app::LspPendingRequest::GotoDefinition { .. } => "definition",
+                crate::app::LspPendingRequest::GotoDeclaration { .. } => "declaration",
+                crate::app::LspPendingRequest::GotoTypeDefinition { .. } => "type definition",
+                crate::app::LspPendingRequest::GotoImplementation { .. } => "implementation",
+                crate::app::LspPendingRequest::GotoReferences { .. } => "references",
+                crate::app::LspPendingRequest::Hover { .. } => "hover",
+                crate::app::LspPendingRequest::Completion { .. } => "completion",
+                crate::app::LspPendingRequest::CodeAction { .. } => "code action",
+                crate::app::LspPendingRequest::Rename { .. } => "rename",
+                _ => "request",
+            })
+            .unwrap_or("request");
+        format!("{} LSP:{label}", hjkl_editor_tui::spinner::frame())
+    } else {
+        let names = app.directory.in_flight_names();
+        match names.len() {
+            0 => String::new(),
+            1 => format!("{} grammar:{}", hjkl_editor_tui::spinner::frame(), names[0]),
+            n => format!(
+                "{} grammar:{} +{}",
+                hjkl_editor_tui::spinner::frame(),
+                names[0],
+                n - 1
+            ),
+        }
+    };
+
+    // Build diag count content.
+    let diag_count_content: String = {
+        let diags = &app.active().lsp_diags;
+        if diags.is_empty() {
+            String::new()
+        } else {
+            let e = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Error)
+                .count();
+            let w2 = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Warning)
+                .count();
+            let i = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Info)
+                .count();
+            let h = diags
+                .iter()
+                .filter(|d| d.severity == DiagSeverity::Hint)
+                .count();
+            let mut parts = Vec::new();
+            if e > 0 {
+                parts.push(format!("E:{e}"));
+            }
+            if w2 > 0 {
+                parts.push(format!("W:{w2}"));
+            }
+            if i > 0 {
+                parts.push(format!("I:{i}"));
+            }
+            if h > 0 {
+                parts.push(format!("H:{h}"));
+            }
+            if parts.is_empty() {
+                String::new()
+            } else {
+                format!(" {} ", parts.join(" "))
+            }
+        }
+    };
+
+    // Search count content.
+    let search_count_content: String = search_count(app)
+        .map(|(idx, total)| format!(" [{idx}/{total}] "))
+        .unwrap_or_default();
+
+    // Dirty marker content.
+    let dirty_content = if app.active().dirty { " ● " } else { "" };
+
+    // Compute available chars for filename:
+    // total = left_fixed + " " + name + suffix + " " + dirty + search + diag + loading + pos + pct
+    let w = width as usize;
+    let mode_chars = mode.chars().count() + 2; // " MODE "
+    let rec_chars = app
+        .active()
+        .editor
+        .recording_register()
+        .map(|r| format!(" REC @{r} ").chars().count())
+        .unwrap_or(0);
+    let pending_chars = {
+        let pc = app.active().editor.pending_count();
+        let po = app.active().editor.pending_op();
+        match (pc, po) {
+            (Some(n), Some(op)) => format!(" {n}{op} ").chars().count(),
+            (Some(n), None) => format!(" {n} ").chars().count(),
+            (None, Some(op)) => format!(" {op} ").chars().count(),
+            (None, None) => 0,
+        }
+    };
+    let right_chars = pos_content.chars().count() + pct_content.chars().count();
+    let loading_chars = if loading_label.is_empty() {
+        0
+    } else {
+        loading_label.chars().count() + 2 // " ... "
+    };
+    let reserved = mode_chars
+        + rec_chars
+        + pending_chars
+        + 2 // " name "
+        + suffix.chars().count()
+        + dirty_content.chars().count()
+        + search_count_content.chars().count()
+        + diag_count_content.chars().count()
+        + loading_chars
+        + right_chars;
+    let avail_for_name = w.saturating_sub(reserved);
+    let filename = truncate_filename(&raw_filename, avail_for_name);
+
+    bar.left.push(filename_segment(&filename, &suffix, &theme));
+
+    // ── Left-side extras (dirty, search, diag, loading) go as left segments ─
+    if let Some(seg) = dirty_segment(app.active().dirty, &theme) {
+        bar.left.push(seg);
+    }
+
+    if !search_count_content.is_empty() {
+        bar.left.push(search_count_segment(
+            0, // dummy — we use raw content via loading_segment
+            0, &theme,
+        ));
+        // Replace last segment with the actual pre-formatted content.
+        if let Some(SlSegment::Text { content, .. }) = bar.left.last_mut() {
+            *content = search_count_content.clone();
+        }
+    }
+
+    if !diag_count_content.is_empty() {
+        // Color by highest severity.
+        let diags = &app.active().lsp_diags;
+        let diag_fg = if diags.iter().any(|d| d.severity == DiagSeverity::Error) {
+            SlColor::rgb(0xff, 0x00, 0x00) // Red
+        } else if diags.iter().any(|d| d.severity == DiagSeverity::Warning) {
+            SlColor::rgb(0xff, 0xc0, 0x00) // Yellow-ish
+        } else if diags.iter().any(|d| d.severity == DiagSeverity::Info) {
+            SlColor::rgb(0x00, 0x7a, 0xff) // Blue
+        } else {
+            SlColor::rgb(0x00, 0xd7, 0xd7) // Cyan
+        };
+        bar.left.push(SlSegment::Text {
+            content: diag_count_content.clone(),
+            style: SlStyle::default_style()
+                .bg(ratatui_rgb_to_sl(ui.surface_bg))
+                .fg(diag_fg),
+        });
+    }
+
+    if !loading_label.is_empty() {
+        bar.left.push(loading_segment(&loading_label, "", &theme));
+        // Fix content: loading_segment adds " frame label " but we want " frame+label "
+        if let Some(SlSegment::Text { content, .. }) = bar.left.last_mut() {
+            *content = format!(" {loading_label} ");
+        }
+    }
+
+    // ── Right side ───────────────────────────────────────────────────────────
+    bar.right.push(SlSegment::Text {
+        content: pos_content,
+        style: SlStyle::default_style()
+            .bg(ratatui_rgb_to_sl(ui.surface_bg))
+            .fg(ratatui_rgb_to_sl(ui.text)),
+    });
+    bar.right.push(SlSegment::Text {
+        content: pct_content,
+        style: SlStyle::default_style()
+            .bg(ratatui_rgb_to_sl(ui.mode_normal_bg))
+            .fg(ratatui_rgb_to_sl(ui.on_accent))
+            .bold(),
+    });
+
+    hjkl_statusline_tui::to_line(&bar, width)
+}
 
 /// Build the style for a diagnostic severity used in overlays and the status line.
 fn diag_severity_style(sev: DiagSeverity) -> Style {
@@ -1221,265 +1518,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Normal status line (lualine-style colored sections) ─────────────────
-    // Palette pulled from app theme (themes/ui-dark.toml). Mode colors map
-    // to website --blue / --green / --accent so the status bar visually
-    // matches both the syntax theme and the project's web identity.
-    let ui = &app.theme.ui;
-    let mode = app.mode_label();
-    let mode_color = match mode {
-        "INSERT" => ui.mode_insert_bg,
-        "VISUAL" | "VISUAL LINE" | "VISUAL BLOCK" => ui.mode_visual_bg,
-        _ => ui.mode_normal_bg,
-    };
-    let mode_style = Style::default()
-        .bg(mode_color)
-        .fg(ui.on_accent)
-        .add_modifier(Modifier::BOLD);
-    let mid_style = Style::default().bg(ui.surface_bg).fg(ui.text);
-    let fill_style = Style::default().bg(ui.panel_bg).fg(ui.text);
-    let dirty_style = Style::default()
-        .bg(ui.surface_bg)
-        .fg(ui.status_dirty_marker);
-
-    // Tags & markers
-    let ro_tag = if app.active().editor.is_readonly() {
-        " [RO]"
-    } else {
-        ""
-    };
-    let new_tag = if app.active().is_new_file {
-        " [New File]"
-    } else {
-        ""
-    };
-    let disk_tag = match app.active().disk_state {
-        DiskState::DeletedOnDisk => " [deleted]",
-        DiskState::ChangedOnDisk => " [changed on disk]",
-        DiskState::Synced => "",
-    };
-    let untracked_tag = if app.active().is_untracked && !app.active().is_new_file {
-        " [Untracked]"
-    } else {
-        ""
-    };
-
-    let raw_filename: String = app
-        .active()
-        .filename
-        .as_ref()
-        .and_then(|p| p.to_str())
-        .unwrap_or("[No Name]")
-        .to_owned();
-
-    let (row, col) = app.active().editor.cursor();
-    let line_count = app.active().editor.buffer().line_count() as usize;
-    let pct = ((row + 1) * 100).checked_div(line_count).unwrap_or(0);
-
-    // Section text (each block has 1-space padding both sides).
-    let mode_block = format!(" {mode} ");
-    let pos_block = format!(" {}:{} ", row + 1, col + 1);
-    let pct_block = format!(" {pct}% ");
-    let dirty_block = if app.active().dirty { " ● " } else { "" };
-    let rec_block = match app.active().editor.recording_register() {
-        Some(reg) => format!(" REC @{reg} "),
-        None => String::new(),
-    };
-    // Pending count + operator block (vim "showcmd").
-    let pending_block: String = {
-        let pc = app.active().editor.pending_count();
-        let po = app.active().editor.pending_op();
-        match (pc, po) {
-            (Some(n), Some(op)) => format!(" {n}{op} "),
-            (Some(n), None) => format!(" {n} "),
-            (None, Some(op)) => format!(" {op} "),
-            (None, None) => String::new(),
-        }
-    };
-    // Search count block `[idx/total]`.
-    let search_count_block: String = search_count(app)
-        .map(|(idx, total)| format!(" [{idx}/{total}] "))
-        .unwrap_or_default();
-    // LSP diag count block: E:N W:N ... skip zero-count categories.
-    let diag_count_block: String = {
-        let diags = &app.active().lsp_diags;
-        if diags.is_empty() {
-            String::new()
-        } else {
-            let e = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Error)
-                .count();
-            let w2 = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Warning)
-                .count();
-            let i = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Info)
-                .count();
-            let h = diags
-                .iter()
-                .filter(|d| d.severity == DiagSeverity::Hint)
-                .count();
-            let mut parts = Vec::new();
-            if e > 0 {
-                parts.push(format!("E:{e}"));
-            }
-            if w2 > 0 {
-                parts.push(format!("W:{w2}"));
-            }
-            if i > 0 {
-                parts.push(format!("I:{i}"));
-            }
-            if h > 0 {
-                parts.push(format!("H:{h}"));
-            }
-            if parts.is_empty() {
-                String::new()
-            } else {
-                format!(" {} ", parts.join(" "))
-            }
-        }
-    };
-    let suffix = format!("{ro_tag}{new_tag}{disk_tag}{untracked_tag}");
-
-    // Loading block — inline spinner for in-flight LSP requests OR
-    // pending grammar compile. LSP wins when both are happening since
-    // the user typically just pressed gd/gr/K and the grammar is older
-    // background work. Empty otherwise.
-    let loading_block: String = if !app.lsp_pending.is_empty() {
-        let label = app
-            .lsp_pending
-            .values()
-            .next()
-            .map(|p| match p {
-                crate::app::LspPendingRequest::GotoDefinition { .. } => "definition",
-                crate::app::LspPendingRequest::GotoDeclaration { .. } => "declaration",
-                crate::app::LspPendingRequest::GotoTypeDefinition { .. } => "type definition",
-                crate::app::LspPendingRequest::GotoImplementation { .. } => "implementation",
-                crate::app::LspPendingRequest::GotoReferences { .. } => "references",
-                crate::app::LspPendingRequest::Hover { .. } => "hover",
-                crate::app::LspPendingRequest::Completion { .. } => "completion",
-                crate::app::LspPendingRequest::CodeAction { .. } => "code action",
-                crate::app::LspPendingRequest::Rename { .. } => "rename",
-                _ => "request",
-            })
-            .unwrap_or("request");
-        format!(" {} LSP:{label} ", hjkl_editor_tui::spinner::frame())
-    } else {
-        // Global grammar-load indicator: any lang queued on the bonsai
-        // async pool (active buffer, preview pane, or otherwise) shows
-        // here. Multiple in-flight names collapse to first + count.
-        let names = app.directory.in_flight_names();
-        match names.len() {
-            0 => String::new(),
-            1 => format!(
-                " {} grammar:{} ",
-                hjkl_editor_tui::spinner::frame(),
-                names[0]
-            ),
-            n => format!(
-                " {} grammar:{} +{} ",
-                hjkl_editor_tui::spinner::frame(),
-                names[0],
-                n - 1
-            ),
-        }
-    };
-
-    // Filename block — surface bg, with leading + trailing space.
-    // Truncate with leading `…` if the line doesn't fit.
-    let w = width as usize;
-    let reserved = mode_block.len()
-        + rec_block.len()
-        + pending_block.len()
-        + 2 /* leading + trailing space around filename */
-        + suffix.len()
-        + dirty_block.len()
-        + search_count_block.len()
-        + diag_count_block.len()
-        + loading_block.len()
-        + pos_block.len()
-        + pct_block.len();
-    let avail_for_name = w.saturating_sub(reserved);
-    let filename: String = if raw_filename.len() <= avail_for_name {
-        raw_filename.clone()
-    } else if avail_for_name <= 1 {
-        String::new()
-    } else {
-        let keep = avail_for_name.saturating_sub(1);
-        let start = raw_filename.len().saturating_sub(keep);
-        format!("\u{2026}{}", &raw_filename[start..])
-    };
-    let mid_block = format!(" {filename}{suffix} ");
-
-    // Spacer fills the gap between mid and the right-side blocks.
-    let used = mode_block.len()
-        + rec_block.len()
-        + pending_block.len()
-        + mid_block.len()
-        + dirty_block.len()
-        + search_count_block.len()
-        + diag_count_block.len()
-        + loading_block.len()
-        + pos_block.len()
-        + pct_block.len();
-    let spacer: String = " ".repeat(w.saturating_sub(used));
-
-    let rec_style = Style::default()
-        .bg(ui.recording_bg)
-        .fg(ui.recording_fg)
-        .add_modifier(Modifier::BOLD);
-    let pending_style = Style::default()
-        .bg(ui.surface_bg)
-        .fg(ui.text)
-        .add_modifier(Modifier::ITALIC);
-
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(9);
-    spans.push(Span::styled(mode_block, mode_style));
-    if !rec_block.is_empty() {
-        spans.push(Span::styled(rec_block, rec_style));
-    }
-    if !pending_block.is_empty() {
-        spans.push(Span::styled(pending_block, pending_style));
-    }
-    spans.push(Span::styled(mid_block, mid_style));
-    if !dirty_block.is_empty() {
-        spans.push(Span::styled(dirty_block.to_string(), dirty_style));
-    }
-    if !search_count_block.is_empty() {
-        spans.push(Span::styled(search_count_block, mid_style));
-    }
-    if !diag_count_block.is_empty() {
-        // Color the diag count by the highest-severity present.
-        let diags = &app.active().lsp_diags;
-        let diag_style = if diags.iter().any(|d| d.severity == DiagSeverity::Error) {
-            Style::default()
-                .bg(ui.surface_bg)
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD)
-        } else if diags.iter().any(|d| d.severity == DiagSeverity::Warning) {
-            Style::default().bg(ui.surface_bg).fg(Color::Yellow)
-        } else if diags.iter().any(|d| d.severity == DiagSeverity::Info) {
-            Style::default().bg(ui.surface_bg).fg(Color::Blue)
-        } else {
-            Style::default().bg(ui.surface_bg).fg(Color::Cyan)
-        };
-        spans.push(Span::styled(diag_count_block, diag_style));
-    }
-    if !loading_block.is_empty() {
-        let loading_style = Style::default()
-            .bg(ui.surface_bg)
-            .fg(ui.text)
-            .add_modifier(Modifier::ITALIC);
-        spans.push(Span::styled(loading_block, loading_style));
-    }
-    spans.push(Span::styled(spacer, fill_style));
-    spans.push(Span::styled(pos_block, mid_style));
-    spans.push(Span::styled(pct_block, mode_style));
-
-    (Line::from(spans), None)
+    // ── Normal status line — delegated to hjkl-statusline ───────────────────
+    // Palette + segments built in `build_normal_status_bar`; ratatui
+    // conversion via `hjkl_statusline_tui::to_line`.
+    (build_normal_status_bar(app, width), None)
 }
 
 /// Format the status line as a plain string (unit-test helper).

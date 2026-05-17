@@ -694,7 +694,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Publish hjkl-app + hjkl to crates.io (idempotent, in dep order)
+      - name: Publish in-tree crates to crates.io (idempotent, in dep order)
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -702,12 +702,14 @@ jobs:
           set -euo pipefail
           # The hjkl-* library crates listed as submodules ship from their
           # own kryptic-sh/hjkl-* repos on their own cadence. This workflow
-          # publishes the two in-tree crates that the workspace owns:
-          #   1. hjkl-app — host-agnostic application layer (lib crate).
-          #   2. hjkl     — the TUI binary that depends on hjkl-app.
-          # Order is load-bearing: cargo publish for `hjkl` resolves its
-          # `hjkl-app = "X.Y"` dep against crates.io, so hjkl-app must be
-          # uploaded + indexed first.
+          # publishes the in-tree crates that the workspace owns:
+          #   1. hjkl-statusline     — renderer-agnostic statusline model.
+          #   2. hjkl-statusline-tui — ratatui adapter (depends on #1).
+          #   3. hjkl-app            — host-agnostic application layer.
+          #   4. hjkl                — the TUI binary (depends on #3).
+          # Order is load-bearing: cargo publish for each crate resolves its
+          # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
+          # uploaded + indexed before its consumer.
           publish_if_missing() {
             local crate="$1"
             local manifest version
@@ -748,5 +750,7 @@ jobs:
             echo "::error::${crate}@${version} did not appear on crates.io within 5 min"
             exit 1
           }
+          publish_if_missing hjkl-statusline
+          publish_if_missing hjkl-statusline-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl

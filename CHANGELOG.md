@@ -8,6 +8,35 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.7] - 2026-05-17
+
+### Fixed
+
+- v0.21.6 `cargo publish -p hjkl --locked` failed because `hjkl-app@0.3.0` on
+  crates.io pins `hjkl-vim = "0.22"`, but `apps/hjkl` (and `apps/hjkl-gui`)
+  bumped their direct pin to `hjkl-vim = "0.23"` for the #64 which-key work.
+  Cargo refused to resolve two major versions of `hjkl-vim` in the same dep
+  graph — `OperatorKind` flowed through both copies, surfacing as an `E0308`
+  type-mismatch wall. Fix: bump `hjkl-app` 0.3.0 → 0.4.0 (MINOR — drops the old
+  `hjkl-vim 0.22` pin in favour of `0.23`) and repin both apps to
+  `hjkl-app = "0.4"`. Per "no retag of shipped versions", v0.21.6's git tag
+  stays as the source-of-truth release and v0.21.7 carries the publish-side fix.
+
+### Added
+
+- **`hjkl-statusline` + `hjkl-statusline-tui` v0.1.0** (#12 partial —
+  normal-mode row only): extracted the normal-mode status bar from
+  `apps/hjkl/src/render.rs` into two new publishable crates. `hjkl-statusline`
+  owns the agnostic data model (`Bar`, `Segment`, `Style`, `StatusTheme`,
+  `ModeKind`, segment builder fns, `truncate_filename`). `hjkl-statusline-tui`
+  adapts it to ratatui (`to_line`, `render`, `to_ratatui_style`).
+  `apps/hjkl/src/render.rs::build_status_line`'s normal-mode branch now
+  delegates to `build_normal_status_bar` which calls
+  `hjkl_statusline_tui::to_line`. 15 new unit tests across both crates. Variants
+  1–5 (command prompt, search prompt, perf overlay, status message,
+  indent-flash) remain in `build_status_line` pending future extractions (#131).
+  CI `publish_if_missing` cascades both before `hjkl-app` / `hjkl`.
+
 ## [0.21.6] - 2026-05-17
 
 ### Added
@@ -2502,7 +2531,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...HEAD
+[0.21.7]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...v0.21.7
 [0.21.6]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...v0.21.6
 [0.21.5]: https://github.com/kryptic-sh/hjkl/compare/v0.21.4...v0.21.5
 [0.21.4]: https://github.com/kryptic-sh/hjkl/compare/v0.21.3...v0.21.4
