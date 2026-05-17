@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-05-17
+
+### Fixed
+
+- v0.20.2 tag-CI failed on `test windows-latest` because the un-ignored
+  hjkl-anvil tests #110 brought in were symlink-dependent (the runtime itself
+  returns `UnsupportedPlatform` on non-unix). hjkl-anvil 0.2.4 gates the 8
+  affected tests behind `#[cfg(unix)]` and `#[allow(dead_code)]`s the helpers
+  that become unused on Windows. v0.20.2 was tagged but the cross-build /
+  publish-crates jobs were skipped, so the umbrella never shipped to crates.io /
+  AUR / brew / apk; v0.20.3 restores the release.
+
+### Changed
+
+- `hjkl-anvil` bumped 0.2.1 → 0.2.4 — submodule pointer updated.
+
 ## [0.20.2] - 2026-05-17
 
 ### Changed
@@ -2368,7 +2384,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...HEAD
+[0.20.3]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/kryptic-sh/hjkl/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/kryptic-sh/hjkl/compare/v0.19.3...v0.20.0
