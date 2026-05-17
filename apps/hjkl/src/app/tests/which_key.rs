@@ -1,0 +1,149 @@
+use super::*;
+
+use crate::app::keymap::HjklMode;
+use hjkl_which_key::{Entry, entries_for};
+
+// ── entries_for integration tests (app + engine merge) ────────────────────────
+
+fn empty_keymap() -> hjkl_keymap::Keymap<crate::keymap_actions::AppAction, HjklMode> {
+    hjkl_keymap::Keymap::new(' ')
+}
+
+#[test]
+fn entries_include_engine_descriptors_at_root() {
+    let km = empty_keymap();
+    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+    for k in ["h", "j", "k", "l", "i", "a", "w", "b"] {
+        assert!(keys.contains(&k), "entries_for missing engine key '{k}'");
+    }
+}
+
+#[test]
+fn entries_include_g_prefix_engine_children() {
+    let km = empty_keymap();
+    let entries = entries_for(
+        &km,
+        HjklMode::Normal,
+        &[hjkl_keymap::KeyEvent::char('g')],
+        ' ',
+    );
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+    assert!(!entries.is_empty(), "g-prefix popup should be non-empty");
+    assert!(keys.contains(&"g"), "g-prefix missing 'gg' entry");
+    assert!(keys.contains(&"j"), "g-prefix missing 'gj' entry");
+}
+
+#[test]
+fn entries_include_z_prefix_engine_children() {
+    let km = empty_keymap();
+    let entries = entries_for(
+        &km,
+        HjklMode::Normal,
+        &[hjkl_keymap::KeyEvent::char('z')],
+        ' ',
+    );
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+    assert!(!entries.is_empty(), "z-prefix popup should be non-empty");
+    assert!(keys.contains(&"z"), "z-prefix missing 'zz' entry");
+}
+
+#[test]
+fn app_entry_shadows_engine_entry() {
+    let mut km: hjkl_keymap::Keymap<crate::keymap_actions::AppAction, HjklMode> =
+        hjkl_keymap::Keymap::new(' ');
+    km.add(
+        HjklMode::Normal,
+        "i",
+        crate::keymap_actions::AppAction::OpenFilePicker,
+        "custom insert desc",
+    )
+    .expect("add failed");
+    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let i_entry = entries.iter().find(|e| e.key == "i").expect("missing 'i'");
+    assert_eq!(
+        i_entry.desc, "custom insert desc",
+        "app desc should override engine desc for 'i'"
+    );
+}
+
+#[test]
+fn entries_sorted_by_key() {
+    let km = empty_keymap();
+    let entries = entries_for(&km, HjklMode::Normal, &[], ' ');
+    let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "entries should be sorted by key string");
+}
+
+// ── #134: RHS desc format ─────────────────────────────────────────────────────
+
+#[test]
+fn nmap_leader_x_desc_shows_rhs_notation() {
+    // After `:nmap <leader>x :echo hi<CR>`, the entry for `x` under the
+    // leader prefix should show `"→ :echo hi<CR>"` (or the truncated form).
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("nmap <leader>x :echo hi<CR>");
+
+    let leader = app.config.editor.leader;
+    // The <leader>x binding lives under the leader key prefix.
+    let leader_prefix = vec![hjkl_keymap::KeyEvent::char(leader)];
+    let entries = entries_for(&app.app_keymap, HjklMode::Normal, &leader_prefix, leader);
+
+    let x_entry = entries
+        .iter()
+        .find(|e| e.key == "x")
+        .expect("expected 'x' entry under leader prefix after :nmap <leader>x");
+
+    // desc should start with "→ " and contain the rhs notation.
+    assert!(
+        x_entry.desc.starts_with("→ "),
+        "desc should start with '→ ', got: {:?}",
+        x_entry.desc
+    );
+    // The RHS notation encodes the key sequence — `:echo hi<CR>` becomes
+    // something like `":echo<leader>hi<CR>"` depending on how spaces are
+    // represented. Check that `:echo` and `hi` appear in the desc.
+    assert!(
+        x_entry.desc.contains(":echo") && x_entry.desc.contains("hi"),
+        "desc should contain ':echo' and 'hi', got: {:?}",
+        x_entry.desc
+    );
+}
+
+#[test]
+fn nmap_desc_truncated_at_40_chars() {
+    // A very long RHS should be truncated at 40 Unicode scalar values + "…".
+    let long_rhs: String = "a".repeat(50);
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex(&format!("nmap x {long_rhs}"));
+
+    let entries = entries_for(&app.app_keymap, HjklMode::Normal, &[], ' ');
+    let x_entry = entries
+        .iter()
+        .find(|e| e.key == "x")
+        .expect("expected 'x' entry after nmap");
+
+    // Total chars: "→ " (2) + 40 'a' + "…" = 43 or less (truncate_desc cuts at 40 total).
+    assert!(
+        x_entry.desc.chars().count() <= 42,
+        "desc should be truncated, got {} chars: {:?}",
+        x_entry.desc.chars().count(),
+        x_entry.desc
+    );
+    assert!(
+        x_entry.desc.ends_with('…'),
+        "truncated desc should end with '…', got: {:?}",
+        x_entry.desc
+    );
+}
+
+// ── Entry struct construction ─────────────────────────────────────────────────
+
+#[test]
+fn entry_new_constructor() {
+    let e = Entry::new("x", "exit");
+    assert_eq!(e.key, "x");
+    assert_eq!(e.desc, "exit");
+}

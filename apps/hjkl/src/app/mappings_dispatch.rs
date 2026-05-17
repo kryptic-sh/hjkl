@@ -5,6 +5,8 @@
 //! in a dedicated module avoids forcing 24 individual `HostCmd` impls that would
 //! either duplicate the parser call or make registration purely ceremonial.
 
+use hjkl_which_key::truncate_desc;
+
 use crate::keymap_actions::AppAction;
 
 use super::{App, keymap};
@@ -34,10 +36,15 @@ impl App {
                 let rhs_km: Vec<hjkl_keymap::KeyEvent> =
                     rhs.iter().map(|&i| keymap::input_to_km_event(i)).collect();
                 let action = AppAction::Replay {
-                    keys: rhs_km,
+                    keys: rhs_km.clone(),
                     recursive,
                 };
                 let leader = self.config.editor.leader;
+                // Build a human-readable "→ <rhs notation>" desc, truncated at 40 chars.
+                let rhs_notation = truncate_desc(
+                    &format!("→ {}", hjkl_keymap::Chord(rhs_km).to_notation(leader)),
+                    40,
+                );
                 let mut any_skipped = false;
                 for &mode in &modes {
                     let Some(km_mode) = keymap::map_mode_to_km_mode(mode) else {
@@ -51,7 +58,7 @@ impl App {
                     let notation = lhs_chord.to_notation(leader);
                     let binding = hjkl_keymap::Binding {
                         action: action.clone(),
-                        desc: "user runtime map".to_string(),
+                        desc: rhs_notation.clone(),
                         recursive,
                         condition: None,
                     };

@@ -753,5 +753,7 @@ jobs:
           publish_if_missing hjkl-statusline
           publish_if_missing hjkl-statusline-tui
           publish_if_missing hjkl-keymap-crossterm
+          publish_if_missing hjkl-which-key
+          publish_if_missing hjkl-which-key-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl

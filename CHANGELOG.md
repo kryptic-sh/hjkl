@@ -8,6 +8,36 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.12] - 2026-05-18
+
+### Added
+
+- **`hjkl-which-key` 0.1.0** — renderer-agnostic which-key popup model (closes
+  #128). Extracts `apps/hjkl/src/which_key.rs` (~207 LOC) into
+  `crates/hjkl-which-key/`. Public surface: `Entry` (`#[non_exhaustive]`),
+  `entries_for` (generic over action type `A`, mode `M: Into<hjkl_vim::Mode>`),
+  `should_show`, `format_key`, `truncate_desc`, `layout` / `PopupLayout`. Pure
+  geometry — no painting. `gui` feature stub declared for future floem adapter.
+  23 new tests (11 in crate, 4 in tui adapter, 8 in app integration).
+- **`hjkl-which-key-tui` 0.1.0** — ratatui adapter for `hjkl-which-key` (closes
+  #128). `pub fn render(frame, layout, header, theme, buf_area)` paints the
+  popup. `PopupTheme` (`#[non_exhaustive]`) holds `hjkl_theme::Color` border +
+  desc slots; `PopupTheme::new(border, desc)` constructs without struct literal.
+
+### Changed
+
+- **`#134` cosmetic** — `:nmap`/`:noremap` bindings now show
+  `"→ <rhs notation>"` (truncated at 40 chars with `…`) instead of the opaque
+  `"user runtime map"` in the which-key popup. `truncate_desc` lives in
+  `hjkl-which-key`.
+- **`apps/hjkl/src/which_key.rs`** reduced to a thin shim:
+  `pub use hjkl_which_key::*;`. All existing `crate::which_key::*` call sites
+  compile unchanged. No behaviour delta.
+- **`apps/hjkl/src/render.rs::which_key_popup`** delegates painting to
+  `hjkl_which_key_tui::render`. Layout math removed from render.rs.
+  Pixel-identical output.
+- **`hjkl-app` 0.4.3 → 0.4.4** (courtesy bump, always-bump policy #136).
+
 ## [0.21.11] - 2026-05-18
 
 ### Added
@@ -2623,7 +2653,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...HEAD
+[0.21.12]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...v0.21.12
 [0.21.11]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...v0.21.11
 [0.21.10]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...v0.21.10
 [0.21.9]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...v0.21.9

@@ -1,0 +1,26 @@
+[package]
+name = "hjkl-which-key"
+description = "Renderer-agnostic which-key popup model for the hjkl editor stack. Entry building, prefix resolution, scroll state, and column layout math."
+keywords = ["vim", "which-key", "modal", "keymap", "editor"]
+categories = ["text-editors"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[features]
+## Stub for a future `hjkl-which-key-gui` floem adapter. No-op today.
+gui = []
+
+[dependencies]
+hjkl-keymap = "0.3"
+hjkl-vim = { version = "0.23", default-features = false }
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

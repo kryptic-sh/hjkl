@@ -1833,82 +1833,20 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     }
 
     let ui = &app.theme.ui;
-
-    // Compute column layout: figure out max entry width, then pack into columns.
-    let entry_width = entries
-        .iter()
-        .map(|e| e.key.len() + 1 + e.desc.len()) // key + space + desc
-        .max()
-        .unwrap_or(8) as u16;
-    // Each column: entry_width + 2 padding between columns.
-    let col_width = entry_width + 2;
-    let available_width = buf_area.width.saturating_sub(2); // subtract border
-    let cols = (available_width / col_width).max(1) as usize;
-    let rows_needed = entries.len().div_ceil(cols);
-
-    // Cap at 12 content rows; drop excess entries silently.
-    const MAX_ROWS: usize = 12;
-    let content_rows = rows_needed.min(MAX_ROWS) as u16;
-
-    // Total popup height: 1 header + content_rows + 2 border = content_rows + 3.
-    let popup_h = content_rows + 3;
-    // Popup sits above status line, anchored to bottom of buf_area.
-    let popup_y = buf_area.y + buf_area.height.saturating_sub(popup_h);
-    let popup_w = buf_area.width;
-
-    let area = Rect {
-        x: buf_area.x,
-        y: popup_y,
-        width: popup_w,
-        height: popup_h,
-    };
-
-    frame.render_widget(Clear, area);
+    let popup_layout = hjkl_which_key::layout(&entries, buf_area.width);
 
     let header_label = if pending.is_empty() {
         "root".to_string()
     } else {
         hjkl_keymap::Chord(pending.clone()).to_notation(leader)
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ui.border_active))
-        .title(format!(" {header_label} "));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
 
-    // Build lines: one line per row of entries.
-    let key_style = Style::default()
-        .fg(ui.border_active)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(ui.text_dim);
+    let theme = hjkl_which_key_tui::PopupTheme::new(
+        ratatui_rgb_to_sl(ui.border_active),
+        ratatui_rgb_to_sl(ui.text_dim),
+    );
 
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Render entries row by row, cols per row.
-    let visible_entries = entries.iter().take(MAX_ROWS * cols);
-    let collected: Vec<&crate::which_key::Entry> = visible_entries.collect();
-
-    for row in 0..content_rows as usize {
-        let mut spans: Vec<Span> = Vec::new();
-        for col in 0..cols {
-            let idx = row * cols + col;
-            if let Some(entry) = collected.get(idx) {
-                let key_str = &entry.key;
-                let desc_str = &entry.desc;
-                let entry_str = format!("{key_str} {desc_str}");
-                // Pad to col_width.
-                let padded_len = col_width as usize;
-                let padding = " ".repeat(padded_len.saturating_sub(entry_str.len()));
-                spans.push(Span::styled(key_str.clone(), key_style));
-                spans.push(Span::styled(format!(" {desc_str}{padding}"), desc_style));
-            }
-        }
-        lines.push(Line::from(spans));
-    }
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, inner);
+    hjkl_which_key_tui::render(frame, &popup_layout, &header_label, &theme, buf_area);
 }
 
 /// Compute a centered Rect of `pct_x`% × `pct_y`% of `area`.
