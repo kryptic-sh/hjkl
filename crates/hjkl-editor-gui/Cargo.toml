@@ -10,8 +10,8 @@ authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 
 [dependencies]
-hjkl-engine = { version = "0.9", default-features = false }
+hjkl-engine = { version = "0.10", default-features = false }
 hjkl-buffer = "0.7"
-hjkl-editor = { version = "0.6", default-features = false }
-hjkl-vim    = { version = "0.20", default-features = false }
+hjkl-editor = { version = "0.7", default-features = false }
+hjkl-vim    = { version = "0.21", default-features = false }
 floem       = "0.2"

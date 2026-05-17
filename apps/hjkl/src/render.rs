@@ -55,32 +55,19 @@ fn build_diag_overlays(
         .collect()
 }
 
-/// Gutter width formula — matches `Editor::cursor_screen_pos`'s
-/// `lnum_width = max(numberwidth, line_count.to_string().len() + 1)`.
-/// The renderer must agree with the engine or terminal cursor lands off by
-/// one column. Returns 0 when both `number` and `relativenumber` are false.
-fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwidth: usize) -> u16 {
-    if !number && !relativenumber {
-        return 0;
-    }
-    let needed = line_count.to_string().len() + 1; // digits + 1 trailing spacer
-    needed.max(numberwidth) as u16
-}
-
 /// Full gutter width including number column, sign column, and fold column.
+///
+/// `lnum_width` must come from `Editor::lnum_width()` — the single source of
+/// truth for the number-column width. Pass 0 when both number flags are off.
 ///
 /// - `sign_column` width: 1 cell when `mode=Yes` or (`mode=Auto` and any visible sign).
 /// - `fold_column` width: `foldcolumn` cells (0 = none, capped at 12).
 fn full_gutter_width(
-    line_count: usize,
-    number: bool,
-    relativenumber: bool,
-    numberwidth: usize,
+    lnum_width: u16,
     signcolumn: hjkl_engine::types::SignColumnMode,
     foldcolumn: u32,
     has_visible_signs: bool,
 ) -> u16 {
-    let num_w = gutter_width(line_count, number, relativenumber, numberwidth);
     let sign_w: u16 = match signcolumn {
         hjkl_engine::types::SignColumnMode::Yes => 1,
         hjkl_engine::types::SignColumnMode::No => 0,
@@ -93,7 +80,7 @@ fn full_gutter_width(
         }
     };
     let fold_w = foldcolumn.min(12) as u16;
-    num_w + sign_w + fold_w
+    lnum_width + sign_w + fold_w
 }
 
 /// Parse a comma-separated colorcolumn string into a sorted `Vec<u16>` of
@@ -307,14 +294,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     };
 
     let s = app.slots()[slot_idx].editor.settings();
-    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
+    let (nu, rnu) = (s.number, s.relativenumber);
     let (scl, fdc) = (s.signcolumn, s.foldcolumn);
     let (cul, cuc) = (s.cursorline, s.cursorcolumn);
     let colorcolumn = s.colorcolumn.clone();
 
     // We need visible signs before computing gutter width for signcolumn=auto.
     // Pre-compute a lightweight "has any visible sign" check using the last
-    // known viewport top (updated after gutter_width when focused).
+    // known viewport top (updated after lnum_width when focused).
     let pre_vp_top = if is_focused {
         app.slots()[slot_idx].editor.host().viewport().top_row
     } else {
@@ -340,12 +327,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     };
     let fold_w = fdc.min(12) as u16;
-    let num_gw_for_text = gutter_width(
-        app.slots()[slot_idx].editor.buffer().line_count() as usize,
-        nu,
-        rnu,
-        nuw,
-    );
+    let num_gw_for_text = app.slots()[slot_idx].editor.lnum_width();
     let gw = sign_w + num_gw_for_text + fold_w;
     let text_width = area.width.saturating_sub(gw);
 
@@ -371,12 +353,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         (true, true) => GutterNumbers::Hybrid { cursor_row },
     };
     // Number-column width only (sign/fold widths are tracked separately).
-    let num_gw = gutter_width(
-        app.slots()[slot_idx].editor.buffer().line_count() as usize,
-        nu,
-        rnu,
-        nuw,
-    );
+    let num_gw = app.slots()[slot_idx].editor.lnum_width();
     let gutter = if num_gw > 0 || sign_w > 0 {
         Some(Gutter {
             width: num_gw,
@@ -564,7 +541,6 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         app.windows[fw].as_ref().map(|w| w.slot).unwrap_or(0)
     };
     let s = app.slots()[slot_idx].editor.settings();
-    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
     let vp = app.slots()[slot_idx].editor.host().viewport();
     let vp_top = vp.top_row;
     let vp_bot = vp_top + 100; // generous upper bound for sign detection
@@ -575,10 +551,7 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         .chain(app.slots()[slot_idx].git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
     let gw = full_gutter_width(
-        app.slots()[slot_idx].editor.buffer().line_count() as usize,
-        nu,
-        rnu,
-        nuw,
+        app.slots()[slot_idx].editor.lnum_width(),
         s.signcolumn,
         s.foldcolumn,
         has_visible_signs,

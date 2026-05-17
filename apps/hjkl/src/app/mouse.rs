@@ -150,16 +150,6 @@ fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
-// ── Gutter width (mirrors render.rs — keep in sync) ──────────────────────────
-
-fn gutter_width(line_count: usize, number: bool, relativenumber: bool, numberwidth: usize) -> u16 {
-    if !number && !relativenumber {
-        return 0;
-    }
-    let needed = line_count.to_string().len() + 1;
-    needed.max(numberwidth) as u16
-}
-
 fn sign_column_width(
     signcolumn: hjkl_engine::types::SignColumnMode,
     has_visible_signs: bool,
@@ -185,19 +175,16 @@ fn sign_column_width(
 /// column, then text). The fold column is reserved in width math but
 /// never actually painted, so it is not included here.
 ///
-/// `cell_to_doc` and `hit_test_zone` must use this so mouse clicks map
-/// to the correct document coordinates.
+/// `lnum_width` must come from `Editor::lnum_width()`. `cell_to_doc` and
+/// `hit_test_zone` must use this so mouse clicks map to the correct document
+/// coordinates.
 fn text_start_offset(
-    line_count: usize,
-    number: bool,
-    relativenumber: bool,
-    numberwidth: usize,
+    lnum_width: u16,
     signcolumn: hjkl_engine::types::SignColumnMode,
     has_visible_signs: bool,
 ) -> u16 {
-    let num_w = gutter_width(line_count, number, relativenumber, numberwidth);
     let sign_w = sign_column_width(signcolumn, has_visible_signs);
-    num_w + sign_w
+    lnum_width + sign_w
 }
 
 // ── cell_to_doc ───────────────────────────────────────────────────────────────
@@ -228,7 +215,6 @@ pub fn cell_to_doc(
     let slot_idx = win.slot;
     let slot = app.slots().get(slot_idx)?;
     let s = slot.editor.settings();
-    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
@@ -242,7 +228,7 @@ pub fn cell_to_doc(
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
-    let gw = text_start_offset(line_count, nu, rnu, nuw, s.signcolumn, has_visible_signs);
+    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -734,7 +720,6 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     };
 
     let s = slot.editor.settings();
-    let (nu, rnu, nuw) = (s.number, s.relativenumber, s.numberwidth);
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
@@ -748,7 +733,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
-    let gw = text_start_offset(line_count, nu, rnu, nuw, s.signcolumn, has_visible_signs);
+    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
