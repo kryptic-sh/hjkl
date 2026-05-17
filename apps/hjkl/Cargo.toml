@@ -18,6 +18,10 @@ path = "src/main.rs"
 
 [dependencies]
 hjkl-app = "0.4"
+hjkl-markdown = "0.1"
+hjkl-markdown-tui = "0.1"
+hjkl-hover = "0.1"
+hjkl-hover-tui = "0.1"
 hjkl-anvil = "0.2"
 hjkl-keymap = "0.3"
 hjkl-keymap-crossterm = "0.1"

@@ -454,12 +454,14 @@ mod border_drag_tests {
     /// enforced by code review — three call sites in `event_loop.rs`.
     #[test]
     fn dismiss_hover_popup_on_click_clears_state() {
-        use crate::hover_popup::HoverPopup;
         use std::time::Instant;
 
         let mut app = App::new(None, false, None, None).unwrap();
 
-        app.hover_popup = Some(HoverPopup::new("stale content".to_string(), (50, 5)));
+        app.hover_popup = Some(crate::hover_popup::new(
+            "stale content".to_string(),
+            (50, 5),
+        ));
         app.hover_timer = Some(HoverTimer {
             cell: (50, 5),
             started_at: Instant::now(),

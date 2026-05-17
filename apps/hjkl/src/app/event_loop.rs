@@ -1235,7 +1235,11 @@ impl App {
                     }
                 }
                 self.tick_hover_timer();
-                if self.hover_popup.as_ref().is_some_and(|p| p.is_expired()) {
+                if self
+                    .hover_popup
+                    .as_ref()
+                    .is_some_and(|p| p.is_expired(std::time::Instant::now()))
+                {
                     self.hover_popup = None;
                     self.hover_timer = None;
                 }

@@ -982,7 +982,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 
     // Hover popup (Phase 5 mouse support) — renders above all other content.
     if let Some(ref popup) = app.hover_popup {
-        popup.render(frame, frame.area(), &app.theme);
+        let hover_theme = hjkl_hover_tui::HoverTheme::new(
+            app.theme.ui.border_active,
+            app.theme.ui.panel_bg,
+            hjkl_markdown_tui::MdTheme::default(),
+        );
+        hjkl_hover_tui::render(frame, popup, &hover_theme, frame.area());
     }
 }
 

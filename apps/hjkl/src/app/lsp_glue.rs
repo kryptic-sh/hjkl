@@ -1562,7 +1562,7 @@ impl App {
         if text.trim().is_empty() {
             return;
         }
-        self.hover_popup = Some(crate::hover_popup::HoverPopup::new(text, timer_cell));
+        self.hover_popup = Some(crate::hover_popup::new(text, timer_cell));
     }
 }
 

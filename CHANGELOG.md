@@ -8,6 +8,49 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.14] - 2026-05-18
+
+### Added
+
+- **`hjkl-markdown` 0.1.0** — renderer-agnostic markdown event stream (closes
+  #15 partially). Public surface: `pub enum Event` (`#[non_exhaustive]` — Text,
+  Heading, CodeBlock, Rule, ListItem, Blank, Link);
+  `pub fn parse(src) -> Vec<Event>` (CommonMark via pulldown-cmark 0.13);
+  `MdThemeSlots` with `dark()` default. 10 unit tests.
+- **`hjkl-markdown-tui` 0.1.0** — ratatui adapter for `hjkl-markdown` (closes
+  #15). Public surface: `pub struct MdTheme` (`#[non_exhaustive]`, 10 color
+  slots, `Default` dark fallback);
+  `pub fn to_lines(events, theme, width) -> Vec<Line>` — line-wrapping markdown
+  event renderer with naive word-wrap. 5 unit tests + 1 doctest.
+- **`hjkl-hover` 0.1.0** — renderer-agnostic hover popup state and geometry
+  (closes #126 partially). Public surface: `HoverState` (`#[non_exhaustive]`
+  content/anchor/dismissed/scroll/expiry/max_width/max_height); `HoverAnchor`
+  (`#[non_exhaustive]`, col/row, `new`); `HoverViewport`; `HoverRect`;
+  `pub fn position(state, viewport) -> HoverRect` — above/below overflow flip,
+  right-edge clamp; `scroll_lines(n: isize)`; `is_expired(Instant) -> bool`. 8
+  unit tests + 1 doctest.
+- **`hjkl-hover-tui` 0.1.0** — ratatui adapter for `hjkl-hover` (closes #126).
+  Public surface: `HoverTheme` (`#[non_exhaustive]`, border/background/md slots,
+  `Default` dark fallback); `pub fn render(frame, state, theme, viewport)` —
+  delegates position math to `hjkl_hover::position`, parses content via
+  `hjkl_markdown::parse`, converts to lines via `hjkl_markdown_tui::to_lines`,
+  paints bordered `Paragraph` with scroll offset. 4 unit tests.
+
+### Changed
+
+- **`apps/hjkl/src/hover_popup.rs`** replaced with shim: re-exports
+  `HoverState as HoverPopup` from `hjkl-hover`; free-function
+  `new(content, (col, row))` preserves the old tuple-anchor call site. ~145 LOC
+  moved to crates; shim is ~18 LOC.
+- **`apps/hjkl/src/render.rs`** hover section delegates to
+  `hjkl_hover_tui::render` with `HoverTheme` built from `app.theme.ui`
+  (border_active → border, panel_bg → background). Pixel-identical output.
+- **`apps/hjkl/src/app/lsp_glue.rs`** `strip_markdown` / `extract_hover_text`
+  remain in-tree (used by `handle_hover_response` → `info_popup`). Mouse hover
+  path (`handle_hover_at_mouse_response`) now creates `HoverState` via the shim.
+  TODO(#15) comment updated.
+- **`hjkl-app` 0.4.5 → 0.4.6** (courtesy bump, always-bump policy).
+
 ## [0.21.13] - 2026-05-18
 
 ### Added
@@ -2676,7 +2719,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...HEAD
+[0.21.14]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...v0.21.14
 [0.21.13]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...v0.21.13
 [0.21.12]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...v0.21.12
 [0.21.11]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...v0.21.11
