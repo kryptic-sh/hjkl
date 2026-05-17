@@ -2096,7 +2096,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.23"
+version = "0.21.24"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2137,6 +2137,8 @@ dependencies = [
  "hjkl-splash",
  "hjkl-statusline",
  "hjkl-statusline-tui",
+ "hjkl-syntax",
+ "hjkl-syntax-tui",
  "hjkl-tabs",
  "hjkl-tabs-tui",
  "hjkl-theme",
@@ -2357,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.23"
+version = "0.21.24"
 dependencies = [
  "clap",
  "floem",
@@ -2545,6 +2547,28 @@ name = "hjkl-statusline-tui"
 version = "0.2.0"
 dependencies = [
  "hjkl-statusline",
+ "ratatui",
+]
+
+[[package]]
+name = "hjkl-syntax"
+version = "0.1.0"
+dependencies = [
+ "hjkl-app",
+ "hjkl-bonsai",
+ "hjkl-buffer",
+ "hjkl-engine",
+ "hjkl-theme",
+ "tracing",
+]
+
+[[package]]
+name = "hjkl-syntax-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-syntax",
+ "hjkl-theme-tui",
  "ratatui",
 ]
 

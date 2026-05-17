@@ -1,18 +1,9 @@
 use super::*;
 
 #[test]
-fn poll_grammar_loads_clears_expired_error() {
+fn poll_grammar_loads_with_no_pending_events_returns_false() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // Inject an error that is already expired (timestamp 10 s in the past).
-    app.grammar_load_error = Some(GrammarLoadError {
-        name: "fake-lang".to_string(),
-        message: "connection refused".to_string(),
-        at: std::time::Instant::now() - Duration::from_secs(10),
-    });
+    // No grammar loads queued — poll should return false (no redraw needed).
     let needs_redraw = app.poll_grammar_loads();
-    assert!(needs_redraw, "expired error should request redraw");
-    assert!(
-        app.grammar_load_error.is_none(),
-        "expired error should be cleared"
-    );
+    assert!(!needs_redraw, "empty event queue should not request redraw");
 }

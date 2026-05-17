@@ -390,6 +390,7 @@ fn dispatch(
                 ExEffect::None
                 | ExEffect::Ok
                 | ExEffect::Info(_)
+                | ExEffect::InfoTitled { .. }
                 | ExEffect::Substituted { .. } => ok(stdout, msgid, Value::Nil),
                 ExEffect::Error(msg) | ExEffect::Unknown(msg) => err(stdout, msgid, &msg),
                 ExEffect::Save => {

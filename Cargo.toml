@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.21.23"
+version = "0.21.25"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -58,6 +58,8 @@ hjkl-tabs-tui = { path = "crates/hjkl-tabs-tui" }
 hjkl-fs-watch = { path = "crates/hjkl-fs-watch" }
 hjkl-menu = { path = "crates/hjkl-menu" }
 hjkl-menu-tui = { path = "crates/hjkl-menu-tui" }
+hjkl-syntax = { path = "crates/hjkl-syntax" }
+hjkl-syntax-tui = { path = "crates/hjkl-syntax-tui" }
 
 [profile.release]
 lto = "thin"

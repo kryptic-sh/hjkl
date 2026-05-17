@@ -414,8 +414,8 @@ fn cursor_line_bg(theme: &crate::theme::UiTheme) -> Style {
 
 /// Split a `Rect` into two parts according to `dir` and `ratio`.
 fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
-    match dir {
-        window::SplitDir::Horizontal => {
+    match dir.axis() {
+        window::Axis::Row => {
             let a_h = ((area.height as f32) * ratio).round() as u16;
             let a_h = a_h.clamp(1, area.height.saturating_sub(1).max(1));
             let b_h = area.height.saturating_sub(a_h);
@@ -433,7 +433,7 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
             };
             (rect_a, rect_b)
         }
-        window::SplitDir::Vertical => {
+        window::Axis::Col => {
             let a_w = ((area.width as f32) * ratio).round() as u16;
             let a_w = a_w.clamp(1, area.width.saturating_sub(1).max(1));
             let b_w = area.width.saturating_sub(a_w);
@@ -451,9 +451,6 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
             };
             (rect_a, rect_b)
         }
-        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant so it
-        // surfaces immediately rather than silently falling through.
-        _ => panic!("split_rect: unhandled SplitDir variant"),
     }
 }
 
@@ -471,15 +468,13 @@ fn draw_separator(
 ) {
     use ratatui::buffer::Cell;
     let style = Style::default().fg(border_color);
-    let (glyph, glyph_width) = match dir {
-        window::SplitDir::Vertical => ("│", 1u16),
-        window::SplitDir::Horizontal => ("─", 1u16),
-        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
-        _ => panic!("draw_separator: unhandled SplitDir variant"),
+    let (glyph, glyph_width) = match dir.axis() {
+        window::Axis::Col => ("│", 1u16),
+        window::Axis::Row => ("─", 1u16),
     };
     let buf = frame.buffer_mut();
-    match dir {
-        window::SplitDir::Vertical => {
+    match dir.axis() {
+        window::Axis::Col => {
             // sep_rect is a single column; iterate rows.
             for row in sep_rect.y..sep_rect.y + sep_rect.height {
                 if let Some(cell) = buf.cell_mut((sep_rect.x, row)) {
@@ -489,7 +484,7 @@ fn draw_separator(
                 }
             }
         }
-        window::SplitDir::Horizontal => {
+        window::Axis::Row => {
             // sep_rect is a single row; iterate columns.
             let mut col = sep_rect.x;
             while col < sep_rect.x + sep_rect.width {
@@ -503,8 +498,6 @@ fn draw_separator(
                 }
             }
         }
-        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
-        _ => panic!("draw_separator: unhandled SplitDir variant in draw loop"),
     }
 }
 
@@ -531,8 +524,8 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
             // shrink the right/bottom child by 1 cell so children never
             // overlap the separator. Skip when the rect is too small.
             let border_color = app.theme.ui.border;
-            let (rect_a, sep_rect, rect_b) = match *dir {
-                window::SplitDir::Vertical => {
+            let (rect_a, sep_rect, rect_b) = match dir.axis() {
+                window::Axis::Col => {
                     // Side-by-side: separator is the rightmost column of rect_a.
                     // Shrink rect_a by 1 on the right; sep is that freed column;
                     // rect_b stays (it already starts right after rect_a).
@@ -553,7 +546,7 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
                         (a_shrunk, Some(sep), rect_b)
                     }
                 }
-                window::SplitDir::Horizontal => {
+                window::Axis::Row => {
                     // Stacked: separator is the bottom row of rect_a.
                     if rect_a.height < 2 || rect_b.height == 0 {
                         (rect_a, None, rect_b)
@@ -571,8 +564,6 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
                         (a_shrunk, Some(sep), rect_b)
                     }
                 }
-                // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
-                _ => panic!("render_layout: unhandled SplitDir variant"),
             };
 
             render_layout(frame, app, rect_a, a);

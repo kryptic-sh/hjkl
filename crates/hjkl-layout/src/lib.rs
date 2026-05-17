@@ -169,6 +169,41 @@ pub enum SplitDir {
     Vertical,
 }
 
+/// Which geometric axis a split is oriented along.
+///
+/// Returned by [`SplitDir::axis`] so consumers outside the crate can match
+/// exhaustively without bumping into the `#[non_exhaustive]` restriction on
+/// [`SplitDir`] itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    /// The split divides space top-to-bottom (rows).
+    Row,
+    /// The split divides space left-to-right (columns).
+    Col,
+}
+
+impl SplitDir {
+    /// Map this direction to its [`Axis`].
+    ///
+    /// `Horizontal` splits stacked vertically → they separate **rows**
+    /// (`Axis::Row`). `Vertical` splits arranged side-by-side → they
+    /// separate **columns** (`Axis::Col`).
+    ///
+    /// Unknown future variants fall back to `Axis::Row` so callers always
+    /// receive a valid answer without panicking.
+    pub fn axis(self) -> Axis {
+        // `#[allow(unreachable_patterns)]` because from INSIDE this crate all
+        // variants are known; the wildcard exists so external consumers relying
+        // on `axis()` are future-proof when new variants are added.
+        #[allow(unreachable_patterns)]
+        match self {
+            SplitDir::Horizontal => Axis::Row,
+            SplitDir::Vertical => Axis::Col,
+            _ => Axis::Row,
+        }
+    }
+}
+
 /// A binary spatial tree that partitions the editor area into windows.
 ///
 /// # Examples

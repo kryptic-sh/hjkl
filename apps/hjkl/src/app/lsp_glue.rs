@@ -314,7 +314,7 @@ impl App {
         let slot_idx = self.focused_slot_idx();
         self.lsp_detach_buffer(slot_idx);
         self.lsp_attach_buffer(slot_idx);
-        self.bus.warn("LSP restarted");
+        self.bus.info("LSP restarted");
     }
 
     /// Return `true` when the active buffer has a running, initialized LSP

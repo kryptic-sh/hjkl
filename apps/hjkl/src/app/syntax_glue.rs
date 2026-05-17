@@ -126,19 +126,9 @@ impl App {
     ///
     /// Returns `true` when at least one load resolved and a redraw is needed.
     pub(crate) fn poll_grammar_loads(&mut self) -> bool {
-        let mut needs_redraw = false;
-        // Expire stale grammar-load errors so the indicator clears itself.
-        if self
-            .grammar_load_error
-            .as_ref()
-            .is_some_and(|e| e.is_expired())
-        {
-            self.grammar_load_error = None;
-            needs_redraw = true;
-        }
         let events = self.syntax.poll_pending_loads();
         if events.is_empty() {
-            return needs_redraw;
+            return false;
         }
         let active_id = self.active().buffer_id;
         for event in &events {
@@ -154,12 +144,10 @@ impl App {
                 }
                 LoadEvent::Failed { id, name, error } => {
                     tracing::debug!("grammar load failed: {name} (buffer {id}): {error}");
-                    self.grammar_load_error = Some(crate::app::GrammarLoadError {
-                        name: name.clone(),
-                        message: error.clone(),
-                        at: Instant::now(),
-                    });
+                    self.bus.error(format!("grammar {name}: {error}"));
                 }
+                // LoadEvent is #[non_exhaustive] — handle future variants gracefully.
+                &_ => {}
             }
         }
         true
@@ -280,6 +268,8 @@ impl App {
             ParseKind::Bottom => {
                 self.slots[slot_idx].bottom_render_output = Some(out);
             }
+            // ParseKind is #[non_exhaustive] — ignore future variants.
+            _ => {}
         }
 
         if is_active {

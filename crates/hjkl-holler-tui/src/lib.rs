@@ -276,22 +276,23 @@ mod tests {
 
     #[test]
     fn render_active_empty_bus_no_panic() {
-        // Use a headless backend to call render_active without a real terminal.
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
         let bus = HollerBus::new();
         let layout = HollerLayout::default();
         let now = SystemTime::now();
-        // We can't easily call frame.render_widget without a backend, but we
-        // can verify the early-return path by using a small area.
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 80,
-            height: 24,
-        };
-        // Ensure no active toasts — render_active returns early.
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_active(frame, area, &bus, &layout, now);
+            })
+            .unwrap();
+        // No active toasts → render_active returns early without drawing anything.
         assert_eq!(bus.active(now).count(), 0);
-        let _ = area; // consumed to suppress warning
-        let _ = layout;
     }
 
     #[test]

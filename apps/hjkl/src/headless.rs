@@ -104,8 +104,8 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
 
                 ExEffect::Ok => {}
 
-                ExEffect::Info(_msg) => {
-                    // Suppress info output in silent headless mode.
+                ExEffect::Info(_) | ExEffect::InfoTitled { .. } => {
+                    // Suppress info/listing output in silent headless mode.
                     // Future: -v flag could enable it.
                 }
 

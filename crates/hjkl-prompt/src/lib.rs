@@ -89,32 +89,6 @@ impl CommandCompletion {
     }
 }
 
-// ── PromptOutcome ─────────────────────────────────────────────────────────────
-
-/// Result returned by [`PromptState::handle_key`].
-///
-/// `#[non_exhaustive]` — new variants may be added in minor releases.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PromptOutcome {
-    /// The prompt is still active; caller should re-render.
-    Continue,
-    /// The prompt was submitted with this text.
-    Submit(String),
-    /// The prompt was cancelled (Esc / Backspace on empty).
-    Cancel,
-    /// A Tab/S-Tab was pressed; caller should drive `advance_completion`.
-    TabForward,
-    /// A Tab/S-Tab was pressed; caller should drive `advance_completion`.
-    TabBackward,
-    /// History navigation (`<C-p>`/Up or `<C-n>`/Down).
-    HistoryPrev,
-    /// History navigation (`<C-p>`/Up or `<C-n>`/Down).
-    HistoryNext,
-    /// Any other key was handled and the field text may have changed.
-    Dirty,
-}
-
 // ── PromptState ───────────────────────────────────────────────────────────────
 
 /// All state needed for a single active prompt bar (`:`, `/`, or `?`).
@@ -227,60 +201,6 @@ impl PromptState {
         match self.field.vim_mode() {
             VimMode::Insert => CursorShape::Bar,
             _ => CursorShape::Block,
-        }
-    }
-
-    /// Handle a raw [`EngineInput`] and return what the caller should do next.
-    ///
-    /// Handles `Enter` (submit), `Esc` (cancel or mode switch), `Backspace` on
-    /// empty (cancel), and delegates everything else to the inner
-    /// [`TextFieldEditor`].
-    ///
-    /// Tab/S-Tab handling is left to the caller — they should call
-    /// [`Self::advance_completion`] via the returned [`PromptOutcome`].
-    pub fn handle_input(&mut self, input: EngineInput) -> PromptOutcome {
-        if input.key == EngineKey::Enter {
-            let text = self.field.text();
-            return PromptOutcome::Submit(text);
-        }
-
-        if input.key == EngineKey::Esc {
-            if let Some(comp) = self.completion.take() {
-                // Revert field text to the original typed text.
-                set_field_text(&mut self.field, &comp.original);
-                return PromptOutcome::Continue;
-            }
-            if self.field.text().is_empty() {
-                return PromptOutcome::Cancel;
-            }
-            if self.field.vim_mode() == VimMode::Insert {
-                self.field.enter_normal();
-                return PromptOutcome::Continue;
-            }
-            return PromptOutcome::Cancel;
-        }
-
-        // Backspace on empty dismisses prompt.
-        if input.key == EngineKey::Backspace && self.field.text().is_empty() {
-            return PromptOutcome::Cancel;
-        }
-
-        // Any non-history key resets history navigation state.
-        if self.history_index.is_some() {
-            self.history_index = None;
-            self.user_input = None;
-        }
-
-        // Any other key while completion is active: commit current candidate.
-        if self.completion.is_some() {
-            self.completion = None;
-        }
-
-        let dirty = self.field.handle_input(input);
-        if dirty {
-            PromptOutcome::Dirty
-        } else {
-            PromptOutcome::Continue
         }
     }
 
@@ -464,42 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_enter_submits_text() {
-        let mut p = PromptState::with_prefill(PromptKind::Command, "write");
-        let out = p.handle_input(EngineInput {
-            key: EngineKey::Enter,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        });
-        assert_eq!(out, PromptOutcome::Submit("write".into()));
-    }
-
-    #[test]
-    fn handle_esc_on_empty_cancels() {
-        let mut p = PromptState::new(PromptKind::Command);
-        let out = p.handle_input(EngineInput {
-            key: EngineKey::Esc,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        });
-        assert_eq!(out, PromptOutcome::Cancel);
-    }
-
-    #[test]
-    fn handle_backspace_on_empty_cancels() {
-        let mut p = PromptState::new(PromptKind::Command);
-        let out = p.handle_input(EngineInput {
-            key: EngineKey::Backspace,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        });
-        assert_eq!(out, PromptOutcome::Cancel);
-    }
-
-    #[test]
     fn push_history_skips_empty() {
         let mut ring: Vec<String> = Vec::new();
         push_history(&mut ring, "");
@@ -585,22 +469,6 @@ mod tests {
         assert_eq!(p.completion.as_ref().unwrap().selected, Some(1));
         p.advance_completion(None, true);
         assert_eq!(p.completion.as_ref().unwrap().selected, Some(0)); // wrap
-    }
-
-    #[test]
-    fn esc_with_completion_reverts_to_original() {
-        let mut p = PromptState::with_prefill(PromptKind::Command, "write");
-        let comp = CommandCompletion::new("w".into(), vec!["write".into(), "wall".into()], 0..5);
-        p.completion = Some(comp);
-        let out = p.handle_input(EngineInput {
-            key: EngineKey::Esc,
-            ctrl: false,
-            alt: false,
-            shift: false,
-        });
-        assert_eq!(out, PromptOutcome::Continue);
-        assert_eq!(p.text(), "w"); // reverted to original
-        assert!(p.completion.is_none());
     }
 
     #[test]

@@ -723,7 +723,9 @@ jobs:
           #  18. hjkl-menu              — renderer-agnostic context menu model.
           #  19. hjkl-menu-tui          — ratatui adapter for hjkl-menu.
           #  20. hjkl-app               — host-agnostic application layer.
-          #  21. hjkl                   — the TUI binary (depends on #20).
+          #  21. hjkl-syntax            — renderer-agnostic syntax pipeline (depends on #20).
+          #  22. hjkl-syntax-tui        — ratatui adapter for hjkl-syntax (depends on #21).
+          #  23. hjkl                   — the TUI binary (depends on #22).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -790,4 +792,6 @@ jobs:
           publish_if_missing hjkl-menu
           publish_if_missing hjkl-menu-tui
           publish_if_missing hjkl-app
+          publish_if_missing hjkl-syntax
+          publish_if_missing hjkl-syntax-tui
           publish_if_missing hjkl

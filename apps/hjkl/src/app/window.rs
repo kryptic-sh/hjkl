@@ -4,7 +4,7 @@
 //! renderer-agnostic types and adds the `App`-specific dispatch methods that
 //! bridge `LayoutRect` ↔ `ratatui::layout::Rect`.
 
-pub use hjkl_layout::{LayoutRect, LayoutTree, SplitDir, Tab, Window, WindowId};
+pub use hjkl_layout::{Axis, LayoutRect, LayoutTree, SplitDir, Tab, Window, WindowId};
 
 // ── Rect conversion helpers ───────────────────────────────────────────────────
 
@@ -368,11 +368,11 @@ impl App {
                 if *my_dir == dir
                     && let Some(r) = last_rect
                 {
-                    let (rect_origin, rect_total) = match dir {
-                        SplitDir::Vertical => (r.x, r.w),
-                        SplitDir::Horizontal => (r.y, r.h),
-                        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
-                        _ => panic!("update_matching: unhandled SplitDir variant"),
+                    // Match on Axis (exhaustive) so new SplitDir variants
+                    // cause a compile error rather than a runtime panic.
+                    let (rect_origin, rect_total) = match dir.axis() {
+                        Axis::Col => (r.x, r.w),
+                        Axis::Row => (r.y, r.h),
                     };
                     if rect_origin == origin && rect_total == total {
                         *ratio = new_ratio;

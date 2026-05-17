@@ -402,20 +402,12 @@ impl App {
                         .info(format!("{count} substitutions on {lines_changed} lines"));
                 }
             }
+            ExEffect::InfoTitled { title, content } => {
+                self.info_popup = Some(InfoPopup::new(title, content));
+            }
             ExEffect::Info(msg) => {
                 if msg.contains('\n') {
-                    let title = if msg.starts_with("--- Registers ---") {
-                        "registers"
-                    } else if msg.starts_with("--- Marks ---") {
-                        "marks"
-                    } else if msg.starts_with("--- Jump list ---") {
-                        "jumps"
-                    } else if msg.starts_with("--- Change list ---") {
-                        "changes"
-                    } else {
-                        "info"
-                    };
-                    self.info_popup = Some(InfoPopup::new(title, msg));
+                    self.info_popup = Some(InfoPopup::new("info", msg));
                 } else {
                     self.bus.info(msg);
                 }

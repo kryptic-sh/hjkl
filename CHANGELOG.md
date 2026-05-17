@@ -8,6 +8,91 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.25] - 2026-05-18
+
+### Added
+
+- **#141 Extract syntax pipeline into `hjkl-syntax` + `hjkl-syntax-tui`** —
+  `apps/hjkl/src/syntax.rs` (59.5 K LOC) split into two new crates and a ~5 K
+  LOC wiring shim:
+  - **`hjkl-syntax` 0.1.0** — renderer-agnostic syntax pipeline. Owns
+    `SyntaxWorker` background thread, `RenderCache`, per-buffer
+    `dirty_gen`-tracked state, viewport-scoped highlight passes
+    (`ParseKind { Viewport, Top, Bottom }` — ordering semantics and perf
+    invariants preserved). Output:
+    `RenderOutput { spans: Vec<Vec<(usize, usize, StyleSpec)>>, signs: Vec<DiagSign>, … }`
+    where `DiagSign` is a renderer-agnostic diagnostic sign (row + ch +
+    priority, no ratatui dep). Zero ratatui dependency. Re-exports
+    `hjkl_theme::{Color, Modifiers, StyleSpec}`. All public enums/structs
+    `#[non_exhaustive]`. `Default` + `new()` constructors. 15+ unit tests
+    covering `ParseKind` ordering, queue deduplication, perf breakdown defaults,
+    and the `build_by_row` helper.
+
+  - **`hjkl-syntax-tui` 0.1.0** — ratatui adapter. `to_ratatui_spans` converts
+    `Vec<Vec<(usize, usize, StyleSpec)>>` to
+    `Vec<Vec<(usize, usize, ratatui::style::Style)>>`.
+    `diag_signs_to_buffer_signs` materialises `DiagSign` → `hjkl_buffer::Sign`
+    with canonical error colour (red). `render_output_to_tui` combines both. 6+
+    unit tests.
+
+  - **`apps/hjkl/src/syntax.rs`** — collapsed to App-side wiring shim (~260
+    LOC): delegates all background-thread work to `hjkl_syntax::SyntaxLayer` and
+    converts `RenderOutput` to the ratatui-typed wrapper on the way out.
+
+  `#[non_exhaustive]` on `ParseKind` and `LoadEvent` required adding wildcard
+  arms to `syntax_glue.rs` match sites. `ParseKind` ordering (Viewport → Top →
+  Bottom) is preserved — perf invariant intact.
+
+## [0.21.24] - 2026-05-18
+
+### Changed
+
+- **#140 SplitDir exhaustiveness fix** — all
+  `match dir { SplitDir::Horizontal => …, SplitDir::Vertical => …, _ => panic!() }`
+  wildcard arms replaced with
+  `match dir.axis() { Axis::Row => …, Axis::Col => … }`. `Axis` is a new
+  exhaustive (non-`#[non_exhaustive]`) enum added to `hjkl-layout 0.3.0` with a
+  `SplitDir::axis()` method. Matching on `Axis` gives the compiler full
+  exhaustion checking from consumer crates; future `SplitDir` variants fall back
+  to `Axis::Row` inside the crate with `#[allow(unreachable_patterns)]`. Touches
+  `split_rect`, `draw_separator`, `render_layout` in `render.rs` and
+  `update_matching` in `app/window.rs`. `hjkl-layout` bumped to **0.3.0**.
+
+- **#131 prompt API cleanup (path B)** — `PromptOutcome` enum and
+  `PromptState::handle_input` removed from `hjkl-prompt`; they were never wired
+  to `apps/hjkl`'s `handle_command_field_key`. All prompt logic remains in
+  `hjkl-prompt`'s `PromptState`, `apply_history_nav`, `advance_completion`;
+  `PromptState` is still used for wildmenu rendering via `hjkl-prompt-tui`.
+  `hjkl-prompt` bumped to **0.2.0** (breaking removal). Follow-up issue to wire
+  `handle_command_field_key` through `PromptState` (path A, ~155 call sites).
+
+- **#5 structured `ExEffect::InfoTitled`** — `ExEffect` gains
+  `InfoTitled { title: &'static str, content: String }`. The four listing
+  handlers (`:registers`, `:marks`, `:jumps`, `:changes`) in `hjkl-ex` now
+  return `InfoTitled` instead of `Info`. `ex_dispatch.rs` in `apps/hjkl` matches
+  `InfoTitled` directly to open an `InfoPopup` without brittle header-prefix
+  string matching. `ExEffect::Info` remains for unclassified single-line or
+  unlabelled multi-line output. `hjkl-ex` bumped to **0.5.0** (breaking variant
+  addition; all consumers updated).
+
+### Fixed
+
+- **#20 grammar load error migrated to bus** — `GrammarLoadError` struct,
+  `GRAMMAR_ERR_TTL` constant, `grammar_load_error: Option<GrammarLoadError>`
+  field on `App`, and the inline status-line render block removed.
+  `poll_grammar_loads` now calls `self.bus.error(format!("grammar {name}: …"))`
+  on load failure so grammar errors surface via `:notifications` like all other
+  bus messages.
+
+- **#6 LSP restart severity** — `restart_lsp` now calls
+  `bus.info("LSP restarted")` instead of `bus.warn` (successful restart is
+  informational, not a warning).
+
+- **holler-tui tautology test** — `render_active_empty_bus_no_panic` now uses
+  `ratatui::backend::TestBackend` to actually invoke
+  `render_active(frame, area, &bus, &layout, now)` rather than merely asserting
+  on `bus.active(now).count()`.
+
 ## [0.21.23] - 2026-05-18
 
 ### Added
@@ -2983,7 +3068,9 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.23...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...HEAD
+[0.21.25]: https://github.com/kryptic-sh/hjkl/compare/v0.21.24...v0.21.25
+[0.21.24]: https://github.com/kryptic-sh/hjkl/compare/v0.21.23...v0.21.24
 [0.21.23]: https://github.com/kryptic-sh/hjkl/compare/v0.21.22...v0.21.23
 [0.21.22]: https://github.com/kryptic-sh/hjkl/compare/v0.21.21...v0.21.22
 [0.21.21]: https://github.com/kryptic-sh/hjkl/compare/v0.21.20...v0.21.21
