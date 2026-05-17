@@ -23,7 +23,7 @@ hjkl-keymap = "0.3"
 hjkl-vim = { version = "0.23", default-features = false, features = ["crossterm"] }
 hjkl-lsp = "0.1"
 hjkl-buffer = "0.7"
-hjkl-splash = { version = "0.2", features = ["ratatui"] }
+hjkl-splash = { version = "0.3", features = ["ratatui"] }
 hjkl-engine = { version = "0.11", default-features = false, features = ["crossterm", "ratatui"] }
 hjkl-editor = { version = "0.8", default-features = false, features = ["crossterm", "ratatui"] }
 hjkl-ex = "0.4"

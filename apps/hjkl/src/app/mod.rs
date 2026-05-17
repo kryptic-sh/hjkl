@@ -1075,7 +1075,7 @@ impl App {
         }
 
         let start_screen = if no_file {
-            Some(crate::start_screen::StartScreen::new())
+            Some(crate::start_screen::new_with_theme(&theme))
         } else {
             None
         };

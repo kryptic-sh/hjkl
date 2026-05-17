@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.8"
+version = "0.21.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2155,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.8"
+version = "0.21.9"
 dependencies = [
  "clap",
  "floem",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-splash"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ratatui",
 ]
@@ -6593,7 +6593,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

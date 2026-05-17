@@ -8,6 +8,28 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.9] - 2026-05-18
+
+### Added
+
+- **`hjkl-splash` 0.3.0** — new `pub mod start_screen` folds the start-screen
+  surface into the splash crate (closes #130). `StartScreen` owns version
+  string, key hints, recent files (reserved), and a `StartScreenTheme` palette.
+  `StartScreen::build(version)` constructs the hjkl-preset default. Behind the
+  `ratatui` feature, `start_screen::render(frame, area, screen)` paints the
+  surface — painting logic moved from `apps/hjkl/src/start_screen.rs` (~100
+  LOC). A `gui` feature stub (`render_gui` no-op) is declared for future floem
+  integration.
+
+### Changed
+
+- **`apps/hjkl/src/start_screen.rs`** reduced to a thin shim: re-exports
+  `hjkl_splash::start_screen::StartScreen`; `new_with_theme` converts the app
+  `UiTheme` RGB values into `StartScreenTheme`; `render` delegates to the crate.
+  No behaviour change — pixel-identical output.
+- **`hjkl-app` 0.4.1 → 0.4.2** (courtesy bump, always-bump policy #136).
+- **`hjkl-splash` pin** in `apps/hjkl` bumped `"0.2"` → `"0.3"`.
+
 ## [0.21.8] - 2026-05-17
 
 ### Fixed
@@ -2566,7 +2588,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...HEAD
+[0.21.9]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...v0.21.9
 [0.21.8]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...v0.21.8
 [0.21.7]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...v0.21.7
 [0.21.6]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...v0.21.6
