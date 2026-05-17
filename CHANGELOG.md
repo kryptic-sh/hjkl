@@ -8,6 +8,25 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-05-17
+
+### Fixed
+
+- **which-key popup didn't render in TUI** — chord-timeout in `App::with_config`
+  and `App::new` was set from `which_key.delay_ms` directly. The same event-loop
+  iteration that activated the popup also hit the chord-timeout deadline,
+  calling `resolve_chord_timeout` which immediately cleared `which_key_active`
+  before any frame rendered. Chord-timeout now strictly exceeds the which-key
+  delay (`+500ms` headroom in `with_config`, `1000ms` matching vim's
+  `timeoutlen` default in `App::new`). Follow-up #133 tracks exposing the value
+  as an explicit config field.
+- v0.21.4 `cargo publish -p hjkl --locked` failed with
+  `unresolved import 'crate::keymap_actions::CmdLineWindowKind'` and
+  `no variant 'OpenCmdLineWindow' found`. The #37 work (`q:` / `q/` / `q?`)
+  added these types to `hjkl-app::keymap_actions`, but hjkl-app on crates.io was
+  still 0.2.0 (last published in v0.21.3 cascade). Bumped hjkl-app 0.2.0 → 0.3.0
+  (additive API = MINOR); apps/hjkl + apps/hjkl-gui repinned to `"0.3"`.
+
 ## [0.21.4] - 2026-05-17
 
 ### Changed
@@ -2472,7 +2491,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...HEAD
+[0.21.5]: https://github.com/kryptic-sh/hjkl/compare/v0.21.4...v0.21.5
 [0.21.4]: https://github.com/kryptic-sh/hjkl/compare/v0.21.3...v0.21.4
 [0.21.3]: https://github.com/kryptic-sh/hjkl/compare/v0.21.2...v0.21.3
 [0.21.2]: https://github.com/kryptic-sh/hjkl/compare/v0.21.1...v0.21.2
