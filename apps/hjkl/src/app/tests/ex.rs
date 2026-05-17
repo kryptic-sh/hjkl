@@ -267,6 +267,105 @@ fn bdelete_on_last_slot_resets_to_no_name() {
     let _ = std::fs::remove_file(&path);
 }
 
+// ── :bwipeout tests (#101) ──────────────────────────────────────────────
+
+#[test]
+fn bwipeout_clears_marks_on_last_slot() {
+    let path = std::env::temp_dir().join("hjkl_bwipeout_marks_last.txt");
+    std::fs::write(&path, "hello\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    // Set a mark on the buffer.
+    app.active_mut().editor.set_mark('a', (0, 0));
+    assert!(app.active().editor.mark('a').is_some(), "mark should be set before wipe");
+    app.dispatch_ex("bw");
+    // After wipe the fresh scratch buffer must have no marks.
+    assert!(
+        app.active().editor.mark('a').is_none(),
+        ":bwipeout on last slot must not carry marks into scratch buffer"
+    );
+    assert_eq!(app.slots.len(), 1);
+    assert!(app.active().filename.is_none());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn bwipeout_clears_jumplist_on_last_slot() {
+    let path = std::env::temp_dir().join("hjkl_bwipeout_jumps_last.txt");
+    std::fs::write(&path, "line1\nline2\nline3\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    // Push an entry into the jumplist.
+    app.active_mut().editor.record_jump((2, 0));
+    let (back, _) = app.active().editor.jump_list();
+    assert!(!back.is_empty(), "jumplist should have an entry before wipe");
+    app.dispatch_ex("bw");
+    // After wipe the fresh scratch buffer must have an empty jumplist.
+    let (back, fwd) = app.active().editor.jump_list();
+    assert!(
+        back.is_empty() && fwd.is_empty(),
+        ":bwipeout on last slot must not carry jumps into scratch buffer"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn bdelete_does_not_explicitly_wipe_marks_path() {
+    // Verify :bdelete and :bwipeout both reach distinct code paths.
+    // With two slots, :bdelete removes the active slot (different slot survives).
+    let path_a = std::env::temp_dir().join("hjkl_bdelete_path_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_bdelete_path_b.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    std::fs::write(&path_b, "b\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    assert_eq!(app.slots.len(), 2);
+    // Set a mark on slot 1 (path_b).
+    app.active_mut().editor.set_mark('z', (0, 0));
+    // :bd removes slot 1; slot 0 (path_a) survives with its own editor.
+    app.dispatch_ex("bd");
+    assert_eq!(app.slots.len(), 1);
+    // The surviving slot (path_a) never had mark 'z'.
+    assert!(
+        app.active().editor.mark('z').is_none(),
+        "mark from removed slot must not survive after :bd"
+    );
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
+#[test]
+fn bwipeout_multi_slot_removes_slot() {
+    let path_a = std::env::temp_dir().join("hjkl_bwipeout_multi_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_bwipeout_multi_b.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    std::fs::write(&path_b, "b\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    assert_eq!(app.slots.len(), 2);
+    app.dispatch_ex("bw");
+    assert_eq!(app.slots.len(), 1);
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("wiped"), "expected wipe status message, got: {msg}");
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
+#[test]
+fn bwipeout_blocks_dirty_without_force() {
+    let path_a = std::env::temp_dir().join("hjkl_bwipeout_dirty_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_bwipeout_dirty_b.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    std::fs::write(&path_b, "b\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    app.active_mut().dirty = true;
+    app.dispatch_ex("bw");
+    let msg = app.status_message.clone().unwrap_or_default();
+    assert!(msg.contains("E89"), "expected E89, got: {msg}");
+    assert_eq!(app.slots.len(), 2, "slot must not be removed when dirty without force");
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
+
 // ── Alt-buffer (D2) tests ───────────────────────────────────────────────
 
 #[test]

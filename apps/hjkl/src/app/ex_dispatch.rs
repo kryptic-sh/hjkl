@@ -273,8 +273,12 @@ impl App {
                         self.do_edit(&path, force);
                         return;
                     }
-                    ExEffect::BufferDelete { force, wipe: _ } => {
-                        self.buffer_delete(force);
+                    ExEffect::BufferDelete { force, wipe } => {
+                        if wipe {
+                            self.buffer_wipe(force);
+                        } else {
+                            self.buffer_delete(force);
+                        }
                         return;
                     }
                     other => {
@@ -297,12 +301,12 @@ impl App {
                     self.do_edit(&path, force);
                     return;
                 }
-                ExEffect::BufferDelete { force, wipe: _ } => {
-                    // `:bd[!]` / `:bw[!]` — wipe semantics not yet distinct
-                    // from delete in the app layer; treat both as buffer_delete.
-                    // TODO(follow-up): differentiate :bwipeout wipe semantics from :bdelete
-                    // (vim drops swap/marks/jumps for wiped buffers). File as issue.
-                    self.buffer_delete(force);
+                ExEffect::BufferDelete { force, wipe } => {
+                    if wipe {
+                        self.buffer_wipe(force);
+                    } else {
+                        self.buffer_delete(force);
+                    }
                     return;
                 }
                 other => other,
@@ -408,8 +412,12 @@ impl App {
             ExEffect::EditFile { path, force } => {
                 self.do_edit(&path, force);
             }
-            ExEffect::BufferDelete { force, wipe: _ } => {
-                self.buffer_delete(force);
+            ExEffect::BufferDelete { force, wipe } => {
+                if wipe {
+                    self.buffer_wipe(force);
+                } else {
+                    self.buffer_delete(force);
+                }
             }
         }
     }
