@@ -720,8 +720,10 @@ jobs:
           #  15. hjkl-tabs              — renderer-agnostic tab bar data model.
           #  16. hjkl-tabs-tui          — ratatui adapter for hjkl-tabs.
           #  17. hjkl-fs-watch          — debounced filesystem watcher (tokio-free).
-          #  18. hjkl-app               — host-agnostic application layer.
-          #  19. hjkl                   — the TUI binary (depends on #18).
+          #  18. hjkl-menu              — renderer-agnostic context menu model.
+          #  19. hjkl-menu-tui          — ratatui adapter for hjkl-menu.
+          #  20. hjkl-app               — host-agnostic application layer.
+          #  21. hjkl                   — the TUI binary (depends on #20).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -785,5 +787,7 @@ jobs:
           publish_if_missing hjkl-tabs
           publish_if_missing hjkl-tabs-tui
           publish_if_missing hjkl-fs-watch
+          publish_if_missing hjkl-menu
+          publish_if_missing hjkl-menu-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl

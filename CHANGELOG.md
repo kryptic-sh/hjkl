@@ -8,6 +8,45 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.23] - 2026-05-18
+
+### Added
+
+- **`hjkl-menu` 0.1.0** — renderer-agnostic context menu data model (closes
+  #127). Public surface: `MenuAction` (`#[non_exhaustive]` — `Copy`, `Cut`,
+  `Paste`, `TabClose*`, `LspGoto*`, `LspHover`, `LspRename`, `LspCodeActions`,
+  `LspFormat`, `LspRestart`, `OpenFilePicker`, `WindowEqualize`, `WindowClose`,
+  `Picker{Open,OpenSplit,OpenVSplit,OpenTab,CopyPath}`, `Separator`, `Info`;
+  `is_inert()`); `MenuItem` (`#[non_exhaustive]`, fields: `label`, `action`,
+  `enabled`, `shortcut_hint`; methods: `new()`, `separator()`,
+  `is_selectable()`); `ContextMenu` (`#[non_exhaustive]`, fields: `items`,
+  `selected`, `anchor`; `Default`; methods: `new()`, `move_up()`, `move_down()`
+  — wraps at bottom, saturates at top, both skip inert rows,
+  `selected_action()`, `dimensions()`, `bounding_rect(screen_w, screen_h)`);
+  builder helpers: `build_code_menu(has_sel, has_lsp)`,
+  `build_status_line_menu(ft, lsp_name)`, `build_split_border_menu()`,
+  `build_picker_menu(has_path)`, `build_tab_menu(more_than_one_tab)`. Zero
+  renderer dependencies. 37 unit tests + 12 doctests.
+- **`hjkl-menu-tui` 0.1.0** — ratatui adapter for `hjkl-menu` (closes #127).
+  Public surface: `MenuTheme` (`#[non_exhaustive]`, fields: `border`,
+  `normal_fg`, `selected_fg`, `selected_bg`, `dimmed_fg`, `separator_fg`;
+  `new()`, `Default` dark palette);
+  `bounding_rect(menu, screen_size: Rect) -> Rect` — thin wrapper around
+  `ContextMenu::bounding_rect` that adds the screen origin offset;
+  `render(frame, menu, screen_size, theme)` — floating bordered popup with
+  proper separator, info-header, disabled-dim, and hint-right-align rendering.
+  13 unit tests + 2 doctests.
+
+### Changed
+
+- **`apps/hjkl/src/menu.rs` collapsed to shim** — 955-line file replaced by a
+  12-line re-export of `hjkl-menu` and `hjkl-menu-tui`. All menu logic lives in
+  the new crates; `crate::menu::*` call sites in `event_loop.rs`, `render.rs`,
+  `app/mod.rs`, and tests are unchanged. `bounding_rect` calls updated from
+  method-on-menu to free function from `hjkl-menu-tui`. `invoke_menu_action`
+  match arm gains `_ => {}` wildcard for `#[non_exhaustive]` compliance.
+  Behaviour delta: none.
+
 ## [0.21.21] - 2026-05-18
 
 ### Added
@@ -2944,7 +2983,9 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.21...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.23...HEAD
+[0.21.23]: https://github.com/kryptic-sh/hjkl/compare/v0.21.22...v0.21.23
+[0.21.22]: https://github.com/kryptic-sh/hjkl/compare/v0.21.21...v0.21.22
 [0.21.21]: https://github.com/kryptic-sh/hjkl/compare/v0.21.20...v0.21.21
 [0.21.20]: https://github.com/kryptic-sh/hjkl/compare/v0.21.19...v0.21.20
 [0.21.19]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...v0.21.19

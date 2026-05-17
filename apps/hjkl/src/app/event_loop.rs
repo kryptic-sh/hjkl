@@ -821,7 +821,7 @@ impl App {
                 // ── Context-menu: click-inside → invoke / click-outside → dismiss
                 if let Some(ref menu) = self.context_menu {
                     let screen_size = self.screen_rect();
-                    let rect = menu.bounding_rect(screen_size);
+                    let rect = crate::menu::bounding_rect(menu, screen_size);
                     let inside = me.column >= rect.x
                         && me.column < rect.x + rect.width
                         && me.row >= rect.y
@@ -1103,7 +1103,7 @@ impl App {
                 // wrong items. Use the real terminal area instead.
                 let screen_size = self.screen_rect();
                 if let Some(menu) = &mut self.context_menu {
-                    let rect = menu.bounding_rect(screen_size);
+                    let rect = crate::menu::bounding_rect(menu, screen_size);
                     // Inner area (strip border row/col).
                     if me.row > rect.y
                         && me.row < rect.y + rect.height - 1

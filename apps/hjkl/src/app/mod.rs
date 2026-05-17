@@ -86,24 +86,6 @@ impl From<crate::keymap_actions::CmdLineWindowKind> for CmdLineKind {
     }
 }
 
-/// How long a grammar-load failure stays visible in the status line before
-/// auto-expiring.
-const GRAMMAR_ERR_TTL: Duration = Duration::from_secs(5);
-
-/// A grammar-load failure surfaced as a transient status message.
-#[derive(Clone)]
-pub(crate) struct GrammarLoadError {
-    pub name: String,
-    pub message: String,
-    pub at: Instant,
-}
-
-impl GrammarLoadError {
-    pub fn is_expired(&self) -> bool {
-        self.at.elapsed() >= GRAMMAR_ERR_TTL
-    }
-}
-
 /// Height of the unified top bar (buffers left, tabs right) at the top of the
 /// screen, when shown (either more than one slot or more than one tab).
 pub const TOP_BAR_HEIGHT: u16 = 1;
@@ -236,9 +218,6 @@ pub struct App {
     /// Animated start screen shown when no file argument was given.
     /// Cleared (set to `None`) on the first keypress.
     pub start_screen: Option<crate::start_screen::StartScreen>,
-    /// Recent grammar-load failure surfaced as a transient status message.
-    /// Auto-expires after `GRAMMAR_ERR_TTL` so a stale error doesn't stick.
-    pub(crate) grammar_load_error: Option<GrammarLoadError>,
     /// LSP subsystem handle. `None` when `config.lsp.enabled = false` (default).
     pub lsp: Option<hjkl_lsp::LspManager>,
     /// Tracks the state of running LSP servers. Populated/updated by
@@ -1121,7 +1100,6 @@ impl App {
             syntax_stale_drops: 0,
             config: hjkl_app::config::Config::default(),
             start_screen,
-            grammar_load_error: None,
             lsp: None,
             lsp_state: HashMap::new(),
             lsp_next_request_id: 0,
@@ -1365,6 +1343,7 @@ impl App {
             MenuAction::PickerOpenTab => self.picker_open_in_tab(),
             MenuAction::PickerCopyPath => self.picker_copy_path(),
             MenuAction::Separator | MenuAction::Info => {} // no-op
+            _ => {}                                        // future variants — no-op
         }
     }
 

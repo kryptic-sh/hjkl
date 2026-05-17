@@ -992,7 +992,7 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 
     // Context menu (right-click, Phase 2 Round A) — floats above everything.
     if let Some(ref menu) = app.context_menu {
-        menu.render(frame, area);
+        crate::menu::render(frame, menu, area, &crate::menu::MenuTheme::default());
     }
 
     // Hover popup (Phase 5 mouse support) — renders above all other content.
@@ -1351,30 +1351,6 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
                 Style::default()
                     .bg(app.theme.ui.surface_bg)
                     .fg(app.theme.ui.text)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            None,
-        );
-    }
-
-    // ── Grammar load error (transient, 5 s TTL) ────────────────────────────
-    if let Some(err) = &app.grammar_load_error
-        && !err.is_expired()
-    {
-        let content = format!(" grammar load failed: {} — {}", err.name, err.message);
-        let truncated = if content.len() > width as usize {
-            let max = (width as usize).saturating_sub(1);
-            format!("{}…", &content[..max.min(content.len())])
-        } else {
-            content
-        };
-        let padded = format!("{truncated:<width$}", width = width as usize);
-        return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default()
-                    .bg(app.theme.ui.surface_bg)
-                    .fg(app.theme.ui.status_dirty_marker)
                     .add_modifier(Modifier::BOLD),
             )]),
             None,

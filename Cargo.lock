@@ -2096,7 +2096,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.21"
+version = "0.21.23"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2128,6 +2128,8 @@ dependencies = [
  "hjkl-mangler",
  "hjkl-markdown",
  "hjkl-markdown-tui",
+ "hjkl-menu",
+ "hjkl-menu-tui",
  "hjkl-picker",
  "hjkl-picker-tui",
  "hjkl-prompt",
@@ -2327,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-ex"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
@@ -2355,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.21"
+version = "0.21.23"
 dependencies = [
  "clap",
  "floem",
@@ -2426,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-layout"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "hjkl-lsp"
@@ -2466,6 +2468,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-menu"
+version = "0.1.0"
+
+[[package]]
+name = "hjkl-menu-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-menu",
+ "ratatui",
+]
+
+[[package]]
 name = "hjkl-picker"
 version = "0.9.0"
 dependencies = [
@@ -2490,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-prompt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hjkl-engine",
  "hjkl-form",
@@ -4351,7 +4365,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
