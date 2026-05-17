@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-05-17
+
+### Fixed
+
+- `cargo publish -p hjkl --locked` failed on v0.19.3 and v0.20.0 (silently —
+  neither tag's `hjkl` crate reached crates.io) with
+  `no matching package named hjkl-app found`. Since Stage 1a of #125,
+  `apps/hjkl` declares `hjkl-app = "0.1"` but `hjkl-app` was `publish = false`,
+  and cargo requires path-deps in published crates to also be resolvable from
+  crates.io. Flipped `hjkl-app` to publishable and updated the `publish-crates`
+  job to upload `hjkl-app` first (with index-wait poll) before publishing
+  `hjkl`.
+
+### Added
+
+- `hjkl-app` 0.1.0 now publishes to crates.io (was in-tree-only). README added
+  with the standard badge set.
+
 ## [0.20.0] - 2026-05-17
 
 ### Added
@@ -2338,7 +2356,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/kryptic-sh/hjkl/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/kryptic-sh/hjkl/compare/v0.19.3...v0.20.0
 [0.19.3]: https://github.com/kryptic-sh/hjkl/compare/v0.19.2...v0.19.3
 [0.19.2]: https://github.com/kryptic-sh/hjkl/compare/v0.19.1...v0.19.2

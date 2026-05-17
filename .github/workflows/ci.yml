@@ -694,20 +694,52 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Publish hjkl app to crates.io (idempotent)
+      - name: Publish hjkl-app + hjkl to crates.io (idempotent, in dep order)
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
-          # The 8 hjkl-* library crates live as submodules and ship
-          # from their own kryptic-sh/hjkl-* repos on their own cadence.
-          # This workflow only publishes the umbrella `hjkl` app crate
-          # at the workspace version.
-          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          URL="https://crates.io/api/v1/crates/hjkl/${VERSION}"
-          if curl -fsS -A "hjkl-release-ci" -o /dev/null "$URL"; then
-            echo "::notice::hjkl@${VERSION} already on crates.io, skipping"
-            exit 0
-          fi
-          cargo publish -p hjkl --locked
+          # The hjkl-* library crates listed as submodules ship from their
+          # own kryptic-sh/hjkl-* repos on their own cadence. This workflow
+          # publishes the two in-tree crates that the workspace owns:
+          #   1. hjkl-app — host-agnostic application layer (lib crate).
+          #   2. hjkl     — the TUI binary that depends on hjkl-app.
+          # Order is load-bearing: cargo publish for `hjkl` resolves its
+          # `hjkl-app = "X.Y"` dep against crates.io, so hjkl-app must be
+          # uploaded + indexed first.
+          publish_if_missing() {
+            local crate="$1"
+            local version
+            version=$(grep -m1 '^version' "crates/$crate/Cargo.toml" 2>/dev/null \
+                      || grep -m1 '^version' "apps/$crate/Cargo.toml" 2>/dev/null \
+                      || grep -m1 '^version' Cargo.toml)
+            version=$(echo "$version" | cut -d'"' -f2)
+            # Workspace member version inheritance: apps/hjkl reads from
+            # workspace.version in Cargo.toml.
+            if [ -z "$version" ] || [ "$version" = "workspace" ]; then
+              version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+            fi
+            local url="https://crates.io/api/v1/crates/${crate}/${version}"
+            if curl -fsS -A "${crate}-release-ci" -o /dev/null "$url"; then
+              echo "::notice::${crate}@${version} already on crates.io, skipping"
+              return 0
+            fi
+            echo "::group::publish ${crate}@${version}"
+            cargo publish -p "${crate}" --locked
+            echo "::endgroup::"
+            # Wait for the new version to be indexed before the next publish
+            # tries to resolve it. crates.io can take 5-60s.
+            echo "Waiting for ${crate}@${version} to be indexed..."
+            for _ in $(seq 1 60); do
+              if curl -fsS -A "${crate}-release-ci" -o /dev/null "$url"; then
+                echo "${crate}@${version} indexed"
+                return 0
+              fi
+              sleep 5
+            done
+            echo "::error::${crate}@${version} did not appear on crates.io within 5 min"
+            exit 1
+          }
+          publish_if_missing hjkl-app
+          publish_if_missing hjkl

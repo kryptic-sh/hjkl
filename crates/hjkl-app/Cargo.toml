@@ -10,7 +10,7 @@ repository = "https://github.com/kryptic-sh/hjkl"
 authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
-publish = false   # in-tree until Stage 4 promotes to a submodule
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"
