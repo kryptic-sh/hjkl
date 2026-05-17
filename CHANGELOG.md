@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-05-17
+
+### Changed
+
+- `.config/nextest.toml` — added `anvil-env` test group (`max-threads = 1`) for
+  `package(hjkl-anvil)`. Serializes the 18 env-mutating XDG path-resolution and
+  full-pipeline tests (previously `#[ignore]`'d, unreachable from CI) so they
+  run automatically under `cargo nextest run --workspace`. The 16
+  previously-ignored tests across `store`, `installer`, and the integration
+  suite now have real CI coverage.
+- `hjkl-anvil` bumped to 0.2.1 — submodule pointer updated.
+
 ## [0.20.1] - 2026-05-17
 
 ### Fixed
@@ -2356,7 +2368,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...HEAD
+[0.20.2]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/kryptic-sh/hjkl/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/kryptic-sh/hjkl/compare/v0.19.3...v0.20.0
 [0.19.3]: https://github.com/kryptic-sh/hjkl/compare/v0.19.2...v0.19.3

@@ -276,7 +276,10 @@ fn bwipeout_clears_marks_on_last_slot() {
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     // Set a mark on the buffer.
     app.active_mut().editor.set_mark('a', (0, 0));
-    assert!(app.active().editor.mark('a').is_some(), "mark should be set before wipe");
+    assert!(
+        app.active().editor.mark('a').is_some(),
+        "mark should be set before wipe"
+    );
     app.dispatch_ex("bw");
     // After wipe the fresh scratch buffer must have no marks.
     assert!(
@@ -296,7 +299,10 @@ fn bwipeout_clears_jumplist_on_last_slot() {
     // Push an entry into the jumplist.
     app.active_mut().editor.record_jump((2, 0));
     let (back, _) = app.active().editor.jump_list();
-    assert!(!back.is_empty(), "jumplist should have an entry before wipe");
+    assert!(
+        !back.is_empty(),
+        "jumplist should have an entry before wipe"
+    );
     app.dispatch_ex("bw");
     // After wipe the fresh scratch buffer must have an empty jumplist.
     let (back, fwd) = app.active().editor.jump_list();
@@ -344,7 +350,10 @@ fn bwipeout_multi_slot_removes_slot() {
     app.dispatch_ex("bw");
     assert_eq!(app.slots.len(), 1);
     let msg = app.status_message.clone().unwrap_or_default();
-    assert!(msg.contains("wiped"), "expected wipe status message, got: {msg}");
+    assert!(
+        msg.contains("wiped"),
+        "expected wipe status message, got: {msg}"
+    );
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
 }
@@ -361,7 +370,11 @@ fn bwipeout_blocks_dirty_without_force() {
     app.dispatch_ex("bw");
     let msg = app.status_message.clone().unwrap_or_default();
     assert!(msg.contains("E89"), "expected E89, got: {msg}");
-    assert_eq!(app.slots.len(), 2, "slot must not be removed when dirty without force");
+    assert_eq!(
+        app.slots.len(),
+        2,
+        "slot must not be removed when dirty without force"
+    );
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
 }

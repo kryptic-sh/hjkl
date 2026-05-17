@@ -1,23 +1,38 @@
 # cargo-nextest config.
 #
-# nextest runs each test in its own process, in parallel. `hjkl-clipboard`'s
-# X11/Wayland backend tests don't survive that: they serialize themselves
-# with an in-process `static TEST_LOCK: Mutex<()>` and bind a mock display
-# at a fixed name (`DISPLAY=:98` for X11, a fixed socket for Wayland). The
-# Mutex only serializes threads *within one test binary* — under nextest
-# each test is its own process, so the lock is per-process and useless, and
-# parallel processes collide on the same mock display (symptom:
-# "MockManager received wrong payload bytes", spurious unwrap panics).
-# `cargo test`'s single-binary thread pool happened to honour the Mutex.
+# nextest runs each test in its own process, in parallel. Two groups of tests
+# in this workspace require serialization for different reasons.
 #
-# Pin the clipboard backend tests into a single-threaded test group so at
-# most one runs at a time — same effective serialization the Mutex gave
-# under `cargo test`. The other ~1790 workspace tests stay fully parallel.
-# Proper fix (follow-up): give each test a unique display name.
+# ── clipboard-display ────────────────────────────────────────────────────────
+# `hjkl-clipboard`'s X11/Wayland backend tests serialize themselves with an
+# in-process `static TEST_LOCK: Mutex<()>` and bind a mock display at a fixed
+# name (`DISPLAY=:98` for X11, a fixed socket for Wayland). The Mutex only
+# serializes threads *within one test binary* — under nextest each test is its
+# own process, so the lock is per-process and useless, and parallel processes
+# collide on the same mock display (symptom: "MockManager received wrong
+# payload bytes", spurious unwrap panics). `cargo test`'s single-binary thread
+# pool happened to honour the Mutex.
+#
+# ── anvil-env ────────────────────────────────────────────────────────────────
+# `hjkl-anvil`'s XDG path-resolution and full-pipeline tests mutate
+# `XDG_DATA_HOME` / `XDG_CACHE_HOME` via `std::env::set_var`. An in-process
+# `static ENV_LOCK: Mutex<()>` serializes them within a single `cargo test`
+# binary, but nextest's process-per-test model makes that lock useless across
+# processes. This group caps concurrent anvil test processes to 1 — same
+# effect as `--test-threads=1` but only for hjkl-anvil. The other ~1800+
+# workspace tests stay fully parallel.
+#
+# Proper fix (follow-up): use `std::env::var` lookup-at-call-time + per-test
+# temp dir injection so no global env mutation is needed.
 
 [test-groups]
 clipboard-display = { max-threads = 1 }
+anvil-env = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
 test-group = 'clipboard-display'
+
+[[profile.default.overrides]]
+filter = 'package(hjkl-anvil)'
+test-group = 'anvil-env'
