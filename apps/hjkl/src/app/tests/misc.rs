@@ -690,10 +690,11 @@ fn dispatch_action_stays_small() {
     // Regression: dispatch_action body must stay under 100 lines.
     // We locate the function by its signature and count until the first
     // `^    }$` line (the closing brace at 4-space indent).
-    let src = include_str!("../mod.rs");
+    // dispatch_action was moved to dispatch.rs as part of the mod.rs split.
+    let src = include_str!("../dispatch.rs");
     let start = src
         .find("pub fn dispatch_action")
-        .expect("dispatch_action must exist in mod.rs");
+        .expect("dispatch_action must exist in dispatch.rs");
     let rest = &src[start..];
     // Count lines until and including the closing brace.
     let mut brace_depth = 0usize;
