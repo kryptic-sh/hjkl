@@ -73,10 +73,7 @@ impl Default for HoverTheme {
 /// The popup position is computed by [`hjkl_hover::position`], then the
 /// markdown content is parsed and rendered via `hjkl-markdown-tui`.
 pub fn render(frame: &mut Frame, state: &HoverState, theme: &HoverTheme, viewport: Rect) {
-    let vp = HoverViewport {
-        width: viewport.width,
-        height: viewport.height,
-    };
+    let vp = HoverViewport::new(viewport.width, viewport.height);
     let hr = position(state, vp);
     let rect = Rect {
         x: viewport.x + hr.x,
@@ -128,13 +125,7 @@ mod tests {
     #[test]
     fn position_smoke() {
         let s = make_state("hello", 5, 5);
-        let r = hjkl_hover::position(
-            &s,
-            HoverViewport {
-                width: 80,
-                height: 24,
-            },
-        );
+        let r = hjkl_hover::position(&s, HoverViewport::new(80, 24));
         assert!(r.x + r.width <= 80);
         assert!(r.y + r.height <= 24);
     }

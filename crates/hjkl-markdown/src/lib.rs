@@ -128,7 +128,6 @@ pub fn parse(src: &str) -> Vec<Event> {
     // Inline state machine.
     let mut bold = false;
     let mut italic = false;
-    let code_span = false;
     // Block accumulators.
     let mut heading_level: Option<u8> = None;
     let mut heading_buf = String::new();
@@ -261,7 +260,7 @@ pub fn parse(src: &str) -> Vec<Event> {
                         content: s.to_string(),
                         bold,
                         italic,
-                        code_span,
+                        code_span: false,
                     });
                 }
             }
@@ -272,7 +271,7 @@ pub fn parse(src: &str) -> Vec<Event> {
                     content: "\n".to_string(),
                     bold,
                     italic,
-                    code_span,
+                    code_span: false,
                 });
             }
             pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => {}

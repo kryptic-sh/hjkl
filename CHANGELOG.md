@@ -8,6 +8,44 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.19] - 2026-05-18
+
+### Changed
+
+- **`hjkl-layout` 0.1 → 0.2** (breaking): `LayoutTree` gains `#[non_exhaustive]`
+  — external match arms must include a wildcard catch-all. Closes #140.
+- **`hjkl-hover` 0.1 → 0.2** (breaking): `HoverViewport` and `HoverRect` gain
+  `#[non_exhaustive]` with matching `::new()` constructors. External struct
+  literals must migrate to constructors. Closes #126.
+- **`hjkl-hover-tui` 0.1 → 0.2**: updated to `hjkl-hover 0.2`; construction
+  sites migrated to `HoverViewport::new()`.
+- **`apps/hjkl` prompt-bar wiring** (closes #131): inline `wildmenu()` and
+  `prompt_line()` functions in `render.rs` deleted; replaced with calls to
+  `hjkl_prompt_tui::render_wildmenu` and `hjkl_prompt_tui::build_prompt_line`.
+  `render.rs` now imports `hjkl-prompt-tui`; a new `prompt_theme()` helper maps
+  `UiTheme` → `PromptTheme` so user-configured palette is forwarded. Wiring path
+  A chosen (additive, no `hjkl-prompt` API change).
+- **`apps/hjkl` info popup titles** (closes #139): `ExEffect::Info` handler in
+  `ex_dispatch.rs` now infers per-command titles from content prefix —
+  `"--- Registers ---"` → `"registers"`, `"--- Marks ---"` → `"marks"`,
+  `"--- Jump list ---"` → `"jumps"`, `"--- Change list ---"` → `"changes"`,
+  fallback `"info"`. No `ExEffect` API change (content-prefix approach). 4 call
+  sites.
+- **`apps/hjkl` SplitDir safety** (closes #140): `split_rect`, `draw_separator`,
+  and `render_layout` in `render.rs`, and `update_matching` in `window.rs` —
+  `unreachable!()` wildcard arms replaced with named-variant arms + explicit
+  `_ => panic!(...)` so future `SplitDir` variants fail loudly at runtime.
+- **`hjkl-markdown`**: dead `let code_span = false;` removed; both emission
+  sites inline `false` directly. Closes #131 (dead code).
+- **`hjkl-app` 0.4.8 → 0.4.9** (courtesy bump, always-bump policy #136).
+
+### Fixed
+
+- **CHANGELOG `[0.21.16]` link def** was `releases/tag/v0.21.16`; corrected to
+  `compare/v0.21.15...v0.21.16`.
+- **`apps/hjkl/src/app/tests/lsp.rs`** `hover_response_sets_info_popup`:
+  `assert_eq!(popup.kind, ContentKind::Markdown)` assertion added.
+
 ## [0.21.18] - 2026-05-18
 
 ### Added
@@ -106,6 +144,7 @@ patch bumps.
   `crate::app::prompt::CommandCompletion` to `hjkl_prompt::CommandCompletion`.
   `App::push_history` delegates to `hjkl_prompt::push_history`.
 - **`hjkl-app` 0.4.7 → 0.4.8** (courtesy bump, always-bump policy #136).
+- GUI (`hjkl-prompt-gui`) deferred to #147.
 
 ## [0.21.15] - 2026-05-18
 
@@ -2850,10 +2889,11 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.19...HEAD
+[0.21.19]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...v0.21.19
 [0.21.18]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...v0.21.18
 [0.21.17]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...v0.21.17
-[0.21.16]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.21.16
+[0.21.16]: https://github.com/kryptic-sh/hjkl/compare/v0.21.15...v0.21.16
 [0.21.15]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...v0.21.15
 [0.21.14]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...v0.21.14
 [0.21.13]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...v0.21.13

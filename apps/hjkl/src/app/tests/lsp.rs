@@ -927,6 +927,7 @@ fn hover_response_sets_info_popup() {
         popup.content.contains("foo"),
         "popup must contain function name"
     );
+    assert_eq!(popup.kind, hjkl_info_popup::ContentKind::Markdown);
 }
 
 #[test]

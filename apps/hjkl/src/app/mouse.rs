@@ -114,6 +114,7 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                         None
                     }
                 }
+                // `SplitDir` is `#[non_exhaustive]`; unknown variant → no border hit.
                 _ => None,
             };
             // Return this split's hit if found; otherwise recurse into children.
@@ -123,6 +124,8 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                 hit_test_border_tree(a, col, row).or_else(|| hit_test_border_tree(b, col, row))
             }
         }
+        // `LayoutTree` is `#[non_exhaustive]`; unknown variant → no border hit.
+        _ => None,
     }
 }
 

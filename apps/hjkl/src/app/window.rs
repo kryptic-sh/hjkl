@@ -371,7 +371,8 @@ impl App {
                     let (rect_origin, rect_total) = match dir {
                         SplitDir::Vertical => (r.x, r.w),
                         SplitDir::Horizontal => (r.y, r.h),
-                        _ => return,
+                        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
+                        _ => panic!("update_matching: unhandled SplitDir variant"),
                     };
                     if rect_origin == origin && rect_total == total {
                         *ratio = new_ratio;

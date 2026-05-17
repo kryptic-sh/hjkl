@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.18"
+version = "0.21.20"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2126,6 +2126,8 @@ dependencies = [
  "hjkl-splash",
  "hjkl-statusline",
  "hjkl-statusline-tui",
+ "hjkl-tabs",
+ "hjkl-tabs-tui",
  "hjkl-theme",
  "hjkl-theme-tui",
  "hjkl-vim",
@@ -2171,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.4.8"
+version = "0.4.10"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2335,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.18"
+version = "0.21.20"
 dependencies = [
  "clap",
  "floem",
@@ -2361,11 +2363,11 @@ dependencies = [
 
 [[package]]
 name = "hjkl-hover"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "hjkl-hover-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hjkl-hover",
  "hjkl-markdown",
@@ -2406,7 +2408,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-layout"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "hjkl-lsp"
@@ -2511,6 +2513,18 @@ name = "hjkl-statusline-tui"
 version = "0.2.0"
 dependencies = [
  "hjkl-statusline",
+ "ratatui",
+]
+
+[[package]]
+name = "hjkl-tabs"
+version = "0.1.0"
+
+[[package]]
+name = "hjkl-tabs-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-tabs",
  "ratatui",
 ]
 

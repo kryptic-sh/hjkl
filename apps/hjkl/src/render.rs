@@ -21,6 +21,9 @@ use ratatui::{
 
 use crate::app::{App, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TOP_BAR_HEIGHT, window};
 use hjkl_holler_tui::{HollerLayout, render_active};
+use hjkl_prompt_tui::{PromptTheme, build_prompt_line, render_wildmenu};
+use hjkl_tabs::TabBar;
+use hjkl_tabs_tui::{TabBarTheme, build_line as build_tab_line};
 
 /// Convert a `ratatui::style::Color::Rgb` to `hjkl_statusline::Color`.
 /// Named/indexed colors fall back to white.
@@ -448,7 +451,9 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
             };
             (rect_a, rect_b)
         }
-        _ => unreachable!("unknown SplitDir variant"),
+        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant so it
+        // surfaces immediately rather than silently falling through.
+        _ => panic!("split_rect: unhandled SplitDir variant"),
     }
 }
 
@@ -469,7 +474,8 @@ fn draw_separator(
     let (glyph, glyph_width) = match dir {
         window::SplitDir::Vertical => ("│", 1u16),
         window::SplitDir::Horizontal => ("─", 1u16),
-        _ => unreachable!("unknown SplitDir variant"),
+        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
+        _ => panic!("draw_separator: unhandled SplitDir variant"),
     };
     let buf = frame.buffer_mut();
     match dir {
@@ -497,7 +503,8 @@ fn draw_separator(
                 }
             }
         }
-        _ => {}
+        // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
+        _ => panic!("draw_separator: unhandled SplitDir variant in draw loop"),
     }
 }
 
@@ -564,7 +571,8 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
                         (a_shrunk, Some(sep), rect_b)
                     }
                 }
-                _ => unreachable!("unknown SplitDir variant"),
+                // `SplitDir` is `#[non_exhaustive]`; panic on any future variant.
+                _ => panic!("render_layout: unhandled SplitDir variant"),
             };
 
             render_layout(frame, app, rect_a, a);
@@ -576,6 +584,8 @@ fn render_layout(frame: &mut Frame, app: &mut App, area: Rect, layout: &mut wind
                 draw_separator(frame, sep, *dir, border_color);
             }
         }
+        // `LayoutTree` is `#[non_exhaustive]`; unknown variant → skip rendering.
+        _ => {}
     }
 }
 
@@ -1011,8 +1021,9 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
 /// Left side: buffer-line entries (one per slot), only when `app.slots().len() > 1`.
 /// Format: ` name ` or ` name+ ` (dirty), separated by `│`.
 ///
-/// Right side: tab entries (one per tab), only when `app.tabs.len() > 1`.
-/// Format: `[1: name] [2: name]`, right-aligned flush with the row's right edge.
+/// Right side: tab entries (one per layout tab), only when `app.tabs.len() > 1`.
+/// Rendered via [`hjkl_tabs_tui::build_line`] so tab-bar behaviour (active
+/// highlight, dirty marker `●`, overflow `<`/`>`) is owned by `hjkl-tabs-tui`.
 ///
 /// If both sides overflow the row width, the left (buffer) side is truncated
 /// from the right with `…`. If buffers still don't fit even after truncation,
@@ -1033,18 +1044,16 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     let show_buffers = app.slots().len() > 1;
     let total_width = area.width as usize;
 
-    // ── Right side: compute tab spans and their total width ──────────────────
-    struct TabEntry {
-        label: String,
-        is_active: bool,
-        has_sep: bool, // true for all except the first
-    }
-    let mut tab_entries: Vec<TabEntry> = Vec::new();
-    let mut tabs_total_len = 0usize;
-
+    // ── Right side: build a hjkl_tabs::TabBar from the layout tabs ──────────
+    //
+    // Each `hjkl_layout::Tab` (a window-split tree tab) maps to one
+    // `hjkl_tabs::Tab<usize>` where the id is the positional index.
+    // The title is `"{n}: {filename}"` matching the pre-migration format.
+    // Dirty = any leaf window in the layout has a dirty slot.
+    let mut tab_bar: TabBar<usize> = TabBar::new();
     if show_tabs {
-        for (i, tab) in app.tabs.iter().enumerate() {
-            let slot_idx = app.windows[tab.focused_window]
+        for (i, layout_tab) in app.tabs.iter().enumerate() {
+            let slot_idx = app.windows[layout_tab.focused_window]
                 .as_ref()
                 .map(|w| w.slot)
                 .unwrap_or(0);
@@ -1055,27 +1064,40 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("[No Name]");
-            let tab_dirty = tab.layout.leaves().iter().any(|&wid| {
+            let title = format!("{}: {}", i + 1, base_name);
+            tab_bar.open(i, title);
+            let tab_dirty = layout_tab.layout.leaves().iter().any(|&wid| {
                 app.windows[wid]
                     .as_ref()
                     .map(|w| app.slots()[w.slot].dirty)
                     .unwrap_or(false)
             });
-            let label = if tab_dirty {
-                format!(" {}: {}+ ", i + 1, base_name)
-            } else {
-                format!(" {}: {} ", i + 1, base_name)
-            };
-            let has_sep = i > 0;
-            let entry_width = if has_sep { 1 } else { 0 } + label.len();
-            tabs_total_len += entry_width;
-            tab_entries.push(TabEntry {
-                label,
-                is_active: i == app.active_tab,
-                has_sep,
-            });
+            if let Some(t) = tab_bar.tabs.last_mut() {
+                t.dirty = tab_dirty;
+            }
         }
+        tab_bar.focus(&app.active_tab);
     }
+
+    // Build the tab line via hjkl-tabs-tui so active/dirty/overflow logic
+    // is owned by that crate.
+    let tab_theme = TabBarTheme::new(
+        ui.on_accent,
+        ui.mode_normal_bg,
+        ui.text_dim,
+        ui.border,
+        ui.border,
+    );
+    let tab_line = if show_tabs {
+        build_tab_line(area.width, &tab_bar, &tab_theme)
+    } else {
+        hjkl_tabs_tui::build_line(0, &tab_bar, &tab_theme)
+    };
+    let tabs_total_len: usize = tab_line
+        .spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum();
 
     // ── Left side: compute how much width buffers can use ────────────────────
     // Tabs are right-aligned and never truncated; buffers get the remainder.
@@ -1140,94 +1162,46 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
             all_spans.push(Span::raw(" ".repeat(pad_width)));
         }
 
-        // Emit tab spans.
-        for entry in &tab_entries {
-            if entry.has_sep {
-                all_spans.push(Span::styled(" ".to_string(), sep_style));
-            }
-            let style = if entry.is_active {
-                active_style
-            } else {
-                inactive_style
-            };
-            all_spans.push(Span::styled(entry.label.clone(), style));
-        }
+        // Emit tab spans from hjkl-tabs-tui.
+        all_spans.extend(tab_line.spans);
     }
 
     let paragraph = Paragraph::new(Line::from(all_spans));
     frame.render_widget(paragraph, area);
 }
 
+/// Build a [`PromptTheme`] from the app's [`crate::theme::UiTheme`].
+///
+/// Maps the form color slots to the corresponding `PromptTheme` fields so that
+/// wildmenu and prompt-bar rendering respect the user's configured palette.
+fn prompt_theme(ui: &crate::theme::UiTheme) -> PromptTheme {
+    PromptTheme::new(
+        ui.form_insert_bg,
+        ui.form_normal_bg,
+        ui.text,
+        ui.form_tag_insert_fg,
+        ui.form_tag_normal_fg,
+        ui.panel_bg,
+        ui.text,
+        ui.picker_selection_bg,
+    )
+}
+
 /// Render the wildmenu strip — one row of all completion candidates with the
 /// selected one highlighted. Called only when `app.command_completion.is_some()`.
+///
+/// Delegates to [`hjkl_prompt_tui::render_wildmenu`].
 fn wildmenu(frame: &mut Frame, app: &App, area: Rect) {
     let comp = match &app.command_completion {
-        Some(c) => c,
+        Some(c) => c.clone(),
         None => return,
     };
-    let ui = &app.theme.ui;
-    let normal_style = Style::default().bg(ui.panel_bg).fg(ui.text);
-    let selected_style = Style::default().bg(ui.picker_selection_bg).fg(ui.text);
-
-    let width = area.width as usize;
-    let sep = "  ";
-    let sep_len = sep.len();
-
-    // Build spans, accumulating width. Show "... +N more" when overflow.
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut used = 0usize;
-    let n = comp.candidates.len();
-
-    for (i, cand) in comp.candidates.iter().enumerate() {
-        let is_selected = comp.selected == Some(i);
-        let entry = cand.clone();
-        let entry_len = entry.chars().count();
-
-        // Check if we need to truncate (remaining candidates exist).
-        let remaining = n - i;
-        let suffix = if remaining > 1 {
-            format!("  +{} more", remaining - 1)
-        } else {
-            String::new()
-        };
-
-        if used + entry_len > width {
-            // No room even for this entry — show overflow suffix if any left.
-            if !suffix.is_empty() && used + suffix.len() <= width {
-                spans.push(Span::styled(suffix, normal_style));
-            }
-            break;
-        }
-
-        if i > 0 {
-            if used + sep_len + entry_len > width {
-                // Separator + this entry won't fit — show suffix.
-                if used + suffix.len() <= width {
-                    spans.push(Span::styled(suffix, normal_style));
-                }
-                break;
-            }
-            spans.push(Span::styled(sep.to_string(), normal_style));
-            used += sep_len;
-        }
-
-        let style = if is_selected {
-            selected_style
-        } else {
-            normal_style
-        };
-        spans.push(Span::styled(entry, style));
-        used += entry_len;
-    }
-
-    // Pad remainder with the normal style background.
-    if used < width {
-        let pad = " ".repeat(width - used);
-        spans.push(Span::styled(pad, normal_style));
-    }
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    let theme = prompt_theme(&app.theme.ui);
+    // Construct a minimal PromptState carrying just the completion state so we
+    // can delegate to the crate's renderer without duplicating its logic.
+    let mut ps = hjkl_prompt::PromptState::new(hjkl_prompt::PromptKind::Command);
+    ps.completion = Some(comp);
+    render_wildmenu(frame, &ps, &theme, area);
 }
 
 /// Render the one-row status line.
@@ -1244,30 +1218,6 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if let Some(col) = cursor_col {
         frame.set_cursor_position((area.x + col, area.y));
     }
-}
-
-/// Render a prompt status row: prompt content on the left, a right-aligned
-/// `[I]` (Insert) or `[N]` (Normal) mode tag for users on terminals that
-/// don't render cursor-shape changes (or who want a discoverable visual cue).
-fn prompt_line(
-    content: &str,
-    mode: hjkl_form::VimMode,
-    theme: &crate::theme::UiTheme,
-    width: u16,
-) -> Line<'static> {
-    // Insert vs Normal use different bgs sourced from the app theme so the
-    // mode is visible without relying on cursor shape.
-    let (bg, tag, tag_fg) = match mode {
-        hjkl_form::VimMode::Insert => (theme.form_insert_bg, " [I]", theme.form_tag_insert_fg),
-        _ => (theme.form_normal_bg, " [N]", theme.form_tag_normal_fg),
-    };
-    let body_width = (width as usize).saturating_sub(tag.len());
-    let visible: String = content.chars().take(body_width).collect();
-    let body = format!("{visible:<body_width$}");
-    Line::from(vec![
-        Span::styled(body, Style::default().bg(bg).fg(theme.text)),
-        Span::styled(tag, Style::default().bg(bg).fg(tag_fg)),
-    ])
 }
 
 /// Count search matches in the buffer and return `(current_idx, total)`.
@@ -1333,8 +1283,9 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let content = format!(":{display}");
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
+        let theme = prompt_theme(&app.theme.ui);
         return (
-            prompt_line(&content, field.vim_mode(), &app.theme.ui, width),
+            build_prompt_line(&content, field.vim_mode(), &theme, width),
             Some(cursor_col),
         );
     }
@@ -1350,8 +1301,9 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let content = format!("{prefix}{display}");
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
+        let theme = prompt_theme(&app.theme.ui);
         return (
-            prompt_line(&content, field.vim_mode(), &app.theme.ui, width),
+            build_prompt_line(&content, field.vim_mode(), &theme, width),
             Some(cursor_col),
         );
     }

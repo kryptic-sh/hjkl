@@ -187,6 +187,7 @@ pub enum SplitDir {
 /// assert_eq!(tree.neighbor_below(0), Some(1));
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum LayoutTree {
     /// A single window occupying the full allocated area.
     Leaf(WindowId),

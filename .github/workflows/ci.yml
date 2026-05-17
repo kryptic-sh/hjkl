@@ -717,8 +717,10 @@ jobs:
           #  12. hjkl-holler            — pure data + ring-buffer notification bus.
           #  13. hjkl-holler-tui        — ratatui toast renderer (depends on #12).
           #  14. hjkl-layout            — renderer-agnostic window/split layout machinery.
-          #  15. hjkl-app               — host-agnostic application layer.
-          #  16. hjkl                   — the TUI binary (depends on #15).
+          #  15. hjkl-tabs              — renderer-agnostic tab bar data model.
+          #  16. hjkl-tabs-tui          — ratatui adapter for hjkl-tabs.
+          #  17. hjkl-app               — host-agnostic application layer.
+          #  18. hjkl                   — the TUI binary (depends on #17).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -779,5 +781,7 @@ jobs:
           publish_if_missing hjkl-holler
           publish_if_missing hjkl-holler-tui
           publish_if_missing hjkl-layout
+          publish_if_missing hjkl-tabs
+          publish_if_missing hjkl-tabs-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl

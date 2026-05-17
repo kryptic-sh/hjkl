@@ -11,7 +11,7 @@
 //! use std::time::Instant;
 //!
 //! let state = HoverState::new("hello world".to_string(), HoverAnchor::new(5, 3));
-//! let vp = HoverViewport { width: 80, height: 24 };
+//! let vp = HoverViewport::new(80, 24);
 //! let rect = position(&state, vp);
 //! assert!(rect.x + rect.width <= 80);
 //! assert!(rect.y + rect.height <= 24);
@@ -51,18 +51,39 @@ impl HoverAnchor {
 
 /// Available terminal area for popup placement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HoverViewport {
     pub width: u16,
     pub height: u16,
 }
 
+impl HoverViewport {
+    /// Construct a new `HoverViewport`.
+    pub fn new(width: u16, height: u16) -> Self {
+        Self { width, height }
+    }
+}
+
 /// On-screen bounding rect returned by [`position`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HoverRect {
     pub x: u16,
     pub y: u16,
     pub width: u16,
     pub height: u16,
+}
+
+impl HoverRect {
+    /// Construct a new `HoverRect`.
+    pub fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
 }
 
 /// All state needed to display and manage a hover popup.

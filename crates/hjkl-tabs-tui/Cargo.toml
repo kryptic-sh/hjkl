@@ -1,9 +1,9 @@
 [package]
-name = "hjkl-hover-tui"
-description = "Ratatui adapter for hjkl-hover: paints the hover popup into a ratatui Frame using hjkl-markdown-tui for the content body."
-keywords = ["hover", "popup", "tui", "ratatui", "editor"]
+name = "hjkl-tabs-tui"
+description = "Ratatui adapter for hjkl-tabs: renders a TabBar<Id> widget with active-tab highlight, dirty marker, and overflow indicators."
+keywords = ["editor", "tabs", "tabbar", "tui", "ratatui"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,10 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-hover = "0.2"
-hjkl-markdown = "0.1"
-hjkl-markdown-tui = "0.1"
-hjkl-theme = "0.2"
+hjkl-tabs = "0.1"
 ratatui = "0.30"
 
 [package.metadata.docs.rs]
