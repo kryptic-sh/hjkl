@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.11] - 2026-05-18
+
+### Added
+
+- **`hjkl-theme` 0.2.0** — `loader` module with free-function API: `parse_toml`,
+  `load_from_path`, `resolve_palette_refs`, `default_theme()`. Bundled
+  `themes/default.toml` dark palette (closes #143).
+
+### Changed
+
+- **`hjkl-bonsai` → 0.7.5**, **`hjkl-theme-tui` → 0.1.1**: updated `hjkl-theme`
+  dep pin from `0.1` to `0.2`.
+- **`hjkl-statusline` → 0.2.1**: updated `hjkl-theme` dep pin from `0.1` to
+  `0.2`.
+
 ## [0.21.10] - 2026-05-18
 
 ### Added
@@ -2608,7 +2623,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...HEAD
+[0.21.11]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...v0.21.11
 [0.21.10]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...v0.21.10
 [0.21.9]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...v0.21.9
 [0.21.8]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...v0.21.8
