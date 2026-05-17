@@ -343,8 +343,8 @@ fn main() -> Result<()> {
         app.open_picker();
     }
     // Run any +cmd / -c CMD tokens before entering raw mode. Errors surface
-    // via app.status_message and become visible on the first frame. Matches
-    // vim/nvim: `nvim +vsp file.txt` opens the file then runs `:vsp`.
+    // as toasts on the notification bus and become visible on the first frame.
+    // Matches vim/nvim: `nvim +vsp file.txt` opens the file then runs `:vsp`.
     for cmd in &args.commands {
         app.dispatch_ex(cmd);
         if app.exit_requested {

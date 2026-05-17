@@ -13,7 +13,7 @@ fn colon_write_blocked_by_disk_state_guard_without_bang() {
     seed_buffer(&mut app, "edited\n");
     // :write without bang must refuse.
     app.dispatch_ex("write");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("E13"),
         "expected E13 guard message, got: {msg}"
@@ -37,7 +37,7 @@ fn colon_write_bang_overrides_disk_state_guard() {
     seed_buffer(&mut app, "edited\n");
     // :write! must force-save.
     app.dispatch_ex("write!");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(!msg.contains("E13"), ":w! must not produce E13, got: {msg}");
     // disk_state must be reset to Synced.
     assert_eq!(
@@ -86,7 +86,7 @@ fn edit_blocks_dirty_buffer_without_force() {
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     app.active_mut().dirty = true;
     app.dispatch_ex("e %");
-    let msg = app.status_message.unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E37"), "expected E37, got: {msg}");
     let _ = std::fs::remove_file(&path);
 }
@@ -227,7 +227,7 @@ fn bdelete_blocks_dirty_without_force() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     app.active_mut().dirty = true;
     app.dispatch_ex("bd");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E89"), "expected E89, got: {msg}");
     assert_eq!(app.slots.len(), 2);
     let _ = std::fs::remove_file(&path_a);
@@ -349,7 +349,7 @@ fn bwipeout_multi_slot_removes_slot() {
     assert_eq!(app.slots.len(), 2);
     app.dispatch_ex("bw");
     assert_eq!(app.slots.len(), 1);
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("wiped"),
         "expected wipe status message, got: {msg}"
@@ -368,7 +368,7 @@ fn bwipeout_blocks_dirty_without_force() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     app.active_mut().dirty = true;
     app.dispatch_ex("bw");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E89"), "expected E89, got: {msg}");
     assert_eq!(
         app.slots.len(),
@@ -415,7 +415,7 @@ fn buffer_alt_with_single_slot_no_op_with_message() {
     assert_eq!(app.slots.len(), 1);
     app.buffer_alt();
     assert_eq!(app.active_index(), 0);
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("only one buffer"),
         "expected 'only one buffer' message, got: {msg}"
@@ -468,7 +468,7 @@ fn b_num_out_of_range_errors() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert_eq!(app.slots.len(), 1);
     app.dispatch_ex("b 5");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E86"), "expected E86, got: {msg}");
 }
 
@@ -502,7 +502,7 @@ fn b_name_ambiguous_errors() {
     app.dispatch_ex(&format!("e {}", path_b.display()));
     // Both filenames contain "foo" — ambiguous
     app.dispatch_ex("b foo");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("E93"),
         "expected E93 ambiguous error, got: {msg}"
@@ -579,7 +579,7 @@ fn qa_blocks_when_any_slot_dirty() {
         !app.exit_requested,
         ":qa should not exit when dirty slot exists"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E37"), "expected E37, got: {msg}");
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
@@ -748,7 +748,7 @@ fn substitute_percent_global_multi_line() {
         vec!["bar bar", "bar"],
         "buffer should be fully substituted"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "3 substitutions on 2 lines", "status: {msg}");
 }
 
@@ -761,7 +761,7 @@ fn substitute_current_line_first_only() {
     let lines = app.active().editor.buffer().lines().to_vec();
     assert_eq!(lines[0], "bar foo", "only first occurrence on current line");
     assert_eq!(lines[1], "foo", "second line unchanged");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "1 substitutions on 1 lines", "status: {msg}");
 }
 
@@ -780,7 +780,7 @@ fn substitute_empty_pattern_reuses_last_search() {
         lines[0], "hello planet",
         "should replace using last search pattern"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "1 substitutions on 1 lines", "status: {msg}");
 }
 
@@ -792,7 +792,7 @@ fn substitute_no_match_shows_pattern_not_found() {
     app.dispatch_ex("s/xyz/bar/");
     let lines = app.active().editor.buffer().lines().to_vec();
     assert_eq!(lines[0], "hello world", "buffer should be unchanged");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "Pattern not found", "status: {msg}");
 }
 
@@ -801,7 +801,7 @@ fn substitute_no_match_shows_pattern_not_found() {
 fn anvil_install_unknown_tool_sets_error_message() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("Anvil install definitely-not-a-real-tool-xyz");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("unknown tool"),
         "expected 'unknown tool' in status message, got: {msg:?}"
@@ -816,7 +816,7 @@ fn anvil_uninstall_not_installed_graceful() {
     // rust-analyzer is in the registry but not installed in CI.
     app.dispatch_ex("Anvil uninstall rust-analyzer");
     // Either "removed" or "failed to resolve" — should not panic.
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         !msg.is_empty(),
         "expected some status message after anvil uninstall"
@@ -830,7 +830,7 @@ fn anvil_update_all_with_zero_installed_tools() {
     // which means anvil_update_all skips all names and sets the sweep message.
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("Anvil update");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("update sweep started"),
         "expected 'update sweep started', got: {msg:?}"
@@ -871,7 +871,7 @@ fn anvil_picker_source_builds_from_registry() {
 fn anvil_bad_subcommand_shows_usage() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("Anvil badsubcommand something else");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("usage"),
         "expected usage hint in status message, got: {msg:?}"
@@ -1016,12 +1016,9 @@ fn colon_e_percent_expands_to_current_file() {
     );
     // No error message — expansion and re-open succeeded.
     assert!(
-        app.status_message
-            .as_deref()
-            .map(|m| !m.starts_with('E'))
-            .unwrap_or(true),
+        app.bus.last_body_or_empty().is_empty() || !app.bus.last_body_or_empty().starts_with('E'),
         "`:e %%` must not produce an error; got: {:?}",
-        app.status_message
+        app.bus.last_body_or_empty()
     );
 
     let _ = std::fs::remove_file(&path);
@@ -1235,7 +1232,7 @@ fn colon_blast_via_host_registry() {
 fn colon_ls_via_host_registry() {
     let mut app = setup_three_slot_app();
     app.dispatch_ex("ls");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(!msg.is_empty(), ":ls must produce a status message");
 }
 
@@ -1244,10 +1241,10 @@ fn colon_buffers_via_host_registry() {
     let mut app = setup_three_slot_app();
     app.dispatch_ex("buffers");
     let msg = app
-        .status_message
-        .clone()
-        .or_else(|| app.info_popup.as_ref().map(|p| p.content.clone()))
-        .unwrap_or_default();
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.clone())
+        .unwrap_or_else(|| app.bus.last_body_or_empty().to_string());
     assert!(!msg.is_empty(), ":buffers must produce output");
 }
 
@@ -1256,10 +1253,10 @@ fn colon_clipboard_via_host_registry() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("clipboard");
     let msg = app
-        .status_message
-        .clone()
-        .or_else(|| app.info_popup.as_ref().map(|p| p.content.clone()))
-        .unwrap_or_default();
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.clone())
+        .unwrap_or_else(|| app.bus.last_body_or_empty().to_string());
     assert!(!msg.is_empty(), ":clipboard must produce output");
 }
 
@@ -1271,7 +1268,7 @@ fn colon_perf_toggles_overlay_on() {
     assert!(!app.perf_overlay, "perf_overlay must start off");
     app.dispatch_ex("perf");
     assert!(app.perf_overlay, ":perf must enable perf_overlay");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("on"), ":perf status must say 'on'");
 }
 
@@ -1281,7 +1278,7 @@ fn colon_perf_toggles_overlay_off() {
     app.perf_overlay = true;
     app.dispatch_ex("perf");
     assert!(!app.perf_overlay, ":perf must disable perf_overlay");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("off"), ":perf status must say 'off'");
 }
 
@@ -1319,7 +1316,7 @@ fn leader_slash_opens_grep_picker() {
     assert!(
         app.picker.is_some(),
         "<leader>/ must open the grep picker; status={:?}",
-        app.status_message
+        app.bus.last_body_or_empty()
     );
 }
 
@@ -1390,7 +1387,7 @@ fn leader_slash_grep_picker_populates_items() {
         got_match,
         "rg-backed grep picker must return at least one match for the seeded UNIQUE_NEEDLE_42; \
          status={:?}",
-        app.status_message
+        app.bus.last_body_or_empty()
     );
 }
 
@@ -1406,7 +1403,7 @@ fn colon_b_numeric_via_host_registry() {
 fn colon_b_nonexistent_via_host_registry() {
     let mut app = setup_three_slot_app();
     app.dispatch_ex("b nonexistent_buffer_xyz");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("E94") || msg.contains("No matching"),
         ":b nonexistent must set error status"
@@ -1426,7 +1423,7 @@ fn colon_checktime_via_host_registry() {
     // checktime_all should not panic on a fresh app
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("checktime");
-    // no assertion beyond no-panic; status_message may or may not be set
+    // no assertion beyond no-panic; bus may or may not have entries
 }
 
 #[test]
@@ -1518,10 +1515,10 @@ fn colon_lnext_via_host_registry() {
 #[test]
 fn colon_lopen_via_host_registry() {
     // open_diag_picker with no diagnostics: routes through host registry and
-    // sets status_message = "no diagnostics" (empty-state path, no server needed).
+    // pushes "no diagnostics" toast (empty-state path, no server needed).
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("lopen");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("no diagnostics"),
         ":lopen with empty diag list must set status 'no diagnostics', got: {msg}"

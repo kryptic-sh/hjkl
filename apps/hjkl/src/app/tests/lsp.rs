@@ -739,7 +739,7 @@ fn lopen_shows_no_diags_message_when_empty() {
     app.open_diag_picker();
     // No diagnostics — picker must not open; status message set.
     assert!(app.picker.is_none(), "picker must not open when no diags");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("no diagnostics"),
         "expected 'no diagnostics', got: {msg}"
@@ -870,7 +870,7 @@ fn goto_definition_empty_sets_status() {
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
     app.handle_goto_response(buffer_id, (0, 0), result, "definition");
 
-    let msg = app.status_message.as_deref().unwrap_or("");
+    let msg = app.bus.last_body_or_empty();
     assert!(
         msg.contains("no definition found"),
         "expected 'no definition found', got: {msg}"
@@ -936,7 +936,7 @@ fn hover_empty_sets_status() {
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
     app.handle_hover_response(buffer_id, (0, 0), result);
 
-    let msg = app.status_message.as_deref().unwrap_or("");
+    let msg = app.bus.last_body_or_empty();
     assert!(
         msg.contains("no hover info"),
         "expected 'no hover info', got: {msg}"
@@ -951,7 +951,7 @@ fn goto_definition_error_sets_status() {
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
     app.handle_goto_response(buffer_id, (0, 0), result, "definition");
 
-    let msg = app.status_message.as_deref().unwrap_or("");
+    let msg = app.bus.last_body_or_empty();
     assert!(
         msg.contains("server error"),
         "expected error message, got: {msg}"
@@ -965,7 +965,7 @@ fn k_dispatches_hover() {
     app.active_mut().filename = Some(tmp_path("k_test.rs"));
     app.lsp_hover();
     assert!(app.info_popup.is_none());
-    let msg = app.status_message.as_deref().unwrap_or("");
+    let msg = app.bus.last_body_or_empty();
     assert!(msg.contains("LSP: not enabled"), "got: {msg}");
 }
 
@@ -1040,10 +1040,7 @@ fn completion_response_empty_no_popup() {
         "empty response must not open popup"
     );
     assert!(
-        app.status_message
-            .as_deref()
-            .unwrap_or("")
-            .contains("no completions"),
+        app.bus.last_body_or_empty().contains("no completions"),
         "status should report no completions"
     );
 }
@@ -1292,7 +1289,7 @@ fn rename_response_null_sets_status() {
         new_name: "newName".to_string(),
     };
     app.handle_lsp_response(pending, Ok(serde_json::Value::Null));
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("cannot rename"),
         "null rename must set 'cannot rename' status, got: {msg}"
@@ -1316,7 +1313,7 @@ fn rename_response_applies_workspace_edit() {
         new_name: "new_name".to_string(),
     };
     app.handle_lsp_response(pending, Ok(val));
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("renamed"),
         "rename response must set status, got: {msg}"
@@ -1335,7 +1332,7 @@ fn format_response_empty_sets_status() {
     };
     // Empty array = no changes.
     app.handle_lsp_response(pending, Ok(serde_json::json!([])));
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("no formatting"),
         "empty format response must say 'no formatting changes', got: {msg}"
@@ -1370,7 +1367,7 @@ fn format_response_applies_text_edits() {
         range: None,
     };
     app.handle_lsp_response(pending, Ok(val));
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "formatted");
     let lines = app.active().editor.buffer().lines();
     // "fn foo(){}" with space inserted at pos 9 → "fn foo(){ }"
@@ -1387,7 +1384,7 @@ fn code_action_response_empty_sets_status() {
         anchor_col: 0,
     };
     app.handle_lsp_response(pending, Ok(serde_json::json!([])));
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("no code actions"),
         "empty code actions must say 'no code actions', got: {msg}"
@@ -1451,7 +1448,7 @@ fn code_action_response_single_applies_action() {
         app.picker.is_none(),
         "single code action must not open picker"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("files changed"),
         "single action apply must set status, got: {msg}"

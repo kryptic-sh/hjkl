@@ -146,7 +146,7 @@ fn ls_lists_all_buffers_with_active_marker() {
     let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
     app.dispatch_ex(&format!("e {}", path_b.display()));
     app.dispatch_ex("ls");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("1: "), "expected slot 1 entry, got: {msg}");
     assert!(
         msg.contains("2:%"),
@@ -241,7 +241,7 @@ fn git_file_history_picker_no_path_sets_status() {
     assert!(app.active().filename.is_none());
     app.open_git_file_history_picker();
     assert!(app.picker.is_none(), "picker must not open without a path");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("no path"),
         "expected 'no path' status message, got: {msg:?}"

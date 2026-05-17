@@ -655,7 +655,7 @@ fn at_colon_no_prior_ex_is_noop() {
         "cursor must be unchanged"
     );
     assert!(
-        app.status_message.is_none(),
+        app.bus.last_body().is_none(),
         "no status message for no-op replay"
     );
     assert!(

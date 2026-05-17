@@ -116,7 +116,7 @@ impl App {
                 self.switch_to(i);
             }
             _ => {
-                self.status_message = Some("no alternate buffer".into());
+                self.bus.warn("no alternate buffer");
             }
         }
     }
@@ -127,8 +127,8 @@ impl App {
     /// only buffer leaving an empty editor instead of quitting).
     pub(crate) fn buffer_delete(&mut self, force: bool) {
         if !force && self.active().dirty {
-            self.status_message =
-                Some("E89: No write since last change (add ! to override)".into());
+            self.bus
+                .error("E89: No write since last change (add ! to override)");
             return;
         }
         let active_slot = self.focused_slot_idx();
@@ -171,7 +171,7 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
-            self.status_message = Some("buffer closed (replaced with [No Name])".into());
+            self.bus.info("buffer closed (replaced with [No Name])");
             return;
         }
         self.lsp_detach_buffer(active_slot);
@@ -200,7 +200,7 @@ impl App {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "[No Name]".into());
-        self.status_message = Some(format!("buffer closed: \"{name}\""));
+        self.bus.info(format!("buffer closed: \"{name}\""));
     }
 
     /// `:bwipeout[!]` — completely remove the active buffer: drop marks,
@@ -212,8 +212,8 @@ impl App {
     /// no state leaks into the new session.
     pub(crate) fn buffer_wipe(&mut self, force: bool) {
         if !force && self.active().dirty {
-            self.status_message =
-                Some("E89: No write since last change (add ! to override)".into());
+            self.bus
+                .error("E89: No write since last change (add ! to override)");
             return;
         }
         let active_slot = self.focused_slot_idx();
@@ -273,7 +273,7 @@ impl App {
             for win in self.windows.iter_mut().flatten() {
                 win.slot = 0;
             }
-            self.status_message = Some("buffer wiped (replaced with [No Name])".into());
+            self.bus.info("buffer wiped (replaced with [No Name])");
             return;
         }
         // Multi-slot: removing the slot entirely discards the editor (and all
@@ -298,14 +298,14 @@ impl App {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "[No Name]".into());
-        self.status_message = Some(format!("buffer wiped: \"{name}\""));
+        self.bus.info(format!("buffer wiped: \"{name}\""));
     }
 
     /// Returns `true` when multiple slots are open; otherwise sets the
     /// "only one buffer open" status message and returns `false`.
     pub(crate) fn require_multi_buffer(&mut self) -> bool {
         if self.slots.len() <= 1 {
-            self.status_message = Some("only one buffer open".into());
+            self.bus.warn("only one buffer open");
             return false;
         }
         true

@@ -14,7 +14,7 @@
 //! ```
 
 use hjkl_form::VimMode;
-use hjkl_prompt::{PromptState, PromptKind};
+use hjkl_prompt::{PromptKind, PromptState};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -82,7 +82,7 @@ impl Default for PromptTheme {
             normal_bg: Color::Rgb(0x31, 0x32, 0x44), // Catppuccin Mocha surface0
             text: Color::Rgb(0xcd, 0xd6, 0xf4),      // text
             tag_insert_fg: Color::Rgb(0xa6, 0xe3, 0xa1), // green
-            tag_normal_fg: Color::Rgb(0xf3, 0x8b, 0xa8),  // red
+            tag_normal_fg: Color::Rgb(0xf3, 0x8b, 0xa8), // red
             wildmenu_bg: Color::Rgb(0x31, 0x32, 0x44),
             wildmenu_fg: Color::Rgb(0xcd, 0xd6, 0xf4),
             wildmenu_selection_bg: Color::Rgb(0x45, 0x47, 0x5a), // surface1
@@ -142,7 +142,12 @@ pub fn build_prompt_line(
     prompt_line_spans(content, mode, theme, width)
 }
 
-fn prompt_line_spans(content: &str, mode: VimMode, theme: &PromptTheme, width: u16) -> Line<'static> {
+fn prompt_line_spans(
+    content: &str,
+    mode: VimMode,
+    theme: &PromptTheme,
+    width: u16,
+) -> Line<'static> {
     let (bg, tag, tag_fg) = match mode {
         VimMode::Insert => (theme.insert_bg, " [I]", theme.tag_insert_fg),
         _ => (theme.normal_bg, " [N]", theme.tag_normal_fg),
@@ -264,7 +269,7 @@ pub fn is_search_prompt(prompt: &PromptState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_prompt::{CommandCompletion, PromptState, PromptKind};
+    use hjkl_prompt::{CommandCompletion, PromptKind, PromptState};
 
     #[test]
     fn theme_default_constructs() {

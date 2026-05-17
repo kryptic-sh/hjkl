@@ -199,7 +199,9 @@ pub fn geometry(popup: &InfoPopup, viewport: InfoViewport) -> InfoRect {
 
 fn centered_rect(pct_x: u16, pct_y: u16, vp: InfoViewport) -> InfoRect {
     let width = (vp.width.saturating_mul(pct_x) / 100).max(4).min(vp.width);
-    let height = (vp.height.saturating_mul(pct_y) / 100).max(3).min(vp.height);
+    let height = (vp.height.saturating_mul(pct_y) / 100)
+        .max(3)
+        .min(vp.height);
     let x = (vp.width.saturating_sub(width)) / 2;
     let y = (vp.height.saturating_sub(height)) / 2;
     InfoRect {

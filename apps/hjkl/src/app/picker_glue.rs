@@ -93,7 +93,7 @@ impl App {
         let filename = match self.active().filename.clone() {
             Some(p) => p,
             None => {
-                self.status_message = Some("git: current buffer has no path".into());
+                self.bus.error("git: current buffer has no path");
                 return;
             }
         };
@@ -110,7 +110,7 @@ impl App {
         let repo = match git2::Repository::discover(&abs) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a git repo".into());
+                self.bus.error("git: not in a git repo");
                 return;
             }
         };
@@ -118,7 +118,7 @@ impl App {
         let workdir = match repo.workdir() {
             Some(w) => w.to_path_buf(),
             None => {
-                self.status_message = Some("git: bare repo — no workdir".into());
+                self.bus.error("git: bare repo — no workdir");
                 return;
             }
         };
@@ -126,8 +126,8 @@ impl App {
         let rel_path = match abs.strip_prefix(&workdir) {
             Ok(r) => r.to_path_buf(),
             Err(_) => {
-                self.status_message =
-                    Some("git: current buffer is outside the repo workdir".into());
+                self.bus
+                    .error("git: current buffer is outside the repo workdir");
                 return;
             }
         };
@@ -192,7 +192,7 @@ impl App {
         {
             Some(p) => p,
             None => {
-                self.status_message = Some("picker: no path for selected item".into());
+                self.bus.warn("picker: no path for selected item");
                 return;
             }
         };
@@ -210,7 +210,7 @@ impl App {
         {
             Some(p) => p,
             None => {
-                self.status_message = Some("picker: no path for selected item".into());
+                self.bus.warn("picker: no path for selected item");
                 return;
             }
         };
@@ -228,7 +228,7 @@ impl App {
         {
             Some(p) => p,
             None => {
-                self.status_message = Some("picker: no path for selected item".into());
+                self.bus.warn("picker: no path for selected item");
                 return;
             }
         };
@@ -246,7 +246,7 @@ impl App {
         {
             Some(p) => p,
             None => {
-                self.status_message = Some("picker: no path for selected item".into());
+                self.bus.warn("picker: no path for selected item");
                 return;
             }
         };
@@ -255,7 +255,7 @@ impl App {
             .editor
             .host_mut()
             .write_clipboard(s.clone());
-        self.status_message = Some(format!("copied: {s}"));
+        self.bus.info(format!("copied: {s}"));
     }
 
     pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -283,7 +283,7 @@ impl App {
         let app_action = match boxed.downcast::<AppAction>() {
             Ok(a) => *a,
             Err(_) => {
-                self.status_message = Some("picker: unknown action type".into());
+                self.bus.warn("picker: unknown action type");
                 return;
             }
         };
@@ -324,7 +324,7 @@ impl App {
                     self.pending_code_actions.clear();
                     self.apply_code_action_or_command(action);
                 } else {
-                    self.status_message = Some("E: code action index out of range".into());
+                    self.bus.error("E: code action index out of range");
                 }
             }
             AppAction::AnvilInstall(name) => {
@@ -342,7 +342,7 @@ impl App {
         let registry = match self.anvil_registry.as_ref() {
             Some(r) => r,
             None => {
-                self.status_message = Some("anvil: registry not available".into());
+                self.bus.error("anvil: registry not available");
                 return;
             }
         };
@@ -357,7 +357,7 @@ impl App {
         let repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
@@ -370,13 +370,13 @@ impl App {
                 match repo.find_branch(name, BranchType::Remote) {
                     Ok(b) => (b, true),
                     Err(_) => {
-                        self.status_message = Some(format!("git: branch '{name}' not found"));
+                        self.bus.error(format!("git: branch '{name}' not found"));
                         return;
                     }
                 }
             }
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -384,7 +384,7 @@ impl App {
         let target_obj = match branch.get().peel(git2::ObjectType::Commit) {
             Ok(o) => o,
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -393,7 +393,7 @@ impl App {
         let tree = match branch.get().peel_to_tree() {
             Ok(t) => t,
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -447,7 +447,7 @@ impl App {
             } else {
                 String::new()
             };
-            self.status_message = Some(format!(
+            self.bus.warn(format!(
                 "git: uncommitted changes in {}{} — stash or commit first",
                 preview.join(", "),
                 suffix,
@@ -458,25 +458,25 @@ impl App {
         let mut cb = git2::build::CheckoutBuilder::new();
         cb.safe();
         if let Err(e) = repo.checkout_tree(tree.as_object(), Some(&mut cb)) {
-            self.status_message = Some(format!("git: checkout failed: {e}"));
+            self.bus.error(format!("git: checkout failed: {e}"));
             return;
         }
 
         if is_remote {
             // Detached HEAD for remote branch checkouts.
             if let Err(e) = repo.set_head_detached(target_oid) {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         } else {
             let refname = format!("refs/heads/{name}");
             if let Err(e) = repo.set_head(&refname) {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         }
 
-        self.status_message = Some(format!("checked out {name}"));
+        self.bus.info(format!("checked out {name}"));
         // Reload non-dirty buffers whose disk file changed during checkout.
         self.checktime_all();
     }
@@ -486,7 +486,7 @@ impl App {
         let repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
@@ -495,7 +495,7 @@ impl App {
         let tag_ref = match repo.find_reference(&refname) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some(format!("git: tag '{name}' not found"));
+                self.bus.error(format!("git: tag '{name}' not found"));
                 return;
             }
         };
@@ -503,7 +503,7 @@ impl App {
         let target_obj = match tag_ref.peel(ObjectType::Commit) {
             Ok(o) => o,
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -512,7 +512,7 @@ impl App {
         let tree = match target_obj.peel_to_tree() {
             Ok(t) => t,
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -564,7 +564,7 @@ impl App {
             } else {
                 String::new()
             };
-            self.status_message = Some(format!(
+            self.bus.warn(format!(
                 "git: uncommitted changes in {}{} — stash or commit first",
                 preview.join(", "),
                 suffix,
@@ -575,16 +575,17 @@ impl App {
         let mut cb = git2::build::CheckoutBuilder::new();
         cb.safe();
         if let Err(e) = repo.checkout_tree(tree.as_object(), Some(&mut cb)) {
-            self.status_message = Some(format!("git: checkout failed: {e}"));
+            self.bus.error(format!("git: checkout failed: {e}"));
             return;
         }
 
         if let Err(e) = repo.set_head_detached(target_oid) {
-            self.status_message = Some(format!("git: {e}"));
+            self.bus.error(format!("git: {e}"));
             return;
         }
 
-        self.status_message = Some(format!("checked out tag {name} (detached HEAD)"));
+        self.bus
+            .info(format!("checked out tag {name} (detached HEAD)"));
         self.checktime_all();
     }
 
@@ -593,7 +594,7 @@ impl App {
         let repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
@@ -601,17 +602,17 @@ impl App {
         let mut remote = match repo.find_remote(name) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some(format!("git: remote '{name}' not found"));
+                self.bus.error(format!("git: remote '{name}' not found"));
                 return;
             }
         };
 
         match remote.fetch(&[] as &[&str], None, None) {
             Ok(()) => {
-                self.status_message = Some(format!("fetched {name}"));
+                self.bus.info(format!("fetched {name}"));
             }
             Err(e) => {
-                self.status_message = Some(format!("git: fetch {name} failed — {e}"));
+                self.bus.error(format!("git: fetch {name} failed — {e}"));
             }
         }
     }
@@ -621,18 +622,18 @@ impl App {
         let mut repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
         let mut opts = git2::StashApplyOptions::new();
         match repo.stash_apply(idx, Some(&mut opts)) {
             Ok(()) => {
-                self.status_message = Some(format!("applied stash@{{{idx}}}"));
+                self.bus.info(format!("applied stash@{{{idx}}}"));
                 self.checktime_all();
             }
             Err(e) => {
-                self.status_message = Some(format!("stash apply conflict — {e}"));
+                self.bus.error(format!("stash apply conflict — {e}"));
             }
         }
     }
@@ -642,18 +643,18 @@ impl App {
         let mut repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
         let mut opts = git2::StashApplyOptions::new();
         match repo.stash_pop(idx, Some(&mut opts)) {
             Ok(()) => {
-                self.status_message = Some(format!("popped stash@{{{idx}}}"));
+                self.bus.info(format!("popped stash@{{{idx}}}"));
                 self.checktime_all();
             }
             Err(e) => {
-                self.status_message = Some(format!("stash pop conflict — {e}"));
+                self.bus.error(format!("stash pop conflict — {e}"));
             }
         }
     }
@@ -663,16 +664,16 @@ impl App {
         let mut repo = match git2::Repository::discover(&cwd) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
         match repo.stash_drop(idx) {
             Ok(()) => {
-                self.status_message = Some(format!("dropped stash@{{{idx}}}"));
+                self.bus.info(format!("dropped stash@{{{idx}}}"));
             }
             Err(e) => {
-                self.status_message = Some(format!("git: stash drop failed — {e}"));
+                self.bus.error(format!("git: stash drop failed — {e}"));
             }
         }
     }
@@ -683,21 +684,21 @@ impl App {
         ) {
             Ok(r) => r,
             Err(_) => {
-                self.status_message = Some("git: not in a repo".into());
+                self.bus.error("git: not in a repo");
                 return;
             }
         };
         let oid = match git2::Oid::from_str(sha) {
             Ok(o) => o,
             Err(e) => {
-                self.status_message = Some(format!("git: bad sha: {e}"));
+                self.bus.error(format!("git: bad sha: {e}"));
                 return;
             }
         };
         let commit = match repo.find_commit(oid) {
             Ok(c) => c,
             Err(e) => {
-                self.status_message = Some(format!("git: {e}"));
+                self.bus.error(format!("git: {e}"));
                 return;
             }
         };
@@ -714,10 +715,10 @@ impl App {
                 self.slots.push(slot);
                 let new_idx = self.slots.len() - 1;
                 self.switch_to(new_idx);
-                self.status_message = Some(format!("showing commit {short_sha}"));
+                self.bus.info(format!("showing commit {short_sha}"));
             }
             Err(e) => {
-                self.status_message = Some(e);
+                self.bus.error(e);
             }
         }
     }

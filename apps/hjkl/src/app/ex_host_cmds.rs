@@ -438,10 +438,10 @@ impl HostCmd<App> for PerfCmd {
         app.recompute_hits = 0;
         app.recompute_throttled = 0;
         app.recompute_runs = 0;
-        app.status_message = Some(if app.perf_overlay {
-            "perf overlay: on (counters reset)".into()
+        app.bus.info(if app.perf_overlay {
+            "perf overlay: on (counters reset)"
         } else {
-            "perf overlay: off".into()
+            "perf overlay: off"
         });
         Some(ExEffect::Ok)
     }
@@ -1159,6 +1159,69 @@ impl HostCmd<App> for AnvilCmd {
     }
 }
 
+// ── Notifications command ──────────────────────────────────────────────────────
+
+/// `:notifications` / `:notif` — dump the notification ring as an info popup.
+///
+/// Newest entry first. Format: `[-HH:MM:SS] [SEVERITY] body`.
+pub(crate) struct NotificationsCmd;
+
+impl HostCmd<App> for NotificationsCmd {
+    fn name(&self) -> &'static str {
+        "notifications"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["notif"]
+    }
+
+    fn min_prefix(&self) -> usize {
+        5 // "notif"
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        use std::time::SystemTime;
+        let now = SystemTime::now();
+        let entries: Vec<String> = app
+            .bus
+            .history()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|h| {
+                let elapsed = now
+                    .duration_since(h.ts)
+                    .map(|d| {
+                        let secs = d.as_secs();
+                        format!(
+                            "-{:02}:{:02}:{:02}",
+                            secs / 3600,
+                            (secs % 3600) / 60,
+                            secs % 60
+                        )
+                    })
+                    .unwrap_or_else(|_| "?".to_string());
+                format!(
+                    "[{}] [{}] {}",
+                    elapsed,
+                    h.severity.label(),
+                    h.display_body()
+                )
+            })
+            .collect();
+        let content = if entries.is_empty() {
+            "(no notifications)".to_string()
+        } else {
+            entries.join("\n")
+        };
+        Some(ExEffect::Info(content))
+    }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────────
 
 fn build_registry() -> hjkl_ex::HostRegistry<App> {
@@ -1207,6 +1270,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(LlastCmd));
     reg.add(Box::new(LspInfoCmd));
     reg.add(Box::new(AnvilCmd));
+    reg.add(Box::new(NotificationsCmd));
     reg
 }
 

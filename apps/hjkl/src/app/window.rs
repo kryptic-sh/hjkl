@@ -59,8 +59,12 @@ impl App {
             AppAction::OnlyFocusedWindow => self.only_focused_window(),
             AppAction::SwapWithSibling => self.swap_with_sibling(),
             AppAction::MoveWindowToNewTab => match self.move_window_to_new_tab() {
-                Ok(()) => self.status_message = Some("moved window to new tab".into()),
-                Err(msg) => self.status_message = Some(msg.to_string()),
+                Ok(()) => {
+                    self.bus.info("moved window to new tab");
+                }
+                Err(msg) => {
+                    self.bus.error(msg.to_string());
+                }
             },
             AppAction::NewSplit => self.dispatch_ex("new"),
             AppAction::ResizeHeight(delta) => self.resize_height(delta * count as i32),
@@ -179,7 +183,7 @@ impl App {
             }
         }
         *self.layout_mut() = LayoutTree::Leaf(focused);
-        self.status_message = Some("only".into());
+        self.bus.info("only");
     }
 
     /// Swap the focused leaf with its sibling in the immediately enclosing
@@ -187,7 +191,7 @@ impl App {
     pub fn swap_with_sibling(&mut self) {
         let focused = self.focused_window();
         if self.layout_mut().swap_with_sibling(focused) {
-            self.status_message = Some("swap".into());
+            self.bus.info("swap");
         }
     }
 
@@ -236,13 +240,13 @@ impl App {
         let focused = self.focused_window();
         match self.layout_mut().remove_leaf(focused) {
             Err(_) => {
-                self.status_message = Some("E444: Cannot close last window".into());
+                self.bus.error("E444: Cannot close last window");
             }
             Ok(new_focus) => {
                 self.windows[focused] = None;
                 self.set_focused_window(new_focus);
                 self.sync_viewport_to_editor();
-                self.status_message = Some("window closed".into());
+                self.bus.info("window closed");
             }
         }
     }

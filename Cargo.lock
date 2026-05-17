@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.17"
+version = "0.21.18"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2106,6 +2106,8 @@ dependencies = [
  "hjkl-engine",
  "hjkl-ex",
  "hjkl-form",
+ "hjkl-holler",
+ "hjkl-holler-tui",
  "hjkl-hover",
  "hjkl-hover-tui",
  "hjkl-info-popup",
@@ -2333,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.17"
+version = "0.21.18"
 dependencies = [
  "clap",
  "floem",
@@ -2343,6 +2345,18 @@ dependencies = [
  "hjkl-editor-gui",
  "hjkl-engine",
  "hjkl-vim",
+]
+
+[[package]]
+name = "hjkl-holler"
+version = "0.1.0"
+
+[[package]]
+name = "hjkl-holler-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-holler",
+ "ratatui",
 ]
 
 [[package]]

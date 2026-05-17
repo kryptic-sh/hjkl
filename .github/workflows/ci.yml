@@ -714,9 +714,11 @@ jobs:
           #   9. hjkl-info-popup-tui    — ratatui adapter for hjkl-info-popup.
           #  10. hjkl-prompt            — ex/search prompt bar state machine (no renderer).
           #  11. hjkl-prompt-tui        — ratatui adapter for hjkl-prompt.
-          #  12. hjkl-layout            — renderer-agnostic window/split layout machinery.
-          #  13. hjkl-app               — host-agnostic application layer.
-          #  14. hjkl                   — the TUI binary (depends on #13).
+          #  12. hjkl-holler            — pure data + ring-buffer notification bus.
+          #  13. hjkl-holler-tui        — ratatui toast renderer (depends on #12).
+          #  14. hjkl-layout            — renderer-agnostic window/split layout machinery.
+          #  15. hjkl-app               — host-agnostic application layer.
+          #  16. hjkl                   — the TUI binary (depends on #15).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -774,6 +776,8 @@ jobs:
           publish_if_missing hjkl-info-popup-tui
           publish_if_missing hjkl-prompt
           publish_if_missing hjkl-prompt-tui
+          publish_if_missing hjkl-holler
+          publish_if_missing hjkl-holler-tui
           publish_if_missing hjkl-layout
           publish_if_missing hjkl-app
           publish_if_missing hjkl

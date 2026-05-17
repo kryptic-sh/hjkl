@@ -257,8 +257,6 @@ impl App {
             self.start_screen = None;
         }
 
-        self.status_message = None;
-
         // Any keypress clears the which-key popup immediately. The
         // prefix resolution branches below call note_prefix_set() again
         // when chaining into a sub-prefix, which re-arms the timer.

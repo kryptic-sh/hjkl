@@ -14,8 +14,8 @@
 //! assert_eq!(prompt.text(), "");
 //! ```
 
-use hjkl_form::TextFieldEditor;
 use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
+use hjkl_form::TextFieldEditor;
 
 // ── PromptKind ────────────────────────────────────────────────────────────────
 
@@ -323,7 +323,11 @@ impl PromptState {
         let n = state.candidates.len();
         let new_idx = match state.selected {
             None => {
-                if forward { 0 } else { n - 1 }
+                if forward {
+                    0
+                } else {
+                    n - 1
+                }
             }
             Some(i) if forward => (i + 1) % n,
             Some(i) => (i + n - 1) % n,
@@ -567,22 +571,14 @@ mod tests {
 
     #[test]
     fn completion_new_has_no_selection() {
-        let comp = CommandCompletion::new(
-            "w".into(),
-            vec!["write".into(), "wall".into()],
-            0..1,
-        );
+        let comp = CommandCompletion::new("w".into(), vec!["write".into(), "wall".into()], 0..1);
         assert!(comp.selected.is_none());
     }
 
     #[test]
     fn advance_completion_cycles_forward() {
         let mut p = PromptState::with_prefill(PromptKind::Command, "w");
-        let comp = CommandCompletion::new(
-            "w".into(),
-            vec!["write".into(), "wall".into()],
-            0..1,
-        );
+        let comp = CommandCompletion::new("w".into(), vec!["write".into(), "wall".into()], 0..1);
         p.advance_completion(Some(comp), true);
         assert_eq!(p.completion.as_ref().unwrap().selected, Some(0));
         p.advance_completion(None, true);
@@ -594,11 +590,7 @@ mod tests {
     #[test]
     fn esc_with_completion_reverts_to_original() {
         let mut p = PromptState::with_prefill(PromptKind::Command, "write");
-        let comp = CommandCompletion::new(
-            "w".into(),
-            vec!["write".into(), "wall".into()],
-            0..5,
-        );
+        let comp = CommandCompletion::new("w".into(), vec!["write".into(), "wall".into()], 0..5);
         p.completion = Some(comp);
         let out = p.handle_input(EngineInput {
             key: EngineKey::Esc,

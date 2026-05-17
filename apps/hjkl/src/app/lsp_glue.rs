@@ -314,7 +314,7 @@ impl App {
         let slot_idx = self.focused_slot_idx();
         self.lsp_detach_buffer(slot_idx);
         self.lsp_attach_buffer(slot_idx);
-        self.status_message = Some("LSP restarted".into());
+        self.bus.warn("LSP restarted");
     }
 
     /// Return `true` when the active buffer has a running, initialized LSP
@@ -423,16 +423,15 @@ impl App {
         make_pending: impl FnOnce(hjkl_lsp::BufferId, (usize, usize)) -> LspPendingRequest,
     ) {
         if self.lsp.is_none() {
-            self.status_message =
-                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
+            self.bus
+                .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
         let (mut params, buffer_id, origin) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
-                self.status_message = Some(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
-                        .into(),
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
                 );
                 return;
             }
@@ -686,12 +685,12 @@ impl App {
                     self.switch_to(idx);
                 }
                 Err(e) => {
-                    self.status_message = Some(format!("LSP goto: {e}"));
+                    self.bus.error(format!("LSP goto: {e}"));
                     return;
                 }
             }
         } else {
-            self.status_message = Some("LSP goto: non-file URI".into());
+            self.bus.error("LSP goto: non-file URI");
             return;
         }
 
@@ -714,13 +713,13 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP {kind_label}: {}", e.message));
+                self.bus.error(format!("LSP {kind_label}: {}", e.message));
                 return;
             }
         };
         let locs = Self::parse_goto_locations(val);
         if locs.is_empty() {
-            self.status_message = Some(format!("no {kind_label} found"));
+            self.bus.warn(format!("no {kind_label} found"));
             return;
         }
         if locs.len() == 1 {
@@ -740,13 +739,13 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP references: {}", e.message));
+                self.bus.error(format!("LSP references: {}", e.message));
                 return;
             }
         };
         let locs = Self::parse_goto_locations(val);
         if locs.is_empty() {
-            self.status_message = Some("no references found".into());
+            self.bus.warn("no references found");
             return;
         }
         self.open_lsp_locations_picker(&locs, "references");
@@ -781,7 +780,7 @@ impl App {
             .collect();
 
         if entries.is_empty() {
-            self.status_message = Some(format!("no {kind_label} found"));
+            self.bus.warn(format!("no {kind_label} found"));
             return;
         }
 
@@ -834,16 +833,15 @@ impl App {
     /// Send a `textDocument/completion` request for the current cursor position.
     pub(crate) fn lsp_request_completion(&mut self) {
         if self.lsp.is_none() {
-            self.status_message =
-                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
+            self.bus
+                .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
         let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
-                self.status_message = Some(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
-                        .into(),
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
                 );
                 return;
             }
@@ -867,17 +865,16 @@ impl App {
     /// `<leader>ca` — request code actions at the cursor.
     pub(crate) fn lsp_code_actions(&mut self) {
         if self.lsp.is_none() {
-            self.status_message =
-                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
+            self.bus
+                .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => absolutize(p),
             None => {
-                self.status_message = Some(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
-                        .into(),
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
                 );
                 return;
             }
@@ -885,7 +882,7 @@ impl App {
         let uri = match hjkl_lsp::uri::from_path(&path).ok() {
             Some(u) => u,
             None => {
-                self.status_message = Some("LSP: cannot build URI".into());
+                self.bus.error("LSP: cannot build URI");
                 return;
             }
         };
@@ -976,26 +973,26 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP codeAction: {}", e.message));
+                self.bus.error(format!("LSP codeAction: {}", e.message));
                 return;
             }
         };
 
         if val.is_null() {
-            self.status_message = Some("no code actions".into());
+            self.bus.warn("no code actions");
             return;
         }
 
         let actions: Vec<lsp_types::CodeActionOrCommand> = match serde_json::from_value(val) {
             Ok(a) => a,
             Err(_) => {
-                self.status_message = Some("LSP codeAction: could not parse response".into());
+                self.bus.error("LSP codeAction: could not parse response");
                 return;
             }
         };
 
         if actions.is_empty() {
-            self.status_message = Some("no code actions".into());
+            self.bus.warn("no code actions");
             return;
         }
 
@@ -1036,10 +1033,10 @@ impl App {
                 if let Some(edit) = ca.edit {
                     match self.apply_workspace_edit(edit) {
                         Ok(count) => {
-                            self.status_message = Some(format!("{count} files changed"));
+                            self.bus.info(format!("{count} files changed"));
                         }
                         Err(e) => {
-                            self.status_message = Some(format!("LSP codeAction: {e}"));
+                            self.bus.error(format!("LSP codeAction: {e}"));
                             return;
                         }
                     }
@@ -1192,17 +1189,16 @@ impl App {
     /// Send a `textDocument/rename` request.
     pub(crate) fn lsp_rename(&mut self, new_name: String) {
         if self.lsp.is_none() {
-            self.status_message =
-                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
+            self.bus
+                .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => absolutize(p),
             None => {
-                self.status_message = Some(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
-                        .into(),
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
                 );
                 return;
             }
@@ -1210,7 +1206,7 @@ impl App {
         let uri = match hjkl_lsp::uri::from_path(&path).ok() {
             Some(u) => u,
             None => {
-                self.status_message = Some("LSP: cannot build URI".into());
+                self.bus.error("LSP: cannot build URI");
                 return;
             }
         };
@@ -1250,30 +1246,30 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP rename: {}", e.message));
+                self.bus.error(format!("LSP rename: {}", e.message));
                 return;
             }
         };
 
         if val.is_null() {
-            self.status_message = Some("E: cannot rename here".into());
+            self.bus.error("E: cannot rename here");
             return;
         }
 
         let workspace_edit: lsp_types::WorkspaceEdit = match serde_json::from_value(val) {
             Ok(we) => we,
             Err(_) => {
-                self.status_message = Some("LSP rename: could not parse response".into());
+                self.bus.error("LSP rename: could not parse response");
                 return;
             }
         };
 
         match self.apply_workspace_edit(workspace_edit) {
             Ok(count) => {
-                self.status_message = Some(format!("renamed: {count} files changed"));
+                self.bus.info(format!("renamed: {count} files changed"));
             }
             Err(e) => {
-                self.status_message = Some(format!("LSP rename: {e}"));
+                self.bus.error(format!("LSP rename: {e}"));
             }
         }
     }
@@ -1283,17 +1279,16 @@ impl App {
     /// `:LspFormat` — send a `textDocument/formatting` request.
     pub(crate) fn lsp_format(&mut self) {
         if self.lsp.is_none() {
-            self.status_message =
-                Some("LSP: not enabled (set [lsp] enabled = true in config)".into());
+            self.bus
+                .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => absolutize(p),
             None => {
-                self.status_message = Some(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)"
-                        .into(),
+                self.bus.error(
+                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
                 );
                 return;
             }
@@ -1301,7 +1296,7 @@ impl App {
         let uri = match hjkl_lsp::uri::from_path(&path).ok() {
             Some(u) => u,
             None => {
-                self.status_message = Some("LSP: cannot build URI".into());
+                self.bus.error("LSP: cannot build URI");
                 return;
             }
         };
@@ -1340,26 +1335,26 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP format: {}", e.message));
+                self.bus.error(format!("LSP format: {}", e.message));
                 return;
             }
         };
 
         if val.is_null() {
-            self.status_message = Some("no formatting changes".into());
+            self.bus.warn("no formatting changes");
             return;
         }
 
         let edits: Vec<lsp_types::TextEdit> = match serde_json::from_value(val) {
             Ok(e) => e,
             Err(_) => {
-                self.status_message = Some("LSP format: could not parse response".into());
+                self.bus.error("LSP format: could not parse response");
                 return;
             }
         };
 
         if edits.is_empty() {
-            self.status_message = Some("no formatting changes".into());
+            self.bus.warn("no formatting changes");
             return;
         }
 
@@ -1371,7 +1366,7 @@ impl App {
         let slot_idx = match slot_idx {
             Some(i) => i,
             None => {
-                self.status_message = Some("LSP format: buffer no longer open".into());
+                self.bus.error("LSP format: buffer no longer open");
                 return;
             }
         };
@@ -1403,7 +1398,7 @@ impl App {
 
         let _ = self.slots[slot_idx].editor.take_dirty();
         self.slots[slot_idx].dirty = true;
-        self.status_message = Some("formatted".into());
+        self.bus.info("formatted");
     }
 
     /// Handle a `textDocument/completion` response.
@@ -1417,7 +1412,7 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP completion: {}", e.message));
+                self.bus.error(format!("LSP completion: {}", e.message));
                 return;
             }
         };
@@ -1441,7 +1436,7 @@ impl App {
         };
 
         if lsp_items.is_empty() {
-            self.status_message = Some("no completions".into());
+            self.bus.warn("no completions");
             return;
         }
 
@@ -1504,24 +1499,24 @@ impl App {
         let val = match result {
             Ok(v) => v,
             Err(e) => {
-                self.status_message = Some(format!("LSP hover: {}", e.message));
+                self.bus.error(format!("LSP hover: {}", e.message));
                 return;
             }
         };
         if val.is_null() {
-            self.status_message = Some("no hover info".into());
+            self.bus.warn("no hover info");
             return;
         }
         let hover: lsp_types::Hover = match serde_json::from_value(val) {
             Ok(h) => h,
             Err(_) => {
-                self.status_message = Some("LSP hover: could not parse response".into());
+                self.bus.error("LSP hover: could not parse response");
                 return;
             }
         };
         let text = extract_hover_markdown(&hover.contents);
         if text.trim().is_empty() {
-            self.status_message = Some("no hover info".into());
+            self.bus.warn("no hover info");
         } else {
             self.info_popup = Some(InfoPopup::markdown("hover", text));
         }
@@ -1611,7 +1606,7 @@ impl App {
             AppAction::LspCodeActions => self.lsp_code_actions(),
             AppAction::LspRename => {
                 // Phase 5 MVP: prompt user to use :Rename <newname>.
-                self.status_message = Some("use :Rename <newname> to rename".into());
+                self.bus.info("use :Rename <newname> to rename");
             }
             AppAction::LspGotoDef => self.lsp_goto_definition(),
             AppAction::LspGotoDecl => self.lsp_goto_declaration(),

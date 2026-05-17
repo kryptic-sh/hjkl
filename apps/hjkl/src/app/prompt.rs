@@ -503,7 +503,7 @@ impl App {
             }
             Err(e) => {
                 self.active_mut().editor.set_search_pattern(None);
-                self.status_message = Some(format!("E: bad search pattern: {e}"));
+                self.bus.error(format!("E: bad search pattern: {e}"));
             }
         }
     }

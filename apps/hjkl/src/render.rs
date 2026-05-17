@@ -20,6 +20,7 @@ use ratatui::{
 };
 
 use crate::app::{App, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TOP_BAR_HEIGHT, window};
+use hjkl_holler_tui::{HollerLayout, render_active};
 
 /// Convert a `ratatui::style::Color::Rgb` to `hjkl_statusline::Color`.
 /// Named/indexed colors fall back to white.
@@ -993,6 +994,16 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         );
         hjkl_hover_tui::render(frame, popup, &hover_theme, frame.area());
     }
+
+    // Toast notifications — float top-right, newest on top.
+    let holler_layout = HollerLayout::default();
+    render_active(
+        frame,
+        area,
+        &app.bus,
+        &holler_layout,
+        std::time::SystemTime::now(),
+    );
 }
 
 /// Render the unified top bar into a single row.
@@ -1363,21 +1374,6 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
             app.recompute_hits,
             app.recompute_throttled,
         );
-        let padded = format!("{content:<width$}", width = width as usize);
-        return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default()
-                    .bg(app.theme.ui.surface_bg)
-                    .fg(app.theme.ui.text),
-            )]),
-            None,
-        );
-    }
-
-    // ── Status message (ex-command result) ──────────────────────────────────
-    if let Some(ref msg) = app.status_message {
-        let content = format!(" {msg}");
         let padded = format!("{content:<width$}", width = width as usize);
         return (
             Line::from(vec![Span::styled(

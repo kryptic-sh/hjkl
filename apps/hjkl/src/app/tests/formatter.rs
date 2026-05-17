@@ -211,9 +211,9 @@ fn auto_indent_gg_eq_g_on_large_file_does_not_break_pipe() {
     let _ = std::fs::remove_file(&path);
 
     assert!(
-        app.status_message.is_none() || !app.status_message.as_ref().unwrap().contains("pipe"),
+        app.bus.last_body().is_none() || !app.bus.last_body().unwrap().contains("pipe"),
         "expected no broken-pipe error; got status: {:?}",
-        app.status_message
+        app.bus.last_body_or_empty()
     );
 }
 
@@ -272,7 +272,7 @@ fn auto_indent_gg_eq_g_invokes_rustfmt() {
     assert!(
         after.contains("let x = 1;"),
         "rustfmt output expected (`let x = 1;`); got:\n{after}\n\nstatus: {:?}",
-        app.status_message
+        app.bus.last_body_or_empty()
     );
 }
 
@@ -319,7 +319,10 @@ fn prettier_md_diagnostic() {
     app.route_chord_key(key(KeyCode::Char('=')));
     app.route_chord_key(key(KeyCode::Char('G')));
 
-    eprintln!("status right after submit: {:?}", app.status_message);
+    eprintln!(
+        "status right after submit: {:?}",
+        app.bus.last_body_or_empty()
+    );
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -334,7 +337,7 @@ fn prettier_md_diagnostic() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    eprintln!("status after poll: {:?}", app.status_message);
+    eprintln!("status after poll: {:?}", app.bus.last_body_or_empty());
     eprintln!(
         "buffer after: {:?}",
         app.active().editor.buffer().as_string()
@@ -403,13 +406,13 @@ fn auto_indent_invokes_rustfmt_for_rs_files() {
     // original compact form and contain properly-spaced output.
     assert!(
         after.contains("let x = 1;"),
-        "rustfmt output missing `let x = 1;`. got:\n{after}\n\nstatus_message: {:?}",
-        app.status_message
+        "rustfmt output missing `let x = 1;`. got:\n{after}\n\nstatus: {:?}",
+        app.bus.last_body_or_empty()
     );
     assert!(
         after.contains("let y = 2;"),
-        "rustfmt output missing `let y = 2;`. got:\n{after}\n\nstatus_message: {:?}",
-        app.status_message
+        "rustfmt output missing `let y = 2;`. got:\n{after}\n\nstatus: {:?}",
+        app.bus.last_body_or_empty()
     );
 }
 
@@ -436,9 +439,7 @@ fn auto_indent_falls_back_to_dumb_for_unknown_ext() {
     );
     // Status message must NOT contain a formatter error.
     assert!(
-        app.status_message
-            .as_deref()
-            .is_none_or(|m| !m.contains("not installed")),
+        !app.bus.last_body_or_empty().contains("not installed"),
         "no formatter-error status for unknown-ext fallback"
     );
 }
@@ -517,7 +518,7 @@ fn auto_indent_dispatches_to_formatter_for_known_ext() {
     );
     // No error in status message.
     assert!(
-        app.status_message.is_none(),
+        app.bus.last_body().is_none(),
         "no status error expected after successful format"
     );
 }

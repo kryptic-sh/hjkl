@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.21.17"
+version = "0.21.18"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -51,6 +51,8 @@ hjkl-prompt = { path = "crates/hjkl-prompt" }
 hjkl-prompt-tui = { path = "crates/hjkl-prompt-tui" }
 hjkl-layout = { path = "crates/hjkl-layout" }
 hjkl-app = { path = "crates/hjkl-app" }
+hjkl-holler = { path = "crates/hjkl-holler" }
+hjkl-holler-tui = { path = "crates/hjkl-holler-tui" }
 
 [profile.release]
 lto = "thin"

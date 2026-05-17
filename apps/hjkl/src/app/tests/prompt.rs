@@ -23,7 +23,7 @@ fn wq_no_filename_does_not_exit() {
     app.active_mut().dirty = true;
     app.dispatch_ex("wq");
     assert!(!app.exit_requested, "wq must not exit when save fails");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E32"), "expected E32, got: {msg}");
 }
 
@@ -33,7 +33,7 @@ fn wq_readonly_does_not_exit() {
     app.active_mut().filename = Some(tmp_path("hjkl_wq_ro_test.txt"));
     app.dispatch_ex("wq");
     assert!(!app.exit_requested, "wq must not exit when save fails");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E45"), "expected E45, got: {msg}");
 }
 
@@ -181,7 +181,7 @@ fn search_backward_prompt_uses_question_dir() {
 fn colon_set_background_dark_swaps_theme() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("set background=dark");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(
         msg, "background=dark",
         "expected background=dark, got: {msg}"
@@ -192,7 +192,7 @@ fn colon_set_background_dark_swaps_theme() {
 fn colon_set_background_light_swaps_theme() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("set background=light");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(
         msg, "background=light",
         "expected background=light, got: {msg}"
@@ -203,7 +203,7 @@ fn colon_set_background_light_swaps_theme() {
 fn colon_set_background_unknown_errors() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("set background=mauve");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.starts_with("E:"),
         "expected E: error for unknown background, got: {msg}"
@@ -253,7 +253,7 @@ fn esc_on_empty_search_prompt_dismisses() {
 fn edit_no_arg_no_filename_e32() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("e");
-    let msg = app.status_message.unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E32"), "expected E32, got: {msg}");
 }
 

@@ -47,7 +47,7 @@ fn close_focused_window_collapses_split() {
         "layout must collapse to 1 leaf"
     );
     // Status confirms closure.
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("window closed"),
         "expected 'window closed' status"
@@ -67,7 +67,7 @@ fn close_last_window_errors() {
         1,
         "last window must not be closed"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E444"), "expected E444 error, got: {msg}");
 }
 
@@ -176,7 +176,7 @@ fn vsp_creates_vertical_split_with_new_on_left() {
     );
 
     // Status says "vsplit".
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("vsplit"),
         "expected 'vsplit' status, got: {msg}"
@@ -208,7 +208,7 @@ fn vnew_creates_empty_buffer_in_left_split() {
     );
 
     // Status says "vnew".
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("vnew"), "expected 'vnew' status, got: {msg}");
 }
 
@@ -562,7 +562,7 @@ fn only_drops_other_windows() {
         app.windows[focused].is_some(),
         "focused window must still be open"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("only"), "expected 'only' status, got: {msg}");
 }
 
@@ -610,7 +610,7 @@ fn new_creates_horizontal_split_empty_buffer() {
         "original window must be below the new one"
     );
 
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("new"), "expected 'new' status, got: {msg}");
 }
 
@@ -647,7 +647,7 @@ fn ctrl_w_x_swaps_with_sibling() {
         "swap_with_sibling must reverse the leaf order"
     );
 
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("swap"), "expected 'swap' status, got: {msg}");
 }
 
@@ -844,7 +844,7 @@ fn tabclose_last_tab_errors() {
     app.dispatch_ex("tabclose");
     // Must refuse — only one tab.
     assert_eq!(app.tabs.len(), 1, "tabclose must not close the last tab");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E444"), "expected E444 error, got: {msg}");
 }
 
@@ -908,7 +908,7 @@ fn tabfirst_jumps_to_first() {
     assert_eq!(app.active_tab, 2);
     app.dispatch_ex("tabfirst");
     assert_eq!(app.active_tab, 0, "tabfirst must jump to tab 0");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("tab 1/"),
         "expected 'tab 1/N' status, got: {msg}"
@@ -922,7 +922,7 @@ fn tabfirst_noop_when_already_first() {
     app.dispatch_ex("tabfirst");
     assert_eq!(app.active_tab, 0);
     // Should still produce a status message (not an error).
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("tab 1/"),
         "no-op must still report position: {msg}"
@@ -952,7 +952,7 @@ fn tablast_jumps_to_last() {
     assert_eq!(app.active_tab, 0);
     app.dispatch_ex("tablast");
     assert_eq!(app.active_tab, 2, "tablast must jump to the last tab");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("tab 3/3"),
         "expected 'tab 3/3' status, got: {msg}"
@@ -966,7 +966,7 @@ fn tablast_noop_when_already_last() {
     // active_tab is already 1 (last).
     app.dispatch_ex("tablast");
     assert_eq!(app.active_tab, 1);
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("tab 2/2"), "no-op must report position: {msg}");
 }
 
@@ -980,7 +980,7 @@ fn tabonly_drops_other_tabs() {
     app.dispatch_ex("tabonly");
     assert_eq!(app.tabs.len(), 1, "tabonly must close all other tabs");
     assert_eq!(app.active_tab, 0, "active_tab must be reset to 0");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "tabonly");
 }
 
@@ -989,7 +989,7 @@ fn tabonly_no_op_with_single_tab() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("tabonly");
     assert_eq!(app.tabs.len(), 1, "tabonly on single tab must stay at 1");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "tabonly", "must report success even as no-op");
 }
 
@@ -1075,7 +1075,7 @@ fn tabmove_no_arg_moves_to_end() {
     // tabmove with no arg: move tab 0 to the end.
     app.dispatch_ex("tabmove");
     assert_eq!(app.active_tab, 2, "tab should now be at position 2 (end)");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "tabmove");
 }
 

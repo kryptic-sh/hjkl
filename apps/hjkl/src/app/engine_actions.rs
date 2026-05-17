@@ -549,7 +549,7 @@ impl App {
                     // of stack headroom on all platforms.
                     const MAX_DEPTH: usize = 128;
                     if self.replay_depth >= MAX_DEPTH {
-                        self.status_message = Some("E223: recursive mapping (depth limit)".into());
+                        self.bus.error("E223: recursive mapping (depth limit)");
                         return;
                     }
                     self.replay_depth += 1;
@@ -558,8 +558,7 @@ impl App {
                     while let Some(ev) = queue.pop_front() {
                         steps += 1;
                         if steps > MAX_STEPS {
-                            self.status_message =
-                                Some("E223: recursive mapping (1024-step limit)".into());
+                            self.bus.error("E223: recursive mapping (1024-step limit)");
                             break;
                         }
                         let mode = super::current_km_mode(self);

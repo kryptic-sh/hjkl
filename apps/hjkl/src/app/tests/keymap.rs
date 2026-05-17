@@ -94,7 +94,10 @@ fn list_user_maps_excludes_builtin_chords() {
         .as_ref()
         .map(|p| p.content.as_str())
         .unwrap_or("");
-    assert!(popup_content.contains('a'), "should list `a` Normal mapping");
+    assert!(
+        popup_content.contains('a'),
+        "should list `a` Normal mapping"
+    );
     // leader+f is a built-in; it must not appear in user map listing.
     assert!(
         !popup_content.contains("<leader>f"),
@@ -131,7 +134,7 @@ fn cyclic_recursive_map_bails_without_stack_overflow() {
     let mut replay = Vec::new();
     let consumed = app.dispatch_keymap_in_mode(km_ev, 1, &mut replay, Mode::Normal);
     assert!(consumed, "nmap a should match and consume");
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("E223"),
         "expected E223 recursive-mapping error, got: {msg:?}"
@@ -222,7 +225,7 @@ fn colon_mapclear_via_extracted_handler() {
         app.user_keymap_records.is_empty(),
         "user_keymap_records should be empty after mapclear via extracted handler"
     );
-    let msg = app.status_message.clone().unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("cleared"), "status should confirm clear");
 }
 

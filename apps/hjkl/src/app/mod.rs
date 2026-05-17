@@ -5,6 +5,7 @@ use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
 use hjkl_form::TextFieldEditor;
+use hjkl_holler::HollerBus;
 use hjkl_keymap::Keymap;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -153,9 +154,11 @@ pub struct App {
     pub prev_active: Option<usize>,
     /// Set to `true` when the FSM or Ctrl-C wants to quit.
     pub exit_requested: bool,
-    /// Last ex-command result (Info / Error / write confirmation).
-    /// Shown in the status line; cleared on next keypress.
-    pub status_message: Option<String>,
+    /// Notification bus — collects all info/warn/error toasts pushed during
+    /// this session. Replaces the old single-slot `status_message` field.
+    /// Rendered as a floating stack in the top-right corner by
+    /// `hjkl_holler_tui::render_active`.
+    pub bus: HollerBus,
     /// Multi-line info popup (e.g. from `:reg`, `:marks`, `:jumps`,
     /// `:changes`, or the K-key LSP hover path). When `Some`, rendered as a
     /// centered overlay; any keypress dismisses it without dispatching to the
@@ -847,7 +850,7 @@ impl App {
             );
             // Surface the *real* reason so the user can tell apart
             // "binary not on PATH" from "wrapper script exits non-zero".
-            self.status_message = Some(format!("{tool_name} probe: {why}"));
+            self.bus.warn(format!("{tool_name} probe: {why}"));
             return false;
         }
 
@@ -879,7 +882,7 @@ impl App {
         });
 
         self.format_pending.insert(buffer_id);
-        self.status_message = Some(format!("{tool_name}: formatting\u{2026}"));
+        self.bus.info(format!("{tool_name}: formatting\u{2026}"));
 
         // Arm the visual flash *immediately* on submit — the user sees
         // confirmation that `=` was accepted without waiting for the
@@ -932,14 +935,8 @@ impl App {
                     current_gen = current_dg,
                     "format result stale; dropping"
                 );
-                // Clear the "formatting…" status only if it's still ours.
-                if self
-                    .status_message
-                    .as_deref()
-                    .is_some_and(|m| m.ends_with("formatting\u{2026}"))
-                {
-                    self.status_message = None;
-                }
+                // Dismiss the "formatting…" toast if it's still active.
+                self.bus.clear_active();
                 continue;
             }
 
@@ -965,14 +962,8 @@ impl App {
                     // feedback. We don't re-arm here — that would push the
                     // flash window past the formatter latency on big files.
 
-                    // Clear the "formatting…" status.
-                    if self
-                        .status_message
-                        .as_deref()
-                        .is_some_and(|m| m.ends_with("formatting\u{2026}"))
-                    {
-                        self.status_message = None;
-                    }
+                    // Dismiss the "formatting…" toast.
+                    self.bus.clear_active();
 
                     // Propagate dirty/syntax/LSP state — same as the old sync path.
                     // Only do this when the formatted slot is the active one,
@@ -986,11 +977,11 @@ impl App {
                     tracing::debug!(buffer_id = result.buffer_id, "format result installed");
                 }
                 Err(hjkl_mangler::FormatError::NotInstalled(name)) => {
-                    self.status_message = Some(format!("{name}: not installed"));
+                    self.bus.error(format!("{name}: not installed"));
                     redraw = true;
                 }
                 Err(e) => {
-                    self.status_message = Some(format!("formatter: {e}"));
+                    self.bus.error(format!("formatter: {e}"));
                     redraw = true;
                 }
             }
@@ -1102,7 +1093,7 @@ impl App {
             next_buffer_id: 1,
             prev_active: None,
             exit_requested: false,
-            status_message: None,
+            bus: HollerBus::new(),
             info_popup: None,
             command_field: None,
             command_completion: None,
@@ -1199,7 +1190,7 @@ impl App {
     /// truth.
     pub fn set_mouse_capture(&mut self, on: bool) {
         if self.mouse_enabled == on {
-            self.status_message = Some(if on { "mouse" } else { "nomouse" }.into());
+            self.bus.info(if on { "mouse" } else { "nomouse" });
             return;
         }
         let res = if on {
@@ -1210,10 +1201,11 @@ impl App {
         match res {
             Ok(()) => {
                 self.mouse_enabled = on;
-                self.status_message = Some(if on { "mouse" } else { "nomouse" }.into());
+                self.bus.info(if on { "mouse" } else { "nomouse" });
             }
             Err(e) => {
-                self.status_message = Some(format!("E: failed to toggle mouse capture: {e}"));
+                self.bus
+                    .error(format!("E: failed to toggle mouse capture: {e}"));
             }
         }
     }
@@ -1358,7 +1350,7 @@ impl App {
             // same status-message prompt the `<leader>rn` keybind uses so the
             // user knows how to proceed.
             MenuAction::LspRename => {
-                self.status_message = Some("use :Rename <newname> to rename".into());
+                self.bus.info("use :Rename <newname> to rename");
             }
             // ── Phase 7: status-line menu actions ────────────────────────────
             MenuAction::LspRestart => self.restart_lsp(),

@@ -166,7 +166,7 @@ impl App {
     }
 
     /// Poll in-flight anvil install handles each tick and fan status events
-    /// into `status_message` and `anvil_log`.
+    /// into the notification bus and `anvil_log`.
     ///
     /// Returns `true` when at least one event arrived and a redraw is useful.
     pub(crate) fn poll_anvil_jobs(&mut self) -> bool {
@@ -186,12 +186,12 @@ impl App {
 
                 match &status {
                     InstallStatus::Done { .. } => {
-                        self.status_message = Some(format!("anvil: installed {name}"));
+                        self.bus.info(format!("anvil: installed {name}"));
                         to_remove.push(name.clone());
                     }
                     InstallStatus::Failed(reason) => {
-                        self.status_message =
-                            Some(format!("anvil: {name} failed \u{2014} {reason}"));
+                        self.bus
+                            .error(format!("anvil: {name} failed \u{2014} {reason}"));
                         to_remove.push(name.clone());
                     }
                     InstallStatus::Downloading {
@@ -204,23 +204,23 @@ impl App {
                             }
                             _ => format!("{bytes_downloaded} bytes"),
                         };
-                        self.status_message = Some(format!("anvil: {name} downloading {pct}"));
+                        self.bus.info(format!("anvil: {name} downloading {pct}"));
                     }
                     InstallStatus::Verifying => {
-                        self.status_message = Some(format!("anvil: {name} verifying"));
+                        self.bus.info(format!("anvil: {name} verifying"));
                     }
                     InstallStatus::Extracting => {
-                        self.status_message = Some(format!("anvil: {name} extracting"));
+                        self.bus.info(format!("anvil: {name} extracting"));
                     }
                     InstallStatus::Installing => {
-                        self.status_message = Some(format!("anvil: {name} installing"));
+                        self.bus.info(format!("anvil: {name} installing"));
                     }
                     InstallStatus::Queued => {
                         // No toast for the queued state — it's transient.
                     }
                     InstallStatus::TofuRecorded { triple, .. } => {
-                        self.status_message =
-                            Some(format!("anvil: {name} TOFU hash recorded for {triple}"));
+                        self.bus
+                            .info(format!("anvil: {name} TOFU hash recorded for {triple}"));
                     }
                 }
             }

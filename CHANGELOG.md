@@ -8,6 +8,41 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.18] - 2026-05-18
+
+### Added
+
+- **`hjkl-holler` 0.1.0** — pure data + ring-buffer notification bus (closes
+  #20). Public surface: `Severity` (`#[non_exhaustive]` — `Info`, `Warn`,
+  `Error`, `default_ttl()`, `label()`); `Holler` (`#[non_exhaustive]`, fields:
+  `id`, `ts`, `severity`, `body`, `ttl`, `count`, `dismissed`; methods:
+  `is_expired()`, `is_fading()`, `display_body()` with `×N` count badge);
+  `HollerBus` (`#[non_exhaustive]`, `DEFAULT_HISTORY_CAP = 200`, `new()`,
+  `Default`, `push()` with duplicate-collapse on consecutive same-body/severity,
+  `info()` / `warn()` / `error()` convenience wrappers with 2 s / 4 s / 6 s TTL,
+  `active(now)`, `history()`, `dismiss(id)`, `clear_active()`, `last_body()`,
+  `last_body_or_empty()`). 21 unit tests + 2 doctests.
+- **`hjkl-holler-tui` 0.1.0** — ratatui toast renderer (closes #20). Public
+  surface: `HollerLayout` (`#[non_exhaustive]`, `max_width: u16`,
+  `max_visible: usize`, `margin: (u16, u16)`, `new()`, `Default` → 48 / 5 /
+  (1,1)); `pub fn render_active(frame, area, bus, layout, now)` — floating
+  bordered stack newest-on-top in the top-right corner, severity-coloured
+  borders (catppuccin palette), `Modifier::DIM` fade in the last 500 ms before
+  expiry. 11 unit tests.
+
+### Changed
+
+- **`apps/hjkl`**: all `App::status_message: Option<String>` sites (~300
+  references across `mod.rs`, `event_loop.rs`, `lsp_glue.rs`, `window.rs`,
+  `buffer_ops.rs`, `mappings_dispatch.rs`, `prompt.rs`, `engine_actions.rs`,
+  `syntax_glue.rs`, `picker_glue.rs`, `ex_dispatch.rs`, `ex_host_cmds.rs`,
+  `render.rs`) migrated to `App::bus: HollerBus`. All status writes replaced
+  with `bus.info()` / `bus.warn()` / `bus.error()`. Toast stack rendered via
+  `render_active()` as a floating overlay — no bottom-line message slot.
+- **`:notifications`** (alias `:notif`, min-prefix 5) ex command added: dumps
+  notification history newest-first as `[-HH:MM:SS] [SEVERITY] body` in an info
+  popup.
+
 ## [0.21.17] - 2026-05-18
 
 ### Added
@@ -2815,7 +2850,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.18...HEAD
+[0.21.18]: https://github.com/kryptic-sh/hjkl/compare/v0.21.17...v0.21.18
 [0.21.17]: https://github.com/kryptic-sh/hjkl/compare/v0.21.16...v0.21.17
 [0.21.16]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.21.16
 [0.21.15]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...v0.21.15

@@ -104,7 +104,7 @@ impl App {
                         }
                         "mouse?" => {
                             let flags_str = self.mouse_flags.as_flags_str();
-                            self.status_message = Some(if self.mouse_enabled {
+                            self.bus.info(if self.mouse_enabled {
                                 format!("mouse={flags_str}")
                             } else {
                                 "nomouse".to_string()
@@ -149,18 +149,19 @@ impl App {
                     self.syntax.set_theme(Arc::new(DotFallbackTheme::dark()));
                     self.active_mut().last_recompute_key = None;
                     self.recompute_and_install();
-                    self.status_message = Some("background=dark".into());
+                    self.bus.info("background=dark");
                     return;
                 }
                 "light" => {
                     self.syntax.set_theme(Arc::new(DotFallbackTheme::light()));
                     self.active_mut().last_recompute_key = None;
                     self.recompute_and_install();
-                    self.status_message = Some("background=light".into());
+                    self.bus.info("background=light");
                     return;
                 }
                 other => {
-                    self.status_message = Some(format!("E: unknown background value: {other}"));
+                    self.bus
+                        .error(format!("E: unknown background value: {other}"));
                     return;
                 }
             }
@@ -230,8 +231,8 @@ impl App {
                 Some(PathBuf::from(path_arg))
             };
             if !force && self.active().disk_state == DiskState::ChangedOnDisk {
-                self.status_message =
-                    Some("E13: file has changed on disk (add ! to override)".into());
+                self.bus
+                    .error("E13: file has changed on disk (add ! to override)");
                 return;
             }
             if self.do_save(target) {
@@ -368,8 +369,8 @@ impl App {
                 if force || save {
                     self.exit_requested = true;
                 } else if self.active().dirty {
-                    self.status_message =
-                        Some("E37: No write since last change (add ! to override)".into());
+                    self.bus
+                        .error("E37: No write since last change (add ! to override)");
                 } else {
                     self.exit_requested = true;
                 }
@@ -394,24 +395,25 @@ impl App {
                     }
                     self.recompute_and_install();
                 }
-                self.status_message = Some(if count == 0 {
-                    "Pattern not found".into()
+                if count == 0 {
+                    self.bus.warn("Pattern not found");
                 } else {
-                    format!("{count} substitutions on {lines_changed} lines")
-                });
+                    self.bus
+                        .info(format!("{count} substitutions on {lines_changed} lines"));
+                }
             }
             ExEffect::Info(msg) => {
                 if msg.contains('\n') {
                     self.info_popup = Some(InfoPopup::new("info", msg));
                 } else {
-                    self.status_message = Some(msg);
+                    self.bus.info(msg);
                 }
             }
             ExEffect::Error(msg) => {
-                self.status_message = Some(format!("E: {msg}"));
+                self.bus.error(format!("E: {msg}"));
             }
             ExEffect::Unknown(c) => {
-                self.status_message = Some(format!("E492: Not an editor command: :{c}"));
+                self.bus.error(format!("E492: Not an editor command: :{c}"));
             }
             ExEffect::EditFile { path, force } => {
                 self.do_edit(&path, force);
@@ -450,7 +452,7 @@ impl App {
             match self.open_new_slot(std::path::PathBuf::from(arg)) {
                 Ok(idx) => idx,
                 Err(msg) => {
-                    self.status_message = Some(msg);
+                    self.bus.info(msg);
                     return;
                 }
             }
@@ -472,7 +474,7 @@ impl App {
                 last_rect: None,
             });
         self.set_focused_window(new_win_id);
-        self.status_message = Some("split".into());
+        self.bus.info("split");
     }
 
     /// `:vsp [file]` / `:vsplit [file]` — open a vertical split.
@@ -500,7 +502,7 @@ impl App {
             match self.open_new_slot(std::path::PathBuf::from(arg)) {
                 Ok(idx) => idx,
                 Err(msg) => {
-                    self.status_message = Some(msg);
+                    self.bus.info(msg);
                     return;
                 }
             }
@@ -522,7 +524,7 @@ impl App {
                 last_rect: None,
             });
         self.set_focused_window(new_win_id);
-        self.status_message = Some("vsplit".into());
+        self.bus.info("vsplit");
     }
 
     /// `:vnew` — open a vertical split with a fresh empty unnamed buffer.
@@ -602,7 +604,7 @@ impl App {
                 last_rect: None,
             });
         self.set_focused_window(new_win_id);
-        self.status_message = Some("vnew".into());
+        self.bus.info("vnew");
     }
 
     /// `:new` — open a horizontal split with a fresh empty unnamed buffer.
@@ -684,7 +686,7 @@ impl App {
                 last_rect: None,
             });
         self.set_focused_window(new_win_id);
-        self.status_message = Some("new".into());
+        self.bus.info("new");
     }
 
     /// Format a one-line summary of the active clipboard backend for the
@@ -727,17 +729,18 @@ impl App {
     }
 
     /// Write slot `idx`'s buffer to `path` (or the slot's own filename if
-    /// `path` is `None`). Updates `status_message` on success or failure.
+    /// `path` is `None`). Pushes a notification on success or failure.
     /// Does NOT change `self.active`. Returns `true` on success.
     fn save_slot(&mut self, idx: usize, path: Option<PathBuf>) -> bool {
         if self.slots[idx].editor.is_readonly() {
-            self.status_message = Some("E45: 'readonly' option is set (add ! to override)".into());
+            self.bus
+                .error("E45: 'readonly' option is set (add ! to override)");
             return false;
         }
         let target = path.or_else(|| self.slots[idx].filename.clone());
         match target {
             None => {
-                self.status_message = Some("E32: No file name".into());
+                self.bus.error("E32: No file name");
                 false
             }
             Some(p) => {
@@ -756,14 +759,14 @@ impl App {
                     && !parent.exists()
                     && let Err(e) = std::fs::create_dir_all(parent)
                 {
-                    self.status_message = Some(format!("E: {}: {e}", parent.display()));
+                    self.bus.error(format!("E: {}: {e}", parent.display()));
                     return false;
                 }
                 match std::fs::write(&p, &content) {
                     Ok(()) => {
                         let line_count = lines.len();
                         let byte_count = content.len();
-                        self.status_message = Some(format!(
+                        self.bus.info(format!(
                             "\"{}\" {}L, {}B written",
                             p.display(),
                             line_count,
@@ -784,7 +787,7 @@ impl App {
                         true
                     }
                     Err(e) => {
-                        self.status_message = Some(format!("E: {}: {e}", p.display()));
+                        self.bus.error(format!("E: {}: {e}", p.display()));
                         false
                     }
                 }
@@ -807,7 +810,8 @@ impl App {
             self.save_slot(i, None);
             written += 1;
         }
-        self.status_message = Some(format!("{written} buffer(s) written, {skipped} skipped"));
+        self.bus
+            .info(format!("{written} buffer(s) written, {skipped} skipped"));
     }
 
     /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
@@ -818,7 +822,7 @@ impl App {
                 .as_ref()
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "[No Name]".into());
-            self.status_message = Some(format!(
+            self.bus.error(format!(
                 "E37: No write since last change for buffer \"{name}\" (add ! to override)"
             ));
             return;
@@ -850,7 +854,7 @@ impl App {
             let curr = match self.active().filename.as_ref().and_then(|p| p.to_str()) {
                 Some(s) => s,
                 None => {
-                    self.status_message = Some("E499: Empty file name for '%'".into());
+                    self.bus.error("E499: Empty file name for '%'");
                     return;
                 }
             };
@@ -872,7 +876,7 @@ impl App {
                 return;
             }
             self.switch_to(idx);
-            self.status_message = Some(format!(
+            self.bus.info(format!(
                 "switched to buffer {}: \"{}\"",
                 idx + 1,
                 self.active()
@@ -904,7 +908,7 @@ impl App {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                self.status_message = Some(format!("\"{path_display}\" {line_count}L"));
+                self.bus.info(format!("\"{path_display}\" {line_count}L"));
                 self.refresh_git_signs_force();
 
                 // Drop the pristine default buffer once a real file is open.
@@ -923,7 +927,7 @@ impl App {
                 }
             }
             Err(msg) => {
-                self.status_message = Some(msg);
+                self.bus.info(msg);
             }
         }
     }
@@ -933,20 +937,20 @@ impl App {
         let path = match self.active().filename.clone() {
             Some(p) => p,
             None => {
-                self.status_message = Some("E32: No file name".into());
+                self.bus.error("E32: No file name");
                 return;
             }
         };
         if !force && self.active().dirty {
-            self.status_message =
-                Some("E37: No write since last change (add ! to override)".into());
+            self.bus
+                .error("E37: No write since last change (add ! to override)");
             return;
         }
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                self.status_message =
-                    Some(format!("E484: Can't open file {}: {e}", path.display()));
+                self.bus
+                    .error(format!("E484: Can't open file {}: {e}", path.display()));
                 return;
             }
         };
@@ -991,7 +995,7 @@ impl App {
         self.recompute_and_install();
         self.active_mut().snapshot_saved();
         self.refresh_git_signs_force();
-        self.status_message = Some(format!(
+        self.bus.info(format!(
             "\"{}\" {line_count}L, {byte_count}B",
             path.display()
         ));
@@ -1099,7 +1103,7 @@ impl App {
             }
         }
         if !messages.is_empty() {
-            self.status_message = Some(messages.join(" | "));
+            self.bus.info(messages.join(" | "));
         }
     }
 
@@ -1109,14 +1113,14 @@ impl App {
     pub(super) fn do_tabfirst(&mut self) {
         if self.active_tab == 0 {
             let m = self.tabs.len();
-            self.status_message = Some(format!("tab 1/{m}"));
+            self.bus.info(format!("tab 1/{m}"));
             return;
         }
         self.sync_viewport_from_editor();
         self.active_tab = 0;
         self.sync_viewport_to_editor();
         let m = self.tabs.len();
-        self.status_message = Some(format!("tab 1/{m}"));
+        self.bus.info(format!("tab 1/{m}"));
     }
 
     /// `:tablast` — jump to the last tab.
@@ -1124,20 +1128,20 @@ impl App {
         let last = self.tabs.len() - 1;
         if self.active_tab == last {
             let m = self.tabs.len();
-            self.status_message = Some(format!("tab {m}/{m}"));
+            self.bus.info(format!("tab {m}/{m}"));
             return;
         }
         self.sync_viewport_from_editor();
         self.active_tab = last;
         self.sync_viewport_to_editor();
         let m = self.tabs.len();
-        self.status_message = Some(format!("tab {m}/{m}"));
+        self.bus.info(format!("tab {m}/{m}"));
     }
 
     /// `:tabonly` / `:tabo` — close all tabs except the current one.
     pub(super) fn do_tabonly(&mut self) {
         if self.tabs.len() <= 1 {
-            self.status_message = Some("tabonly".into());
+            self.bus.info("tabonly");
             return;
         }
         self.sync_viewport_from_editor();
@@ -1158,7 +1162,7 @@ impl App {
         self.active_tab = 0;
 
         self.sync_viewport_to_editor();
-        self.status_message = Some("tabonly".into());
+        self.bus.info("tabonly");
     }
 
     /// Close all tabs whose index is strictly greater than `active_tab`.
@@ -1227,7 +1231,7 @@ impl App {
         };
 
         if target == self.active_tab {
-            self.status_message = Some("tabmove".into());
+            self.bus.info("tabmove");
             return;
         }
 
@@ -1236,7 +1240,7 @@ impl App {
         self.tabs.insert(target, tab);
         self.active_tab = target;
         self.sync_viewport_to_editor();
-        self.status_message = Some("tabmove".into());
+        self.bus.info("tabmove");
     }
 
     /// `:tabs` — show an info popup listing all tabs with their active buffer
@@ -1328,7 +1332,7 @@ impl App {
             match self.open_new_slot(std::path::PathBuf::from(arg)) {
                 Ok(idx) => idx,
                 Err(msg) => {
-                    self.status_message = Some(msg);
+                    self.bus.info(msg);
                     return;
                 }
             }
@@ -1346,13 +1350,13 @@ impl App {
 
         // Sync viewport for the new tab's editor.
         self.sync_viewport_to_editor();
-        self.status_message = Some("tabnew".into());
+        self.bus.info("tabnew");
     }
 
     /// `:tabnext` / `:tabn` — cycle to the next tab (wraps).
     pub(super) fn do_tabnext(&mut self) {
         if self.tabs.len() <= 1 {
-            self.status_message = Some("only one tab".into());
+            self.bus.warn("only one tab");
             return;
         }
         self.sync_viewport_from_editor();
@@ -1360,13 +1364,13 @@ impl App {
         self.sync_viewport_to_editor();
         let n = self.active_tab + 1;
         let m = self.tabs.len();
-        self.status_message = Some(format!("tab {n}/{m}"));
+        self.bus.info(format!("tab {n}/{m}"));
     }
 
     /// `:tabprev` / `:tabp` / `:tabN` — cycle to the previous tab (wraps).
     pub(super) fn do_tabprev(&mut self) {
         if self.tabs.len() <= 1 {
-            self.status_message = Some("only one tab".into());
+            self.bus.warn("only one tab");
             return;
         }
         self.sync_viewport_from_editor();
@@ -1374,7 +1378,7 @@ impl App {
         self.sync_viewport_to_editor();
         let n = self.active_tab + 1;
         let m = self.tabs.len();
-        self.status_message = Some(format!("tab {n}/{m}"));
+        self.bus.info(format!("tab {n}/{m}"));
     }
 
     /// `:tabclose` / `:tabc` — close the current tab.
@@ -1383,7 +1387,7 @@ impl App {
     /// that belonged exclusively to this tab and adjusts `active_tab`.
     pub(super) fn do_tabclose(&mut self) {
         if self.tabs.len() <= 1 {
-            self.status_message = Some("E444: Cannot close last tab".into());
+            self.bus.error("E444: Cannot close last tab");
             return;
         }
         self.sync_viewport_from_editor();
@@ -1406,7 +1410,7 @@ impl App {
         self.sync_viewport_to_editor();
         let n = self.active_tab + 1;
         let m = self.tabs.len();
-        self.status_message = Some(format!("tab {n}/{m}"));
+        self.bus.info(format!("tab {n}/{m}"));
     }
 
     // ── LSP diagnostic navigation ─────────────────────────────────────────────
@@ -1415,7 +1419,7 @@ impl App {
     pub(crate) fn open_diag_picker(&mut self) {
         let diags = self.active().lsp_diags.clone();
         if diags.is_empty() {
-            self.status_message = Some("no diagnostics".into());
+            self.bus.warn("no diagnostics");
             return;
         }
 
@@ -1462,7 +1466,7 @@ impl App {
             .collect();
 
         if candidates.is_empty() {
-            self.status_message = Some("no diagnostics".into());
+            self.bus.warn("no diagnostics");
             return;
         }
 
@@ -1480,7 +1484,8 @@ impl App {
             self.active_mut().editor.ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
-            self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+            self.bus
+                .info(format!("[{}] {}", sev_label(d.severity), msg));
         }
     }
 
@@ -1496,7 +1501,7 @@ impl App {
             .collect();
 
         if candidates.is_empty() {
-            self.status_message = Some("no diagnostics".into());
+            self.bus.warn("no diagnostics");
             return;
         }
 
@@ -1515,7 +1520,8 @@ impl App {
             self.active_mut().editor.ensure_cursor_in_scrolloff();
             self.sync_viewport_from_editor();
             let msg = d.message.lines().next().unwrap_or("").to_string();
-            self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+            self.bus
+                .info(format!("[{}] {}", sev_label(d.severity), msg));
         }
     }
 
@@ -1524,7 +1530,7 @@ impl App {
         let target = self.active().lsp_diags.first().cloned();
         match target {
             None => {
-                self.status_message = Some("no diagnostics".into());
+                self.bus.warn("no diagnostics");
             }
             Some(d) => {
                 self.active_mut()
@@ -1533,7 +1539,8 @@ impl App {
                 self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
-                self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+                self.bus
+                    .info(format!("[{}] {}", sev_label(d.severity), msg));
             }
         }
     }
@@ -1543,7 +1550,7 @@ impl App {
         let target = self.active().lsp_diags.last().cloned();
         match target {
             None => {
-                self.status_message = Some("no diagnostics".into());
+                self.bus.warn("no diagnostics");
             }
             Some(d) => {
                 self.active_mut()
@@ -1552,7 +1559,8 @@ impl App {
                 self.active_mut().editor.ensure_cursor_in_scrolloff();
                 self.sync_viewport_from_editor();
                 let msg = d.message.lines().next().unwrap_or("").to_string();
-                self.status_message = Some(format!("[{}] {}", sev_label(d.severity), msg));
+                self.bus
+                    .info(format!("[{}] {}", sev_label(d.severity), msg));
             }
         }
     }
@@ -1573,7 +1581,7 @@ impl App {
             .collect();
 
         if hits.is_empty() {
-            self.status_message = Some("no diagnostics at cursor".into());
+            self.bus.warn("no diagnostics at cursor");
             return;
         }
 
@@ -1711,17 +1719,17 @@ impl App {
     /// `:Anvil install <name>` — queue a background install job.
     pub(crate) fn anvil_install(&mut self, name: &str) {
         let Some(registry) = self.anvil_registry.as_ref() else {
-            self.status_message = Some("anvil: registry not available".into());
+            self.bus.error("anvil: registry not available");
             return;
         };
         let Some(spec) = registry.get(name) else {
-            self.status_message = Some(format!("anvil: unknown tool `{name}`"));
+            self.bus.error(format!("anvil: unknown tool `{name}`"));
             return;
         };
         let spec = spec.clone();
         let handle = self.anvil_pool.install(name.to_string(), spec);
         self.anvil_handles.insert(name.to_string(), handle);
-        self.status_message = Some(format!("anvil: installing {name}\u{2026}"));
+        self.bus.info(format!("anvil: installing {name}\u{2026}"));
     }
 
     /// `:Anvil uninstall <name>` — remove the tool's package dir and bin symlink.
@@ -1736,10 +1744,11 @@ impl App {
                     let link = bin.join(&spec.bin);
                     let _ = std::fs::remove_file(&link);
                 }
-                self.status_message = Some(format!("anvil: removed {name}"));
+                self.bus.info(format!("anvil: removed {name}"));
             }
             _ => {
-                self.status_message = Some(format!("anvil: failed to resolve paths for {name}"));
+                self.bus
+                    .error(format!("anvil: failed to resolve paths for {name}"));
             }
         }
     }
@@ -1748,18 +1757,18 @@ impl App {
     /// the registry's pinned version.
     pub(crate) fn anvil_update(&mut self, name: &str) {
         let Some(registry) = self.anvil_registry.as_ref() else {
-            self.status_message = Some("anvil: registry not available".into());
+            self.bus.error("anvil: registry not available");
             return;
         };
         let Some(spec) = registry.get(name) else {
-            self.status_message = Some(format!("anvil: unknown tool `{name}`"));
+            self.bus.error(format!("anvil: unknown tool `{name}`"));
             return;
         };
         let spec_version = spec.version.clone();
         let installed = hjkl_anvil::store::read_rev(name).ok().flatten();
         let needs_update = installed.map(|r| r.version != spec_version).unwrap_or(true);
         if !needs_update {
-            self.status_message = Some(format!("anvil: {name} already up to date"));
+            self.bus.info(format!("anvil: {name} already up to date"));
             return;
         }
         self.anvil_install(name);
@@ -1768,7 +1777,7 @@ impl App {
     /// `:Anvil update` (no args) — update every installed-but-outdated tool.
     pub(crate) fn anvil_update_all(&mut self) {
         let Some(registry) = self.anvil_registry.as_ref() else {
-            self.status_message = Some("anvil: registry not available".into());
+            self.bus.error("anvil: registry not available");
             return;
         };
         let names: Vec<String> = registry.names().map(String::from).collect();
@@ -1777,7 +1786,7 @@ impl App {
                 self.anvil_update(name);
             }
         }
-        self.status_message = Some("anvil: update sweep started".into());
+        self.bus.info("anvil: update sweep started");
     }
 }
 

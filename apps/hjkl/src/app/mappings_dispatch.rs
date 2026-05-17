@@ -78,9 +78,9 @@ impl App {
                     });
                 }
                 if any_skipped {
-                    self.status_message = Some("mapping added (terminal mode skipped)".into());
+                    self.bus.info("mapping added (terminal mode skipped)");
                 } else {
-                    self.status_message = Some("mapping added".into());
+                    self.bus.info("mapping added");
                 }
             }
             keymap::RuntimeMapCommand::Remove { modes, lhs } => {
@@ -99,14 +99,11 @@ impl App {
                     self.user_keymap_records
                         .retain(|r| !(r.mode == mode && r.lhs == lhs));
                 }
-                self.status_message = Some(
-                    if removed {
-                        "mapping removed"
-                    } else {
-                        "E31: No such mapping"
-                    }
-                    .into(),
-                );
+                if removed {
+                    self.bus.info("mapping removed");
+                } else {
+                    self.bus.error("E31: No such mapping");
+                }
             }
             keymap::RuntimeMapCommand::Clear { modes } => {
                 let leader = self.config.editor.leader;
@@ -129,7 +126,7 @@ impl App {
                 }
                 self.user_keymap_records
                     .retain(|r| !modes.contains(&r.mode));
-                self.status_message = Some("mappings cleared".into());
+                self.bus.info("mappings cleared");
             }
             keymap::RuntimeMapCommand::List { modes } => {
                 self.info_popup = Some(InfoPopup::new(

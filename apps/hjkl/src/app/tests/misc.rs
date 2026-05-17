@@ -146,7 +146,7 @@ fn do_save_readonly_blocked() {
     let mut app = App::new(None, true, None, None).unwrap();
     app.active_mut().filename = Some(tmp_path("hjkl_phase5_ro_test.txt"));
     app.do_save(None);
-    let msg = app.status_message.unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(
         msg.contains("E45"),
         "expected E45 readonly error, got: {msg}"
@@ -157,7 +157,7 @@ fn do_save_readonly_blocked() {
 fn do_save_no_filename_e32() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.do_save(None);
-    let msg = app.status_message.unwrap_or_default();
+    let msg = app.bus.last_body_or_empty().to_string();
     assert!(msg.contains("E32"), "expected E32, got: {msg}");
 }
 
@@ -597,25 +597,25 @@ fn dispatch_picker_action_opens_buffer_picker() {
 }
 
 #[test]
-fn dispatch_git_action_status_sets_picker_or_status_message() {
+fn dispatch_git_action_status_sets_picker_or_notification() {
     // Without a git repo the picker may or may not open (implementation
     // detail), but the call must not panic.
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(AppAction::GitStatus, 1);
     // Either a picker opened or a status message was set — both are valid.
-    let reacted = app.picker.is_some() || app.status_message.is_some();
+    let reacted = app.picker.is_some() || app.bus.last_body().is_some();
     assert!(reacted, "GitStatus must open picker or set status message");
 }
 
 #[test]
-fn dispatch_lsp_action_lsp_rename_sets_status_message() {
+fn dispatch_lsp_action_lsp_rename_sets_notification() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_action(AppAction::LspRename, 1);
     assert!(
-        app.status_message.is_some(),
-        "LspRename must set status_message"
+        app.bus.last_body().is_some(),
+        "LspRename must push a notification"
     );
-    let msg = app.status_message.as_deref().unwrap_or("");
+    let msg = app.bus.last_body_or_empty();
     assert!(
         msg.contains("Rename"),
         "LspRename status must mention :Rename, got: {msg}"
@@ -635,8 +635,8 @@ fn dispatch_buffer_action_buffer_next_single_slot_sets_message() {
     // With a single slot buffer_next is a no-op that sets a status message.
     app.dispatch_action(AppAction::BufferNext, 1);
     assert!(
-        app.status_message.is_some(),
-        "BufferNext on single slot must set status_message"
+        app.bus.last_body().is_some(),
+        "BufferNext on single slot must push a notification"
     );
 }
 
