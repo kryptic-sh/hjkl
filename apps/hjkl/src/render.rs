@@ -7,8 +7,8 @@
 use hjkl_buffer::{BufferView, DiagOverlay, Gutter, GutterNumbers, Viewport};
 use hjkl_engine::{Host, Query};
 use hjkl_statusline::{
-    Bar, Color as SlColor, Segment as SlSegment, StatusTheme, Style as SlStyle, dirty_segment,
-    filename_segment, loading_segment, mode_segment, pending_segment, recording_segment,
+    Bar, Color as SlColor, Segment as SlSegment, StatusTheme, Style as SlStyle, StyleExt,
+    dirty_segment, filename_segment, loading_segment, mode_segment, pending_segment,
     search_count_segment, truncate_filename,
 };
 use ratatui::{
@@ -31,24 +31,27 @@ fn ratatui_rgb_to_sl(c: Color) -> SlColor {
 }
 
 /// Build a `StatusTheme` from the app's `UiTheme`.
+///
+/// `StatusTheme` is `#[non_exhaustive]`; construct via `Default` + field mutation
+/// so new colour slots added upstream don't break this site.
 fn app_status_theme(app: &App) -> StatusTheme {
     let ui = &app.theme.ui;
-    StatusTheme {
-        bg: ratatui_rgb_to_sl(ui.surface_bg),
-        fg: ratatui_rgb_to_sl(ui.text),
-        fill_bg: ratatui_rgb_to_sl(ui.panel_bg),
-        mode_normal_bg: ratatui_rgb_to_sl(ui.mode_normal_bg),
-        mode_normal_fg: ratatui_rgb_to_sl(ui.on_accent),
-        mode_insert_bg: ratatui_rgb_to_sl(ui.mode_insert_bg),
-        mode_insert_fg: ratatui_rgb_to_sl(ui.on_accent),
-        mode_visual_bg: ratatui_rgb_to_sl(ui.mode_visual_bg),
-        mode_visual_fg: ratatui_rgb_to_sl(ui.on_accent),
-        dirty_fg: ratatui_rgb_to_sl(ui.status_dirty_marker),
-        readonly_fg: ratatui_rgb_to_sl(ui.text),
-        new_file_fg: ratatui_rgb_to_sl(ui.text),
-        recording_bg: ratatui_rgb_to_sl(ui.recording_bg),
-        recording_fg: ratatui_rgb_to_sl(ui.recording_fg),
-    }
+    let mut t = StatusTheme::default();
+    t.bg = ratatui_rgb_to_sl(ui.surface_bg);
+    t.fg = ratatui_rgb_to_sl(ui.text);
+    t.fill_bg = ratatui_rgb_to_sl(ui.panel_bg);
+    t.mode_normal_bg = ratatui_rgb_to_sl(ui.mode_normal_bg);
+    t.mode_normal_fg = ratatui_rgb_to_sl(ui.on_accent);
+    t.mode_insert_bg = ratatui_rgb_to_sl(ui.mode_insert_bg);
+    t.mode_insert_fg = ratatui_rgb_to_sl(ui.on_accent);
+    t.mode_visual_bg = ratatui_rgb_to_sl(ui.mode_visual_bg);
+    t.mode_visual_fg = ratatui_rgb_to_sl(ui.on_accent);
+    t.dirty_fg = ratatui_rgb_to_sl(ui.status_dirty_marker);
+    t.readonly_fg = ratatui_rgb_to_sl(ui.text);
+    t.new_file_fg = ratatui_rgb_to_sl(ui.text);
+    t.recording_bg = ratatui_rgb_to_sl(ui.recording_bg);
+    t.recording_fg = ratatui_rgb_to_sl(ui.recording_fg);
+    t
 }
 
 /// Build the normal-mode status bar as an agnostic `Bar`.
@@ -68,11 +71,9 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
     };
 
     // ── Left side ────────────────────────────────────────────────────────────
+    // Note: recording @r is handled in build_status_line as a full-line
+    // takeover (vim bottom-line behaviour). It never reaches this path.
     bar.left.push(mode_segment(mode, &theme));
-
-    if let Some(reg) = app.active().editor.recording_register() {
-        bar.left.push(recording_segment(reg, &theme));
-    }
 
     {
         let pc = app.active().editor.pending_count();
@@ -212,14 +213,10 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
 
     // Compute available chars for filename:
     // total = left_fixed + " " + name + suffix + " " + dirty + search + diag + loading + pos + pct
+    // Note: rec_chars omitted — recording is a full-line takeover handled in
+    // build_status_line and never reaches this function.
     let w = width as usize;
     let mode_chars = mode.chars().count() + 2; // " MODE "
-    let rec_chars = app
-        .active()
-        .editor
-        .recording_register()
-        .map(|r| format!(" REC @{r} ").chars().count())
-        .unwrap_or(0);
     let pending_chars = {
         let pc = app.active().editor.pending_count();
         let po = app.active().editor.pending_op();
@@ -237,7 +234,6 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         loading_label.chars().count() + 2 // " ... "
     };
     let reserved = mode_chars
-        + rec_chars
         + pending_chars
         + 2 // " name "
         + suffix.chars().count()
@@ -1597,6 +1593,19 @@ pub fn format_status_line_full(
 #[cfg(test)]
 pub fn format_write_message(path: &str, lines: usize, bytes: usize) -> String {
     format!("\"{}\" {}L, {}B written", path, lines, bytes)
+}
+
+/// Render the status-line content for `app` at the given `width` and return
+/// the concatenated plaintext string. Used in unit tests to assert which
+/// branch (full-line banner vs normal bar) fires.
+#[cfg(test)]
+pub(crate) fn status_line_text(app: &App, width: u16) -> String {
+    let (line, _cursor_col) = build_status_line(app, width);
+    line.spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// Centered popup containing the picker's query input + scrollable

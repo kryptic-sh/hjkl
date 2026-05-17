@@ -28,8 +28,8 @@ hjkl-engine = { version = "0.11", default-features = false, features = ["crosste
 hjkl-editor = { version = "0.8", default-features = false, features = ["crossterm", "ratatui"] }
 hjkl-ex = "0.4"
 hjkl-editor-tui = "0.1"
-hjkl-statusline = "0.1"
-hjkl-statusline-tui = "0.1"
+hjkl-statusline = "0.2"
+hjkl-statusline-tui = "0.2"
 hjkl-bonsai = "0.7"
 hjkl-theme-tui = "0.1"
 hjkl-clipboard = "0.5"

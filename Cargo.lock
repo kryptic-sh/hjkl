@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.7"
+version = "0.21.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2155,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.7"
+version = "0.21.8"
 dependencies = [
  "clap",
  "floem",
@@ -2390,11 +2390,14 @@ dependencies = [
 
 [[package]]
 name = "hjkl-statusline"
-version = "0.1.0"
+version = "0.2.0"
+dependencies = [
+ "hjkl-theme",
+]
 
 [[package]]
 name = "hjkl-statusline-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hjkl-statusline",
  "ratatui",

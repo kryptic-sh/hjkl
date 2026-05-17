@@ -8,62 +8,55 @@
 
 #![forbid(unsafe_code)]
 
-/// RGBA color (all channels 0–255, alpha ignored by TUI renderers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
+// ── Re-export hjkl-theme types ──────────────────────────────────────────────
+//
+// `Color`, `Modifiers`, and `Style` (aliased from hjkl-theme's `StyleSpec`)
+// are the canonical types shared across the hjkl crate stack. Consumers that
+// hold both a `Theme` and a `Bar` no longer need conversion shims.
+pub use hjkl_theme::Color;
+pub use hjkl_theme::Modifiers;
+/// Alias for [`hjkl_theme::StyleSpec`]: foreground, background, modifiers.
+pub use hjkl_theme::StyleSpec as Style;
+
+// ── Style builder helpers ────────────────────────────────────────────────────
+//
+// `StyleSpec` from hjkl-theme carries only fields; builder methods live here
+// as a local extension so callers can chain `.fg()`, `.bg()`, `.bold()`, etc.
+
+/// Extension methods for building a [`Style`] (`hjkl_theme::StyleSpec`) by chaining.
+pub trait StyleExt: Sized {
+    /// Return a default (all-None / all-false) style.
+    fn default_style() -> Self;
+    /// Set foreground color.
+    fn fg(self, fg: Color) -> Self;
+    /// Set background color.
+    fn bg(self, bg: Color) -> Self;
+    /// Enable bold.
+    fn bold(self) -> Self;
+    /// Enable italic.
+    fn italic(self) -> Self;
 }
 
-impl Color {
-    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b }
-    }
-}
-
-/// Text modifiers for a segment.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Modifiers {
-    pub bold: bool,
-    pub italic: bool,
-}
-
-/// Pre-resolved style: foreground, background, and modifiers.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Style {
-    pub fg: Option<Color>,
-    pub bg: Option<Color>,
-    pub modifiers: Modifiers,
-}
-
-impl Style {
-    pub const fn default_style() -> Self {
-        Self {
-            fg: None,
-            bg: None,
-            modifiers: Modifiers {
-                bold: false,
-                italic: false,
-            },
-        }
+impl StyleExt for Style {
+    fn default_style() -> Self {
+        Self::default()
     }
 
-    pub fn fg(self, fg: Color) -> Self {
+    fn fg(self, fg: Color) -> Self {
         Self {
             fg: Some(fg),
             ..self
         }
     }
 
-    pub fn bg(self, bg: Color) -> Self {
+    fn bg(self, bg: Color) -> Self {
         Self {
             bg: Some(bg),
             ..self
         }
     }
 
-    pub fn bold(self) -> Self {
+    fn bold(self) -> Self {
         Self {
             modifiers: Modifiers {
                 bold: true,
@@ -73,7 +66,7 @@ impl Style {
         }
     }
 
-    pub fn italic(self) -> Self {
+    fn italic(self) -> Self {
         Self {
             modifiers: Modifiers {
                 italic: true,
@@ -85,6 +78,7 @@ impl Style {
 }
 
 /// A single horizontal segment in the statusline.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum Segment {
     /// Pre-styled text. The renderer paints it verbatim.
@@ -183,6 +177,10 @@ impl Bar {
 // ── Theme ──────────────────────────────────────────────────────────────────
 
 /// Theme colours the status row needs. Caller populates from its own theme.
+///
+/// `#[non_exhaustive]` allows adding new colour slots (e.g. per-severity
+/// diagnostic colours, #135) without a breaking semver bump for consumers.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct StatusTheme {
     pub bg: Color,
@@ -201,9 +199,49 @@ pub struct StatusTheme {
     pub recording_fg: Color,
 }
 
+impl Default for StatusTheme {
+    fn default() -> Self {
+        let grey = Color::rgb(0xaa, 0xaa, 0xaa);
+        let dark = Color::rgb(0x2e, 0x34, 0x40);
+        Self {
+            bg: Color::rgb(0x2a, 0x32, 0x40),
+            fg: Color::rgb(0xe5, 0xe9, 0xf0),
+            fill_bg: Color::rgb(0x1e, 0x22, 0x2a),
+            mode_normal_bg: Color::rgb(0x5e, 0x81, 0xac),
+            mode_normal_fg: dark,
+            mode_insert_bg: Color::rgb(0x7e, 0xe7, 0x87),
+            mode_insert_fg: dark,
+            mode_visual_bg: Color::rgb(0xd0, 0x8e, 0x4b),
+            mode_visual_fg: dark,
+            dirty_fg: Color::rgb(0xeb, 0xcb, 0x8b),
+            readonly_fg: grey,
+            new_file_fg: grey,
+            recording_bg: Color::rgb(0xbf, 0x61, 0x6a),
+            recording_fg: dark,
+        }
+    }
+}
+
+impl StatusTheme {
+    /// Construct with explicit `bg` and `fg`; remaining slots filled with
+    /// sensible Nord-palette greys so callers can mutate only what they need.
+    pub fn new(bg: Color, fg: Color) -> Self {
+        Self {
+            bg,
+            fg,
+            ..Self::default()
+        }
+    }
+}
+
 // ── Mode ────────────────────────────────────────────────────────────────────
 
 /// High-level mode classification for color selection.
+///
+/// `#[non_exhaustive]` so future variants (Command, ExSearch, IncSearch,
+/// Macro, Terminal sub-kinds, …) can be added without breaking exhaustive
+/// matches in downstream code.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeKind {
     Normal,
@@ -537,5 +575,25 @@ mod tests {
         let s = truncate_filename(long, 10);
         assert!(s.starts_with('\u{2026}'), "must start with ellipsis: {s:?}");
         assert!(s.chars().count() <= 10);
+    }
+
+    #[test]
+    fn status_theme_default_is_sensible() {
+        let t = StatusTheme::default();
+        // All RGB channels must be in range (trivially true for u8, but assert
+        // that the struct doesn't have any zero-alpha trap).
+        assert_eq!(t.bg.a, 255, "default bg alpha must be 255");
+        assert_eq!(t.fg.a, 255, "default fg alpha must be 255");
+    }
+
+    #[test]
+    fn status_theme_new_sets_bg_fg() {
+        let bg = Color::rgb(0x10, 0x20, 0x30);
+        let fg = Color::rgb(0xe0, 0xd0, 0xc0);
+        let t = StatusTheme::new(bg, fg);
+        assert_eq!(t.bg, bg);
+        assert_eq!(t.fg, fg);
+        // Other slots come from default — spot-check one.
+        assert_eq!(t.recording_bg, StatusTheme::default().recording_bg);
     }
 }

@@ -58,6 +58,8 @@ pub fn to_ratatui_style(s: Style) -> RStyle {
 fn segment_to_span(seg: &Segment) -> Span<'static> {
     match seg {
         Segment::Text { content, style } => Span::styled(content.clone(), to_ratatui_style(*style)),
+        // Future variants (Icon, Separator, PowerlineChevron, …) fall back to empty.
+        _ => Span::raw(String::new()),
     }
 }
 
@@ -84,26 +86,28 @@ pub fn to_line(bar: &Bar, width: u16) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_statusline::{Bar, Color, Segment, StatusTheme, Style, cursor_segment, mode_segment};
+    use hjkl_statusline::{
+        Bar, Color, Segment, StatusTheme, Style, StyleExt, cursor_segment, mode_segment,
+    };
     use ratatui::{Terminal, backend::TestBackend};
 
+    /// Build a test theme via mutation — `StatusTheme` is `#[non_exhaustive]`
+    /// so struct literals are not permitted outside the defining crate.
     fn test_theme() -> StatusTheme {
-        StatusTheme {
-            bg: Color::rgb(0x2a, 0x32, 0x40),
-            fg: Color::rgb(0xe5, 0xe9, 0xf0),
-            fill_bg: Color::rgb(0x1e, 0x22, 0x2a),
-            mode_normal_bg: Color::rgb(0x5e, 0x81, 0xac),
-            mode_normal_fg: Color::rgb(0x2e, 0x34, 0x40),
-            mode_insert_bg: Color::rgb(0x7e, 0xe7, 0x87),
-            mode_insert_fg: Color::rgb(0x2e, 0x34, 0x40),
-            mode_visual_bg: Color::rgb(0xd0, 0x8e, 0x4b),
-            mode_visual_fg: Color::rgb(0x2e, 0x34, 0x40),
-            dirty_fg: Color::rgb(0xeb, 0xcb, 0x8b),
-            readonly_fg: Color::rgb(0xbf, 0x61, 0x6a),
-            new_file_fg: Color::rgb(0xa3, 0xbe, 0x8c),
-            recording_bg: Color::rgb(0xbf, 0x61, 0x6a),
-            recording_fg: Color::rgb(0x2e, 0x34, 0x40),
-        }
+        let mut t = StatusTheme::new(Color::rgb(0x2a, 0x32, 0x40), Color::rgb(0xe5, 0xe9, 0xf0));
+        t.fill_bg = Color::rgb(0x1e, 0x22, 0x2a);
+        t.mode_normal_bg = Color::rgb(0x5e, 0x81, 0xac);
+        t.mode_normal_fg = Color::rgb(0x2e, 0x34, 0x40);
+        t.mode_insert_bg = Color::rgb(0x7e, 0xe7, 0x87);
+        t.mode_insert_fg = Color::rgb(0x2e, 0x34, 0x40);
+        t.mode_visual_bg = Color::rgb(0xd0, 0x8e, 0x4b);
+        t.mode_visual_fg = Color::rgb(0x2e, 0x34, 0x40);
+        t.dirty_fg = Color::rgb(0xeb, 0xcb, 0x8b);
+        t.readonly_fg = Color::rgb(0xbf, 0x61, 0x6a);
+        t.new_file_fg = Color::rgb(0xa3, 0xbe, 0x8c);
+        t.recording_bg = Color::rgb(0xbf, 0x61, 0x6a);
+        t.recording_fg = Color::rgb(0x2e, 0x34, 0x40);
+        t
     }
 
     #[test]

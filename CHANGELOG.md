@@ -8,6 +8,41 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.8] - 2026-05-17
+
+### Fixed
+
+- **Fix 1 (HIGH parity)** — restore recording-register full-line takeover.
+  `build_normal_status_bar` no longer pushes a `recording_segment` badge; the
+  `build_status_line` early-return guard (vim bottom-line takeover) is the sole
+  path. `rec_chars` reservation removed from the filename-width calculation. Two
+  new tests in `apps/hjkl/src/app/tests/render_recording.rs` assert the
+  full-width banner fires when active and falls through to the normal bar when
+  stopped.
+- **Fix 2 (HIGH API freeze)** — `#[non_exhaustive]` on `Segment`, `ModeKind`,
+  and `StatusTheme` in `hjkl-statusline`. Future variants / colour slots can
+  land without breaking exhaustive matches or struct literals in downstream
+  code. `StatusTheme` gains a `Default` impl (Nord palette greys) and a
+  `StatusTheme::new(bg, fg)` constructor. `hjkl-statusline-tui`'s
+  `segment_to_span` match gets a `_ =>` fallback arm.
+- **Fix 3 (CRITICAL theme consistency)** — `hjkl-statusline` drops its parallel
+  `Color`, `Modifiers`, and `Style` type definitions. It now re-exports
+  `hjkl_theme::{Color, Modifiers, StyleSpec as Style}`. Builder methods (`fg`,
+  `bg`, `bold`, `italic`, `default_style`) live on a new `StyleExt` trait.
+  `hjkl-statusline-tui` imports `StyleExt`; `apps/hjkl/src/render.rs` imports
+  `StyleExt` and constructs `StatusTheme` via mutation (required by
+  `#[non_exhaustive]` outside the defining crate). `hjkl-theme::Color` carries
+  an alpha channel (`a: u8`); TUI renderers already ignore it. `hjkl-statusline`
+  bumped 0.1.0 → **0.2.0** (breaking: type aliases changed, struct literals
+  blocked). `hjkl-statusline-tui` bumped 0.1.0 → **0.2.0** (consumer re-pin).
+  `apps/hjkl` repinned to `"0.2"` for both.
+
+### Changed
+
+- **`hjkl-app` 0.4.0 → 0.4.1** (courtesy bump per always-bump policy, #136). No
+  source changes; version advance keeps it from going stale as upstream
+  statusline crates roll.
+
 ## [0.21.7] - 2026-05-17
 
 ### Fixed
@@ -2531,7 +2566,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...HEAD
+[0.21.8]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...v0.21.8
 [0.21.7]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...v0.21.7
 [0.21.6]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...v0.21.6
 [0.21.5]: https://github.com/kryptic-sh/hjkl/compare/v0.21.4...v0.21.5

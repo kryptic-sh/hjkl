@@ -571,6 +571,7 @@ pub mod misc;
 pub mod mouse;
 pub mod pickers;
 pub mod prompt;
+pub mod render_recording;
 pub mod splits_windows;
 pub mod syntax;
 pub mod visual;
