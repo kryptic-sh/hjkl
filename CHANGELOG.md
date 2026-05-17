@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-05-17
+
+### Fixed
+
+- v0.21.0's Cargo.lock still listed `hjkl` and `hjkl-gui` workspace members at
+  `version = "0.20.4"` because `cargo generate-lockfile` doesn't refresh
+  workspace-member version entries — only `cargo build` does (memory
+  `feedback_bctp_lockfile_regen.md`). `cargo publish -p hjkl --locked` rejected
+  the mismatch. v0.21.0 was tagged but `hjkl@0.21.0` never reached crates.io;
+  v0.21.1 restores publish.
+
 ## [0.21.0] - 2026-05-17
 
 ### Changed
@@ -2428,7 +2439,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/kryptic-sh/hjkl/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...v0.21.0
 [0.20.4]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...v0.20.3
