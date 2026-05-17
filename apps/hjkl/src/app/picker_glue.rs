@@ -730,7 +730,7 @@ fn build_scratch_slot(
     syntax: &mut crate::syntax::SyntaxLayer,
     buffer_id: BufferId,
     content: &str,
-    config: &crate::config::Config,
+    config: &hjkl_app::config::Config,
 ) -> Result<BufferSlot, String> {
     let mut buffer = Buffer::new();
     let content = content.strip_suffix('\n').unwrap_or(content);

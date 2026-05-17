@@ -207,7 +207,7 @@ fn with_config_updates_leader_and_reapplies_to_existing_slot() {
     let app = App::new(None, false, None, None).unwrap();
     assert_eq!(app.config.editor.leader, ' ');
 
-    let mut cfg = crate::config::Config::default();
+    let mut cfg = hjkl_app::config::Config::default();
     cfg.editor.leader = '\\';
     cfg.editor.tab_width = 2;
     let app = app.with_config(cfg);
@@ -229,7 +229,7 @@ fn with_config_preserves_readonly_on_existing_slot() {
     let app = App::new(None, true, None, None).unwrap();
     assert!(app.active().editor.is_readonly());
 
-    let app = app.with_config(crate::config::Config::default());
+    let app = app.with_config(hjkl_app::config::Config::default());
     assert!(
         app.active().editor.is_readonly(),
         "readonly state must survive with_config re-application"
@@ -258,7 +258,7 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
     )
     .unwrap();
 
-    let cfg = crate::config::load_from(tmp.path()).expect("load_from must succeed");
+    let cfg = hjkl_app::config::load_from(tmp.path()).expect("load_from must succeed");
     // Bundled defaults survived for fields the user file omitted:
     assert_eq!(cfg.editor.huge_file_threshold, 50_000);
     assert!(cfg.editor.expandtab);
@@ -284,7 +284,7 @@ fn config_load_from_disk_validation_failure_surfaces() {
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
     writeln!(tmp, "[editor]\nhuge_file_threshold = 0").unwrap();
 
-    let cfg = crate::config::load_from(tmp.path()).expect("parse must succeed");
+    let cfg = hjkl_app::config::load_from(tmp.path()).expect("parse must succeed");
 
     use hjkl_config::Validate;
     let err = cfg.validate().unwrap_err();

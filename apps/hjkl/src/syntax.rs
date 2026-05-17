@@ -21,7 +21,7 @@ use hjkl_buffer::Sign;
 use hjkl_engine::Query;
 use hjkl_theme_tui::ToRatatui;
 
-use crate::lang::{GrammarRequest, LanguageDirectory};
+use hjkl_app::lang::{GrammarRequest, LanguageDirectory};
 
 /// Stable identifier for an open buffer. Assigned by the App; carried
 /// through every syntax-pipeline message so the worker can multiplex

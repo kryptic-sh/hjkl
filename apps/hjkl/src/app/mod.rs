@@ -516,7 +516,7 @@ pub struct App {
     /// Shared grammar resolver. `Arc` so the syntax layer and every picker
     /// source point at the same in-memory `Grammar` cache (one dlopen +
     /// query parse per language, app-wide).
-    pub directory: std::sync::Arc<crate::lang::LanguageDirectory>,
+    pub directory: std::sync::Arc<hjkl_app::lang::LanguageDirectory>,
     /// App-wide theme (UI chrome + syntax). Loaded once at startup from
     /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
     pub theme: crate::theme::AppTheme,
@@ -548,7 +548,7 @@ pub struct App {
     /// receive `Config::default()` (the bundled values); main wires the
     /// XDG-merged value via [`Self::with_config`] before entering the
     /// event loop.
-    pub config: crate::config::Config,
+    pub config: hjkl_app::config::Config,
     /// Animated start screen shown when no file argument was given.
     /// Cleared (set to `None`) on the first keypress.
     pub start_screen: Option<crate::start_screen::StartScreen>,
@@ -716,7 +716,7 @@ pub(super) fn build_slot(
     syntax: &mut SyntaxLayer,
     buffer_id: BufferId,
     path: Option<PathBuf>,
-    config: &crate::config::Config,
+    config: &hjkl_app::config::Config,
 ) -> Result<BufferSlot, String> {
     let mut buffer = Buffer::new();
     let mut is_new_file = false;
@@ -751,7 +751,7 @@ pub(super) fn build_slot(
         ..Options::default()
     };
     if let Some(ref p) = path {
-        crate::editorconfig::overlay_for_path(&mut ec_opts, p);
+        hjkl_app::editorconfig::overlay_for_path(&mut ec_opts, p);
     }
     let mut editor = Editor::new(buffer, host, ec_opts);
     if let Ok(size) = crossterm::terminal::size() {
@@ -1765,7 +1765,7 @@ impl App {
         // (hjkl-bonsai's bundled DotFallbackTheme is left untouched
         // for other consumers).
         let theme = crate::theme::AppTheme::default_dark();
-        let directory = std::sync::Arc::new(crate::lang::LanguageDirectory::new()?);
+        let directory = std::sync::Arc::new(hjkl_app::lang::LanguageDirectory::new()?);
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
         let buffer_id: BufferId = 0;
         // App::new uses bundled config defaults; main wires the XDG-merged
@@ -1773,7 +1773,7 @@ impl App {
         // initial Options seed, the bundled defaults are correct because
         // tests never customize config and main re-applies overrides via
         // `apply_options` after `with_config`.
-        let bootstrap_config = crate::config::Config::default();
+        let bootstrap_config = hjkl_app::config::Config::default();
         let no_file = filename.is_none();
         let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
             .map_err(|s| anyhow::anyhow!(s))?;
@@ -1839,7 +1839,7 @@ impl App {
             last_rect: None,
         };
 
-        let default_leader = crate::config::Config::default().editor.leader;
+        let default_leader = hjkl_app::config::Config::default().editor.leader;
         Ok(Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
@@ -1878,7 +1878,7 @@ impl App {
             recompute_throttled: 0,
             recompute_runs: 0,
             syntax_stale_drops: 0,
-            config: crate::config::Config::default(),
+            config: hjkl_app::config::Config::default(),
             start_screen,
             grammar_load_error: None,
             lsp: None,
@@ -1897,7 +1897,7 @@ impl App {
             replay_depth: 0,
             // Default to bundled config's value; main overrides via with_config
             // before crossterm capture is enabled.
-            mouse_enabled: crate::config::Config::default().editor.mouse,
+            mouse_enabled: hjkl_app::config::Config::default().editor.mouse,
             mouse_flags: MouseFlags::all(),
             app_keymap: keymap_build::build_app_keymap(default_leader),
             anvil_pool: hjkl_anvil::InstallPool::new(),
@@ -1954,7 +1954,7 @@ impl App {
         }
     }
 
-    pub fn with_config(mut self, config: crate::config::Config) -> Self {
+    pub fn with_config(mut self, config: hjkl_app::config::Config) -> Self {
         self.mouse_enabled = config.editor.mouse;
         self.which_key_enabled = config.which_key.enabled;
         self.which_key_delay = std::time::Duration::from_millis(config.which_key.delay_ms);
@@ -1975,7 +1975,7 @@ impl App {
                 ..Options::default()
             };
             if let Some(p) = slot.filename.as_ref() {
-                crate::editorconfig::overlay_for_path(&mut opts, p);
+                hjkl_app::editorconfig::overlay_for_path(&mut opts, p);
             }
             slot.editor.apply_options(&opts);
         }

@@ -6,8 +6,9 @@ use hjkl_bonsai::{CommentMarkerPass, Highlighter, Theme};
 use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::PreviewSpans;
 
+use hjkl_app::lang::GrammarRequest;
+
 use crate::git_worker::GitJob;
-use crate::lang::GrammarRequest;
 use crate::syntax::LoadEvent;
 
 use super::App;

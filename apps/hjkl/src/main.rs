@@ -2,8 +2,6 @@
 
 mod app;
 mod completion;
-mod config;
-mod editorconfig;
 mod embed;
 mod git;
 mod git_worker;
@@ -12,7 +10,6 @@ mod host;
 pub(crate) mod hover_popup;
 mod keymap_actions;
 mod keymap_translate;
-mod lang;
 pub(crate) mod menu;
 mod nvim_api;
 mod picker;
@@ -287,9 +284,9 @@ fn main() -> Result<()> {
     // we use the XDG path. In both cases the bundled `src/config.toml`
     // defaults are applied first and the user file is deep-merged on top.
     let cfg = match args.config.as_deref() {
-        Some(path) => config::load_from(path)
+        Some(path) => hjkl_app::config::load_from(path)
             .map(|c| (c, hjkl_config::ConfigSource::File(path.to_path_buf()))),
-        None => config::load(),
+        None => hjkl_app::config::load(),
     };
     let cfg = match cfg {
         Ok((c, _src)) => c,

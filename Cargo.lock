@@ -2097,6 +2097,7 @@ dependencies = [
  "ec4rs",
  "git2",
  "hjkl-anvil",
+ "hjkl-app",
  "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-clipboard",
@@ -2152,6 +2153,22 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "zip",
+]
+
+[[package]]
+name = "hjkl-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ec4rs",
+ "hjkl-bonsai",
+ "hjkl-config",
+ "hjkl-engine",
+ "hjkl-lsp",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
 ]
 
 [[package]]
@@ -2282,6 +2299,7 @@ version = "0.19.2"
 dependencies = [
  "clap",
  "floem",
+ "hjkl-app",
  "hjkl-buffer",
  "hjkl-editor",
  "hjkl-editor-gui",
