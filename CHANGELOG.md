@@ -8,6 +8,26 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.10] - 2026-05-18
+
+### Added
+
+- **`hjkl-keymap-crossterm` 0.1.0** — new renderer-adapter crate (closes #142).
+  Extracts `apps/hjkl/src/keymap_translate.rs` (~179 LOC) into
+  `crates/hjkl-keymap-crossterm/`. Exposes `pub fn from_crossterm` and
+  `pub fn to_crossterm` for crossterm ↔ `hjkl_keymap::KeyEvent` translation. All
+  7 unit tests relocated into the crate. Mirrors the `-tui`/`-gui` naming rule
+  from #100. Future `hjkl-keymap-floem` will follow when `apps/hjkl-gui` needs
+  key input.
+
+### Changed
+
+- **`apps/hjkl/src/keymap_translate.rs`** reduced to a thin shim:
+  `pub use hjkl_keymap_crossterm::*;`. Existing
+  `crate::keymap_translate::from_crossterm` and `to_crossterm` call sites
+  compile unchanged. No behaviour delta — pure relocation.
+- **`hjkl-app` 0.4.2 → 0.4.3** (courtesy bump, always-bump policy #136).
+
 ## [0.21.9] - 2026-05-18
 
 ### Added
@@ -2588,7 +2608,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.10...HEAD
+[0.21.10]: https://github.com/kryptic-sh/hjkl/compare/v0.21.9...v0.21.10
 [0.21.9]: https://github.com/kryptic-sh/hjkl/compare/v0.21.8...v0.21.9
 [0.21.8]: https://github.com/kryptic-sh/hjkl/compare/v0.21.7...v0.21.8
 [0.21.7]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...v0.21.7

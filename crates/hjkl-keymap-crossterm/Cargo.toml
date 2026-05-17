@@ -1,0 +1,18 @@
+[package]
+name = "hjkl-keymap-crossterm"
+description = "Crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. Wraps the crossterm input boundary in a renderer-adapter crate per the hjkl naming convention."
+keywords = ["editor", "keymap", "crossterm", "tui"]
+categories = ["text-editors"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+# publish=true (default) — required for apps/hjkl publish to resolve us from crates.io.
+
+[dependencies]
+crossterm = "0.29"
+hjkl-keymap = "0.3"

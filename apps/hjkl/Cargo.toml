@@ -20,6 +20,7 @@ path = "src/main.rs"
 hjkl-app = "0.4"
 hjkl-anvil = "0.2"
 hjkl-keymap = "0.3"
+hjkl-keymap-crossterm = "0.1"
 hjkl-vim = { version = "0.23", default-features = false, features = ["crossterm"] }
 hjkl-lsp = "0.1"
 hjkl-buffer = "0.7"

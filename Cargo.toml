@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.21.9"
+version = "0.21.10"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -28,6 +28,7 @@ hjkl-config = { path = "crates/hjkl-config" }
 hjkl-splash = { path = "crates/hjkl-splash" }
 hjkl-lsp = { path = "crates/hjkl-lsp" }
 hjkl-keymap = { path = "crates/hjkl-keymap" }
+hjkl-keymap-crossterm = { path = "crates/hjkl-keymap-crossterm" }
 hjkl-editor = { path = "crates/hjkl-editor" }
 hjkl-vim = { path = "crates/hjkl-vim" }
 hjkl-theme = { path = "crates/hjkl-theme" }
