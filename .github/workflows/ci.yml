@@ -710,15 +710,20 @@ jobs:
           # uploaded + indexed first.
           publish_if_missing() {
             local crate="$1"
-            local version
-            version=$(grep -m1 '^version' "crates/$crate/Cargo.toml" 2>/dev/null \
-                      || grep -m1 '^version' "apps/$crate/Cargo.toml" 2>/dev/null \
-                      || grep -m1 '^version' Cargo.toml)
-            version=$(echo "$version" | cut -d'"' -f2)
-            # Workspace member version inheritance: apps/hjkl reads from
-            # workspace.version in Cargo.toml.
-            if [ -z "$version" ] || [ "$version" = "workspace" ]; then
-              version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+            local manifest version
+            if   [ -f "crates/$crate/Cargo.toml" ]; then manifest="crates/$crate/Cargo.toml"
+            elif [ -f "apps/$crate/Cargo.toml" ];   then manifest="apps/$crate/Cargo.toml"
+            else echo "::error::cannot find manifest for $crate"; exit 1
+            fi
+            # Extract `version = "X.Y.Z"`. If the manifest uses workspace
+            # inheritance (`version.workspace = true`, no quoted value),
+            # fall back to the workspace version in the root Cargo.toml.
+            version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' "$manifest" | head -1 | cut -d'"' -f2)
+            if [ -z "$version" ]; then
+              version=$(grep -E '^version[[:space:]]*=[[:space:]]*"' Cargo.toml | head -1 | cut -d'"' -f2)
+            fi
+            if [ -z "$version" ]; then
+              echo "::error::could not resolve version for $crate"; exit 1
             fi
             local url="https://crates.io/api/v1/crates/${crate}/${version}"
             if curl -fsS -A "${crate}-release-ci" -o /dev/null "$url"; then
