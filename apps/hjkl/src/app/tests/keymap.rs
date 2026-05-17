@@ -89,19 +89,30 @@ fn list_user_maps_excludes_builtin_chords() {
     app.dispatch_ex("imap c d");
     // `:nmap` (no rhs) lists Normal-mode user maps only.
     app.dispatch_ex("nmap");
-    let popup = app.info_popup.as_deref().unwrap_or("");
-    assert!(popup.contains('a'), "should list `a` Normal mapping");
+    let popup_content = app
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.as_str())
+        .unwrap_or("");
+    assert!(popup_content.contains('a'), "should list `a` Normal mapping");
     // leader+f is a built-in; it must not appear in user map listing.
     assert!(
-        !popup.contains("<leader>f"),
+        !popup_content.contains("<leader>f"),
         "must not list built-in <leader>f"
     );
     // 'c' is imap — not in nmap listing.
-    assert!(!popup.contains('c'), "imap c must not appear in nmap list");
+    assert!(
+        !popup_content.contains('c'),
+        "imap c must not appear in nmap list"
+    );
 
     // Now list imap separately.
     app.dispatch_ex("imap");
-    let popup = app.info_popup.as_deref().unwrap_or("");
+    let popup = app
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.as_str())
+        .unwrap_or("");
     assert!(popup.contains('c'), "imap listing should contain `c`");
 }
 
@@ -225,7 +236,11 @@ fn colon_map_list_via_extracted_handler() {
         app.info_popup.is_some(),
         "info_popup should be set after bare `map` via extracted handler"
     );
-    let popup = app.info_popup.as_deref().unwrap_or("");
+    let popup = app
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.as_str())
+        .unwrap_or("");
     assert!(popup.contains('p'), "popup should list the `p` binding");
 }
 

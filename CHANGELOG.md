@@ -8,6 +8,38 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.15] - 2026-05-18
+
+### Added
+
+- **`hjkl-info-popup` 0.1.0** — renderer-agnostic info popup data model (closes
+  #139 partially). Public surface: `InfoPopup` (`#[non_exhaustive]`,
+  title/content/kind/position/dismissed, `new` + `markdown` constructors,
+  `From<String>`, `lines()`, `line_count()`); `ContentKind` (`Plain` default,
+  `Markdown` for K-key LSP path); `InfoPosition` (`Centered` default);
+  `InfoViewport`; `InfoRect`; `pub fn geometry(popup, viewport) -> InfoRect` —
+  80%×60% centered rect. 11 unit tests + 2 doctests.
+- **`hjkl-info-popup-tui` 0.1.0** — ratatui adapter for `hjkl-info-popup`
+  (closes #139). Public surface: `InfoPopupTheme` (`#[non_exhaustive]`,
+  border/md slots, `Default` dark fallback);
+  `pub fn render(frame, popup, theme, buf_area)` — clears area, draws bordered
+  box, renders plain `Paragraph` for `Plain` content or `hjkl-markdown-tui`
+  styled lines for `Markdown` content. 6 unit tests + 1 doctest.
+
+### Changed
+
+- **`apps/hjkl/src/render.rs`** `info_popup_overlay` body replaced with a thin
+  delegate to `hjkl_info_popup_tui::render` (≤10 LOC shim vs. ~17 LOC before).
+- **`apps/hjkl/src/app/mod.rs`** `info_popup: Option<String>` →
+  `Option<InfoPopup>`. Title is now popup-specific (e.g. `" marks "`,
+  `" registers "`, `" hover "`) rather than always `" info "`.
+- **`apps/hjkl/src/app/lsp_glue.rs`** K-key hover path (`handle_hover_response`)
+  migrated to `InfoPopup::markdown("hover", raw_markdown)` — raw LSP markdown
+  passed directly instead of through `strip_markdown`. Mouse hover path
+  (`handle_hover_at_mouse_response`) similarly migrated to raw markdown via
+  `extract_hover_markdown`. `strip_markdown` / `extract_hover_text` dropped.
+- **`hjkl-app` 0.4.6 → 0.4.7** (courtesy bump, always-bump policy #136).
+
 ## [0.21.14] - 2026-05-18
 
 ### Added
@@ -2719,7 +2751,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.15...HEAD
+[0.21.15]: https://github.com/kryptic-sh/hjkl/compare/v0.21.14...v0.21.15
 [0.21.14]: https://github.com/kryptic-sh/hjkl/compare/v0.21.13...v0.21.14
 [0.21.13]: https://github.com/kryptic-sh/hjkl/compare/v0.21.12...v0.21.13
 [0.21.12]: https://github.com/kryptic-sh/hjkl/compare/v0.21.11...v0.21.12

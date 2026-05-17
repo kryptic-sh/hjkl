@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use hjkl_info_popup::InfoPopup;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::json;
 
@@ -1493,7 +1494,7 @@ impl App {
         // completion was already taken via `take()` above, so it's already None.
     }
 
-    /// Handle a hover response — set `info_popup` with extracted text.
+    /// Handle a hover response (K-key) — set `info_popup` with markdown content.
     pub(crate) fn handle_hover_response(
         &mut self,
         _buffer_id: hjkl_lsp::BufferId,
@@ -1518,11 +1519,11 @@ impl App {
                 return;
             }
         };
-        let text = extract_hover_text(&hover.contents);
+        let text = extract_hover_markdown(&hover.contents);
         if text.trim().is_empty() {
             self.status_message = Some("no hover info".into());
         } else {
-            self.info_popup = Some(text);
+            self.info_popup = Some(InfoPopup::markdown("hover", text));
         }
     }
 
@@ -1558,7 +1559,7 @@ impl App {
             Ok(h) => h,
             Err(_) => return,
         };
-        let text = extract_hover_text(&hover.contents);
+        let text = extract_hover_markdown(&hover.contents);
         if text.trim().is_empty() {
             return;
         }
@@ -1566,54 +1567,33 @@ impl App {
     }
 }
 
-/// Extract plain text from LSP hover contents.
-/// TODO(#15): replace with proper Markdown rendering once hjkl-md lands.
-fn extract_hover_text(contents: &lsp_types::HoverContents) -> String {
+/// Extract raw markdown from LSP hover contents for rendering by
+/// `hjkl-markdown-tui` (K-key popup and mouse hover popup paths).
+///
+/// `MarkedString::LanguageString` is wrapped in a CommonMark fenced block so
+/// the markdown renderer can syntax-highlight it.
+fn extract_hover_markdown(contents: &lsp_types::HoverContents) -> String {
     match contents {
-        lsp_types::HoverContents::Scalar(ms) => marked_string_text(ms),
+        lsp_types::HoverContents::Scalar(ms) => marked_string_to_md(ms),
         lsp_types::HoverContents::Array(items) => items
             .iter()
-            .map(marked_string_text)
+            .map(marked_string_to_md)
             .collect::<Vec<_>>()
             .join("\n\n"),
-        lsp_types::HoverContents::Markup(mc) => strip_markdown(&mc.value),
+        // MarkupContent: already markdown (or plain text for `kind = "plaintext"`).
+        lsp_types::HoverContents::Markup(mc) => mc.value.clone(),
     }
 }
 
-fn marked_string_text(ms: &lsp_types::MarkedString) -> String {
+fn marked_string_to_md(ms: &lsp_types::MarkedString) -> String {
     match ms {
-        lsp_types::MarkedString::String(s) => strip_markdown(s),
+        // Plain string — pass through as-is; valid CommonMark.
+        lsp_types::MarkedString::String(s) => s.clone(),
+        // Language-annotated snippet — wrap in a fenced code block.
         lsp_types::MarkedString::LanguageString(ls) => {
-            format!("[{}]\n{}", ls.language, ls.value)
+            format!("```{}\n{}\n```", ls.language, ls.value)
         }
     }
-}
-
-/// Minimal markdown stripper — removes backtick fences and asterisks.
-/// TODO(#15): replace with proper renderer.
-fn strip_markdown(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_fence = false;
-    for line in s.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            if in_fence {
-                // Emit language hint as a label if present.
-                let lang = trimmed.trim_start_matches('`').trim();
-                if !lang.is_empty() {
-                    out.push_str(lang);
-                    out.push('\n');
-                }
-            }
-            continue;
-        }
-        // Strip inline code backticks and bold/italic asterisks.
-        let stripped: String = line.replace("**", "").replace(['*', '`'], "");
-        out.push_str(&stripped);
-        out.push('\n');
-    }
-    out
 }
 
 impl App {

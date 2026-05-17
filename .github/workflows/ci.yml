@@ -710,8 +710,10 @@ jobs:
           #   5. hjkl-markdown-tui      — ratatui adapter for hjkl-markdown.
           #   6. hjkl-hover             — hover popup state and geometry (no renderer).
           #   7. hjkl-hover-tui         — ratatui adapter for hjkl-hover.
-          #   8. hjkl-app               — host-agnostic application layer.
-          #   9. hjkl                   — the TUI binary (depends on #8).
+          #   8. hjkl-info-popup        — info popup data model (no renderer).
+          #   9. hjkl-info-popup-tui    — ratatui adapter for hjkl-info-popup.
+          #  10. hjkl-app               — host-agnostic application layer.
+          #  11. hjkl                   — the TUI binary (depends on #10).
           # Order is load-bearing: cargo publish for each crate resolves its
           # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
@@ -765,5 +767,7 @@ jobs:
           publish_if_missing hjkl-markdown-tui
           publish_if_missing hjkl-hover
           publish_if_missing hjkl-hover-tui
+          publish_if_missing hjkl-info-popup
+          publish_if_missing hjkl-info-popup-tui
           publish_if_missing hjkl-app
           publish_if_missing hjkl

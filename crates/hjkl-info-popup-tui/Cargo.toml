@@ -1,0 +1,24 @@
+[package]
+name = "hjkl-info-popup-tui"
+description = "Ratatui adapter for hjkl-info-popup: renders the info popup (`:reg`, `:marks`, `:jumps`, `:changes`) as a centered bordered overlay."
+keywords = ["popup", "tui", "ratatui", "editor", "info"]
+categories = ["text-editors", "command-line-interface"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-info-popup = "0.1"
+hjkl-markdown = "0.1"
+hjkl-markdown-tui = "0.1"
+ratatui = "0.30"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

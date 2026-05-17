@@ -41,6 +41,7 @@ mod viewport_sync;
 pub mod window;
 
 use crate::completion::Completion;
+use hjkl_info_popup::InfoPopup;
 
 pub use types::{
     BufferSlot, DiagSeverity, DiskState, LspDiag, LspPendingRequest, LspServerInfo, MouseFlags,
@@ -156,9 +157,10 @@ pub struct App {
     /// Shown in the status line; cleared on next keypress.
     pub status_message: Option<String>,
     /// Multi-line info popup (e.g. from `:reg`, `:marks`, `:jumps`,
-    /// `:changes`). When `Some`, rendered as a centered overlay; any
-    /// keypress dismisses it without dispatching to the editor.
-    pub info_popup: Option<String>,
+    /// `:changes`, or the K-key LSP hover path). When `Some`, rendered as a
+    /// centered overlay; any keypress dismisses it without dispatching to the
+    /// editor.
+    pub info_popup: Option<InfoPopup>,
     /// Active `:` command input. `Some` while the user is typing an ex
     /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
     /// (h/l/w/b/dw/diw/...) work inside the prompt.

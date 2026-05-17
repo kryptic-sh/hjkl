@@ -1132,13 +1132,17 @@ fn tabs_listing_marks_active_tab() {
     app.dispatch_ex("tabnew");
     // Active tab is 2.
     app.dispatch_ex("tabs");
-    let popup = app.info_popup.clone().unwrap_or_default();
+    let popup_content = app
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.clone())
+        .unwrap_or_default();
     // Should contain 3 "Tab page N" entries.
-    assert!(popup.contains("Tab page 1"), "missing Tab page 1");
-    assert!(popup.contains("Tab page 2"), "missing Tab page 2");
-    assert!(popup.contains("Tab page 3"), "missing Tab page 3");
+    assert!(popup_content.contains("Tab page 1"), "missing Tab page 1");
+    assert!(popup_content.contains("Tab page 2"), "missing Tab page 2");
+    assert!(popup_content.contains("Tab page 3"), "missing Tab page 3");
     // The active tab (3) must have '>'; others must have ' '.
-    let lines: Vec<&str> = popup.lines().collect();
+    let lines: Vec<&str> = popup_content.lines().collect();
     // Lines alternate: "Tab page N", "<marker> <name>".
     // tab1 marker is lines[1], tab2 marker is lines[3], tab3 marker is lines[5].
     assert!(

@@ -772,10 +772,14 @@ fn lsp_info_with_lsp_disabled_sets_status() {
     let mut app = App::new(None, false, None, None).unwrap();
     // self.lsp is None by default — :LspInfo shows the disabled state.
     app.show_lsp_info();
-    let popup = app.info_popup.clone().unwrap_or_default();
+    let popup_content = app
+        .info_popup
+        .as_ref()
+        .map(|p| p.content.as_str())
+        .unwrap_or_default();
     assert!(
-        popup.contains("LSP: disabled"),
-        "expected 'LSP: disabled' message, got: {popup}"
+        popup_content.contains("LSP: disabled"),
+        "expected 'LSP: disabled' message, got: {popup_content}"
     );
 }
 
@@ -803,9 +807,12 @@ fn lsp_info_lists_running_servers() {
         "popup must open when LSP is enabled"
     );
     let popup = app.info_popup.as_ref().unwrap();
-    assert!(popup.contains("rust"), "popup must mention server language");
     assert!(
-        popup.contains("initialized"),
+        popup.content.contains("rust"),
+        "popup must mention server language"
+    );
+    assert!(
+        popup.content.contains("initialized"),
         "popup must show server state"
     );
     if let Some(mgr) = app.lsp.take() {
@@ -916,7 +923,10 @@ fn hover_response_sets_info_popup() {
 
     assert!(app.info_popup.is_some(), "hover must set info_popup");
     let popup = app.info_popup.as_ref().unwrap();
-    assert!(popup.contains("foo"), "popup must contain function name");
+    assert!(
+        popup.content.contains("foo"),
+        "popup must contain function name"
+    );
 }
 
 #[test]

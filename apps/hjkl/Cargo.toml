@@ -18,6 +18,8 @@ path = "src/main.rs"
 
 [dependencies]
 hjkl-app = "0.4"
+hjkl-info-popup = "0.1"
+hjkl-info-popup-tui = "0.1"
 hjkl-markdown = "0.1"
 hjkl-markdown-tui = "0.1"
 hjkl-hover = "0.1"

@@ -1704,24 +1704,16 @@ fn render_picker_input_and_list(
 }
 
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
-/// output. Rendered on top of the buffer pane; any key dismisses it.
+/// output and the K-key LSP hover info path.
+///
+/// Delegates to `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
 fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
-    let text = match app.info_popup.as_ref() {
-        Some(t) => t,
+    let popup = match app.info_popup.as_ref() {
+        Some(p) => p,
         None => return,
     };
-    let area = centered_rect(80, 60, buf_area);
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.ui.border_active))
-        .title(" info ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let para = Paragraph::new(text.clone());
-    frame.render_widget(para, inner);
+    let theme = hjkl_info_popup_tui::InfoPopupTheme::new(app.theme.ui.border_active);
+    hjkl_info_popup_tui::render(frame, popup, &theme, buf_area);
 }
 
 /// Render the which-key popup anchored at the bottom of `buf_area`.

@@ -1,0 +1,18 @@
+[package]
+name = "hjkl-info-popup"
+description = "Renderer-agnostic info popup data model for the hjkl editor stack. Used by :reg, :marks, :jumps, :changes, and the K-key hover info path."
+keywords = ["popup", "editor", "info", "tui"]
+categories = ["text-editors"]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

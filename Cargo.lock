@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.21.14"
+version = "0.21.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2108,6 +2108,8 @@ dependencies = [
  "hjkl-form",
  "hjkl-hover",
  "hjkl-hover-tui",
+ "hjkl-info-popup",
+ "hjkl-info-popup-tui",
  "hjkl-keymap",
  "hjkl-keymap-crossterm",
  "hjkl-lsp",
@@ -2164,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-app"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -2328,7 +2330,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.21.14"
+version = "0.21.15"
 dependencies = [
  "clap",
  "floem",
@@ -2352,6 +2354,20 @@ dependencies = [
  "hjkl-markdown",
  "hjkl-markdown-tui",
  "hjkl-theme",
+ "ratatui",
+]
+
+[[package]]
+name = "hjkl-info-popup"
+version = "0.1.0"
+
+[[package]]
+name = "hjkl-info-popup-tui"
+version = "0.1.0"
+dependencies = [
+ "hjkl-info-popup",
+ "hjkl-markdown",
+ "hjkl-markdown-tui",
  "ratatui",
 ]
 
@@ -6684,7 +6700,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

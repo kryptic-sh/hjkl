@@ -1246,7 +1246,7 @@ fn colon_buffers_via_host_registry() {
     let msg = app
         .status_message
         .clone()
-        .or_else(|| app.info_popup.clone())
+        .or_else(|| app.info_popup.as_ref().map(|p| p.content.clone()))
         .unwrap_or_default();
     assert!(!msg.is_empty(), ":buffers must produce output");
 }
@@ -1258,7 +1258,7 @@ fn colon_clipboard_via_host_registry() {
     let msg = app
         .status_message
         .clone()
-        .or_else(|| app.info_popup.clone())
+        .or_else(|| app.info_popup.as_ref().map(|p| p.content.clone()))
         .unwrap_or_default();
     assert!(!msg.is_empty(), ":clipboard must produce output");
 }
@@ -1497,8 +1497,14 @@ fn colon_tabs_via_host_registry() {
         ":tabs must set info_popup with tab listing"
     );
     let popup = app.info_popup.as_ref().unwrap();
-    assert!(popup.contains("Tab page 1"), "popup must list Tab page 1");
-    assert!(popup.contains("Tab page 2"), "popup must list Tab page 2");
+    assert!(
+        popup.content.contains("Tab page 1"),
+        "popup must list Tab page 1"
+    );
+    assert!(
+        popup.content.contains("Tab page 2"),
+        "popup must list Tab page 2"
+    );
 }
 
 #[test]

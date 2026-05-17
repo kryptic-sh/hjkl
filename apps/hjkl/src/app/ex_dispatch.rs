@@ -1,6 +1,7 @@
 use hjkl_bonsai::DotFallbackTheme;
 use hjkl_engine::{Host, Query};
 use hjkl_ex::ExEffect;
+use hjkl_info_popup::InfoPopup;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -401,7 +402,7 @@ impl App {
             }
             ExEffect::Info(msg) => {
                 if msg.contains('\n') {
-                    self.info_popup = Some(msg);
+                    self.info_popup = Some(InfoPopup::new("info", msg));
                 } else {
                     self.status_message = Some(msg);
                 }
@@ -1272,7 +1273,7 @@ impl App {
             let marker = if i == self.active_tab { '>' } else { ' ' };
             lines.push(format!("{marker} {name}"));
         }
-        self.info_popup = Some(lines.join("\n"));
+        self.info_popup = Some(InfoPopup::new("tabs", lines.join("\n")));
     }
 
     // ─── Tab helpers ─────────────────────────────────────────────────────────
@@ -1602,7 +1603,7 @@ impl App {
             .map(|d| format!("[{}] {}", sev_label(d.severity), d.message))
             .collect::<Vec<_>>()
             .join("\n---\n");
-        self.info_popup = Some(text);
+        self.info_popup = Some(InfoPopup::new("diagnostics", text));
     }
 
     /// `:LspInfo` — show running LSP servers + diagnostic info about the
@@ -1614,7 +1615,7 @@ impl App {
         // Top: enabled / disabled state.
         if self.lsp.is_none() {
             lines.push("LSP: disabled (set [lsp] enabled = true in config)".into());
-            self.info_popup = Some(lines.join("\n"));
+            self.info_popup = Some(InfoPopup::new("lsp info", lines.join("\n")));
             return;
         }
         lines.push("LSP: enabled".into());
@@ -1725,7 +1726,7 @@ impl App {
             lines.push("  (registry not available)".into());
         }
 
-        self.info_popup = Some(lines.join("\n"));
+        self.info_popup = Some(InfoPopup::new("lsp info", lines.join("\n")));
     }
 
     /// `:Anvil install <name>` — queue a background install job.

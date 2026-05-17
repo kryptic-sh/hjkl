@@ -5,6 +5,7 @@
 //! in a dedicated module avoids forcing 24 individual `HostCmd` impls that would
 //! either duplicate the parser call or make registration purely ceremonial.
 
+use hjkl_info_popup::InfoPopup;
 use hjkl_which_key::truncate_desc;
 
 use crate::keymap_actions::AppAction;
@@ -131,9 +132,9 @@ impl App {
                 self.status_message = Some("mappings cleared".into());
             }
             keymap::RuntimeMapCommand::List { modes } => {
-                self.info_popup = Some(keymap::format_user_map_list(
-                    &self.user_keymap_records,
-                    &modes,
+                self.info_popup = Some(InfoPopup::new(
+                    "mappings",
+                    keymap::format_user_map_list(&self.user_keymap_records, &modes),
                 ));
             }
         }
