@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-menu = "0.1"
+hjkl-menu = "0.2"
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

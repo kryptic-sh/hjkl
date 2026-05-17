@@ -19,7 +19,9 @@ use hjkl_syntax_tui::render_output_to_tui;
 use hjkl_app::lang::LanguageDirectory;
 
 // Re-export agnostic types used by app/mod.rs and syntax_glue.rs.
-pub use hjkl_syntax::{BufferId, LoadEvent, ParseKind, PerfBreakdown, SetLanguageOutcome};
+pub use hjkl_syntax::{
+    BufferId, LoadEvent, LoadEventKind, ParseKind, ParseKindKind, PerfBreakdown, SetLanguageOutcome,
+};
 
 // ---------------------------------------------------------------------------
 // TUI-typed RenderOutput (wiring shim)

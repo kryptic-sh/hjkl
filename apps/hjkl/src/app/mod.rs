@@ -1308,43 +1308,44 @@ impl App {
 
     /// Execute a [`crate::menu::MenuAction`] selected from the context menu.
     pub(crate) fn invoke_menu_action(&mut self, action: crate::menu::MenuAction) {
-        use crate::menu::MenuAction;
-        match action {
-            MenuAction::Copy => self.menu_copy(),
-            MenuAction::Cut => self.menu_cut(),
-            MenuAction::Paste => self.menu_paste(),
-            MenuAction::TabClose => self.dispatch_ex("tabclose"),
-            MenuAction::TabCloseOthers => self.do_tabonly(),
-            MenuAction::TabCloseRight => self.close_tabs_to_right(),
-            MenuAction::TabCloseLeft => self.close_tabs_to_left(),
-            // ── LSP actions (Phase 2, Round B) ───────────────────────────────
-            MenuAction::LspGotoDefinition => self.lsp_goto_definition(),
-            MenuAction::LspGotoReferences => self.lsp_goto_references(),
-            MenuAction::LspHover => self.lsp_hover(),
-            MenuAction::LspCodeActions => self.lsp_code_actions(),
-            MenuAction::LspFormat => self.lsp_format(),
+        use crate::menu::MenuActionKind;
+        // Dispatch through the exhaustive `MenuActionKind` view so no `_ => {}`
+        // wildcard is needed despite `MenuAction` being `#[non_exhaustive]`.
+        action.dispatch(|kind| match kind {
+            MenuActionKind::Copy => self.menu_copy(),
+            MenuActionKind::Cut => self.menu_cut(),
+            MenuActionKind::Paste => self.menu_paste(),
+            MenuActionKind::TabClose => self.dispatch_ex("tabclose"),
+            MenuActionKind::TabCloseOthers => self.do_tabonly(),
+            MenuActionKind::TabCloseRight => self.close_tabs_to_right(),
+            MenuActionKind::TabCloseLeft => self.close_tabs_to_left(),
+            // ── LSP actions ──────────────────────────────────────────────────
+            MenuActionKind::LspGotoDefinition => self.lsp_goto_definition(),
+            MenuActionKind::LspGotoReferences => self.lsp_goto_references(),
+            MenuActionKind::LspHover => self.lsp_hover(),
+            MenuActionKind::LspCodeActions => self.lsp_code_actions(),
+            MenuActionKind::LspFormat => self.lsp_format(),
             // Rename needs a new name from the user.  The ex command
             // `:Rename <newname>` is the supported entry point — mirror the
             // same status-message prompt the `<leader>rn` keybind uses so the
             // user knows how to proceed.
-            MenuAction::LspRename => {
+            MenuActionKind::LspRename => {
                 self.bus.info("use :Rename <newname> to rename");
             }
-            // ── Phase 7: status-line menu actions ────────────────────────────
-            MenuAction::LspRestart => self.restart_lsp(),
-            MenuAction::OpenFilePicker => self.open_picker(),
-            // ── Phase 7: split-border menu actions ───────────────────────────
-            MenuAction::WindowEqualize => self.equalize_layout(),
-            MenuAction::WindowClose => self.dispatch_ex("close"),
-            // ── Phase 8: picker overlay menu actions ──────────────────────────
-            MenuAction::PickerOpen => self.picker_accept(),
-            MenuAction::PickerOpenSplit => self.picker_open_in_split(),
-            MenuAction::PickerOpenVSplit => self.picker_open_in_vsplit(),
-            MenuAction::PickerOpenTab => self.picker_open_in_tab(),
-            MenuAction::PickerCopyPath => self.picker_copy_path(),
-            MenuAction::Separator | MenuAction::Info => {} // no-op
-            _ => {}                                        // future variants — no-op
-        }
+            // ── Status-line menu actions ──────────────────────────────────────
+            MenuActionKind::LspRestart => self.restart_lsp(),
+            MenuActionKind::OpenFilePicker => self.open_picker(),
+            // ── Split-border menu actions ─────────────────────────────────────
+            MenuActionKind::WindowEqualize => self.equalize_layout(),
+            MenuActionKind::WindowClose => self.dispatch_ex("close"),
+            // ── Picker overlay menu actions ───────────────────────────────────
+            MenuActionKind::PickerOpen => self.picker_accept(),
+            MenuActionKind::PickerOpenSplit => self.picker_open_in_split(),
+            MenuActionKind::PickerOpenVSplit => self.picker_open_in_vsplit(),
+            MenuActionKind::PickerOpenTab => self.picker_open_in_tab(),
+            MenuActionKind::PickerCopyPath => self.picker_copy_path(),
+            MenuActionKind::Separator | MenuActionKind::Info => {} // no-op
+        });
     }
 
     // ── Menu clipboard actions (Phase 2, Round A) ─────────────────────────

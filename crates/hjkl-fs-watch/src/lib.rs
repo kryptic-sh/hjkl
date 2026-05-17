@@ -11,6 +11,16 @@
 //! Tokio and composes cleanly with both TUI (main-thread event loop) and GUI
 //! (floem reactive) consumers that manage their own runtimes.
 //!
+//! # Debounce window
+//!
+//! The debounce timer uses a **sliding window**: each new raw event for a
+//! path resets that path's timer to `now + debounce_duration`.  A rapid
+//! burst of writes to the same file does **not** emit intermediate events —
+//! only one [`FsEvent`] is emitted after the last raw event in the burst,
+//! once the sliding window has expired with no further activity on that path.
+//! The flush ticker runs at half the debounce interval so events are
+//! delivered promptly once the burst settles.
+//!
 //! # Overview
 //!
 //! ```no_run
@@ -827,7 +837,12 @@ mod tests {
             "expected at least one event after rename"
         );
 
-        // Accept either a Renamed or a Remove+Create/Modified pair.
+        // Accept either:
+        //   (a) a single Renamed event with the correct from/to pair, or
+        //   (b) a Removed(src) AND a Created/Modified(dst) pair.
+        //
+        // Requiring both sides of the pair prevents a lone spurious Create or
+        // Remove from making the test pass vacuously.
         let has_rename = events
             .iter()
             .any(|e| matches!(e, FsEvent::Renamed { from, to } if from == &src && to == &dst));
@@ -838,8 +853,8 @@ mod tests {
             .iter()
             .any(|e| matches!(e, FsEvent::Created(p) | FsEvent::Modified(p) if p == &dst));
         assert!(
-            has_rename || has_remove || has_create,
-            "unexpected events: {events:?}"
+            has_rename || (has_remove && has_create),
+            "expected Renamed(src→dst) or Removed(src)+Created/Modified(dst); got {events:?}"
         );
     }
 

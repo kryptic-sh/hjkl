@@ -81,8 +81,12 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
         } => {
             let area = (*last_rect)?;
             // Compute the separator position from ratio (matches render::split_rect).
-            let hit = match dir {
-                window::SplitDir::Vertical => {
+            // Match on Axis (exhaustive) so future SplitDir variants cause a
+            // compile error rather than a silent runtime no-op.
+            use hjkl_layout::Axis;
+            let hit = match dir.axis() {
+                Axis::Col => {
+                    // Vertical split: side-by-side columns.
                     let a_w = ((area.w as f32) * ratio).round() as u16;
                     let a_w = a_w.clamp(1, area.w.saturating_sub(1).max(1));
                     // Separator column: rightmost cell of rect_a (before shrinking).
@@ -98,7 +102,8 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                         None
                     }
                 }
-                window::SplitDir::Horizontal => {
+                Axis::Row => {
+                    // Horizontal split: stacked rows.
                     let a_h = ((area.h as f32) * ratio).round() as u16;
                     let a_h = a_h.clamp(1, area.h.saturating_sub(1).max(1));
                     // Separator row: bottom row of rect_a (before shrinking).
@@ -114,8 +119,6 @@ fn hit_test_border_tree(layout: &window::LayoutTree, col: u16, row: u16) -> Opti
                         None
                     }
                 }
-                // `SplitDir` is `#[non_exhaustive]`; unknown variant → no border hit.
-                _ => None,
             };
             // Return this split's hit if found; otherwise recurse into children.
             if hit.is_some() {

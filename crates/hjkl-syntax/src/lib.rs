@@ -333,6 +333,47 @@ pub enum LoadEvent {
     },
 }
 
+/// Exhaustive view of a [`LoadEvent`] for use in
+/// [`SyntaxLayer::dispatch_load_event`] callbacks.
+///
+/// Unlike [`LoadEvent`] (which is `#[non_exhaustive]`), matching on this enum
+/// requires no wildcard arm and produces a compile error when new variants are
+/// added.
+#[derive(Debug)]
+pub enum LoadEventKind<'a> {
+    /// Grammar installed successfully.
+    Ready {
+        /// The buffer id the grammar was loaded for.
+        id: BufferId,
+        /// The resolved language name.
+        name: &'a str,
+    },
+    /// Grammar load failed.
+    Failed {
+        /// The buffer id the grammar was loaded for.
+        id: BufferId,
+        /// The resolved language name.
+        name: &'a str,
+        /// Human-readable error message.
+        error: &'a str,
+    },
+}
+
+/// Exhaustive view of a [`ParseKind`] for use in
+/// [`SyntaxLayer::dispatch_parse_kind`] callbacks.
+///
+/// Unlike [`ParseKind`] (which is `#[non_exhaustive]`), matching on this enum
+/// requires no wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseKindKind {
+    /// The current visible viewport region.
+    Viewport,
+    /// The top of the document — pre-cached for `gg`.
+    Top,
+    /// The bottom of the document — pre-cached for `G`.
+    Bottom,
+}
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -1336,6 +1377,106 @@ impl SyntaxLayer {
             .get(&id)
             .map(|c| c.pending_reset)
             .unwrap_or(false)
+    }
+
+    /// Dispatch a [`LoadEvent`] through a caller-supplied handler.
+    ///
+    /// The handler receives each known variant as an exhaustive inner enum so
+    /// consumers never need a `_ => {}` wildcard arm for `LoadEvent`'s
+    /// `#[non_exhaustive]` restriction.  Unknown future variants are silently
+    /// ignored (this method is updated when new variants land).
+    ///
+    /// Returns `true` when the event was dispatched to a known variant,
+    /// `false` when it was an unknown future variant and the handler was not
+    /// called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_syntax::{LoadEvent, SyntaxLayer};
+    ///
+    /// let event = LoadEvent::Ready { id: 0, name: "rust".into() };
+    /// let mut got_ready = false;
+    /// let handled = SyntaxLayer::dispatch_load_event(&event, |ev| {
+    ///     use hjkl_syntax::LoadEventKind;
+    ///     match ev {
+    ///         LoadEventKind::Ready { id, name } => { got_ready = true; }
+    ///         LoadEventKind::Failed { .. } => {}
+    ///     }
+    /// });
+    /// assert!(handled);
+    /// assert!(got_ready);
+    /// ```
+    pub fn dispatch_load_event(
+        event: &LoadEvent,
+        mut handler: impl FnMut(LoadEventKind<'_>),
+    ) -> bool {
+        // `#[allow(unreachable_patterns)]` because from inside this crate all
+        // LoadEvent variants are known; the wildcard exists so this helper
+        // stays future-proof for external consumers when new variants land.
+        #[allow(unreachable_patterns)]
+        match event {
+            LoadEvent::Ready { id, name } => {
+                handler(LoadEventKind::Ready { id: *id, name });
+                true
+            }
+            LoadEvent::Failed { id, name, error } => {
+                handler(LoadEventKind::Failed {
+                    id: *id,
+                    name,
+                    error,
+                });
+                true
+            }
+            // Unknown future variant — ignore gracefully.
+            _ => false,
+        }
+    }
+
+    /// Dispatch a [`ParseKind`] value through a caller-supplied handler.
+    ///
+    /// Eliminates `_ => {}` wildcards in consumer match arms by providing an
+    /// exhaustive inner enum.  Unknown future variants fall back to the
+    /// `ParseKind::Viewport` path (conservative: treat unknown as viewport).
+    ///
+    /// Returns `true` for known variants, `false` for unknown ones (and calls
+    /// the handler with `ParseKindKind::Viewport` as the fallback).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_syntax::{ParseKind, ParseKindKind, SyntaxLayer};
+    ///
+    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Top, |k| {
+    ///     assert_eq!(k, ParseKindKind::Top);
+    /// });
+    /// assert!(known);
+    /// ```
+    pub fn dispatch_parse_kind(kind: ParseKind, mut handler: impl FnMut(ParseKindKind)) -> bool {
+        // `#[allow(unreachable_patterns)]` because from inside this crate all
+        // ParseKind variants are known; the wildcard exists so this helper
+        // stays future-proof for external consumers when new variants land.
+        #[allow(unreachable_patterns)]
+        match kind {
+            ParseKind::Viewport => {
+                handler(ParseKindKind::Viewport);
+                true
+            }
+            ParseKind::Top => {
+                handler(ParseKindKind::Top);
+                true
+            }
+            ParseKind::Bottom => {
+                handler(ParseKindKind::Bottom);
+                true
+            }
+            // Unknown future variant — fall back to Viewport so the caller
+            // still gets a sensible route.
+            _ => {
+                handler(ParseKindKind::Viewport);
+                false
+            }
+        }
     }
 }
 

@@ -12,8 +12,6 @@ use hjkl_app::lang::GrammarRequest;
 use hjkl_buffer::Sign;
 use ratatui::style::{Color, Style};
 
-use crate::syntax::LoadEvent;
-
 use super::App;
 
 /// Convert a host-agnostic [`GitChange`] into a ratatui-flavored [`Sign`]
@@ -132,23 +130,22 @@ impl App {
         }
         let active_id = self.active().buffer_id;
         for event in &events {
-            match event {
-                LoadEvent::Ready { id, name } => {
+            use crate::syntax::LoadEventKind;
+            hjkl_syntax::SyntaxLayer::dispatch_load_event(event, |kind| match kind {
+                LoadEventKind::Ready { id, name } => {
                     tracing::debug!("grammar load complete: {name} (buffer {id})");
                     // If the completed load is for the active buffer, clear
                     // the recompute cache key so the next recompute_and_install
                     // submits a fresh parse with the new language.
-                    if *id == active_id {
+                    if id == active_id {
                         self.active_mut().last_recompute_key = None;
                     }
                 }
-                LoadEvent::Failed { id, name, error } => {
+                LoadEventKind::Failed { id, name, error } => {
                     tracing::debug!("grammar load failed: {name} (buffer {id}): {error}");
                     self.bus.error(format!("grammar {name}: {error}"));
                 }
-                // LoadEvent is #[non_exhaustive] — handle future variants gracefully.
-                &_ => {}
-            }
+            });
         }
         true
     }
@@ -237,8 +234,6 @@ impl App {
     /// Returns `true` if the live install ran on the active buffer, `false`
     /// for non-active routes and genuine stale drops (no matching slot).
     pub(crate) fn install_render_result(&mut self, out: crate::syntax::RenderOutput) -> bool {
-        use crate::syntax::ParseKind;
-
         let active_id = self.active().buffer_id;
 
         // Find the slot that owns this buffer_id.
@@ -250,9 +245,11 @@ impl App {
 
         let is_active = out.buffer_id == active_id;
 
-        // Route into the correct per-slot cache field.
-        match out.kind {
-            ParseKind::Viewport => {
+        // Route into the correct per-slot cache field via the exhaustive dispatch
+        // helper so no wildcard arm is needed despite ParseKind being #[non_exhaustive].
+        use crate::syntax::ParseKindKind;
+        hjkl_syntax::SyntaxLayer::dispatch_parse_kind(out.kind, |kind| match kind {
+            ParseKindKind::Viewport => {
                 // Install diag signs from viewport results (only kind that
                 // runs the diagnostic scan over the visible region).
                 if is_active {
@@ -260,17 +257,15 @@ impl App {
                     let active_idx = self.focused_slot_idx();
                     self.slots[active_idx].diag_signs = signs;
                 }
-                self.slots[slot_idx].viewport_render_output = Some(out);
+                self.slots[slot_idx].viewport_render_output = Some(out.clone());
             }
-            ParseKind::Top => {
-                self.slots[slot_idx].top_render_output = Some(out);
+            ParseKindKind::Top => {
+                self.slots[slot_idx].top_render_output = Some(out.clone());
             }
-            ParseKind::Bottom => {
-                self.slots[slot_idx].bottom_render_output = Some(out);
+            ParseKindKind::Bottom => {
+                self.slots[slot_idx].bottom_render_output = Some(out.clone());
             }
-            // ParseKind is #[non_exhaustive] — ignore future variants.
-            _ => {}
-        }
+        });
 
         if is_active {
             // Active buffer: merge all three caches and install on the editor.

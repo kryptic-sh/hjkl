@@ -89,6 +89,180 @@ impl MenuAction {
     pub fn is_inert(&self) -> bool {
         matches!(self, MenuAction::Separator | MenuAction::Info)
     }
+
+    /// Dispatch `self` through a caller-supplied handler using the exhaustive
+    /// [`MenuActionKind`] enum.
+    ///
+    /// Because [`MenuAction`] is `#[non_exhaustive]`, consumers that match on
+    /// it directly must include a `_ => {}` wildcard arm.  Calling this method
+    /// instead lets consumers match against [`MenuActionKind`] — which is
+    /// **not** `#[non_exhaustive]` — and get a compile error when a new action
+    /// variant is added without a handler.
+    ///
+    /// Returns `true` when the action was dispatched to a known variant,
+    /// `false` when it was an unknown future variant and the handler was not
+    /// called (callers can treat this as a no-op).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_menu::{MenuAction, MenuActionKind};
+    ///
+    /// let mut copied = false;
+    /// let handled = MenuAction::Copy.dispatch(|kind| match kind {
+    ///     MenuActionKind::Copy => { copied = true; }
+    ///     _ => {}
+    /// });
+    /// assert!(handled);
+    /// assert!(copied);
+    /// ```
+    pub fn dispatch(&self, mut handler: impl FnMut(MenuActionKind)) -> bool {
+        // `#[allow(unreachable_patterns)]` because from inside this crate all
+        // MenuAction variants are known; the wildcard exists so this helper
+        // stays future-proof for external consumers when new variants land.
+        #[allow(unreachable_patterns)]
+        match self {
+            MenuAction::Copy => {
+                handler(MenuActionKind::Copy);
+                true
+            }
+            MenuAction::Cut => {
+                handler(MenuActionKind::Cut);
+                true
+            }
+            MenuAction::Paste => {
+                handler(MenuActionKind::Paste);
+                true
+            }
+            MenuAction::TabClose => {
+                handler(MenuActionKind::TabClose);
+                true
+            }
+            MenuAction::TabCloseOthers => {
+                handler(MenuActionKind::TabCloseOthers);
+                true
+            }
+            MenuAction::TabCloseRight => {
+                handler(MenuActionKind::TabCloseRight);
+                true
+            }
+            MenuAction::TabCloseLeft => {
+                handler(MenuActionKind::TabCloseLeft);
+                true
+            }
+            MenuAction::LspGotoDefinition => {
+                handler(MenuActionKind::LspGotoDefinition);
+                true
+            }
+            MenuAction::LspGotoReferences => {
+                handler(MenuActionKind::LspGotoReferences);
+                true
+            }
+            MenuAction::LspHover => {
+                handler(MenuActionKind::LspHover);
+                true
+            }
+            MenuAction::LspRename => {
+                handler(MenuActionKind::LspRename);
+                true
+            }
+            MenuAction::LspCodeActions => {
+                handler(MenuActionKind::LspCodeActions);
+                true
+            }
+            MenuAction::LspFormat => {
+                handler(MenuActionKind::LspFormat);
+                true
+            }
+            MenuAction::LspRestart => {
+                handler(MenuActionKind::LspRestart);
+                true
+            }
+            MenuAction::OpenFilePicker => {
+                handler(MenuActionKind::OpenFilePicker);
+                true
+            }
+            MenuAction::WindowEqualize => {
+                handler(MenuActionKind::WindowEqualize);
+                true
+            }
+            MenuAction::WindowClose => {
+                handler(MenuActionKind::WindowClose);
+                true
+            }
+            MenuAction::PickerOpen => {
+                handler(MenuActionKind::PickerOpen);
+                true
+            }
+            MenuAction::PickerOpenSplit => {
+                handler(MenuActionKind::PickerOpenSplit);
+                true
+            }
+            MenuAction::PickerOpenVSplit => {
+                handler(MenuActionKind::PickerOpenVSplit);
+                true
+            }
+            MenuAction::PickerOpenTab => {
+                handler(MenuActionKind::PickerOpenTab);
+                true
+            }
+            MenuAction::PickerCopyPath => {
+                handler(MenuActionKind::PickerCopyPath);
+                true
+            }
+            MenuAction::Separator => {
+                handler(MenuActionKind::Separator);
+                true
+            }
+            MenuAction::Info => {
+                handler(MenuActionKind::Info);
+                true
+            }
+            // Unknown future variant — no-op.
+            _ => false,
+        }
+    }
+}
+
+/// Exhaustive view of a [`MenuAction`] for use in [`MenuAction::dispatch`]
+/// callbacks.
+///
+/// Unlike [`MenuAction`] (which is `#[non_exhaustive]`), matching on this enum
+/// produces a compile error when a new action variant is added without a
+/// handler, ensuring consumers stay in sync.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MenuActionKind {
+    // ── Clipboard ──────────────────────────────────────────────────────────
+    Copy,
+    Cut,
+    Paste,
+    // ── Tab management ─────────────────────────────────────────────────────
+    TabClose,
+    TabCloseOthers,
+    TabCloseRight,
+    TabCloseLeft,
+    // ── LSP ────────────────────────────────────────────────────────────────
+    LspGotoDefinition,
+    LspGotoReferences,
+    LspHover,
+    LspRename,
+    LspCodeActions,
+    LspFormat,
+    // ── Status-line menu ───────────────────────────────────────────────────
+    LspRestart,
+    OpenFilePicker,
+    // ── Split-border menu ──────────────────────────────────────────────────
+    WindowEqualize,
+    WindowClose,
+    // ── Picker overlay menu ────────────────────────────────────────────────
+    PickerOpen,
+    PickerOpenSplit,
+    PickerOpenVSplit,
+    PickerOpenTab,
+    PickerCopyPath,
+    // ── Visual decoration ──────────────────────────────────────────────────
+    Separator,
+    Info,
 }
 
 // ── MenuItem ──────────────────────────────────────────────────────────────────

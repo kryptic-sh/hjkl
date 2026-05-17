@@ -8,13 +8,67 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.26] - 2026-05-18
+
+### Changed
+
+- **`hjkl-syntax` 0.1→0.2 — exhaustive dispatch helpers** — adds
+  `SyntaxLayer::dispatch_load_event(event, handler)` and
+  `SyntaxLayer::dispatch_parse_kind(kind, handler)` inherent methods together
+  with matching `LoadEventKind<'_>` and `ParseKindKind` exhaustive enums.
+  Consumers call these instead of matching directly on `#[non_exhaustive]`
+  `LoadEvent` / `ParseKind`, eliminating wildcard arms. Updated
+  `apps/hjkl/src/app/syntax_glue.rs` `poll_grammar_loads` and
+  `install_render_result` to use the new dispatch API; wildcard arms removed.
+  Purely additive — bumped to **0.2** per `0.x` minor policy.
+
+- **`hjkl-menu` 0.1→0.2 — exhaustive dispatch** — adds
+  `MenuAction::dispatch(handler)` method and `MenuActionKind` exhaustive enum
+  mirroring all `MenuAction` variants. `apps/hjkl/src/app/mod.rs`
+  `invoke_menu_action` now calls `action.dispatch(|kind| match kind { … })`
+  rather than matching on `MenuAction` directly, removing the `_ => {}`
+  wildcard. `crate::menu` shim re-exports `MenuActionKind`. Bumped to **0.2**
+  per `0.x` minor policy.
+
+- **`hjkl-layout`: `hit_test_border_tree` migrated to `Axis`** —
+  `apps/hjkl/src/app/mouse.rs` `hit_test_border_tree` inner match on `SplitDir`
+  replaced with `match dir.axis() { Axis::Col => …, Axis::Row => … }`,
+  consistent with the other four `Axis`-based sites in `render.rs` and
+  `window.rs`. `hjkl-layout` version unchanged (consumer-side change only).
+
+- **`hjkl-fs-watch`: tighten rename test** —
+  `rename_file_emits_renamed_or_remove_create` assertion changed from
+  `has_rename || has_remove || has_create` (which passes on any single event) to
+  `has_rename || (has_remove && has_create)` (requires the full from+to pair on
+  the fallback path). Also improves error message to name exactly which
+  condition was expected.
+
+### Fixed
+
+- **`## [0.21.25]` LOC figures retroactively corrected** —
+  `apps/hjkl/src/syntax.rs` was ~1 521 lines before the extraction (not 59.5 K —
+  that was the issue tracker's exaggerated total). The collapsed wiring shim is
+  ~560 lines (not "~5 K"). Added note that #150 (GUI syntax layer) is deferred;
+  `hjkl-syntax` renders plain text in GUI mode until that issue lands.
+
+- **`## [0.21.23]` doctest counts retroactively corrected** — `hjkl-menu`
+  shipped 36 unit tests + 13 doctests (not 37 + 12); `hjkl-menu-tui` shipped 13
+  unit tests + 2 doctests, where 1 of the 2 doctests is `no_run`
+  (compile-checked only, not executed in CI).
+
+- **`hjkl-fs-watch` sliding-debounce doc** — added a "Debounce window" section
+  to the module-level doc explaining the sliding-window behaviour: each new raw
+  event resets the path's timer, so rapid bursts flush after the last event plus
+  one debounce window.
+
 ## [0.21.25] - 2026-05-18
 
 ### Added
 
 - **#141 Extract syntax pipeline into `hjkl-syntax` + `hjkl-syntax-tui`** —
-  `apps/hjkl/src/syntax.rs` (59.5 K LOC) split into two new crates and a ~5 K
-  LOC wiring shim:
+  `apps/hjkl/src/syntax.rs` (~1 521 LOC pre-extraction) split into two new
+  crates and a ~560 LOC wiring shim. (#150 GUI syntax layer deferred;
+  `hjkl-syntax` renders plain text in GUI mode until that issue lands.)
   - **`hjkl-syntax` 0.1.0** — renderer-agnostic syntax pipeline. Owns
     `SyntaxWorker` background thread, `RenderCache`, per-buffer
     `dirty_gen`-tracked state, viewport-scoped highlight passes
@@ -24,24 +78,26 @@ patch bumps.
     where `DiagSign` is a renderer-agnostic diagnostic sign (row + ch +
     priority, no ratatui dep). Zero ratatui dependency. Re-exports
     `hjkl_theme::{Color, Modifiers, StyleSpec}`. All public enums/structs
-    `#[non_exhaustive]`. `Default` + `new()` constructors. 15+ unit tests
-    covering `ParseKind` ordering, queue deduplication, perf breakdown defaults,
-    and the `build_by_row` helper.
+    `#[non_exhaustive]`. `Default` + `new()` constructors. 19 unit tests (7
+    require network/compiler, skipped in CI) + 14 doctests covering `ParseKind`
+    ordering, queue deduplication, perf breakdown defaults, and the
+    `build_by_row` helper.
 
   - **`hjkl-syntax-tui` 0.1.0** — ratatui adapter. `to_ratatui_spans` converts
     `Vec<Vec<(usize, usize, StyleSpec)>>` to
     `Vec<Vec<(usize, usize, ratatui::style::Style)>>`.
     `diag_signs_to_buffer_signs` materialises `DiagSign` → `hjkl_buffer::Sign`
-    with canonical error colour (red). `render_output_to_tui` combines both. 6+
-    unit tests.
+    with canonical error colour (red). `render_output_to_tui` combines both. 11
+    unit tests + 5 doctests.
 
-  - **`apps/hjkl/src/syntax.rs`** — collapsed to App-side wiring shim (~260
+  - **`apps/hjkl/src/syntax.rs`** — collapsed to App-side wiring shim (~560
     LOC): delegates all background-thread work to `hjkl_syntax::SyntaxLayer` and
     converts `RenderOutput` to the ratatui-typed wrapper on the way out.
 
-  `#[non_exhaustive]` on `ParseKind` and `LoadEvent` required adding wildcard
-  arms to `syntax_glue.rs` match sites. `ParseKind` ordering (Viewport → Top →
-  Bottom) is preserved — perf invariant intact.
+  `#[non_exhaustive]` on `ParseKind` and `LoadEvent` required wildcard arms at
+  `syntax_glue.rs` match sites (migrated to dispatch helpers in v0.21.26).
+  `ParseKind` ordering (Viewport → Top → Bottom) is preserved — perf invariant
+  intact.
 
 ## [0.21.24] - 2026-05-18
 
@@ -111,7 +167,7 @@ patch bumps.
   builder helpers: `build_code_menu(has_sel, has_lsp)`,
   `build_status_line_menu(ft, lsp_name)`, `build_split_border_menu()`,
   `build_picker_menu(has_path)`, `build_tab_menu(more_than_one_tab)`. Zero
-  renderer dependencies. 37 unit tests + 12 doctests.
+  renderer dependencies. 36 unit tests + 13 doctests.
 - **`hjkl-menu-tui` 0.1.0** — ratatui adapter for `hjkl-menu` (closes #127).
   Public surface: `MenuTheme` (`#[non_exhaustive]`, fields: `border`,
   `normal_fg`, `selected_fg`, `selected_bg`, `dimmed_fg`, `separator_fg`;
@@ -120,7 +176,7 @@ patch bumps.
   `ContextMenu::bounding_rect` that adds the screen origin offset;
   `render(frame, menu, screen_size, theme)` — floating bordered popup with
   proper separator, info-header, disabled-dim, and hint-right-align rendering.
-  13 unit tests + 2 doctests.
+  13 unit tests + 2 doctests (1 of 2 is `no_run`: compile-checked only).
 
 ### Changed
 
@@ -3068,7 +3124,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...HEAD
+[0.21.26]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...v0.21.26
 [0.21.25]: https://github.com/kryptic-sh/hjkl/compare/v0.21.24...v0.21.25
 [0.21.24]: https://github.com/kryptic-sh/hjkl/compare/v0.21.23...v0.21.24
 [0.21.23]: https://github.com/kryptic-sh/hjkl/compare/v0.21.22...v0.21.23
