@@ -1,7 +1,7 @@
 [package]
 name = "hjkl-editor-gui"
 description = "Floem adapter for the hjkl modal editor stack."
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -10,8 +10,8 @@ authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 
 [dependencies]
-hjkl-engine = { version = "0.10", default-features = false }
+hjkl-engine = { version = "0.11", default-features = false }
 hjkl-buffer = "0.7"
-hjkl-editor = { version = "0.7", default-features = false }
-hjkl-vim    = { version = "0.21", default-features = false }
+hjkl-editor = { version = "0.8", default-features = false }
+hjkl-vim    = { version = "0.22", default-features = false }
 floem       = "0.2"

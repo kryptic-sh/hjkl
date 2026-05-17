@@ -11,7 +11,7 @@ use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormEvent, SelectField, SubmitField, SubmitOutcome,
     TextFieldEditor,
 };
-use hjkl_ratatui::form::{FormPalette, draw_form};
+use hjkl_editor_tui::form::{FormPalette, draw_form};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::sync::Arc;

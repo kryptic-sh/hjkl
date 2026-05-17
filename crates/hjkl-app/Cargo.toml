@@ -21,11 +21,11 @@ hjkl-anvil = "0.2"
 hjkl-bonsai = "0.7"
 hjkl-buffer = "0.7"
 hjkl-config = "0.2"
-hjkl-engine = { version = "0.10", default-features = false }
+hjkl-engine = { version = "0.11", default-features = false }
 hjkl-keymap = "0.3"
 hjkl-lsp = "0.1"
-hjkl-picker = "0.8"
-hjkl-vim = "0.21"
+hjkl-picker = "0.9"
+hjkl-vim = { version = "0.22", default-features = false }
 lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"

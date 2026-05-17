@@ -1366,7 +1366,7 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
                 _ => "request",
             })
             .unwrap_or("request");
-        format!(" {} LSP:{label} ", hjkl_ratatui::spinner::frame())
+        format!(" {} LSP:{label} ", hjkl_editor_tui::spinner::frame())
     } else {
         // Global grammar-load indicator: any lang queued on the bonsai
         // async pool (active buffer, preview pane, or otherwise) shows
@@ -1374,10 +1374,10 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let names = app.directory.in_flight_names();
         match names.len() {
             0 => String::new(),
-            1 => format!(" {} grammar:{} ", hjkl_ratatui::spinner::frame(), names[0]),
+            1 => format!(" {} grammar:{} ", hjkl_editor_tui::spinner::frame(), names[0]),
             n => format!(
                 " {} grammar:{} +{} ",
-                hjkl_ratatui::spinner::frame(),
+                hjkl_editor_tui::spinner::frame(),
                 names[0],
                 n - 1
             ),
@@ -1655,7 +1655,7 @@ fn render_picker_input_and_list(
     let scan_tag = if picker.scan_done() {
         "".to_string()
     } else {
-        format!(" {} scanning", hjkl_ratatui::spinner::frame())
+        format!(" {} scanning", hjkl_editor_tui::spinner::frame())
     };
     let kind = picker.title();
     let title = format!(" picker — {kind} — {matched}/{total}{scan_tag} ");

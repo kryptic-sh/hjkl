@@ -8,6 +8,37 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-05-17
+
+### Changed
+
+- **#99 — default-feature flip:** `hjkl-engine` default features changed from
+  `["serde", "crossterm", "ratatui"]` to `["serde"]`. `hjkl-vim` default
+  features changed from `["crossterm"]` to `[]`. `hjkl-editor` default features
+  changed from `["serde", "crossterm", "ratatui"]` to `["serde"]`. Consumers
+  that relied on defaults must now opt in explicitly with
+  `features = ["crossterm", "ratatui"]` (or whichever subset they need).
+- **#100 — rename `hjkl-ratatui` → `hjkl-editor-tui`:** New crate
+  `hjkl-editor-tui` published at v0.1.0 with identical implementation. The old
+  `hjkl-ratatui` 0.7.0 is now a thin `pub use hjkl_editor_tui::*` shim — all old
+  code keeps working unchanged, new code should use `hjkl-editor-tui`.
+  `apps/hjkl` migrated to `hjkl-editor-tui` directly.
+- Submodule cascade for engine 0.11 semver-incompatibility:
+  - `hjkl-engine` 0.10 → 0.11
+  - `hjkl-vim` 0.21 → 0.22
+  - `hjkl-ex` 0.3 → 0.4
+  - `hjkl-form` 0.5 → 0.6
+  - `hjkl-picker` 0.8 → 0.9
+  - `hjkl-editor` 0.7 → 0.8
+  - `hjkl-ratatui` 0.5 → 0.7 (0.6 last impl, 0.7 shim)
+  - `hjkl-picker-tui` 0.3 → 0.4
+  - `hjkl-editor-gui` 0.1 → 0.2 (in-tree)
+- `hjkl-compat-oracle` engine/vim pins updated to 0.11/0.22 with explicit
+  features.
+- `apps/hjkl` engine dep now
+  `default-features = false, features = ["crossterm", "ratatui"]` — no longer
+  relying on engine defaults.
+
 ## [0.20.4] - 2026-05-17
 
 ### Fixed
@@ -2397,7 +2428,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/kryptic-sh/hjkl/compare/v0.20.4...v0.21.0
 [0.20.4]: https://github.com/kryptic-sh/hjkl/compare/v0.20.3...v0.20.4
 [0.20.3]: https://github.com/kryptic-sh/hjkl/compare/v0.20.2...v0.20.3
 [0.20.2]: https://github.com/kryptic-sh/hjkl/compare/v0.20.1...v0.20.2

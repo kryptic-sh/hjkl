@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.20.4"
+version = "0.21.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -22,6 +22,7 @@ hjkl-form = { path = "crates/hjkl-form" }
 hjkl-picker = { path = "crates/hjkl-picker" }
 hjkl-picker-tui = { path = "crates/hjkl-picker-tui" }
 hjkl-ratatui = { path = "crates/hjkl-ratatui" }
+hjkl-editor-tui = { path = "crates/hjkl-editor-tui" }
 hjkl-bonsai = { path = "crates/hjkl-bonsai" }
 hjkl-config = { path = "crates/hjkl-config" }
 hjkl-splash = { path = "crates/hjkl-splash" }

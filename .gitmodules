@@ -58,3 +58,6 @@
 [submodule "crates/hjkl-mangler"]
 	path = crates/hjkl-mangler
 	url = https://github.com/kryptic-sh/hjkl-mangler.git
+[submodule "crates/hjkl-editor-tui"]
+	path = crates/hjkl-editor-tui
+	url = https://github.com/kryptic-sh/hjkl-editor-tui.git
