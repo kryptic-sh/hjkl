@@ -338,6 +338,36 @@ pub struct BufferSlot {
     pub(crate) dirty_rows_log: Vec<(u64, std::ops::RangeInclusive<usize>)>,
 }
 
+/// Walk up from `start` looking for a project-root marker file.
+///
+/// Markers: `.git`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`,
+/// `setup.py`, `composer.json`, `.hg`.  Returns the first directory that
+/// contains one of these files, or `start` itself as a fallback.
+pub(crate) fn find_project_root(start: &std::path::Path) -> PathBuf {
+    const MARKERS: &[&str] = &[
+        ".git",
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pyproject.toml",
+        "setup.py",
+        "composer.json",
+        ".hg",
+    ];
+    let mut dir = start.to_owned();
+    loop {
+        for marker in MARKERS {
+            if dir.join(marker).exists() {
+                return dir;
+            }
+        }
+        match dir.parent() {
+            Some(p) => dir = p.to_owned(),
+            None => return start.to_owned(),
+        }
+    }
+}
+
 impl BufferSlot {
     /// Snapshot the loaded content so undo-to-saved clears dirty.
     pub(super) fn snapshot_saved(&mut self) {

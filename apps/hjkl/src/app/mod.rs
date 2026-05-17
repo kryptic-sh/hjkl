@@ -337,14 +337,7 @@ pub(crate) struct BorderDrag {
     pub last_pos: u16,
 }
 
-/// Resolve the cursor shape for an active prompt field (`command_field` or
-/// `search_field`). Insert mode → Bar; anything else → Block.
-fn prompt_cursor_shape(field: &hjkl_form::TextFieldEditor) -> CursorShape {
-    match field.vim_mode() {
-        hjkl_form::VimMode::Insert => CursorShape::Bar,
-        _ => CursorShape::Block,
-    }
-}
+pub(crate) use prompt::prompt_cursor_shape;
 
 /// Build a [`BufferSlot`] from disk content.
 ///
@@ -525,50 +518,6 @@ impl App {
             | mouse::Zone::StatusLine
             | mouse::Zone::SplitBorder { .. }
             | mouse::Zone::PickerRow { .. } => {}
-        }
-    }
-
-    /// Primary-selection paste at terminal cell `(col, row)`. Pulled out
-    /// of [`Self::middle_click`] so the Code-zone path is independently
-    /// expressible (and so the X11/Wayland-only branch is grep-able).
-    fn middle_click_paste_primary(&mut self, col: u16, row: u16) {
-        use hjkl_clipboard::{Capabilities, MimeType, Selection};
-
-        let Some(win_id) = mouse::hit_test_window(self, col, row) else {
-            return;
-        };
-        let Some((doc_row, doc_col)) = mouse::cell_to_doc(self, win_id, col, row) else {
-            return;
-        };
-
-        // Read primary selection BEFORE any mut borrows of self.
-        let primary_text: Option<String> = {
-            let cb = self.active().editor.host().clipboard();
-            cb.filter(|cb| {
-                cb.capabilities().contains(Capabilities::PRIMARY)
-                    && cb.capabilities().contains(Capabilities::READ)
-            })
-            .and_then(|cb| {
-                cb.get(Selection::Primary, MimeType::Text)
-                    .ok()
-                    .and_then(|b| String::from_utf8(b).ok())
-            })
-        };
-
-        let current_focus = self.focused_window();
-        if win_id != current_focus {
-            self.sync_viewport_from_editor();
-            self.set_focused_window(win_id);
-            self.sync_viewport_to_editor();
-        }
-
-        self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
-        self.sync_after_engine_mutation();
-
-        if let Some(text) = primary_text {
-            self.active_mut().editor.set_yank(text);
-            self.active_mut().editor.paste_after(1);
-            self.sync_after_engine_mutation();
         }
     }
 
@@ -804,36 +753,6 @@ impl App {
 
     // ── External formatter dispatch (hjkl-mangler) ───────────────────────
 
-    /// Walk up from `start` looking for a project-root marker file.
-    ///
-    /// Markers: `.git`, `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml`,
-    /// `setup.py`, `composer.json`, `.hg`.  Returns the first directory that
-    /// contains one of these files, or `start` itself as a fallback.
-    fn find_project_root(start: &std::path::Path) -> std::path::PathBuf {
-        const MARKERS: &[&str] = &[
-            ".git",
-            "Cargo.toml",
-            "package.json",
-            "go.mod",
-            "pyproject.toml",
-            "setup.py",
-            "composer.json",
-            ".hg",
-        ];
-        let mut dir = start.to_owned();
-        loop {
-            for marker in MARKERS {
-                if dir.join(marker).exists() {
-                    return dir;
-                }
-            }
-            match dir.parent() {
-                Some(p) => dir = p.to_owned(),
-                None => return start.to_owned(),
-            }
-        }
-    }
-
     /// Try to format the active buffer using an external formatter.
     ///
     /// **BLOCKS the calling thread for up to 2 seconds.**  This is a
@@ -888,7 +807,7 @@ impl App {
             .parent()
             .map(|p| p.to_owned())
             .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let project_root = Self::find_project_root(&parent);
+        let project_root = types::find_project_root(&parent);
 
         tracing::debug!(
             file = %path.display(),

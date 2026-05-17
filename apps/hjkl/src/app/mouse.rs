@@ -775,6 +775,54 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     Zone::None
 }
 
+// ── App methods extracted from mod.rs ────────────────────────────────────────
+
+impl App {
+    /// Primary-selection paste at terminal cell `(col, row)`. Pulled out
+    /// of [`Self::middle_click`] so the Code-zone path is independently
+    /// expressible (and so the X11/Wayland-only branch is grep-able).
+    pub(crate) fn middle_click_paste_primary(&mut self, col: u16, row: u16) {
+        use hjkl_clipboard::{Capabilities, MimeType, Selection};
+
+        let Some(win_id) = hit_test_window(self, col, row) else {
+            return;
+        };
+        let Some((doc_row, doc_col)) = cell_to_doc(self, win_id, col, row) else {
+            return;
+        };
+
+        // Read primary selection BEFORE any mut borrows of self.
+        let primary_text: Option<String> = {
+            let cb = self.active().editor.host().clipboard();
+            cb.filter(|cb| {
+                cb.capabilities().contains(Capabilities::PRIMARY)
+                    && cb.capabilities().contains(Capabilities::READ)
+            })
+            .and_then(|cb| {
+                cb.get(Selection::Primary, MimeType::Text)
+                    .ok()
+                    .and_then(|b| String::from_utf8(b).ok())
+            })
+        };
+
+        let current_focus = self.focused_window();
+        if win_id != current_focus {
+            self.sync_viewport_from_editor();
+            self.set_focused_window(win_id);
+            self.sync_viewport_to_editor();
+        }
+
+        self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
+        self.sync_after_engine_mutation();
+
+        if let Some(text) = primary_text {
+            self.active_mut().editor.set_yank(text);
+            self.active_mut().editor.paste_after(1);
+            self.sync_after_engine_mutation();
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

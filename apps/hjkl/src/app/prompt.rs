@@ -1,5 +1,5 @@
 use crossterm::event::{KeyCode, KeyModifiers};
-use hjkl_engine::{Input as EngineInput, Key as EngineKey, VimMode};
+use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
 use hjkl_form::TextFieldEditor;
 
 use super::{App, SearchDir};
@@ -463,5 +463,14 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+/// Resolve the cursor shape for an active prompt field (`command_field` or
+/// `search_field`). Insert mode → Bar; anything else → Block.
+pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
+    match field.vim_mode() {
+        hjkl_form::VimMode::Insert => CursorShape::Bar,
+        _ => CursorShape::Block,
     }
 }
