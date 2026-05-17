@@ -19,6 +19,6 @@ hjkl-editor-gui = "0.2"
 hjkl-editor     = { version = "0.8", default-features = false }
 hjkl-engine     = { version = "0.11", default-features = false }
 hjkl-buffer     = "0.7"
-hjkl-vim        = { version = "0.22", default-features = false }
+hjkl-vim        = { version = "0.23", default-features = false }
 clap            = { version = "4", features = ["derive"] }
 floem           = "0.2"

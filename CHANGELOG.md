@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.6] - 2026-05-17
+
+### Added
+
+- **Which-key shows vim FSM built-in bindings** (#64): `entries_for` in
+  `apps/hjkl/src/which_key.rs` now merges `hjkl_vim::descriptors::children_for`
+  (engine FSM) with app keymap entries. App entries win on conflict so `:nmap`
+  shadows builtins. Covers Normal root (83 keys), g-prefix (19), z-prefix (11),
+  and operator-pending (24). Visual root also exposed.
+- Bumped `hjkl-vim` submodule `0.22.0` → `0.23.0` (adds `descriptors` module).
+
 ## [0.21.5] - 2026-05-17
 
 ### Fixed
@@ -2491,7 +2502,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.6...HEAD
+[0.21.6]: https://github.com/kryptic-sh/hjkl/compare/v0.21.5...v0.21.6
 [0.21.5]: https://github.com/kryptic-sh/hjkl/compare/v0.21.4...v0.21.5
 [0.21.4]: https://github.com/kryptic-sh/hjkl/compare/v0.21.3...v0.21.4
 [0.21.3]: https://github.com/kryptic-sh/hjkl/compare/v0.21.2...v0.21.3
