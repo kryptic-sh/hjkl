@@ -228,25 +228,10 @@ pub enum DiskState {
     DeletedOnDisk,
 }
 
-/// Direction of an active host-driven search prompt. `/` opens a
-/// forward prompt, `?` opens a backward one. The direction is recorded
-/// alongside [`App::search_field`] so the commit path can call the
-/// matching `Editor::search_advance_*` and persist the direction onto
-/// the engine's `last_search_forward` for future `n` / `N` repeats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchDir {
-    Forward,
-    Backward,
-}
-
-/// Cardinal direction for window navigation (`<C-h/j/k/l>` / `TmuxNavigate`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavDir {
-    Left,
-    Down,
-    Up,
-    Right,
-}
+/// Re-exported from `hjkl_app::keymap_actions` — source of truth moved there.
+pub use hjkl_app::keymap_actions::NavDir;
+/// Re-exported from `hjkl_app::keymap_actions` — source of truth moved there.
+pub use hjkl_app::keymap_actions::SearchDir;
 
 /// LSP diagnostic severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
