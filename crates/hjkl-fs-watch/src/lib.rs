@@ -722,6 +722,14 @@ mod tests {
             .expect("build watcher")
     }
 
+    /// Let FSEvents / inotify settle after watcher creation, then drain any
+    /// init-time events (e.g. macOS FSEvents fires a Created for the watched
+    /// root directory itself).
+    fn settle_watcher(watcher: &mut Watcher) {
+        std::thread::sleep(Duration::from_millis(300));
+        while watcher.try_recv().is_some() {}
+    }
+
     // ── builder / error tests ────────────────────────────────────────────────
 
     #[test]
@@ -764,8 +772,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let mut watcher = default_watcher(&root);
-        // Let the watcher settle.
-        std::thread::sleep(Duration::from_millis(50));
+        settle_watcher(&mut watcher);
 
         let file = root.join("hello.txt");
         fs::write(&file, b"hi").unwrap();
@@ -788,7 +795,7 @@ mod tests {
         fs::write(&file, b"initial").unwrap();
 
         let mut watcher = default_watcher(&root);
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         fs::write(&file, b"updated").unwrap();
 
@@ -809,7 +816,7 @@ mod tests {
         fs::write(&file, b"bye").unwrap();
 
         let mut watcher = default_watcher(&root);
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         fs::remove_file(&file).unwrap();
 
@@ -826,12 +833,13 @@ mod tests {
     #[test]
     fn rename_file_emits_renamed_or_remove_create() {
         let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("old.txt");
-        let dst = dir.path().join("new.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let src = root.join("old.txt");
+        let dst = root.join("new.txt");
         fs::write(&src, b"data").unwrap();
 
-        let mut watcher = default_watcher(dir.path());
-        std::thread::sleep(Duration::from_millis(100));
+        let mut watcher = default_watcher(&root);
+        settle_watcher(&mut watcher);
 
         fs::rename(&src, &dst).unwrap();
 
@@ -841,9 +849,11 @@ mod tests {
             "expected at least one event after rename"
         );
 
-        // Accept either:
+        // Accept any of:
         //   (a) a single Renamed event with the correct from/to pair, or
-        //   (b) a Removed(src) AND a Created/Modified(dst) pair.
+        //   (b) a Removed(src) AND a Created/Modified(dst) pair, or
+        //   (c) a Modified(src) AND a Modified(dst) pair
+        //       (macOS FSEvents conflates rename as two modify events).
         //
         // Requiring both sides of the pair prevents a lone spurious Create or
         // Remove from making the test pass vacuously.
@@ -856,9 +866,15 @@ mod tests {
         let has_create = events
             .iter()
             .any(|e| matches!(e, FsEvent::Created(p) | FsEvent::Modified(p) if p == &dst));
+        let has_modify_src = events
+            .iter()
+            .any(|e| matches!(e, FsEvent::Modified(p) if p == &src));
+        let has_modify_dst = events
+            .iter()
+            .any(|e| matches!(e, FsEvent::Modified(p) if p == &dst));
         assert!(
-            has_rename || (has_remove && has_create),
-            "expected Renamed(src→dst) or Removed(src)+Created/Modified(dst); got {events:?}"
+            has_rename || (has_remove && has_create) || (has_modify_src && has_modify_dst),
+            "expected Renamed(src→dst), Removed(src)+Created/Modified(dst), or Modified(src)+Modified(dst); got {events:?}"
         );
     }
 
@@ -867,15 +883,16 @@ mod tests {
     #[test]
     fn rapid_modifies_coalesced() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("busy.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("busy.txt");
         fs::write(&file, b"0").unwrap();
 
         let mut watcher = WatcherBuilder::new()
-            .root(dir.path().to_path_buf())
+            .root(root.clone())
             .debounce(Duration::from_millis(200))
             .build()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         // Write 5 times rapidly.
         for i in 1u8..=5 {
@@ -914,7 +931,7 @@ mod tests {
             .filter(|p| p.extension().map(|e| e == "rs").unwrap_or(false))
             .build()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         // Write a .txt file — should be filtered out.
         fs::write(dir.path().join("ignored.txt"), b"x").unwrap();
@@ -938,7 +955,7 @@ mod tests {
             .filter(|p| p.extension().map(|e| e == "rs").unwrap_or(false))
             .build()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         let rs_file = root.join("main.rs");
         fs::write(&rs_file, b"fn main() {}").unwrap();
@@ -959,7 +976,7 @@ mod tests {
         let file = dir.path().join("paused.txt");
 
         let mut watcher = default_watcher(dir.path());
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         watcher.pause();
         assert!(watcher.is_paused());
@@ -980,11 +997,12 @@ mod tests {
     #[test]
     fn resume_restores_event_delivery() {
         let dir = tempfile::tempdir().unwrap();
-        let file_before = dir.path().join("before.txt");
-        let file_after = dir.path().join("after.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let file_before = root.join("before.txt");
+        let file_after = root.join("after.txt");
 
-        let mut watcher = default_watcher(dir.path());
-        std::thread::sleep(Duration::from_millis(100));
+        let mut watcher = default_watcher(&root);
+        settle_watcher(&mut watcher);
 
         watcher.pause();
         fs::write(&file_before, b"silent").unwrap();
@@ -1046,7 +1064,7 @@ mod tests {
             .recursive(false)
             .build()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        settle_watcher(&mut watcher);
 
         let deep = sub.join("deep.txt");
         fs::write(&deep, b"deep").unwrap();
@@ -1071,11 +1089,12 @@ mod tests {
     #[test]
     fn events_drains_queue() {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("drain.txt");
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("drain.txt");
         fs::write(&file, b"a").unwrap();
 
-        let mut watcher = default_watcher(dir.path());
-        std::thread::sleep(Duration::from_millis(100));
+        let mut watcher = default_watcher(&root);
+        settle_watcher(&mut watcher);
 
         fs::write(&file, b"b").unwrap();
 

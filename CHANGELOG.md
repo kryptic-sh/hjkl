@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.29] - 2026-05-18
+
+### Fixed
+
+- **`hjkl-fs-watch` macOS test compatibility round 2** — universal
+  `settle_watcher` helper (300 ms sleep + drain loop) applied after every
+  watcher build in the test suite, eliminating spurious FSEvents
+  `Created(tempdir)` events that leaked into assertions. All tests that
+  constructed a watcher without a canonicalized root now use
+  `dir.path().canonicalize()`, fixing `/var` → `/private/var` path-comparison
+  mismatches on macOS. `rename_file_emits_renamed_or_remove_create` now accepts
+  a third event shape: `Modified(src) + Modified(dst)` (FSEvents conflates
+  rename as two modify events). `resume_restores_event_delivery` uses
+  canonicalized paths so the post-resume `Modified` event matches correctly.
+
 ## [0.21.28] - 2026-05-18
 
 ### Fixed
@@ -3164,7 +3179,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...HEAD
+[0.21.29]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...v0.21.29
 [0.21.28]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...v0.21.28
 [0.21.27]: https://github.com/kryptic-sh/hjkl/compare/v0.21.26...v0.21.27
 [0.21.26]: https://github.com/kryptic-sh/hjkl/compare/v0.21.25...v0.21.26
