@@ -8,6 +8,30 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.31] - 2026-05-18
+
+### Fixed
+
+- **`viewport_sync` no longer clobbers `sticky_col` on every keypress** —
+  `sync_viewport_to_editor` was calling `Editor::jump_cursor`, which resets
+  `sticky_col` (curswant) to the clamped cursor column. On an empty line that
+  means `sticky_col` got overwritten with 0, so the next `j`/`k` landed at col 0
+  instead of restoring the pre-jump column. Fixed by routing the viewport cursor
+  restore through the new `Editor::set_cursor_quiet`, which positions the cursor
+  without touching `sticky_col`. Root cause of the post-v0.21.27 `j`/`k`
+  empty-line regression.
+
+### Added
+
+- **`Editor::set_cursor_quiet`** (`hjkl-engine` 0.11.3) — host-side cursor
+  restore that preserves `sticky_col`. Use for viewport sync and snapshot
+  replay; use `jump_cursor` for user-facing jumps (goto-line, search, picker
+  `<CR>`, `]d`, click) where curswant reset is correct vim semantics.
+- **Regression test `e_then_jjj_preserves_column_across_empty_line`** — covers
+  the full event-loop path (`sync_viewport_to_editor` + dispatch +
+  `sync_viewport_from_editor`) to guard against reintroduction of the
+  viewport-sync sticky-col clobber.
+
 ## [0.21.30] - 2026-05-18
 
 ### Fixed
@@ -3207,7 +3231,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...HEAD
+[0.21.31]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...v0.21.31
 [0.21.30]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...v0.21.30
 [0.21.29]: https://github.com/kryptic-sh/hjkl/compare/v0.21.28...v0.21.29
 [0.21.28]: https://github.com/kryptic-sh/hjkl/compare/v0.21.27...v0.21.28

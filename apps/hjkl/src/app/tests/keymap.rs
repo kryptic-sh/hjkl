@@ -4729,3 +4729,62 @@ fn p65_replace_mode_overstrike() {
         "Replace-mode overstrike must replace 'h' with 'X'; got {line:?}"
     );
 }
+
+// ── Viewport-sync regression tests ─────────────────────────────────────────
+
+/// Regression for the v0.21.27–v0.21.30 bug where `viewport_sync.rs` called
+/// `jump_cursor` (which resets `sticky_col`) before every input dispatch.
+/// After pressing `j` onto an empty line the sticky column was clobbered to 0,
+/// so the second `j` landed at col 0 instead of restoring the original column.
+///
+/// The fix routes viewport restores through `set_cursor_quiet`, which sets the
+/// buffer cursor WITHOUT touching `sticky_col`.
+///
+/// This test calls `sync_viewport_to_editor` before each keypress — exactly as
+/// the real event loop does — to reproduce the clobber path.
+#[test]
+fn e_then_jjj_preserves_column_across_empty_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Three-line buffer: long line, empty line, long line.
+    seed_buffer(&mut app, "hello world\n\nanother line");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // Helper: simulate the event-loop order (sync TO editor, dispatch, sync FROM editor).
+    macro_rules! dispatch_with_sync {
+        ($app:expr, $key:expr) => {{
+            $app.sync_viewport_to_editor();
+            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            $app.sync_viewport_from_editor();
+        }};
+    }
+
+    // `e` — move to end of first word "hello" → col 4.
+    dispatch_with_sync!(app, key(KeyCode::Char('e')));
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(
+        (row, col),
+        (0, 4),
+        "after e: expected (0, 4), got ({row}, {col})"
+    );
+
+    // `j` — move down to empty line (col 0 due to clamp).
+    dispatch_with_sync!(app, key(KeyCode::Char('j')));
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 1, "after first j: expected row 1, got {row}");
+    assert_eq!(
+        col, 0,
+        "after first j: expected col 0 on empty line, got {col}"
+    );
+
+    // `j` — move down to "another line" — sticky_col must survive viewport_sync
+    // and restore to col 4, not 0.
+    dispatch_with_sync!(app, key(KeyCode::Char('j')));
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 2, "after second j: expected row 2, got {row}");
+    assert_eq!(
+        col, 4,
+        "sticky_col must persist across viewport_sync — \
+         viewport_sync.rs jump_cursor used to clobber it; got col {col}"
+    );
+}

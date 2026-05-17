@@ -21,7 +21,9 @@ impl App {
             vp.width = rect.w;
             vp.height = rect.h;
         }
-        self.active_mut().editor.jump_cursor(cursor_row, cursor_col);
+        self.active_mut()
+            .editor
+            .set_cursor_quiet(cursor_row, cursor_col);
     }
 
     /// Copy the active editor's host viewport scroll state and cursor back
