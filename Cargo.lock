@@ -2087,7 +2087,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
 name = "hjkl"
-version = "0.19.2"
+version = "0.19.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2279,13 +2279,12 @@ dependencies = [
 
 [[package]]
 name = "hjkl-ex"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "regex",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2299,7 +2298,7 @@ dependencies = [
 
 [[package]]
 name = "hjkl-gui"
-version = "0.19.2"
+version = "0.19.3"
 dependencies = [
  "clap",
  "floem",
@@ -2321,11 +2320,10 @@ dependencies = [
 
 [[package]]
 name = "hjkl-lsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
- "lsp-types",
  "serde",
  "serde_json",
  "tempfile",
@@ -5296,7 +5294,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -6570,7 +6568,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
