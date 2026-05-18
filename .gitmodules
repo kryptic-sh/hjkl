@@ -1,6 +1,3 @@
-[submodule "crates/hjkl-buffer"]
-	path = crates/hjkl-buffer
-	url = https://github.com/kryptic-sh/hjkl-buffer.git
 [submodule "crates/hjkl-clipboard"]
 	path = crates/hjkl-clipboard
 	url = https://github.com/kryptic-sh/hjkl-clipboard.git
