@@ -33,7 +33,7 @@ hjkl-hover.workspace = true
 hjkl-hover-tui.workspace = true
 hjkl-anvil.workspace = true
 hjkl-keymap.workspace = true
-hjkl-keymap-crossterm.workspace = true
+hjkl-keymap-tui.workspace = true
 hjkl-vim = { workspace = true, features = ["crossterm"] }
 hjkl-lsp.workspace = true
 hjkl-buffer.workspace = true

@@ -12,6 +12,8 @@ patch bumps.
 
 - Renamed crate `hjkl-css-floem` → `hjkl-css-gui` to match `-gui` floem-adapter
   convention.
+- Renamed crate `hjkl-keymap-crossterm` → `hjkl-keymap-tui` to match the `-tui`
+  adapter convention (crossterm is a TUI-only input lib).
 
 ### Removed
 

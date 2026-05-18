@@ -1,6 +1,6 @@
 [package]
-name = "hjkl-keymap-crossterm"
-description = "Crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. Wraps the crossterm input boundary in a renderer-adapter crate per the hjkl naming convention."
+name = "hjkl-keymap-tui"
+description = "Ratatui/crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. The TUI-side input boundary for hjkl, per the -tui adapter convention."
 keywords = ["editor", "keymap", "crossterm", "tui"]
 categories = ["text-editors"]
 version.workspace = true

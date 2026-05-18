@@ -37,7 +37,7 @@ hjkl-hover-tui = { path = "crates/hjkl-hover-tui", version = "0.25" }
 hjkl-info-popup = { path = "crates/hjkl-info-popup", version = "0.25" }
 hjkl-info-popup-tui = { path = "crates/hjkl-info-popup-tui", version = "0.25" }
 hjkl-keymap = { path = "crates/hjkl-keymap", version = "0.25", default-features = false }
-hjkl-keymap-crossterm = { path = "crates/hjkl-keymap-crossterm", version = "0.25" }
+hjkl-keymap-tui = { path = "crates/hjkl-keymap-tui", version = "0.25" }
 hjkl-lang = { path = "crates/hjkl-lang", version = "0.25" }
 hjkl-layout = { path = "crates/hjkl-layout", version = "0.25" }
 hjkl-lsp = { path = "crates/hjkl-lsp", version = "0.25" }

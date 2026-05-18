@@ -721,7 +721,7 @@ jobs:
           # Original in-tree crates (28):
           #  22.  hjkl-statusline       — statusline model (#3).
           #  23.  hjkl-statusline-tui   — ratatui adapter (#22).
-          #  24.  hjkl-keymap-crossterm — crossterm key adapter (#10).
+          #  24.  hjkl-keymap-tui       — ratatui/crossterm key adapter (#10).
           #  25.  hjkl-which-key        — which-key data (#10, #11).
           #  26.  hjkl-which-key-tui    — ratatui adapter (#3, #25).
           #  27.  hjkl-completion-tui   — ratatui completion popup (#5a).
@@ -850,7 +850,7 @@ jobs:
           publish_if_missing hjkl-theme-tui
           publish_if_missing hjkl-statusline
           publish_if_missing hjkl-statusline-tui
-          publish_if_missing hjkl-keymap-crossterm
+          publish_if_missing hjkl-keymap-tui
           publish_if_missing hjkl-which-key
           publish_if_missing hjkl-which-key-tui
           publish_if_missing hjkl-completion-tui

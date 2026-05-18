@@ -1,11 +1,12 @@
-# hjkl-keymap-crossterm
+# hjkl-keymap-tui
 
-Crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. Wraps the crossterm input
-boundary in a renderer-adapter crate per the hjkl naming convention.
+Ratatui/crossterm KeyEvent ↔ `hjkl-keymap` KeyEvent adapter. The TUI-side
+input boundary for hjkl. Renamed from `hjkl-keymap-crossterm` 2026-05-18 to
+match the `-tui` adapter convention used across the workspace.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/hjkl-keymap-crossterm.svg)](https://crates.io/crates/hjkl-keymap-crossterm)
-[![docs.rs](https://img.shields.io/docsrs/hjkl-keymap-crossterm)](https://docs.rs/hjkl-keymap-crossterm)
+[![crates.io](https://img.shields.io/crates/v/hjkl-keymap-tui.svg)](https://crates.io/crates/hjkl-keymap-tui)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-keymap-tui)](https://docs.rs/hjkl-keymap-tui)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
 
@@ -18,21 +19,13 @@ editor in Rust.
 - [`to_crossterm`] — round-trip back to a `crossterm::event::KeyEvent` for
   replaying unbound sequences or user maps.
 
-Companion adapters (future):
+Companion adapter (future):
 
-- `hjkl-keymap-floem` — floem / winit input layer (for `apps/hjkl-gui`).
-
-The naming follows the hjkl renderer-adapter convention (`-tui` / `-gui` suffix
-rule from issue #100).
+- `hjkl-keymap-gui` — floem / winit input layer (for `apps/hjkl-gui`).
 
 ## Documentation
 
-[docs.rs/hjkl-keymap-crossterm](https://docs.rs/hjkl-keymap-crossterm)
-
-## Contributing
-
-See the
-[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+[docs.rs/hjkl-keymap-tui](https://docs.rs/hjkl-keymap-tui)
 
 ## License
 

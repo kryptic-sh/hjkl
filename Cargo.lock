@@ -2167,7 +2167,7 @@ dependencies = [
  "hjkl-info-popup",
  "hjkl-info-popup-tui",
  "hjkl-keymap",
- "hjkl-keymap-crossterm",
+ "hjkl-keymap-tui",
  "hjkl-lang",
  "hjkl-layout",
  "hjkl-lsp",
@@ -2489,7 +2489,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hjkl-keymap-crossterm"
+name = "hjkl-keymap-tui"
 version = "0.25.0"
 dependencies = [
  "crossterm",
