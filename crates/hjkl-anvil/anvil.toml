@@ -1,0 +1,58 @@
+[meta]
+schema_version = 1
+upstream_rev = ""
+
+[tool.rust-analyzer]
+category = "lsp"
+description = "Rust language server"
+version = "2025-01-13"
+bin = "rust-analyzer"
+method = "github"
+repo = "rust-lang/rust-analyzer"
+asset_pattern = "rust-analyzer-{triple}.gz"
+[tool.rust-analyzer.sha256]
+"x86_64-unknown-linux-gnu" = ""
+"aarch64-apple-darwin" = ""
+
+[tool.gopls]
+category = "lsp"
+description = "Go language server"
+version = "v0.17.1"
+bin = "gopls"
+method = "goinstall"
+module = "golang.org/x/tools/gopls"
+
+[tool.lua-language-server]
+category = "lsp"
+description = "Lua language server"
+version = "3.13.5"
+bin = "lua-language-server"
+method = "github"
+repo = "LuaLS/lua-language-server"
+asset_pattern = "lua-language-server-{version}-{triple}.tar.gz"
+[tool.lua-language-server.sha256]
+"x86_64-unknown-linux-gnu" = ""
+
+[tool.pyright]
+category = "lsp"
+description = "Python type checker / language server"
+version = "1.1.395"
+bin = "pyright-langserver"
+method = "npm"
+package = "pyright"
+
+[tool.taplo]
+category = "lsp"
+description = "TOML language server / formatter"
+version = "0.9.3"
+bin = "taplo"
+method = "cargo"
+crate_name = "taplo-cli"
+
+[tool.shfmt]
+category = "formatter"
+description = "Shell script formatter"
+version = "v3.10.0"
+bin = "shfmt"
+method = "goinstall"
+module = "mvdan.cc/sh/v3/cmd/shfmt"

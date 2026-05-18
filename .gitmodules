@@ -34,9 +34,6 @@
 [submodule "crates/hjkl-keymap"]
 	path = crates/hjkl-keymap
 	url = https://github.com/kryptic-sh/hjkl-keymap.git
-[submodule "crates/hjkl-anvil"]
-	path = crates/hjkl-anvil
-	url = https://github.com/kryptic-sh/hjkl-anvil.git
 [submodule "crates/hjkl-vim"]
 	path = crates/hjkl-vim
 	url = https://github.com/kryptic-sh/hjkl-vim.git
