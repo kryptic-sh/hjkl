@@ -1,3 +1,0 @@
-[submodule "crates/hjkl-ratatui"]
-	path = crates/hjkl-ratatui
-	url = https://github.com/kryptic-sh/hjkl-ratatui.git
