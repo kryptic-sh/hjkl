@@ -1,6 +1,3 @@
-[submodule "crates/hjkl-editor"]
-	path = crates/hjkl-editor
-	url = https://github.com/kryptic-sh/hjkl-editor.git
 [submodule "crates/hjkl-form"]
 	path = crates/hjkl-form
 	url = https://github.com/kryptic-sh/hjkl-form.git

@@ -1,0 +1,8 @@
+---
+source: crates/hjkl-editor/tests/golden_ex.rs
+expression: info
+---
+--- Marks ---
+mark  line  col
+ Z       4    0
+ a       2    2
