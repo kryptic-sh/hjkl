@@ -22,7 +22,7 @@ crossterm = ["dep:crossterm"]
 # now host-owned via the doc-coord primitives (`mouse_click_doc` etc.).
 # Off by default for wasm / no_std consumers; default-on at the workspace
 # level for backwards compat.
-ratatui = ["dep:ratatui", "hjkl-buffer/ratatui"]
+ratatui = ["dep:ratatui"]
 
 [dev-dependencies]
 proptest = "1"

@@ -8,7 +8,7 @@ use hjkl_picker::PreviewSpans;
 
 use hjkl_app::git::{GitChange, GitChangeKind};
 use hjkl_app::git_worker::GitJob;
-use hjkl_buffer::Sign;
+use hjkl_buffer_tui::Sign;
 use hjkl_lang::GrammarRequest;
 use ratatui::style::{Color, Style};
 
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn install_render_result_drops_stale_buffer_id() {
         use crate::syntax::{PerfBreakdown, RenderOutput};
-        use hjkl_buffer::Sign;
+        use hjkl_buffer_tui::Sign;
         use ratatui::style::{Color, Style};
 
         let mut app = App::new(None, false, None, None).unwrap();

@@ -2,7 +2,7 @@
 //!
 //! Converts [`hjkl_syntax::RenderOutput`] (renderer-agnostic
 //! [`hjkl_theme::StyleSpec`] spans) into `ratatui::style::Style`-typed row
-//! tables and routes [`hjkl_syntax::DiagSign`]s to [`hjkl_buffer::Sign`]
+//! tables and routes [`hjkl_syntax::DiagSign`]s to [`hjkl_buffer_tui::Sign`]
 //! values for gutter rendering.
 //!
 //! # Quick-start
@@ -20,7 +20,7 @@
 //! assert!(signs.is_empty());
 //! ```
 
-use hjkl_buffer::Sign;
+use hjkl_buffer_tui::Sign;
 use hjkl_syntax::{DiagSign, RenderOutput, StyleSpec};
 use hjkl_theme_tui::ToRatatui;
 use ratatui::style::{Color, Style};
@@ -84,7 +84,7 @@ pub fn spec_to_ratatui(spec: &StyleSpec) -> Style {
     spec.to_ratatui()
 }
 
-/// Convert [`DiagSign`]s (renderer-agnostic) into [`hjkl_buffer::Sign`]s
+/// Convert [`DiagSign`]s (renderer-agnostic) into [`hjkl_buffer_tui::Sign`]s
 /// (ratatui-styled) using the canonical error colour (red foreground).
 ///
 /// Higher-priority signs take precedence when multiple signs land on the
@@ -119,7 +119,7 @@ pub fn diag_signs_to_buffer_signs(signs: &[DiagSign]) -> Vec<Sign> {
 /// Convert a full [`RenderOutput`] into the ratatui-typed pair
 /// `(spans, signs)` ready for installation into an editor slot.
 ///
-/// Returns the converted span table and the [`hjkl_buffer::Sign`] vec.
+/// Returns the converted span table and the [`hjkl_buffer_tui::Sign`] vec.
 /// The order of operations matches the install path in `syntax_glue.rs`.
 ///
 /// # Examples

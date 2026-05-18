@@ -17,6 +17,10 @@ patch bumps.
 - Extracted `hjkl-splash-tui` from `hjkl-splash` — the ratatui adapter is no
   longer behind a feature gate on the agnostic crate. Apps must depend on
   `hjkl-splash-tui` directly for `render`. Part of #162.
+- Extracted `hjkl-buffer-tui` from `hjkl-buffer` — the ratatui Widget impl is
+  no longer behind a feature gate on the agnostic crate. Direct consumers
+  (`hjkl-syntax-tui`, `hjkl-picker-tui`) depend on `hjkl-buffer-tui` directly.
+  Part of #162.
 
 ### Removed
 

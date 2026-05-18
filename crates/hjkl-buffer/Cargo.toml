@@ -12,12 +12,7 @@ rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
-[features]
-default = []
-ratatui = ["dep:ratatui"]
-
 [dependencies]
-ratatui = { version = "0.30", optional = true }
 regex = "1"
 unicode-width = "0.2"
 

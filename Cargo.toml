@@ -17,6 +17,7 @@ hjkl-anvil = { path = "crates/hjkl-anvil", version = "0.25" }
 hjkl-app = { path = "crates/hjkl-app", version = "0.25" }
 hjkl-bonsai = { path = "crates/hjkl-bonsai", version = "0.25" }
 hjkl-buffer = { path = "crates/hjkl-buffer", version = "0.25" }
+hjkl-buffer-tui = { path = "crates/hjkl-buffer-tui", version = "0.25" }
 hjkl-clipboard = { path = "crates/hjkl-clipboard", version = "0.25" }
 hjkl-completion = { path = "crates/hjkl-completion", version = "0.25" }
 hjkl-completion-tui = { path = "crates/hjkl-completion-tui", version = "0.25" }

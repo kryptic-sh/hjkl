@@ -702,6 +702,7 @@ jobs:
           #   5.  hjkl-buffer           — gap-buffer core (no hjkl deps).
           #   5a. hjkl-completion       — completion popup data model (no hjkl deps).
           #   5b. hjkl-lang             — language directory + grammar request (#4).
+          #   5c. hjkl-buffer-tui       — ratatui Widget adapter (#5).
           #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
           #   7.  hjkl-config           — config schema (no hjkl deps).
           #   8.  hjkl-engine           — editor engine (depends on #5).
@@ -832,6 +833,7 @@ jobs:
           publish_if_missing hjkl-css-gui
           publish_if_missing hjkl-bonsai
           publish_if_missing hjkl-buffer
+          publish_if_missing hjkl-buffer-tui
           publish_if_missing hjkl-completion
           publish_if_missing hjkl-lang
           publish_if_missing hjkl-clipboard

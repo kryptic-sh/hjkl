@@ -17,13 +17,15 @@ default = ["serde"]
 serde = ["hjkl-engine/serde"]
 crossterm = ["hjkl-engine/crossterm"]
 # Pulls the engine's `ratatui` adapter surface (Style intern, mouse
-# Rect helpers) plus the buffer's ratatui Widget impl. Default-on for
-# back-compat; non-terminal hosts opt out via `default-features = false`.
-ratatui = ["hjkl-engine/ratatui", "hjkl-buffer/ratatui"]
+# Rect helpers). The buffer's ratatui Widget impl now lives in the
+# `hjkl-buffer-tui` crate. Default-on for back-compat; non-terminal
+# hosts opt out via `default-features = false`.
+ratatui = ["hjkl-engine/ratatui", "dep:hjkl-buffer-tui"]
 
 [dependencies]
 hjkl-engine.workspace = true
 hjkl-buffer.workspace = true
+hjkl-buffer-tui = { workspace = true, optional = true }
 
 [dev-dependencies]
 crossterm = { version = "0.29.0", features = ["event-stream"] }

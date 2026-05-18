@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use hjkl_buffer_tui::Sign;
 use hjkl_info_popup::InfoPopup;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::json;
@@ -225,9 +226,9 @@ impl App {
         }
 
         // Build gutter signs from the map.
-        let diag_signs_lsp: Vec<hjkl_buffer::Sign> = sign_map
+        let diag_signs_lsp: Vec<Sign> = sign_map
             .into_iter()
-            .map(|(row, (_, ch, style, priority))| hjkl_buffer::Sign {
+            .map(|(row, (_, ch, style, priority))| Sign {
                 row,
                 ch,
                 style,

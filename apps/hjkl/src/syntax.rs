@@ -13,6 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use hjkl_bonsai::{DotFallbackTheme, Theme};
+use hjkl_buffer_tui::Sign;
 use hjkl_engine::Query;
 use hjkl_syntax_tui::render_output_to_tui;
 
@@ -39,7 +40,7 @@ pub struct RenderOutput {
     /// Per-row span table with ratatui styles.
     pub spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     /// Diagnostic gutter signs (ratatui-styled via `hjkl-syntax-tui`).
-    pub signs: Vec<hjkl_buffer::Sign>,
+    pub signs: Vec<Sign>,
     /// `(dirty_gen, viewport_top, viewport_height)` cache key.
     pub key: (u64, usize, usize),
     /// Sub-step timing breakdown (available for perf_overlay; accessed via

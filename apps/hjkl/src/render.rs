@@ -4,7 +4,8 @@
 //! It splits the terminal area into a buffer pane + status line row and
 //! delegates to [`buffer_pane`] and [`status_line`].
 
-use hjkl_buffer::{BufferView, DiagOverlay, Gutter, GutterNumbers, Viewport};
+use hjkl_buffer::Viewport;
+use hjkl_buffer_tui::{BufferView, DiagOverlay, Gutter, GutterNumbers};
 use hjkl_engine::{Host, Query};
 use hjkl_statusline::{
     Bar, Color as SlColor, Segment as SlSegment, StatusTheme, Style as SlStyle, StyleExt,
@@ -698,7 +699,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
     let vp_bot = vp_top + area.height as usize;
-    let mut visible_signs: Vec<hjkl_buffer::Sign> = app.slots()[slot_idx]
+    let mut visible_signs: Vec<hjkl_buffer_tui::Sign> = app.slots()[slot_idx]
         .diag_signs
         .iter()
         .copied()

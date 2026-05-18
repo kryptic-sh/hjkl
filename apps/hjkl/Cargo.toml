@@ -37,6 +37,7 @@ hjkl-keymap-tui.workspace = true
 hjkl-vim = { workspace = true, features = ["crossterm"] }
 hjkl-lsp.workspace = true
 hjkl-buffer.workspace = true
+hjkl-buffer-tui.workspace = true
 hjkl-splash.workspace = true
 hjkl-splash-tui.workspace = true
 hjkl-engine = { workspace = true, features = ["crossterm", "ratatui"] }

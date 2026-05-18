@@ -14,7 +14,8 @@ readme = "README.md"
 
 [dependencies]
 hjkl-picker.workspace = true
-hjkl-buffer = { workspace = true, features = ["ratatui"] }
+hjkl-buffer.workspace = true
+hjkl-buffer-tui.workspace = true
 hjkl-engine = { workspace = true, features = ["ratatui", "crossterm"] }
 ratatui = "0.30"
 crossterm = "0.29"

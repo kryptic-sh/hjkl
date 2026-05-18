@@ -12,7 +12,8 @@
 #![forbid(unsafe_code)]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use hjkl_buffer::{BufferView, Gutter, Viewport};
+use hjkl_buffer::Viewport;
+use hjkl_buffer_tui::{BufferView, Gutter};
 use hjkl_engine::Input;
 use hjkl_picker::{Picker, PickerAction, PickerEvent, PreviewHighlighter, PreviewSpans};
 use ratatui::Frame;

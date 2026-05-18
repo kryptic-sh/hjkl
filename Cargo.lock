@@ -2151,6 +2151,7 @@ dependencies = [
  "hjkl-app",
  "hjkl-bonsai",
  "hjkl-buffer",
+ "hjkl-buffer-tui",
  "hjkl-clipboard",
  "hjkl-completion",
  "hjkl-completion-tui",
@@ -2278,7 +2279,6 @@ version = "0.25.0"
 dependencies = [
  "criterion",
  "proptest",
- "ratatui",
  "regex",
  "unicode-width 0.2.2",
 ]
@@ -2369,6 +2369,7 @@ version = "0.25.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
+ "hjkl-buffer-tui",
  "hjkl-engine",
 ]
 
@@ -2587,6 +2588,7 @@ version = "0.25.0"
 dependencies = [
  "crossterm",
  "hjkl-buffer",
+ "hjkl-buffer-tui",
  "hjkl-engine",
  "hjkl-picker",
  "ratatui",
@@ -2653,6 +2655,7 @@ name = "hjkl-syntax-tui"
 version = "0.25.0"
 dependencies = [
  "hjkl-buffer",
+ "hjkl-buffer-tui",
  "hjkl-syntax",
  "hjkl-theme-tui",
  "ratatui",

@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- Dropped the `ratatui` feature and `render` module. The ratatui Widget adapter
+  now lives in the new `hjkl-buffer-tui` crate. Part of #162.
+
 ## [0.8.1] - 2026-05-18
 
 ### Fixed

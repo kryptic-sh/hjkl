@@ -6,12 +6,6 @@
 //!
 //! Extracted from `sqeel-buffer` with full git history.
 //!
-//! ## Features
-//!
-//! - `ratatui` (off by default): enables the `render` module with a direct
-//!   cell-write `ratatui::widgets::Widget` impl for [`Buffer`] via
-//!   [`BufferView`].
-//!
 //! ## Pre-1.0 stability
 //!
 //! Pre-1.0: signatures may shift between patch versions. The invariants
@@ -54,8 +48,6 @@ mod folds;
 pub mod geom;
 mod motion;
 mod position;
-#[cfg(feature = "ratatui")]
-mod render;
 mod selection;
 mod span;
 mod viewport;
@@ -68,8 +60,6 @@ pub use folds::Fold;
 pub use geom::visual_col_to_char_col;
 pub use motion::is_keyword_char;
 pub use position::Position;
-#[cfg(feature = "ratatui")]
-pub use render::{BufferView, Conceal, DiagOverlay, Gutter, GutterNumbers, Sign, StyleResolver};
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
 pub use viewport::{Viewport, is_big_viewport_jump, over_provisioned_range};

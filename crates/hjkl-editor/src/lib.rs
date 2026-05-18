@@ -54,7 +54,7 @@ pub mod buffer {
     };
 
     #[cfg(feature = "ratatui")]
-    pub use hjkl_buffer::{BufferView, Gutter, Sign, StyleResolver};
+    pub use hjkl_buffer_tui::{BufferView, Gutter, Sign, StyleResolver};
 }
 
 pub mod runtime {

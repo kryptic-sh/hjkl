@@ -999,7 +999,7 @@ mod tests {
     /// returns None, and a click on cell 5 is the first text cell (col 0).
     #[test]
     fn cell_to_doc_with_visible_sign_first_text_cell_is_at_sign_w_plus_num_gw() {
-        use hjkl_buffer::Sign;
+        use hjkl_buffer_tui::Sign;
         use ratatui::style::Style;
 
         let mut app =

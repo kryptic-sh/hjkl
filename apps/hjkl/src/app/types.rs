@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use hjkl_buffer::Buffer;
+use hjkl_buffer_tui::Sign;
 use hjkl_engine::{Editor, VimMode};
 
 use crate::host::TuiHost;
@@ -285,10 +286,10 @@ pub struct BufferSlot {
     /// Diagnostic gutter signs (tree-sitter ERROR / MISSING) for the
     /// current viewport. Refreshed by `recompute_and_install`; read by
     /// `render::buffer_pane`.
-    pub diag_signs: Vec<hjkl_buffer::Sign>,
+    pub diag_signs: Vec<Sign>,
     /// LSP diagnostic gutter signs. Separate from `diag_signs` so the
     /// oracle/syntax source can be cleared independently of LSP.
-    pub diag_signs_lsp: Vec<hjkl_buffer::Sign>,
+    pub diag_signs_lsp: Vec<Sign>,
     /// Full LSP diagnostic list for the buffer. Replaced wholesale each
     /// time `textDocument/publishDiagnostics` arrives (server is source
     /// of truth — empty notification clears all diags).
@@ -300,7 +301,7 @@ pub struct BufferSlot {
     /// whenever the buffer's `dirty_gen` advances so unsaved edits
     /// show in the gutter live. Filtered to the viewport per-frame
     /// in the renderer.
-    pub git_signs: Vec<hjkl_buffer::Sign>,
+    pub git_signs: Vec<Sign>,
     /// `dirty_gen` of the buffer when `git_signs` was last rebuilt.
     /// `None` = stale, force recompute on next render.
     pub(super) last_git_dirty_gen: Option<u64>,

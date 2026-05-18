@@ -1,10 +1,8 @@
-//! Direct cell-write `ratatui::widgets::Widget` for [`crate::Buffer`].
-//!
-//! Enabled by the `ratatui` feature (off by default).
+//! Direct cell-write `ratatui::widgets::Widget` for [`hjkl_buffer::Buffer`].
 //!
 //! ## Render path
 //!
-//! When the `ratatui` feature is enabled, [`BufferView`] implements
+//! [`BufferView`] implements
 //! `ratatui::widgets::Widget`. The widget is **single-pass** — text,
 //! selection, gutter signs, and styled spans all paint together. There is
 //! no separate `Paragraph` or layout step. Writes one cell at a time so
@@ -13,13 +11,13 @@
 //! does.
 //!
 //! Caller wraps a `&Buffer` in [`BufferView`], hands it the style table
-//! that resolves opaque [`crate::Span`] style ids to real ratatui styles
+//! that resolves opaque [`hjkl_buffer::Span`] style ids to real ratatui styles
 //! via a [`StyleResolver`], and renders into a `ratatui::Frame`.
 //!
 //! ## StyleResolver hooks
 //!
 //! The [`StyleResolver`] trait is the host's bridge from opaque `u32` style
-//! ids (stored in [`crate::Span::style`]) to real `ratatui::style::Style`
+//! ids (stored in [`hjkl_buffer::Span::style`]) to real `ratatui::style::Style`
 //! values. Implement it against your own theme. A convenience blanket impl
 //! exists for closures `Fn(u32) -> Style`.
 
@@ -29,10 +27,10 @@ use ratatui::style::Style;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 
-use crate::wrap::wrap_segments;
-use crate::{Buffer, Selection, Span, Viewport, Wrap};
+use hjkl_buffer::wrap::wrap_segments;
+use hjkl_buffer::{Buffer, Selection, Span, Viewport, Wrap};
 
-/// Resolves an opaque [`crate::Span::style`] id to a real ratatui
+/// Resolves an opaque [`hjkl_buffer::Span::style`] id to a real ratatui
 /// style. The buffer doesn't know about colours; the host (sqeel-vim
 /// or any future user) keeps a lookup table.
 pub trait StyleResolver {
@@ -483,7 +481,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         term_buf: &mut TermBuffer,
         area: Rect,
         screen_row: u16,
-        fold: crate::Fold,
+        fold: hjkl_buffer::Fold,
         first_line: &str,
         is_cursor_row: bool,
     ) {
@@ -667,8 +665,8 @@ impl<R: StyleResolver> BufferView<'_, R> {
         area: Rect,
         screen_row: u16,
         line: &str,
-        row_spans: &[crate::Span],
-        sel_range: crate::RowSpan,
+        row_spans: &[hjkl_buffer::Span],
+        sel_range: hjkl_buffer::RowSpan,
         search_ranges: &[(usize, usize)],
         is_cursor_row: bool,
         cursor_col: usize,
@@ -882,9 +880,13 @@ impl<R: StyleResolver> BufferView<'_, R> {
     /// Hosts that want the old behaviour can ensure their narrower spans
     /// set every field explicitly — `Style::patch` only carries broader
     /// fields through `None` slots.
-    fn resolve_span_style(&self, row_spans: &[crate::Span], byte_offset: usize) -> Option<Style> {
+    fn resolve_span_style(
+        &self,
+        row_spans: &[hjkl_buffer::Span],
+        byte_offset: usize,
+    ) -> Option<Style> {
         // Collect every span containing this byte, sorted broadest first.
-        let mut overlapping: Vec<&crate::Span> = row_spans
+        let mut overlapping: Vec<&hjkl_buffer::Span> = row_spans
             .iter()
             .filter(|s| byte_offset >= s.start_byte && byte_offset < s.end_byte)
             .collect();
@@ -965,7 +967,7 @@ mod tests {
     fn cursor_cell_gets_reversed_style() {
         let mut b = Buffer::from_str("abc");
         let v = vp(10, 1);
-        b.set_cursor(crate::Position::new(0, 1));
+        b.set_cursor(hjkl_buffer::Position::new(0, 1));
         let view = BufferView {
             buffer: &b,
             viewport: &v,
@@ -993,7 +995,7 @@ mod tests {
 
     #[test]
     fn selection_bg_applies_only_to_selected_cells() {
-        use crate::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let b = Buffer::from_str("abcdef");
         let v = vp(10, 1);
         let view = BufferView {
@@ -1031,7 +1033,7 @@ mod tests {
     fn selection_paints_placeholder_on_empty_line_charwise() {
         // Char selection spanning two lines, middle empty row must show
         // a selection cell at col 0 so the user can see the row is in range.
-        use crate::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let b = Buffer::from_str("abc\n\nxyz");
         let v = vp(10, 3);
         let view = BufferView {
@@ -1064,7 +1066,7 @@ mod tests {
 
     #[test]
     fn selection_paints_placeholder_on_empty_line_linewise() {
-        use crate::Selection;
+        use hjkl_buffer::Selection;
         let b = Buffer::from_str("abc\n\nxyz");
         let v = vp(10, 3);
         let view = BufferView {
@@ -1100,7 +1102,7 @@ mod tests {
         // The empty row must paint cols 2..=5 (the block's full width),
         // NOT just col 0 — otherwise the block looks broken at empty
         // rows. Matches Neovim's rectangular block highlight.
-        use crate::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let b = Buffer::from_str("abcdef\n\nuvwxyz");
         let v = vp(10, 3);
         let view = BufferView {
@@ -1150,7 +1152,7 @@ mod tests {
     #[test]
     fn selection_block_placeholder_clips_to_row_width() {
         // Block right edge past row width must stop at row_end_x.
-        use crate::{Position, Selection};
+        use hjkl_buffer::{Position, Selection};
         let b = Buffer::from_str("abc\n\nxyz");
         let v = vp(5, 3);
         let view = BufferView {
@@ -1195,7 +1197,7 @@ mod tests {
         // carrying only `fg = ...`. Pre-0.6.1 the narrow span won outright
         // and dropped the broad bg, which made markdown code-block tinting
         // impossible without bloating every injected language's captures.
-        use crate::Span;
+        use hjkl_buffer::Span;
         let b = Buffer::from_str("fn main() {}");
         let v = vp(20, 1);
         // id=1 = broad code-block bg, id=2 = narrow keyword fg.
@@ -1255,7 +1257,7 @@ mod tests {
         // broader span's bg. Earlier "narrowest-wins-completely" behaviour
         // had this trivially; the new layered logic relies on
         // `Style::patch` overriding only set fields, so we pin it.
-        use crate::Span;
+        use hjkl_buffer::Span;
         let b = Buffer::from_str("hello world");
         let v = vp(20, 1);
         let spans = vec![vec![
@@ -1306,7 +1308,7 @@ mod tests {
 
     #[test]
     fn syntax_span_fg_resolves_via_table() {
-        use crate::Span;
+        use hjkl_buffer::Span;
         let b = Buffer::from_str("SELECT foo");
         let v = vp(20, 1);
         let spans = vec![vec![Span::new(0, 6, 7)]];
@@ -1386,7 +1388,7 @@ mod tests {
     fn gutter_renders_relative_with_cursor_at_zero() {
         // 5 rows, cursor on row 2 (0-based). Relative: row 2 → 0, row 0 → 2, row 4 → 2.
         let mut b = Buffer::from_str("a\nb\nc\nd\ne");
-        b.set_cursor(crate::Position::new(2, 0));
+        b.set_cursor(hjkl_buffer::Position::new(2, 0));
         let v = vp(10, 5);
         let view = BufferView {
             buffer: &b,
@@ -1433,7 +1435,7 @@ mod tests {
         // 3 rows, cursor on row 1 (0-based). Hybrid: row 1 → absolute (2),
         // row 0 → offset 1, row 2 → offset 1.
         let mut b = Buffer::from_str("a\nb\nc");
-        b.set_cursor(crate::Position::new(1, 0));
+        b.set_cursor(hjkl_buffer::Position::new(1, 0));
         let v = vp(10, 3);
         let view = BufferView {
             buffer: &b,
@@ -1562,7 +1564,7 @@ mod tests {
         let v = vp(20, 1);
         let pat = Regex::new("foo").unwrap();
         // Cursor on column 1 (inside first `foo` match).
-        b.set_cursor(crate::Position::new(0, 1));
+        b.set_cursor(hjkl_buffer::Position::new(0, 1));
         let view = BufferView {
             buffer: &b,
             viewport: &v,
@@ -1903,7 +1905,7 @@ mod tests {
             tab_width: 0,
         };
         // Cursor on 'g' (col 6) should land on row 1, col 2.
-        b.set_cursor(crate::Position::new(0, 6));
+        b.set_cursor(hjkl_buffer::Position::new(0, 6));
         let r = no_styles as fn(u32) -> Style;
         let mut view = make_wrap_view(&b, &v, &r, None);
         view.cursor_style = Style::default().add_modifier(Modifier::REVERSED);
@@ -1929,7 +1931,7 @@ mod tests {
             tab_width: 0,
         };
         // Past-end cursor at col 6.
-        b.set_cursor(crate::Position::new(0, 6));
+        b.set_cursor(hjkl_buffer::Position::new(0, 6));
         let r = no_styles as fn(u32) -> Style;
         let mut view = make_wrap_view(&b, &v, &r, None);
         view.cursor_style = Style::default().add_modifier(Modifier::REVERSED);
