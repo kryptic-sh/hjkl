@@ -17,7 +17,7 @@ itself runs a tiny FSM over `Form-Normal` / `Form-Insert` modes for focus
 navigation, validation, and submit dispatch — keystrokes delegate to the focused
 field's editor when the form is in Insert mode.
 
-Renderers live in adapter crates: `hjkl-ratatui::form::draw_form` ships the
+Renderers live in adapter crates: `hjkl-editor-tui::form::draw_form` ships the
 ratatui flavor.
 
 ## Status
@@ -55,7 +55,7 @@ let mut form = Form::new()
     }));
 
 // Drive with `Form::handle_input(input)` from your event loop, then call
-// `hjkl_ratatui::form::draw_form(...)` per frame.
+// `hjkl_editor_tui::form::draw_form(...)` per frame.
 let _ = form.handle_input(hjkl_engine::Input::default());
 let _ = FormEvent::Changed;
 ```

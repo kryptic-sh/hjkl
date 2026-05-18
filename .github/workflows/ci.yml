@@ -715,7 +715,6 @@ jobs:
           #  16.  hjkl-mangler          — formatter dispatch (no hjkl deps).
           #  17.  hjkl-picker           — fuzzy picker (#5, #8, #12).
           #  18.  hjkl-picker-tui       — ratatui picker adapter (#5, #8, #17).
-          #  19.  hjkl-ratatui          — ratatui integration shim (#13).
           #  20.  hjkl-splash           — start screen (no hjkl deps).
           #  21.  hjkl-theme-tui        — ratatui theme adapter (#3).
           #
@@ -847,7 +846,6 @@ jobs:
           publish_if_missing hjkl-mangler
           publish_if_missing hjkl-picker
           publish_if_missing hjkl-picker-tui
-          publish_if_missing hjkl-ratatui
           publish_if_missing hjkl-splash
           publish_if_missing hjkl-theme-tui
           publish_if_missing hjkl-statusline

@@ -50,7 +50,6 @@ hjkl-picker = { path = "crates/hjkl-picker", version = "0.25" }
 hjkl-picker-tui = { path = "crates/hjkl-picker-tui", version = "0.25" }
 hjkl-prompt = { path = "crates/hjkl-prompt", version = "0.25" }
 hjkl-prompt-tui = { path = "crates/hjkl-prompt-tui", version = "0.25" }
-hjkl-ratatui = { path = "crates/hjkl-ratatui", version = "0.25" }
 hjkl-splash = { path = "crates/hjkl-splash", version = "0.25" }
 hjkl-statusline = { path = "crates/hjkl-statusline", version = "0.25" }
 hjkl-statusline-tui = { path = "crates/hjkl-statusline-tui", version = "0.25" }

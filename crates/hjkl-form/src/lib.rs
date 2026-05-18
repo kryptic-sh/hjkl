@@ -8,7 +8,7 @@
 //! navigation and validation, delegating keystrokes to the focused
 //! field's editor when in insert mode.
 //!
-//! Renderers live in adapter crates: `hjkl-ratatui::form::draw_form`
+//! Renderers live in adapter crates: `hjkl-editor-tui::form::draw_form`
 //! ships the ratatui flavor.
 #![forbid(unsafe_code)]
 

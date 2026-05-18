@@ -2599,13 +2599,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hjkl-ratatui"
-version = "0.25.0"
-dependencies = [
- "hjkl-editor-tui",
-]
-
-[[package]]
 name = "hjkl-splash"
 version = "0.25.0"
 dependencies = [

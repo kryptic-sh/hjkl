@@ -211,8 +211,8 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
   built on the engine (used by pickers, `:` / `/` prompts)
 - [`hjkl-picker`](https://crates.io/crates/hjkl-picker) — fuzzy picker subsystem
   (`Picker`, `PickerLogic`, `FileSource`, `RgSource`, scorer)
-- [`hjkl-ratatui`](https://crates.io/crates/hjkl-ratatui) — ratatui rendering
-  adapters + shared spinner
+- [`hjkl-editor-tui`](https://crates.io/crates/hjkl-editor-tui) — ratatui
+  rendering adapters + shared spinner
 - [`hjkl-lsp`](https://crates.io/crates/hjkl-lsp) — LSP client crate
 
 See [docs.rs/hjkl-engine](https://docs.rs/hjkl-engine) for the engine trait
