@@ -25,9 +25,6 @@
 [submodule "crates/hjkl-splash"]
 	path = crates/hjkl-splash
 	url = https://github.com/kryptic-sh/hjkl-splash.git
-[submodule "crates/hjkl-lsp"]
-	path = crates/hjkl-lsp
-	url = https://github.com/kryptic-sh/hjkl-lsp.git
 [submodule "crates/hjkl-keymap"]
 	path = crates/hjkl-keymap
 	url = https://github.com/kryptic-sh/hjkl-keymap.git
