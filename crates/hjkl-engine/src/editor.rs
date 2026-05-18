@@ -590,38 +590,21 @@ pub struct Editor<
     /// and `Editor::mutate_edit` are concrete on `hjkl_buffer::Buffer`
     /// for 0.1.0 — see `crate::buf_helpers::apply_buffer_edit`.
     pub(super) buffer: B,
-    /// Style intern table for the migration buffer's opaque
-    /// `Span::style` ids. Phase 7d-ii-a wiring — `apply_window_spans`
-    /// produces `(start, end, Style)` tuples for the textarea; we
-    /// translate those to `hjkl_buffer::Span` by interning the
-    /// `Style` here and storing the table index. The render path's
-    /// `StyleResolver` looks the style back up by id.
-    ///
-    /// Behind the `ratatui` feature; non-ratatui hosts use the
-    /// engine-native [`crate::types::Style`] surface via
-    /// [`Editor::intern_engine_style`] (which lives on a parallel
-    /// engine-side table when ratatui is off).
-    #[cfg(feature = "ratatui")]
-    pub(super) style_table: Vec<ratatui::style::Style>,
-    /// Engine-native style intern table. Used directly by
-    /// [`Editor::intern_engine_style`] when the `ratatui` feature is
-    /// off; when it's on, the table is derived from `style_table` via
-    /// [`ratatui_style_to_engine`] / [`engine_style_to_ratatui`].
-    #[cfg(not(feature = "ratatui"))]
-    pub(super) engine_style_table: Vec<crate::types::Style>,
+    /// Engine-native style intern table. Opaque `Span::style` ids index
+    /// into this table; the render path resolves ids back to
+    /// [`crate::types::Style`] (and converts to ratatui at the boundary
+    /// when the `ratatui` feature is on). Always present — no cfg-mutex.
+    pub(super) style_table: Vec<crate::types::Style>,
     /// Vim-style register bank — `"`, `"0`–`"9`, `"a`–`"z`. Sources
     /// every `p` / `P` via the active selector (default unnamed).
     /// Internal — read via [`Editor::registers`]; mutated by yank /
     /// delete / paste FSM paths and by [`Editor::seed_yank`].
     pub(crate) registers: crate::registers::Registers,
-    /// Per-row syntax styling, kept here so the host can do
-    /// incremental window updates (see `apply_window_spans` in
-    /// the host). Same `(start_byte, end_byte, Style)` tuple shape
-    /// the textarea used to host. The Buffer-side opaque-id spans are
-    /// derived from this on every install. Behind the `ratatui`
-    /// feature.
-    #[cfg(feature = "ratatui")]
-    pub styled_spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
+    /// Per-row syntax styling in engine-native form. Always present —
+    /// populated by [`Editor::install_syntax_spans`] and the ratatui
+    /// adapter [`Editor::install_ratatui_syntax_spans`]. Ratatui hosts
+    /// convert at the boundary via [`engine_style_to_ratatui`].
+    pub styled_spans: Vec<Vec<(usize, usize, crate::types::Style)>>,
     /// Per-editor settings tweakable via `:set`. Exposed by reference
     /// so handlers (indent, search) read the live value rather than a
     /// snapshot taken at startup. Read via [`Editor::settings`];
@@ -920,12 +903,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             pending_lsp: None,
             pending_fold_ops: Vec::new(),
             buffer,
-            #[cfg(feature = "ratatui")]
             style_table: Vec::new(),
-            #[cfg(not(feature = "ratatui"))]
-            engine_style_table: Vec::new(),
             registers: crate::registers::Registers::default(),
-            #[cfg(feature = "ratatui")]
             styled_spans: Vec::new(),
             settings,
             marks: std::collections::BTreeMap::new(),
@@ -1188,10 +1167,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
 
     /// Install styled syntax spans using `ratatui::style::Style`. The
     /// ratatui-flavoured variant of [`Editor::install_syntax_spans`].
-    /// Drops zero-width runs and clamps `end` to the line's char length
-    /// so the buffer cache doesn't see runaway ranges. Behind the
-    /// `ratatui` feature; non-ratatui hosts use the unprefixed
-    /// [`Editor::install_syntax_spans`] (engine-native `Style`).
+    /// Converts each ratatui style to engine-native at the boundary
+    /// (via [`ratatui_style_to_engine`]) before interning; storage is
+    /// always engine-native. Drops zero-width runs and clamps `end`
+    /// to the line's char length. Behind the `ratatui` feature.
     ///
     /// Renamed from `install_syntax_spans` in 0.0.32 — the unprefixed
     /// name now belongs to the engine-native variant per SPEC 0.1.0
@@ -1201,29 +1180,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         &mut self,
         spans: Vec<Vec<(usize, usize, ratatui::style::Style)>>,
     ) {
-        // Look up `line_byte_lens` lazily — only fetch a row's length
-        // when it has at least one span. On a 100k-line file with
-        // ~50 visible rows, this avoids an O(N) buffer walk per frame.
-        let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
-        for (row, row_spans) in spans.iter().enumerate() {
-            if row_spans.is_empty() {
-                by_row.push(Vec::new());
-                continue;
-            }
-            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
-            let mut translated = Vec::with_capacity(row_spans.len());
-            for (start, end, style) in row_spans {
-                let end_clamped = (*end).min(line_len);
-                if end_clamped <= *start {
-                    continue;
-                }
-                let id = self.intern_ratatui_style(*style);
-                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
-            }
-            by_row.push(translated);
-        }
-        self.buffer_spans = by_row;
-        self.styled_spans = spans;
+        // Convert ratatui spans to engine-native and delegate.
+        let engine_spans: Vec<Vec<(usize, usize, crate::types::Style)>> = spans
+            .into_iter()
+            .map(|row_spans| {
+                row_spans
+                    .into_iter()
+                    .map(|(start, end, style)| (start, end, ratatui_style_to_engine(style)))
+                    .collect()
+            })
+            .collect();
+        self.install_syntax_spans(engine_spans);
     }
 
     /// Snapshot of the unnamed register (the default `p` / `P` source).
@@ -1395,14 +1362,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .map(|r| buf_line(&self.buffer, r).map(|s| s.len()).unwrap_or(0))
             .collect();
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
-        #[cfg(feature = "ratatui")]
-        let mut ratatui_spans: Vec<Vec<(usize, usize, ratatui::style::Style)>> =
+        let mut engine_spans: Vec<Vec<(usize, usize, crate::types::Style)>> =
             Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
             let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
             let mut translated = Vec::with_capacity(row_spans.len());
-            #[cfg(feature = "ratatui")]
-            let mut translated_r = Vec::with_capacity(row_spans.len());
+            let mut translated_e = Vec::with_capacity(row_spans.len());
             for (start, end, style) in row_spans {
                 let end_clamped = (*end).min(line_len);
                 if end_clamped <= *start {
@@ -1410,43 +1375,49 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 }
                 let id = self.intern_style(*style);
                 translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
-                #[cfg(feature = "ratatui")]
-                translated_r.push((*start, end_clamped, engine_style_to_ratatui(*style)));
+                translated_e.push((*start, end_clamped, *style));
             }
             by_row.push(translated);
-            #[cfg(feature = "ratatui")]
-            ratatui_spans.push(translated_r);
+            engine_spans.push(translated_e);
         }
         self.buffer_spans = by_row;
-        #[cfg(feature = "ratatui")]
-        {
-            self.styled_spans = ratatui_spans;
-        }
+        self.styled_spans = engine_spans;
     }
 
     /// Intern a `ratatui::style::Style` and return the opaque id used
-    /// in `hjkl_buffer::Span::style`. The ratatui-flavoured variant of
-    /// [`Editor::intern_style`]. Linear-scan dedup — the table grows
-    /// only as new tree-sitter token kinds appear, so it stays tiny.
-    /// Behind the `ratatui` feature.
+    /// in `hjkl_buffer::Span::style`. Thin adapter: converts ratatui
+    /// style → engine-native via [`ratatui_style_to_engine`], then
+    /// delegates to [`Editor::intern_style`]. Linear-scan dedup is
+    /// handled there. Behind the `ratatui` feature.
     ///
     /// Renamed from `intern_style` in 0.0.32 — at 0.1.0 freeze the
     /// unprefixed name belongs to the engine-native variant.
     #[cfg(feature = "ratatui")]
     pub fn intern_ratatui_style(&mut self, style: ratatui::style::Style) -> u32 {
-        if let Some(idx) = self.style_table.iter().position(|s| *s == style) {
-            return idx as u32;
-        }
-        self.style_table.push(style);
-        (self.style_table.len() - 1) as u32
+        self.intern_style(ratatui_style_to_engine(style))
     }
 
-    /// Read-only view of the style table — id `i` → `style_table[i]`.
-    /// The render path passes a closure backed by this slice as the
-    /// `StyleResolver` for `BufferView`. Behind the `ratatui` feature.
-    #[cfg(feature = "ratatui")]
-    pub fn style_table(&self) -> &[ratatui::style::Style] {
+    /// Read-only view of the style table in engine-native form —
+    /// id `i` → `style_table[i]`. Always available, no cfg gate.
+    ///
+    /// Ratatui hosts that need a `ratatui::style::Style` slice should
+    /// call [`Editor::ratatui_style_table`] (allocates) or convert
+    /// individual entries via `engine_style_to_ratatui` at lookup time.
+    pub fn style_table(&self) -> &[crate::types::Style] {
         &self.style_table
+    }
+
+    /// Allocate and return the style table converted to ratatui styles.
+    /// Convenience for render paths that need a `Vec<ratatui::style::Style>`.
+    /// Allocates on every call — prefer a per-draw local binding.
+    /// Behind the `ratatui` feature.
+    #[cfg(feature = "ratatui")]
+    pub fn ratatui_style_table(&self) -> Vec<ratatui::style::Style> {
+        self.style_table
+            .iter()
+            .copied()
+            .map(engine_style_to_ratatui)
+            .collect()
     }
 
     /// Per-row syntax span overlay, one `Vec<Span>` per buffer row.
@@ -1462,48 +1433,27 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     /// Intern a SPEC [`crate::types::Style`] and return its opaque id.
-    /// With the `ratatui` feature on, the id matches the one
-    /// [`Editor::intern_ratatui_style`] would return for the equivalent
-    /// `ratatui::Style` (both share the underlying table). With it off,
-    /// the engine keeps a parallel `crate::types::Style`-keyed table
-    /// — ids are still stable per-editor.
-    ///
-    /// Hosts that don't depend on ratatui (buffr, future GUI shells)
-    /// reach this method to populate the table during syntax span
-    /// installation.
+    /// Both the ratatui adapter [`Editor::intern_ratatui_style`] and the
+    /// engine-native path converge here — the unified `style_table` is
+    /// always engine-native. Linear-scan dedup — the table grows only as
+    /// new tree-sitter token kinds appear, so it stays tiny.
     ///
     /// Renamed from `intern_engine_style` in 0.0.32 — at 0.1.0 freeze
     /// the unprefixed name is the universally-available engine-native
     /// variant.
     pub fn intern_style(&mut self, style: crate::types::Style) -> u32 {
-        #[cfg(feature = "ratatui")]
-        {
-            let r = engine_style_to_ratatui(style);
-            self.intern_ratatui_style(r)
+        if let Some(idx) = self.style_table.iter().position(|s| *s == style) {
+            return idx as u32;
         }
-        #[cfg(not(feature = "ratatui"))]
-        {
-            if let Some(idx) = self.engine_style_table.iter().position(|s| *s == style) {
-                return idx as u32;
-            }
-            self.engine_style_table.push(style);
-            (self.engine_style_table.len() - 1) as u32
-        }
+        self.style_table.push(style);
+        (self.style_table.len() - 1) as u32
     }
 
     /// Look up an interned style by id and return it as a SPEC
     /// [`crate::types::Style`]. Returns `None` for ids past the end
     /// of the table.
     pub fn engine_style_at(&self, id: u32) -> Option<crate::types::Style> {
-        #[cfg(feature = "ratatui")]
-        {
-            let r = self.style_table.get(id as usize).copied()?;
-            Some(ratatui_style_to_engine(r))
-        }
-        #[cfg(not(feature = "ratatui"))]
-        {
-            self.engine_style_table.get(id as usize).copied()
-        }
+        self.style_table.get(id as usize).copied()
     }
 
     /// Historical reverse-sync hook from when the textarea mirrored
@@ -5275,6 +5225,7 @@ mod tests {
 
     #[test]
     fn install_ratatui_syntax_spans_translates_styled_spans() {
+        use crate::types::Color as EColor;
         use ratatui::style::{Color, Style};
         let mut e = Editor::new(
             hjkl_buffer::Buffer::new(),
@@ -5289,7 +5240,9 @@ mod tests {
         assert_eq!(by_row[0][0].start_byte, 0);
         assert_eq!(by_row[0][0].end_byte, 6);
         let id = by_row[0][0].style;
-        assert_eq!(e.style_table()[id as usize].fg, Some(Color::Red));
+        // Named colors are flattened to RGB at the ratatui→engine boundary
+        // (see `ratatui_style_to_engine`). Color::Red maps to (205, 49, 49).
+        assert_eq!(e.style_table()[id as usize].fg, Some(EColor(205, 49, 49)));
     }
 
     #[test]

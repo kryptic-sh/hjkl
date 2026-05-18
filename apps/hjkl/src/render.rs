@@ -734,7 +734,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     };
 
     let style_table = app.slots()[slot_idx].editor.style_table().to_owned();
-    let resolver = move |id: u32| style_table.get(id as usize).copied().unwrap_or_default();
+    let resolver = move |id: u32| {
+        engine_style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
+    };
 
     // For non-focused windows, don't show cursor highlight or cursor position.
     let show_cursor = is_focused && !in_prompt;
