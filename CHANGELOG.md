@@ -8,14 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.23.0] - 2026-05-18
+## [0.24.0] - 2026-05-18
 
 ### Changed (MAJOR)
 
 - **Lockstep workspace versioning** — all 48 workspace crates now share a single
   version via `version.workspace = true` in each `[package]` table (closes #152
-  Phase 2). Bumped from `0.22.0` to `0.23.0` — the highest version any
-  individual crate had reached (hjkl-vim 0.23.x series).
+  Phase 2). Bumped from `0.22.0` to `0.24.0` — v0.23.x tags were already
+  occupied by prior umbrella releases; 0.24.0 is the next available minor.
 - **`[workspace.dependencies]` block added** to root `Cargo.toml`: all 48
   hjkl-\* crates are declared via `path =` so inter-crate deps can use
   `hjkl-foo.workspace = true` or
@@ -32,7 +32,7 @@ patch bumps.
 
 External consumers of the individual crates should pin to their previous
 independent versions (e.g. `hjkl-engine = "0.11"`, `hjkl-vim = "0.23"`). Those
-tags remain on crates.io. The 0.23.0+ series reflects monorepo lockstep going
+tags remain on crates.io. The 0.24.0+ series reflects monorepo lockstep going
 forward — all crates advance together on each umbrella release.
 
 ## [0.22.0] - 2026-05-18
@@ -3393,8 +3393,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.23.0...HEAD
-[0.23.0]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...v0.23.0
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...v0.24.0
 [0.22.0]: https://github.com/kryptic-sh/hjkl/compare/v0.21.35...v0.22.0
 [0.21.35]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...v0.21.35
 [0.21.34]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...v0.21.34
