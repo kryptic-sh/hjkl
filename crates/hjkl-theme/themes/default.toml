@@ -1,0 +1,82 @@
+# hjkl-theme built-in dark theme.
+#
+# Minimal dark palette used as a fallback when no user theme file is
+# present. Colors are a neutral dark base; consumers are encouraged to
+# ship their own theme TOML and call loader::load_from_path instead.
+
+[palette]
+bg       = "#1e1e2e"
+fg       = "#cdd6f4"
+comment  = "#6c7086"
+red      = "#f38ba8"
+orange   = "#fab387"
+yellow   = "#f9e2af"
+green    = "#a6e3a1"
+teal     = "#94e2d5"
+blue     = "#89b4fa"
+mauve    = "#cba6f7"
+
+[ui]
+background = "$bg"
+foreground = "$fg"
+cursor     = "$blue"
+cursorline = "#2a2a3c"
+gutter     = "$comment"
+
+[ui.statusline]
+fg = "$fg"
+bg = "#313244"
+
+[ui.selection]
+bg = "#45475a"
+
+"@keyword"           = { fg = "$mauve", modifiers = ["bold"] }
+"@keyword.return"    = { fg = "$mauve", modifiers = ["bold"] }
+"@keyword.control"   = { fg = "$mauve", modifiers = ["bold"] }
+"@function"          = "$blue"
+"@function.builtin"  = { fg = "$blue", modifiers = ["italic"] }
+"@function.method"   = "$blue"
+"@string"            = "$green"
+"@string.escape"     = "$teal"
+"@comment"           = { fg = "$comment", modifiers = ["italic"] }
+"@variable"          = "$fg"
+"@variable.builtin"  = { fg = "$orange", modifiers = ["italic"] }
+"@number"            = "$orange"
+"@float"             = "$orange"
+"@boolean"           = "$orange"
+"@type"              = "$yellow"
+"@type.builtin"      = { fg = "$yellow", modifiers = ["italic"] }
+"@constant"          = "$orange"
+"@constant.builtin"  = { fg = "$orange", modifiers = ["italic"] }
+"@attribute"         = "$yellow"
+"@operator"          = "$teal"
+"@punctuation"       = "$fg"
+"@punctuation.delimiter" = "$comment"
+"@punctuation.bracket"   = "$fg"
+"@punctuation.special"   = "$teal"
+"@tag"               = "$red"
+"@tag.attribute"     = "$orange"
+"@tag.delimiter"     = "$comment"
+"@markup.heading"    = { fg = "$blue", modifiers = ["bold"] }
+"@markup.heading.1"  = { fg = "$mauve", modifiers = ["bold"] }
+"@markup.heading.2"  = { fg = "$blue", modifiers = ["bold"] }
+"@markup.heading.3"  = { fg = "$teal", modifiers = ["bold"] }
+"@markup.strong"     = { modifiers = ["bold"] }
+"@markup.italic"     = { modifiers = ["italic"] }
+"@markup.strikethrough" = { modifiers = ["strikethrough"] }
+"@markup.raw"        = "$green"
+"@markup.raw.block"  = { fg = "$green", bg = "#1a1a2e" }
+"@markup.link"       = "$blue"
+"@markup.link.label" = { fg = "$blue", modifiers = ["underline"] }
+"@markup.link.url"   = { fg = "$teal", modifiers = ["underline"] }
+"@markup.list"       = "$red"
+"@markup.quote"      = { fg = "$comment", modifiers = ["italic"] }
+"@label"             = "$blue"
+"@parameter"         = "$orange"
+"@field"             = "$teal"
+"@property"          = "$teal"
+"@namespace"         = "$yellow"
+"@module"            = "$yellow"
+"@import"            = "$mauve"
+"@error"             = "$red"
+"@warning"           = "$yellow"
