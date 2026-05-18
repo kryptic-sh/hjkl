@@ -27,8 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -42,8 +40,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -62,8 +58,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -88,8 +82,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
@@ -188,8 +180,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Verify tag matches Cargo.toml version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -681,8 +671,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Install Rust stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -700,35 +688,62 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
-          # The hjkl-* library crates listed as submodules ship from their
-          # own kryptic-sh/hjkl-* repos on their own cadence. This workflow
-          # publishes the in-tree crates that the workspace owns:
-          #   1. hjkl-statusline        — renderer-agnostic statusline model.
-          #   2. hjkl-statusline-tui    — ratatui adapter (depends on #1).
-          #   3. hjkl-completion-tui    — ratatui completion popup (depends on hjkl-app).
-          #   4. hjkl-markdown          — markdown event stream (no renderer types).
-          #   5. hjkl-markdown-tui      — ratatui adapter for hjkl-markdown.
-          #   6. hjkl-hover             — hover popup state and geometry (no renderer).
-          #   7. hjkl-hover-tui         — ratatui adapter for hjkl-hover.
-          #   8. hjkl-info-popup        — info popup data model (no renderer).
-          #   9. hjkl-info-popup-tui    — ratatui adapter for hjkl-info-popup.
-          #  10. hjkl-prompt            — ex/search prompt bar state machine (no renderer).
-          #  11. hjkl-prompt-tui        — ratatui adapter for hjkl-prompt.
-          #  12. hjkl-holler            — pure data + ring-buffer notification bus.
-          #  13. hjkl-holler-tui        — ratatui toast renderer (depends on #12).
-          #  14. hjkl-layout            — renderer-agnostic window/split layout machinery.
-          #  15. hjkl-tabs              — renderer-agnostic tab bar data model.
-          #  16. hjkl-tabs-tui          — ratatui adapter for hjkl-tabs.
-          #  17. hjkl-fs-watch          — debounced filesystem watcher (tokio-free).
-          #  18. hjkl-menu              — renderer-agnostic context menu model.
-          #  19. hjkl-menu-tui          — ratatui adapter for hjkl-menu.
-          #  20. hjkl-app               — host-agnostic application layer.
-          #  21. hjkl-syntax            — renderer-agnostic syntax pipeline (depends on #20).
-          #  22. hjkl-syntax-tui        — ratatui adapter for hjkl-syntax (depends on #21).
-          #  23. hjkl                   — the TUI binary (depends on #22).
-          # Order is load-bearing: cargo publish for each crate resolves its
-          # `hjkl-* = "X.Y"` deps against crates.io, so each dep must be
+          # All workspace crates are published in topological dependency order.
+          # Absorbed crates (formerly submodules) come first; crates that
+          # depend on them follow. Order is load-bearing: cargo publish
+          # resolves hjkl-* deps against crates.io, so each dep must be
           # uploaded + indexed before its consumer.
+          #
+          # Absorbed crates (21, in dep order):
+          #   1.  hjkl-xdg              — XDG dirs helper (no hjkl deps).
+          #   2.  hjkl-anvil            — config-dir abstraction (depends on #1).
+          #   3.  hjkl-theme            — colour/style tokens (no hjkl deps).
+          #   4.  hjkl-bonsai           — tree-sitter highlight layer (#3, #1).
+          #   5.  hjkl-buffer           — gap-buffer core (no hjkl deps).
+          #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
+          #   7.  hjkl-config           — config schema (no hjkl deps).
+          #   8.  hjkl-engine           — editor engine (depends on #5).
+          #   9.  hjkl-editor           — editor model (#5, #8).
+          #  10.  hjkl-keymap           — key binding types (no hjkl deps).
+          #  11.  hjkl-vim              — vim FSM (#5, #8, #10).
+          #  12.  hjkl-form             — form/widget layer (#5, #8, #11).
+          #  13.  hjkl-editor-tui       — ratatui editor adapter (#8, #12).
+          #  14.  hjkl-ex               — ex-command parser (#5, #8).
+          #  15.  hjkl-lsp              — LSP client types (no hjkl deps).
+          #  16.  hjkl-mangler          — formatter dispatch (no hjkl deps).
+          #  17.  hjkl-picker           — fuzzy picker (#5, #8, #12).
+          #  18.  hjkl-picker-tui       — ratatui picker adapter (#5, #8, #17).
+          #  19.  hjkl-ratatui          — ratatui integration shim (#13).
+          #  20.  hjkl-splash           — start screen (no hjkl deps).
+          #  21.  hjkl-theme-tui        — ratatui theme adapter (#3).
+          #
+          # Original in-tree crates (26):
+          #  22.  hjkl-statusline       — statusline model (#3).
+          #  23.  hjkl-statusline-tui   — ratatui adapter (#22).
+          #  24.  hjkl-keymap-crossterm — crossterm key adapter (#10).
+          #  25.  hjkl-which-key        — which-key data (#10, #11).
+          #  26.  hjkl-which-key-tui    — ratatui adapter (#3, #25).
+          #  27.  hjkl-completion-tui   — ratatui completion popup.
+          #  28.  hjkl-markdown         — markdown event stream.
+          #  29.  hjkl-markdown-tui     — ratatui markdown adapter (#28, #3).
+          #  30.  hjkl-hover            — hover popup state.
+          #  31.  hjkl-hover-tui        — ratatui hover adapter (#30, #28, #29, #3).
+          #  32.  hjkl-info-popup       — info popup model.
+          #  33.  hjkl-info-popup-tui   — ratatui adapter (#32, #28, #29).
+          #  34.  hjkl-prompt           — prompt bar state machine (#8, #12).
+          #  35.  hjkl-prompt-tui       — ratatui prompt adapter (#12, #34).
+          #  36.  hjkl-holler           — notification ring-buffer.
+          #  37.  hjkl-holler-tui       — ratatui toast renderer (#36).
+          #  38.  hjkl-layout           — window/split layout machinery.
+          #  39.  hjkl-tabs             — tab bar data model.
+          #  40.  hjkl-tabs-tui         — ratatui tabs adapter (#39).
+          #  41.  hjkl-fs-watch         — debounced filesystem watcher.
+          #  42.  hjkl-menu             — context menu model.
+          #  43.  hjkl-menu-tui         — ratatui menu adapter (#42).
+          #  44.  hjkl-app              — host-agnostic app layer (#2, #4, #5, #7, #8, #10, #15, #17, #11).
+          #  45.  hjkl-syntax           — syntax pipeline (#44, #4, #8, #3, #5).
+          #  46.  hjkl-syntax-tui       — ratatui syntax adapter (#5, #45, #21).
+          #  47.  hjkl                  — TUI binary.
           publish_if_missing() {
             local crate="$1"
             local manifest version
@@ -769,6 +784,27 @@ jobs:
             echo "::error::${crate}@${version} did not appear on crates.io within 5 min"
             exit 1
           }
+          publish_if_missing hjkl-xdg
+          publish_if_missing hjkl-anvil
+          publish_if_missing hjkl-theme
+          publish_if_missing hjkl-bonsai
+          publish_if_missing hjkl-buffer
+          publish_if_missing hjkl-clipboard
+          publish_if_missing hjkl-config
+          publish_if_missing hjkl-engine
+          publish_if_missing hjkl-editor
+          publish_if_missing hjkl-keymap
+          publish_if_missing hjkl-vim
+          publish_if_missing hjkl-form
+          publish_if_missing hjkl-editor-tui
+          publish_if_missing hjkl-ex
+          publish_if_missing hjkl-lsp
+          publish_if_missing hjkl-mangler
+          publish_if_missing hjkl-picker
+          publish_if_missing hjkl-picker-tui
+          publish_if_missing hjkl-ratatui
+          publish_if_missing hjkl-splash
+          publish_if_missing hjkl-theme-tui
           publish_if_missing hjkl-statusline
           publish_if_missing hjkl-statusline-tui
           publish_if_missing hjkl-keymap-crossterm

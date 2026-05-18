@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-05-18
+
+### Changed
+
+- **CI: 21 absorbed crates added to `publish_if_missing`** — the
+  `publish-crates` job now publishes all 21 formerly-submodule crates in
+  topological dependency order before the existing 26 in-tree crates (closes
+  #152 Phase 3). Topo order: hjkl-xdg → hjkl-anvil → hjkl-theme → hjkl-bonsai →
+  hjkl-buffer → hjkl-clipboard → hjkl-config → hjkl-engine → hjkl-editor →
+  hjkl-keymap → hjkl-vim → hjkl-form → hjkl-editor-tui → hjkl-ex → hjkl-lsp →
+  hjkl-mangler → hjkl-picker → hjkl-picker-tui → hjkl-ratatui → hjkl-splash →
+  hjkl-theme-tui.
+- **CI: `submodules: recursive` removed** from all `actions/checkout@v6` steps
+  (fmt, clippy, test, no_std, build, publish-crates) — no submodules remain in
+  the workspace after Phase 1 absorption.
+
 ## [0.24.0] - 2026-05-18
 
 ### Changed (MAJOR)
@@ -3393,7 +3409,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.1...HEAD
+[0.24.1]: https://github.com/kryptic-sh/hjkl/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...v0.24.0
 [0.22.0]: https://github.com/kryptic-sh/hjkl/compare/v0.21.35...v0.22.0
 [0.21.35]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...v0.21.35
