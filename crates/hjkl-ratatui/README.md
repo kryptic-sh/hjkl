@@ -1,12 +1,15 @@
 # hjkl-ratatui
 
-Adapters between `hjkl-engine` types and the ratatui / crossterm ecosystems.
+Deprecated shim for hjkl-editor-tui. Use hjkl-editor-tui instead.
 
-[![CI](https://github.com/kryptic-sh/hjkl-ratatui/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-ratatui/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-ratatui.svg)](https://crates.io/crates/hjkl-ratatui)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-ratatui)](https://docs.rs/hjkl-ratatui)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Engine types are deliberately UI-agnostic so non-terminal hosts (buffr's
 wasm-flavored renderer, future GUI shells) can consume them without dragging
@@ -61,6 +64,15 @@ let ratatui_style = engine_to_ratatui_style(engine_style);
 }
 ```
 
+## Documentation
+
+[docs.rs/hjkl-ratatui](https://docs.rs/hjkl-ratatui)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

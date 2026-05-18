@@ -2,11 +2,14 @@
 
 Rendering-agnostic splash-screen animation for kryptic-sh projects.
 
-[![CI](https://github.com/kryptic-sh/hjkl-splash/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-splash/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-splash.svg)](https://crates.io/crates/hjkl-splash)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-splash)](https://docs.rs/hjkl-splash)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 A small state machine that traces a cursor along an arbitrary path through an
 ASCII-art block, leaving a fading trail behind it. The core is renderer-agnostic
@@ -79,6 +82,15 @@ let color: Color = default_trail_color(2).into();
 - **`presets::hjkl`** — bundles the HJKL letterforms and the cursor-path that
   traces the H, J, K, L strokes. Other projects pass their own `art` + `path`.
 
+## Documentation
+
+[docs.rs/hjkl-splash](https://docs.rs/hjkl-splash)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

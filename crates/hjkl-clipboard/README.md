@@ -1,13 +1,16 @@
 # hjkl-clipboard
 
-In-house cross-platform clipboard library for the hjkl ecosystem — rich MIME
-types, async support, and OSC 52 fallback for SSH sessions.
+Cross-platform clipboard library with rich types, async support, and OSC 52
+fallback for SSH
 
-[![CI](https://github.com/kryptic-sh/hjkl-clipboard/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-clipboard/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-clipboard.svg)](https://crates.io/crates/hjkl-clipboard)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-clipboard)](https://docs.rs/hjkl-clipboard)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 No `arboard` dependency. Hand-rolled backends for every supported platform give
 real selection ownership, rich MIME types, and an async API that doesn't require
@@ -267,16 +270,20 @@ clipboard use.
 
 On Arch: `pacman -S libxcb`. On Debian/Ubuntu: `apt install libxcb1`.
 
-## MSRV
-
-Rust **1.95** (Edition 2024). Bumps land freely when useful; every bump is
-documented in [`CHANGELOG.md`](CHANGELOG.md).
-
 ## Feature flags
 
 None currently. All backends are compiled in unconditionally for each supported
 target.
 
+## Documentation
+
+[docs.rs/hjkl-clipboard](https://docs.rs/hjkl-clipboard)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

@@ -1,13 +1,16 @@
 # hjkl-editor
 
-Front-door facade for the hjkl modal editor stack — one dependency instead of
-three.
+Front-door for the hjkl modal editor stack: vim engine + rope buffer +
+registers, in one crate.
 
-[![CI](https://github.com/kryptic-sh/hjkl-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-editor/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-editor.svg)](https://crates.io/crates/hjkl-editor)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-editor)](https://docs.rs/hjkl-editor)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Re-exports the working parts of
 [`hjkl-engine`](https://crates.io/crates/hjkl-engine) and
@@ -51,6 +54,15 @@ satisfies `hjkl_editor::spec::Host`. The trait extraction will rewire `Editor`
 to take it as a generic; in the meantime the host-shape stays compatible by
 name.
 
+## Documentation
+
+[docs.rs/hjkl-editor](https://docs.rs/hjkl-editor)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

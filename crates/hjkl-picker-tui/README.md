@@ -5,8 +5,11 @@ Ratatui adapter for hjkl-picker — preview pane renderer + crossterm key router
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-picker-tui.svg)](https://crates.io/crates/hjkl-picker-tui)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-picker-tui)](https://docs.rs/hjkl-picker-tui)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Thin glue layer between the backend-agnostic
 [`hjkl-picker`](https://crates.io/crates/hjkl-picker) crate and a ratatui
@@ -50,11 +53,15 @@ let event = handle_key(&mut picker, key_event);
 preview_pane(&mut frame, &picker, &highlighter, &theme, area);
 ```
 
-## Umbrella repo
+## Documentation
 
-This crate is developed inside
-[kryptic-sh/hjkl](https://github.com/kryptic-sh/hjkl).
+[docs.rs/hjkl-picker-tui](https://docs.rs/hjkl-picker-tui)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

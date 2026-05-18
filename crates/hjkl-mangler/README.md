@@ -1,13 +1,16 @@
 # hjkl-mangler
 
-External-formatter dispatch for editors: rustfmt, prettier, gofmt, ruff, stylua,
-shfmt, taplo, black.
+External-formatter dispatch for hjkl: rustfmt, prettier, gofmt, ruff, stylua,
+shfmt, taplo and more
 
-[![CI](https://github.com/kryptic-sh/hjkl-mangler/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-mangler/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-mangler.svg)](https://crates.io/crates/hjkl-mangler)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-mangler)](https://docs.rs/hjkl-mangler)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Format-on-`=` and format-on-save dispatch layer for the hjkl workspace. Wraps
 each external formatter behind a uniform `Formatter` trait so the editor only
@@ -15,8 +18,8 @@ sees `format(source, project_root, range) -> Result<String, FormatError>`.
 
 ## Status
 
-Pre-1.0. Trait shape and built-in impls are stable enough to use from
-production editors; new formatter impls land additively.
+Pre-1.0. Trait shape and built-in impls are stable enough to use from production
+editors; new formatter impls land additively.
 
 ## Features
 
@@ -30,8 +33,8 @@ production editors; new formatter impls land additively.
 - `is_tool_installed(name)` / `probe_tool(name)` for host-side fallback
   decisions (e.g. fall back to a dumb indent algo when the external tool is
   missing).
-- Pipe-deadlock-safe subprocess driver (stdout/stderr drained on threads
-  before stdin write — required for >64 KiB output).
+- Pipe-deadlock-safe subprocess driver (stdout/stderr drained on threads before
+  stdin write — required for >64 KiB output).
 
 ## Usage
 
@@ -54,6 +57,15 @@ println!("{formatted}");
 For async dispatch see `FormatWorker`. For range-only formatting pass
 `Some(RangeSpec { start_row, end_row })`.
 
+## Documentation
+
+[docs.rs/hjkl-mangler](https://docs.rs/hjkl-mangler)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

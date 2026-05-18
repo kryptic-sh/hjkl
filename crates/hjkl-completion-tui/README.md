@@ -1,6 +1,16 @@
 # hjkl-completion-tui
 
-Ratatui adapter for `hjkl-app` completion.
+Ratatui adapter for hjkl-app completion: paints the completion popup model into
+a ratatui Frame.
+
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hjkl-completion-tui.svg)](https://crates.io/crates/hjkl-completion-tui)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-completion-tui)](https://docs.rs/hjkl-completion-tui)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Paints an LSP/word-completion popup into a ratatui `Frame` given a `Completion`
 model from `hjkl-app`.
@@ -32,6 +42,15 @@ let anchor = Rect { x: abs_col, y: abs_row, width: 1, height: 1 };
 When the popup would extend past the bottom of `viewport`, it automatically
 flips above the cursor anchor.
 
+## Documentation
+
+[docs.rs/hjkl-completion-tui](https://docs.rs/hjkl-completion-tui)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

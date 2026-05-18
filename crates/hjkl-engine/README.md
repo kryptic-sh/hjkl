@@ -1,12 +1,15 @@
 # hjkl-engine
 
-Vim FSM, motion grammar, and editor traits — the no-I/O core of the hjkl stack.
+Vim FSM, motion grammar, and ex commands. Pre-1.0 churn.
 
-[![CI](https://github.com/kryptic-sh/hjkl-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-engine.svg)](https://crates.io/crates/hjkl-engine)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-engine)](https://docs.rs/hjkl-engine)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Vim-mode editor engine built on top of `hjkl-buffer`. Exposes an `Editor` you
 can drop into a ratatui layout — covers the bulk of vim's normal / insert /
@@ -53,6 +56,15 @@ let input = Input { key: Key::Char('j'), ..Default::default() };
 hjkl_vim::dispatch_input(&mut editor, input);
 ```
 
+## Documentation
+
+[docs.rs/hjkl-engine](https://docs.rs/hjkl-engine)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

@@ -1,13 +1,15 @@
 # hjkl-bonsai
 
-Tree-sitter syntax highlighting for the hjkl editor stack — runtime grammar
-loading, no baked-in languages.
+Tree-sitter grammar registry + highlighter for the hjkl editor stack
 
-[![CI](https://github.com/kryptic-sh/hjkl-bonsai/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-bonsai/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-bonsai.svg)](https://crates.io/crates/hjkl-bonsai)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-bonsai)](https://docs.rs/hjkl-bonsai)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 > Renamed from `hjkl-tree-sitter` (the old crate stays as a deprecated 0.5.0
 > artifact on crates.io). New releases ship under `hjkl-bonsai`.
@@ -117,6 +119,15 @@ uniformly across platforms so a `~/.local/share/bonsai/` checkout looks
 identical everywhere. The resolver is self-contained — no `hjkl-config` or other
 umbrella deps.
 
+## Documentation
+
+[docs.rs/hjkl-bonsai](https://docs.rs/hjkl-bonsai)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

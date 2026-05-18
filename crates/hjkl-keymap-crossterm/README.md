@@ -1,7 +1,16 @@
 # hjkl-keymap-crossterm
 
-Crossterm `KeyEvent` ↔ `hjkl-keymap` `KeyEvent` adapter. Wraps the crossterm
-input boundary in a renderer-adapter crate per the hjkl naming convention.
+Crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. Wraps the crossterm input
+boundary in a renderer-adapter crate per the hjkl naming convention.
+
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hjkl-keymap-crossterm.svg)](https://crates.io/crates/hjkl-keymap-crossterm)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-keymap-crossterm)](https://docs.rs/hjkl-keymap-crossterm)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 - [`from_crossterm`] — translate a `crossterm::event::KeyEvent` to a
   `hjkl_keymap::KeyEvent`. Returns `None` for unsupported codes (media keys,
@@ -16,6 +25,15 @@ Companion adapters (future):
 The naming follows the hjkl renderer-adapter convention (`-tui` / `-gui` suffix
 rule from issue #100).
 
+## Documentation
+
+[docs.rs/hjkl-keymap-crossterm](https://docs.rs/hjkl-keymap-crossterm)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

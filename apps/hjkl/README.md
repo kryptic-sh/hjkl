@@ -1,27 +1,25 @@
 # hjkl
 
-Vim-modal terminal editor. Standalone TUI built on the hjkl engine.
+Vim-modal terminal editor: standalone TUI built on the hjkl engine.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl.svg)](https://crates.io/crates/hjkl)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](../../LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![docs.rs](https://img.shields.io/docsrs/hjkl)](https://docs.rs/hjkl)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Native vim-modal editor. Single static binary, no plugins, no config files
 required. Built on the [hjkl-engine](https://crates.io/crates/hjkl-engine) +
 rope buffer.
 
-## Status
-
-`0.12.2` — full LSP client (5 phases: diagnostics, goto/hover, completion, code
-actions/rename/format), window splits (`:sp`/`:vsp`, `Ctrl-w` nav, resize),
-tabs, tmux-navigator handoff, mouse scroll, line numbers, multi-buffer editing,
-fuzzy file/buffer/grep pickers with syntax-highlighted preview, tree-sitter
-highlighting, smart indent, `.editorconfig`, and clipboard via
-[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
-[SCOPE.md](SCOPE.md) for the full feature roadmap.
-
 ## Install
+
+```bash
+cargo install hjkl
+```
 
 **macOS (Homebrew)**
 
@@ -46,14 +44,18 @@ apk add --allow-untrusted hjkl-*.apk   # download .apk from releases page
 
 **Fedora / RHEL** — `.rpm` for x86_64 + aarch64 on the same page.
 
-**From source**
-
-```bash
-cargo install hjkl
-```
-
 Or grab a pre-built tarball for any platform from the
 [releases page](https://github.com/kryptic-sh/hjkl/releases).
+
+## Status
+
+`0.12.2` — full LSP client (5 phases: diagnostics, goto/hover, completion, code
+actions/rename/format), window splits (`:sp`/`:vsp`, `Ctrl-w` nav, resize),
+tabs, tmux-navigator handoff, mouse scroll, line numbers, multi-buffer editing,
+fuzzy file/buffer/grep pickers with syntax-highlighted preview, tree-sitter
+highlighting, smart indent, `.editorconfig`, and clipboard via
+[`hjkl-clipboard`](https://crates.io/crates/hjkl-clipboard). See
+[SCOPE.md](SCOPE.md) for the full feature roadmap.
 
 ## Usage
 
@@ -221,6 +223,15 @@ reference.
 - Website: <https://hjkl.kryptic.sh>
 - Repository: <https://github.com/kryptic-sh/hjkl>
 
+## Documentation
+
+[docs.rs/hjkl](https://docs.rs/hjkl)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](../../LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

@@ -1,13 +1,16 @@
 # hjkl-config
 
 Shared TOML config loader for hjkl-based apps — XDG path resolution, span-aware
-parse errors, opt-in validation hook.
+parse errors, optional validation hook.
 
-[![CI](https://github.com/kryptic-sh/hjkl-config/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-config/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-config.svg)](https://crates.io/crates/hjkl-config)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-config)](https://docs.rs/hjkl-config)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Implements one of the few cross-cutting patterns shared by every hjkl-family
 app: read a `config.toml` from the platform's XDG config dir, fall back to
@@ -60,10 +63,10 @@ no file exists on disk. Otherwise the file at
   file path without loading.
 - **`write_default<C: Serialize>(path, cfg)`** — opt-in serialize-and-write
   helper. Creates parent dirs. Never auto-called.
-- **`ConfigError`** — `NoConfigDir`, `Io`, `Write`, `Parse { line, col,
-  snippet, ... }`.
-- **`ConfigSource { File(PathBuf), Defaults }`** — log-friendly tag for
-  whether the loaded value came from disk.
+- **`ConfigError`** — `NoConfigDir`, `Io`, `Write`,
+  `Parse { line, col, snippet, ... }`.
+- **`ConfigSource { File(PathBuf), Defaults }`** — log-friendly tag for whether
+  the loaded value came from disk.
 - **`Validate`** trait — opt-in hook with consumer-defined error type. `load`
   does not call it; consumers invoke `cfg.validate()` themselves.
 
@@ -71,13 +74,23 @@ no file exists on disk. Otherwise the file at
 
 Resolved via [`directories`]:
 
-- **Linux** — `$XDG_CONFIG_HOME/<app>/config.toml`
-  (default `~/.config/<app>/config.toml`)
-- **macOS** — `~/Library/Application Support/<qualifier>.<org>.<app>/config.toml`
+- **Linux** — `$XDG_CONFIG_HOME/<app>/config.toml` (default
+  `~/.config/<app>/config.toml`)
+- **macOS** —
+  `~/Library/Application Support/<qualifier>.<org>.<app>/config.toml`
 - **Windows** — `%APPDATA%\<org>\<app>\config\config.toml`
+
+## Documentation
+
+[docs.rs/hjkl-config](https://docs.rs/hjkl-config)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).
 
 [`directories`]: https://docs.rs/directories

@@ -1,13 +1,15 @@
 # hjkl-form
 
-Vim-modal forms built on top of `hjkl-engine` — full vim grammar inside every
-text field.
+Vim-modal forms for hjkl-based apps.
 
-[![CI](https://github.com/kryptic-sh/hjkl-form/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl-form/actions/workflows/ci.yml)
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-form.svg)](https://crates.io/crates/hjkl-form)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-form)](https://docs.rs/hjkl-form)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Each text field hosts its own `Editor<Buffer, FormFieldHost>`, so users get the
 full vim grammar (`hjkl`, `wb`, `ciw`, `dd`, ...) inside form inputs. The form
@@ -74,6 +76,15 @@ let _ = FormEvent::Changed;
 | Form-Insert | `Enter`   | Jump to next field (single-line) |
 | Form-Insert | `Esc`     | Return to Form-Normal            |
 
+## Documentation
+
+[docs.rs/hjkl-form](https://docs.rs/hjkl-form)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

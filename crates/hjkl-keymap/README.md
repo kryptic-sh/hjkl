@@ -1,15 +1,21 @@
 # hjkl-keymap
 
 Backend-agnostic modal keymap: chord parsing, trie dispatch, leader/chord
-resolution for the hjkl editor stack.
+resolution for the hjkl editor stack
 
-Parses vim-style notation (`<leader>gs`, `<C-x>`, `<S-Tab>`, `<C-S-Tab>`,
-named specials, `<lt>`, bare characters), stores bindings per-mode in separate
-tries, and resolves key events to `Pending` / `Match` / `Ambiguous` / `Unbound`
+[![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hjkl-keymap.svg)](https://crates.io/crates/hjkl-keymap)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-keymap)](https://docs.rs/hjkl-keymap)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
+
+Parses vim-style notation (`<leader>gs`, `<C-x>`, `<S-Tab>`, `<C-S-Tab>`, named
+specials, `<lt>`, bare characters), stores bindings per-mode in separate tries,
+and resolves key events to `Pending` / `Match` / `Ambiguous` / `Unbound`
 outcomes via a stateful `feed` API.
-
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
 
 ## Usage
 
@@ -36,11 +42,15 @@ assert!(matches!(km.feed(Mode::Normal, g, now), KeyResolve::Pending));
 assert!(matches!(km.feed(Mode::Normal, s, now), KeyResolve::Match(_)));
 ```
 
-## License
+## Documentation
 
-MIT — see [LICENSE](LICENSE).
+[docs.rs/hjkl-keymap](https://docs.rs/hjkl-keymap)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). For security issues, see
-[SECURITY.md](SECURITY.md).
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
+
+## License
+
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).

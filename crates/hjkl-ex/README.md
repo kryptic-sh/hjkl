@@ -5,8 +5,11 @@ Ex-command registry and dispatch layer for the hjkl editor stack.
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/hjkl-ex.svg)](https://crates.io/crates/hjkl-ex)
 [![docs.rs](https://img.shields.io/docsrs/hjkl-ex)](https://docs.rs/hjkl-ex)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-hjkl.kryptic.sh-7ee787)](https://hjkl.kryptic.sh)
+[![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
+
+Part of the [hjkl monorepo](https://github.com/kryptic-sh/hjkl) — a vim-modal
+editor in Rust.
 
 Provides a typed `Registry` for ex commands, range parsing, Tab-completion, and
 the full `:set` option table. Host applications register commands and call
@@ -54,11 +57,15 @@ let completions = complete("set nu", 6, &reg, &host_reg, &sources);
 // completions.candidates == ["nu", "number", "numberwidth", …]
 ```
 
-## Umbrella repo
+## Documentation
 
-This crate is developed inside
-[kryptic-sh/hjkl](https://github.com/kryptic-sh/hjkl).
+[docs.rs/hjkl-ex](https://docs.rs/hjkl-ex)
+
+## Contributing
+
+See the
+[monorepo CONTRIBUTING guide](https://github.com/kryptic-sh/hjkl/blob/main/CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE).
