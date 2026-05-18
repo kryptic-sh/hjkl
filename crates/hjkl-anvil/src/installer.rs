@@ -220,6 +220,59 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
     result
 }
 
+/// Atomic move that survives cross-filesystem boundaries (EXDEV).
+///
+/// Tries `fs::rename` first (atomic on same filesystem). On EXDEV
+/// (`io::ErrorKind::CrossesDevices`) falls back to `fs::copy` + `fs::remove_file`
+/// — non-atomic but unavoidable when source and dest live on different
+/// filesystems (common with tmpfs `TempDir` in tests).
+fn move_file_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            std::fs::copy(src, dst)?;
+            std::fs::remove_file(src)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Move a directory tree across filesystem boundaries (EXDEV).
+///
+/// Tries `fs::rename` first. On EXDEV falls back to a recursive copy of every
+/// file followed by `fs::remove_dir_all(src)`.
+fn move_dir_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+            // Walk and copy every file, preserving relative structure.
+            let mut stack = vec![src.to_path_buf()];
+            while let Some(dir) = stack.pop() {
+                let rel = dir
+                    .strip_prefix(src)
+                    .map_err(|_| io::Error::other("strip_prefix failed"))?;
+                let dst_dir = dst.join(rel);
+                std::fs::create_dir_all(&dst_dir)?;
+                for entry in std::fs::read_dir(&dir)?.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else {
+                        let rel_file = path
+                            .strip_prefix(src)
+                            .map_err(|_| io::Error::other("strip_prefix failed"))?;
+                        std::fs::copy(&path, dst.join(rel_file))?;
+                    }
+                }
+            }
+            std::fs::remove_dir_all(src)?;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Create the symlink atomically: write to `<target>.tmp`, then rename.
 ///
 /// On Windows, symlink creation requires elevated privileges or Developer Mode.
@@ -232,7 +285,7 @@ fn atomic_symlink(link_path: &Path, target: &Path) -> Result<(), InstallError> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(target, &tmp)?;
-        std::fs::rename(&tmp, link_path)?;
+        move_file_cross_device(&tmp, link_path)?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -443,11 +496,11 @@ pub fn install_github_inner(
     // If an old install exists, move it aside.
     if final_pkg.exists() {
         let _ = std::fs::remove_dir_all(&bak); // clean stale bak
-        std::fs::rename(&final_pkg, &bak)?;
+        move_dir_cross_device(&final_pkg, &bak)?;
     }
 
     // Move the extracted tree into place.
-    match std::fs::rename(&extract_dir, &final_pkg) {
+    match move_dir_cross_device(&extract_dir, &final_pkg) {
         Ok(()) => {
             // Success — remove backup.
             if bak.exists() {
@@ -457,7 +510,7 @@ pub fn install_github_inner(
         Err(e) => {
             // Rollback.
             if bak.exists() {
-                let _ = std::fs::rename(&bak, &final_pkg);
+                let _ = move_dir_cross_device(&bak, &final_pkg);
             }
             return Err(InstallError::Io(e));
         }
