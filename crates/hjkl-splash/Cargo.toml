@@ -1,0 +1,24 @@
+[package]
+name = "hjkl-splash"
+description = "Rendering-agnostic splash-screen animation for kryptic-sh projects."
+keywords = ["tui", "animation", "splash", "ratatui"]
+categories = ["text-editors", "command-line-utilities"]
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl-splash"
+homepage = "https://hjkl.kryptic.sh"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+
+[features]
+default = []
+ratatui = ["dep:ratatui"]
+
+[dependencies]
+ratatui = { version = "0.30", default-features = false, optional = true }
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
