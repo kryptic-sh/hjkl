@@ -769,7 +769,40 @@ jobs:
               return 0
             fi
             echo "::group::publish ${crate}@${version}"
-            cargo publish -p "${crate}" --locked
+            # Retry loop: handles crates.io 429 rate-limit responses.
+            # crates.io allows ~30 updates/10min for existing crates.
+            # On 429 the API returns a human-readable "Please try again after
+            # <RFC-2822 timestamp>" string; parse it with GNU date (ubuntu runner).
+            local attempt=0
+            while [ $attempt -lt 3 ]; do
+              if cargo publish -p "${crate}" --locked 2>&1 | tee /tmp/publish_"${crate}".log; then
+                break
+              fi
+              if grep -qiE "429|Too Many Requests" /tmp/publish_"${crate}".log; then
+                local wait_until wait_secs
+                wait_until=$(grep -oE 'try again after [^.]+' /tmp/publish_"${crate}".log | sed 's/try again after //' || true)
+                if [ -n "$wait_until" ]; then
+                  wait_secs=$(( $(date -d "$wait_until" +%s) - $(date +%s) + 30 ))
+                  # Guard against already-elapsed timestamps (negative result).
+                  [ "$wait_secs" -lt 30 ] && wait_secs=30
+                  echo "::warning::rate limited publishing ${crate}, sleeping ${wait_secs}s until $wait_until"
+                else
+                  wait_secs=660
+                  echo "::warning::rate limited publishing ${crate}, sleeping ${wait_secs}s (11 min fallback)"
+                fi
+                sleep "$wait_secs"
+                attempt=$(( attempt + 1 ))
+              else
+                echo "::error::publish failed for ${crate} (non-rate-limit error)"
+                echo "::endgroup::"
+                return 1
+              fi
+            done
+            if [ $attempt -ge 3 ]; then
+              echo "::error::publish failed for ${crate} after 3 rate-limit retries"
+              echo "::endgroup::"
+              return 1
+            fi
             echo "::endgroup::"
             # Wait for the new version to be indexed before the next publish
             # tries to resolve it. crates.io can take 5-60s.
@@ -777,6 +810,10 @@ jobs:
             for _ in $(seq 1 60); do
               if curl -fsS -A "${crate}-release-ci" -o /dev/null "$url"; then
                 echo "${crate}@${version} indexed"
+                # Pacing: stay under the 30 updates/10min crates.io rate limit
+                # for existing crates. 47 crates × 25s ≈ 20 min total, comfortably
+                # within four 10-min windows at 30/window = 120 capacity.
+                sleep 25
                 return 0
               fi
               sleep 5
