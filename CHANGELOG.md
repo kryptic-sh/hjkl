@@ -8,6 +8,39 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.34] - 2026-05-18
+
+### Changed (BREAKING)
+
+- **`hjkl-buffer 0.8.0`** — `Buffer` now holds `Arc<Mutex<Content>>` and
+  represents a per-window view. `Content` is the new per-document type that owns
+  the text rows (`lines`), dirty generation counter (`dirty_gen`), and manual
+  folds. Migration: existing `Buffer::new()` / `Buffer::from_str()` /
+  `Buffer::replace_all()` keep the same signatures (one `Buffer` per `Content`
+  is the common case — no change for single-window use).
+
+### Added
+
+- `hjkl_buffer::Content` struct — per-document state that can be shared across
+  multiple `Buffer` views via `Arc<Mutex<Content>>`. Exported from
+  `hjkl-buffer`'s crate root.
+- `Buffer::new_view(Arc<Mutex<Content>>) -> Buffer` — creates a second
+  per-window view onto the same content. Each view carries its own cursor;
+  text + folds are shared.
+- `Buffer::content_arc() -> Arc<Mutex<Content>>` — returns a clone of the inner
+  `Arc` for constructing additional views.
+- Tests `buffer_views_independent_cursors` and `buffer_views_share_content` in
+  `hjkl-buffer` verifying the split semantics (closes #158).
+
+### Fixed
+
+- `docs/editor-field-classification.md` — corrected `styled_spans` and
+  `buffer_spans` Classification column from "per-buffer" to "per-window
+  (near-term; per-document target in Phase D)"; updated per-window field count
+  headline; updated VimState count from 35 to 36; added "Notable findings"
+  section documenting the cursor-in-Buffer discovery and the Helix Document+View
+  adoption.
+
 ## [0.21.33] - 2026-05-18
 
 ### Added
@@ -3270,7 +3303,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...HEAD
+[0.21.34]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...v0.21.34
 [0.21.33]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...v0.21.33
 [0.21.32]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...v0.21.32
 [0.21.31]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...v0.21.31

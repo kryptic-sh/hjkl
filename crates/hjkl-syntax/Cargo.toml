@@ -20,7 +20,7 @@ hjkl-app = "0.4"
 tracing = "0.1"
 
 [dev-dependencies]
-hjkl-buffer = "0.7"
+hjkl-buffer = "0.8"
 
 [package.metadata.docs.rs]
 all-features = true

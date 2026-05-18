@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 hjkl-syntax = "0.2"
 hjkl-theme-tui = "0.1"
-hjkl-buffer = { version = "0.7", features = ["ratatui"] }
+hjkl-buffer = { version = "0.8", features = ["ratatui"] }
 ratatui = "0.30"
 
 [package.metadata.docs.rs]
