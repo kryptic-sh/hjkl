@@ -11,9 +11,6 @@ use std::time::{Duration, Instant};
 pub mod presets;
 pub mod start_screen;
 
-#[cfg(feature = "ratatui")]
-mod ratatui_adapter;
-
 /// 24-bit RGB colour value.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);

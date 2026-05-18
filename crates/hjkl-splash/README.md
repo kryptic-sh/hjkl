@@ -51,16 +51,8 @@ splash.advance(); // call once per animation tick
 
 ### ratatui adapter
 
-```toml
-hjkl-splash = { version = "0.1", features = ["ratatui"] }
-```
-
-```rust,no_run
-use hjkl_splash::{default_trail_color, Rgb};
-use ratatui::style::Color;
-
-let color: Color = default_trail_color(2).into();
-```
+For ratatui rendering, add [`hjkl-splash-tui`](https://crates.io/crates/hjkl-splash-tui)
+and call `hjkl_splash_tui::render(frame, area, &screen)`.
 
 ## What's here
 
@@ -75,8 +67,7 @@ let color: Color = default_trail_color(2).into();
 - **`Layout`** — origin + extent of the art block within a viewport.
   `Layout::centered(w, h, rows, cols)` matches the canonical hjkl placement
   (centered horizontally, slight headroom for hint text below).
-- **`Rgb(u8, u8, u8)`** — pure RGB triple. With `features = ["ratatui"]`, `Rgb`
-  implements `From<Rgb> for ratatui::style::Color`.
+- **`Rgb(u8, u8, u8)`** — pure RGB triple. No renderer dependency.
 - **`default_trail_color(age)`** — canonical greyscale fade ramp; consumers with
   their own theme can ignore this and provide custom mappings.
 - **`presets::hjkl`** — bundles the HJKL letterforms and the cursor-path that

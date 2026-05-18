@@ -29,5 +29,5 @@ pub fn render(
     screen: &StartScreen,
     _theme: &crate::theme::AppTheme,
 ) {
-    hjkl_splash::start_screen::render(frame, area, screen);
+    hjkl_splash_tui::render(frame, area, screen);
 }

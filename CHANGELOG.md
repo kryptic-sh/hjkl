@@ -14,6 +14,9 @@ patch bumps.
   convention.
 - Renamed crate `hjkl-keymap-crossterm` → `hjkl-keymap-tui` to match the `-tui`
   adapter convention (crossterm is a TUI-only input lib).
+- Extracted `hjkl-splash-tui` from `hjkl-splash` — the ratatui adapter is no
+  longer behind a feature gate on the agnostic crate. Apps must depend on
+  `hjkl-splash-tui` directly for `render`. Part of #162.
 
 ### Removed
 

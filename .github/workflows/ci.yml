@@ -716,6 +716,7 @@ jobs:
           #  17.  hjkl-picker           — fuzzy picker (#5, #8, #12).
           #  18.  hjkl-picker-tui       — ratatui picker adapter (#5, #8, #17).
           #  20.  hjkl-splash           — start screen (no hjkl deps).
+          #  20a. hjkl-splash-tui       — ratatui adapter (#20).
           #  21.  hjkl-theme-tui        — ratatui theme adapter (#3).
           #
           # Original in-tree crates (28):
@@ -847,6 +848,7 @@ jobs:
           publish_if_missing hjkl-picker
           publish_if_missing hjkl-picker-tui
           publish_if_missing hjkl-splash
+          publish_if_missing hjkl-splash-tui
           publish_if_missing hjkl-theme-tui
           publish_if_missing hjkl-statusline
           publish_if_missing hjkl-statusline-tui

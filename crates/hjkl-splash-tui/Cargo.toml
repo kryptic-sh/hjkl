@@ -1,0 +1,21 @@
+[package]
+name = "hjkl-splash-tui"
+description = "Ratatui adapter for hjkl-splash — renders StartScreen into a ratatui Frame."
+keywords = ["tui", "animation", "splash", "ratatui"]
+categories = ["text-editors", "command-line-utilities"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version = "1.95"
+readme = "README.md"
+
+[dependencies]
+hjkl-splash.workspace = true
+ratatui = { version = "0.30", default-features = false }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

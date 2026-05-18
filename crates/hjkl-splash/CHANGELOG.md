@@ -5,6 +5,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- Dropped the `ratatui` feature and `start_screen::render`. The ratatui adapter
+  now lives in the new `hjkl-splash-tui` crate. Part of #162.
+
 ## [0.2.0] - 2026-05-06
 
 ### Changed (breaking)
