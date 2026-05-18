@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.33] - 2026-05-18
+
+### Added
+
+- `docs/editor-field-classification.md` — classification of every
+  `hjkl_engine::Editor` and `VimState` field as per-buffer, per-window, or
+  global, in preparation for the per-window Editor refactor (#153, closes #153).
+
 ## [0.21.32] - 2026-05-18
 
 ### Fixed
@@ -3262,7 +3270,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...HEAD
+[0.21.33]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...v0.21.33
 [0.21.32]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...v0.21.32
 [0.21.31]: https://github.com/kryptic-sh/hjkl/compare/v0.21.30...v0.21.31
 [0.21.30]: https://github.com/kryptic-sh/hjkl/compare/v0.21.29...v0.21.30
