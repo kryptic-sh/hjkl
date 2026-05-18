@@ -21,6 +21,8 @@ hjkl-clipboard = { path = "crates/hjkl-clipboard", version = "0.25" }
 hjkl-completion = { path = "crates/hjkl-completion", version = "0.25" }
 hjkl-completion-tui = { path = "crates/hjkl-completion-tui", version = "0.25" }
 hjkl-config = { path = "crates/hjkl-config", version = "0.25" }
+hjkl-css = { path = "crates/hjkl-css", version = "0.25" }
+hjkl-css-floem = { path = "crates/hjkl-css-floem", version = "0.25" }
 hjkl-editor = { path = "crates/hjkl-editor", version = "0.25", default-features = false }
 hjkl-editor-gui = { path = "crates/hjkl-editor-gui", version = "0.25" }
 hjkl-editor-tui = { path = "crates/hjkl-editor-tui", version = "0.25", default-features = false }
