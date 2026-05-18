@@ -678,6 +678,7 @@ impl App {
     }
 
     /// Return a shared reference to the focused [`AppWindow`].
+    #[allow(dead_code)]
     pub fn active_window(&self) -> &window::AppWindow {
         let fw = self.focused_window();
         self.windows[fw]
@@ -686,6 +687,7 @@ impl App {
     }
 
     /// Return a mutable reference to the focused [`AppWindow`].
+    #[allow(dead_code)]
     pub fn active_window_mut(&mut self) -> &mut window::AppWindow {
         let fw = self.focused_window();
         self.windows[fw]
@@ -705,11 +707,13 @@ impl App {
     }
 
     /// Return a shared reference to the active buffer slot.
+    #[allow(dead_code)]
     pub fn active_slot(&self) -> &BufferSlot {
         &self.slots[self.focused_slot_idx()]
     }
 
     /// Return a mutable reference to the active buffer slot.
+    #[allow(dead_code)]
     pub fn active_slot_mut(&mut self) -> &mut BufferSlot {
         let slot_idx = self.focused_slot_idx();
         &mut self.slots[slot_idx]

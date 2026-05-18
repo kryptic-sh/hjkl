@@ -8,6 +8,44 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-05-18
+
+### Changed (MAJOR)
+
+- **Monorepo absorption** — all 21 submodule crates merged into the umbrella
+  repository via `git read-tree --prefix` (closes #152 Phase 1). Files moved
+  from separate `kryptic-sh/hjkl-*` repos to `crates/<name>/` with submodule
+  history preserved. `.gitmodules` deleted. Per-crate `.github/`,
+  `rustfmt.toml`, `rust-toolchain.toml`, `deny.toml`, `.editorconfig`,
+  `.gitignore`, and `hjkl-bonsai/.cargo/config.toml` removed — umbrella owns
+  these configs. Per-crate `README.md`, `CHANGELOG.md`, `LICENSE`, and data
+  files (`anvil.toml`, `bonsai.toml`, `themes/`, `DESIGN-0.4.0.md`) retained.
+- **`[patch.crates-io]` block kept** — workspace members use plain version deps
+  (`hjkl-engine = { version = "0.11" }`); the patch block remains required until
+  Phase 2 converts all inter-crate deps to `version.workspace = true`.
+- Workspace version bumped `0.21.35` → `0.22.0`. Per-crate versions unchanged
+  (Phase 2 switches to lockstep `workspace.version = true`).
+
+### Crates absorbed (21 total, versions as absorbed)
+
+`hjkl-engine 0.11.4`, `hjkl-vim 0.23.2`, `hjkl-ex 0.5.1`, `hjkl-buffer 0.8.1`,
+`hjkl-form 0.6.2`, `hjkl-picker 0.9.1`, `hjkl-anvil 0.2.4`, `hjkl-xdg 0.1.0`,
+`hjkl-config 0.2.1`, `hjkl-splash 0.3.0`, `hjkl-lsp 0.1.1`, `hjkl-keymap 0.3.0`,
+`hjkl-editor 0.8.1`, `hjkl-bonsai 0.7.5`, `hjkl-clipboard 0.5.5`,
+`hjkl-theme 0.2.0`, `hjkl-mangler 0.1.0`, `hjkl-ratatui 0.7.0`,
+`hjkl-editor-tui 0.1.0`, `hjkl-picker-tui 0.4.1`, `hjkl-theme-tui 0.1.1`.
+
+### Notes
+
+- `hjkl-clipboard`: absorbed at Cargo.toml version `0.5.5` (tag was `v0.5.4` — a
+  known "corrects botched 0.5.4" situation; tag not re-cut per policy).
+- `hjkl-editor-tui`: had a `.git/` directory (standalone clone) rather than the
+  normal gitmodule link — absorbed cleanly via `git rm` + `git read-tree`.
+- `hjkl-bonsai`: originally tracked as `hjkl-tree-sitter` in `.git/modules/`;
+  `.cargo/config.toml` (xtask alias) deleted; `xtask/` sub-workspace kept.
+- Submodule repos (`kryptic-sh/hjkl-*`) will be deleted in Phase 4 of #152 after
+  monorepo CI is green.
+
 ## [0.21.35] - 2026-05-18
 
 ### Fixed
@@ -3326,7 +3364,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/kryptic-sh/hjkl/compare/v0.21.35...v0.22.0
 [0.21.35]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...v0.21.35
 [0.21.34]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...v0.21.34
 [0.21.33]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...v0.21.33
