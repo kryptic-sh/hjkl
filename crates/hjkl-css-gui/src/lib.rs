@@ -4,7 +4,7 @@
 //!
 //! ```rust,ignore
 //! use hjkl_css::parse;
-//! use hjkl_css_floem::ViewCssExt;
+//! use hjkl_css_gui::ViewCssExt;
 //!
 //! let sheet = parse("label.prompt { color: #21d1d3; padding: 4px 8px; }")
 //!     .expect("stylesheet parses");
@@ -17,7 +17,7 @@
 //!
 //! ```rust,ignore
 //! use hjkl_css::{Node, parse};
-//! use hjkl_css_floem::ViewCssExt;
+//! use hjkl_css_gui::ViewCssExt;
 //!
 //! let sheet = parse(".row .label { color: #fff; }").expect("parses");
 //! let target = Node { element: "label", classes: &["prompt"] };

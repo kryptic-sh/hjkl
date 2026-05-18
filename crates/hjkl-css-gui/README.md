@@ -1,11 +1,14 @@
-# hjkl-css-floem
+# hjkl-css-gui
+
+Renamed from `hjkl-css-floem` 2026-05-18 to match the `-gui` floem-adapter
+convention used elsewhere in hjkl (e.g. `hjkl-editor-gui`).
 
 Adapter that maps a `hjkl-css` `Stylesheet` onto
 [`floem`](https://github.com/lapce/floem) views via an extension trait.
 
 [![CI](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml/badge.svg)](https://github.com/kryptic-sh/hjkl/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/hjkl-css-floem.svg)](https://crates.io/crates/hjkl-css-floem)
-[![docs.rs](https://img.shields.io/docsrs/hjkl-css-floem)](https://docs.rs/hjkl-css-floem)
+[![crates.io](https://img.shields.io/crates/v/hjkl-css-gui.svg)](https://crates.io/crates/hjkl-css-gui)
+[![docs.rs](https://img.shields.io/docsrs/hjkl-css-gui)](https://docs.rs/hjkl-css-gui)
 [![MSRV](https://img.shields.io/badge/MSRV-1.95-blue.svg)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kryptic-sh/hjkl/blob/main/LICENSE)
 
@@ -18,7 +21,7 @@ editor in Rust.
 
 ```rust
 use hjkl_css::parse;
-use hjkl_css_floem::ViewCssExt;
+use hjkl_css_gui::ViewCssExt;
 
 let sheet = parse(r#"
     label { color: #c0caf5; padding: 4px 8px; }
@@ -44,7 +47,7 @@ match:
 
 ```rust
 use hjkl_css::{Node, parse};
-use hjkl_css_floem::ViewCssExt;
+use hjkl_css_gui::ViewCssExt;
 
 let sheet = parse(".row .label { color: #fff; }").unwrap();
 
@@ -108,7 +111,7 @@ Supported via hjkl-css v0.4.0:
 
 ## Documentation
 
-[docs.rs/hjkl-css-floem](https://docs.rs/hjkl-css-floem)
+[docs.rs/hjkl-css-gui](https://docs.rs/hjkl-css-gui)
 
 ## Contributing
 

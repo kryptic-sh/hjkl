@@ -1,14 +1,14 @@
-# Contributing to `hjkl-css-floem`
+# Contributing to `hjkl-css-gui`
 
-Thanks for considering a contribution. `hjkl-css-floem` is pre-1.0 and the
-public API is still in motion — please open an issue before starting any
-non-trivial PR so the design can be sanity-checked early.
+Thanks for considering a contribution. `hjkl-css-gui` is pre-1.0 and the public
+API is still in motion — please open an issue before starting any non-trivial PR
+so the design can be sanity-checked early.
 
 ## Development setup
 
 ```bash
-git clone git@github.com:kryptic-sh/hjkl-css-floem.git
-cd hjkl-css-floem
+git clone git@github.com:kryptic-sh/hjkl-css-gui.git
+cd hjkl-css-gui
 rustup toolchain install stable
 cargo test --all-features
 ```

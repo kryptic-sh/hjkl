@@ -2345,7 +2345,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hjkl-css-floem"
+name = "hjkl-css-gui"
 version = "0.25.0"
 dependencies = [
  "floem",

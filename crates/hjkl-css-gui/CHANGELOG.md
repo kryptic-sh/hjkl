@@ -5,6 +5,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Crate renamed from `hjkl-css-floem` to `hjkl-css-gui`. The previous name is
+  dead — no shim. (will publish at next umbrella release)
+
 ## [0.2.1] - 2026-05-18
 
 ### Fixed
@@ -70,7 +75,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Documents the workspace-root `[patch.crates-io]` requirement for the
   layer-shell floem fork.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-css-floem/compare/v0.2.1...HEAD
-[0.2.1]: https://github.com/kryptic-sh/hjkl-css-floem/releases/tag/v0.2.1
-[0.2.0]: https://github.com/kryptic-sh/hjkl-css-floem/releases/tag/v0.2.0
-[0.1.0]: https://github.com/kryptic-sh/hjkl-css-floem/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kryptic-sh/hjkl-css-gui/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/kryptic-sh/hjkl-css-gui/releases/tag/v0.2.1
+[0.2.0]: https://github.com/kryptic-sh/hjkl-css-gui/releases/tag/v0.2.0
+[0.1.0]: https://github.com/kryptic-sh/hjkl-css-gui/releases/tag/v0.1.0

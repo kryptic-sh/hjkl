@@ -1,5 +1,5 @@
 [package]
-name = "hjkl-css-floem"
+name = "hjkl-css-gui"
 version.workspace = true
 edition.workspace = true
 description = "Adapter that maps a hjkl-css Stylesheet onto floem View styling via an extension trait."

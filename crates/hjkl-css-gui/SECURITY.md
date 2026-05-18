@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`hjkl-css-floem` is pre-1.0. Only the latest 0.x patch release receives security
+`hjkl-css-gui` is pre-1.0. Only the latest 0.x patch release receives security
 fixes. Once 1.0.0 ships, the latest minor receives fixes; older minors are
 best-effort.
 

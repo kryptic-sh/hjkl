@@ -8,6 +8,11 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed crate `hjkl-css-floem` → `hjkl-css-gui` to match `-gui` floem-adapter
+  convention.
+
 ## [0.25.0] - 2026-05-18
 
 ### Changed (BREAKING)
