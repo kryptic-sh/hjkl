@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-05-18
+
+### Fixed
+
+- **Windows CI build** — `move_file_cross_device` in `hjkl-anvil/installer.rs`
+  is only reachable on Unix (called from `#[cfg(unix)]` `atomic_symlink`). On
+  Windows the function appeared dead → `-D warnings` failed the windows-latest
+  test job. Added `#[cfg_attr(windows, allow(dead_code))]`. Without this fix, CI
+  gates publish-crates indefinitely.
+
+### Changed
+
+- **cron.yml: removed 6 stale `submodules: recursive`** in
+  miri/fuzz/deny/bench/wasm_size/vim_compat jobs. No-op at runtime (no
+  submodules exist post-#152) but a maintenance confusion risk.
+
 ## [0.24.1] - 2026-05-18
 
 ### Changed
@@ -3409,7 +3425,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.2...HEAD
+[0.24.2]: https://github.com/kryptic-sh/hjkl/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/kryptic-sh/hjkl/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...v0.24.0
 [0.22.0]: https://github.com/kryptic-sh/hjkl/compare/v0.21.35...v0.22.0

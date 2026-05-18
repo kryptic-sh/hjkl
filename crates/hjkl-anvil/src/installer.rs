@@ -226,6 +226,10 @@ fn walkdir(root: &Path) -> Vec<PathBuf> {
 /// (`io::ErrorKind::CrossesDevices`) falls back to `fs::copy` + `fs::remove_file`
 /// — non-atomic but unavoidable when source and dest live on different
 /// filesystems (common with tmpfs `TempDir` in tests).
+///
+/// Currently only used on Unix paths; Windows has its own NTFS rename
+/// semantics that don't emit `CrossesDevices`. Allow dead on Windows.
+#[cfg_attr(windows, allow(dead_code))]
 fn move_file_cross_device(src: &Path, dst: &Path) -> io::Result<()> {
     match std::fs::rename(src, dst) {
         Ok(()) => Ok(()),
