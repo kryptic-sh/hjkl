@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.24.4] - 2026-05-18
+
+### Fixed
+
+- **cron.yml YAML parse failure** — the v0.24.2 sed cleanup of
+  `submodules: recursive` left 6 orphan empty `with:` blocks (followed
+  immediately by `- uses:`), making the YAML invalid. GitHub showed the workflow
+  as `name: ".github/workflows/cron.yml"` (file path fallback when parse fails)
+  and emitted "No jobs were run" emails on every push. Dropped the 6 orphan
+  `with:` lines; YAML now parses; 5 legitimate `with:` blocks with actual
+  content remain intact.
+
 ## [0.24.3] - 2026-05-18
 
 ### Fixed
@@ -3436,7 +3448,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...HEAD
+[0.24.4]: https://github.com/kryptic-sh/hjkl/compare/v0.24.3...v0.24.4
 [0.24.3]: https://github.com/kryptic-sh/hjkl/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/kryptic-sh/hjkl/compare/v0.24.1...v0.24.2
 [0.24.1]: https://github.com/kryptic-sh/hjkl/compare/v0.24.0...v0.24.1
