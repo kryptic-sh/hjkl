@@ -15,8 +15,8 @@ use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::BufferId;
 use crate::git::GitChange;
+use hjkl_buffer::BufferId;
 
 /// A git diff job submitted to the worker.
 pub struct GitJob {

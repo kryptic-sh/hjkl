@@ -18,6 +18,7 @@ hjkl-app = { path = "crates/hjkl-app", version = "0.24" }
 hjkl-bonsai = { path = "crates/hjkl-bonsai", version = "0.24" }
 hjkl-buffer = { path = "crates/hjkl-buffer", version = "0.24" }
 hjkl-clipboard = { path = "crates/hjkl-clipboard", version = "0.24" }
+hjkl-completion = { path = "crates/hjkl-completion", version = "0.24" }
 hjkl-completion-tui = { path = "crates/hjkl-completion-tui", version = "0.24" }
 hjkl-config = { path = "crates/hjkl-config", version = "0.24" }
 hjkl-editor = { path = "crates/hjkl-editor", version = "0.24", default-features = false }
@@ -35,6 +36,7 @@ hjkl-info-popup = { path = "crates/hjkl-info-popup", version = "0.24" }
 hjkl-info-popup-tui = { path = "crates/hjkl-info-popup-tui", version = "0.24" }
 hjkl-keymap = { path = "crates/hjkl-keymap", version = "0.24", default-features = false }
 hjkl-keymap-crossterm = { path = "crates/hjkl-keymap-crossterm", version = "0.24" }
+hjkl-lang = { path = "crates/hjkl-lang", version = "0.24" }
 hjkl-layout = { path = "crates/hjkl-layout", version = "0.24" }
 hjkl-lsp = { path = "crates/hjkl-lsp", version = "0.24" }
 hjkl-mangler = { path = "crates/hjkl-mangler", version = "0.24" }

@@ -1,2 +1,2 @@
-//! Re-export shim — actual implementation in hjkl-app.
-pub use hjkl_app::completion::*;
+//! Re-export shim — actual implementation in hjkl-completion.
+pub use hjkl_completion::*;

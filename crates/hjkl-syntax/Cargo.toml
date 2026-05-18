@@ -14,13 +14,11 @@ readme = "README.md"
 
 [dependencies]
 hjkl-bonsai.workspace = true
+hjkl-buffer.workspace = true
 hjkl-theme.workspace = true
 hjkl-engine.workspace = true
-hjkl-app.workspace = true
+hjkl-lang.workspace = true
 tracing = "0.1"
-
-[dev-dependencies]
-hjkl-buffer.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,8 +1,8 @@
 [package]
-name = "hjkl-completion-tui"
-description = "Ratatui adapter for hjkl-completion: paints the completion popup model into a ratatui Frame."
-keywords = ["vim", "completion", "tui", "ratatui", "editor"]
-categories = ["text-editors", "command-line-interface"]
+name = "hjkl-completion"
+description = "Completion popup data model for the hjkl editor stack: Completion, CompletionItem, CompletionKind, and LSP conversion helpers."
+keywords = ["completion", "lsp", "editor", "popup"]
+categories = ["text-editors"]
 version.workspace = true
 edition = "2024"
 license = "MIT"
@@ -13,9 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-completion.workspace = true
-hjkl-theme.workspace = true
-ratatui = "0.30"
+lsp-types = "0.97"
 
 [package.metadata.docs.rs]
 all-features = true

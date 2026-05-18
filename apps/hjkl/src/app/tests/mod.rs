@@ -118,13 +118,7 @@ fn err_val(msg: &str) -> Result<serde_json::Value, hjkl_lsp::RpcError> {
 }
 
 fn make_completion_item(label: &str) -> crate::completion::CompletionItem {
-    crate::completion::CompletionItem {
-        label: label.to_string(),
-        detail: None,
-        kind: crate::completion::CompletionKind::Other,
-        insert_text: label.to_string(),
-        filter_text: None,
-    }
+    crate::completion::CompletionItem::new(label)
 }
 
 fn synthesize_completion_response(labels: &[&str]) -> serde_json::Value {

@@ -8,8 +8,8 @@ use hjkl_picker::PreviewSpans;
 
 use hjkl_app::git::{GitChange, GitChangeKind};
 use hjkl_app::git_worker::GitJob;
-use hjkl_app::lang::GrammarRequest;
 use hjkl_buffer::Sign;
+use hjkl_lang::GrammarRequest;
 use ratatui::style::{Color, Style};
 
 use super::App;
@@ -634,7 +634,7 @@ impl App {
     ) -> PreviewSpans {
         let grammar = match self.directory.request_for_path(path) {
             GrammarRequest::Cached(g) => g,
-            GrammarRequest::Loading { .. } | GrammarRequest::Unknown => {
+            GrammarRequest::Loading { .. } | GrammarRequest::Unknown | _ => {
                 return PreviewSpans::default();
             }
         };
@@ -660,7 +660,7 @@ impl App {
         let directory = std::sync::Arc::clone(&self.directory);
         let resolve = move |name: &str| match directory.request_by_name(name) {
             GrammarRequest::Cached(g) => Some(g),
-            GrammarRequest::Loading { .. } | GrammarRequest::Unknown => None,
+            GrammarRequest::Loading { .. } | GrammarRequest::Unknown | _ => None,
         };
         let mut flat = h.highlight_range_with_injections(bytes, byte_range, resolve);
         drop(cache);

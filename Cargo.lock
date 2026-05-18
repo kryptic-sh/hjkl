@@ -2108,6 +2108,7 @@ dependencies = [
  "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-clipboard",
+ "hjkl-completion",
  "hjkl-completion-tui",
  "hjkl-config",
  "hjkl-editor",
@@ -2123,6 +2124,7 @@ dependencies = [
  "hjkl-info-popup-tui",
  "hjkl-keymap",
  "hjkl-keymap-crossterm",
+ "hjkl-lang",
  "hjkl-layout",
  "hjkl-lsp",
  "hjkl-mangler",
@@ -2193,7 +2195,6 @@ dependencies = [
  "ec4rs",
  "git2",
  "hjkl-anvil",
- "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-config",
  "hjkl-engine",
@@ -2201,7 +2202,6 @@ dependencies = [
  "hjkl-lsp",
  "hjkl-picker",
  "hjkl-vim",
- "lsp-types",
  "serde",
  "tempfile",
  "toml",
@@ -2265,10 +2265,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-completion"
+version = "0.24.4"
+dependencies = [
+ "lsp-types",
+]
+
+[[package]]
 name = "hjkl-completion-tui"
 version = "0.24.4"
 dependencies = [
- "hjkl-app",
+ "hjkl-completion",
  "hjkl-theme",
  "ratatui",
 ]
@@ -2429,6 +2436,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hjkl-lang"
+version = "0.24.4"
+dependencies = [
+ "anyhow",
+ "hjkl-bonsai",
+ "tracing",
+]
+
+[[package]]
 name = "hjkl-layout"
 version = "0.24.4"
 
@@ -2554,10 +2570,10 @@ dependencies = [
 name = "hjkl-syntax"
 version = "0.24.4"
 dependencies = [
- "hjkl-app",
  "hjkl-bonsai",
  "hjkl-buffer",
  "hjkl-engine",
+ "hjkl-lang",
  "hjkl-theme",
  "tracing",
 ]

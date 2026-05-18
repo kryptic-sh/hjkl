@@ -29,7 +29,7 @@ use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, Point, Theme};
 use hjkl_engine::Query;
 
-use hjkl_app::lang::{GrammarRequest, LanguageDirectory};
+use hjkl_lang::{GrammarRequest, LanguageDirectory};
 
 pub use hjkl_theme::{Color, Modifiers, StyleSpec};
 
@@ -44,7 +44,7 @@ pub use hjkl_theme::{Color, Modifiers, StyleSpec};
 /// let id: BufferId = 42;
 /// assert_eq!(id, 42);
 /// ```
-pub use hjkl_app::BufferId;
+pub use hjkl_buffer::BufferId;
 
 // ---------------------------------------------------------------------------
 // Public output types
@@ -488,7 +488,7 @@ impl Pending {
 /// use std::sync::Arc;
 /// use hjkl_syntax::SyntaxWorker;
 /// use hjkl_bonsai::DotFallbackTheme;
-/// use hjkl_app::lang::LanguageDirectory;
+/// use hjkl_lang::LanguageDirectory;
 ///
 /// let theme = Arc::new(DotFallbackTheme::dark());
 /// let dir = Arc::new(LanguageDirectory::new().unwrap());
@@ -921,7 +921,7 @@ struct PendingLoad {
 /// use std::sync::Arc;
 /// use hjkl_syntax::SyntaxLayer;
 /// use hjkl_bonsai::DotFallbackTheme;
-/// use hjkl_app::lang::LanguageDirectory;
+/// use hjkl_lang::LanguageDirectory;
 ///
 /// let theme = Arc::new(DotFallbackTheme::dark());
 /// let dir = Arc::new(LanguageDirectory::new().unwrap());
@@ -952,7 +952,7 @@ impl SyntaxLayer {
     /// use std::sync::Arc;
     /// use hjkl_syntax::SyntaxLayer;
     /// use hjkl_bonsai::DotFallbackTheme;
-    /// use hjkl_app::lang::LanguageDirectory;
+    /// use hjkl_lang::LanguageDirectory;
     ///
     /// let theme = Arc::new(DotFallbackTheme::dark());
     /// let dir = Arc::new(LanguageDirectory::new().unwrap());
@@ -992,7 +992,7 @@ impl SyntaxLayer {
     /// use std::path::Path;
     /// use hjkl_syntax::{SyntaxLayer, SetLanguageOutcome};
     /// use hjkl_bonsai::DotFallbackTheme;
-    /// use hjkl_app::lang::LanguageDirectory;
+    /// use hjkl_lang::LanguageDirectory;
     ///
     /// let theme = Arc::new(DotFallbackTheme::dark());
     /// let dir = Arc::new(LanguageDirectory::new().unwrap());
@@ -1022,6 +1022,14 @@ impl SyntaxLayer {
                 SetLanguageOutcome::Loading(name)
             }
             GrammarRequest::Unknown => {
+                self.worker.set_language(id, None);
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                SetLanguageOutcome::Unknown
+            }
+            _ => {
+                // Future GrammarRequest variants — treat as Unknown.
                 self.worker.set_language(id, None);
                 let c = self.client_mut(id);
                 c.current_lang = None;

@@ -18,7 +18,6 @@ crossbeam-channel = "0.5"
 ec4rs = "1"
 git2 = { version = "0.20", default-features = false }
 hjkl-anvil.workspace = true
-hjkl-bonsai.workspace = true
 hjkl-buffer.workspace = true
 hjkl-config.workspace = true
 hjkl-engine.workspace = true
@@ -26,7 +25,6 @@ hjkl-keymap.workspace = true
 hjkl-lsp.workspace = true
 hjkl-picker.workspace = true
 hjkl-vim.workspace = true
-lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 tracing = "0.1"

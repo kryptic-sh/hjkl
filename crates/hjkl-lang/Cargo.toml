@@ -1,8 +1,8 @@
 [package]
-name = "hjkl-completion-tui"
-description = "Ratatui adapter for hjkl-completion: paints the completion popup model into a ratatui Frame."
-keywords = ["vim", "completion", "tui", "ratatui", "editor"]
-categories = ["text-editors", "command-line-interface"]
+name = "hjkl-lang"
+description = "Language directory and grammar request types for the hjkl editor stack: GrammarRequest, LanguageDirectory."
+keywords = ["language", "grammar", "tree-sitter", "editor"]
+categories = ["text-editors", "parsing"]
 version.workspace = true
 edition = "2024"
 license = "MIT"
@@ -13,9 +13,9 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-completion.workspace = true
-hjkl-theme.workspace = true
-ratatui = "0.30"
+anyhow = "1"
+hjkl-bonsai.workspace = true
+tracing = "0.1"
 
 [package.metadata.docs.rs]
 all-features = true

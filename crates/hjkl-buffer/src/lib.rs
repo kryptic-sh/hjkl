@@ -74,3 +74,18 @@ pub use selection::{RowSpan, Selection};
 pub use span::Span;
 pub use viewport::{Viewport, is_big_viewport_jump, over_provisioned_range};
 pub use wrap::Wrap;
+
+/// Stable per-buffer identifier carried through async pipelines
+/// (syntax, git-signs, format-worker) so workers can multiplex per-buffer
+/// state without holding buffer references.
+///
+/// Assigned by the application layer; 0 is a valid test sentinel.
+///
+/// # Example
+///
+/// ```
+/// use hjkl_buffer::BufferId;
+/// let id: BufferId = 42;
+/// assert_eq!(id, 42);
+/// ```
+pub type BufferId = u64;

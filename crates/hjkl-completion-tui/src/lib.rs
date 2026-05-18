@@ -1,7 +1,7 @@
-//! Ratatui adapter for `hjkl-app` completion.
+//! Ratatui adapter for `hjkl-completion`.
 //!
 //! Paints an LSP/word-completion popup into a ratatui [`Frame`] given a
-//! [`Completion`] model produced by `hjkl-app`.
+//! [`Completion`] model.
 //!
 //! # Usage
 //!
@@ -23,7 +23,7 @@
 
 #![forbid(unsafe_code)]
 
-use hjkl_app::completion::Completion;
+use hjkl_completion::Completion;
 use hjkl_theme::Color;
 use ratatui::{
     Frame,
@@ -211,16 +211,10 @@ pub fn popup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hjkl_app::completion::{Completion, CompletionItem, CompletionKind};
+    use hjkl_completion::{Completion, CompletionItem};
 
     fn make_item(label: &str) -> CompletionItem {
-        CompletionItem {
-            label: label.to_string(),
-            detail: None,
-            kind: CompletionKind::Other,
-            insert_text: label.to_string(),
-            filter_text: None,
-        }
+        CompletionItem::new(label)
     }
 
     fn make_completion(labels: &[&str]) -> Completion {

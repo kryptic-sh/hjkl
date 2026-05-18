@@ -185,7 +185,7 @@ pub struct App {
     /// Shared grammar resolver. `Arc` so the syntax layer and every picker
     /// source point at the same in-memory `Grammar` cache (one dlopen +
     /// query parse per language, app-wide).
-    pub directory: std::sync::Arc<hjkl_app::lang::LanguageDirectory>,
+    pub directory: std::sync::Arc<hjkl_lang::LanguageDirectory>,
     /// App-wide theme (UI chrome + syntax). Loaded once at startup from
     /// `themes/{ui,syntax}-dark.toml` baked via include_str!.
     pub theme: crate::theme::AppTheme,
@@ -1025,7 +1025,7 @@ impl App {
         // (hjkl-bonsai's bundled DotFallbackTheme is left untouched
         // for other consumers).
         let theme = crate::theme::AppTheme::default_dark();
-        let directory = std::sync::Arc::new(hjkl_app::lang::LanguageDirectory::new()?);
+        let directory = std::sync::Arc::new(hjkl_lang::LanguageDirectory::new()?);
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
         let buffer_id: BufferId = 0;
         // App::new uses bundled config defaults; main wires the XDG-merged

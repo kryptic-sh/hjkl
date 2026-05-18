@@ -700,6 +700,8 @@ jobs:
           #   3.  hjkl-theme            — colour/style tokens (no hjkl deps).
           #   4.  hjkl-bonsai           — tree-sitter highlight layer (#3, #1).
           #   5.  hjkl-buffer           — gap-buffer core (no hjkl deps).
+          #   5a. hjkl-completion       — completion popup data model (no hjkl deps).
+          #   5b. hjkl-lang             — language directory + grammar request (#4).
           #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
           #   7.  hjkl-config           — config schema (no hjkl deps).
           #   8.  hjkl-engine           — editor engine (depends on #5).
@@ -717,13 +719,13 @@ jobs:
           #  20.  hjkl-splash           — start screen (no hjkl deps).
           #  21.  hjkl-theme-tui        — ratatui theme adapter (#3).
           #
-          # Original in-tree crates (26):
+          # Original in-tree crates (28):
           #  22.  hjkl-statusline       — statusline model (#3).
           #  23.  hjkl-statusline-tui   — ratatui adapter (#22).
           #  24.  hjkl-keymap-crossterm — crossterm key adapter (#10).
           #  25.  hjkl-which-key        — which-key data (#10, #11).
           #  26.  hjkl-which-key-tui    — ratatui adapter (#3, #25).
-          #  27.  hjkl-completion-tui   — ratatui completion popup.
+          #  27.  hjkl-completion-tui   — ratatui completion popup (#5a).
           #  28.  hjkl-markdown         — markdown event stream.
           #  29.  hjkl-markdown-tui     — ratatui markdown adapter (#28, #3).
           #  30.  hjkl-hover            — hover popup state.
@@ -740,8 +742,8 @@ jobs:
           #  41.  hjkl-fs-watch         — debounced filesystem watcher.
           #  42.  hjkl-menu             — context menu model.
           #  43.  hjkl-menu-tui         — ratatui menu adapter (#42).
-          #  44.  hjkl-app              — host-agnostic app layer (#2, #4, #5, #7, #8, #10, #15, #17, #11).
-          #  45.  hjkl-syntax           — syntax pipeline (#44, #4, #8, #3, #5).
+          #  44.  hjkl-app              — host-agnostic app layer (#2, #5, #7, #8, #10, #15, #17, #11).
+          #  45.  hjkl-syntax           — syntax pipeline (#5, #5b, #4, #8, #3).
           #  46.  hjkl-syntax-tui       — ratatui syntax adapter (#5, #45, #21).
           #  47.  hjkl                  — TUI binary.
           publish_if_missing() {
@@ -826,6 +828,8 @@ jobs:
           publish_if_missing hjkl-theme
           publish_if_missing hjkl-bonsai
           publish_if_missing hjkl-buffer
+          publish_if_missing hjkl-completion
+          publish_if_missing hjkl-lang
           publish_if_missing hjkl-clipboard
           publish_if_missing hjkl-config
           publish_if_missing hjkl-engine

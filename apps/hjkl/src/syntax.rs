@@ -16,7 +16,7 @@ use hjkl_bonsai::{DotFallbackTheme, Theme};
 use hjkl_engine::Query;
 use hjkl_syntax_tui::render_output_to_tui;
 
-use hjkl_app::lang::LanguageDirectory;
+use hjkl_lang::LanguageDirectory;
 
 // Re-export agnostic types used by app/mod.rs and syntax_glue.rs.
 pub use hjkl_syntax::{
