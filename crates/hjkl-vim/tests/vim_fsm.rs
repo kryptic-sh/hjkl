@@ -3322,58 +3322,10 @@ fn readonly_blocks_insert_mutation() {
     assert_eq!(e.buffer().line(0).unwrap(), "hello");
 }
 
-#[cfg(feature = "ratatui")]
-#[test]
-fn intern_ratatui_style_dedups_repeated_styles() {
-    use ratatui::style::{Color, Style};
-    let mut e = editor_with("");
-    let red = Style::default().fg(Color::Red);
-    let blue = Style::default().fg(Color::Blue);
-    let id_r1 = e.intern_ratatui_style(red);
-    let id_r2 = e.intern_ratatui_style(red);
-    let id_b = e.intern_ratatui_style(blue);
-    assert_eq!(id_r1, id_r2);
-    assert_ne!(id_r1, id_b);
-    assert_eq!(e.style_table().len(), 2);
-}
-
-#[cfg(feature = "ratatui")]
-#[test]
-fn install_ratatui_syntax_spans_translates_styled_spans() {
-    use ratatui::style::{Color, Style};
-    let mut e = editor_with("SELECT foo");
-    e.install_ratatui_syntax_spans(vec![vec![(0, 6, Style::default().fg(Color::Red))]]);
-    let by_row = e.buffer_spans();
-    assert_eq!(by_row.len(), 1);
-    assert_eq!(by_row[0].len(), 1);
-    assert_eq!(by_row[0][0].start_byte, 0);
-    assert_eq!(by_row[0][0].end_byte, 6);
-    let id = by_row[0][0].style;
-    assert_eq!(e.style_table()[id as usize].fg, Some(Color::Red));
-}
-
-#[cfg(feature = "ratatui")]
-#[test]
-fn install_ratatui_syntax_spans_clamps_sentinel_end() {
-    use ratatui::style::{Color, Style};
-    let mut e = editor_with("hello");
-    e.install_ratatui_syntax_spans(vec![vec![(
-        0,
-        usize::MAX,
-        Style::default().fg(Color::Blue),
-    )]]);
-    let by_row = e.buffer_spans();
-    assert_eq!(by_row[0][0].end_byte, 5);
-}
-
-#[cfg(feature = "ratatui")]
-#[test]
-fn install_ratatui_syntax_spans_drops_zero_width() {
-    use ratatui::style::{Color, Style};
-    let mut e = editor_with("abc");
-    e.install_ratatui_syntax_spans(vec![vec![(2, 2, Style::default().fg(Color::Red))]]);
-    assert!(e.buffer_spans()[0].is_empty());
-}
+// Tests for `intern_ratatui_style` and `install_ratatui_syntax_spans` moved to
+// `hjkl-engine/src/editor.rs` (`mod tests`) — they exercise engine APIs, not
+// the vim FSM. Relocation followed the drop of vim's dead `ratatui` feature
+// passthrough.
 
 #[test]
 fn named_register_yank_into_a_then_paste_from_a() {
