@@ -9,6 +9,7 @@
 use std::time::{Duration, Instant};
 
 pub mod presets;
+pub mod start_screen;
 
 #[cfg(feature = "ratatui")]
 mod ratatui_adapter;

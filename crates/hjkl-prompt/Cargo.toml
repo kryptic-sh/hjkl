@@ -3,7 +3,7 @@ name = "hjkl-prompt"
 description = "Renderer-agnostic ex/search prompt bar state machine for the hjkl editor stack. Covers `:`, `/`, and `?` prompts with history navigation and wildmenu completion model."
 keywords = ["prompt", "editor", "ex", "search", "tui"]
 categories = ["text-editors"]
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,8 +13,8 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-form = "0.6"
-hjkl-engine = { version = "0.11", default-features = false }
+hjkl-form.workspace = true
+hjkl-engine.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

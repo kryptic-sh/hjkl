@@ -3,7 +3,7 @@ name = "hjkl-theme-tui"
 description = "Ratatui adapters for hjkl-theme: Color/StyleSpec/Modifiers conversions."
 keywords = ["theme", "ratatui", "tui", "color", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.1"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-theme-tui"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-theme = { version = "0.2" }
+hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

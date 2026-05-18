@@ -3,7 +3,7 @@ name = "hjkl-syntax-tui"
 description = "Ratatui adapter for hjkl-syntax: converts renderer-agnostic RenderOutput spans to ratatui Span/Line and routes DiagSigns to hjkl_buffer::Sign."
 keywords = ["syntax", "tui", "ratatui", "highlight", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,9 +13,9 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-syntax = "0.2"
-hjkl-theme-tui = "0.1"
-hjkl-buffer = { version = "0.8", features = ["ratatui"] }
+hjkl-syntax.workspace = true
+hjkl-theme-tui.workspace = true
+hjkl-buffer = { workspace = true, features = ["ratatui"] }
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

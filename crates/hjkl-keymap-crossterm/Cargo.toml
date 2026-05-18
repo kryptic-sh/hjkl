@@ -3,7 +3,7 @@ name = "hjkl-keymap-crossterm"
 description = "Crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. Wraps the crossterm input boundary in a renderer-adapter crate per the hjkl naming convention."
 keywords = ["editor", "keymap", "crossterm", "tui"]
 categories = ["text-editors"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -15,4 +15,4 @@ readme = "README.md"
 
 [dependencies]
 crossterm = "0.29"
-hjkl-keymap = "0.3"
+hjkl-keymap.workspace = true

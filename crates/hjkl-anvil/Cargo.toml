@@ -3,7 +3,7 @@ name = "hjkl-anvil"
 description = "Mason-style LSP and developer-tool installer"
 keywords = ["lsp", "installer", "tools", "mason"]
 categories = ["development-tools", "filesystem"]
-version = "0.2.4"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-anvil"
@@ -24,7 +24,7 @@ path = "src/bin/sync_anvil.rs"
 required-features = ["sync"]
 
 [dependencies]
-hjkl-xdg = "0.1"
+hjkl-xdg.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 thiserror = "2"

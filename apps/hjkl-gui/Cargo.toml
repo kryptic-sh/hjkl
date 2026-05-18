@@ -14,11 +14,11 @@ name = "hjkl-gui"
 path = "src/main.rs"
 
 [dependencies]
-hjkl-app = "0.4"
-hjkl-editor-gui = "0.2"
-hjkl-editor     = { version = "0.8", default-features = false }
-hjkl-engine     = { version = "0.11", default-features = false }
-hjkl-buffer     = "0.8"
-hjkl-vim        = { version = "0.23", default-features = false }
+hjkl-app.workspace = true
+hjkl-editor-gui.workspace = true
+hjkl-editor.workspace = true
+hjkl-engine.workspace = true
+hjkl-buffer.workspace = true
+hjkl-vim.workspace = true
 clap            = { version = "4", features = ["derive"] }
 floem           = "0.2"

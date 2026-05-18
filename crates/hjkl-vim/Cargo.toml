@@ -3,7 +3,7 @@ name = "hjkl-vim"
 description = "Vim modal state types and grammar primitives for the hjkl editor stack. Pre-1.0 churn."
 keywords = ["vim", "modal", "editor", "fsm"]
 categories = ["text-editors"]
-version = "0.23.2"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-vim"
@@ -23,8 +23,8 @@ crossterm = { version = "0.29.0", features = ["event-stream"] }
 ratatui = { version = "0.30" }
 
 [dependencies]
-hjkl-engine = { version = "0.11", default-features = false }
-hjkl-buffer = "0.8"
-hjkl-keymap = { version = "0.3", default-features = false }
+hjkl-engine.workspace = true
+hjkl-buffer.workspace = true
+hjkl-keymap.workspace = true
 crossterm = { version = "0.29.0", optional = true }
 ratatui = { version = "0.30", optional = true }

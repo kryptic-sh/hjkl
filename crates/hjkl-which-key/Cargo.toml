@@ -3,7 +3,7 @@ name = "hjkl-which-key"
 description = "Renderer-agnostic which-key popup model for the hjkl editor stack. Entry building, prefix resolution, scroll state, and column layout math."
 keywords = ["vim", "which-key", "modal", "keymap", "editor"]
 categories = ["text-editors"]
-version = "0.1.1"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -17,8 +17,8 @@ readme = "README.md"
 gui = []
 
 [dependencies]
-hjkl-keymap = "0.3"
-hjkl-vim = { version = "0.23", default-features = false }
+hjkl-keymap.workspace = true
+hjkl-vim.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

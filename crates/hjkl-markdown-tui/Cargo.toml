@@ -3,7 +3,7 @@ name = "hjkl-markdown-tui"
 description = "Ratatui adapter for hjkl-markdown: converts markdown events to ratatui Lines for inline rendering."
 keywords = ["markdown", "tui", "ratatui", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,8 +13,8 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-markdown = "0.1"
-hjkl-theme = "0.2"
+hjkl-markdown.workspace = true
+hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

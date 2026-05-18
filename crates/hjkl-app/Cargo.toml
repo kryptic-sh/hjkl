@@ -3,7 +3,7 @@ name = "hjkl-app"
 description = "Host-agnostic application layer for the hjkl editor. Used by apps/hjkl (TUI) and apps/hjkl-gui (GUI)."
 keywords = ["editor", "tui", "gui"]
 categories = ["text-editors"]
-version = "0.4.10"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -17,15 +17,15 @@ anyhow = "1"
 crossbeam-channel = "0.5"
 ec4rs = "1"
 git2 = { version = "0.20", default-features = false }
-hjkl-anvil = "0.2"
-hjkl-bonsai = "0.7"
-hjkl-buffer = "0.8"
-hjkl-config = "0.2"
-hjkl-engine = { version = "0.11", default-features = false }
-hjkl-keymap = "0.3"
-hjkl-lsp = "0.1"
-hjkl-picker = "0.9"
-hjkl-vim = { version = "0.23", default-features = false }
+hjkl-anvil.workspace = true
+hjkl-bonsai.workspace = true
+hjkl-buffer.workspace = true
+hjkl-config.workspace = true
+hjkl-engine.workspace = true
+hjkl-keymap.workspace = true
+hjkl-lsp.workspace = true
+hjkl-picker.workspace = true
+hjkl-vim.workspace = true
 lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"

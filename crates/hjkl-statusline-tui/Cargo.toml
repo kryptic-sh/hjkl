@@ -3,7 +3,7 @@ name = "hjkl-statusline-tui"
 description = "ratatui adapter for hjkl-statusline: renders the renderer-agnostic statusline model into a ratatui Line / widget."
 keywords = ["editor", "statusline", "vim", "tui", "ratatui"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-statusline = "0.2"
+hjkl-statusline.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

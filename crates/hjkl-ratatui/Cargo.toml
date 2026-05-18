@@ -3,7 +3,7 @@ name = "hjkl-ratatui"
 description = "Deprecated shim for hjkl-editor-tui. Use hjkl-editor-tui instead."
 keywords = ["vim", "ratatui", "tui", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.7.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-ratatui"
@@ -17,7 +17,7 @@ default = ["crossterm"]
 crossterm = ["hjkl-editor-tui/crossterm"]
 
 [dependencies]
-hjkl-editor-tui = { version = "0.1", default-features = false }
+hjkl-editor-tui.workspace = true
 
 [package.metadata.docs.rs]
 all-features = true

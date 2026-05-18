@@ -3,7 +3,7 @@ name = "hjkl-picker-tui"
 description = "Ratatui adapter for hjkl-picker — preview pane renderer + crossterm key router."
 keywords = ["picker", "fuzzy", "tui", "ratatui", "crossterm"]
 categories = ["command-line-interface"]
-version = "0.4.1"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-picker-tui"
@@ -13,9 +13,9 @@ rust-version = "1.95"
 readme = "README.md"
 
 [dependencies]
-hjkl-picker = "0.9"
-hjkl-buffer = { version = "0.8", features = ["ratatui"] }
-hjkl-engine = { version = "0.11", default-features = false, features = ["ratatui", "crossterm"] }
+hjkl-picker.workspace = true
+hjkl-buffer = { workspace = true, features = ["ratatui"] }
+hjkl-engine = { workspace = true, features = ["ratatui", "crossterm"] }
 ratatui = "0.30"
 crossterm = "0.29"
 

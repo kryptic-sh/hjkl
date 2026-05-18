@@ -3,7 +3,7 @@ name = "hjkl-hover-tui"
 description = "Ratatui adapter for hjkl-hover: paints the hover popup into a ratatui Frame using hjkl-markdown-tui for the content body."
 keywords = ["hover", "popup", "tui", "ratatui", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.2.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,10 +13,10 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-hover = "0.2"
-hjkl-markdown = "0.1"
-hjkl-markdown-tui = "0.1"
-hjkl-theme = "0.2"
+hjkl-hover.workspace = true
+hjkl-markdown.workspace = true
+hjkl-markdown-tui.workspace = true
+hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

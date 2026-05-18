@@ -3,7 +3,7 @@ name = "hjkl-which-key-tui"
 description = "Ratatui adapter for hjkl-which-key: renders the which-key popup model into a ratatui Frame."
 keywords = ["vim", "which-key", "tui", "ratatui", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,8 +13,8 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-which-key = "0.1"
-hjkl-theme = "0.2"
+hjkl-which-key.workspace = true
+hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

@@ -3,7 +3,7 @@ name = "hjkl-ex"
 description = "Ex-command registry and dispatch layer for the hjkl editor stack."
 keywords = ["vim", "editor", "ex", "command", "modal"]
 categories = ["text-editors"]
-version = "0.5.1"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl-ex"
@@ -13,8 +13,8 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-engine = { version = "0.11", default-features = false }
-hjkl-buffer = { version = "0.8" }
+hjkl-engine.workspace = true
+hjkl-buffer.workspace = true
 regex = "1"
 
 [dev-dependencies]

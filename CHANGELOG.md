@@ -8,18 +8,47 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-05-18
+
+### Changed (MAJOR)
+
+- **Lockstep workspace versioning** — all 48 workspace crates now share a single
+  version via `version.workspace = true` in each `[package]` table (closes #152
+  Phase 2). Bumped from `0.22.0` to `0.23.0` — the highest version any
+  individual crate had reached (hjkl-vim 0.23.x series).
+- **`[workspace.dependencies]` block added** to root `Cargo.toml`: all 48
+  hjkl-\* crates are declared via `path =` so inter-crate deps can use
+  `hjkl-foo.workspace = true` or
+  `hjkl-foo = { workspace = true, features = [...] }` instead of version
+  strings.
+- **`[patch.crates-io]` block removed** — the 48 entries were made redundant by
+  workspace-relative `path =` deps. `cargo build --workspace` resolves all
+  crates through the workspace member list directly.
+- **`hjkl-splash`: `start_screen` module added** — exposes `StartScreen`,
+  `StartScreenTheme`, and `render()` (ratatui-gated), fixing a pre-existing
+  missing-module bug that was masked by the old `[patch.crates-io]` build cache.
+
+### Migration
+
+External consumers of the individual crates should pin to their previous
+independent versions (e.g. `hjkl-engine = "0.11"`, `hjkl-vim = "0.23"`). Those
+tags remain on crates.io. The 0.23.0+ series reflects monorepo lockstep going
+forward — all crates advance together on each umbrella release.
+
 ## [0.22.0] - 2026-05-18
 
 ### Changed (MAJOR)
 
 - **Monorepo absorption** — all 21 submodule crates merged into the umbrella
   repository via `git read-tree --prefix` (closes #152 Phase 1). Files moved
-  from separate `kryptic-sh/hjkl-*` repos to `crates/<name>/` with submodule
-  history preserved. `.gitmodules` deleted. Per-crate `.github/`,
-  `rustfmt.toml`, `rust-toolchain.toml`, `deny.toml`, `.editorconfig`,
-  `.gitignore`, and `hjkl-bonsai/.cargo/config.toml` removed — umbrella owns
-  these configs. Per-crate `README.md`, `CHANGELOG.md`, `LICENSE`, and data
-  files (`anvil.toml`, `bonsai.toml`, `themes/`, `DESIGN-0.4.0.md`) retained.
+  from separate `kryptic-sh/hjkl-*` repos to `crates/<name>/` with file contents
+  preserved (upstream commit history remains in the standalone
+  kryptic-sh/hjkl-\* repos until Phase 4 deletion). `.gitmodules` deleted.
+  Per-crate `.github/`, `rustfmt.toml`, `rust-toolchain.toml`, `deny.toml`,
+  `.editorconfig`, `.gitignore`, and `hjkl-bonsai/.cargo/config.toml` removed —
+  umbrella owns these configs. Per-crate `README.md`, `CHANGELOG.md`, `LICENSE`,
+  and data files (`anvil.toml`, `bonsai.toml`, `themes/`, `DESIGN-0.4.0.md`)
+  retained.
 - **`[patch.crates-io]` block kept** — workspace members use plain version deps
   (`hjkl-engine = { version = "0.11" }`); the patch block remains required until
   Phase 2 converts all inter-crate deps to `version.workspace = true`.
@@ -3364,7 +3393,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/kryptic-sh/hjkl/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/kryptic-sh/hjkl/compare/v0.21.35...v0.22.0
 [0.21.35]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...v0.21.35
 [0.21.34]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...v0.21.34

@@ -3,7 +3,7 @@ name = "hjkl-holler-tui"
 description = "Ratatui adapter for hjkl-holler: paints active toast notifications in a top-right stack with severity-colored borders."
 keywords = ["notifications", "toasts", "tui", "ratatui", "editor"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-holler = "0.1"
+hjkl-holler.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

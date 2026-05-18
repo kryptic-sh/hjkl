@@ -3,7 +3,7 @@ name = "hjkl-menu-tui"
 description = "Ratatui adapter for hjkl-menu: renders the renderer-agnostic context menu model into a ratatui Frame with full theme support."
 keywords = ["editor", "menu", "context-menu", "tui", "ratatui"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-menu = "0.2"
+hjkl-menu.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

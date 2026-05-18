@@ -3,7 +3,7 @@ name = "hjkl-tabs-tui"
 description = "Ratatui adapter for hjkl-tabs: renders a TabBar<Id> widget with active-tab highlight, dirty marker, and overflow indicators."
 keywords = ["editor", "tabs", "tabbar", "tui", "ratatui"]
 categories = ["text-editors", "command-line-interface"]
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/kryptic-sh/hjkl"
@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-hjkl-tabs = "0.1"
+hjkl-tabs.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

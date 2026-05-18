@@ -1,7 +1,7 @@
 [package]
 name = "hjkl-compat-oracle"
 description = "Headless neovim diff harness for vim-compatibility regression testing."
-version = "0.1.0"
+version.workspace = true
 publish = false
 edition.workspace = true
 license.workspace = true
@@ -13,9 +13,9 @@ homepage.workspace = true
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-hjkl-buffer = { version = "0.8" }
-hjkl-engine = { version = "0.11", default-features = false, features = ["crossterm", "ratatui"] }
-hjkl-vim = { version = "0.23", default-features = false, features = ["crossterm"] }
+hjkl-buffer.workspace = true
+hjkl-engine = { workspace = true, features = ["crossterm", "ratatui"] }
+hjkl-vim = { workspace = true, features = ["crossterm"] }
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros"] }
