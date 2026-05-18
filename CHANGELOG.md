@@ -21,6 +21,10 @@ patch bumps.
   no longer behind a feature gate on the agnostic crate. Direct consumers
   (`hjkl-syntax-tui`, `hjkl-picker-tui`) depend on `hjkl-buffer-tui` directly.
   Part of #162.
+- Dropped dead `ratatui` feature from `hjkl-vim`. Four engine-API tests that
+  lived in `hjkl-vim/tests/vim_fsm.rs` (gated on that feature) relocated to
+  `hjkl-engine`'s `mod tests` where the implementation lives. No consumer
+  asked for `hjkl-vim["ratatui"]`. Part of #162.
 
 ### Removed
 
