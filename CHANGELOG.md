@@ -8,6 +8,29 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.21.35] - 2026-05-18
+
+### Fixed
+
+- **#158 P0 review findings** — multi-view UB in `hjkl-buffer 0.8.1`:
+  `Buffer::lines()` / `Buffer::line()` / `folds()` / `fold_at_row()` now return
+  owned data instead of references backed by a held `MutexGuard`. The prior
+  unsafe lifetime extension was unsound when two `Buffer` views share the same
+  `Arc<Mutex<Content>>`.
+- All engine call sites updated (`hjkl-engine 0.11.4`): `Query::line` trait
+  returns `String`; `buf_helpers`, `motions`, `buffer_impl`, `editor`, `search`,
+  `vim`, `viewport_math`, and the app-layer (`apps/hjkl`) all adapted.
+  Ex-command callers in `hjkl-ex 0.5.1` updated. Test helpers in
+  `hjkl-vim 0.23.2` updated.
+- Module-level doc for `hjkl-buffer/content.rs` corrected:
+  `Arc<RefCell<Content>>` → `Arc<Mutex<Content>>`.
+
+### Changed
+
+- Submodule pointer bumps: `hjkl-buffer` → v0.8.1, `hjkl-engine` → v0.11.4,
+  `hjkl-ex` → v0.5.1, `hjkl-editor` → v0.8.1, `hjkl-form` → v0.6.2,
+  `hjkl-picker` → v0.9.1, `hjkl-picker-tui` → v0.4.1, `hjkl-vim` → v0.23.2.
+
 ## [0.21.34] - 2026-05-18
 
 ### Changed (BREAKING)
@@ -3304,6 +3327,7 @@ the editor side.
 - `MIGRATION.md` — extraction plan and design rationale.
 
 [Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...HEAD
+[0.21.35]: https://github.com/kryptic-sh/hjkl/compare/v0.21.34...v0.21.35
 [0.21.34]: https://github.com/kryptic-sh/hjkl/compare/v0.21.33...v0.21.34
 [0.21.33]: https://github.com/kryptic-sh/hjkl/compare/v0.21.32...v0.21.33
 [0.21.32]: https://github.com/kryptic-sh/hjkl/compare/v0.21.31...v0.21.32

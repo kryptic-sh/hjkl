@@ -276,7 +276,7 @@ fn dispatch(
             let _strict = param_bool(p, 3).unwrap_or(false);
 
             let lines = editor.buffer().lines();
-            let (s, e) = match resolve_line_range(lines, start, end) {
+            let (s, e) = match resolve_line_range(&lines, start, end) {
                 Ok(r) => r,
                 Err(msg) => return err(stdout, msgid, &msg),
             };

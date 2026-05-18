@@ -28,7 +28,7 @@ fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize, usize) {
     let mut content = String::with_capacity((end - start).saturating_mul(80));
     for r in start..end {
         if let Some(line) = buf.line(r) {
-            content.push_str(line);
+            content.push_str(&line);
             content.push('\n');
         }
     }

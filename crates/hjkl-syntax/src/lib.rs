@@ -1123,7 +1123,7 @@ impl SyntaxLayer {
             if r > vp_top {
                 source.push('\n');
             }
-            source.push_str(buffer.line(r as u32));
+            source.push_str(&buffer.line(r as u32));
         }
         let bytes = source.as_bytes();
         let mut row_starts: Vec<usize> = vec![0];
@@ -1253,7 +1253,7 @@ impl SyntaxLayer {
                 if r > 0 {
                     source.push('\n');
                 }
-                source.push_str(buffer.line(r as u32));
+                source.push_str(&buffer.line(r as u32));
             }
             let mut row_starts: Vec<usize> = vec![0];
             for (i, &b) in source.as_bytes().iter().enumerate() {

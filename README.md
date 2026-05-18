@@ -37,7 +37,7 @@ numbers, and a consumer-agnostic picker `PreviewHighlighter` trait. See
 | `hjkl-splash`    | Startup splash screen widget (ratatui feature).                                      |
 | `hjkl-lsp`       | LSP client: per-language server lifecycle, full text-sync, diagnostics.              |
 
-Published on crates.io. Add to `Cargo.toml`:
+  Published on crates.io. Add to `Cargo.toml`:
 
 ```toml
 hjkl-editor = "0.4"

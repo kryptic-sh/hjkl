@@ -258,8 +258,8 @@ pub fn cell_to_doc(
 
     // Char column via tab-expansion inverse.
     let tab_width = vp.effective_tab_width();
-    let line_str = slot.editor.buffer().line(doc_row).unwrap_or("");
-    let char_col = hjkl_buffer::visual_col_to_char_col(line_str, visual_col, tab_width);
+    let line_str = slot.editor.buffer().line(doc_row).unwrap_or_default();
+    let char_col = hjkl_buffer::visual_col_to_char_col(&line_str, visual_col, tab_width);
 
     Some((doc_row, char_col))
 }

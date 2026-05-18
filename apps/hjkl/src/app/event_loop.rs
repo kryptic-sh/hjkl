@@ -935,8 +935,7 @@ impl App {
                                     .editor
                                     .buffer()
                                     .line(doc_row)
-                                    .unwrap_or("")
-                                    .to_owned();
+                                    .unwrap_or_default();
                                 let (ws, we) = mouse::word_bounds(&line, doc_col);
                                 // Anchor at word start, cursor at word end - 1.
                                 self.active_mut().editor.enter_visual_char();
