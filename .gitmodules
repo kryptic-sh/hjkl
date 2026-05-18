@@ -19,9 +19,6 @@
 [submodule "crates/hjkl-picker-tui"]
 	path = crates/hjkl-picker-tui
 	url = https://github.com/kryptic-sh/hjkl-picker-tui.git
-[submodule "crates/hjkl-theme-tui"]
-	path = crates/hjkl-theme-tui
-	url = https://github.com/kryptic-sh/hjkl-theme-tui.git
 [submodule "crates/hjkl-editor-tui"]
 	path = crates/hjkl-editor-tui
 	url = https://github.com/kryptic-sh/hjkl-editor-tui.git
