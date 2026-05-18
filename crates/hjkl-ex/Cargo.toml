@@ -1,0 +1,26 @@
+[package]
+name = "hjkl-ex"
+description = "Ex-command registry and dispatch layer for the hjkl editor stack."
+keywords = ["vim", "editor", "ex", "command", "modal"]
+categories = ["text-editors"]
+version = "0.5.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/kryptic-sh/hjkl-ex"
+authors = ["mxaddict <mxaddict@kryptic.sh>"]
+rust-version = "1.95"
+homepage = "https://hjkl.kryptic.sh"
+readme = "README.md"
+
+[dependencies]
+hjkl-engine = { version = "0.11", default-features = false }
+hjkl-buffer = { version = "0.8" }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
