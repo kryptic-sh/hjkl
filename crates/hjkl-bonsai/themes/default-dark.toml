@@ -1,0 +1,71 @@
+# hjkl default-dark theme
+# Capture-name dot-fallback applies: "@keyword.control" falls back to "@keyword" if not found.
+# Colors are #rrggbb hex strings or palette references ($name).
+
+"@keyword"                   = { fg = "$mauve", modifiers = ["bold"] }
+"@keyword.control"           = { fg = "$red", modifiers = ["bold"] }
+"@keyword.return"            = { fg = "$red", modifiers = ["bold"] }
+"@keyword.operator"          = "$mauve"
+"@keyword.sql"               = { fg = "$mauve", modifiers = ["bold"] }
+
+"@string"                    = "$green"
+"@string.escape"             = "$yellow"
+"@string.special"            = "$sky"
+
+"@comment"                   = { fg = "$overlay", modifiers = ["italic"] }
+"@comment.marker.todo"       = { fg = "$crust", bg = "$yellow", modifiers = ["bold"] }
+"@comment.marker.tail.todo"  = { fg = "$yellow", modifiers = ["italic"] }
+"@comment.marker.fixme"      = { fg = "$crust", bg = "$red", modifiers = ["bold"] }
+"@comment.marker.tail.fixme" = { fg = "$red", modifiers = ["italic"] }
+"@comment.marker.note"       = { fg = "$crust", bg = "$blue", modifiers = ["bold"] }
+"@comment.marker.tail.note"  = { fg = "$blue", modifiers = ["italic"] }
+"@comment.marker.warn"       = { fg = "$crust", bg = "$peach", modifiers = ["bold"] }
+"@comment.marker.tail.warn"  = { fg = "$peach", modifiers = ["italic"] }
+
+"@number"                    = "$mauve"
+
+"@function"                  = "$sky"
+"@function.builtin"          = "$sapphire"
+"@function.method"           = "$sky"
+"@function.macro"            = { fg = "$sky", modifiers = ["bold"] }
+
+"@type"                      = "$yellow"
+"@type.builtin"              = { fg = "$yellow", modifiers = ["bold"] }
+
+"@variable"                  = "$fg"
+"@variable.builtin"          = "$red_dark"
+"@variable.parameter"        = { fg = "$fg", modifiers = ["italic"] }
+
+"@constant"                  = "$mauve"
+"@constant.builtin"          = { fg = "$mauve", modifiers = ["bold"] }
+
+"@punctuation"               = "$gutter"
+"@punctuation.bracket"       = "$gutter"
+"@punctuation.delimiter"     = "$gutter"
+
+"@operator"                  = "$blue"
+
+"@tag"                       = "$blue"
+"@heading"                   = { fg = "$sky", modifiers = ["bold"] }
+"@link"                      = { fg = "$sapphire", modifiers = ["underline"] }
+"@code"                      = "$green"
+
+"@property"                  = "$sky"
+"@table"                     = "$yellow"
+
+"@identifier"                = "$fg"
+
+[palette]
+fg        = "#d8dee9"
+mauve     = "#cc99cc"
+red       = "#ffaaaa"
+red_dark  = "#bf616a"
+green     = "#a3be8c"
+yellow    = "#ebcb8b"
+sky       = "#88c0d0"
+sapphire  = "#5e81ac"
+blue      = "#81a1c1"
+overlay   = "#858585"
+gutter    = "#7c8696"
+peach     = "#d19a66"
+crust     = "#1d1d1d"
