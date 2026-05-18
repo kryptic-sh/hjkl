@@ -16,11 +16,11 @@ readme = "README.md"
 default = ["serde"]
 serde = ["hjkl-engine/serde"]
 crossterm = ["hjkl-engine/crossterm"]
-# Pulls the engine's `ratatui` adapter surface (Style intern, mouse
-# Rect helpers). The buffer's ratatui Widget impl now lives in the
-# `hjkl-buffer-tui` crate. Default-on for back-compat; non-terminal
-# hosts opt out via `default-features = false`.
-ratatui = ["hjkl-engine/ratatui", "dep:hjkl-buffer-tui"]
+# Re-exports hjkl-buffer-tui types (BufferView, Gutter, Sign, StyleResolver).
+# The engine-tui adapter surface now lives in hjkl-engine-tui (#162 phase 2).
+# Default-on for back-compat; non-terminal hosts opt out via
+# `default-features = false`.
+ratatui = ["dep:hjkl-buffer-tui"]
 
 [dependencies]
 hjkl-engine.workspace = true

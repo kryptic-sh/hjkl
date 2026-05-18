@@ -4,6 +4,7 @@ use anyhow::Result;
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Host};
 use hjkl_engine::{CursorShape, Editor, Options, VimMode};
+use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_form::TextFieldEditor;
 use hjkl_holler::HollerBus;
 use hjkl_keymap::Keymap;

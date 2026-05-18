@@ -1,5 +1,6 @@
 use hjkl_buffer::Buffer;
 use hjkl_engine::{Editor, Host, Options};
+use hjkl_engine_tui::EditorRatatuiExt;
 use std::path::PathBuf;
 
 use super::{App, DiskState, STATUS_LINE_HEIGHT};

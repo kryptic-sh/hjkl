@@ -1,4 +1,5 @@
 use hjkl_engine::{Host, Query};
+use hjkl_engine_tui::EditorRatatuiExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 

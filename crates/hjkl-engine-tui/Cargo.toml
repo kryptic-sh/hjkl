@@ -1,0 +1,23 @@
+[package]
+name = "hjkl-engine-tui"
+description = "Ratatui adapters for hjkl-engine — Style conversion + Editor extension methods for ratatui-flavoured input."
+keywords = ["ratatui", "vim", "editor", "tui", "style"]
+categories = ["text-editors", "command-line-interface"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version = "1.95"
+readme = "README.md"
+
+[dependencies]
+hjkl-engine.workspace = true
+hjkl-buffer.workspace = true
+ratatui = "0.30"
+
+[package.metadata.docs.rs]
+all-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]

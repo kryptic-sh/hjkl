@@ -14,7 +14,7 @@ homepage.workspace = true
 anyhow = "1"
 async-trait = "0.1"
 hjkl-buffer.workspace = true
-hjkl-engine = { workspace = true, features = ["crossterm", "ratatui"] }
+hjkl-engine = { workspace = true, features = ["crossterm"] }
 hjkl-vim = { workspace = true, features = ["crossterm"] }
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }

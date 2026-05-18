@@ -30,6 +30,11 @@ patch bumps.
   (`intern_ratatui_style`, `install_ratatui_syntax_spans`,
   `ratatui_style_table`) now convert at the boundary. Storage is no longer
   cfg-mutex'd. Phase 1 of #162.
+- Extracted `hjkl-engine-tui` from `hjkl-engine` — ratatui adapter surface
+  (`style_to_ratatui` / `style_from_ratatui` free fns + `EditorRatatuiExt` trait
+  with `intern_ratatui_style` / `install_ratatui_syntax_spans` /
+  `ratatui_style_table`) now lives in the new sibling crate. `hjkl-engine`
+  dropped its `ratatui` feature entirely. Phase 2 of #162.
 
 ### Removed
 

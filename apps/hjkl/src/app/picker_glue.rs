@@ -6,6 +6,7 @@ use crate::picker_action::AppAction;
 use git2::{BranchType, ErrorCode, ObjectType};
 use hjkl_buffer::Buffer;
 use hjkl_engine::{BufferEdit, Editor, Host, Options};
+use hjkl_engine_tui::EditorRatatuiExt;
 
 use super::{App, BufferSlot, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;

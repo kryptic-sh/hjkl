@@ -28,6 +28,7 @@ hjkl-editor = { path = "crates/hjkl-editor", version = "0.25", default-features 
 hjkl-editor-gui = { path = "crates/hjkl-editor-gui", version = "0.25" }
 hjkl-editor-tui = { path = "crates/hjkl-editor-tui", version = "0.25", default-features = false }
 hjkl-engine = { path = "crates/hjkl-engine", version = "0.25", default-features = false }
+hjkl-engine-tui = { path = "crates/hjkl-engine-tui", version = "0.25" }
 hjkl-ex = { path = "crates/hjkl-ex", version = "0.25" }
 hjkl-form = { path = "crates/hjkl-form", version = "0.25" }
 hjkl-fs-watch = { path = "crates/hjkl-fs-watch", version = "0.25" }

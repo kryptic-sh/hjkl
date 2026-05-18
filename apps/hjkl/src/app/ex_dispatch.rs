@@ -1,5 +1,6 @@
 use hjkl_bonsai::DotFallbackTheme;
 use hjkl_engine::{Host, Query};
+use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_ex::ExEffect;
 use hjkl_info_popup::InfoPopup;
 use std::path::PathBuf;

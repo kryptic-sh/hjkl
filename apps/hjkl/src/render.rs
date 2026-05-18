@@ -735,7 +735,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     let style_table = app.slots()[slot_idx].editor.style_table().to_owned();
     let resolver = move |id: u32| {
-        engine_style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
+        hjkl_engine_tui::style_to_ratatui(style_table.get(id as usize).copied().unwrap_or_default())
     };
 
     // For non-focused windows, don't show cursor highlight or cursor position.
@@ -824,9 +824,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // Emit the terminal cursor only for the focused window.
     // extra_gutter_width = sign_w + fold_w (cells left of number column).
     if show_cursor
-        && let Some((cx, cy)) = app.slots_mut()[slot_idx]
-            .editor
-            .cursor_screen_pos_in_rect(area, sign_w + fold_w)
+        && let Some((cx, cy)) = app.slots_mut()[slot_idx].editor.cursor_screen_pos(
+            area.x,
+            area.y,
+            area.width,
+            area.height,
+            sign_w + fold_w,
+        )
     {
         frame.set_cursor_position((cx, cy));
     }
@@ -1493,41 +1497,6 @@ fn picker_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     }
 }
 
-/// Convert an engine-native style to a ratatui `Style` for TUI rendering.
-fn engine_style_to_ratatui(s: hjkl_engine::types::Style) -> Style {
-    use hjkl_engine::types::Attrs;
-    let mut out = Style::default();
-    if let Some(fg) = s.fg {
-        out = out.fg(Color::Rgb(fg.0, fg.1, fg.2));
-    }
-    if let Some(bg) = s.bg {
-        out = out.bg(Color::Rgb(bg.0, bg.1, bg.2));
-    }
-    let mut m = Modifier::empty();
-    if s.attrs.contains(Attrs::BOLD) {
-        m |= Modifier::BOLD;
-    }
-    if s.attrs.contains(Attrs::ITALIC) {
-        m |= Modifier::ITALIC;
-    }
-    if s.attrs.contains(Attrs::UNDERLINE) {
-        m |= Modifier::UNDERLINED;
-    }
-    if s.attrs.contains(Attrs::REVERSE) {
-        m |= Modifier::REVERSED;
-    }
-    if s.attrs.contains(Attrs::DIM) {
-        m |= Modifier::DIM;
-    }
-    if s.attrs.contains(Attrs::STRIKE) {
-        m |= Modifier::CROSSED_OUT;
-    }
-    if !m.is_empty() {
-        out = out.add_modifier(m);
-    }
-    out
-}
-
 /// Shared input + list rendering for the non-generic `Picker`.
 fn render_picker_input_and_list(
     frame: &mut Frame,
@@ -1595,7 +1564,7 @@ fn render_picker_input_and_list(
                         .find(|(r, _)| r.contains(&ci))
                         .map(|(_, st)| *st)
                         .unwrap_or_default();
-                    let base = engine_style_to_ratatui(base_engine);
+                    let base = hjkl_engine_tui::style_to_ratatui(base_engine);
                     if matches.contains(&ci) {
                         Span::styled(s, base.patch(match_style))
                     } else if base != Style::default() {

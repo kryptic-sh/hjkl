@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- Dropped the `ratatui` feature and all ratatui adapter APIs
+  (`intern_ratatui_style`, `install_ratatui_syntax_spans`,
+  `ratatui_style_table`, plus the `engine_style_to_ratatui` /
+  `ratatui_style_to_engine` free fns, and the `cursor_screen_pos_in_rect`
+  convenience wrapper). They now live in the new `hjkl-engine-tui` crate. Phase
+  2 of #162.
+
 ## [0.11.4] - 2026-05-18
 
 ### Fixed

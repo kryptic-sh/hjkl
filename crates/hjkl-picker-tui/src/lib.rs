@@ -156,7 +156,7 @@ pub fn preview_pane(
         preview_spans
             .styles
             .get(id as usize)
-            .map(|s| engine_style_to_ratatui(*s))
+            .map(|s| hjkl_engine_tui::style_to_ratatui(*s))
             .unwrap_or_default()
     };
     let cursor_line_bg = if picker.preview_match_row().is_some() {
@@ -198,42 +198,4 @@ fn gutter_width(line_count: usize) -> u16 {
     const NUMBERWIDTH: usize = 4;
     let needed = line_count.to_string().len() + 1;
     needed.max(NUMBERWIDTH) as u16
-}
-
-/// Map engine-native style to ratatui style. Engine `Color` is an RGB
-/// triple; engine `Attrs` is a bitflag.
-fn engine_style_to_ratatui(s: hjkl_engine::types::Style) -> Style {
-    use hjkl_engine::types::Attrs;
-    use ratatui::style::{Color as RColor, Modifier as RMod};
-
-    let mut out = Style::default();
-    if let Some(fg) = s.fg {
-        out = out.fg(RColor::Rgb(fg.0, fg.1, fg.2));
-    }
-    if let Some(bg) = s.bg {
-        out = out.bg(RColor::Rgb(bg.0, bg.1, bg.2));
-    }
-    let mut m = RMod::empty();
-    if s.attrs.contains(Attrs::BOLD) {
-        m |= RMod::BOLD;
-    }
-    if s.attrs.contains(Attrs::ITALIC) {
-        m |= RMod::ITALIC;
-    }
-    if s.attrs.contains(Attrs::UNDERLINE) {
-        m |= RMod::UNDERLINED;
-    }
-    if s.attrs.contains(Attrs::REVERSE) {
-        m |= RMod::REVERSED;
-    }
-    if s.attrs.contains(Attrs::DIM) {
-        m |= RMod::DIM;
-    }
-    if s.attrs.contains(Attrs::STRIKE) {
-        m |= RMod::CROSSED_OUT;
-    }
-    if !m.is_empty() {
-        out = out.add_modifier(m);
-    }
-    out
 }

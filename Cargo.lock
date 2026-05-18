@@ -2159,6 +2159,7 @@ dependencies = [
  "hjkl-editor",
  "hjkl-editor-tui",
  "hjkl-engine",
+ "hjkl-engine-tui",
  "hjkl-ex",
  "hjkl-form",
  "hjkl-holler",
@@ -2402,11 +2403,19 @@ dependencies = [
  "crossterm",
  "hjkl-buffer",
  "proptest",
- "ratatui",
  "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hjkl-engine-tui"
+version = "0.25.0"
+dependencies = [
+ "hjkl-buffer",
+ "hjkl-engine",
+ "ratatui",
 ]
 
 [[package]]
@@ -2590,6 +2599,7 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-buffer-tui",
  "hjkl-engine",
+ "hjkl-engine-tui",
  "hjkl-picker",
  "ratatui",
 ]

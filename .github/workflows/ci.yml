@@ -74,8 +74,7 @@ jobs:
   no_std:
     name: no_std + wasm smoke (deferred)
     runs-on: ubuntu-latest
-    # hjkl-engine pulls ratatui+crossterm unconditionally until phase 5 lands
-    # the engine-native Style type + trait extraction (per SPEC). Keep this
+    # hjkl-engine still pulls crossterm (phase 3 will drop it). Keep this
     # job as a non-blocking signal so re-enabling it post-refactor is one
     # line. Re-enable by removing `continue-on-error: true` and unblocking
     # the steps.
@@ -706,6 +705,7 @@ jobs:
           #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
           #   7.  hjkl-config           — config schema (no hjkl deps).
           #   8.  hjkl-engine           — editor engine (depends on #5).
+          #   8a. hjkl-engine-tui       — ratatui adapter for engine (#8).
           #   9.  hjkl-editor           — editor model (#5, #8).
           #  10.  hjkl-keymap           — key binding types (no hjkl deps).
           #  11.  hjkl-vim              — vim FSM (#5, #8, #10).
@@ -839,6 +839,7 @@ jobs:
           publish_if_missing hjkl-clipboard
           publish_if_missing hjkl-config
           publish_if_missing hjkl-engine
+          publish_if_missing hjkl-engine-tui
           publish_if_missing hjkl-editor
           publish_if_missing hjkl-keymap
           publish_if_missing hjkl-vim
