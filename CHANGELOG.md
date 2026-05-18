@@ -8,6 +8,55 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-05-18
+
+### Changed (BREAKING)
+
+- **Data-model types relocated** to restore clean layering — renderer and worker
+  crates no longer depend upward into `hjkl-app` (closes #160):
+  - `Completion`, `CompletionItem`, `CompletionKind` → new `hjkl-completion`
+    crate.
+  - `GrammarRequest`, `LanguageDirectory` → new `hjkl-lang` crate.
+  - `BufferId` → `hjkl-buffer`.
+- `hjkl-completion-tui` and `hjkl-syntax` dropped their `hjkl-app` dep entirely.
+  They now depend on the leaf data crates directly.
+- **Migration** for external consumers of `hjkl-app`:
+  - `use hjkl_app::completion::Completion` → `use hjkl_completion::Completion`
+  - `use hjkl_app::lang::LanguageDirectory` → `use hjkl_lang::LanguageDirectory`
+  - `use hjkl_app::BufferId` → `use hjkl_buffer::BufferId`
+- Standardized 47 crate-level READMEs to the Tokio/wgpu monorepo convention — CI
+  / crates.io / docs.rs / MSRV / License badges all point to the umbrella
+  monorepo. Replaces stale badges that pointed to the standalone submodule repos
+  absorbed in #152.
+
+### Added
+
+- `hjkl-completion` 0.25.0 — completion data model (10 unit + 2 doctests; zero
+  renderer deps).
+- `hjkl-lang` 0.25.0 — `GrammarRequest` + `LanguageDirectory` (5 unit + 2
+  doctests).
+- `BufferId` re-exported from `hjkl-buffer`'s lib root.
+- **Rate-limit guard** in `publish_if_missing` (`.github/workflows/ci.yml`):
+  sleep 25 s after each successful publish (47 × 25 s ≈ 20 min, under
+  crates.io's 30/10min update cap), automatic retry-on-429 with cooldown parsed
+  from the `try again after` timestamp (max 3 attempts). Eliminates manual
+  reruns after rate-limit hits.
+
+### Removed
+
+- `hjkl-app::completion` module + `crates/hjkl-app/src/completion.rs` (moved to
+  `hjkl-completion`).
+- `hjkl-app::lang` module + `crates/hjkl-app/src/lang.rs` (moved to
+  `hjkl-lang`).
+- `hjkl-app::BufferId` (moved to `hjkl-buffer::BufferId`).
+
+### Notes
+
+- `hjkl-lsp` and `hjkl-mangler` still define their own `pub type BufferId = u64`
+  aliases (pre-existing, unrelated to #160) — tracked as follow-up debt;
+  unifying would force a `hjkl-buffer` dep on those crates just for a type
+  alias.
+
 ## [0.24.4] - 2026-05-18
 
 ### Fixed
@@ -3448,7 +3497,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...v0.25.0
 [0.24.4]: https://github.com/kryptic-sh/hjkl/compare/v0.24.3...v0.24.4
 [0.24.3]: https://github.com/kryptic-sh/hjkl/compare/v0.24.2...v0.24.3
 [0.24.2]: https://github.com/kryptic-sh/hjkl/compare/v0.24.1...v0.24.2
