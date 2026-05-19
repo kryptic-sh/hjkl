@@ -8,9 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.25.0] - 2026-05-19
+## [0.25.1] - 2026-05-19
 
-### Changed (BREAKING)
+### Fixed
+
+- **Missing `hjkl-css` and `hjkl-css-gui` publish on v0.25.0** — the
+  `publish_if_missing` list in `.github/workflows/ci.yml` predated those crates,
+  so they were silently skipped from the v0.25.0 push. The list now includes
+  both. v0.25.1 ships them at the lockstep version; consumers can pin `"0.25"`
+  and pick them up.
+
+### Changed
 
 - Renamed crate `hjkl-css-floem` → `hjkl-css-gui` to match the `-gui`
   floem-adapter convention. External consumers update the dep name and the
@@ -38,6 +46,15 @@ patch bumps.
   with `intern_ratatui_style` / `install_ratatui_syntax_spans` /
   `ratatui_style_table`) now lives in the new sibling crate. `hjkl-engine`
   dropped its `ratatui` feature entirely. Phase 2 of #162.
+
+### Removed
+
+- Deleted deprecated `hjkl-ratatui` shim. Use `hjkl-editor-tui` directly.
+
+## [0.25.0] - 2026-05-18
+
+### Changed (BREAKING)
+
 - **Data-model types relocated** to restore clean layering — renderer and worker
   crates no longer depend upward into `hjkl-app` (closes #160):
   - `Completion`, `CompletionItem`, `CompletionKind` → new `hjkl-completion`
@@ -75,7 +92,6 @@ patch bumps.
 - `hjkl-app::lang` module + `crates/hjkl-app/src/lang.rs` (moved to
   `hjkl-lang`).
 - `hjkl-app::BufferId` (moved to `hjkl-buffer::BufferId`).
-- Deleted deprecated `hjkl-ratatui` shim. Use `hjkl-editor-tui` directly.
 
 ### Notes
 
@@ -3524,7 +3540,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...HEAD
+[0.25.1]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...v0.25.0
 [0.24.4]: https://github.com/kryptic-sh/hjkl/compare/v0.24.3...v0.24.4
 [0.24.3]: https://github.com/kryptic-sh/hjkl/compare/v0.24.2...v0.24.3
