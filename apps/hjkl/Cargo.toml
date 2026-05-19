@@ -34,15 +34,16 @@ hjkl-hover-tui.workspace = true
 hjkl-anvil.workspace = true
 hjkl-keymap.workspace = true
 hjkl-keymap-tui.workspace = true
-hjkl-vim = { workspace = true, features = ["crossterm"] }
+hjkl-vim.workspace = true
+hjkl-vim-tui.workspace = true
 hjkl-lsp.workspace = true
 hjkl-buffer.workspace = true
 hjkl-buffer-tui.workspace = true
 hjkl-splash.workspace = true
 hjkl-splash-tui.workspace = true
-hjkl-engine = { workspace = true, features = ["crossterm"] }
+hjkl-engine.workspace = true
 hjkl-engine-tui.workspace = true
-hjkl-editor = { workspace = true, features = ["crossterm", "ratatui"] }
+hjkl-editor = { workspace = true, features = ["ratatui"] }
 hjkl-ex.workspace = true
 hjkl-editor-tui.workspace = true
 hjkl-statusline.workspace = true

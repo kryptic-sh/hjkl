@@ -1,7 +1,7 @@
 [package]
-name = "hjkl-engine-tui"
-description = "Ratatui adapters for hjkl-engine — Style conversion + Editor extension methods for ratatui-flavoured input."
-keywords = ["ratatui", "vim", "editor", "tui", "style"]
+name = "hjkl-vim-tui"
+description = "Ratatui/crossterm driver for hjkl-vim — wires crossterm KeyEvents through the FSM."
+keywords = ["vim", "modal", "editor", "tui", "crossterm"]
 categories = ["text-editors", "command-line-interface"]
 version.workspace = true
 edition.workspace = true
@@ -13,13 +13,15 @@ rust-version = "1.95"
 readme = "README.md"
 
 [dependencies]
+hjkl-vim.workspace = true
 hjkl-engine.workspace = true
+hjkl-engine-tui.workspace = true
 hjkl-buffer.workspace = true
-ratatui = "0.30"
-crossterm = { version = "0.29.0", features = ["event-stream"] }
 
 [dev-dependencies]
-regex = "1"
+proptest = "1"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+ratatui = { version = "0.30" }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -9,12 +9,51 @@
 //!   exposes `intern_ratatui_style`, `install_ratatui_syntax_spans`, and
 //!   `ratatui_style_table`. Extracted from `hjkl-engine`'s `ratatui` feature
 //!   gate as part of #162 phase 2.
+//! - [`KeyEvent`] — re-export of [`crossterm::event::KeyEvent`] for
+//!   downstream convenience.
+//! - [`crossterm_to_input`] — convert a crossterm `KeyEvent` to the
+//!   engine-agnostic [`hjkl_engine::Input`] type. Moved from `hjkl-engine`'s
+//!   `crossterm` feature gate as part of #162 phase 3.
 
+use crossterm::event::{KeyCode, KeyModifiers};
 use hjkl_engine::{
-    Editor,
+    Editor, Input, Key,
     types::{Attrs, Color, Host, Style},
 };
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
+
+/// Re-export of [`crossterm::event::KeyEvent`] for downstream convenience.
+pub use crossterm::event::KeyEvent;
+
+/// Convert a crossterm [`KeyEvent`] to the engine-agnostic [`hjkl_engine::Input`].
+///
+/// Keys the engine FSM does not model (`KeyCode::F(_)`, `KeyCode::Insert`, and
+/// any other unrecognised variant) map to [`hjkl_engine::Key::Null`]; callers
+/// should early-return or discard such inputs. Moved from `hjkl-engine`'s
+/// `crossterm` feature gate as part of #162 phase 3.
+pub fn crossterm_to_input(key: KeyEvent) -> Input {
+    let k = match key.code {
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Left => Key::Left,
+        KeyCode::Right => Key::Right,
+        KeyCode::Up => Key::Up,
+        KeyCode::Down => Key::Down,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::Esc => Key::Esc,
+        _ => Key::Null,
+    };
+    Input {
+        key: k,
+        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+        alt: key.modifiers.contains(KeyModifiers::ALT),
+        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+    }
+}
 
 /// Convert an engine-native [`Style`] to a [`ratatui::style::Style`].
 ///

@@ -1,11 +1,12 @@
 //! Vim-mode editor engine built on top of [`hjkl_buffer`].
 //!
-//! Exposes an [`Editor`] you can drop into a ratatui layout, a command
-//! grammar that covers the bulk of vim's normal / insert / visual /
-//! visual-line / visual-block modes, text-object operators, dot-repeat,
-//! and ex-command handling (`:s/foo/bar/g`, `:w`, `:q`, `:noh`, ...).
-//! Rendering goes through `hjkl_buffer::BufferView`; selection / gutter
-//! highlights are painted in the same single-pass as text.
+//! Exposes an [`Editor`] that is fully toolkit-agnostic. Covers the bulk
+//! of vim's normal / insert / visual / visual-line / visual-block modes,
+//! text-object operators, dot-repeat, and ex-command handling
+//! (`:s/foo/bar/g`, `:w`, `:q`, `:noh`, ...). Rendering goes through
+//! `hjkl_buffer::BufferView`; selection / gutter highlights are painted in
+//! the same single-pass as text. TUI/crossterm adapters live in the
+//! `hjkl-engine-tui` companion crate.
 //!
 //! Imported wholesale from sqeel-vim with full git history. The trait
 //! extraction (Selection / SelectionSet / Buffer + Host sub-traits) lands
@@ -32,10 +33,6 @@ pub mod types;
 mod viewport_math;
 mod vim;
 
-#[cfg(feature = "crossterm")]
-pub use crossterm::event::KeyEvent;
-#[cfg(feature = "crossterm")]
-pub use editor::crossterm_to_input;
 pub use editor::{Editor, LspIntent, StepBookkeeping};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};

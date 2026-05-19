@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
+- Dropped the `crossterm` feature, the `crossterm_to_input` free fn, the
+  `KeyEvent` re-export, and the `From<KeyEvent> for Input` impl. They now live
+  in `hjkl-engine-tui`. The 231-test `editor.rs mod tests` integration suite
+  moved to `hjkl-engine-tui/tests/editor_behavior.rs`. Phase 3 of #162.
 - Dropped the `ratatui` feature and all ratatui adapter APIs
   (`intern_ratatui_style`, `install_ratatui_syntax_spans`,
   `ratatui_style_table`, plus the `engine_style_to_ratatui` /

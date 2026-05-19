@@ -77,7 +77,7 @@ fn visual_line_eq_reindents_selected_lines() {
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );

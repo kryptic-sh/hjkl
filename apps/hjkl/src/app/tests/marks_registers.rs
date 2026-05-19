@@ -471,7 +471,7 @@ fn play_macro_with_count_3() {
         if ct_key.code != KeyCode::Null {
             let consumed = app.route_chord_key(ct_key);
             if !consumed {
-                hjkl_vim::handle_key(&mut app.active_mut().editor, ct_key);
+                hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
             }
             app.sync_viewport_from_editor();
         }
@@ -914,7 +914,7 @@ fn register_prefix_then_x_targets_register() {
     );
 
     // `x` — engine-handled delete-char. Feed via engine (x is not in app keymap).
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('x'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('x'));
     app.sync_viewport_from_editor();
 
     let lines = app.active().editor.buffer().lines().to_vec();
@@ -1023,7 +1023,7 @@ fn count_then_dot_5_dot_repeats_five_times() {
     app.sync_viewport_from_editor();
 
     // `x` — delete 'h', establishes last_change.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('x'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('x'));
     app.sync_viewport_from_editor();
 
     let lines_after_x = app.active().editor.buffer().lines().to_vec();

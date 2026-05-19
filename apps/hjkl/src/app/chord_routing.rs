@@ -55,7 +55,7 @@ impl App {
     pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = Self::km_to_crossterm(km_ev);
-            hjkl_vim::handle_key(&mut self.active_mut().editor, ct_ev);
+            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
         }
     }
 
@@ -123,7 +123,7 @@ impl App {
             && !just_started_recording
             && !register_name_of_play
         {
-            let input = hjkl_engine::Input::from(key);
+            let input = hjkl_engine_tui::crossterm_to_input(key);
             if input.key != hjkl_engine::Key::Null {
                 self.active_mut().editor.record_input(input);
             }

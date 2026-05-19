@@ -111,7 +111,7 @@ fuzz_target!(|data: &[u8]| {
     for (key, mods) in input.keys.into_iter().take(256) {
         let code = to_keycode(key);
         let modifiers: KeyModifiers = mods.into();
-        let _ = hjkl_vim::handle_key(&mut ed, KeyEvent::new(code, modifiers));
+        let _ = hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(code, modifiers));
     }
 
     // Drain any buffered effects so internal caches exercise too.

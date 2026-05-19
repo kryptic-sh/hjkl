@@ -119,7 +119,7 @@ impl App {
             return;
         }
 
-        let input: EngineInput = key.into();
+        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
         let field = match self.command_field.as_mut() {
             Some(f) => f,
             None => return,
@@ -389,7 +389,7 @@ impl App {
             return;
         }
 
-        let input: EngineInput = key.into();
+        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
         let field = match self.search_field.as_mut() {
             Some(f) => f,
             None => return,

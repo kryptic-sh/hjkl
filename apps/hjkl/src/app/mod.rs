@@ -1444,7 +1444,7 @@ impl App {
                         .delete_block(top_row, bot_row, left_col, right_col, '"');
                     // Exit visual mode.
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                    hjkl_vim::handle_key(
+                    hjkl_vim_tui::handle_key(
                         &mut self.active_mut().editor,
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
@@ -1456,7 +1456,7 @@ impl App {
                         .editor
                         .delete_range(start, end, RangeKind::Inclusive, '"');
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                    hjkl_vim::handle_key(
+                    hjkl_vim_tui::handle_key(
                         &mut self.active_mut().editor,
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
@@ -1471,7 +1471,7 @@ impl App {
                         '"',
                     );
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                    hjkl_vim::handle_key(
+                    hjkl_vim_tui::handle_key(
                         &mut self.active_mut().editor,
                         CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
@@ -1550,7 +1550,7 @@ impl App {
     pub(crate) fn replay_km_events_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
             let ct_ev = crate::keymap_translate::to_crossterm(km_ev);
-            hjkl_vim::handle_key(&mut self.active_mut().editor, ct_ev);
+            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_ev);
         }
     }
 }

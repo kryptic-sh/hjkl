@@ -7,7 +7,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::{execute, terminal};
 use hjkl_editor_tui::form::{FormPalette, draw_form};
-use hjkl_engine::Input;
+use hjkl_engine_tui::crossterm_to_input;
 use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormEvent, SelectField, SubmitField, SubmitOutcome,
     TextFieldEditor,
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
         if let Event::Key(key) = ev
             && key.kind != KeyEventKind::Release
         {
-            let input = Input::from(key);
+            let input = crossterm_to_input(key);
             if let Some(form_ev) = form.handle_input(input) {
                 match form_ev {
                     FormEvent::Cancelled => break Ok(()),

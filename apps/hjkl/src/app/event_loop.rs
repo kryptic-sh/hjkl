@@ -23,7 +23,7 @@ pub(crate) enum KeyOutcome {
     /// Break out of the event loop (equivalent to `break`).
     Break,
     /// Key was not consumed by any overlay/prefix handler; fall through to
-    /// the engine (Insert or Normal/Visual via hjkl_vim::handle_key).
+    /// the engine (Insert or Normal/Visual via hjkl_vim_tui::handle_key).
     FallThrough,
 }
 
@@ -73,7 +73,7 @@ impl App {
     /// This is called from the main event loop whenever the editor is in
     /// `VimMode::Insert` and the key has not been consumed by an overlay
     /// (completion popup, etc.). Normal / Visual modes still route through
-    /// `hjkl_vim::handle_key`.
+    /// `hjkl_vim_tui::handle_key`.
     ///
     /// ### `Ctrl-R {reg}` — register paste
     /// `insert_ctrl_r_arm()` sets an internal flag (`insert_pending_register`).
@@ -326,7 +326,7 @@ impl App {
             // Exit visual mode by feeding Esc to the engine. The
             // visual-exit hook in hjkl-engine sets the `<` / `>`
             // marks so :'<,'> resolves.
-            hjkl_vim::handle_key(
+            hjkl_vim_tui::handle_key(
                 &mut self.active_mut().editor,
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             );
@@ -1247,16 +1247,16 @@ impl App {
                     // ── Normal editor key handling ────────────────
                     // Insert mode uses the inline dispatcher which calls
                     // Editor::insert_* primitives directly. Normal / Visual
-                    // modes route through the FSM via hjkl_vim::handle_key.
+                    // modes route through the FSM via hjkl_vim_tui::handle_key.
                     if self.active().editor.vim_mode() == VimMode::Insert {
                         self.dispatch_insert_key(key);
                         // dispatch_insert_key calls Editor primitives directly and
-                        // does not go through hjkl_vim::handle_key, which is the
+                        // does not go through hjkl_vim_tui::handle_key, which is the
                         // normal site for emit_cursor_shape_if_changed. Emit here
                         // so Esc (→ Normal/Block) and Ctrl-O surface immediately.
                         self.active_mut().editor.emit_cursor_shape_if_changed();
                     } else {
-                        hjkl_vim::handle_key(&mut self.active_mut().editor, key);
+                        hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
                     }
 
                     self.sync_viewport_from_editor();

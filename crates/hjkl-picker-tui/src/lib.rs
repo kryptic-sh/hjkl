@@ -62,7 +62,7 @@ pub fn handle_key(picker: &mut Picker, key: KeyEvent) -> PickerEvent {
         _ => {}
     }
 
-    let input: Input = key.into();
+    let input: Input = hjkl_engine_tui::crossterm_to_input(key);
     if let Some(action) = picker.handle_source_key(input) {
         return PickerEvent::Select(action);
     }

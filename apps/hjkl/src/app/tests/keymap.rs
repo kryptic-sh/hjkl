@@ -56,7 +56,7 @@ fn imap_jj_enters_normal_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("imap jj <Esc>");
     // Enter insert mode.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     assert_eq!(app.active().editor.vim_mode(), VimMode::Insert);
 
     use crate::app::keymap::HjklMode as Mode;
@@ -398,11 +398,11 @@ fn count_engine_motion_5j_moves_cursor_five_rows() {
     // Simulate what the event loop does for `5j`:
     // 1. Buffer '5' into pending_count.
     // 2. On 'j', replay '5' then 'j' to the engine.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
     );
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
     );
@@ -421,7 +421,7 @@ fn zero_with_empty_count_is_start_of_line() {
     );
 
     // Move to end of first line.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE),
     );
@@ -431,7 +431,7 @@ fn zero_with_empty_count_is_start_of_line() {
     // `0` with empty pending_count → goes to col 0.
     // Verify the rule: is_zero && pending_count.is_empty() → fall through.
     assert!(app.pending_count.is_empty());
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE),
     );
@@ -718,11 +718,11 @@ fn gv_restores_last_visual() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n");
     // Enter visual and select a few chars.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
     // Exit visual.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
     assert_eq!(
         app.active().editor.vim_mode(),
         hjkl_engine::VimMode::Normal,
@@ -2623,9 +2623,9 @@ fn visual_g_u_uppercases_selection() {
     app.active_mut().editor.jump_cursor(0, 0);
 
     // Enter visual mode and select "hello" (5 chars).
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('v')));
     for _ in 0..4 {
-        hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
+        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('l')));
     }
     assert_eq!(
         app.active().editor.vim_mode(),
@@ -2635,8 +2635,8 @@ fn visual_g_u_uppercases_selection() {
 
     // In visual mode: 'g' goes through engine FSM (pending_state not in visual path),
     // engine sets Pending::G. Then 'U' → engine Pending::G + 'U' → Uppercase selection.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('g')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('U')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('U')));
 
     // Should be back in Normal mode after visual-mode gU.
     assert_eq!(
@@ -3007,7 +3007,7 @@ fn visual_block_h_l_extend_selection() {
     // Enter VisualBlock mode (Ctrl-V). Engine handles the mode entry.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-        hjkl_vim::handle_key(
+        hjkl_vim_tui::handle_key(
             &mut app.active_mut().editor,
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
@@ -3079,7 +3079,7 @@ fn gg_via_pending_state_in_visual_mode() {
     // Enter Visual mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-        hjkl_vim::handle_key(
+        hjkl_vim_tui::handle_key(
             &mut app.active_mut().editor,
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
         );
@@ -3119,7 +3119,7 @@ fn gg_via_pending_state_in_visual_line_mode() {
     // Enter VisualLine mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-        hjkl_vim::handle_key(
+        hjkl_vim_tui::handle_key(
             &mut app.active_mut().editor,
             CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
         );
@@ -3157,7 +3157,7 @@ fn gg_via_pending_state_in_visual_block_mode() {
     // Enter VisualBlock mode.
     {
         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-        hjkl_vim::handle_key(
+        hjkl_vim_tui::handle_key(
             &mut app.active_mut().editor,
             CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
@@ -3208,7 +3208,7 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
@@ -3260,7 +3260,7 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter Visual via `v`.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
     );
@@ -3310,7 +3310,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualBlock via Ctrl-V.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
@@ -4106,7 +4106,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
 
     // Type "Hello" in Insert mode.
     for c in ['H', 'e', 'l', 'l', 'o'] {
-        hjkl_vim::handle_key(
+        hjkl_vim_tui::handle_key(
             &mut app.active_mut().editor,
             KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE),
         );
@@ -4114,7 +4114,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     app.sync_after_engine_mutation();
 
     // `<Esc>` — exit Insert.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
     );
@@ -4545,7 +4545,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
 
     // `w` — word-forward motion in Normal; handled by existing engine handle_key
     // path because vim_mode() == Normal after <C-o>.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
     );
@@ -4588,19 +4588,19 @@ fn p65_ctrl_r_register_paste() {
     // Yank line 0 into register 'a' via engine.
     // Set register 'a' directly via the engine's named registers.
     // Simplest: yank the word via engine handle_key ("ayy").
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
     );
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
@@ -4754,7 +4754,7 @@ fn e_then_jjj_preserves_column_across_empty_line() {
     macro_rules! dispatch_with_sync {
         ($app:expr, $key:expr) => {{
             $app.sync_viewport_to_editor();
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4805,7 +4805,7 @@ fn j_through_empty_line_preserves_column_app_level() {
     // Dispatch WITHOUT pre-keypress sync_to — that is the new contract.
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4834,7 +4834,7 @@ fn j_through_short_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4862,7 +4862,7 @@ fn gj_through_empty_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4893,7 +4893,7 @@ fn gk_through_empty_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4926,7 +4926,7 @@ fn search_n_preserves_column_through_event_loop() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -4958,7 +4958,7 @@ fn mark_jump_resets_sticky_through_event_loop() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim::handle_key(&mut $app.active_mut().editor, $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_mut().editor, $key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5023,8 +5023,8 @@ fn split_then_independent_cursors() {
     }
 
     // Win 0 is focused. Move cursor down to row 2.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('j')));
     app.sync_viewport_from_editor();
     let (row0, _) = app.active().editor.cursor();
     assert_eq!(row0, 2, "win0 cursor should be at row 2");
@@ -5067,9 +5067,9 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     );
 
     // Win0 focused — make an edit (insert a char).
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
     );

@@ -15,7 +15,7 @@ fn visual_d_deletes_selection_via_keymap() {
     app.sync_viewport_from_editor();
 
     // Enter Visual mode via engine FSM.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
     assert_eq!(
         app.active().editor.vim_mode(),
         hjkl_engine::VimMode::Visual,
@@ -60,7 +60,7 @@ fn visual_y_yanks_selection_via_keymap() {
     app.active_mut().editor.jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
 
     // Extend right 4: covers "hello".
     for _ in 0..4 {
@@ -107,7 +107,7 @@ fn visual_line_d_deletes_line_via_keymap() {
     app.sync_viewport_from_editor();
 
     // Enter VisualLine via engine FSM (Shift-V).
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
@@ -148,7 +148,7 @@ fn visual_c_enters_insert_mode_via_keymap() {
     app.active_mut().editor.jump_cursor(0, 0);
     app.sync_viewport_from_editor();
 
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
 
     // Extend right 4: covers "hello".
     for _ in 0..4 {
@@ -238,8 +238,8 @@ fn visual_d_with_named_register_writes_to_register() {
     app.sync_viewport_from_editor();
 
     // "a — set pending register to 'a' via engine FSM.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('"'));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('a'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('"'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('a'));
     assert_eq!(
         app.active().editor.pending_register(),
         Some('a'),
@@ -247,7 +247,7 @@ fn visual_d_with_named_register_writes_to_register() {
     );
 
     // Enter Visual mode.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('v'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('v'));
     // Extend right 4 to select "hello".
     for _ in 0..4 {
         app.route_chord_key(ck('l'));
@@ -287,7 +287,7 @@ fn visual_line_d_deletes_single_line_via_range_mutation() {
     app.sync_viewport_from_editor();
 
     // Enter VisualLine.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
@@ -321,7 +321,7 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
     app.sync_viewport_from_editor();
 
     // Enter VisualBlock.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
@@ -361,11 +361,11 @@ fn visual_block_y_yanks_rectangle_to_register() {
     app.sync_viewport_from_editor();
 
     // Set pending register 'a'.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('"'));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, ck('a'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('"'));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck('a'));
 
     // Enter VisualBlock.
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );

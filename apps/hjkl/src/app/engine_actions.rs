@@ -137,7 +137,7 @@ impl App {
                         }
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
+                        hjkl_vim_tui::handle_key(
                             &mut self.active_mut().editor,
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
@@ -203,7 +203,7 @@ impl App {
                         // Exit visual mode after the op (except Change, which already
                         // transitioned to Insert above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
+                        hjkl_vim_tui::handle_key(
                             &mut self.active_mut().editor,
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
@@ -289,7 +289,7 @@ impl App {
                         }
                         // Exit visual mode after the op (except Change above).
                         use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
-                        hjkl_vim::handle_key(
+                        hjkl_vim_tui::handle_key(
                             &mut self.active_mut().editor,
                             CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );

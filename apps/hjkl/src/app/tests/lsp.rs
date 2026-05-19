@@ -223,11 +223,11 @@ fn gg_scrolls_window_viewport_to_top() {
 
     // Drive `gg` through the engine. First `g` sets engine-side pending,
     // second `g` triggers the gg motion (cursor → top + auto-scroll).
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
@@ -1011,7 +1011,7 @@ fn lsp_request_works_with_relative_filename() {
 fn completion_response_opens_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Enter insert mode so the guard passes.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     // Give the buffer a filename so buffer_id matches.
     app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
@@ -1028,7 +1028,7 @@ fn completion_response_opens_popup() {
 #[test]
 fn completion_response_empty_no_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1050,7 +1050,7 @@ fn completion_response_empty_no_popup() {
 fn completion_request_pending_routes_to_handler() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Simulate a pending completion request.
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1083,7 +1083,7 @@ fn accept_completion_inserts_selected_item() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer with some text and enter insert mode at col 0.
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     // Open popup anchored at col 0 row 0 with two items.
     let items = vec![make_completion_item("hello"), make_completion_item("world")];
     app.completion = Some(crate::completion::Completion::new(0, 0, items));

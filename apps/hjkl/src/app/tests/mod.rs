@@ -401,14 +401,14 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     }
     // Engine pending bypass: if the engine is mid-chord, skip the trie.
     if app.active().editor.is_chord_pending() {
-        hjkl_vim::handle_key(&mut app.active_mut().editor, ct_key);
+        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
         app.sync_viewport_from_editor();
         return;
     }
     // Try the keymap trie.
     let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
         // Untranslatable key — forward direct to engine.
-        hjkl_vim::handle_key(&mut app.active_mut().editor, ct_key);
+        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ct_key);
         app.sync_viewport_from_editor();
         return;
     };
@@ -420,7 +420,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     // Unbound: forward all replay keys (including multi-key) to the engine.
     for ev in &replay {
         let back = crate::keymap_translate::to_crossterm(ev);
-        hjkl_vim::handle_key(&mut app.active_mut().editor, back);
+        hjkl_vim_tui::handle_key(&mut app.active_mut().editor, back);
     }
     app.sync_viewport_from_editor();
 }
@@ -492,7 +492,7 @@ fn macro_key_seq(app: &mut App, keys: &[KeyEvent]) {
     for &k in keys {
         // route_chord_key returns false for unrecognised keys; forward to engine.
         if !app.route_chord_key(k) {
-            hjkl_vim::handle_key(&mut app.active_mut().editor, k);
+            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, k);
         }
         app.sync_viewport_from_editor();
     }
@@ -512,7 +512,7 @@ fn seed_numbered_lines(app: &mut App, count: usize) {
 fn rck(app: &mut App, keys: &[char]) {
     for &c in keys {
         if !app.route_chord_key(ck(c)) {
-            hjkl_vim::handle_key(&mut app.active_mut().editor, ck(c));
+            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, ck(c));
         }
         app.sync_viewport_from_editor();
     }

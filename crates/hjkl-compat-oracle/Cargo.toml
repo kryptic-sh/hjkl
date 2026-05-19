@@ -14,8 +14,8 @@ homepage.workspace = true
 anyhow = "1"
 async-trait = "0.1"
 hjkl-buffer.workspace = true
-hjkl-engine = { workspace = true, features = ["crossterm"] }
-hjkl-vim = { workspace = true, features = ["crossterm"] }
+hjkl-engine.workspace = true
+hjkl-vim.workspace = true
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "macros"] }

@@ -72,13 +72,10 @@ jobs:
         # `--examples` is a no-op until examples land; harmless before then.
 
   no_std:
-    name: no_std + wasm smoke (deferred)
+    name: no_std + wasm smoke
     runs-on: ubuntu-latest
-    # hjkl-engine still pulls crossterm (phase 3 will drop it). Keep this
-    # job as a non-blocking signal so re-enabling it post-refactor is one
-    # line. Re-enable by removing `continue-on-error: true` and unblocking
-    # the steps.
-    continue-on-error: true
+    # hjkl-engine is now fully agnostic (no crossterm dep) after #162 phase 3.
+    # Gate removed.
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -705,10 +702,11 @@ jobs:
           #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
           #   7.  hjkl-config           — config schema (no hjkl deps).
           #   8.  hjkl-engine           — editor engine (depends on #5).
-          #   8a. hjkl-engine-tui       — ratatui adapter for engine (#8).
+          #   8a. hjkl-engine-tui       — ratatui + crossterm adapter for engine (#8).
           #   9.  hjkl-editor           — editor model (#5, #8).
           #  10.  hjkl-keymap           — key binding types (no hjkl deps).
-          #  11.  hjkl-vim              — vim FSM (#5, #8, #10).
+          #  11.  hjkl-vim              — vim FSM, toolkit-agnostic (#5, #8, #10).
+          #  11a. hjkl-vim-tui          — crossterm driver for hjkl-vim (#8a, #11).
           #  12.  hjkl-form             — form/widget layer (#5, #8, #11).
           #  13.  hjkl-editor-tui       — ratatui editor adapter (#8, #12).
           #  14.  hjkl-ex               — ex-command parser (#5, #8).
@@ -843,6 +841,7 @@ jobs:
           publish_if_missing hjkl-editor
           publish_if_missing hjkl-keymap
           publish_if_missing hjkl-vim
+          publish_if_missing hjkl-vim-tui
           publish_if_missing hjkl-form
           publish_if_missing hjkl-editor-tui
           publish_if_missing hjkl-ex

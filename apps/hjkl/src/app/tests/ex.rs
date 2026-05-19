@@ -112,14 +112,14 @@ fn undo_to_saved_state_clears_dirty() {
     std::fs::write(&path, "alpha\nbravo\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert!(!app.active().dirty);
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('X')));
     if app.active_mut().editor.take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }
     assert!(app.active().dirty, "edit should mark dirty");
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
-    hjkl_vim::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('u')));
     if app.active_mut().editor.take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }

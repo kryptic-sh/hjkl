@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- Extracted `hjkl-vim-tui` from `hjkl-vim` and moved engine's crossterm adapter
+  to `hjkl-engine-tui`. `hjkl-engine` and `hjkl-vim` now have zero toolkit deps
+  — fully agnostic cores. `hjkl-form`'s crossterm cascade dropped. The 231-test
+  engine integration suite moved to `hjkl-engine-tui/tests/`. Closes #162 phase
+  3 (the engine cleanup arc).
+
 ## [0.25.1] - 2026-05-19
 
 ### Fixed

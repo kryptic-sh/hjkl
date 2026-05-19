@@ -7,7 +7,9 @@
 [patch.crates-io]
 hjkl-buffer = { path = "../../hjkl-buffer" }
 hjkl-engine = { path = ".." }
+hjkl-engine-tui = { path = "../../hjkl-engine-tui" }
 hjkl-vim = { path = "../../hjkl-vim" }
+hjkl-vim-tui = { path = "../../hjkl-vim-tui" }
 
 [package]
 name = "hjkl-engine-fuzz"
@@ -27,7 +29,9 @@ cargo-fuzz = true
 
 [dependencies]
 hjkl-engine = { path = ".." }
+hjkl-engine-tui = { path = "../../hjkl-engine-tui" }
 hjkl-vim = { path = "../../hjkl-vim" }
+hjkl-vim-tui = { path = "../../hjkl-vim-tui" }
 hjkl-buffer = { path = "../../hjkl-buffer" }
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }

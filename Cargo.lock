@@ -2192,6 +2192,7 @@ dependencies = [
  "hjkl-theme",
  "hjkl-theme-tui",
  "hjkl-vim",
+ "hjkl-vim-tui",
  "hjkl-which-key",
  "hjkl-which-key-tui",
  "lsp-types",
@@ -2399,7 +2400,6 @@ name = "hjkl-engine"
 version = "0.25.1"
 dependencies = [
  "bitflags 2.11.1",
- "crossterm",
  "hjkl-buffer",
  "proptest",
  "regex",
@@ -2412,9 +2412,11 @@ dependencies = [
 name = "hjkl-engine-tui"
 version = "0.25.1"
 dependencies = [
+ "crossterm",
  "hjkl-buffer",
  "hjkl-engine",
  "ratatui",
+ "regex",
 ]
 
 [[package]]
@@ -2707,6 +2709,19 @@ dependencies = [
  "hjkl-buffer",
  "hjkl-engine",
  "hjkl-keymap",
+ "proptest",
+ "ratatui",
+]
+
+[[package]]
+name = "hjkl-vim-tui"
+version = "0.25.1"
+dependencies = [
+ "crossterm",
+ "hjkl-buffer",
+ "hjkl-engine",
+ "hjkl-engine-tui",
+ "hjkl-vim",
  "proptest",
  "ratatui",
 ]

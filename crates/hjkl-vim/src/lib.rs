@@ -31,25 +31,6 @@ pub enum Mode {
     CommandLine,
 }
 
-/// Drive the vim FSM with a crossterm [`hjkl_engine::KeyEvent`]. Decodes the
-/// event to [`hjkl_engine::Input`] and dispatches through [`dispatch_input`].
-/// Emits the cursor-shape change after the FSM returns.
-///
-/// Returns `true` if the engine consumed the keystroke.
-#[cfg(feature = "crossterm")]
-pub fn handle_key<H: hjkl_engine::Host>(
-    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
-    key: hjkl_engine::KeyEvent,
-) -> bool {
-    let input = hjkl_engine::crossterm_to_input(key);
-    if input.key == hjkl_engine::Key::Null {
-        return false;
-    }
-    let consumed = dispatch_input(editor, input);
-    editor.emit_cursor_shape_if_changed();
-    consumed
-}
-
 /// Drive the vim FSM with a [`hjkl_engine::PlannedInput`]. Translates the
 /// planned input to engine [`hjkl_engine::Input`], dispatches through
 /// [`dispatch_input`], and emits cursor-shape changes.

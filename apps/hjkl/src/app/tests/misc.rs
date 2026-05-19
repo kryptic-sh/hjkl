@@ -64,7 +64,7 @@ fn dot_repeat_replays_last_change() {
     });
     app.active_mut().editor.jump_cursor(0, 0);
     // Set up a last_change by feeding `x` through the engine (single-char delete).
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
@@ -89,7 +89,7 @@ fn dot_repeat_with_count_3_replays_three_times() {
         text: "abcdef".to_string(),
     });
     app.active_mut().editor.jump_cursor(0, 0);
-    hjkl_vim::handle_key(
+    hjkl_vim_tui::handle_key(
         &mut app.active_mut().editor,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );

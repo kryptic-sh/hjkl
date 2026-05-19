@@ -8,6 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- Dropped the `crossterm` feature and `handle_key`. The crossterm-driven FSM
+  wrapper lives in the new `hjkl-vim-tui` crate. Three test files
+  (`editor_fsm.rs`, `vim_fsm.rs`, `proptest_fsm.rs`) relocated to
+  `hjkl-vim-tui/tests/`. Phase 3 of #162.
+
 ## [0.23.2] - 2026-05-18
 
 ### Fixed

@@ -15,7 +15,6 @@ readme = "README.md"
 [features]
 default = ["serde"]
 serde = ["hjkl-engine/serde"]
-crossterm = ["hjkl-engine/crossterm"]
 # Re-exports hjkl-buffer-tui types (BufferView, Gutter, Sign, StyleResolver).
 # The engine-tui adapter surface now lives in hjkl-engine-tui (#162 phase 2).
 # Default-on for back-compat; non-terminal hosts opt out via

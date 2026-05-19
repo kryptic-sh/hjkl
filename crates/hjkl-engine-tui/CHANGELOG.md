@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added the crossterm adapter (`KeyEvent` re-export + `crossterm_to_input` free
+  fn) moved from `hjkl-engine`. The 231-test engine integration suite relocated
+  to `tests/editor_behavior.rs`. Phase 3 of #162.
+
 ## [0.25.0] - 2026-05-18
 
 ### Added
