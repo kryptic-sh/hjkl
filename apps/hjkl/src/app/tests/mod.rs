@@ -361,13 +361,13 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.goto_mark_line(ch);
+                    let _ = app.active_mut().editor.try_goto_mark_line(ch);
                     app.sync_viewport_from_editor();
                     return;
                 }
                 Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
                     app.pending_state = None;
-                    app.active_mut().editor.goto_mark_char(ch);
+                    let _ = app.active_mut().editor.try_goto_mark_char(ch);
                     app.sync_viewport_from_editor();
                     return;
                 }

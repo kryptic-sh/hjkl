@@ -957,14 +957,17 @@ pub struct EditorSnapshot {
     /// Skipped for `Eq`/`PartialEq` because [`crate::Registers`]
     /// doesn't derive them today.
     pub registers: crate::Registers,
-    /// Named marks — both lowercase (`'a`–`'z`, buffer-scope) and
-    /// uppercase (`'A`–`'Z`, file-scope). Round-trips across tab
-    /// swaps in the host.
+    /// Named marks — lowercase (`'a`–`'z`, buffer-scope). Round-trips
+    /// across tab swaps in the host.
     ///
     /// 0.0.36: consolidated from the prior `file_marks` field;
     /// lowercase marks now persist as well since they live in the
     /// same unified [`crate::Editor::marks`] map.
     pub marks: std::collections::BTreeMap<char, (u32, u32)>,
+    /// Global (file) marks — uppercase (`'A`–`'Z`). Each entry records
+    /// `(buffer_id, row, col)` so cross-buffer jumps can switch to the
+    /// correct slot. Added in VERSION 5.
+    pub global_marks: std::collections::BTreeMap<char, (u64, u32, u32)>,
 }
 
 /// Status-line mode summary. Bridges to the legacy
@@ -988,6 +991,8 @@ impl EditorSnapshot {
     /// Bumped to 3 in v0.0.9: file_marks added.
     /// Bumped to 4 in v0.0.36: file_marks → unified `marks` map
     /// (lowercase + uppercase consolidated).
+    /// Bumped to 5: `global_marks` field added for cross-buffer uppercase
+    /// marks (closes #175).
     ///
     /// # Lock policy
     ///
@@ -1000,7 +1005,7 @@ impl EditorSnapshot {
     ///   the entire 0.1.x line.
     /// - **0.2.0+:** any further structural change requires `VERSION++`
     ///   together with a major-version bump of `hjkl-engine`.
-    pub const VERSION: u32 = 4;
+    pub const VERSION: u32 = 5;
 }
 
 /// Errors surfaced from the engine to the host. Intentionally narrow —
@@ -1428,7 +1433,7 @@ mod tests {
 
     #[test]
     fn editor_snapshot_version_const() {
-        assert_eq!(EditorSnapshot::VERSION, 4);
+        assert_eq!(EditorSnapshot::VERSION, 5);
     }
 
     #[test]
@@ -1441,6 +1446,7 @@ mod tests {
             viewport_top: 0,
             registers: crate::Registers::default(),
             marks: Default::default(),
+            global_marks: Default::default(),
         };
         assert_eq!(s.cursor, (0, 0));
         assert_eq!(s.lines.len(), 1);
@@ -1450,8 +1456,9 @@ mod tests {
     #[test]
     fn editor_snapshot_roundtrip() {
         let mut marks = std::collections::BTreeMap::new();
-        marks.insert('A', (5u32, 2u32));
         marks.insert('a', (1u32, 0u32));
+        let mut global_marks = std::collections::BTreeMap::new();
+        global_marks.insert('A', (42u64, 5u32, 2u32));
         let s = EditorSnapshot {
             version: EditorSnapshot::VERSION,
             mode: SnapshotMode::Insert,
@@ -1460,12 +1467,14 @@ mod tests {
             viewport_top: 2,
             registers: crate::Registers::default(),
             marks,
+            global_marks,
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: EditorSnapshot = serde_json::from_str(&json).unwrap();
         assert_eq!(s.cursor, back.cursor);
         assert_eq!(s.lines, back.lines);
         assert_eq!(s.viewport_top, back.viewport_top);
+        assert_eq!(s.global_marks, back.global_marks);
     }
 
     #[test]

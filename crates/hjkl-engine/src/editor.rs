@@ -524,6 +524,16 @@ pub struct Editor<
     /// and the `:marks` ex command. Mark-shift on edits is handled
     /// by [`Editor::shift_marks_after_edit`].
     pub(crate) marks: std::collections::BTreeMap<char, (usize, usize)>,
+    /// Global (uppercase) marks that carry a `buffer_id` so they can jump
+    /// across buffers. Keyed by `'A'`–`'Z'`; values are
+    /// `(buffer_id, row, col)`. Set by `m{A-Z}`, resolved by
+    /// `try_goto_mark_line` / `try_goto_mark_char`.
+    pub(crate) global_marks: std::collections::BTreeMap<char, (u64, usize, usize)>,
+    /// The `buffer_id` this editor instance is currently attached to.
+    /// Updated by the host app on every `switch_to` / slot creation so
+    /// global-mark writes record the correct id without requiring the app
+    /// to pass the id on every keystroke.
+    pub(crate) current_buffer_id: u64,
     /// Block ranges (`(start_row, end_row)` inclusive) the host has
     /// extracted from a syntax tree. `:foldsyntax` reads these to
     /// populate folds. The host refreshes them on every re-parse via
@@ -778,6 +788,26 @@ pub enum LspIntent {
     GotoDefinition,
 }
 
+/// Result of `try_goto_mark_line` / `try_goto_mark_char`.
+///
+/// The host app inspects this to decide whether to switch buffers before
+/// completing the jump; the engine cannot switch buffers itself because
+/// it is single-buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkJump {
+    /// Jump was executed within the current buffer.
+    SameBuffer,
+    /// Jump targets a different buffer. The host must switch to
+    /// `buffer_id` and then position the cursor at `(row, col)`.
+    CrossBuffer {
+        buffer_id: u64,
+        row: usize,
+        col: usize,
+    },
+    /// The mark was not set (silent no-op).
+    Unset,
+}
+
 impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Build an [`Editor`] from a buffer, host adapter, and SPEC options.
     ///
@@ -807,6 +837,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             styled_spans: Vec::new(),
             settings,
             marks: std::collections::BTreeMap::new(),
+            global_marks: std::collections::BTreeMap::new(),
+            current_buffer_id: 0,
             syntax_fold_ranges: Vec::new(),
             change_log: Vec::new(),
             sticky_col: None,
@@ -918,6 +950,36 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Remove the named mark `c` (no-op if unset).
     pub fn clear_mark(&mut self, c: char) {
         self.marks.remove(&c);
+    }
+
+    /// Look up an uppercase global mark by letter. Returns
+    /// `(buffer_id, row, col)` if set; `None` otherwise.
+    pub fn global_mark(&self, c: char) -> Option<(u64, usize, usize)> {
+        self.global_marks.get(&c).copied()
+    }
+
+    /// Set an uppercase global mark `c` to `(buffer_id, row, col)`.
+    pub fn set_global_mark(&mut self, c: char, buffer_id: u64, pos: (usize, usize)) {
+        self.global_marks.insert(c, (buffer_id, pos.0, pos.1));
+    }
+
+    /// Return the `buffer_id` this editor is currently attached to.
+    pub fn current_buffer_id(&self) -> u64 {
+        self.current_buffer_id
+    }
+
+    /// Update the `buffer_id` this editor is attached to. Called by the
+    /// app on every `switch_to` so global-mark sets record the correct id.
+    pub fn set_current_buffer_id(&mut self, id: u64) {
+        self.current_buffer_id = id;
+    }
+
+    /// Iterate all global marks (`'A'`–`'Z'`), yielding
+    /// `(mark_char, buffer_id, row, col)`.
+    pub fn global_marks_iter(&self) -> impl Iterator<Item = (char, u64, usize, usize)> + '_ {
+        self.global_marks
+            .iter()
+            .map(|(c, &(bid, r, col))| (*c, bid, r, col))
     }
 
     /// Look up a buffer-local lowercase mark (`'a`–`'z`). Kept as a
@@ -1563,6 +1625,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             self.marks.remove(&c);
         }
 
+        // Shift global marks that belong to the current buffer.
+        let cur_bid = self.current_buffer_id;
+        let mut global_to_drop: Vec<char> = Vec::new();
+        for (c, (bid, row, _col)) in self.global_marks.iter_mut() {
+            if *bid != cur_bid {
+                continue;
+            }
+            if (edit_start..drop_end).contains(row) {
+                global_to_drop.push(*c);
+            } else if *row >= shift_threshold {
+                *row = ((*row as isize) + delta).max(0) as usize;
+            }
+        }
+        for c in global_to_drop {
+            self.global_marks.remove(&c);
+        }
+
         let shift_jumps = |entries: &mut Vec<(usize, usize)>| {
             entries.retain(|(row, _)| !(edit_start..drop_end).contains(row));
             for (row, _) in entries.iter_mut() {
@@ -2182,6 +2261,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .iter()
             .map(|(c, (r, col))| (*c, (*r as u32, *col as u32)))
             .collect();
+        let global_marks = self
+            .global_marks
+            .iter()
+            .map(|(c, &(bid, r, col))| (*c, (bid, r as u32, col as u32)))
+            .collect();
         EditorSnapshot {
             version: EditorSnapshot::VERSION,
             mode,
@@ -2190,6 +2274,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             viewport_top,
             registers: self.registers.clone(),
             marks,
+            global_marks,
         }
     }
 
@@ -2220,6 +2305,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             .marks
             .into_iter()
             .map(|(c, (r, col))| (c, (r as usize, col as usize)))
+            .collect();
+        self.global_marks = snap
+            .global_marks
+            .into_iter()
+            .map(|(c, (bid, r, col))| (c, (bid, r as usize, col as usize)))
             .collect();
         Ok(())
     }
@@ -3629,6 +3719,24 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// `EngineCmd::GotoMarkChar` without re-entering the engine FSM.
     pub fn goto_mark_char(&mut self, ch: char) {
         vim::goto_mark(self, ch, false);
+    }
+
+    /// Jump to the mark named `ch`, linewise. For uppercase marks (`'A'`–`'Z'`)
+    /// that live in a different buffer, returns `MarkJump::CrossBuffer` so the
+    /// app can switch slots before positioning the cursor. Returns
+    /// `MarkJump::SameBuffer` for same-buffer / lowercase / special marks, and
+    /// `MarkJump::Unset` when the mark is not set.
+    pub fn try_goto_mark_line(&mut self, ch: char) -> MarkJump {
+        vim::try_goto_mark(self, ch, true)
+    }
+
+    /// Jump to the mark named `ch`, charwise. For uppercase marks (`'A'`–`'Z'`)
+    /// that live in a different buffer, returns `MarkJump::CrossBuffer` so the
+    /// app can switch slots before positioning the cursor. Returns
+    /// `MarkJump::SameBuffer` for same-buffer / lowercase / special marks, and
+    /// `MarkJump::Unset` when the mark is not set.
+    pub fn try_goto_mark_char(&mut self, ch: char) -> MarkJump {
+        vim::try_goto_mark(self, ch, false)
     }
 
     // ── Macro controller API (Phase 5b) ──────────────────────────────────────

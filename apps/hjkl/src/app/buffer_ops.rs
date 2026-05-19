@@ -1,5 +1,5 @@
 use hjkl_buffer::Buffer;
-use hjkl_engine::{Editor, Host, Options};
+use hjkl_engine::{Editor, Host, MarkJump, Options};
 use hjkl_engine_tui::EditorRatatuiExt;
 use std::path::PathBuf;
 
@@ -26,6 +26,10 @@ impl App {
             .as_deref()
             .map(|p| p.to_string_lossy().into_owned());
         self.slots[idx].editor.registers_mut().set_filename(fname);
+        // Keep the engine's current_buffer_id in sync so `mA`–`mZ` global
+        // marks tag new marks with the correct slot id.
+        let new_bid = self.slots[idx].buffer_id;
+        self.slots[idx].editor.set_current_buffer_id(new_bid);
         // Point the focused window at the new slot.
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;
@@ -148,6 +152,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_current_buffer_id(new_id);
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -250,6 +255,7 @@ impl App {
             self.next_buffer_id += 1;
             let host = TuiHost::new();
             let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            editor.set_current_buffer_id(new_id);
             if let Ok(size) = crossterm::terminal::size() {
                 let vp = editor.host_mut().viewport_mut();
                 vp.width = size.0;
@@ -398,6 +404,45 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Handle the result of `Editor::try_goto_mark_line` /
+    /// `Editor::try_goto_mark_char`. Switches to the correct slot for cross-
+    /// buffer marks, positions the cursor, and syncs. Emits an error toast
+    /// when the referenced buffer has been closed.
+    pub(crate) fn apply_mark_jump(&mut self, jump: MarkJump, linewise: bool) {
+        match jump {
+            MarkJump::SameBuffer => {
+                self.sync_after_engine_mutation();
+            }
+            MarkJump::CrossBuffer {
+                buffer_id,
+                row,
+                col,
+            } => {
+                let slot_idx = self.slots.iter().position(|s| s.buffer_id == buffer_id);
+                match slot_idx {
+                    Some(idx) => {
+                        self.switch_to(idx);
+                        if linewise {
+                            self.active_mut().editor.jump_cursor(row, 0);
+                            self.active_mut()
+                                .editor
+                                .apply_motion(hjkl_vim::MotionKind::FirstNonBlank, 1);
+                        } else {
+                            self.active_mut().editor.jump_cursor(row, col);
+                        }
+                        self.sync_after_engine_mutation();
+                    }
+                    None => {
+                        self.bus.error(format!(
+                            "E474: mark references a closed buffer (id {buffer_id})"
+                        ));
+                    }
+                }
+            }
+            MarkJump::Unset => { /* silent no-op — mark not set */ }
         }
     }
 }
