@@ -510,6 +510,8 @@ pub struct VimState {
     /// sole source of truth; until then both fields are kept in sync.
     /// Initialized to `Normal` via `#[derive(Default)]`.
     pub(crate) current_mode: crate::VimMode,
+    /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
+    pub last_substitute: Option<crate::substitute::SubstituteCmd>,
 }
 
 pub(crate) const SEARCH_HISTORY_MAX: usize = 100;

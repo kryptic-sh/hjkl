@@ -632,9 +632,8 @@ fn extract_leading_number(line: &str) -> i64 {
 /// expects.  No-range → current cursor line; with range the engine receives a
 /// 0-based inclusive `RangeInclusive<u32>`.
 ///
-/// `:&` and `:~` (repeat-last-substitute shortcuts) are NOT registered here.
-/// They use non-alphabetic names that `split_name_args` cannot parse; defer
-/// them to a future phase once the parse layer can handle bare-symbol commands.
+/// On success the parsed `SubstituteCmd` is stored on the editor so `:&` / `:&&`
+/// can repeat it (part of #171).
 fn substitute_handler<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     args: &str,
@@ -663,11 +662,69 @@ fn substitute_handler<H: Host>(
     };
 
     match apply_substitute(editor, &cmd, r) {
-        Ok(out) => Some(ExEffect::Substituted {
-            count: out.replacements,
-            lines_changed: out.lines_changed,
-        }),
+        Ok(out) => {
+            // Store so `:&` / `:&&` can repeat this substitution.
+            editor.set_last_substitute(cmd);
+            Some(ExEffect::Substituted {
+                count: out.replacements,
+                lines_changed: out.lines_changed,
+            })
+        }
         Err(e) => Some(ExEffect::Error(e.to_string())),
+    }
+}
+
+/// `:&` / `:&&` / `:[range]&` / `:[range]&&` — repeat last substitute.
+///
+/// `:&`  — repeat with original flags dropped (pattern and replacement kept).
+/// `:&&` — repeat with original flags preserved.
+///
+/// `keep_flags` is `true` for `&&`, `false` for `&`.
+pub(crate) fn repeat_substitute_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    keep_flags: bool,
+    range: Option<LineRange>,
+) -> ExEffect {
+    use hjkl_engine::substitute::{SubstFlags, apply_substitute};
+
+    let cmd = match editor.last_substitute().cloned() {
+        Some(c) => c,
+        None => return ExEffect::Error("no previous substitute".into()),
+    };
+
+    // `:&` drops flags; `:&&` keeps them (vim semantics).
+    let effective_cmd = if keep_flags {
+        cmd
+    } else {
+        hjkl_engine::substitute::SubstituteCmd {
+            flags: SubstFlags::default(),
+            ..cmd
+        }
+    };
+
+    // Resolve range; default to current line.
+    let r = match range {
+        Some(lr) => {
+            let start = lr.start_one_based().saturating_sub(1) as u32;
+            let end = lr.end_one_based().saturating_sub(1) as u32;
+            start..=end
+        }
+        None => {
+            let row = editor.cursor().0 as u32;
+            row..=row
+        }
+    };
+
+    match apply_substitute(editor, &effective_cmd, r) {
+        Ok(out) => {
+            // Keep last_substitute updated with what was actually run.
+            editor.set_last_substitute(effective_cmd);
+            ExEffect::Substituted {
+                count: out.replacements,
+                lines_changed: out.lines_changed,
+            }
+        }
+        Err(e) => ExEffect::Error(e.to_string()),
     }
 }
 
@@ -1885,5 +1942,59 @@ mod tests {
             matches!(result, Some(ExEffect::Info(_))),
             "expected Info, got {result:?}"
         );
+    }
+
+    // ── repeat_substitute_handler (:& / :&&) ─────────────────────────────────
+
+    #[test]
+    fn repeat_substitute_no_prior_returns_error() {
+        let mut ed = make_editor_with_lines(&["foo"]);
+        let result = repeat_substitute_handler(&mut ed, false, None);
+        assert!(
+            matches!(result, ExEffect::Error(_)),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn repeat_substitute_repeats_on_current_line() {
+        let mut ed = make_editor_with_lines(&["foo", "foo"]);
+        substitute_handler(&mut ed, "/foo/bar", None);
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "bar");
+        ed.goto_line(2);
+        let result = repeat_substitute_handler(&mut ed, false, None);
+        assert!(
+            matches!(result, ExEffect::Substituted { count: 1, .. }),
+            "expected Substituted(1), got {result:?}"
+        );
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "bar");
+    }
+
+    #[test]
+    fn repeat_substitute_amp_amp_keeps_global_flag() {
+        let mut ed = make_editor_with_lines(&["x x x", "x x x"]);
+        substitute_handler(&mut ed, "/x/y/g", None);
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "y y y");
+        ed.goto_line(2);
+        let result = repeat_substitute_handler(&mut ed, true, None);
+        assert!(
+            matches!(result, ExEffect::Substituted { count: 3, .. }),
+            "expected Substituted(3), got {result:?}"
+        );
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "y y y");
+    }
+
+    #[test]
+    fn repeat_substitute_amp_drops_global_flag() {
+        let mut ed = make_editor_with_lines(&["x x x", "x x x"]);
+        substitute_handler(&mut ed, "/x/y/g", None);
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "y y y");
+        ed.goto_line(2);
+        let result = repeat_substitute_handler(&mut ed, false, None);
+        assert!(
+            matches!(result, ExEffect::Substituted { count: 1, .. }),
+            "expected Substituted(1) (first only), got {result:?}"
+        );
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "y x x");
     }
 }
