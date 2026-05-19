@@ -19,6 +19,13 @@ impl App {
             let regs = self.slots[current_slot].editor.registers().clone();
             *self.slots[idx].editor.registers_mut() = regs;
         }
+        // Update the synthetic `%` register with the new slot's filename so
+        // `"%p`, `<C-r>%`, and `:echo @%` reflect the correct path.
+        let fname = self.slots[idx]
+            .filename
+            .as_deref()
+            .map(|p| p.to_string_lossy().into_owned());
+        self.slots[idx].editor.registers_mut().set_filename(fname);
         // Point the focused window at the new slot.
         let fw = self.focused_window();
         self.windows[fw].as_mut().expect("focused_window open").slot = idx;

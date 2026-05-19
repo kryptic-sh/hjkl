@@ -284,6 +284,9 @@ pub enum Motion {
     FirstNonBlankPrevLine,
     /// `_` — first non-blank of `count-1` lines down (count=1 = current line). Linewise.
     FirstNonBlankLine,
+    /// `{count}|` — jump to column `count` on the current line (1-based;
+    /// no count or count=0 → column 1 → index 0). Clamped to line length.
+    GotoColumn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2395,6 +2398,7 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
         Key::Char('}') => Some(Motion::ParagraphNext),
         Key::Char('(') => Some(Motion::SentencePrev),
         Key::Char(')') => Some(Motion::SentenceNext),
+        Key::Char('|') => Some(Motion::GotoColumn),
         _ => None,
     }
 }
@@ -2925,6 +2929,10 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
         }
         Motion::FirstNonBlankLine => {
             crate::motions::move_first_non_blank_line(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::GotoColumn => {
+            crate::motions::move_goto_column(&mut ed.buffer, count);
             ed.push_buffer_cursor_to_textarea();
         }
     }

@@ -41,4 +41,18 @@ pub enum ExEffect {
     /// `:bd[!]` / `:bw[!]` — close the current buffer.
     /// `wipe = true` for `:bwipeout`; `force = true` when `!` was given.
     BufferDelete { force: bool, wipe: bool },
+    /// `:put [{reg}]` / `:pu [{reg}]` — paste register contents as a new
+    /// line below (or above when `above = true`) the cursor.
+    PutRegister { reg: char, above: bool },
+    /// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename
+    /// the buffer identity so future `:w` writes there.
+    /// Distinct from `SaveAs` (`:w <path>`) which writes elsewhere but keeps
+    /// the buffer's own filename unchanged.
+    SaveAndRename { path: String },
+    /// `:file {name}` — rename the current buffer in-memory without writing.
+    RenameBuffer { name: String },
+    /// `:cd [{path}]` — change the working directory. An empty path means
+    /// `$HOME`. The directory change is applied inside the handler; the new
+    /// path is surfaced so the host can update its status-line / title.
+    Cwd(String),
 }

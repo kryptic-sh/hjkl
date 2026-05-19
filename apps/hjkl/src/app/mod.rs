@@ -1048,6 +1048,16 @@ impl App {
         let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config)
             .map_err(|s| anyhow::anyhow!(s))?;
 
+        // Seed `"%` with the initial buffer's filename so `<C-r>%` / `"%p`
+        // work from the first keystroke without requiring a buffer switch.
+        {
+            let fname = slot
+                .filename
+                .as_deref()
+                .map(|p| p.to_string_lossy().into_owned());
+            slot.editor.registers_mut().set_filename(fname);
+        }
+
         // Apply readonly after the slot is built — build_slot always uses
         // Options::default(); override here when requested.
         if readonly {

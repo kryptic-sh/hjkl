@@ -168,6 +168,27 @@ fn dispatch(
                     *should_quit = true;
                     success(id, Value::Null)
                 }
+                ExEffect::PutRegister { .. } => {
+                    // Multi-buffer operation not supported in embed mode — no-op.
+                    success(id, Value::Null)
+                }
+                ExEffect::SaveAndRename { path } => {
+                    let new_path = PathBuf::from(&path);
+                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
+                        error_resp(id, ERR_EX_COMMAND, &e.to_string())
+                    } else {
+                        *current_filename = Some(new_path);
+                        success(id, Value::Null)
+                    }
+                }
+                ExEffect::RenameBuffer { .. } => {
+                    // In-memory rename only — no-op in embed mode.
+                    success(id, Value::Null)
+                }
+                ExEffect::Cwd(_) => {
+                    // Directory already changed by the handler — no-op.
+                    success(id, Value::Null)
+                }
             }
         }
 

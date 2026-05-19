@@ -724,3 +724,41 @@ initial_cursor = [0, 0]
 keys = "]["
 expected_buffer = "before\n}\nafter\n"
 expected_cursor = [1, 0]
+
+# ─── N| column-jump motion (#169) ──────────────────────────────────────────────
+
+# 5| jumps to column 5 (index 4, 1-based).
+[[cases]]
+name = "motion_pipe_goto_col5"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = "5|"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 4]
+
+# bare | (no count) jumps to column 1 (index 0).
+[[cases]]
+name = "motion_pipe_no_count_col1"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 7]
+keys = "|"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# d| deletes from cursor to column 1 (exclusive: col 0 not included when cursor is there).
+[[cases]]
+name = "op_d_pipe_delete_to_col1"
+initial_buffer = "hello\n"
+initial_cursor = [0, 3]
+keys = "d|"
+expected_buffer = "lo\n"
+expected_cursor = [0, 0]
+
+# d5| deletes to column 5.
+[[cases]]
+name = "op_d_pipe_count_delete_to_col5"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = "d5|"
+expected_buffer = "o world\n"
+expected_cursor = [0, 0]

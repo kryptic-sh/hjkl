@@ -312,6 +312,111 @@ fn redo_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+// ---- saveas / file ---------------------------------------------------------
+
+/// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename the
+/// buffer identity so future `:w` writes there.
+fn saveas_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let path = args.trim();
+    if path.is_empty() {
+        return Some(ExEffect::Error("E471: Argument required".into()));
+    }
+    Some(ExEffect::SaveAndRename {
+        path: path.to_string(),
+    })
+}
+
+/// `:file [{name}]` — no-arg: print filename + status; with-arg: rename
+/// buffer in-memory without writing.
+fn file_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let name = args.trim();
+    if name.is_empty() {
+        // No arg: surface filename + readonly info. Dirty state lives in the
+        // app's slot (not the engine) so only readonly is checked here.
+        let filename = editor
+            .registers()
+            .read('%')
+            .map(|s| s.text.clone())
+            .unwrap_or_else(|| "[No Name]".into());
+        let ro_flag = if editor.is_readonly() { " [RO]" } else { "" };
+        Some(ExEffect::Info(format!("\"{filename}\"{ro_flag}")))
+    } else {
+        Some(ExEffect::RenameBuffer {
+            name: name.to_string(),
+        })
+    }
+}
+
+// ---- cd / pwd --------------------------------------------------------------
+
+/// `:cd [{path}]` — change working directory. No arg → `$HOME`.
+fn cd_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let raw = args.trim();
+    let target = if raw.is_empty() {
+        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+    } else {
+        raw.to_string()
+    };
+    match std::env::set_current_dir(&target) {
+        Ok(()) => {
+            let new_cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or(target.clone());
+            Some(ExEffect::Cwd(new_cwd))
+        }
+        Err(e) => Some(ExEffect::Error(format!("{target}: {e}"))),
+    }
+}
+
+/// `:pwd` — print working directory.
+fn pwd_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    Some(ExEffect::Info(cwd))
+}
+
+// ---- put -------------------------------------------------------------------
+
+/// `:put [{reg}]` / `:put!` — paste a register's contents as a new line.
+///
+/// Without `!`: paste below the current line.
+/// With `!`: paste above the current line.
+/// Default register when no arg: `"` (unnamed).
+fn put_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let reg = args.trim().chars().next().unwrap_or('"');
+    Some(ExEffect::PutRegister { reg, above: false })
+}
+
+fn put_above_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let reg = args.trim().chars().next().unwrap_or('"');
+    Some(ExEffect::PutRegister { reg, above: true })
+}
+
 // ---- registers / marks / jumps / changes -----------------------------------
 
 fn registers_handler<H: Host>(
@@ -777,6 +882,60 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: bwipeout_force_handler::<H>,
+    });
+
+    // `:saveas {path}` / `:sav {path}` — write and rename buffer (min_prefix=3).
+    reg.add(ExCommand {
+        name: "saveas",
+        aliases: &["sav"],
+        arg_kind: ArgKind::Path,
+        min_prefix: 3,
+        run: saveas_handler::<H>,
+    });
+
+    // `:file [{name}]` — no-arg: show filename; with-arg: rename buffer (min_prefix=1).
+    reg.add(ExCommand {
+        name: "file",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 1,
+        run: file_handler::<H>,
+    });
+
+    // `:cd [{path}]` — change working directory (no-arg → $HOME) (min_prefix=2).
+    reg.add(ExCommand {
+        name: "cd",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 2,
+        run: cd_handler::<H>,
+    });
+
+    // `:pwd` — print working directory (min_prefix=3).
+    reg.add(ExCommand {
+        name: "pwd",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: pwd_handler::<H>,
+    });
+
+    // `:put [{reg}]` / `:pu [{reg}]` — paste register as new line below cursor.
+    reg.add(ExCommand {
+        name: "put",
+        aliases: &["pu"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: put_handler::<H>,
+    });
+
+    // `:put! [{reg}]` / `:pu!` — paste register as new line above cursor.
+    reg.add(ExCommand {
+        name: "put!",
+        aliases: &["pu!"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: put_above_handler::<H>,
     });
 
     // `:registers` / `:reg` (min_prefix=3; `:reg` via alias since "reg" < 3 chars)
@@ -1636,5 +1795,95 @@ mod tests {
         assert!(reg.resolve("set").is_some());
         assert!(reg.resolve("nohlsearch").is_some());
         assert!(reg.resolve("noh").is_some());
+    }
+
+    // ── put_handler ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn put_handler_no_args_uses_unnamed_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: false
+            })
+        );
+    }
+
+    #[test]
+    fn put_handler_with_reg_uses_given_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "a", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: 'a',
+                above: false
+            })
+        );
+    }
+
+    #[test]
+    fn put_above_handler_no_args_uses_unnamed_register() {
+        let mut ed = make_editor();
+        let result = put_above_handler(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: true
+            })
+        );
+    }
+
+    #[test]
+    fn put_handler_percent_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "%", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '%',
+                above: false
+            })
+        );
+    }
+
+    // ── cd_handler / pwd_handler ─────────────────────────────────────────────
+
+    #[test]
+    fn cd_handler_valid_dir_returns_cwd() {
+        let mut ed = make_editor();
+        let tmp = std::env::temp_dir();
+        let result = cd_handler(&mut ed, &tmp.to_string_lossy(), None);
+        match result {
+            Some(ExEffect::Cwd(path)) => {
+                assert!(!path.is_empty(), "Cwd path must not be empty");
+            }
+            other => panic!("expected Cwd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cd_handler_invalid_dir_returns_error() {
+        let mut ed = make_editor();
+        let bogus = std::env::temp_dir().join("nonexistent_hjkl_test_dir_xyz");
+        let result = cd_handler(&mut ed, &bogus.to_string_lossy(), None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn pwd_handler_returns_info() {
+        let mut ed = make_editor();
+        let result = pwd_handler(&mut ed, "", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
     }
 }

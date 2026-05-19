@@ -78,13 +78,13 @@ pub fn children_for(mode: Mode, prefix: &[KeyEvent]) -> Vec<VimDescriptor> {
 // ─── Expected counts (used by tests to catch drift) ───────────────────────────
 
 /// Expected count of root Normal-mode descriptors.
-pub const COUNT_NORMAL_ROOT: usize = 83;
+pub const COUNT_NORMAL_ROOT: usize = 84;
 /// Expected count of g-prefix descriptors.
 pub const COUNT_G_PREFIX: usize = 19;
 /// Expected count of z-prefix descriptors.
 pub const COUNT_Z_PREFIX: usize = 11;
 /// Expected count of operator-pending root descriptors (d/c/y prefix children).
-pub const COUNT_OP_PENDING_ROOT: usize = 24;
+pub const COUNT_OP_PENDING_ROOT: usize = 25;
 
 // ─── Normal-mode dispatch ──────────────────────────────────────────────────────
 
@@ -195,6 +195,7 @@ fn normal_root() -> Vec<VimDescriptor> {
         VimDescriptor::char('}', "paragraph next"),
         VimDescriptor::char('(', "sentence prev"),
         VimDescriptor::char(')', "sentence next"),
+        VimDescriptor::char('|', "goto column"),
         VimDescriptor::char('n', "search next"),
         VimDescriptor::char('N', "search prev"),
         VimDescriptor::char('*', "search word forward"),
@@ -349,6 +350,7 @@ fn op_pending_root() -> Vec<VimDescriptor> {
         VimDescriptor::char('F', "find char backward"),
         VimDescriptor::char('t', "till char forward"),
         VimDescriptor::char('T', "till char backward"),
+        VimDescriptor::char('|', "goto column"),
         // Text-object prefixes.
         VimDescriptor::char('i', "inner text object"),
         VimDescriptor::char('a', "around text object"),

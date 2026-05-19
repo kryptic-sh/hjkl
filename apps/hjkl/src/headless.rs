@@ -175,6 +175,29 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                     // No multi-buffer in headless mode — stop processing.
                     break;
                 }
+
+                ExEffect::PutRegister { .. } => {
+                    // No multi-buffer paste support in headless mode — no-op.
+                }
+
+                ExEffect::SaveAndRename { path } => {
+                    let new_path = PathBuf::from(&path);
+                    if let Err(e) = write_buffer(&editor, &Some(new_path.clone()), &display_name) {
+                        eprintln!("{e}");
+                        exit_code = 1;
+                    } else {
+                        current_filename = Some(new_path);
+                        wrote = true;
+                    }
+                }
+
+                ExEffect::RenameBuffer { .. } => {
+                    // In-memory rename — no write; no-op in headless mode.
+                }
+
+                ExEffect::Cwd(_) => {
+                    // Directory already changed by the handler — no-op.
+                }
             }
         }
 
