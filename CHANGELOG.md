@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- Added `editor.chord_timeout_ms` config field (default 1000 ms, vim's
+  `timeoutlen` equivalent). Previously the chord-resolve timeout was derived
+  internally as `which_key.delay_ms + 500`; users can now tune it
+  independently. A startup warning is emitted when `chord_timeout_ms <=
+  which_key.delay_ms` to flag a potential chord-resolve race. Closes #133.
+
 ### Changed
 
 - Extracted `hjkl-vim-tui` from `hjkl-vim` and moved engine's crossterm adapter

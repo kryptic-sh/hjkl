@@ -30,6 +30,11 @@ huge_file_threshold = 50000
 # `:set mouse` / `:set nomouse` / `:set mouse!` / `:set mouse?`.
 mouse = true
 
+# Milliseconds to wait for a chord to complete before timing out.
+# Vim's `timeoutlen` equivalent. Must be > which_key.delay_ms or a
+# startup warning is emitted (chord-resolve race may re-emerge).
+chord_timeout_ms = 1000
+
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"

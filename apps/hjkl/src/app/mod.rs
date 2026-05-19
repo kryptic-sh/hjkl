@@ -1153,9 +1153,13 @@ impl App {
                 let mut km = keymap_build::build_app_keymap(default_leader);
                 // Chord timeout MUST exceed the default which-key delay
                 // (500 ms) or the same loop iteration that activates the
-                // popup also auto-resolves the chord and clears it. 1000 ms
-                // matches vim's `timeoutlen` default.
-                km.set_timeout(std::time::Duration::from_millis(1000));
+                // popup also auto-resolves the chord and clears it. The
+                // canonical default is sourced from EditorConfig::default()
+                // so there is a single source of truth; with_config
+                // overrides this before the event loop starts.
+                km.set_timeout(std::time::Duration::from_millis(
+                    hjkl_app::config::Config::default().editor.chord_timeout_ms,
+                ));
                 km
             },
             anvil_pool: hjkl_anvil::InstallPool::new(),
@@ -1228,10 +1232,18 @@ impl App {
         // Chord timeout (vim `timeoutlen`) must be strictly greater than
         // `which_key.delay_ms`, otherwise the same event-loop iteration
         // that activates the popup also resolves the chord and clears it
-        // — the popup never paints. Add 500 ms headroom so the popup gets
-        // at least one render frame before auto-resolve.
+        // — the popup never paints.
+        if config.editor.chord_timeout_ms <= config.which_key.delay_ms {
+            tracing::warn!(
+                chord_timeout_ms = config.editor.chord_timeout_ms,
+                which_key_delay_ms = config.which_key.delay_ms,
+                "chord_timeout_ms ({}) <= which_key.delay_ms ({}); chord-resolve race may re-emerge",
+                config.editor.chord_timeout_ms,
+                config.which_key.delay_ms,
+            );
+        }
         let leader = config.editor.leader;
-        let timeout = Duration::from_millis(config.which_key.delay_ms + 500);
+        let timeout = Duration::from_millis(config.editor.chord_timeout_ms);
         self.app_keymap = keymap_build::build_app_keymap(leader);
         self.app_keymap.set_timeout(timeout);
         self.config = config;

@@ -766,3 +766,50 @@ fn sync_appends_edit_log_with_correct_dirty_gen() {
          log={log:?}"
     );
 }
+
+// ── chord_timeout_ms config wiring tests ──────────────────────────────────
+
+/// App::new (no-config path) must seed the chord-timeout from the canonical
+/// EditorConfig default (1000 ms), not a hardcoded literal.
+#[test]
+fn app_new_chord_timeout_uses_editor_config_default() {
+    let app = App::new(None, false, None, None).unwrap();
+    let expected = std::time::Duration::from_millis(
+        hjkl_app::config::Config::default().editor.chord_timeout_ms,
+    );
+    assert_eq!(
+        app.app_keymap.timeout_duration(),
+        expected,
+        "App::new chord timeout must match EditorConfig::default().chord_timeout_ms"
+    );
+}
+
+/// App::with_config must thread chord_timeout_ms from the config into the
+/// app_keymap, replacing whatever App::new seeded.
+#[test]
+fn with_config_applies_chord_timeout_ms() {
+    let app = App::new(None, false, None, None).unwrap();
+
+    let mut cfg = hjkl_app::config::Config::default();
+    cfg.editor.chord_timeout_ms = 250;
+    // which_key.delay_ms is 500 by default; set it below 250 so the warn
+    // branch is not triggered in this test.
+    cfg.which_key.delay_ms = 100;
+    let app = app.with_config(cfg);
+
+    assert_eq!(
+        app.app_keymap.timeout_duration(),
+        std::time::Duration::from_millis(250),
+        "with_config must set keymap timeout to chord_timeout_ms"
+    );
+}
+
+/// Default config must carry chord_timeout_ms = 1000.
+#[test]
+fn default_config_chord_timeout_ms_is_1000() {
+    let cfg = hjkl_app::config::Config::default();
+    assert_eq!(
+        cfg.editor.chord_timeout_ms, 1000,
+        "bundled default chord_timeout_ms must be 1000"
+    );
+}

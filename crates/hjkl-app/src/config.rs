@@ -65,6 +65,13 @@ pub struct EditorConfig {
     /// Whether mouse capture (and wheel-scrolls-viewport) is on at startup.
     /// Runtime-togglable via `:set [no]mouse`.
     pub mouse: bool,
+    /// Milliseconds to wait for a chord to complete before timing out.
+    /// Vim's `:set timeoutlen` equivalent. Default 1000.
+    ///
+    /// Must be strictly greater than `which_key.delay_ms`; if it is not,
+    /// a startup warning is emitted and the chord-resolve race described
+    /// in the `App::with_config` doc comment may re-emerge.
+    pub chord_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -278,5 +285,40 @@ mod tests {
         cfg.theme.name = String::new();
         let err = cfg.validate().unwrap_err();
         assert_eq!(err.field, "theme.name");
+    }
+
+    // ── chord_timeout_ms tests ─────────────────────────────────────────────
+
+    /// Bundled default must set chord_timeout_ms = 1000.
+    #[test]
+    fn defaults_chord_timeout_ms_is_1000() {
+        let cfg: Config = toml::from_str(DEFAULTS_TOML).expect("bundled config.toml must parse");
+        assert_eq!(cfg.editor.chord_timeout_ms, 1000);
+    }
+
+    /// A user config that explicitly sets chord_timeout_ms must override the
+    /// bundled default.
+    #[test]
+    fn user_override_chord_timeout_ms() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "[editor]\nchord_timeout_ms = 250").unwrap();
+        let cfg = load_from(f.path()).unwrap();
+        assert_eq!(cfg.editor.chord_timeout_ms, 250);
+        // Non-overridden fields must keep their bundled defaults.
+        assert_eq!(cfg.editor.tab_width, 4, "tab_width must keep default");
+    }
+
+    /// A user config that omits chord_timeout_ms must inherit the bundled default.
+    #[test]
+    fn user_partial_override_keeps_chord_timeout_ms_default() {
+        use std::io::Write;
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "[editor]\nleader = \"\\\\\"").unwrap();
+        let cfg = load_from(f.path()).unwrap();
+        assert_eq!(
+            cfg.editor.chord_timeout_ms, 1000,
+            "chord_timeout_ms must keep default when not overridden"
+        );
     }
 }
