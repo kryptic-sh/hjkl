@@ -5087,3 +5087,249 @@ fn gj_through_empty_line_preserves_want_in_wrap_mode() {
         "gj must restore col 10 on long line; got col {col2}"
     );
 }
+
+// ─── Issue #31: new motions [[, ]], [], ][, +/<CR>, -, _ ─────────────────
+
+// ── + / <CR> (FirstNonBlankNextLine) ─────────────────────────────────────
+
+#[test]
+fn plus_moves_to_first_non_blank_next_line() {
+    let mut e = editor_with("foo\n    bar\nbaz");
+    // cursor at (0,0); `+` → row 1, first non-blank col 4.
+    run_keys(&mut e, "+");
+    assert_eq!(e.cursor(), (1, 4));
+}
+
+#[test]
+fn cr_moves_to_first_non_blank_next_line() {
+    let mut e = editor_with("foo\n    bar\nbaz");
+    run_keys(&mut e, "<CR>");
+    assert_eq!(e.cursor(), (1, 4));
+}
+
+#[test]
+fn plus_count_moves_multiple_lines() {
+    let mut e = editor_with("a\nb\n  c\nd");
+    // 3+ from row 0 → row 3, first non-blank.
+    run_keys(&mut e, "3+");
+    assert_eq!(e.cursor(), (3, 0));
+}
+
+#[test]
+fn plus_at_last_line_stays() {
+    // At the last line `+` should not panic; stays on last line.
+    let mut e = editor_with("foo\nbar");
+    // Move to last row first.
+    run_keys(&mut e, "G");
+    let pre = e.cursor().0;
+    run_keys(&mut e, "+");
+    assert_eq!(e.cursor().0, pre, "should not move past last line");
+}
+
+#[test]
+fn d_plus_deletes_linewise() {
+    // `d+` from row 0 should delete rows 0 and 1 (linewise).
+    let mut e = editor_with("one\ntwo\nthree");
+    run_keys(&mut e, "d+");
+    // Rows 0 and 1 deleted; cursor on "three".
+    assert!(e.content().starts_with("three"));
+}
+
+// ── - (FirstNonBlankPrevLine) ─────────────────────────────────────────────
+
+#[test]
+fn minus_moves_to_first_non_blank_prev_line() {
+    let mut e = editor_with("  hello\nworld\nfoo");
+    // Jump to row 2, then `-`.
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "-");
+    assert_eq!(e.cursor(), (1, 0)); // "world" first non-blank = 0
+}
+
+#[test]
+fn minus_count_moves_multiple_lines_back() {
+    let mut e = editor_with("  a\nb\nc\n  d");
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "3-");
+    // 3 lines up from row 3 → row 0, first non-blank col 2.
+    assert_eq!(e.cursor(), (0, 2));
+}
+
+#[test]
+fn minus_at_first_line_stays() {
+    let mut e = editor_with("  foo\nbar");
+    // cursor already at row 0.
+    run_keys(&mut e, "-");
+    assert_eq!(e.cursor().0, 0, "should not go above first line");
+}
+
+#[test]
+fn d_minus_deletes_linewise() {
+    let mut e = editor_with("one\ntwo\nthree");
+    // Jump to row 1 then `d-` should delete rows 0–1 linewise.
+    run_keys(&mut e, "j");
+    run_keys(&mut e, "d-");
+    assert!(e.content().starts_with("three"));
+}
+
+// ── _ (FirstNonBlankLine) ─────────────────────────────────────────────────
+
+#[test]
+fn underscore_lands_on_first_non_blank_of_current_line() {
+    let mut e = editor_with("    hello\nworld");
+    // count=1: stay on current line, first non-blank.
+    run_keys(&mut e, "_");
+    assert_eq!(e.cursor(), (0, 4));
+}
+
+#[test]
+fn underscore_count_moves_count_minus_1_lines_down() {
+    let mut e = editor_with("a\n  b\nc\n  d");
+    // 3_ from row 0: count-1=2 lines down → row 2 first non-blank.
+    run_keys(&mut e, "3_");
+    assert_eq!(e.cursor(), (2, 0));
+}
+
+#[test]
+fn d_underscore_deletes_current_line() {
+    // `d_` (count=1) → linewise delete of current line.
+    let mut e = editor_with("one\ntwo\nthree");
+    run_keys(&mut e, "d_");
+    assert!(!e.content().contains("one"));
+    assert!(e.content().contains("two"));
+}
+
+#[test]
+fn d_2_underscore_deletes_current_and_next() {
+    // `d2_` → linewise delete from current row through count-1=1 lines down.
+    let mut e = editor_with("one\ntwo\nthree");
+    run_keys(&mut e, "d2_");
+    assert!(!e.content().contains("one"));
+    assert!(!e.content().contains("two"));
+    assert!(e.content().contains("three"));
+}
+
+// ── [[ and ]] (SectionBackward / SectionForward) ─────────────────────────
+
+const SECTION_BUF: &str = "preamble\n{\nfoo\n}\nbar\n{\nbaz\n}\nepilogue";
+
+#[test]
+fn double_bracket_open_backward_finds_brace_at_col0() {
+    // Start at last row, `[[` should jump to the second `{` (row 5).
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "[[");
+    assert_eq!(e.cursor().0, 5);
+}
+
+#[test]
+fn double_bracket_open_backward_count_finds_nth_brace() {
+    // `2[[` from last row should jump to row 1 (first `{`).
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "2[[");
+    assert_eq!(e.cursor().0, 1);
+}
+
+#[test]
+fn double_bracket_open_backward_at_top_clamps() {
+    // `[[` on row 0 (no `{` above) should not panic; stays at row 0.
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "[[");
+    assert_eq!(e.cursor().0, 0);
+}
+
+#[test]
+fn double_bracket_close_forward_finds_brace_at_col0() {
+    // From row 0, `]]` should jump to row 1 (first `{`).
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "]]");
+    assert_eq!(e.cursor().0, 1);
+}
+
+#[test]
+fn double_bracket_close_forward_count_finds_nth_brace() {
+    // `2]]` from row 0 should jump to row 5 (second `{`).
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "2]]");
+    assert_eq!(e.cursor().0, 5);
+}
+
+#[test]
+fn double_bracket_close_forward_at_bottom_clamps() {
+    // `]]` on last row (no more `{` below) should not panic.
+    let mut e = editor_with(SECTION_BUF);
+    run_keys(&mut e, "G");
+    let row_before = e.cursor().0;
+    run_keys(&mut e, "]]");
+    assert_eq!(e.cursor().0, row_before);
+}
+
+#[test]
+fn d_double_bracket_open_deletes_range() {
+    // `d[[` from row 5 should delete to the nearest `{` at col 0 (charwise exclusive).
+    let mut e = editor_with(SECTION_BUF);
+    // Jump to row 5 (second `{`).
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "[["); // row 5
+    // d[[ from row 5 → nearest { backward is row 1; charwise exclusive.
+    run_keys(&mut e, "d[[");
+    // Content between rows 1..5 is deleted; row 1 `{` itself stays (exclusive).
+    assert!(e.content().contains('{'), "opening brace should remain");
+}
+
+// ── [] and ][ (SectionEndBackward / SectionEndForward) ────────────────────
+
+const SECTION_BUF2: &str = "a\n{\nfoo\n}\nb\n{\nbar\n}\nc";
+
+#[test]
+fn bracket_close_open_backward_finds_brace_at_col0() {
+    // `[]` from last row: backward to `}` at col 0 → row 7.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "[]");
+    assert_eq!(e.cursor().0, 7);
+}
+
+#[test]
+fn bracket_close_open_backward_count() {
+    // `2[]` from last row: two `}` backward → row 3.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "G");
+    run_keys(&mut e, "2[]");
+    assert_eq!(e.cursor().0, 3);
+}
+
+#[test]
+fn bracket_close_open_backward_at_top_clamps() {
+    // `[]` from row 0: no `}` above → stays at row 0.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "[]");
+    assert_eq!(e.cursor().0, 0);
+}
+
+#[test]
+fn bracket_open_close_forward_finds_brace_at_col0() {
+    // `][` from row 0: forward to `}` at col 0 → row 3.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "][");
+    assert_eq!(e.cursor().0, 3);
+}
+
+#[test]
+fn bracket_open_close_forward_count() {
+    // `2][` from row 0: two `}` forward → row 7.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "2][");
+    assert_eq!(e.cursor().0, 7);
+}
+
+#[test]
+fn bracket_open_close_forward_at_bottom_clamps() {
+    // `][` from last row: no `}` below → stays at last row.
+    let mut e = editor_with(SECTION_BUF2);
+    run_keys(&mut e, "G");
+    let row_before = e.cursor().0;
+    run_keys(&mut e, "][");
+    assert_eq!(e.cursor().0, row_before);
+}

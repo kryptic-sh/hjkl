@@ -103,4 +103,17 @@ pub enum MotionKind {
     /// Count multiplies the full-page distance. Lands on the first non-blank
     /// of the target row.
     FullPageUp,
+    /// `_` — first non-blank of `count-1` lines below the cursor (count=1 = current line).
+    /// Linewise. Vim's `_` motion.
+    FirstNonBlankLine,
+    /// `[[` — backward to the previous `{` at column 0 (C section header).
+    /// Charwise exclusive; count-aware.
+    SectionBackward,
+    /// `]]` — forward to the next `{` at column 0. Charwise exclusive; count-aware.
+    SectionForward,
+    /// `[]` — backward to the previous `}` at column 0 (C section end).
+    /// Charwise exclusive; count-aware.
+    SectionEndBackward,
+    /// `][` — forward to the next `}` at column 0. Charwise exclusive; count-aware.
+    SectionEndForward,
 }

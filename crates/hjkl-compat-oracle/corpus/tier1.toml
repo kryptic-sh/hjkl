@@ -596,3 +596,131 @@ initial_cursor = [0, 0]
 keys = "fa;,"
 expected_buffer = "abcabc\n"
 expected_cursor = [0, 0]
+
+# ─── Issue #31: new motions +/<CR>, -, _, [[, ]], [], ][ ──────────────────────
+
+# + moves to first non-blank of next line (linewise).
+[[cases]]
+name = "motion_plus_first_non_blank_next_line"
+initial_buffer = "foo\n    bar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "+"
+expected_buffer = "foo\n    bar\nbaz\n"
+expected_cursor = [1, 4]
+
+# <CR> is identical to + in normal mode.
+[[cases]]
+name = "motion_cr_first_non_blank_next_line"
+initial_buffer = "foo\n    bar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "<CR>"
+expected_buffer = "foo\n    bar\nbaz\n"
+expected_cursor = [1, 4]
+
+# 3+ from row 0 lands on row 3 first non-blank.
+[[cases]]
+name = "motion_plus_count_3"
+initial_buffer = "a\nb\n  c\nd\n"
+initial_cursor = [0, 0]
+keys = "3+"
+expected_buffer = "a\nb\n  c\nd\n"
+expected_cursor = [3, 0]
+
+# - moves to first non-blank of previous line (linewise).
+[[cases]]
+name = "motion_minus_first_non_blank_prev_line"
+initial_buffer = "  hello\nworld\n"
+initial_cursor = [1, 0]
+keys = "-"
+expected_buffer = "  hello\nworld\n"
+expected_cursor = [0, 2]
+
+# 2- from row 2 lands on row 0 first non-blank.
+[[cases]]
+name = "motion_minus_count_2"
+initial_buffer = "  a\nb\nc\n"
+initial_cursor = [2, 0]
+keys = "2-"
+expected_buffer = "  a\nb\nc\n"
+expected_cursor = [0, 2]
+
+# _ lands on first non-blank of current line (count=1).
+[[cases]]
+name = "motion_underscore_current_line"
+initial_buffer = "    hello\nworld\n"
+initial_cursor = [0, 0]
+keys = "_"
+expected_buffer = "    hello\nworld\n"
+expected_cursor = [0, 4]
+
+# 3_ from row 0: count-1=2 lines down.
+[[cases]]
+name = "motion_underscore_count_3"
+initial_buffer = "a\n  b\nc\n  d\n"
+initial_cursor = [0, 0]
+keys = "3_"
+expected_buffer = "a\n  b\nc\n  d\n"
+expected_cursor = [2, 0]
+
+# d+ deletes linewise (current + next line).
+[[cases]]
+name = "op_d_plus_linewise_delete"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "d+"
+expected_buffer = "three\n"
+expected_cursor = [0, 0]
+
+# d- deletes linewise (prev + current line).
+[[cases]]
+name = "op_d_minus_linewise_delete"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [1, 0]
+keys = "d-"
+expected_buffer = "three\n"
+expected_cursor = [0, 0]
+
+# d_ deletes current line (count=1, linewise).
+[[cases]]
+name = "op_d_underscore_linewise_current"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "d_"
+expected_buffer = "two\nthree\n"
+expected_cursor = [0, 0]
+
+# [[ backward to { at col 0.
+[[cases]]
+name = "motion_double_bracket_open_backward"
+initial_buffer = "preamble\n{\nfoo\n}\n"
+initial_cursor = [3, 0]
+keys = "[["
+expected_buffer = "preamble\n{\nfoo\n}\n"
+expected_cursor = [1, 0]
+
+# ]] forward to { at col 0.
+[[cases]]
+name = "motion_double_bracket_close_forward"
+initial_buffer = "preamble\n{\nfoo\n}\nafter\n"
+initial_cursor = [0, 0]
+keys = "]]"
+expected_buffer = "preamble\n{\nfoo\n}\nafter\n"
+expected_cursor = [1, 0]
+
+# [] backward to } at col 0.
+[[cases]]
+name = "motion_bracket_close_open_backward"
+initial_buffer = "before\n}\nafter\n"
+initial_cursor = [2, 0]
+keys = "[]"
+expected_buffer = "before\n}\nafter\n"
+expected_cursor = [1, 0]
+
+# ][ forward to } at col 0.
+[[cases]]
+name = "motion_bracket_open_close_forward"
+initial_buffer = "before\n}\nafter\n"
+initial_cursor = [0, 0]
+keys = "]["
+expected_buffer = "before\n}\nafter\n"
+expected_cursor = [1, 0]

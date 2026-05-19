@@ -148,6 +148,16 @@ pub enum Pending {
     /// `count` is the prefix multiplier (`3@a` plays the macro 3
     /// times); 0 means "no prefix" and is treated as 1.
     PlayMacroTarget { count: usize },
+    /// `[` pressed in Normal/Visual mode — waiting for the second key.
+    /// Resolves `[[` → `SectionBackward`, `[]` → `SectionEndBackward`.
+    SquareBracketOpen,
+    /// `]` pressed in Normal/Visual mode — waiting for the second key.
+    /// Resolves `]]` → `SectionForward`, `][` → `SectionEndForward`.
+    SquareBracketClose,
+    /// Operator + `[` pending — waiting for second key to pick section motion.
+    OpSquareBracketOpen { op: Operator, count1: usize },
+    /// Operator + `]` pending — waiting for second key to pick section motion.
+    OpSquareBracketClose { op: Operator, count1: usize },
 }
 
 // ─── Operator / Motion / TextObject ────────────────────────────────────────
@@ -253,6 +263,22 @@ pub enum Motion {
     ScreenDown,
     /// `gk` — `count` visual rows up; mirror of [`Motion::ScreenDown`].
     ScreenUp,
+    /// `[[` — backward to the previous `{` at column 0 (C section header).
+    /// Charwise exclusive; count-aware.
+    SectionBackward,
+    /// `]]` — forward to the next `{` at column 0. Charwise exclusive.
+    SectionForward,
+    /// `[]` — backward to the previous `}` at column 0 (C section end).
+    /// Charwise exclusive; count-aware.
+    SectionEndBackward,
+    /// `][` — forward to the next `}` at column 0. Charwise exclusive.
+    SectionEndForward,
+    /// `+` / `<CR>` — first non-blank of the next line. Linewise.
+    FirstNonBlankNextLine,
+    /// `-` — first non-blank of the previous line. Linewise.
+    FirstNonBlankPrevLine,
+    /// `_` — first non-blank of `count-1` lines down (count=1 = current line). Linewise.
+    FirstNonBlankLine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,7 +657,9 @@ impl VimState {
             Pending::Op { op, .. }
             | Pending::OpTextObj { op, .. }
             | Pending::OpG { op, .. }
-            | Pending::OpFind { op, .. } => Some(*op),
+            | Pending::OpFind { op, .. }
+            | Pending::OpSquareBracketOpen { op, .. }
+            | Pending::OpSquareBracketClose { op, .. } => Some(*op),
             _ => None,
         };
         op.map(|o| match o {
@@ -2323,7 +2351,13 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
     match input.key {
         Key::Char('h') | Key::Backspace | Key::Left => Some(Motion::Left),
         Key::Char('l') | Key::Right => Some(Motion::Right),
-        Key::Char('j') | Key::Down | Key::Enter => Some(Motion::Down),
+        Key::Char('j') | Key::Down => Some(Motion::Down),
+        // `+` / `<CR>` — first non-blank of next line (linewise, count-aware).
+        Key::Char('+') | Key::Enter => Some(Motion::FirstNonBlankNextLine),
+        // `-` — first non-blank of previous line (linewise, count-aware).
+        Key::Char('-') => Some(Motion::FirstNonBlankPrevLine),
+        // `_` — first non-blank of current line, or count-1 lines down (linewise).
+        Key::Char('_') => Some(Motion::FirstNonBlankLine),
         Key::Char('k') | Key::Up => Some(Motion::Up),
         Key::Char('w') => Some(Motion::WordFwd),
         Key::Char('W') => Some(Motion::BigWordFwd),
@@ -2584,6 +2618,21 @@ pub(crate) fn apply_motion_kind<H: crate::types::Host>(
             // Direct call mirrors the FSM Ctrl-b arm. No new Motion variant.
             scroll_cursor_rows(ed, -(viewport_full_rows(ed, count) as isize));
         }
+        crate::MotionKind::FirstNonBlankLine => {
+            execute_motion_with_block_vcol(ed, Motion::FirstNonBlankLine, count);
+        }
+        crate::MotionKind::SectionBackward => {
+            execute_motion_with_block_vcol(ed, Motion::SectionBackward, count);
+        }
+        crate::MotionKind::SectionForward => {
+            execute_motion_with_block_vcol(ed, Motion::SectionForward, count);
+        }
+        crate::MotionKind::SectionEndBackward => {
+            execute_motion_with_block_vcol(ed, Motion::SectionEndBackward, count);
+        }
+        crate::MotionKind::SectionEndForward => {
+            execute_motion_with_block_vcol(ed, Motion::SectionEndForward, count);
+        }
     }
 }
 
@@ -2843,6 +2892,34 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
                     ed.jump_cursor(row, col);
                 }
             }
+        }
+        Motion::SectionBackward => {
+            crate::motions::move_section_backward(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::SectionForward => {
+            crate::motions::move_section_forward(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::SectionEndBackward => {
+            crate::motions::move_section_end_backward(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::SectionEndForward => {
+            crate::motions::move_section_end_forward(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::FirstNonBlankNextLine => {
+            crate::motions::move_first_non_blank_next_line(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::FirstNonBlankPrevLine => {
+            crate::motions::move_first_non_blank_prev_line(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Motion::FirstNonBlankLine => {
+            crate::motions::move_first_non_blank_line(&mut ed.buffer, count);
+            ed.push_buffer_cursor_to_textarea();
         }
     }
 }
@@ -3456,6 +3533,15 @@ fn motion_kind(motion: &Motion) -> RangeKind {
         Motion::MatchBracket => RangeKind::Inclusive,
         // `$` now lands on the last char — operator ranges include it.
         Motion::LineEnd => RangeKind::Inclusive,
+        // Linewise motions: +/-/_ land on the first non-blank of a line.
+        Motion::FirstNonBlankNextLine
+        | Motion::FirstNonBlankPrevLine
+        | Motion::FirstNonBlankLine => RangeKind::Linewise,
+        // [[/]]/[][/][ are charwise exclusive (land on the brace, brace excluded from operator).
+        Motion::SectionBackward
+        | Motion::SectionForward
+        | Motion::SectionEndBackward
+        | Motion::SectionEndForward => RangeKind::Exclusive,
         _ => RangeKind::Exclusive,
     }
 }

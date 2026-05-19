@@ -10,6 +10,11 @@ patch bumps.
 
 ### Added
 
+- Motions `[[`, `]]`, `[]`, `][`, `+` / `<CR>`, `-`, `_` (closes #31). Section
+  header / end navigation by `{` / `}` at col 0; linewise first-non-blank moves.
+  All seven support count prefix and operator-pending (`d[[`, `y]]`, `c+`, etc).
+  Oracle corpus extended with one case per motion.
+
 - Search pattern pre-processor rewrites vim word boundaries `\<` and `\>` to
   `\b` before regex compile. Drops the start/end asymmetry but unblocks the
   common case; users typing `/foo\<bar\>` now match `bar` as expected. Applies
@@ -40,9 +45,10 @@ patch bumps.
   engine integration suite moved to `hjkl-engine-tui/tests/`. Closes #162 phase
   3 (the engine cleanup arc).
 
-- Workspace `resolver = "2"` → `"3"` for MSRV-aware dep resolution. `cargo update`
-  now skips transitive crate versions whose `rust-version` exceeds the workspace
-  MSRV (1.95), preventing accidental MSRV breakage. Closes #144.
+- Workspace `resolver = "2"` → `"3"` for MSRV-aware dep resolution.
+  `cargo update` now skips transitive crate versions whose `rust-version`
+  exceeds the workspace MSRV (1.95), preventing accidental MSRV breakage. Closes
+  #144.
 
 ## [0.25.1] - 2026-05-19
 

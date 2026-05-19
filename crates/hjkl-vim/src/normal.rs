@@ -64,6 +64,20 @@ pub fn step_normal<H: Host>(
         Pending::SelectRegister => return handle_select_register(ed, input),
         Pending::RecordMacroTarget => return handle_record_macro_target(ed, input),
         Pending::PlayMacroTarget { count } => return handle_play_macro_target(ed, input, count),
+        Pending::SquareBracketOpen => {
+            let cnt = ed.take_count();
+            return handle_after_square_bracket_open(ed, input, cnt);
+        }
+        Pending::SquareBracketClose => {
+            let cnt = ed.take_count();
+            return handle_after_square_bracket_close(ed, input, cnt);
+        }
+        Pending::OpSquareBracketOpen { op, count1 } => {
+            return handle_op_after_square_bracket_open(ed, input, op, count1);
+        }
+        Pending::OpSquareBracketClose { op, count1 } => {
+            return handle_op_after_square_bracket_close(ed, input, op, count1);
+        }
         Pending::None => {}
     }
 
@@ -297,6 +311,32 @@ pub fn step_normal<H: Host>(
         )
     {
         ed.set_pending(Pending::Z);
+        return true;
+    }
+
+    // `[` prefix (section motions `[[` / `[]`). Available in Normal and Visual modes.
+    if !input.ctrl
+        && input.key == Key::Char('[')
+        && matches!(
+            ed.fsm_mode(),
+            FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+        )
+    {
+        ed.set_count(count);
+        ed.set_pending(Pending::SquareBracketOpen);
+        return true;
+    }
+
+    // `]` prefix (section motions `]]` / `][`). Available in Normal and Visual modes.
+    if !input.ctrl
+        && input.key == Key::Char(']')
+        && matches!(
+            ed.fsm_mode(),
+            FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+        )
+    {
+        ed.set_count(count);
+        ed.set_pending(Pending::SquareBracketClose);
         return true;
     }
 
@@ -635,6 +675,16 @@ fn handle_after_op<H: Host>(
         return true;
     }
 
+    // `[` / `]` — section-motion prefix in operator-pending context (d[[ etc).
+    if !input.ctrl && input.key == Key::Char('[') {
+        ed.set_pending(Pending::OpSquareBracketOpen { op, count1 });
+        return true;
+    }
+    if !input.ctrl && input.key == Key::Char(']') {
+        ed.set_pending(Pending::OpSquareBracketClose { op, count1 });
+        return true;
+    }
+
     // `f`/`F`/`t`/`T` with pending target.
     if let Some((forward, till)) = find_entry(&input) {
         ed.set_pending(Pending::OpFind {
@@ -805,6 +855,74 @@ fn handle_visual_text_obj<H: Host>(
         return true;
     };
     ed.visual_text_obj_extend(ch, inner);
+    true
+}
+
+// ─── Section-motion chord handlers ────────────────────────────────────────
+
+/// `[[` — backward to previous `{` at col 0; `[]` — backward to `}` at col 0.
+fn handle_after_square_bracket_open<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    count: usize,
+) -> bool {
+    let motion = match input.key {
+        Key::Char('[') => Motion::SectionBackward,
+        Key::Char(']') => Motion::SectionEndBackward,
+        _ => return true, // unknown second key — cancel silently
+    };
+    ed.execute_motion(motion, count);
+    true
+}
+
+/// `]]` — forward to next `{` at col 0; `][` — forward to `}` at col 0.
+fn handle_after_square_bracket_close<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    count: usize,
+) -> bool {
+    let motion = match input.key {
+        Key::Char(']') => Motion::SectionForward,
+        Key::Char('[') => Motion::SectionEndForward,
+        _ => return true,
+    };
+    ed.execute_motion(motion, count);
+    true
+}
+
+/// Operator + `[[` / `[]`.
+fn handle_op_after_square_bracket_open<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    op: Operator,
+    count1: usize,
+) -> bool {
+    let motion = match input.key {
+        Key::Char('[') => Motion::SectionBackward,
+        Key::Char(']') => Motion::SectionEndBackward,
+        _ => return true,
+    };
+    let count2 = ed.take_count();
+    let total = count1.max(1) * count2.max(1);
+    ed.apply_op_with_motion_direct(op, &motion, total);
+    true
+}
+
+/// Operator + `]]` / `][`.
+fn handle_op_after_square_bracket_close<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    op: Operator,
+    count1: usize,
+) -> bool {
+    let motion = match input.key {
+        Key::Char(']') => Motion::SectionForward,
+        Key::Char('[') => Motion::SectionEndForward,
+        _ => return true,
+    };
+    let count2 = ed.take_count();
+    let total = count1.max(1) * count2.max(1);
+    ed.apply_op_with_motion_direct(op, &motion, total);
     true
 }
 

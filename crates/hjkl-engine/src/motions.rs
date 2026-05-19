@@ -208,6 +208,111 @@ pub fn move_paragraph_next<B: Cursor + Query>(buf: &mut B, count: usize) {
     write_cursor(buf, Position::new(row, 0));
 }
 
+/// `[[` — backward to the previous `{` at column 0 (C section header).
+/// Searches from the line above the cursor; clamps at row 0. Charwise exclusive.
+pub fn move_section_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let mut row = cursor.row;
+    let mut found = 0;
+    while found < count.max(1) {
+        if row == 0 {
+            break;
+        }
+        row -= 1;
+        if read_line(buf, row).starts_with('{') {
+            found += 1;
+        }
+    }
+    write_cursor(buf, Position::new(row, 0));
+}
+
+/// `]]` — forward to the next `{` at column 0 (C section header).
+/// Searches from the line below the cursor; clamps at last row. Charwise exclusive.
+pub fn move_section_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let last = read_row_count(buf).saturating_sub(1);
+    let mut row = cursor.row;
+    let mut found = 0;
+    while found < count.max(1) {
+        if row >= last {
+            break;
+        }
+        row += 1;
+        if read_line(buf, row).starts_with('{') {
+            found += 1;
+        }
+    }
+    write_cursor(buf, Position::new(row, 0));
+}
+
+/// `[]` — backward to the previous `}` at column 0 (C section end).
+/// Searches from the line above the cursor; clamps at row 0. Charwise exclusive.
+pub fn move_section_end_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let mut row = cursor.row;
+    let mut found = 0;
+    while found < count.max(1) {
+        if row == 0 {
+            break;
+        }
+        row -= 1;
+        if read_line(buf, row).starts_with('}') {
+            found += 1;
+        }
+    }
+    write_cursor(buf, Position::new(row, 0));
+}
+
+/// `][` — forward to the next `}` at column 0 (C section end).
+/// Searches from the line below the cursor; clamps at last row. Charwise exclusive.
+pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let last = read_row_count(buf).saturating_sub(1);
+    let mut row = cursor.row;
+    let mut found = 0;
+    while found < count.max(1) {
+        if row >= last {
+            break;
+        }
+        row += 1;
+        if read_line(buf, row).starts_with('}') {
+            found += 1;
+        }
+    }
+    write_cursor(buf, Position::new(row, 0));
+}
+
+/// `+` / `<CR>` — first non-blank of the next line (`count` lines down).
+/// Linewise motion. On the last line, stays on the current line's first non-blank.
+pub fn move_first_non_blank_next_line<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let last = read_row_count(buf).saturating_sub(1);
+    let target_row = (cursor.row + count.max(1)).min(last);
+    write_cursor(buf, Position::new(target_row, 0));
+    move_first_non_blank(buf);
+}
+
+/// `-` — first non-blank of the previous line (`count` lines up).
+/// Linewise motion. On the first line, stays on row 0's first non-blank.
+pub fn move_first_non_blank_prev_line<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let target_row = cursor.row.saturating_sub(count.max(1));
+    write_cursor(buf, Position::new(target_row, 0));
+    move_first_non_blank(buf);
+}
+
+/// `_` — first non-blank of the current line, or `count-1` lines down.
+/// Vim's `_` jumps to first-non-blank of `count-1` lines below (count=1 = current).
+/// Linewise motion.
+pub fn move_first_non_blank_line<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    let last = read_row_count(buf).saturating_sub(1);
+    let offset = count.max(1).saturating_sub(1);
+    let target_row = (cursor.row + offset).min(last);
+    write_cursor(buf, Position::new(target_row, 0));
+    move_first_non_blank(buf);
+}
+
 // ── Vertical motions ────────────────────────────────────────────────
 
 /// `k` — `count` rows up. `sticky_col` is read + written by the
@@ -1439,5 +1544,168 @@ mod tests {
         assert_eq!(m.cursor.line, 1);
         super::move_top(&mut m);
         assert_eq!(m.cursor, Pos::new(0, 0));
+    }
+
+    // ── Section motions ([[/]]/[][/][) ──────────────────────────────────────
+
+    #[test]
+    fn section_forward_finds_brace_at_col0() {
+        // "a\n{\nb\n{\nc" — two `{` at col 0 on rows 1 and 3.
+        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        // ]] from row 0 → row 1.
+        move_section_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0));
+        // ]] again → row 3.
+        move_section_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(3, 0));
+        // ]] again — no more `{` → stays at row 3 (last row clamped at row 4).
+        move_section_forward(&mut b, 1);
+        // No `{` below row 3; clamps at last row.
+        assert_eq!(at(&b).row, 4); // "c" is row 4
+    }
+
+    #[test]
+    fn section_forward_count_skips_n_braces() {
+        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        // 2]] from row 0 → row 3 (second `{`).
+        move_section_forward(&mut b, 2);
+        assert_eq!(at(&b), Position::new(3, 0));
+    }
+
+    #[test]
+    fn section_backward_finds_brace_at_col0() {
+        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        b.set_cursor(Position::new(4, 0));
+        // [[ from row 4 → row 3.
+        move_section_backward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(3, 0));
+        // [[ again → row 1.
+        move_section_backward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0));
+        // [[ again — no `{` above → row 0.
+        move_section_backward(&mut b, 1);
+        assert_eq!(at(&b).row, 0);
+    }
+
+    #[test]
+    fn section_backward_count_skips_n_braces() {
+        let mut b = Buffer::from_str("a\n{\nb\n{\nc");
+        b.set_cursor(Position::new(4, 0));
+        // 2[[ → row 1 (two `{` back from row 4).
+        move_section_backward(&mut b, 2);
+        assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    #[test]
+    fn section_forward_at_bottom_clamps() {
+        let mut b = Buffer::from_str("no braces here");
+        move_section_forward(&mut b, 1);
+        // No `{` found; stays at last row.
+        assert_eq!(at(&b).row, 0);
+    }
+
+    #[test]
+    fn section_backward_at_top_clamps() {
+        let mut b = Buffer::from_str("no braces here");
+        move_section_backward(&mut b, 1);
+        assert_eq!(at(&b).row, 0);
+    }
+
+    #[test]
+    fn section_end_forward_finds_close_brace_at_col0() {
+        let mut b = Buffer::from_str("a\n}\nb\n}\nc");
+        // ][ from row 0 → row 1.
+        move_section_end_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0));
+        // ][ again → row 3.
+        move_section_end_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(3, 0));
+    }
+
+    #[test]
+    fn section_end_backward_finds_close_brace_at_col0() {
+        let mut b = Buffer::from_str("a\n}\nb\n}\nc");
+        b.set_cursor(Position::new(4, 0));
+        // [] from row 4 → row 3.
+        move_section_end_backward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(3, 0));
+        // [] again → row 1.
+        move_section_end_backward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    // ── First-non-blank line motions (+/-/_) ────────────────────────────────
+
+    #[test]
+    fn first_non_blank_next_line_lands_on_non_blank() {
+        // `+` from row 0 → row 1, first non-blank.
+        let mut b = Buffer::from_str("foo\n    bar\nbaz");
+        move_first_non_blank_next_line(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 4));
+    }
+
+    #[test]
+    fn first_non_blank_next_line_count() {
+        // `3+` from row 0 → row 3.
+        let mut b = Buffer::from_str("a\nb\n  c\nd");
+        move_first_non_blank_next_line(&mut b, 3);
+        assert_eq!(at(&b), Position::new(3, 0));
+    }
+
+    #[test]
+    fn first_non_blank_next_line_at_last_row_clamps() {
+        let mut b = Buffer::from_str("foo\nbar");
+        b.set_cursor(Position::new(1, 0));
+        move_first_non_blank_next_line(&mut b, 1);
+        assert_eq!(at(&b).row, 1);
+    }
+
+    #[test]
+    fn first_non_blank_prev_line_lands_on_non_blank() {
+        // `-` from row 1 → row 0, first non-blank.
+        let mut b = Buffer::from_str("    hello\nworld");
+        b.set_cursor(Position::new(1, 0));
+        move_first_non_blank_prev_line(&mut b, 1);
+        assert_eq!(at(&b), Position::new(0, 4));
+    }
+
+    #[test]
+    fn first_non_blank_prev_line_count() {
+        // `3-` from row 3 → row 0.
+        let mut b = Buffer::from_str("  a\nb\nc\nd");
+        b.set_cursor(Position::new(3, 0));
+        move_first_non_blank_prev_line(&mut b, 3);
+        assert_eq!(at(&b), Position::new(0, 2));
+    }
+
+    #[test]
+    fn first_non_blank_prev_line_at_row_zero_clamps() {
+        let mut b = Buffer::from_str("  foo\nbar");
+        move_first_non_blank_prev_line(&mut b, 1);
+        assert_eq!(at(&b).row, 0);
+    }
+
+    #[test]
+    fn first_non_blank_line_count_1_stays_on_current() {
+        // `_` with count=1 stays on current line, first non-blank.
+        let mut b = Buffer::from_str("    hello\nworld");
+        move_first_non_blank_line(&mut b, 1);
+        assert_eq!(at(&b), Position::new(0, 4));
+    }
+
+    #[test]
+    fn first_non_blank_line_count_2_goes_one_down() {
+        // `2_` from row 0 → row 1 (count-1=1 line down), first non-blank.
+        let mut b = Buffer::from_str("foo\n  bar\nbaz");
+        move_first_non_blank_line(&mut b, 2);
+        assert_eq!(at(&b), Position::new(1, 2));
+    }
+
+    #[test]
+    fn first_non_blank_line_clamps_at_last_row() {
+        let mut b = Buffer::from_str("a\nb");
+        // 10_ from row 0 → last row (row 1), first non-blank.
+        move_first_non_blank_line(&mut b, 10);
+        assert_eq!(at(&b).row, 1);
     }
 }
