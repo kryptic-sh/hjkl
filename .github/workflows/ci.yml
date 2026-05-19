@@ -114,13 +114,13 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: [test]
-    # Tag-gated: the cross-platform binary matrix runs only on v*.*.* tag
-    # pushes (the release pipeline) or manual workflow_dispatch. Its
-    # consumers (aur-bin / alpine / brew-tap / publish-crates) are already
-    # tag-gated, so building on every main push wastes the artifacts.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    # Runs on every main push (dry-run), every v* tag push (release), and
+    # workflow_dispatch (manual rehearsal). Skips on PRs. The inner upload
+    # steps below stay tag-gated, so main-push builds verify the matrix
+    # compiles + packages cleanly without writing anything to the release.
+    # Reference incident: buffr v0.13.0 had to be torn down because a
+    # Windows-only cfg leak only surfaced post-tag.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
