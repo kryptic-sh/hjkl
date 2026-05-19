@@ -1856,7 +1856,8 @@ mod tests {
     #[test]
     fn cd_handler_valid_dir_returns_cwd() {
         let mut ed = make_editor();
-        let result = cd_handler(&mut ed, "/tmp", None);
+        let tmp = std::env::temp_dir();
+        let result = cd_handler(&mut ed, &tmp.to_string_lossy(), None);
         match result {
             Some(ExEffect::Cwd(path)) => {
                 assert!(!path.is_empty(), "Cwd path must not be empty");
@@ -1868,7 +1869,8 @@ mod tests {
     #[test]
     fn cd_handler_invalid_dir_returns_error() {
         let mut ed = make_editor();
-        let result = cd_handler(&mut ed, "/nonexistent_hjkl_test_dir_xyz", None);
+        let bogus = std::env::temp_dir().join("nonexistent_hjkl_test_dir_xyz");
+        let result = cd_handler(&mut ed, &bogus.to_string_lossy(), None);
         assert!(
             matches!(result, Some(ExEffect::Error(_))),
             "expected Error, got {result:?}"
