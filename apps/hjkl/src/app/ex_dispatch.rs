@@ -432,6 +432,24 @@ impl App {
             ExEffect::PutRegister { reg, above } => {
                 self.do_put_register(reg, above);
             }
+            ExEffect::SaveAndRename { path } => {
+                // `:saveas {path}`: write to path AND update the buffer's identity.
+                // save_slot already updates slot.filename when saving to a new path.
+                let p = PathBuf::from(&path);
+                let idx = self.focused_slot_idx();
+                self.save_slot(idx, Some(p));
+            }
+            ExEffect::RenameBuffer { name } => {
+                // `:file {name}`: rename buffer in-memory without writing.
+                let idx = self.focused_slot_idx();
+                let p = PathBuf::from(&name);
+                self.slots[idx].filename = Some(p.clone());
+                self.slots[idx]
+                    .editor
+                    .registers_mut()
+                    .set_filename(Some(name.clone()));
+                self.bus.info(format!("\"{}\" [Not edited]", p.display()));
+            }
         }
     }
 

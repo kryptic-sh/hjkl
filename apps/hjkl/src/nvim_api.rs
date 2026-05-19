@@ -437,6 +437,19 @@ fn dispatch(
                     // No multi-buffer paste in nvim-api mode — no-op.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::SaveAndRename { path } => {
+                    let new_path = PathBuf::from(&path);
+                    if let Err(e) = write_buffer(editor, &Some(new_path.clone())) {
+                        err(stdout, msgid, &e)
+                    } else {
+                        *current_filename = Some(new_path);
+                        ok(stdout, msgid, Value::Nil)
+                    }
+                }
+                ExEffect::RenameBuffer { .. } => {
+                    // In-memory rename — no-op in nvim-api mode.
+                    ok(stdout, msgid, Value::Nil)
+                }
             }
         }
 

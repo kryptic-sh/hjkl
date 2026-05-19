@@ -44,4 +44,11 @@ pub enum ExEffect {
     /// `:put [{reg}]` / `:pu [{reg}]` — paste register contents as a new
     /// line below (or above when `above = true`) the cursor.
     PutRegister { reg: char, above: bool },
+    /// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename
+    /// the buffer identity so future `:w` writes there.
+    /// Distinct from `SaveAs` (`:w <path>`) which writes elsewhere but keeps
+    /// the buffer's own filename unchanged.
+    SaveAndRename { path: String },
+    /// `:file {name}` — rename the current buffer in-memory without writing.
+    RenameBuffer { name: String },
 }
