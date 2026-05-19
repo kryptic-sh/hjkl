@@ -107,7 +107,7 @@ impl App {
             }
 
             // ── Command-line window (issue #37) ────────────────────────────
-            AppAction::OpenCmdLineWindow(kind) => self.open_cmdline_window(kind.into()),
+            AppAction::OpenCmdLineWindow(kind) => self.open_cmdline_window(kind.into(), None),
 
             // ── Engine-mutating actions ────────────────────────────────────
             _ => self.dispatch_engine_action(action, count),

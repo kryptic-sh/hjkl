@@ -158,7 +158,7 @@ impl App {
             };
             if let Some(ck) = kind {
                 self.pending_state = None;
-                self.open_cmdline_window(ck);
+                self.open_cmdline_window(ck, None);
                 return true;
             }
         }

@@ -26,6 +26,12 @@ patch bumps.
   A startup warning is emitted when `chord_timeout_ms <= which_key.delay_ms` to
   flag a potential chord-resolve race. Closes #133.
 
+- `<C-f>` mid-prompt switch into cmdline window. From `:` / `/` / `?` prompts,
+  `<C-f>` captures the in-progress text + cursor col, closes the prompt without
+  committing, and opens the matching `q:` / `q/` / `q?` window with the text
+  appended as the trailing line, cursor at the captured column. `cedit` is
+  hardcoded to `<C-f>` for v1 (configurable later). Closes #132.
+
 ### Changed
 
 - `hjkl-statusline` polish — `Cow<'static, str>`-backed `Segment::Text` for

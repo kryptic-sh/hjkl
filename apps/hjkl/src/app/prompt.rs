@@ -119,6 +119,23 @@ impl App {
             return;
         }
 
+        // <C-f> mid-prompt: switch into the ex cmdline window (issue #132).
+        // Capture text + cursor col, close the prompt WITHOUT committing to
+        // history, and open the q: window with the in-progress text as the
+        // trailing line.
+        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(field) = self.command_field.take() {
+                let text = field.text();
+                let (_, col) = field.cursor();
+                self.command_completion = None;
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
+                let prefill = Some((text, col));
+                self.open_cmdline_window(CmdLineKind::Ex, prefill);
+            }
+            return;
+        }
+
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
         let field = match self.command_field.as_mut() {
             Some(f) => f,
@@ -389,6 +406,38 @@ impl App {
             return;
         }
 
+        // <C-f> mid-prompt: switch into the matching search cmdline window
+        // (issue #132). Capture text + cursor col, close the search prompt
+        // WITHOUT committing or updating the last-search pattern, then open
+        // q/ or q? with the in-progress text as the trailing line.
+        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let Some(field) = self.search_field.take() {
+                let text = field.text();
+                let (_, col) = field.cursor();
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
+                // Restore the previous pattern (cancel live-preview side-effect).
+                let last = self.active().editor.last_search().map(str::to_owned);
+                match last {
+                    Some(p) if !p.is_empty() => {
+                        if let Ok(re) = regex::Regex::new(&p) {
+                            self.active_mut().editor.set_search_pattern(Some(re));
+                        } else {
+                            self.active_mut().editor.set_search_pattern(None);
+                        }
+                    }
+                    _ => self.active_mut().editor.set_search_pattern(None),
+                }
+                let win_kind = match self.search_dir {
+                    SearchDir::Forward => CmdLineKind::SearchForward,
+                    SearchDir::Backward => CmdLineKind::SearchBackward,
+                };
+                let prefill = Some((text, col));
+                self.open_cmdline_window(win_kind, prefill);
+            }
+            return;
+        }
+
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
         let field = match self.search_field.as_mut() {
             Some(f) => f,
@@ -541,7 +590,16 @@ pub(crate) fn prompt_cursor_shape(field: &TextFieldEditor) -> CursorShape {
 
 impl App {
     /// Open the command-line window for `kind` (`q:` / `q/` / `q?`).
-    pub(crate) fn open_cmdline_window(&mut self, kind: CmdLineKind) {
+    ///
+    /// `prefill` — when `Some((text, col))`, appends `text` as a trailing line
+    /// after the history rows and positions the cursor at `(last_row, col)`.
+    /// Used by `<C-f>` mid-prompt to carry in-progress text into the window
+    /// (issue #132). Pass `None` for the normal `q:` / `q/` / `q?` path.
+    pub(crate) fn open_cmdline_window(
+        &mut self,
+        kind: CmdLineKind,
+        prefill: Option<(String, usize)>,
+    ) {
         use crate::app::window::{LayoutTree, SplitDir, Window};
         use crate::host::TuiHost;
         use hjkl_buffer::Buffer;
@@ -558,7 +616,16 @@ impl App {
             CmdLineKind::SearchBackward => self.search_history_backward.clone(),
         };
 
-        let content = history.join("\n");
+        // Build buffer content: history lines + optional prefill line.
+        let content = if let Some((ref text, _)) = prefill {
+            if history.is_empty() {
+                text.clone()
+            } else {
+                format!("{}\n{}", history.join("\n"), text)
+            }
+        } else {
+            history.join("\n")
+        };
 
         let buffer_id = self.next_buffer_id;
         self.next_buffer_id += 1;
@@ -577,7 +644,14 @@ impl App {
             BufferEdit::replace_all(editor.buffer_mut(), &content);
         }
         let line_count = editor.buffer().row_count();
-        editor.jump_cursor(line_count.saturating_sub(1), 0);
+        // Position cursor: when prefill is Some, land at (last_row, prefill_col);
+        // otherwise land at last history row col 0 (existing behaviour).
+        let (cursor_row, cursor_col) = if let Some((_, col)) = prefill {
+            (line_count.saturating_sub(1), col)
+        } else {
+            (line_count.saturating_sub(1), 0)
+        };
+        editor.jump_cursor(cursor_row, cursor_col);
         let _ = editor.take_content_edits();
         let _ = editor.take_content_reset();
 
@@ -610,17 +684,27 @@ impl App {
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;
 
-        let win_rows = (history.len() + 1).clamp(1, 7);
+        // Win height accounts for the prefill line too.
+        let total_lines = history.len() + if prefill.is_some() { 1 } else { 0 };
+        let win_rows = (total_lines + 1).clamp(1, 7);
 
         let focused = self.focused_window();
         let new_win_id = self.next_window_id;
         self.next_window_id += 1;
+        // The window snapshot's cursor position must match where we placed the
+        // editor cursor — sync_viewport_to_editor() restores from this snapshot.
+        let (win_cursor_row, win_cursor_col) = if let Some((_, col)) = prefill {
+            // Prefill adds one extra line after the history rows.
+            (history.len(), col)
+        } else {
+            (history.len().saturating_sub(1), 0)
+        };
         self.windows.push(Some(Window::with_scroll(
             slot_idx,
             0,
             0,
-            history.len().saturating_sub(1),
-            0,
+            win_cursor_row,
+            win_cursor_col,
         )));
 
         let total_h = crossterm::terminal::size()
