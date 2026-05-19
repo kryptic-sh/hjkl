@@ -189,6 +189,11 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
             hjkl_vim::OperatorKind::AutoIndent,
             "auto-indent operator",
         ),
+        (
+            "!",
+            hjkl_vim::OperatorKind::Filter,
+            "filter through command",
+        ),
     ] {
         let action = AppAction::BeginPendingAfterOp { op, count1: 1 };
         if let Err(e) = km.add(Mode::Normal, key, action, desc) {
@@ -215,6 +220,11 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
             "=",
             hjkl_vim::OperatorKind::AutoIndent,
             "auto-indent selection",
+        ),
+        (
+            "!",
+            hjkl_vim::OperatorKind::Filter,
+            "filter selection through command",
         ),
     ] {
         let action = AppAction::VisualOp { op, count: 1 };

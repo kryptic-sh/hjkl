@@ -649,6 +649,8 @@ fn handle_after_op<H: Host>(
         Operator::Reflow => Some('q'),
         // `==` auto-indents the current line.
         Operator::AutoIndent => Some('='),
+        // `!!` filters the current line — vim's doubled form.
+        Operator::Filter => Some('!'),
     };
     if let Key::Char(c) = input.key
         && !input.ctrl

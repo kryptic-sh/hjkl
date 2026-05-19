@@ -557,6 +557,67 @@ impl App {
         }
     }
 
+    /// Open the `!` filter prompt for the row range `(top, bot)` (inclusive).
+    /// The user types a shell command; on Enter the range is piped through it.
+    pub(crate) fn open_filter_prompt(&mut self, top: usize, bot: usize) {
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        self.filter_field = Some(field);
+        self.filter_pending_range = Some((top, bot));
+    }
+
+    /// Handle a key event while the `!` filter prompt is active.
+    pub(crate) fn handle_filter_field_key(&mut self, key: crossterm::event::KeyEvent) {
+        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
+        let field = match self.filter_field.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if input.key == EngineKey::Enter {
+            let command = field.text();
+            let range = self.filter_pending_range.take();
+            self.filter_field = None;
+            if let Some((top, bot)) = range {
+                let result = self
+                    .active_mut()
+                    .editor
+                    .filter_range(top, bot, command.trim(), None);
+                match result {
+                    Ok(()) => {
+                        self.sync_after_engine_mutation();
+                    }
+                    Err(msg) => {
+                        self.bus.error(format!("filter: {msg}"));
+                    }
+                }
+            }
+            return;
+        }
+
+        if input.key == EngineKey::Esc {
+            if field.text().is_empty() {
+                self.filter_field = None;
+                self.filter_pending_range = None;
+            } else if field.vim_mode() == VimMode::Insert {
+                field.enter_normal();
+            } else {
+                self.filter_field = None;
+                self.filter_pending_range = None;
+            }
+            return;
+        }
+
+        // Backspace on an empty prompt dismisses it.
+        if input.key == EngineKey::Backspace && field.text().is_empty() {
+            self.filter_field = None;
+            self.filter_pending_range = None;
+            return;
+        }
+
+        field.handle_input(input);
+    }
+
     /// Dispatch a prompt-opening [`crate::keymap_actions::AppAction`].
     ///
     /// Handles variants:

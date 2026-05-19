@@ -157,6 +157,14 @@ pub struct App {
     /// Active wildmenu state for the command-line prompt. `None` outside
     /// completion (no Tab pressed yet, or after acceptance/cancel).
     pub(crate) command_completion: Option<hjkl_prompt::CommandCompletion>,
+    /// Active `!` filter prompt. `Some` while the user is typing a shell
+    /// command after a `!{motion}` or `!!` operator. Paired with
+    /// `filter_pending_range` which holds the row range to filter.
+    pub(crate) filter_field: Option<hjkl_form::TextFieldEditor>,
+    /// Row range `(top, bot)` (inclusive) waiting for a shell command from
+    /// the `!` filter prompt. Set when `filter_field` opens; cleared on
+    /// submit or cancel.
+    pub(crate) filter_pending_range: Option<(usize, usize)>,
     /// Active `/` (forward) / `?` (backward) search prompt.
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
@@ -608,6 +616,7 @@ impl App {
         self.context_menu.is_some()
             || self.picker.is_some()
             || self.command_field.is_some()
+            || self.filter_field.is_some()
             || self.search_field.is_some()
             || self.info_popup.is_some()
     }
@@ -1107,6 +1116,8 @@ impl App {
             info_popup: None,
             command_field: None,
             command_completion: None,
+            filter_field: None,
+            filter_pending_range: None,
             search_field: None,
             picker: None,
             pending_count: hjkl_vim::CountAccumulator::new(),

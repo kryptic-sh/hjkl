@@ -319,6 +319,23 @@ impl App {
                         total_count,
                     }) => {
                         self.pending_state = None;
+                        // Filter with motion (!<motion>): resolve the row range, then
+                        // open the filter prompt so the user can type the shell command.
+                        if op == hjkl_vim::OperatorKind::Filter {
+                            if let Some((top, bot)) = self
+                                .active_mut()
+                                .editor
+                                .range_for_op_motion(motion_key, total_count)
+                            {
+                                tracing::debug!(
+                                    top,
+                                    bot,
+                                    "filter operator: opening prompt for motion range"
+                                );
+                                self.open_filter_prompt(top, bot);
+                            }
+                            return true;
+                        }
                         // AutoIndent with motion (=<motion>): dry-run the motion to
                         // find the row range, then submit the async formatter.
                         // Falls back to dumb algo when no formatter is registered.
@@ -354,6 +371,21 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpDouble { op, total_count }) => {
                         self.pending_state = None;
+                        // Filter (!!): open the filter prompt for the current line range.
+                        // `!!` filters `total_count` lines starting at the cursor.
+                        if op == hjkl_vim::OperatorKind::Filter {
+                            let cursor_row = self.active().editor.cursor().0;
+                            let bot_row = cursor_row
+                                .saturating_add(total_count.max(1))
+                                .saturating_sub(1);
+                            tracing::debug!(
+                                cursor_row,
+                                bot_row,
+                                "filter operator: opening prompt for double (!!)"
+                            );
+                            self.open_filter_prompt(cursor_row, bot_row);
+                            return true;
+                        }
                         // AutoIndent (==): submit async formatter with cursor-row range.
                         // Falls back to dumb algo when no formatter is registered.
                         let used_formatter = op == hjkl_vim::OperatorKind::AutoIndent && {

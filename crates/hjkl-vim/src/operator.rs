@@ -27,6 +27,10 @@ pub enum OperatorKind {
     Reflow,
     /// `=` — auto-indent (v1 dumb shiftwidth bracket counting).
     AutoIndent,
+    /// `!` — filter through external shell command. After the motion fixes the
+    /// range the grammar transitions to `PendingFilter` and waits for the
+    /// app to supply a command string before emitting `EngineCmd::ApplyFilter`.
+    Filter,
 }
 
 impl OperatorKind {
@@ -46,6 +50,7 @@ impl OperatorKind {
             OperatorKind::ToggleCase => '~',
             OperatorKind::Reflow => 'q',
             OperatorKind::AutoIndent => '=',
+            OperatorKind::Filter => '!',
         }
     }
 }

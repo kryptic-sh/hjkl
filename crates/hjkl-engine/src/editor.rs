@@ -3136,6 +3136,133 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.last_indent_range.take()
     }
 
+    /// Filter rows `top_row..=bot_row` through an external shell command.
+    ///
+    /// Spawns `sh -c "<command>"` (or `cmd /C "<command>"` on Windows), pipes
+    /// the selected lines (joined by `\n`) to stdin, and waits up to
+    /// `timeout_secs` seconds (default 10) for the process to finish.
+    ///
+    /// On success: the rows are replaced with stdout. No trailing-newline trim.
+    /// On non-zero exit, spawn failure, or timeout: returns `Err(stderr_or_msg)`
+    /// without mutating the buffer.
+    ///
+    /// `top_row` and `bot_row` are clamped to the buffer's valid row range.
+    pub fn filter_range(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        command: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<(), String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+        use std::thread;
+
+        let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(10));
+        let lines = self.buffer().lines();
+        let line_count = lines.len();
+        let top = top_row.min(line_count.saturating_sub(1));
+        let bot = bot_row.min(line_count.saturating_sub(1));
+        let (top, bot) = (top.min(bot), top.max(bot));
+        let input_text = lines[top..=bot].join("\n");
+
+        tracing::debug!(
+            top_row = top,
+            bot_row = bot,
+            command = command,
+            "filter_range: spawning shell command"
+        );
+
+        #[cfg(not(windows))]
+        let mut child = Command::new("sh")
+            .args(["-c", command])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", command])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        // Write stdin on a thread to avoid deadlock when output > pipe buffer.
+        let mut stdin = child.stdin.take().ok_or("no stdin handle")?;
+        let input_bytes = input_text.into_bytes();
+        thread::spawn(move || {
+            let _ = stdin.write_all(&input_bytes);
+            // stdin drops here, signalling EOF to the child.
+        });
+
+        // Wait for exit with timeout via a thread + channel.
+        let (tx, rx) = mpsc::channel();
+        let child_id = child.id();
+        let _ = child_id; // Used on Unix for kill.
+        thread::spawn(move || {
+            let output = child.wait_with_output();
+            let _ = tx.send(output);
+        });
+
+        let output = rx.recv_timeout(timeout).map_err(|_| {
+            tracing::debug!(command, "filter_range: command timed out");
+            // On timeout: the worker thread's `child` is dropped when the
+            // thread eventually exits, which closes the process handle.
+            // We can't SIGKILL from here without the Child, so just report.
+            format!("command timed out after {}s", timeout.as_secs())
+        })?;
+
+        let output = output.map_err(|e| format!("wait failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            tracing::debug!(
+                command,
+                exit_code = ?output.status.code(),
+                "filter_range: command exited with non-zero status"
+            );
+            return Err(if stderr.is_empty() {
+                format!(
+                    "command exited with status {}",
+                    output.status.code().unwrap_or(-1)
+                )
+            } else {
+                stderr
+            });
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        tracing::debug!(
+            command,
+            stdout_bytes = output.stdout.len(),
+            "filter_range: command succeeded, replacing rows"
+        );
+
+        // Replace the row range with the stdout lines.
+        let mut all_lines = lines;
+        let new_lines: Vec<String> = stdout.lines().map(|l| l.to_owned()).collect();
+        // If stdout ended with a newline, stdout.lines() drops the trailing empty
+        // entry — this preserves vim's "no trailing-newline trim" spec because
+        // a trailing '\n' from the command means the last replacement line is the
+        // line BEFORE the newline, not an empty line after it.
+        let after = all_lines.split_off(bot + 1);
+        all_lines.truncate(top);
+        all_lines.extend(new_lines);
+        all_lines.extend(after);
+
+        self.push_undo();
+        self.restore(all_lines, (top, 0));
+        // Leave mode as Normal after a successful filter operation (vim parity).
+        self.force_normal();
+
+        Ok(())
+    }
+
     // ─── Phase 4b: pub text-object resolution (hjkl#70) ─────────────────────
     //
     // Pure functions — no cursor mutation, no mode change, no register write.
