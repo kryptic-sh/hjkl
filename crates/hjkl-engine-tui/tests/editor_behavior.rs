@@ -3076,3 +3076,25 @@ fn filter_range_partial_range() {
     assert_eq!(lines[0], "alpha", "row 0 must be untouched");
     assert_eq!(&lines[1..], &["apple", "banana"]);
 }
+
+/// A slow command must be killed by the timeout; filter_range returns Err
+/// and the buffer is unmodified.
+#[test]
+#[cfg(not(windows))]
+fn filter_range_timeout_kills_slow_command() {
+    let mut e = make_editor("line1\nline2");
+    let before = e.buffer().lines().to_vec();
+    let start = std::time::Instant::now();
+    let result = e.filter_range(0, 1, "sleep 30", Some(1));
+    let elapsed = start.elapsed();
+    assert!(result.is_err(), "slow command must time out: {result:?}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "should return within ~1s timeout + slack, got {elapsed:?}"
+    );
+    assert_eq!(
+        e.buffer().lines().to_vec(),
+        before,
+        "buffer must be unchanged"
+    );
+}

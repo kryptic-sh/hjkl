@@ -3156,8 +3156,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ) -> Result<(), String> {
         use std::io::Write;
         use std::process::{Command, Stdio};
-        use std::sync::mpsc;
         use std::thread;
+        use std::time::Instant;
 
         let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(10));
         let lines = self.buffer().lines();
@@ -3200,46 +3200,63 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             // stdin drops here, signalling EOF to the child.
         });
 
-        // Wait for exit with timeout via a thread + channel.
-        let (tx, rx) = mpsc::channel();
-        let child_id = child.id();
-        let _ = child_id; // Used on Unix for kill.
-        thread::spawn(move || {
-            let output = child.wait_with_output();
-            let _ = tx.send(output);
+        // Drain stdout/stderr on separate threads so the child's pipes don't
+        // fill and deadlock the child. Keep `child` here so we can kill it on
+        // timeout.
+        let mut stdout_pipe = child.stdout.take().ok_or("no stdout handle")?;
+        let mut stderr_pipe = child.stderr.take().ok_or("no stderr handle")?;
+        let stdout_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
+            buf
+        });
+        let stderr_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
+            buf
         });
 
-        let output = rx.recv_timeout(timeout).map_err(|_| {
-            tracing::debug!(command, "filter_range: command timed out");
-            // On timeout: the worker thread's `child` is dropped when the
-            // thread eventually exits, which closes the process handle.
-            // We can't SIGKILL from here without the Child, so just report.
-            format!("command timed out after {}s", timeout.as_secs())
-        })?;
+        // Poll try_wait until exit or timeout. On timeout: SIGKILL the child
+        // (std Child::kill sends SIGKILL on Unix / TerminateProcess on Windows).
+        // A proper TERM→KILL escalation would need nix/libc; skip for v1.
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        tracing::debug!(command, "filter_range: timeout — killing child");
+                        let _ = child.kill();
+                        let _ = child.wait(); // reap so the OS can free resources
+                        return Err(format!("command timed out after {}s", timeout.as_secs()));
+                    }
+                    thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(format!("wait failed: {e}")),
+            }
+        };
 
-        let output = output.map_err(|e| format!("wait failed: {e}"))?;
+        let stdout_bytes = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
             tracing::debug!(
                 command,
-                exit_code = ?output.status.code(),
+                exit_code = ?status.code(),
                 "filter_range: command exited with non-zero status"
             );
             return Err(if stderr.is_empty() {
-                format!(
-                    "command exited with status {}",
-                    output.status.code().unwrap_or(-1)
-                )
+                format!("command exited with status {}", status.code().unwrap_or(-1))
             } else {
                 stderr
             });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
         tracing::debug!(
             command,
-            stdout_bytes = output.stdout.len(),
+            stdout_bytes = stdout_bytes.len(),
             "filter_range: command succeeded, replacing rows"
         );
 
