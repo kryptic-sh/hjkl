@@ -8,7 +8,53 @@ patch bumps.
 
 ## [Unreleased]
 
-## [0.26.0] - 2026-05-19
+## [0.27.0] - 2026-05-20
+
+### Added
+
+- `!` filter operator — `!{motion}`, `!!`, and visual-mode `!` pipe the selected
+  range through an external shell command. `Editor::filter_range` spawns
+  `sh -c <cmd>` (or `cmd /C` on Windows), streams stdin/stdout on drain threads
+  to avoid pipe deadlock, and SIGKILLs the child after a configurable timeout
+  (default 10s) without mutating the buffer on error. Five engine tests cover
+  identity (`cat`), `sort` full + partial range, bad-command Err, and
+  slow-command timeout-kill. Closes #85.
+
+- `N|` column-jump motion — `5|` moves to column 5 (1-based, clamped to line
+  length). Works as a charwise-exclusive motion under operators: `d5|`, `y|`,
+  `c10|` all behave correctly. Oracle corpus extended with four cases. Closes
+  #169.
+
+- `"%` filename register and `:put` ex command. `<C-r>%` in insert mode inserts
+  the buffer's filename inline; `:echo @%` prints it; `"%p` pastes it. `:put a`
+  pastes register `a` as a new line below the cursor; `:put!` pastes above.
+  Closes #170.
+
+- `:saveas` / `:sav` write the buffer to a new path AND update the buffer
+  identity so subsequent `:w` writes there (distinct from bare `:w <path>` which
+  only writes elsewhere). `:file newname` renames the buffer in-memory without
+  writing; bare `:file` prints the current name + dirty/readonly status. Closes
+  #172.
+
+- `:cd` / `:pwd` working-directory commands. `:cd /path` calls
+  `std::env::set_current_dir`; bare `:cd` goes to `$HOME`. `:pwd` prints the
+  current working directory to the status bar. Closes #173.
+
+- Uppercase global marks (`mA`–`mZ`) now record the source buffer and jump
+  across files. `mA` in file A → `:e fileB` → `'A` switches back to file A and
+  moves the cursor. `` `A `` restores the exact column. Lowercase marks
+  (`ma`–`mz`) remain per-buffer. `:marks` listing shows `buf:{id}` beside
+  uppercase entries. New `MarkJump` enum (`SameBuffer` /
+  `CrossBuffer { buffer_id, row, col }` / `Unset`) returned from
+  `try_goto_mark_char` / `try_goto_mark_line` so the app layer dispatches the
+  cross-buffer switch. `EditorSnapshot` VERSION bumped 4 → 5; older snapshots
+  are not loadable. Closes #175.
+
+- `:&` and `:&&` repeat the last `:s` substitution on the current line. `:&`
+  drops flags; `:&&` keeps them. Range prefix works: `:%&&` repeats with flags
+  on the whole buffer. The most recent `:s` is stored in
+  `VimState::last_substitute`; ships the small half of #171 (interactive
+  `:s///gc` confirm remains open in #171).
 
 ### Added
 
@@ -3601,7 +3647,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...v0.25.0
