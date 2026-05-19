@@ -1537,6 +1537,11 @@ impl App {
     ///
     /// The caller uses this to drive `which_key::entries_for` directly —
     /// the static `Prefix` enum is no longer needed.
+    ///
+    /// **Popup-mode note:** this intentionally reads only the Normal pending
+    /// buffer.  When the editor is in Visual or Insert mode the Normal buffer
+    /// is empty, so callers see an empty `Vec` and suppress the popup.  See
+    /// the comment in `render.rs::which_key_popup` for the full rationale.
     pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
         self.app_keymap.pending(keymap::HjklMode::Normal).to_vec()
     }

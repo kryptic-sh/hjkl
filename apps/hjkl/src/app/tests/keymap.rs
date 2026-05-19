@@ -1258,6 +1258,188 @@ fn which_key_no_pending_popup_suppressed() {
     );
 }
 
+// ── which-key audit follow-up tests (#57 coverage gaps) ─────────────────────
+
+#[test]
+fn which_key_app_wins_over_fsm_for_conflicting_key() {
+    // `h` is declared in both descriptors.rs (FSM: "left") and keymap_build.rs
+    // (app: "char left").  entries_for must surface the APP description because
+    // the app-keymap overlay (step 2) overwrites the FSM entry (step 1).
+    let app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+    let entries = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &[],
+        leader,
+    );
+
+    let h_entry = entries.iter().find(|e| e.key == "h");
+    assert!(h_entry.is_some(), "h must appear in Normal root entries");
+    assert_eq!(
+        h_entry.unwrap().desc,
+        "char left",
+        "app desc 'char left' must win over FSM desc 'left'"
+    );
+}
+
+#[test]
+fn which_key_user_shadows_app_for_conflicting_chord() {
+    // <leader>f is registered in keymap_build.rs as "file picker".
+    // After :nmap <leader>f :echo hi<CR>, the user binding must shadow the app
+    // binding and entries_for must show the user's "→ ..." description.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+
+    app.dispatch_ex("nmap <leader>f :echo hi<CR>");
+
+    let prefix = km_prefix(&app, "<leader>");
+    let entries = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &prefix,
+        leader,
+    );
+
+    let f_entry = entries.iter().find(|e| e.key == "f");
+    assert!(f_entry.is_some(), "f must appear under <leader> after nmap");
+    let desc = &f_entry.unwrap().desc;
+    assert!(
+        desc.starts_with("→ "),
+        "user nmap desc must start with '→ ', got {desc:?}"
+    );
+    assert!(
+        !desc.contains("file picker"),
+        "app 'file picker' desc must be shadowed by user binding, got {desc:?}"
+    );
+}
+
+#[test]
+fn which_key_unmap_removes_entry_from_popup() {
+    // Register <leader>z then verify it appears in entries_for.
+    // After :nunmap <leader>z it must be gone from entries_for.
+    let mut app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+
+    app.dispatch_ex("nmap <leader>z :echo hi<CR>");
+
+    let prefix = km_prefix(&app, "<leader>");
+    let before = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &prefix,
+        leader,
+    );
+    assert!(
+        before.iter().any(|e| e.key == "z"),
+        "<leader>z must appear in popup before unmap"
+    );
+
+    app.dispatch_ex("nunmap <leader>z");
+
+    let after = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &prefix,
+        leader,
+    );
+    assert!(
+        !after.iter().any(|e| e.key == "z"),
+        "<leader>z must be gone from popup after :nunmap"
+    );
+}
+
+#[test]
+fn which_key_fsm_only_key_surfaces_in_popup() {
+    // `{` (paragraph prev) is in descriptors.rs normal_root() but is NOT
+    // registered in keymap_build.rs.  entries_for must include it via the FSM
+    // path (step 1) since no app binding overrides it.
+    let app = App::new(None, false, None, None).unwrap();
+    let leader = app.config.editor.leader;
+    let entries = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &[],
+        leader,
+    );
+
+    let found = entries.iter().find(|e| e.key == "{");
+    assert!(
+        found.is_some(),
+        "FSM-only key '{{' must appear in Normal root entries via descriptors path"
+    );
+    assert_eq!(
+        found.unwrap().desc,
+        "paragraph prev",
+        "FSM desc 'paragraph prev' must be surfaced for '{{'"
+    );
+}
+
+#[test]
+fn which_key_visual_mode_suppresses_popup() {
+    // active_which_key_prefix reads the NORMAL mode pending buffer.
+    // After entering Visual mode the Normal buffer stays empty (no prefix was
+    // accumulated in Normal), so active_which_key_prefix returns empty — which
+    // is the "popup off" signal in render.rs (pending.is_empty() &&
+    // !which_key_sticky).
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    // Enter Visual mode via `v`.
+    drive_key(&mut app, key(KeyCode::Char('v')));
+    assert_eq!(
+        app.active().editor.vim_mode(),
+        VimMode::Visual,
+        "must be in Visual mode after pressing v"
+    );
+
+    // The Normal pending buffer must be empty — popup is suppressed.
+    let pending = app.active_which_key_prefix();
+    assert!(
+        pending.is_empty(),
+        "active_which_key_prefix must be empty in Visual mode (popup suppressed), \
+         got {} events",
+        pending.len()
+    );
+}
+
+#[test]
+fn which_key_sticky_root_includes_fsm_entries() {
+    // With which_key_sticky = true and an empty pending prefix, entries_for at
+    // the Normal root must include BOTH FSM root entries (e.g. `h`, `{`) AND
+    // app root entries (e.g. `h` shadowed as "char left", `:` as "open command
+    // prompt").  The sticky flag itself is a render.rs concern; this test drives
+    // entries_for directly to confirm the underlying data is correct.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.which_key_sticky = true;
+    let leader = app.config.editor.leader;
+
+    let entries = crate::which_key::entries_for(
+        &app.app_keymap,
+        crate::app::keymap::HjklMode::Normal,
+        &[], // empty prefix = root
+        leader,
+    );
+
+    // FSM-only entry must be present.
+    assert!(
+        entries.iter().any(|e| e.key == "{"),
+        "sticky root must include FSM-only key '{{'"
+    );
+    // App root entry must be present.
+    assert!(
+        entries.iter().any(|e| e.key == ":"),
+        "sticky root must include app key ':' (open command prompt)"
+    );
+    // h must appear with the app description (app wins over FSM).
+    let h = entries.iter().find(|e| e.key == "h");
+    assert!(h.is_some(), "sticky root must include 'h'");
+    assert_eq!(
+        h.unwrap().desc,
+        "char left",
+        "app desc 'char left' must be present in sticky root"
+    );
+}
+
 // ── which-key Backspace / sticky tests (#backspace-nav) ──────────────────────
 
 /// Feed a key into the Normal-mode app_keymap trie and update which-key state.

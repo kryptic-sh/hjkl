@@ -1621,6 +1621,13 @@ fn which_key_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     }
 
     let leader = app.config.editor.leader;
+    // The popup is Normal-mode only by design: `entries_for` is called with a
+    // hardcoded `HjklMode::Normal` regardless of the current vim mode.
+    // Non-Normal modes (Visual, Insert, etc.) suppress the popup implicitly
+    // because `active_which_key_prefix` (mod.rs:1541) reads the Normal pending
+    // buffer, which is always empty when the mode is not Normal.  If future work
+    // extends the popup to Visual mode, both this hardcoded mode and
+    // `active_which_key_prefix` in `mod.rs` need to be updated together.
     let entries = crate::which_key::entries_for(
         &app.app_keymap,
         crate::app::keymap::HjklMode::Normal,

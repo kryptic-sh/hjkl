@@ -34,6 +34,17 @@ patch bumps.
 
 ### Changed
 
+- Added 6 which-key popup tests covering app-wins-over-FSM
+  (`which_key_app_wins_over_fsm_for_conflicting_key`), user-shadows-app
+  (`which_key_user_shadows_app_for_conflicting_chord`), unmap removal from popup
+  (`which_key_unmap_removes_entry_from_popup`), FSM-only key surfaces
+  (`which_key_fsm_only_key_surfaces_in_popup`), Visual-mode suppression
+  (`which_key_visual_mode_suppresses_popup`), and sticky-root FSM inclusion
+  (`which_key_sticky_root_includes_fsm_entries`). Documented Normal-mode-only
+  popup hardcoding in `render.rs::which_key_popup` and
+  `mod.rs::active_which_key_prefix`. Audit follow-up — behavior was already
+  correct.
+
 - `hjkl-statusline` polish — `Cow<'static, str>`-backed `Segment::Text` for
   zero-alloc static labels, `percent_segment` now takes a `ModeKind` parameter
   so the badge bg/fg echoes the active mode, `truncate_filename` uses
