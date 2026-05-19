@@ -435,7 +435,7 @@ impl App {
             Ok(statuses) => statuses
                 .iter()
                 .filter(|s| !s.status().is_empty())
-                .filter_map(|s| s.path().map(|p| p.to_string()))
+                .filter_map(|s| s.path().ok().map(|p| p.to_string()))
                 .filter(|p| touched.contains(p))
                 .collect(),
             Err(_) => Vec::new(),
@@ -552,7 +552,7 @@ impl App {
             Ok(statuses) => statuses
                 .iter()
                 .filter(|s| !s.status().is_empty())
-                .filter_map(|s| s.path().map(|p| p.to_string()))
+                .filter_map(|s| s.path().ok().map(|p| p.to_string()))
                 .filter(|p| touched.contains(p))
                 .collect(),
             Err(_) => Vec::new(),

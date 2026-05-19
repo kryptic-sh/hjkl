@@ -183,8 +183,8 @@ pub fn render_commit(repo: &Repository, commit: &Commit) -> String {
     let adjusted = secs + (offset_min as i64) * 60;
     let date_str = epoch_to_date_str(adjusted, sign, off_h, off_m);
 
-    let subject = commit.summary().unwrap_or("");
-    let body = commit.body().unwrap_or("").trim_end();
+    let subject = commit.summary().ok().flatten().unwrap_or("");
+    let body = commit.body().ok().flatten().unwrap_or("").trim_end();
 
     let mut header =
         format!("commit {id}\nAuthor: {name} <{email}>\nDate:   {date_str}\n\n    {subject}\n");
@@ -402,8 +402,8 @@ fn scan_git_status(
     let mut parsed: Vec<GitStatusItem> = Vec::new();
     for entry in statuses.iter() {
         let path_str = match entry.path() {
-            Some(p) => p,
-            None => continue,
+            Ok(p) => p,
+            Err(_) => continue,
         };
         let path = PathBuf::from(path_str);
         let st = entry.status();
@@ -635,7 +635,7 @@ fn scan_git_log(
         let sha = commit.id().to_string();
         let short_sha = sha[..7.min(sha.len())].to_string();
         let author = commit.author().name().unwrap_or("").to_owned();
-        let subject = commit.summary().unwrap_or("").to_owned();
+        let subject = commit.summary().ok().flatten().unwrap_or("").to_owned();
         batch.push(GitLogItem {
             sha,
             short_sha,
@@ -935,7 +935,7 @@ fn scan_git_file_history(
         let sha = commit.id().to_string();
         let short_sha = sha[..7.min(sha.len())].to_string();
         let author = commit.author().name().unwrap_or("").to_owned();
-        let subject = commit.summary().unwrap_or("").to_owned();
+        let subject = commit.summary().ok().flatten().unwrap_or("").to_owned();
         batch.push(GitLogItem {
             sha,
             short_sha,
@@ -1444,7 +1444,7 @@ impl PickerLogic for GitBranchPicker {
             };
             let sha = commit.id().to_string();
             let short_sha = &sha[..7.min(sha.len())];
-            let subject = commit.summary().unwrap_or("").to_owned();
+            let subject = commit.summary().ok().flatten().unwrap_or("").to_owned();
             text.push_str(&format!("{short_sha}  {subject}\n"));
             count += 1;
             if count >= 30 {
@@ -1551,7 +1551,7 @@ fn scan_git_stashes(
             if let Ok(mut g) = items.lock() {
                 g.push(StashItem {
                     index: 0,
-                    oid: git2::Oid::zero(),
+                    oid: git2::Oid::ZERO_SHA1,
                     message: String::new(),
                     branch_hint: String::new(),
                 });
@@ -1578,7 +1578,7 @@ fn scan_git_stashes(
         if let Ok(mut g) = items.lock() {
             g.push(StashItem {
                 index: 0,
-                oid: git2::Oid::zero(),
+                oid: git2::Oid::ZERO_SHA1,
                 message: "no stashes".to_string(),
                 branch_hint: String::new(),
             });
@@ -1689,7 +1689,7 @@ impl PickerLogic for GitStashPicker {
             .ok()
             .and_then(|g| g.get(idx).map(|i| i.oid))
         {
-            Some(o) if o != git2::Oid::zero() => o,
+            Some(o) if o != git2::Oid::ZERO_SHA1 => o,
             _ => {
                 return (hjkl_buffer::Buffer::new(), String::new());
             }
@@ -1842,7 +1842,7 @@ fn scan_git_tags(
             if let Ok(mut g) = items.lock() {
                 g.push(TagItem {
                     name: "no tags".to_string(),
-                    target_oid: git2::Oid::zero(),
+                    target_oid: git2::Oid::ZERO_SHA1,
                     message: String::new(),
                     tagger: None,
                 });
@@ -1863,7 +1863,13 @@ fn scan_git_tags(
         }
         let (target_oid, message, tagger) = if let Ok(tag) = repo.find_tag(oid) {
             let target = tag.target_id();
-            let msg = tag.message().unwrap_or("").trim().to_string();
+            let msg = tag
+                .message()
+                .ok()
+                .flatten()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let sig = tag
                 .tagger()
                 .map(|s| (s.name().unwrap_or("").to_string(), s.when().seconds()));
@@ -1885,7 +1891,7 @@ fn scan_git_tags(
         if let Ok(mut g) = items.lock() {
             g.push(TagItem {
                 name: "no tags".to_string(),
-                target_oid: git2::Oid::zero(),
+                target_oid: git2::Oid::ZERO_SHA1,
                 message: String::new(),
                 tagger: None,
             });
@@ -2147,7 +2153,7 @@ fn scan_git_remotes(
     };
 
     let mut remotes: Vec<RemoteItem> = Vec::new();
-    for name in names.iter().flatten() {
+    for name in names.iter().filter_map(|r| r.ok().flatten()) {
         if let Ok(remote) = repo.find_remote(name) {
             let url = remote.url().unwrap_or("").to_string();
             let prefix = format!("refs/remotes/{name}/");
@@ -2294,7 +2300,7 @@ impl PickerLogic for GitRemotesPicker {
                 let short = r
                     .shorthand()
                     .map(|s| s.to_string())
-                    .unwrap_or_else(|| r.name().unwrap_or("").to_string());
+                    .unwrap_or_else(|_| r.name().unwrap_or("").to_string());
                 if short.ends_with("/HEAD") {
                     continue;
                 }
