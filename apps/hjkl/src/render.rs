@@ -273,24 +273,25 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         ));
         // Replace last segment with the actual pre-formatted content.
         if let Some(SlSegment::Text { content, .. }) = bar.left.last_mut() {
-            *content = search_count_content.clone();
+            *content = search_count_content.clone().into();
         }
     }
 
     if !diag_count_content.is_empty() {
-        // Color by highest severity.
+        // Color by highest severity — routed through StatusTheme so the host
+        // controls the palette (adapts to terminal-named colors vs RGB).
         let diags = &app.active().lsp_diags;
         let diag_fg = if diags.iter().any(|d| d.severity == DiagSeverity::Error) {
-            SlColor::rgb(0xff, 0x00, 0x00) // Red
+            theme.diag_error_fg
         } else if diags.iter().any(|d| d.severity == DiagSeverity::Warning) {
-            SlColor::rgb(0xff, 0xc0, 0x00) // Yellow-ish
+            theme.diag_warning_fg
         } else if diags.iter().any(|d| d.severity == DiagSeverity::Info) {
-            SlColor::rgb(0x00, 0x7a, 0xff) // Blue
+            theme.diag_info_fg
         } else {
-            SlColor::rgb(0x00, 0xd7, 0xd7) // Cyan
+            theme.diag_hint_fg
         };
         bar.left.push(SlSegment::Text {
-            content: diag_count_content.clone(),
+            content: diag_count_content.clone().into(),
             style: SlStyle::default_style()
                 .bg(ratatui_rgb_to_sl(ui.surface_bg))
                 .fg(diag_fg),
@@ -301,19 +302,19 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
         bar.left.push(loading_segment(&loading_label, "", &theme));
         // Fix content: loading_segment adds " frame label " but we want " frame+label "
         if let Some(SlSegment::Text { content, .. }) = bar.left.last_mut() {
-            *content = format!(" {loading_label} ");
+            *content = format!(" {loading_label} ").into();
         }
     }
 
     // ── Right side ───────────────────────────────────────────────────────────
     bar.right.push(SlSegment::Text {
-        content: pos_content,
+        content: pos_content.into(),
         style: SlStyle::default_style()
             .bg(ratatui_rgb_to_sl(ui.surface_bg))
             .fg(ratatui_rgb_to_sl(ui.text)),
     });
     bar.right.push(SlSegment::Text {
-        content: pct_content,
+        content: pct_content.into(),
         style: SlStyle::default_style()
             .bg(ratatui_rgb_to_sl(ui.mode_normal_bg))
             .fg(ratatui_rgb_to_sl(ui.on_accent))

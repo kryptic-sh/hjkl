@@ -57,7 +57,9 @@ pub fn to_ratatui_style(s: Style) -> RStyle {
 /// Convert a [`Segment`] to a ratatui [`Span`].
 fn segment_to_span(seg: &Segment) -> Span<'static> {
     match seg {
-        Segment::Text { content, style } => Span::styled(content.clone(), to_ratatui_style(*style)),
+        Segment::Text { content, style } => {
+            Span::styled(content.clone().into_owned(), to_ratatui_style(*style))
+        }
         // Future variants (Icon, Separator, PowerlineChevron, …) fall back to empty.
         _ => Span::raw(String::new()),
     }
@@ -85,6 +87,8 @@ pub fn to_line(bar: &Bar, width: u16) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
     use hjkl_statusline::{
         Bar, Color, Segment, StatusTheme, Style, StyleExt, cursor_segment, mode_segment,
@@ -122,7 +126,7 @@ mod tests {
         };
         bar.left.push(mode_segment("NORMAL", &theme));
         bar.left.push(Segment::Text {
-            content: " [No Name] ".to_string(),
+            content: Cow::Borrowed(" [No Name] "),
             style: Style::default_style().bg(theme.bg).fg(theme.fg),
         });
         bar.right.push(cursor_segment(0, 0, &theme));

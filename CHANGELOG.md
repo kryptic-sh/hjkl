@@ -12,11 +12,22 @@ patch bumps.
 
 - Added `editor.chord_timeout_ms` config field (default 1000 ms, vim's
   `timeoutlen` equivalent). Previously the chord-resolve timeout was derived
-  internally as `which_key.delay_ms + 500`; users can now tune it
-  independently. A startup warning is emitted when `chord_timeout_ms <=
-  which_key.delay_ms` to flag a potential chord-resolve race. Closes #133.
+  internally as `which_key.delay_ms + 500`; users can now tune it independently.
+  A startup warning is emitted when `chord_timeout_ms <= which_key.delay_ms` to
+  flag a potential chord-resolve race. Closes #133.
 
 ### Changed
+
+- `hjkl-statusline` polish — `Cow<'static, str>`-backed `Segment::Text` for
+  zero-alloc static labels, `percent_segment` now takes a `ModeKind` parameter
+  so the badge bg/fg echoes the active mode, `truncate_filename` uses
+  `char_indices()` for correct UTF-8 char-boundary truncation on non-ASCII
+  filenames, and diag-severity colors switched from hardcoded RGB to
+  `StatusTheme`-routed fields (`diag_error_fg` / `diag_warning_fg` /
+  `diag_info_fg` / `diag_hint_fg`) so the host controls the palette. Four new
+  tests added: `readonly + dirty` combined, `percent_segment` with empty buffer,
+  `Bar::layout` right-exceeds-width degenerate case, and recording-register
+  segment. Closes #135.
 
 - Extracted `hjkl-vim-tui` from `hjkl-vim` and moved engine's crossterm adapter
   to `hjkl-engine-tui`. `hjkl-engine` and `hjkl-vim` now have zero toolkit deps

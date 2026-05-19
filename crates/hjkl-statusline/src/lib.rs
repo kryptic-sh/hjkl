@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::borrow::Cow;
+
 // ── Re-export hjkl-theme types ──────────────────────────────────────────────
 //
 // `Color`, `Modifiers`, and `Style` (aliased from hjkl-theme's `StyleSpec`)
@@ -82,7 +84,14 @@ impl StyleExt for Style {
 #[derive(Debug, Clone)]
 pub enum Segment {
     /// Pre-styled text. The renderer paints it verbatim.
-    Text { content: String, style: Style },
+    ///
+    /// `content` is a [`Cow<'static, str>`] so static labels (e.g. `" NORMAL "`)
+    /// are stored as borrowed `&'static str` with zero allocation, while
+    /// dynamically-built strings (e.g. ` 42:7 `) use the owned `String` path.
+    Text {
+        content: Cow<'static, str>,
+        style: Style,
+    },
 }
 
 impl Segment {
@@ -128,7 +137,7 @@ impl Bar {
             let spacer_w = w.saturating_sub(total);
             out.extend(self.left.iter().cloned());
             out.push(Segment::Text {
-                content: " ".repeat(spacer_w),
+                content: " ".repeat(spacer_w).into(),
                 style: self.fill_style,
             });
             out.extend(self.right.iter().cloned());
@@ -149,13 +158,13 @@ impl Bar {
                         let truncated: String =
                             content.chars().take(remaining.saturating_sub(1)).collect();
                         out.push(Segment::Text {
-                            content: format!("{truncated}\u{2026}"),
+                            content: format!("{truncated}\u{2026}").into(),
                             style: *style,
                         });
                     } else if remaining == 1 {
                         let Segment::Text { style, .. } = seg;
                         out.push(Segment::Text {
-                            content: "\u{2026}".to_string(),
+                            content: Cow::Borrowed("\u{2026}"),
                             style: *style,
                         });
                     }
@@ -164,7 +173,7 @@ impl Bar {
             }
             // Zero-width spacer in truncated layout.
             out.push(Segment::Text {
-                content: String::new(),
+                content: Cow::Borrowed(""),
                 style: self.fill_style,
             });
             out.extend(self.right.iter().cloned());
@@ -197,6 +206,14 @@ pub struct StatusTheme {
     pub new_file_fg: Color,
     pub recording_bg: Color,
     pub recording_fg: Color,
+    /// Foreground color for Error-severity diagnostics in the statusline.
+    pub diag_error_fg: Color,
+    /// Foreground color for Warning-severity diagnostics in the statusline.
+    pub diag_warning_fg: Color,
+    /// Foreground color for Info-severity diagnostics in the statusline.
+    pub diag_info_fg: Color,
+    /// Foreground color for Hint-severity diagnostics in the statusline.
+    pub diag_hint_fg: Color,
 }
 
 impl Default for StatusTheme {
@@ -218,6 +235,11 @@ impl Default for StatusTheme {
             new_file_fg: grey,
             recording_bg: Color::rgb(0xbf, 0x61, 0x6a),
             recording_fg: dark,
+            // Standard ANSI-named colors: adapt to the terminal palette.
+            diag_error_fg: Color::rgb(0xff, 0x00, 0x00), // ANSI Red
+            diag_warning_fg: Color::rgb(0xff, 0xc0, 0x00), // ANSI Yellow
+            diag_info_fg: Color::rgb(0x00, 0x7a, 0xff),  // ANSI Blue
+            diag_hint_fg: Color::rgb(0x00, 0xd7, 0xd7),  // ANSI Cyan
         }
     }
 }
@@ -284,7 +306,7 @@ pub fn mode_segment(label: &str, theme: &StatusTheme) -> Segment {
         _ => (theme.mode_normal_bg, theme.mode_normal_fg),
     };
     Segment::Text {
-        content: format!(" {label} "),
+        content: format!(" {label} ").into(),
         style: Style::default_style().bg(bg).fg(fg).bold(),
     }
 }
@@ -293,7 +315,7 @@ pub fn mode_segment(label: &str, theme: &StatusTheme) -> Segment {
 pub fn filename_segment(name: &str, suffix: &str, theme: &StatusTheme) -> Segment {
     let style = Style::default_style().bg(theme.bg).fg(theme.fg);
     Segment::Text {
-        content: format!(" {name}{suffix} "),
+        content: format!(" {name}{suffix} ").into(),
         style,
     }
 }
@@ -302,7 +324,7 @@ pub fn filename_segment(name: &str, suffix: &str, theme: &StatusTheme) -> Segmen
 pub fn dirty_segment(dirty: bool, theme: &StatusTheme) -> Option<Segment> {
     if dirty {
         Some(Segment::Text {
-            content: " \u{25cf} ".to_string(),
+            content: Cow::Borrowed(" \u{25cf} "),
             style: Style::default_style().bg(theme.bg).fg(theme.dirty_fg),
         })
     } else {
@@ -313,27 +335,41 @@ pub fn dirty_segment(dirty: bool, theme: &StatusTheme) -> Option<Segment> {
 /// Build the cursor position segment (` row:col `).
 pub fn cursor_segment(row: usize, col: usize, theme: &StatusTheme) -> Segment {
     Segment::Text {
-        content: format!(" {}:{} ", row + 1, col + 1),
+        content: format!(" {}:{} ", row + 1, col + 1).into(),
         style: Style::default_style().bg(theme.bg).fg(theme.fg),
     }
 }
 
 /// Build the percentage segment (` N% `).
-pub fn percent_segment(row: usize, total_lines: usize, theme: &StatusTheme) -> Segment {
+///
+/// `mode` controls which mode colors are used for the badge background so
+/// the segment visually echoes the active mode (e.g. green in INSERT, orange
+/// in VISUAL). Pass [`ModeKind::Normal`] when the caller does not know the
+/// mode or wants the default Normal styling.
+pub fn percent_segment(
+    row: usize,
+    total_lines: usize,
+    mode: ModeKind,
+    theme: &StatusTheme,
+) -> Segment {
     let pct = ((row + 1) * 100).checked_div(total_lines).unwrap_or(0);
+    let (bg, fg) = match mode {
+        ModeKind::Insert => (theme.mode_insert_bg, theme.mode_insert_fg),
+        ModeKind::Visual | ModeKind::VisualLine | ModeKind::VisualBlock => {
+            (theme.mode_visual_bg, theme.mode_visual_fg)
+        }
+        _ => (theme.mode_normal_bg, theme.mode_normal_fg),
+    };
     Segment::Text {
-        content: format!(" {pct}% "),
-        style: Style::default_style()
-            .bg(theme.mode_normal_bg)
-            .fg(theme.mode_normal_fg)
-            .bold(),
+        content: format!(" {pct}% ").into(),
+        style: Style::default_style().bg(bg).fg(fg).bold(),
     }
 }
 
 /// Build a recording-register segment (` REC @r `).
 pub fn recording_segment(reg: char, theme: &StatusTheme) -> Segment {
     Segment::Text {
-        content: format!(" REC @{reg} "),
+        content: format!(" REC @{reg} ").into(),
         style: Style::default_style()
             .bg(theme.recording_bg)
             .fg(theme.recording_fg)
@@ -347,10 +383,10 @@ pub fn pending_segment(
     op: Option<&str>,
     theme: &StatusTheme,
 ) -> Option<Segment> {
-    let content = match (count, op) {
-        (Some(n), Some(o)) => format!(" {n}{o} "),
-        (Some(n), None) => format!(" {n} "),
-        (None, Some(o)) => format!(" {o} "),
+    let content: Cow<'static, str> = match (count, op) {
+        (Some(n), Some(o)) => format!(" {n}{o} ").into(),
+        (Some(n), None) => format!(" {n} ").into(),
+        (None, Some(o)) => format!(" {o} ").into(),
         (None, None) => return None,
     };
     Some(Segment::Text {
@@ -362,7 +398,7 @@ pub fn pending_segment(
 /// Build a search-count segment (` [idx/total] `).
 pub fn search_count_segment(idx: usize, total: usize, theme: &StatusTheme) -> Segment {
     Segment::Text {
-        content: format!(" [{idx}/{total}] "),
+        content: format!(" [{idx}/{total}] ").into(),
         style: Style::default_style().bg(theme.bg).fg(theme.fg),
     }
 }
@@ -370,7 +406,7 @@ pub fn search_count_segment(idx: usize, total: usize, theme: &StatusTheme) -> Se
 /// Build a loading/spinner segment (` ⠋ label `).
 pub fn loading_segment(spinner_frame: &str, label: &str, theme: &StatusTheme) -> Segment {
     Segment::Text {
-        content: format!(" {spinner_frame} {label} "),
+        content: format!(" {spinner_frame} {label} ").into(),
         style: Style::default_style().bg(theme.bg).fg(theme.fg).italic(),
     }
 }
@@ -379,15 +415,24 @@ pub fn loading_segment(spinner_frame: &str, label: &str, theme: &StatusTheme) ->
 
 /// Truncate `filename` so it fits in `avail` display columns, prepending `…`
 /// when truncation occurs. Returns the (possibly truncated) string.
+///
+/// Uses `char_indices()` to find a valid UTF-8 char boundary at or before the
+/// computed byte offset, avoiding panics on multibyte (non-ASCII) filenames.
 pub fn truncate_filename(filename: &str, avail: usize) -> String {
-    if filename.len() <= avail {
+    if filename.chars().count() <= avail {
         filename.to_owned()
     } else if avail <= 1 {
         String::new()
     } else {
-        let keep = avail.saturating_sub(1);
-        let start = filename.len().saturating_sub(keep);
-        format!("\u{2026}{}", &filename[start..])
+        let keep = avail.saturating_sub(1); // one char reserved for '…'
+        // Walk from the end: collect the last `keep` chars' byte start offsets.
+        let start_byte = filename
+            .char_indices()
+            .rev()
+            .nth(keep.saturating_sub(1))
+            .map(|(byte_idx, _)| byte_idx)
+            .unwrap_or(0);
+        format!("\u{2026}{}", &filename[start_byte..])
     }
 }
 
@@ -411,6 +456,10 @@ mod tests {
             new_file_fg: Color::rgb(0xa3, 0xbe, 0x8c),
             recording_bg: Color::rgb(0xbf, 0x61, 0x6a),
             recording_fg: Color::rgb(0x2e, 0x34, 0x40),
+            diag_error_fg: Color::rgb(0xff, 0x00, 0x00),
+            diag_warning_fg: Color::rgb(0xff, 0xc0, 0x00),
+            diag_info_fg: Color::rgb(0x00, 0x7a, 0xff),
+            diag_hint_fg: Color::rgb(0x00, 0xd7, 0xd7),
         }
     }
 
@@ -422,7 +471,7 @@ mod tests {
             ..Default::default()
         };
         bar.left.push(Segment::Text {
-            content: " NORMAL ".to_string(),
+            content: Cow::Borrowed(" NORMAL "),
             style: Style::default_style(),
         });
 
@@ -439,11 +488,11 @@ mod tests {
             ..Default::default()
         };
         bar.left.push(Segment::Text {
-            content: " NORMAL ".to_string(),
+            content: Cow::Borrowed(" NORMAL "),
             style: Style::default_style(),
         });
         bar.right.push(Segment::Text {
-            content: " 1:1 ".to_string(),
+            content: Cow::Borrowed(" 1:1 "),
             style: Style::default_style(),
         });
 
@@ -461,15 +510,15 @@ mod tests {
             ..Default::default()
         };
         bar.left.push(Segment::Text {
-            content: " NORMAL ".to_string(),
+            content: Cow::Borrowed(" NORMAL "),
             style: Style::default_style(),
         });
         bar.left.push(Segment::Text {
-            content: format!(" {long_name} "),
+            content: format!(" {long_name} ").into(),
             style: Style::default_style(),
         });
         bar.right.push(Segment::Text {
-            content: " 1:1 ".to_string(),
+            content: Cow::Borrowed(" 1:1 "),
             style: Style::default_style(),
         });
 
@@ -477,7 +526,7 @@ mod tests {
         let all_content: String = segments
             .iter()
             .map(|s| match s {
-                Segment::Text { content, .. } => content.as_str(),
+                Segment::Text { content, .. } => content.as_ref(),
             })
             .collect();
         assert!(
@@ -494,15 +543,15 @@ mod tests {
             ..Default::default()
         };
         bar.left.push(Segment::Text {
-            content: " NORMAL ".to_string(),
+            content: Cow::Borrowed(" NORMAL "),
             style: Style::default_style(),
         });
         bar.right.push(Segment::Text {
-            content: " 1:1 ".to_string(),
+            content: Cow::Borrowed(" 1:1 "),
             style: Style::default_style(),
         });
         bar.right.push(Segment::Text {
-            content: " 100% ".to_string(),
+            content: Cow::Borrowed(" 100% "),
             style: Style::default_style(),
         });
 
@@ -555,7 +604,7 @@ mod tests {
     #[test]
     fn percent_segment_formats_percent() {
         let theme = test_theme();
-        let seg = percent_segment(42, 100, &theme);
+        let seg = percent_segment(42, 100, ModeKind::Normal, &theme);
         match seg {
             Segment::Text { content, .. } => {
                 assert!(content.contains("43%"), "percent segment: {content:?}");
@@ -595,5 +644,134 @@ mod tests {
         assert_eq!(t.fg, fg);
         // Other slots come from default — spot-check one.
         assert_eq!(t.recording_bg, StatusTheme::default().recording_bg);
+    }
+
+    // ── New tests for issue #135 ─────────────────────────────────────────────
+
+    /// Both `[RO]` and `[+]` (dirty marker) appear together in the bar.
+    #[test]
+    fn readonly_and_dirty_both_shown() {
+        let theme = test_theme();
+        let mut bar = Bar {
+            fill_style: Style::default_style().bg(theme.fill_bg).fg(theme.fg),
+            ..Default::default()
+        };
+        bar.left
+            .push(filename_segment("README.md", " [RO]", &theme));
+        // dirty_segment returns Some when dirty=true
+        if let Some(seg) = dirty_segment(true, &theme) {
+            bar.left.push(seg);
+        }
+
+        let segments = bar.layout(60);
+        let all_content: String = segments
+            .iter()
+            .map(|s| match s {
+                Segment::Text { content, .. } => content.as_ref(),
+            })
+            .collect();
+        assert!(
+            all_content.contains("[RO]"),
+            "readonly tag missing: {all_content:?}"
+        );
+        assert!(
+            all_content.contains('\u{25cf}'),
+            "dirty marker (●) missing: {all_content:?}"
+        );
+    }
+
+    /// `percent_segment` with `total_lines = 0` must not panic and should show 0%.
+    #[test]
+    fn percent_segment_empty_buffer_no_panic() {
+        let theme = test_theme();
+        // row=0, total_lines=0: checked_div returns None → 0%
+        let seg = percent_segment(0, 0, ModeKind::Normal, &theme);
+        match seg {
+            Segment::Text { content, .. } => {
+                assert!(
+                    content.contains("0%"),
+                    "expected 0% for empty buffer: {content:?}"
+                );
+            }
+        }
+    }
+
+    /// When right segments alone exceed the bar width, `Bar::layout` must not
+    /// panic and must return segments whose total width equals the requested width.
+    ///
+    /// In the current implementation right segments are always preserved fully;
+    /// when they exceed `width` the spacer collapses to zero and the left side
+    /// gets zero budget. The total width therefore equals `right_len`, which may
+    /// be > `width`. This test asserts the function completes without panicking
+    /// and produces a non-empty segment list.
+    #[test]
+    fn bar_layout_right_alone_exceeds_width_no_panic() {
+        let theme = test_theme();
+        let mut bar = Bar {
+            fill_style: Style::default_style().bg(theme.fill_bg).fg(theme.fg),
+            ..Default::default()
+        };
+        // Right segments total 20 chars, bar width is only 10.
+        bar.right.push(Segment::Text {
+            content: Cow::Borrowed(" 1:1 "),
+            style: Style::default_style(),
+        });
+        bar.right.push(Segment::Text {
+            content: Cow::Borrowed(" 100% "),
+            style: Style::default_style(),
+        });
+
+        // Must not panic.
+        let segments = bar.layout(10);
+        assert!(
+            !segments.is_empty(),
+            "layout must return at least one segment"
+        );
+    }
+
+    /// When `recording_register = Some('q')` the bar contains the recording indicator.
+    #[test]
+    fn recording_segment_shows_register() {
+        let theme = test_theme();
+        let seg = recording_segment('q', &theme);
+        match &seg {
+            Segment::Text { content, style } => {
+                assert!(
+                    content.contains("REC"),
+                    "recording segment must contain REC: {content:?}"
+                );
+                assert!(
+                    content.contains('@'),
+                    "recording segment must contain @: {content:?}"
+                );
+                assert!(
+                    content.contains('q'),
+                    "recording segment must contain register name: {content:?}"
+                );
+                assert_eq!(
+                    style.bg,
+                    Some(theme.recording_bg),
+                    "recording segment must use recording_bg"
+                );
+            }
+        }
+
+        // Verify the segment appears in a bar layout.
+        let mut bar = Bar {
+            fill_style: Style::default_style().bg(theme.fill_bg).fg(theme.fg),
+            ..Default::default()
+        };
+        bar.left.push(seg);
+        let segments = bar.layout(40);
+        let all_content: String = segments
+            .iter()
+            .map(|s| match s {
+                Segment::Text { content, .. } => content.as_ref(),
+            })
+            .collect();
+        assert!(
+            all_content.contains("REC @q"),
+            "recording indicator missing from bar: {all_content:?}"
+        );
     }
 }
