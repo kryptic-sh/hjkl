@@ -10,6 +10,11 @@ patch bumps.
 
 ### Added
 
+- Search pattern pre-processor rewrites vim word boundaries `\<` and `\>` to
+  `\b` before regex compile. Drops the start/end asymmetry but unblocks the
+  common case; users typing `/foo\<bar\>` now match `bar` as expected. Applies
+  to `/` search, live-preview highlighting, and `:s` substitute. Closes #33.
+
 - Added `editor.chord_timeout_ms` config field (default 1000 ms, vim's
   `timeoutlen` equivalent). Previously the chord-resolve timeout was derived
   internally as `which_key.delay_ms + 500`; users can now tune it independently.

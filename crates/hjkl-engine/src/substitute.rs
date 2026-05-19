@@ -189,10 +189,11 @@ pub fn apply_substitute<H: crate::types::Host>(
         ed.settings().ignore_case
     };
 
+    let translated = crate::search::vim_to_rust_regex(&pattern_str);
     let effective_pattern = if case_insensitive {
-        format!("(?i){pattern_str}")
+        format!("(?i){translated}")
     } else {
-        pattern_str.clone()
+        translated
     };
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;

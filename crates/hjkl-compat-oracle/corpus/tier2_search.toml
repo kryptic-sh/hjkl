@@ -75,3 +75,14 @@ initial_cursor = [0, 6]
 keys = "To"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 5]
+
+# `/\<bar\><CR>` — vim word-boundary search; cursor lands on standalone `bar`,
+# not on the `bar` embedded in `foobar`. Exercises the `\<`/`\>` → `\b`
+# pre-processor (closes #33).
+[[cases]]
+name = "search_vim_word_boundary"
+initial_buffer = "foobar bar baz\n"
+initial_cursor = [0, 0]
+keys = "/\\<bar\\><CR>"
+expected_buffer = "foobar bar baz\n"
+expected_cursor = [0, 7]

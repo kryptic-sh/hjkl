@@ -2082,7 +2082,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             if prompt.text.is_empty() {
                 return Vec::new();
             }
-            let Ok(re) = regex::Regex::new(&prompt.text) else {
+            let translated = crate::search::vim_to_rust_regex(&prompt.text);
+            let Ok(re) = regex::Regex::new(&translated) else {
                 return Vec::new();
             };
             let Some(haystack) = buf_line(&self.buffer, row) else {
@@ -4554,10 +4555,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         } else {
             let case_insensitive = self.settings().ignore_case
                 && !(self.settings().smartcase && pattern.chars().any(|c| c.is_uppercase()));
+            let translated = crate::search::vim_to_rust_regex(pattern);
             let effective: std::borrow::Cow<'_, str> = if case_insensitive {
-                std::borrow::Cow::Owned(format!("(?i){pattern}"))
+                std::borrow::Cow::Owned(format!("(?i){translated}"))
             } else {
-                std::borrow::Cow::Borrowed(pattern)
+                std::borrow::Cow::Owned(translated)
             };
             regex::Regex::new(&effective).ok()
         };

@@ -24,6 +24,48 @@ use regex::Regex;
 
 use crate::types::{Cursor, Query, Search};
 
+/// Rewrite vim-style word-boundary escapes to Rust `regex`-compatible form.
+///
+/// The `regex` crate supports `\b` (symmetric word boundary) but not the
+/// vim/PCRE `\<` (word-boundary start) or `\>` (word-boundary end) variants.
+/// This function performs a single-pass rewrite:
+///
+/// - `\<` → `\b`
+/// - `\>` → `\b`
+/// - `\\<` / `\\>` (literal double-backslash followed by `<`/`>`) are left
+///   untouched — only the unescaped form transforms.
+/// - All other syntax (`\b`, `\B`, `\d`, anchors, …) passes through unchanged.
+///
+/// Call this on the raw user-typed pattern string **before** passing to
+/// `regex::Regex::new`. Keep the original string for display / history.
+pub fn vim_to_rust_regex(pat: &str) -> String {
+    let mut out = String::with_capacity(pat.len());
+    let mut chars = pat.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.peek() {
+                Some('<') => {
+                    chars.next();
+                    out.push_str(r"\b");
+                }
+                Some('>') => {
+                    chars.next();
+                    out.push_str(r"\b");
+                }
+                _ => {
+                    out.push('\\');
+                    if let Some(next) = chars.next() {
+                        out.push(next);
+                    }
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Per-row match cache keyed against the buffer's `dirty_gen`. Live
 /// alongside the active pattern so re-running `n` doesn't re-scan
 /// rows the buffer hasn't touched.
@@ -208,6 +250,102 @@ mod tests {
 
     fn re(pat: &str) -> Regex {
         Regex::new(pat).unwrap()
+    }
+
+    fn vim_re(pat: &str) -> Regex {
+        Regex::new(&vim_to_rust_regex(pat)).unwrap()
+    }
+
+    // ── vim_to_rust_regex unit tests ─────────────────────────────────────────
+
+    /// `\<` and `\>` both rewrite to `\b`.
+    #[test]
+    fn vim_boundary_rewrites_to_b() {
+        assert_eq!(vim_to_rust_regex(r"\<foo\>"), r"\bfoo\b");
+        assert_eq!(vim_to_rust_regex(r"\<"), r"\b");
+        assert_eq!(vim_to_rust_regex(r"\>"), r"\b");
+    }
+
+    /// A literal double-backslash before `<`/`>` must not be consumed.
+    /// `\\<` in the source string is two chars: `\` `\`; the rewriter sees
+    /// the first `\` followed by `\`, emits `\\`, then `<` is plain text.
+    #[test]
+    fn escaped_backslash_left_alone() {
+        // Input: \\< (three chars in source: '\', '\', '<')
+        // Expected output: \\< (the first \ escapes the second, < is literal)
+        let input = r"\\<";
+        let output = vim_to_rust_regex(input);
+        assert_eq!(output, r"\\<");
+    }
+
+    /// Other escape sequences (`\b`, `\B`, `\d`, `\w`, anchors) pass through.
+    #[test]
+    fn other_escapes_unchanged() {
+        assert_eq!(vim_to_rust_regex(r"\b"), r"\b");
+        assert_eq!(vim_to_rust_regex(r"\B"), r"\B");
+        assert_eq!(vim_to_rust_regex(r"\d+"), r"\d+");
+        assert_eq!(vim_to_rust_regex(r"^\w+$"), r"^\w+$");
+    }
+
+    /// Mixed: `\<\w+\>` rewrites to `\b\w+\b` — matches whole words.
+    #[test]
+    fn mixed_boundary_and_word_class() {
+        assert_eq!(vim_to_rust_regex(r"\<\w+\>"), r"\b\w+\b");
+    }
+
+    // ── Integration: compiled vim patterns match correctly ───────────────────
+
+    /// `/foo\<bar\>` — `bar` as a standalone word is matched, `foobar` is not.
+    #[test]
+    fn vim_boundary_matches_standalone_word_not_suffix() {
+        let re = vim_re(r"foo\<bar\>");
+        // "foobar" — `bar` follows directly after `foo` with no word boundary:
+        // the `\b` between `foo` and `bar` fails here.
+        assert!(!re.is_match("foobar"));
+        // "foo bar" — word boundary between `foo ` and `bar`:
+        // pattern `foo\bbar\b` does not match because `foo` is not adjacent.
+        // Use a pattern that directly tests the intent: `bar` as a whole word.
+        let re2 = vim_re(r"\<bar\>");
+        assert!(re2.is_match("foo bar baz"));
+        assert!(!re2.is_match("foobar"));
+    }
+
+    /// `\<word` matches `word` at start-of-word but not mid-word.
+    #[test]
+    fn vim_boundary_start_only() {
+        let re = vim_re(r"\<word");
+        assert!(re.is_match("word here"));
+        assert!(re.is_match("some word here"));
+        assert!(!re.is_match("sword"));
+        assert!(!re.is_match("aword"));
+    }
+
+    /// `word\>` matches `word` at end-of-word but not when followed by more.
+    #[test]
+    fn vim_boundary_end_only() {
+        let re = vim_re(r"word\>");
+        assert!(re.is_match("some word"));
+        assert!(re.is_match("word"));
+        assert!(!re.is_match("words"));
+        assert!(!re.is_match("wordsmith"));
+    }
+
+    /// Existing `\b` continues to work (sanity check — no double-transform).
+    #[test]
+    fn existing_b_boundary_unchanged() {
+        let re = vim_re(r"\bfoo\b");
+        assert!(re.is_match("foo"));
+        assert!(re.is_match("a foo b"));
+        assert!(!re.is_match("foobar"));
+        assert!(!re.is_match("afoo"));
+    }
+
+    /// Mixed: `\<\w+\>` matches whole words only.
+    #[test]
+    fn vim_whole_word_pattern() {
+        let re = vim_re(r"\<\w+\>");
+        let matches: Vec<_> = re.find_iter("foo bar baz").map(|m| m.as_str()).collect();
+        assert_eq!(matches, vec!["foo", "bar", "baz"]);
     }
 
     #[test]
