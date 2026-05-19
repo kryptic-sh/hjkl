@@ -194,6 +194,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                 ExEffect::RenameBuffer { .. } => {
                     // In-memory rename — no write; no-op in headless mode.
                 }
+
+                ExEffect::Cwd(_) => {
+                    // Directory already changed by the handler — no-op.
+                }
             }
         }
 

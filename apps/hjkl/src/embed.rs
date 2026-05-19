@@ -185,6 +185,10 @@ fn dispatch(
                     // In-memory rename only — no-op in embed mode.
                     success(id, Value::Null)
                 }
+                ExEffect::Cwd(_) => {
+                    // Directory already changed by the handler — no-op.
+                    success(id, Value::Null)
+                }
             }
         }
 

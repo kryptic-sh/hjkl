@@ -51,4 +51,8 @@ pub enum ExEffect {
     SaveAndRename { path: String },
     /// `:file {name}` — rename the current buffer in-memory without writing.
     RenameBuffer { name: String },
+    /// `:cd [{path}]` — change the working directory. An empty path means
+    /// `$HOME`. The directory change is applied inside the handler; the new
+    /// path is surfaced so the host can update its status-line / title.
+    Cwd(String),
 }

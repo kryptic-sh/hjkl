@@ -450,6 +450,10 @@ impl App {
                     .set_filename(Some(name.clone()));
                 self.bus.info(format!("\"{}\" [Not edited]", p.display()));
             }
+            ExEffect::Cwd(new_cwd) => {
+                // `:cd` already applied std::env::set_current_dir; show new path.
+                self.bus.info(new_cwd);
+            }
         }
     }
 

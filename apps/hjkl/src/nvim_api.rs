@@ -450,6 +450,10 @@ fn dispatch(
                     // In-memory rename — no-op in nvim-api mode.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::Cwd(_) => {
+                    // Directory already changed by the handler — no-op.
+                    ok(stdout, msgid, Value::Nil)
+                }
             }
         }
 

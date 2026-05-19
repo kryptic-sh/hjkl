@@ -355,6 +355,43 @@ fn file_handler<H: Host>(
     }
 }
 
+// ---- cd / pwd --------------------------------------------------------------
+
+/// `:cd [{path}]` — change working directory. No arg → `$HOME`.
+fn cd_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let raw = args.trim();
+    let target = if raw.is_empty() {
+        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+    } else {
+        raw.to_string()
+    };
+    match std::env::set_current_dir(&target) {
+        Ok(()) => {
+            let new_cwd = std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or(target.clone());
+            Some(ExEffect::Cwd(new_cwd))
+        }
+        Err(e) => Some(ExEffect::Error(format!("{target}: {e}"))),
+    }
+}
+
+/// `:pwd` — print working directory.
+fn pwd_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    Some(ExEffect::Info(cwd))
+}
+
 // ---- put -------------------------------------------------------------------
 
 /// `:put [{reg}]` / `:put!` — paste a register's contents as a new line.
@@ -863,6 +900,24 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Path,
         min_prefix: 1,
         run: file_handler::<H>,
+    });
+
+    // `:cd [{path}]` — change working directory (no-arg → $HOME) (min_prefix=2).
+    reg.add(ExCommand {
+        name: "cd",
+        aliases: &[],
+        arg_kind: ArgKind::Path,
+        min_prefix: 2,
+        run: cd_handler::<H>,
+    });
+
+    // `:pwd` — print working directory (min_prefix=3).
+    reg.add(ExCommand {
+        name: "pwd",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: pwd_handler::<H>,
     });
 
     // `:put [{reg}]` / `:pu [{reg}]` — paste register as new line below cursor.
@@ -1793,6 +1848,40 @@ mod tests {
                 reg: '%',
                 above: false
             })
+        );
+    }
+
+    // ── cd_handler / pwd_handler ─────────────────────────────────────────────
+
+    #[test]
+    fn cd_handler_valid_dir_returns_cwd() {
+        let mut ed = make_editor();
+        let result = cd_handler(&mut ed, "/tmp", None);
+        match result {
+            Some(ExEffect::Cwd(path)) => {
+                assert!(!path.is_empty(), "Cwd path must not be empty");
+            }
+            other => panic!("expected Cwd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cd_handler_invalid_dir_returns_error() {
+        let mut ed = make_editor();
+        let result = cd_handler(&mut ed, "/nonexistent_hjkl_test_dir_xyz", None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn pwd_handler_returns_info() {
+        let mut ed = make_editor();
+        let result = pwd_handler(&mut ed, "", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
         );
     }
 }
