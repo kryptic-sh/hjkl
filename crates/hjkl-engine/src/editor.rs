@@ -3136,6 +3136,150 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.last_indent_range.take()
     }
 
+    /// Filter rows `top_row..=bot_row` through an external shell command.
+    ///
+    /// Spawns `sh -c "<command>"` (or `cmd /C "<command>"` on Windows), pipes
+    /// the selected lines (joined by `\n`) to stdin, and waits up to
+    /// `timeout_secs` seconds (default 10) for the process to finish.
+    ///
+    /// On success: the rows are replaced with stdout. No trailing-newline trim.
+    /// On non-zero exit, spawn failure, or timeout: returns `Err(stderr_or_msg)`
+    /// without mutating the buffer.
+    ///
+    /// `top_row` and `bot_row` are clamped to the buffer's valid row range.
+    pub fn filter_range(
+        &mut self,
+        top_row: usize,
+        bot_row: usize,
+        command: &str,
+        timeout_secs: Option<u64>,
+    ) -> Result<(), String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::thread;
+        use std::time::Instant;
+
+        let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(10));
+        let lines = self.buffer().lines();
+        let line_count = lines.len();
+        let top = top_row.min(line_count.saturating_sub(1));
+        let bot = bot_row.min(line_count.saturating_sub(1));
+        let (top, bot) = (top.min(bot), top.max(bot));
+        let input_text = lines[top..=bot].join("\n");
+
+        tracing::debug!(
+            top_row = top,
+            bot_row = bot,
+            command = command,
+            "filter_range: spawning shell command"
+        );
+
+        #[cfg(not(windows))]
+        let mut child = Command::new("sh")
+            .args(["-c", command])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", command])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn failed: {e}"))?;
+
+        // Write stdin on a thread to avoid deadlock when output > pipe buffer.
+        let mut stdin = child.stdin.take().ok_or("no stdin handle")?;
+        let input_bytes = input_text.into_bytes();
+        thread::spawn(move || {
+            let _ = stdin.write_all(&input_bytes);
+            // stdin drops here, signalling EOF to the child.
+        });
+
+        // Drain stdout/stderr on separate threads so the child's pipes don't
+        // fill and deadlock the child. Keep `child` here so we can kill it on
+        // timeout.
+        let mut stdout_pipe = child.stdout.take().ok_or("no stdout handle")?;
+        let mut stderr_pipe = child.stderr.take().ok_or("no stderr handle")?;
+        let stdout_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
+            buf
+        });
+        let stderr_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
+            buf
+        });
+
+        // Poll try_wait until exit or timeout. On timeout: SIGKILL the child
+        // (std Child::kill sends SIGKILL on Unix / TerminateProcess on Windows).
+        // A proper TERM→KILL escalation would need nix/libc; skip for v1.
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        tracing::debug!(command, "filter_range: timeout — killing child");
+                        let _ = child.kill();
+                        let _ = child.wait(); // reap so the OS can free resources
+                        return Err(format!("command timed out after {}s", timeout.as_secs()));
+                    }
+                    thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(format!("wait failed: {e}")),
+            }
+        };
+
+        let stdout_bytes = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+            tracing::debug!(
+                command,
+                exit_code = ?status.code(),
+                "filter_range: command exited with non-zero status"
+            );
+            return Err(if stderr.is_empty() {
+                format!("command exited with status {}", status.code().unwrap_or(-1))
+            } else {
+                stderr
+            });
+        }
+
+        let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+        tracing::debug!(
+            command,
+            stdout_bytes = stdout_bytes.len(),
+            "filter_range: command succeeded, replacing rows"
+        );
+
+        // Replace the row range with the stdout lines.
+        let mut all_lines = lines;
+        let new_lines: Vec<String> = stdout.lines().map(|l| l.to_owned()).collect();
+        // If stdout ended with a newline, stdout.lines() drops the trailing empty
+        // entry — this preserves vim's "no trailing-newline trim" spec because
+        // a trailing '\n' from the command means the last replacement line is the
+        // line BEFORE the newline, not an empty line after it.
+        let after = all_lines.split_off(bot + 1);
+        all_lines.truncate(top);
+        all_lines.extend(new_lines);
+        all_lines.extend(after);
+
+        self.push_undo();
+        self.restore(all_lines, (top, 0));
+        // Leave mode as Normal after a successful filter operation (vim parity).
+        self.force_normal();
+
+        Ok(())
+    }
+
     // ─── Phase 4b: pub text-object resolution (hjkl#70) ─────────────────────
     //
     // Pure functions — no cursor mutation, no mode change, no register write.

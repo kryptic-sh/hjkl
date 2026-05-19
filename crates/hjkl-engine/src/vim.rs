@@ -197,6 +197,11 @@ pub enum Operator {
     /// bracket depth counting (v1 dumb reindent). Always linewise.
     /// See `auto_indent_range` for the algorithm and its limitations.
     AutoIndent,
+    /// `!{motion}` — filter the line range through an external shell command.
+    /// The range text is piped to the command's stdin; stdout replaces the
+    /// range in the buffer. Non-zero exit or spawn failure returns an error
+    /// to the caller without mutating the buffer.
+    Filter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -674,6 +679,7 @@ impl VimState {
             Operator::Fold => 'z',
             Operator::Reflow => 'q',
             Operator::AutoIndent => '=',
+            Operator::Filter => '!',
         })
     }
 }
@@ -3652,6 +3658,12 @@ fn run_operator_over_range<H: crate::types::Host>(
             auto_indent_rows(ed, top.0, bot.0);
             ed.vim.mode = Mode::Normal;
         }
+        Operator::Filter => {
+            // Filter is not dispatched through run_operator_over_range.
+            // The app calls Editor::filter_range directly with a command string.
+            // Reaching this arm means a caller invoked run_operator_over_range
+            // with Operator::Filter by mistake — silently no-op.
+        }
     }
 }
 
@@ -4544,6 +4556,9 @@ fn execute_line_op<H: crate::types::Host>(
             ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
         }
+        Operator::Filter => {
+            // Filter is dispatched through Editor::filter_range, not here.
+        }
     }
 }
 
@@ -4637,6 +4652,8 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     auto_indent_rows(ed, top, bot);
                     ed.vim.mode = Mode::Normal;
                 }
+                // Filter is dispatched through Editor::filter_range, not here.
+                Operator::Filter => {}
                 // Visual `zf` is handled inline in `handle_after_z`,
                 // never routed through this dispatcher.
                 Operator::Fold => unreachable!("Visual zf takes its own path"),
@@ -4703,6 +4720,8 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     auto_indent_rows(ed, top.0, bot.0);
                     ed.vim.mode = Mode::Normal;
                 }
+                // Filter is dispatched through Editor::filter_range, not here.
+                Operator::Filter => {}
                 Operator::Fold => unreachable!("Visual zf takes its own path"),
             }
         }
@@ -4843,6 +4862,8 @@ fn apply_block_operator<H: crate::types::Host>(
             auto_indent_rows(ed, top, bot);
             ed.vim.mode = Mode::Normal;
         }
+        // Filter is dispatched through Editor::filter_range, not here.
+        Operator::Filter => {}
     }
 }
 

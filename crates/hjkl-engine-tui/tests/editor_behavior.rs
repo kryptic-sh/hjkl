@@ -3021,3 +3021,80 @@ fn auto_indent_vs_cargo_fmt_motions_diagnostic() {
         "auto_indent diverges from cargo fmt on {pct}% of lines — regression from <1% baseline"
     );
 }
+
+// ── filter_range tests ────────────────────────────────────────────────────────
+
+fn make_editor(content: &str) -> Editor {
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::new(),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+    e.set_content(content);
+    e
+}
+
+/// `cat` is identity — buffer content must be unchanged after filter_range.
+#[test]
+fn filter_range_cat_is_identity() {
+    let mut e = make_editor("alpha\nbeta\ngamma");
+    let result = e.filter_range(0, 2, "cat", None);
+    assert!(result.is_ok(), "cat must succeed: {result:?}");
+    let lines = e.buffer().lines().to_vec();
+    assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
+}
+
+/// Non-existent command returns Err; buffer must be unchanged.
+#[test]
+fn filter_range_nonexistent_command_returns_err() {
+    let mut e = make_editor("line1\nline2");
+    let count_before = e.buffer().lines().len();
+    let result = e.filter_range(0, 1, "__hjkl_no_such_cmd_xyz__", None);
+    assert!(result.is_err(), "non-existent command must return Err");
+    // Buffer must still have same line count — no mutation on error.
+    assert_eq!(e.buffer().lines().len(), count_before);
+}
+
+/// `sort` reorders lines within the filtered range.
+#[test]
+fn filter_range_sort_reorders_lines() {
+    let mut e = make_editor("banana\napple\ncherry");
+    let result = e.filter_range(0, 2, "sort", None);
+    assert!(result.is_ok(), "sort must succeed: {result:?}");
+    let lines = e.buffer().lines().to_vec();
+    assert_eq!(lines, vec!["apple", "banana", "cherry"]);
+}
+
+/// Partial range: only the specified rows are filtered; other rows untouched.
+#[test]
+fn filter_range_partial_range() {
+    // filter rows 1..=2 (banana, apple); row 0 (alpha) must stay
+    let mut e = make_editor("alpha\nbanana\napple");
+    let result = e.filter_range(1, 2, "sort", None);
+    assert!(result.is_ok(), "sort must succeed: {result:?}");
+    let lines = e.buffer().lines().to_vec();
+    assert_eq!(lines[0], "alpha", "row 0 must be untouched");
+    assert_eq!(&lines[1..], &["apple", "banana"]);
+}
+
+/// A slow command must be killed by the timeout; filter_range returns Err
+/// and the buffer is unmodified.
+#[test]
+#[cfg(not(windows))]
+fn filter_range_timeout_kills_slow_command() {
+    let mut e = make_editor("line1\nline2");
+    let before = e.buffer().lines().to_vec();
+    let start = std::time::Instant::now();
+    let result = e.filter_range(0, 1, "sleep 30", Some(1));
+    let elapsed = start.elapsed();
+    assert!(result.is_err(), "slow command must time out: {result:?}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "should return within ~1s timeout + slack, got {elapsed:?}"
+    );
+    assert_eq!(
+        e.buffer().lines().to_vec(),
+        before,
+        "buffer must be unchanged"
+    );
+}

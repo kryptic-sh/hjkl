@@ -694,8 +694,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         &viewport_owned
     };
 
-    let in_prompt =
-        app.command_field.is_some() || app.search_field.is_some() || app.picker.is_some();
+    let in_prompt = app.command_field.is_some()
+        || app.filter_field.is_some()
+        || app.search_field.is_some()
+        || app.picker.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
@@ -1280,6 +1282,20 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         let text = field.text();
         let display: String = text.lines().next().unwrap_or("").to_string();
         let content = format!(":{display}");
+        let (_, ccol) = field.cursor();
+        let cursor_col = 1u16 + ccol as u16;
+        let theme = prompt_theme(&app.theme.ui);
+        return (
+            build_prompt_line(&content, field.vim_mode(), &theme, width),
+            Some(cursor_col),
+        );
+    }
+
+    // ── Filter prompt (`!`) ───────────────────────────────────────────────────
+    if let Some(ref field) = app.filter_field {
+        let text = field.text();
+        let display: String = text.lines().next().unwrap_or("").to_string();
+        let content = format!("!{display}");
         let (_, ccol) = field.cursor();
         let cursor_col = 1u16 + ccol as u16;
         let theme = prompt_theme(&app.theme.ui);

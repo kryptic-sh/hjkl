@@ -63,6 +63,7 @@ pub(crate) fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Ope
         hjkl_vim::OperatorKind::ToggleCase => hjkl_engine::Operator::ToggleCase,
         hjkl_vim::OperatorKind::Reflow => hjkl_engine::Operator::Reflow,
         hjkl_vim::OperatorKind::AutoIndent => hjkl_engine::Operator::AutoIndent,
+        hjkl_vim::OperatorKind::Filter => hjkl_engine::Operator::Filter,
     }
 }
 
@@ -291,6 +292,12 @@ impl App {
             if self.exit_requested {
                 return KeyOutcome::Break;
             }
+            return KeyOutcome::Continue;
+        }
+
+        // ── Filter prompt (`!` operator) ──────────────────────────
+        if self.filter_field.is_some() {
+            self.handle_filter_field_key(key);
             return KeyOutcome::Continue;
         }
 

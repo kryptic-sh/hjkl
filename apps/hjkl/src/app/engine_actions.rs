@@ -133,6 +133,19 @@ impl App {
                                     }
                                 }
                             }
+                            hjkl_vim::OperatorKind::Filter => {
+                                // Visual-block !: filter the row range through a shell command.
+                                // Exit visual mode first, then open the filter prompt.
+                                use crossterm::event::{
+                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
+                                };
+                                hjkl_vim_tui::handle_key(
+                                    &mut self.active_mut().editor,
+                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                );
+                                self.open_filter_prompt(top_row, bot_row);
+                                return;
+                            }
                             _ => return,
                         }
                         // Exit visual mode after the op (except Change above).
@@ -197,6 +210,20 @@ impl App {
                                         });
                                     }
                                 }
+                            }
+                            hjkl_vim::OperatorKind::Filter => {
+                                // Visual-charwise !: filter the row range through a shell command.
+                                let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
+                                // Exit visual mode first, then open the filter prompt.
+                                use crossterm::event::{
+                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
+                                };
+                                hjkl_vim_tui::handle_key(
+                                    &mut self.active_mut().editor,
+                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                );
+                                self.open_filter_prompt(min_r, max_r);
+                                return;
                             }
                             _ => return,
                         }
@@ -284,6 +311,19 @@ impl App {
                                         });
                                     }
                                 }
+                            }
+                            hjkl_vim::OperatorKind::Filter => {
+                                // Visual-line !: filter the row range through a shell command.
+                                // Exit visual mode first, then open the filter prompt.
+                                use crossterm::event::{
+                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
+                                };
+                                hjkl_vim_tui::handle_key(
+                                    &mut self.active_mut().editor,
+                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                );
+                                self.open_filter_prompt(top_row, bot_row);
+                                return;
                             }
                             _ => return,
                         }
