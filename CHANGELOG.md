@@ -8,10 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
-### Changed
+## [0.25.0] - 2026-05-19
 
-- Renamed crate `hjkl-css-floem` → `hjkl-css-gui` to match `-gui` floem-adapter
-  convention.
+### Changed (BREAKING)
+
+- Renamed crate `hjkl-css-floem` → `hjkl-css-gui` to match the `-gui`
+  floem-adapter convention. External consumers update the dep name and the
+  `use hjkl_css_floem::*` import.
 - Renamed crate `hjkl-keymap-crossterm` → `hjkl-keymap-tui` to match the `-tui`
   adapter convention (crossterm is a TUI-only input lib).
 - Extracted `hjkl-splash-tui` from `hjkl-splash` — the ratatui adapter is no
@@ -35,15 +38,6 @@ patch bumps.
   with `intern_ratatui_style` / `install_ratatui_syntax_spans` /
   `ratatui_style_table`) now lives in the new sibling crate. `hjkl-engine`
   dropped its `ratatui` feature entirely. Phase 2 of #162.
-
-### Removed
-
-- Deleted deprecated `hjkl-ratatui` shim. Use `hjkl-editor-tui` directly.
-
-## [0.25.0] - 2026-05-18
-
-### Changed (BREAKING)
-
 - **Data-model types relocated** to restore clean layering — renderer and worker
   crates no longer depend upward into `hjkl-app` (closes #160):
   - `Completion`, `CompletionItem`, `CompletionKind` → new `hjkl-completion`
@@ -81,6 +75,7 @@ patch bumps.
 - `hjkl-app::lang` module + `crates/hjkl-app/src/lang.rs` (moved to
   `hjkl-lang`).
 - `hjkl-app::BufferId` (moved to `hjkl-buffer::BufferId`).
+- Deleted deprecated `hjkl-ratatui` shim. Use `hjkl-editor-tui` directly.
 
 ### Notes
 
