@@ -14,7 +14,6 @@ readme = "README.md"
 
 [dependencies]
 hjkl-markdown.workspace = true
-hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

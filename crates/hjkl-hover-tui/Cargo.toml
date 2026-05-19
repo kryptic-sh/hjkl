@@ -16,7 +16,6 @@ readme = "README.md"
 hjkl-hover.workspace = true
 hjkl-markdown.workspace = true
 hjkl-markdown-tui.workspace = true
-hjkl-theme.workspace = true
 ratatui = "0.30"
 
 [package.metadata.docs.rs]

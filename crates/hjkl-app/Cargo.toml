@@ -13,7 +13,6 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-anyhow = "1"
 crossbeam-channel = "0.5"
 ec4rs = "1"
 git2 = { version = "0.21", default-features = false }
@@ -27,7 +26,6 @@ hjkl-picker.workspace = true
 hjkl-vim.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
-tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

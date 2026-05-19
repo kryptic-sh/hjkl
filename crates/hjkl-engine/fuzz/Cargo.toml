@@ -29,8 +29,6 @@ cargo-fuzz = true
 
 [dependencies]
 hjkl-engine = { path = ".." }
-hjkl-engine-tui = { path = "../../hjkl-engine-tui" }
-hjkl-vim = { path = "../../hjkl-vim" }
 hjkl-vim-tui = { path = "../../hjkl-vim-tui" }
 hjkl-buffer = { path = "../../hjkl-buffer" }
 libfuzzer-sys = "0.4"

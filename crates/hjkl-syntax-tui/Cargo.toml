@@ -15,7 +15,6 @@ readme = "README.md"
 [dependencies]
 hjkl-syntax.workspace = true
 hjkl-theme-tui.workspace = true
-hjkl-buffer.workspace = true
 hjkl-buffer-tui.workspace = true
 ratatui = "0.30"
 
