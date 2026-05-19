@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-05-19
+
 ### Added
 
 - Motions `[[`, `]]`, `[]`, `][`, `+` / `<CR>`, `-`, `_` (closes #31). Section
@@ -3599,7 +3601,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/kryptic-sh/hjkl/compare/v0.24.4...v0.25.0
 [0.24.4]: https://github.com/kryptic-sh/hjkl/compare/v0.24.3...v0.24.4
