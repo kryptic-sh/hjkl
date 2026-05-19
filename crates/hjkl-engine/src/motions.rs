@@ -153,6 +153,18 @@ pub fn move_line_end<B: Cursor + Query>(buf: &mut B) {
     write_cursor(buf, Position::new(row, col));
 }
 
+/// `{count}|` — jump to column `count` on the current line (1-based;
+/// count=0 or no count → column 1 → index 0). Clamped to line length.
+pub fn move_goto_column<B: Cursor + Query>(buf: &mut B, count: usize) {
+    let cursor = read_cursor(buf);
+    // count is 1-based in vim: `1|` → col 0, `5|` → col 4.
+    // count=0 is treated as 1 (no count given → go to column 1).
+    let target_col = if count == 0 { 0 } else { count - 1 };
+    let line = read_line(buf, cursor.row);
+    let clamped = target_col.min(last_col(&line));
+    write_cursor(buf, Position::new(cursor.row, clamped));
+}
+
 /// `g_` — last non-blank char on the row. Empty / all-blank rows
 /// stay at column 0.
 pub fn move_last_non_blank<B: Cursor + Query>(buf: &mut B) {
