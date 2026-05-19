@@ -33,7 +33,7 @@ pub mod types;
 mod viewport_math;
 mod vim;
 
-pub use editor::{Editor, LspIntent, StepBookkeeping};
+pub use editor::{Editor, LspIntent, MarkJump, StepBookkeeping};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};
 

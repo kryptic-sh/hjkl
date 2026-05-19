@@ -438,6 +438,9 @@ pub(super) fn build_slot(
         hjkl_app::editorconfig::overlay_for_path(&mut ec_opts, p);
     }
     let mut editor = Editor::new(buffer, host, ec_opts);
+    // Tag the editor with its stable buffer_id so `mA`–`mZ` global marks
+    // record the correct id from the first keystroke.
+    editor.set_current_buffer_id(buffer_id);
     if let Ok(size) = crossterm::terminal::size() {
         let viewport_height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
         let vp = editor.host_mut().viewport_mut();

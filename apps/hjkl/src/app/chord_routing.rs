@@ -534,14 +534,14 @@ impl App {
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkLine { ch }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.goto_mark_line(ch);
-                        self.sync_after_engine_mutation();
+                        let jump = self.active_mut().editor.try_goto_mark_line(ch);
+                        self.apply_mark_jump(jump, true);
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::GotoMarkChar { ch }) => {
                         self.pending_state = None;
-                        self.active_mut().editor.goto_mark_char(ch);
-                        self.sync_after_engine_mutation();
+                        let jump = self.active_mut().editor.try_goto_mark_char(ch);
+                        self.apply_mark_jump(jump, false);
                         return true;
                     }
                     Outcome::Commit(hjkl_vim::EngineCmd::StartMacroRecord { reg }) => {

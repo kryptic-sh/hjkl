@@ -601,10 +601,15 @@ fn handle_goto_mark<H: Host>(
     let Key::Char(c) = input.key else {
         return true;
     };
+    // CrossBuffer results are silently ignored here — the FSM has no
+    // mechanism to switch buffers. The app layer handles uppercase marks
+    // through chord_routing + apply_mark_jump. Lowercase/special marks
+    // always resolve in the same buffer. Uppercase marks that are in the
+    // same buffer (current_buffer_id matches) execute the jump normally.
     if linewise {
-        ed.goto_mark_line(c);
+        let _ = ed.try_goto_mark_line(c);
     } else {
-        ed.goto_mark_char(c);
+        let _ = ed.try_goto_mark_char(c);
     }
     true
 }

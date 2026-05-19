@@ -55,24 +55,26 @@ fn display_register(text: &str) -> String {
 // ---- marks -----------------------------------------------------------------
 
 /// `:marks` — list every set mark with `(line, col)`. Lines are 1-based to
-/// match vim; cols are 0-based.
+/// match vim; cols are 0-based. Uppercase global marks include the buffer id.
 pub(crate) fn format_marks<H: Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
 ) -> String {
     let mut lines = vec!["--- Marks ---".to_string(), "mark  line  col".to_string()];
-    // 0.0.36: lowercase + uppercase marks share the unified
-    // `Editor::marks` map. `marks()` already iterates in BTreeMap
-    // (char-ordered) sequence, so no extra sort needed.
-    let entries: Vec<(char, usize, usize)> =
-        editor.marks().map(|(c, (r, col))| (c, r, col)).collect();
-    for (c, r, col) in entries {
-        lines.push(format!(" {c}    {:>4}  {col:>3}", r + 1));
+    // Lowercase (buffer-local) marks — from the unified `Editor::marks` map.
+    for (c, (r, col)) in editor.marks() {
+        if c.is_ascii_lowercase() || !c.is_ascii_alphabetic() {
+            lines.push(format!(" {c}    {:>4}  {:>3}", r + 1, col));
+        }
+    }
+    // Uppercase global marks — include buffer_id for cross-buffer context.
+    for (c, bid, r, col) in editor.global_marks_iter() {
+        lines.push(format!(" {c}    {:>4}  {:>3}  buf:{bid}", r + 1, col));
     }
     if let Some((r, col)) = editor.last_jump_back() {
-        lines.push(format!(" '    {:>4}  {col:>3}", r + 1));
+        lines.push(format!(" '    {:>4}  {:>3}", r + 1, col));
     }
     if let Some((r, col)) = editor.last_edit_pos() {
-        lines.push(format!(" .    {:>4}  {col:>3}", r + 1));
+        lines.push(format!(" .    {:>4}  {:>3}", r + 1, col));
     }
     if lines.len() == 2 {
         lines.push("(no marks set)".to_string());

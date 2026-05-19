@@ -2186,32 +2186,39 @@ pub(crate) fn set_mark_at_cursor<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
 ) {
-    if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() {
-        // 0.0.36: lowercase + uppercase marks share the unified
-        // `Editor::marks` map. Uppercase entries survive
-        // `set_content` so they persist across tab swaps within the
-        // same Editor (the map lives on the Editor, not the buffer).
+    if ch.is_ascii_lowercase() {
         let pos = ed.cursor();
         ed.set_mark(ch, pos);
+    } else if ch.is_ascii_uppercase() {
+        let pos = ed.cursor();
+        let bid = ed.current_buffer_id();
+        ed.set_global_mark(ch, bid, pos);
+        tracing::debug!(
+            mark = ch as u32,
+            buffer_id = bid,
+            row = pos.0,
+            col = pos.1,
+            "global mark set"
+        );
     }
     // Invalid chars silently no-op (mirrors handle_set_mark behaviour).
 }
 
-/// `'<ch>` / `` `<ch> `` — public controller entry point. Validates `ch`
-/// against the set of legal mark names (lowercase, uppercase, special:
-/// `'`/`` ` ``/`.`/`[`/`]`/`<`/`>`), resolves the target position, and
-/// jumps the cursor. `linewise = true` → row only, col snaps to first
-/// non-blank; `linewise = false` → exact (row, col). Called by
-/// `Editor::goto_mark_line` / `Editor::goto_mark_char` so that hjkl-vim's
-/// `PendingState::GotoMarkLine` / `GotoMarkChar` reducers can dispatch
-/// without re-entering the engine FSM.
+/// `'<ch>` / `` `<ch> `` — public controller entry point for lowercase and
+/// special marks. Validates `ch` against the set of legal mark names
+/// (lowercase, special: `'`/`` ` ``/`.`/`[`/`]`/`<`/`>`), resolves the
+/// target position, and jumps the cursor. `linewise = true` → row only, col
+/// snaps to first non-blank; `linewise = false` → exact (row, col).
+///
+/// Uppercase marks are handled by [`try_goto_mark`] which can return a
+/// `MarkJump::CrossBuffer` for cross-buffer jumps.
 pub(crate) fn goto_mark<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
     linewise: bool,
 ) {
     let target = match ch {
-        'a'..='z' | 'A'..='Z' => ed.mark(ch),
+        'a'..='z' => ed.mark(ch),
         '\'' | '`' => ed.vim.jump_back.last().copied(),
         '.' => ed.vim.last_edit_pos,
         '[' | ']' | '<' | '>' => ed.mark(ch),
@@ -2234,6 +2241,64 @@ pub(crate) fn goto_mark<H: crate::types::Host>(
         ed.push_jump(pre);
     }
     ed.sticky_col = Some(ed.cursor().1);
+}
+
+/// Unified mark-jump entry point that returns a [`crate::editor::MarkJump`]
+/// so the app layer can decide whether to switch buffers.
+///
+/// - Uppercase marks (`'A'`–`'Z'`) look in `global_marks`. If the stored
+///   `buffer_id` differs from `ed.current_buffer_id()`, returns
+///   `CrossBuffer`. Same-buffer uppercase marks execute the jump normally.
+/// - All other legal mark chars delegate to [`goto_mark`] and return
+///   `SameBuffer`.
+pub(crate) fn try_goto_mark<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    ch: char,
+    linewise: bool,
+) -> crate::editor::MarkJump {
+    use crate::editor::MarkJump;
+    match ch {
+        'A'..='Z' => {
+            let Some((bid, row, col)) = ed.global_mark(ch) else {
+                return MarkJump::Unset;
+            };
+            if bid != ed.current_buffer_id() {
+                tracing::debug!(
+                    mark = ch as u32,
+                    buffer_id = bid,
+                    row,
+                    col,
+                    "global mark cross-buffer jump"
+                );
+                return MarkJump::CrossBuffer {
+                    buffer_id: bid,
+                    row,
+                    col,
+                };
+            }
+            // Same buffer — execute the jump normally.
+            let pre = ed.cursor();
+            let (r, c_clamped) = clamp_pos(ed, (row, col));
+            if linewise {
+                buf_set_cursor_rc(&mut ed.buffer, r, 0);
+                ed.push_buffer_cursor_to_textarea();
+                move_first_non_whitespace(ed);
+            } else {
+                buf_set_cursor_rc(&mut ed.buffer, r, c_clamped);
+                ed.push_buffer_cursor_to_textarea();
+            }
+            if ed.cursor() != pre {
+                ed.push_jump(pre);
+            }
+            ed.sticky_col = Some(ed.cursor().1);
+            MarkJump::SameBuffer
+        }
+        'a'..='z' | '\'' | '`' | '.' | '[' | ']' | '<' | '>' => {
+            goto_mark(ed, ch, linewise);
+            MarkJump::SameBuffer
+        }
+        _ => MarkJump::Unset,
+    }
 }
 
 /// `true` when `op` records a `last_change` entry for dot-repeat purposes.

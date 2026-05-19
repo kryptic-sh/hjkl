@@ -2727,9 +2727,14 @@ fn uppercase_mark_stored_under_uppercase_key() {
     let mut e = editor_with_rows(50, 20);
     e.jump_cursor(5, 3);
     run_keys(&mut e, "mA");
-    // 0.0.36: uppercase marks land in the unified `Editor::marks`
-    // map under the uppercase key — not under 'a'.
-    assert_eq!(e.mark('A'), Some((5, 3)));
+    // Uppercase marks now live in global_marks (cross-buffer), not the
+    // buffer-local `marks` map. The buffer_id defaults to 0 for a fresh editor.
+    let gm = e.global_mark('A');
+    assert!(gm.is_some(), "global mark 'A' should be set");
+    let (_bid, row, col) = gm.unwrap();
+    assert_eq!(row, 5);
+    assert_eq!(col, 3);
+    // Lowercase map is unaffected.
     assert!(e.mark('a').is_none());
 }
 
@@ -2845,6 +2850,75 @@ fn capital_mark_shifts_with_edit() {
     e.jump_cursor(0, 0);
     run_keys(&mut e, "'A");
     assert_eq!(e.cursor().0, 2);
+}
+
+// ── Global mark (cross-buffer) engine unit tests ───────────────────────────
+
+#[test]
+fn global_mark_same_buffer_jump_returns_same_buffer() {
+    let mut e = editor_with("alpha\nbeta\ngamma");
+    e.set_current_buffer_id(42);
+    e.jump_cursor(2, 1);
+    run_keys(&mut e, "mA");
+    // Verify the mark is stored in global_marks with the correct buffer_id.
+    let gm = e.global_mark('A');
+    assert!(gm.is_some());
+    let (bid, row, col) = gm.unwrap();
+    assert_eq!(bid, 42);
+    assert_eq!(row, 2);
+    assert_eq!(col, 1);
+    // Jump to same buffer — try_goto_mark_line returns SameBuffer.
+    e.jump_cursor(0, 0);
+    let jump = e.try_goto_mark_line('A');
+    assert_eq!(jump, hjkl_engine::MarkJump::SameBuffer);
+    assert_eq!(e.cursor().0, 2);
+}
+
+#[test]
+fn global_mark_cross_buffer_returns_cross_buffer() {
+    let mut e = editor_with("alpha\nbeta\ngamma");
+    // Set the mark with buffer_id=99.
+    e.set_current_buffer_id(99);
+    e.jump_cursor(1, 3);
+    run_keys(&mut e, "mB");
+    // Switch "current" buffer to a different id.
+    e.set_current_buffer_id(7);
+    // Jump should return CrossBuffer because 99 != 7.
+    let jump = e.try_goto_mark_char('B');
+    match jump {
+        hjkl_engine::MarkJump::CrossBuffer {
+            buffer_id,
+            row,
+            col,
+        } => {
+            assert_eq!(buffer_id, 99);
+            assert_eq!(row, 1);
+            assert_eq!(col, 3);
+        }
+        other => panic!("expected CrossBuffer, got {other:?}"),
+    }
+}
+
+#[test]
+fn global_mark_unset_returns_unset() {
+    let mut e = editor_with("hello");
+    let jump = e.try_goto_mark_line('Z');
+    assert_eq!(jump, hjkl_engine::MarkJump::Unset);
+}
+
+#[test]
+fn global_mark_shifts_after_edit_in_same_buffer() {
+    let mut e = editor_with("a\nb\nc\nd\ne");
+    e.set_current_buffer_id(1);
+    e.jump_cursor(4, 0);
+    run_keys(&mut e, "mC"); // global mark C at row 4
+    // Delete row 0 — mark should shift to row 3.
+    e.jump_cursor(0, 0);
+    run_keys(&mut e, "dd");
+    let (_, row, _) = e
+        .global_mark('C')
+        .expect("global mark C should still exist");
+    assert_eq!(row, 3, "global mark should shift up by 1 after dd at row 0");
 }
 
 #[test]
