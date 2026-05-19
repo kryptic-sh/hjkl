@@ -16,7 +16,7 @@ readme = "README.md"
 anyhow = "1"
 crossbeam-channel = "0.5"
 ec4rs = "1"
-git2 = { version = "0.20", default-features = false }
+git2 = { version = "0.21", default-features = false }
 hjkl-anvil.workspace = true
 hjkl-buffer.workspace = true
 hjkl-config.workspace = true
