@@ -41,4 +41,7 @@ pub enum ExEffect {
     /// `:bd[!]` / `:bw[!]` — close the current buffer.
     /// `wipe = true` for `:bwipeout`; `force = true` when `!` was given.
     BufferDelete { force: bool, wipe: bool },
+    /// `:put [{reg}]` / `:pu [{reg}]` — paste register contents as a new
+    /// line below (or above when `above = true`) the cursor.
+    PutRegister { reg: char, above: bool },
 }

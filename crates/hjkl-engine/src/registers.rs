@@ -40,6 +40,14 @@ pub struct Registers {
     /// The host (the host) syncs this slot from the OS clipboard
     /// before paste and from the slot back out on yank.
     pub clip: Slot,
+    /// `"%` — synthetic read-only register: current buffer filename.
+    /// Set by the host whenever the active slot changes.
+    pub filename: Option<String>,
+    /// Pre-built `Slot` for the `%` register. Kept in sync with `filename`
+    /// by [`Registers::set_filename`] so `read('%')` can return `&Slot`.
+    /// Derived from `filename` — not serialised independently.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    filename_slot: Option<Slot>,
 }
 
 impl Registers {
@@ -86,6 +94,9 @@ impl Registers {
 
     /// Read a register by its single-char selector. Returns `None`
     /// for unrecognised selectors.
+    ///
+    /// `'%'` is a synthetic read-only register: returns the current buffer
+    /// filename when one has been set via [`Registers::set_filename`].
     pub fn read(&self, reg: char) -> Option<&Slot> {
         match reg {
             '"' => Some(&self.unnamed),
@@ -94,8 +105,17 @@ impl Registers {
             'a'..='z' => Some(&self.named[(reg as u8 - b'a') as usize]),
             'A'..='Z' => Some(&self.named[(reg.to_ascii_lowercase() as u8 - b'a') as usize]),
             '+' | '*' => Some(&self.clip),
+            // `%` is a synthetic read-only register: current buffer filename.
+            '%' => self.filename_slot.as_ref(),
             _ => None,
         }
+    }
+
+    /// Host hook: set the `"%` register to the given filename. Call this
+    /// whenever the active buffer changes.
+    pub fn set_filename(&mut self, name: Option<String>) {
+        self.filename = name.clone();
+        self.filename_slot = name.map(|n| Slot::new(n, false));
     }
 
     /// Replace the clipboard slot's contents — host hook for syncing
@@ -186,5 +206,30 @@ mod tests {
         assert_eq!(r.read('+').unwrap().text, "hi");
         // Unnamed always mirrors the latest write.
         assert_eq!(r.read('"').unwrap().text, "hi");
+    }
+
+    #[test]
+    fn percent_register_returns_none_when_no_filename() {
+        let r = Registers::default();
+        assert!(r.read('%').is_none());
+    }
+
+    #[test]
+    fn percent_register_returns_filename_after_set() {
+        let mut r = Registers::default();
+        r.set_filename(Some("src/main.rs".into()));
+        let slot = r
+            .read('%')
+            .expect("'%' should return Some after set_filename");
+        assert_eq!(slot.text, "src/main.rs");
+        assert!(!slot.linewise, "'%' slot should be charwise");
+    }
+
+    #[test]
+    fn percent_register_clears_when_set_to_none() {
+        let mut r = Registers::default();
+        r.set_filename(Some("foo.txt".into()));
+        r.set_filename(None);
+        assert!(r.read('%').is_none());
     }
 }

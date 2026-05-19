@@ -175,6 +175,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                     // No multi-buffer in headless mode — stop processing.
                     break;
                 }
+
+                ExEffect::PutRegister { .. } => {
+                    // No multi-buffer paste support in headless mode — no-op.
+                }
             }
         }
 

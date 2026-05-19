@@ -433,6 +433,10 @@ fn dispatch(
                     *should_quit = true;
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::PutRegister { .. } => {
+                    // No multi-buffer paste in nvim-api mode — no-op.
+                    ok(stdout, msgid, Value::Nil)
+                }
             }
         }
 

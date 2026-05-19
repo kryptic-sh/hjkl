@@ -168,6 +168,10 @@ fn dispatch(
                     *should_quit = true;
                     success(id, Value::Null)
                 }
+                ExEffect::PutRegister { .. } => {
+                    // Multi-buffer operation not supported in embed mode — no-op.
+                    success(id, Value::Null)
+                }
             }
         }
 

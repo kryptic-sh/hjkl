@@ -312,6 +312,31 @@ fn redo_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+// ---- put -------------------------------------------------------------------
+
+/// `:put [{reg}]` / `:put!` — paste a register's contents as a new line.
+///
+/// Without `!`: paste below the current line.
+/// With `!`: paste above the current line.
+/// Default register when no arg: `"` (unnamed).
+fn put_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let reg = args.trim().chars().next().unwrap_or('"');
+    Some(ExEffect::PutRegister { reg, above: false })
+}
+
+fn put_above_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let reg = args.trim().chars().next().unwrap_or('"');
+    Some(ExEffect::PutRegister { reg, above: true })
+}
+
 // ---- registers / marks / jumps / changes -----------------------------------
 
 fn registers_handler<H: Host>(
@@ -777,6 +802,24 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: bwipeout_force_handler::<H>,
+    });
+
+    // `:put [{reg}]` / `:pu [{reg}]` — paste register as new line below cursor.
+    reg.add(ExCommand {
+        name: "put",
+        aliases: &["pu"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: put_handler::<H>,
+    });
+
+    // `:put! [{reg}]` / `:pu!` — paste register as new line above cursor.
+    reg.add(ExCommand {
+        name: "put!",
+        aliases: &["pu!"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: put_above_handler::<H>,
     });
 
     // `:registers` / `:reg` (min_prefix=3; `:reg` via alias since "reg" < 3 chars)
@@ -1636,5 +1679,59 @@ mod tests {
         assert!(reg.resolve("set").is_some());
         assert!(reg.resolve("nohlsearch").is_some());
         assert!(reg.resolve("noh").is_some());
+    }
+
+    // ── put_handler ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn put_handler_no_args_uses_unnamed_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: false
+            })
+        );
+    }
+
+    #[test]
+    fn put_handler_with_reg_uses_given_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "a", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: 'a',
+                above: false
+            })
+        );
+    }
+
+    #[test]
+    fn put_above_handler_no_args_uses_unnamed_register() {
+        let mut ed = make_editor();
+        let result = put_above_handler(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '"',
+                above: true
+            })
+        );
+    }
+
+    #[test]
+    fn put_handler_percent_register() {
+        let mut ed = make_editor();
+        let result = put_handler(&mut ed, "%", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::PutRegister {
+                reg: '%',
+                above: false
+            })
+        );
     }
 }

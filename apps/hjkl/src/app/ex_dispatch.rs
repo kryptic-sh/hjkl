@@ -429,6 +429,52 @@ impl App {
                     self.buffer_delete(force);
                 }
             }
+            ExEffect::PutRegister { reg, above } => {
+                self.do_put_register(reg, above);
+            }
+        }
+    }
+
+    /// `:put [{reg}]` — paste register contents as a new line below (or above)
+    /// the cursor. Reads the register text, then inserts it as a fresh line.
+    fn do_put_register(&mut self, reg: char, above: bool) {
+        use hjkl_buffer::{Edit, Position};
+        let idx = self.focused_slot_idx();
+        let slot_text = self.slots[idx]
+            .editor
+            .registers()
+            .read(reg)
+            .map(|s| s.text.clone())
+            .unwrap_or_default();
+        if slot_text.is_empty() {
+            self.bus.warn(format!("E: register \"{reg}\" is empty"));
+            return;
+        }
+        // Strip trailing newline that linewise yanks carry so we don't
+        // introduce a blank line at the end.
+        let text = slot_text.trim_end_matches('\n').to_string();
+        let editor = &mut self.slots[idx].editor;
+        let (row, _) = editor.cursor();
+        if above {
+            editor.mutate_edit(Edit::InsertStr {
+                at: Position::new(row, 0),
+                text: format!("{text}\n"),
+            });
+        } else {
+            let line_len = editor
+                .buffer()
+                .line(row)
+                .map(|l| l.chars().count())
+                .unwrap_or(0);
+            editor.mutate_edit(Edit::InsertStr {
+                at: Position::new(row, line_len),
+                text: format!("\n{text}"),
+            });
+        }
+        // Sync dirty state and propagate to syntax engine.
+        let slot = &mut self.slots[idx];
+        if slot.editor.take_dirty() {
+            slot.refresh_dirty_against_saved();
         }
     }
 
@@ -782,7 +828,12 @@ impl App {
                             self.slots[idx].disk_len = Some(meta.len());
                         }
                         self.slots[idx].disk_state = DiskState::Synced;
-                        self.slots[idx].filename = Some(p);
+                        self.slots[idx].filename = Some(p.clone());
+                        // Keep `"%` in sync when the buffer gets a (new) filename.
+                        self.slots[idx]
+                            .editor
+                            .registers_mut()
+                            .set_filename(Some(p.to_string_lossy().into_owned()));
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
                         if idx == self.focused_slot_idx() {
