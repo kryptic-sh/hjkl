@@ -35,6 +35,10 @@ patch bumps.
   engine integration suite moved to `hjkl-engine-tui/tests/`. Closes #162 phase
   3 (the engine cleanup arc).
 
+- Workspace `resolver = "2"` → `"3"` for MSRV-aware dep resolution. `cargo update`
+  now skips transitive crate versions whose `rust-version` exceeds the workspace
+  MSRV (1.95), preventing accidental MSRV breakage. Closes #144.
+
 ## [0.25.1] - 2026-05-19
 
 ### Fixed
