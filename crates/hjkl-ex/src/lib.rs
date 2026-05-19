@@ -72,6 +72,17 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return Some(shell::shell_filter_handler(editor, shell_cmd, range));
     }
 
+    // `:&` / `:&&` (repeat last substitute) — special-case because `&` is not
+    // alphabetic and split_name_args cannot parse it as a command name.
+    // `:&&` keeps the original flags; `:&` drops them (vim semantics).
+    // Must check `&&` before `&` so the double-ampersand form is matched first.
+    if cmd_str == "&&" || cmd_str.starts_with("&& ") {
+        return Some(builtins::repeat_substitute_handler(editor, true, range));
+    }
+    if cmd_str == "&" || cmd_str.starts_with("& ") {
+        return Some(builtins::repeat_substitute_handler(editor, false, range));
+    }
+
     let (name, args) = parse::split_name_args(cmd_str);
     if name.is_empty() {
         // Bare `:N` or bare range — jump to line.
@@ -1501,5 +1512,82 @@ mod tests {
             matches!(result, Some(ExEffect::Error(_))),
             "got: {result:?}"
         );
+    }
+
+    // ---- :& / :&& repeat-last-substitute ------------------------------------
+
+    #[test]
+    fn dispatch_amp_no_prior_sub_returns_error() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo"]);
+        let result = try_dispatch(&reg, &mut editor, "&");
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_amp_repeats_last_sub_on_current_line() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "foo"]);
+        let r1 = try_dispatch(&reg, &mut editor, "s/foo/bar/");
+        assert!(
+            matches!(r1, Some(ExEffect::Substituted { count: 1, .. })),
+            "got: {r1:?}"
+        );
+        assert_eq!(editor.buffer().lines()[0], "bar");
+        editor.goto_line(2);
+        let r2 = try_dispatch(&reg, &mut editor, "&");
+        assert!(
+            matches!(r2, Some(ExEffect::Substituted { count: 1, .. })),
+            "expected Substituted(1), got {r2:?}"
+        );
+        assert_eq!(editor.buffer().lines()[1], "bar");
+    }
+
+    #[test]
+    fn dispatch_amp_amp_keeps_global_flag() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["x x x", "x x x"]);
+        try_dispatch(&reg, &mut editor, "s/x/y/g").unwrap();
+        assert_eq!(editor.buffer().lines()[0], "y y y");
+        editor.goto_line(2);
+        let result = try_dispatch(&reg, &mut editor, "&&");
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 3, .. })),
+            "expected Substituted(3), got {result:?}"
+        );
+        assert_eq!(editor.buffer().lines()[1], "y y y");
+    }
+
+    #[test]
+    fn dispatch_amp_drops_global_flag() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["x x x", "x x x"]);
+        try_dispatch(&reg, &mut editor, "s/x/y/g").unwrap();
+        assert_eq!(editor.buffer().lines()[0], "y y y");
+        editor.goto_line(2);
+        let result = try_dispatch(&reg, &mut editor, "&");
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 1, .. })),
+            "expected Substituted(1) (first only), got {result:?}"
+        );
+        assert_eq!(editor.buffer().lines()[1], "y x x");
+    }
+
+    #[test]
+    fn dispatch_percent_amp_repeats_on_whole_buffer() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["foo", "foo", "bar"]);
+        try_dispatch(&reg, &mut editor, "s/foo/baz/").unwrap();
+        assert_eq!(editor.buffer().lines()[0], "baz");
+        let result = try_dispatch(&reg, &mut editor, "%&");
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 1, .. })),
+            "expected Substituted(1), got {result:?}"
+        );
+        assert_eq!(editor.buffer().lines()[1], "baz");
+        assert_eq!(editor.buffer().lines()[2], "bar");
     }
 }

@@ -441,6 +441,26 @@ use crate::buf_helpers::{
     buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
 };
 
+/// Return value from the engine's `try_goto_mark_*` methods. Tells the
+/// caller (app layer) whether a cross-buffer switch is required.
+///
+/// - `SameBuffer` — cursor moved (or mark was unset → no-op) within the
+///   same buffer; no buffer switch needed.
+/// - `CrossBuffer` — the mark lives in a different buffer. The app must
+///   switch to the slot whose `buffer_id` matches, then position the cursor
+///   at `(row, col)` using `Editor::jump_cursor`.
+/// - `Unset` — mark not set; no action needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkJump {
+    SameBuffer,
+    CrossBuffer {
+        buffer_id: u64,
+        row: usize,
+        col: usize,
+    },
+    Unset,
+}
+
 pub struct Editor<
     B: crate::types::Buffer = hjkl_buffer::Buffer,
     H: crate::types::Host = crate::types::DefaultHost,
@@ -786,26 +806,6 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
 pub enum LspIntent {
     /// `gd` — textDocument/definition at the cursor.
     GotoDefinition,
-}
-
-/// Result of `try_goto_mark_line` / `try_goto_mark_char`.
-///
-/// The host app inspects this to decide whether to switch buffers before
-/// completing the jump; the engine cannot switch buffers itself because
-/// it is single-buffer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MarkJump {
-    /// Jump was executed within the current buffer.
-    SameBuffer,
-    /// Jump targets a different buffer. The host must switch to
-    /// `buffer_id` and then position the cursor at `(row, col)`.
-    CrossBuffer {
-        buffer_id: u64,
-        row: usize,
-        col: usize,
-    },
-    /// The mark was not set (silent no-op).
-    Unset,
 }
 
 impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
@@ -1827,6 +1827,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn set_last_search(&mut self, text: Option<String>, forward: bool) {
         self.vim.last_search = text;
         self.vim.last_search_forward = forward;
+    }
+
+    /// The most recent successful `:s` command. `None` before the first substitute.
+    /// Used by `:&` / `:&&` to repeat it.
+    pub fn last_substitute(&self) -> Option<&crate::substitute::SubstituteCmd> {
+        self.vim.last_substitute.as_ref()
+    }
+
+    /// Store the last successful substitute so `:&` / `:&&` can repeat it.
+    pub fn set_last_substitute(&mut self, cmd: crate::substitute::SubstituteCmd) {
+        self.vim.last_substitute = Some(cmd);
     }
 
     /// Start/end `(row, col)` of the active char-wise Visual selection
