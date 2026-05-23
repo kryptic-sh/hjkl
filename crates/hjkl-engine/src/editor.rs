@@ -1365,6 +1365,63 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.styled_spans = engine_spans;
     }
 
+    /// Translate the cached `buffer_spans` / `styled_spans` row indices
+    /// in-place to track a batch of [`crate::types::ContentEdit`]s without
+    /// blanking the cache.
+    ///
+    /// Why: spans are installed by the async syntax worker, which can lag
+    /// the buffer by one or more frames after an edit. If the edit changes
+    /// the row count and we keep the old span rows in place, the renderer
+    /// paints last-frame's spans at the wrong line — visibly garbled colours.
+    /// The historical fix was to blank `buffer_spans` whenever a row-count
+    /// change came through, but that produces a white flash on every Enter
+    /// or backspace-at-BOL.
+    ///
+    /// What this does instead: for each edit, insert empty span rows where
+    /// the edit grew the buffer and drain rows where it shrank, so the
+    /// surviving rows still index the right line. Spans on the edited row
+    /// itself stay (they'll show stale colours for that one row until the
+    /// worker delivers a fresh parse, which is invisible compared to the
+    /// blank flash).
+    ///
+    /// Edits are applied in order — each edit's `(row, col)` positions are
+    /// taken to be relative to the post-state of the prior edits in the
+    /// batch (matching the order the engine emitted them).
+    pub fn shift_syntax_spans_for_edits(&mut self, edits: &[crate::types::ContentEdit]) {
+        for edit in edits {
+            let oer = edit.old_end_position.0 as usize;
+            let ner = edit.new_end_position.0 as usize;
+            if ner == oer {
+                continue;
+            }
+            if ner > oer {
+                let n = ner - oer;
+                let idx = (oer + 1).min(self.buffer_spans.len());
+                for _ in 0..n {
+                    self.buffer_spans.insert(idx, Vec::new());
+                }
+                let idx_s = (oer + 1).min(self.styled_spans.len());
+                for _ in 0..n {
+                    self.styled_spans.insert(idx_s, Vec::new());
+                }
+            } else {
+                let n = oer - ner;
+                let len_b = self.buffer_spans.len();
+                let start_b = (ner + 1).min(len_b);
+                let end_b = (start_b + n).min(len_b);
+                if end_b > start_b {
+                    self.buffer_spans.drain(start_b..end_b);
+                }
+                let len_s = self.styled_spans.len();
+                let start_s = (ner + 1).min(len_s);
+                let end_s = (start_s + n).min(len_s);
+                if end_s > start_s {
+                    self.styled_spans.drain(start_s..end_s);
+                }
+            }
+        }
+    }
+
     /// Read-only view of the style table in engine-native form —
     /// id `i` → `style_table[i]`. Always available, no cfg gate.
     ///
@@ -5424,4 +5481,114 @@ fn visual_col_for_char(line: &str, char_col: usize, tab_width: usize) -> usize {
         }
     }
     visual
+}
+
+#[cfg(test)]
+mod shift_syntax_spans_tests {
+    use super::*;
+    use crate::types::{ContentEdit, DefaultHost, Options, Style};
+    use hjkl_buffer::Buffer;
+
+    fn ed_with_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("row{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        // Synthesize span rows so we can detect which survive a shift.
+        // Use a distinct fg colour per row so spans are identifiable.
+        let style = Style::default();
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..line_count).map(|_| vec![(0, 1, style)]).collect();
+        e.install_syntax_spans(spans);
+        e
+    }
+
+    fn edit_insert_newline_at(row: u32, col: u32) -> ContentEdit {
+        // Pressing Enter: zero-width insertion that produces one new row.
+        ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (row, col),
+            old_end_position: (row, col),
+            new_end_position: (row + 1, 0),
+        }
+    }
+
+    fn edit_join_rows(row: u32, col: u32) -> ContentEdit {
+        // Backspace at start of `row+1`: removes the newline, joining the
+        // two rows. old_end is on `row+1`, new_end on `row`.
+        ContentEdit {
+            start_byte: 0,
+            old_end_byte: 1,
+            new_end_byte: 0,
+            start_position: (row, col),
+            old_end_position: (row + 1, 0),
+            new_end_position: (row, col),
+        }
+    }
+
+    #[test]
+    fn insert_grows_buffer_spans_in_place() {
+        let mut e = ed_with_spans(4);
+        // Newline at row 1 → buffer grew by one row.
+        e.shift_syntax_spans_for_edits(&[edit_insert_newline_at(1, 1)]);
+        assert_eq!(
+            e.buffer_spans().len(),
+            5,
+            "row-count grew → spans rows must match"
+        );
+        // The empty row should be at index 2 (right after the split point).
+        assert!(e.buffer_spans()[2].is_empty(), "inserted row sits at oer+1");
+        // Surrounding rows kept their content.
+        assert!(!e.buffer_spans()[0].is_empty());
+        assert!(!e.buffer_spans()[1].is_empty());
+        assert!(!e.buffer_spans()[3].is_empty());
+        assert!(!e.buffer_spans()[4].is_empty());
+    }
+
+    #[test]
+    fn delete_shrinks_buffer_spans_in_place() {
+        let mut e = ed_with_spans(4);
+        e.shift_syntax_spans_for_edits(&[edit_join_rows(1, 1)]);
+        assert_eq!(
+            e.buffer_spans().len(),
+            3,
+            "row-count shrank → spans rows must match"
+        );
+    }
+
+    #[test]
+    fn same_row_edit_leaves_rows_untouched() {
+        let mut e = ed_with_spans(3);
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (1, 0),
+            old_end_position: (1, 0),
+            new_end_position: (1, 1),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 3);
+        for row in 0..3 {
+            assert!(
+                !e.buffer_spans()[row].is_empty(),
+                "row {row} should still hold its span"
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_edits_apply_against_prior_state() {
+        let mut e = ed_with_spans(3);
+        // Two consecutive inserts: each adds a row.
+        e.shift_syntax_spans_for_edits(&[
+            edit_insert_newline_at(0, 1),
+            edit_insert_newline_at(1, 1),
+        ]);
+        assert_eq!(e.buffer_spans().len(), 5);
+    }
 }

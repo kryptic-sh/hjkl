@@ -801,23 +801,15 @@ impl App {
             // current one — any cache older than this gen is stale for these
             // rows and should show blank until the worker returns.
             let new_dg = self.active().editor.buffer().dirty_gen();
-            // If any edit changed the row count, the entire installed
-            // buffer_spans cache (indexed by row) is invalid — old rows
-            // map to new rows after the shift. Renderer would otherwise
-            // paint last-frame's spans at the wrong line until the syntax
-            // worker returns a fresh result. Clear immediately so the
-            // intermediate frames render uncoloured rather than mis-
-            // coloured. Same-row edits (typing within one line) don't
-            // need this — buffer_spans rows still map to the right line,
-            // even if individual span byte-ranges are momentarily stale.
-            let row_count_changed = edits
-                .iter()
-                .any(|e| e.old_end_position.0 != e.new_end_position.0);
-            if row_count_changed {
-                self.active_mut()
-                    .editor
-                    .install_ratatui_syntax_spans(Vec::new());
-            }
+            // Row-count edits: translate the cached span rows in-place
+            // so untouched lines keep their existing colours while the
+            // worker reparses. Historically this branch blanked
+            // `buffer_spans` (visible as a white flash on every Enter /
+            // backspace-at-BOL); `shift_syntax_spans_for_edits` keeps
+            // the alignment correct without the flash.
+            self.active_mut()
+                .editor
+                .shift_syntax_spans_for_edits(&edits);
             for edit in &edits {
                 let start_row = edit.start_position.0 as usize;
                 let end_row =
