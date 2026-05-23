@@ -835,6 +835,69 @@ pub(super) fn compute_enter_indent(settings: &crate::editor::Settings, prev_line
     base
 }
 
+// ── Comment-continuation helpers ──────────────────────────────────────────
+
+/// Return the ordered (longest-first) list of line-comment prefixes for
+/// `lang`. Each prefix includes one trailing space (e.g. `"// "`).
+/// The same table lives in `hjkl-lang::comment` for the `gc` toggle (#187).
+fn comment_prefixes_for_lang(lang: &str) -> &'static [&'static str] {
+    match lang {
+        "rust" => &["/// ", "//! ", "// "],
+        "c" | "cpp" => &["// "],
+        "python" | "sh" | "bash" | "zsh" | "fish" | "toml" | "yaml" => &["# "],
+        "lua" => &["-- "],
+        "sql" => &["-- "],
+        "vim" | "viml" => &["\" "],
+        _ => &[],
+    }
+}
+
+/// Detect whether `line` starts with a known comment prefix for `lang`.
+///
+/// Returns `Some((indent, prefix))` where `indent` is the leading whitespace
+/// of the line and `prefix` is the canonical (with trailing space) comment
+/// marker. Returns `None` when the line is not a recognised comment.
+pub(crate) fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, &'static str)> {
+    let indent_end = line
+        .char_indices()
+        .find(|(_, c)| *c != ' ' && *c != '\t')
+        .map(|(i, _)| i)
+        .unwrap_or(line.len());
+    let indent = line[..indent_end].to_string();
+    let rest = &line[indent_end..];
+    for &prefix in comment_prefixes_for_lang(lang) {
+        if rest.starts_with(prefix) {
+            return Some((indent, prefix));
+        }
+        // Also match the bare prefix (line that is exactly `//` with no
+        // trailing content).
+        let bare = prefix.trim_end_matches(' ');
+        if rest == bare || rest.starts_with(&format!("{bare} ")) {
+            return Some((indent, prefix));
+        }
+    }
+    None
+}
+
+/// Given the current `row` in `buffer` and the active `settings`, return the
+/// string to prepend on the new line when comment-continuation fires.
+///
+/// Returns `Some("<indent><prefix>")` when the row is a comment line and
+/// continuation is appropriate, `None` otherwise. The caller appends the
+/// string after the `\n` they are about to insert.
+pub(crate) fn continue_comment(
+    buffer: &hjkl_buffer::Buffer,
+    settings: &crate::editor::Settings,
+    row: usize,
+) -> Option<String> {
+    if settings.filetype.is_empty() {
+        return None;
+    }
+    let line = crate::buf_helpers::buf_line(buffer, row)?;
+    let (indent, prefix) = detect_comment_on_line(&settings.filetype, &line)?;
+    Some(format!("{indent}{prefix}"))
+}
+
 /// Strip one indent unit from the beginning of `line` and insert `ch`
 /// instead. Returns `true` when it consumed the keystroke (dedent +
 /// insert), `false` when the caller should insert normally.
@@ -1170,7 +1233,8 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
     true
 }
 
-/// Insert a newline at the cursor, applying autoindent / smartindent.
+/// Insert a newline at the cursor, applying autoindent / smartindent and
+/// optionally continuing a line comment when `formatoptions` has `r`.
 /// Returns `true`.
 pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
@@ -1181,8 +1245,22 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
     let prev_line = buf_line(&ed.buffer, cursor.row)
         .unwrap_or_default()
         .to_string();
-    let indent = compute_enter_indent(&ed.settings, &prev_line);
-    let text = format!("\n{indent}");
+
+    // formatoptions `r`: continue comment on Enter in insert mode.
+    let comment_cont = if ed.settings.formatoptions.contains('r') {
+        continue_comment(&ed.buffer, &ed.settings, cursor.row)
+    } else {
+        None
+    };
+
+    let text = if let Some(cont) = comment_cont {
+        // Comment continuation overrides autoindent: the indent is already
+        // baked into the continuation prefix.
+        format!("\n{cont}")
+    } else {
+        let indent = compute_enter_indent(&ed.settings, &prev_line);
+        format!("\n{indent}")
+    };
     ed.mutate_edit(Edit::InsertStr { at: cursor, text });
     ed.push_buffer_cursor_to_textarea();
     true
@@ -1219,8 +1297,13 @@ pub(crate) fn insert_tab_bridge<H: crate::types::Host>(
 
 /// Delete the character before the cursor (vim Backspace / `^H`). With
 /// `softtabstop` active, deletes the entire soft-tab run at an aligned
-/// boundary. Joins with the previous line when at column 0. Returns
-/// `true` when something was deleted, `false` at the very start of the
+/// boundary. Joins with the previous line when at column 0.
+///
+/// **Comment-continuation backspace**: when the current line's entire content
+/// is the auto-inserted comment prefix (e.g. `// ` with nothing after it),
+/// a single Backspace removes the whole prefix in one stroke — vim parity.
+///
+/// Returns `true` when something was deleted, `false` at the very start of the
 /// buffer.
 pub(crate) fn insert_backspace_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
@@ -1228,6 +1311,30 @@ pub(crate) fn insert_backspace_bridge<H: crate::types::Host>(
     use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(&ed.buffer);
+
+    // Comment-continuation backspace: if the line is just the prefix (with no
+    // user content after it), delete the whole prefix in one stroke.
+    if cursor.col > 0 {
+        let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+        if let Some((indent, prefix)) = detect_comment_on_line(&ed.settings.filetype, &line) {
+            let full_prefix = format!("{indent}{prefix}");
+            // The cursor must be at the end of (or within) the prefix with no
+            // additional content after — i.e. the line equals the prefix exactly.
+            let line_trimmed = line.trim_end_matches(' ');
+            let prefix_trimmed = full_prefix.trim_end_matches(' ');
+            if line_trimmed == prefix_trimmed && cursor.col == full_prefix.chars().count() {
+                // Delete everything from col 0 to cursor.
+                ed.mutate_edit(Edit::DeleteRange {
+                    start: Position::new(cursor.row, 0),
+                    end: cursor,
+                    kind: MotionKind::Char,
+                });
+                ed.push_buffer_cursor_to_textarea();
+                return true;
+            }
+        }
+    }
+
     let sts = ed.settings.softtabstop;
     if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
         let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
@@ -1595,6 +1702,8 @@ pub(crate) fn enter_insert_shift_a_bridge<H: crate::types::Host>(
 }
 
 /// `o` — open a new line below the cursor and begin Insert.
+/// When `formatoptions` has `o` and the current line is a comment, the
+/// continuation prefix is inserted automatically.
 pub(crate) fn open_line_below_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
@@ -1606,15 +1715,30 @@ pub(crate) fn open_line_below_bridge<H: crate::types::Host>(
     let row = buf_cursor_pos(&ed.buffer).row;
     let line_chars = buf_line_chars(&ed.buffer, row);
     let prev_line = buf_line(&ed.buffer, row).unwrap_or_default();
-    let indent = compute_enter_indent(&ed.settings, &prev_line);
+
+    // formatoptions `o`: continue comment on open-below.
+    let comment_cont = if ed.settings.formatoptions.contains('o') {
+        continue_comment(&ed.buffer, &ed.settings, row)
+    } else {
+        None
+    };
+
+    let suffix = if let Some(cont) = comment_cont {
+        format!("\n{cont}")
+    } else {
+        let indent = compute_enter_indent(&ed.settings, &prev_line);
+        format!("\n{indent}")
+    };
     ed.mutate_edit(Edit::InsertStr {
         at: Position::new(row, line_chars),
-        text: format!("\n{indent}"),
+        text: suffix,
     });
     ed.push_buffer_cursor_to_textarea();
 }
 
 /// `O` — open a new line above the cursor and begin Insert.
+/// When `formatoptions` has `o` and the current line is a comment, the
+/// continuation prefix is inserted automatically on the new line above.
 pub(crate) fn open_line_above_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
@@ -1624,23 +1748,40 @@ pub(crate) fn open_line_above_bridge<H: crate::types::Host>(
     begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: true });
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(&ed.buffer).row;
-    let indent = if row > 0 {
-        let above = buf_line(&ed.buffer, row - 1).unwrap_or_default();
-        compute_enter_indent(&ed.settings, &above)
+
+    // formatoptions `o`: continue comment on open-above (current line drives).
+    let comment_cont = if ed.settings.formatoptions.contains('o') {
+        continue_comment(&ed.buffer, &ed.settings, row)
     } else {
-        let cur = buf_line(&ed.buffer, row).unwrap_or_default();
-        cur.chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .collect::<String>()
+        None
+    };
+
+    // `new_line_content` is the text of the new line (without the trailing `\n`).
+    // Used to position the cursor at the end of that content after the move.
+    let (insert_text, new_line_content) = if let Some(cont) = comment_cont {
+        let content = cont.clone();
+        (format!("{cont}\n"), content)
+    } else {
+        let indent = if row > 0 {
+            let above = buf_line(&ed.buffer, row - 1).unwrap_or_default();
+            compute_enter_indent(&ed.settings, &above)
+        } else {
+            let cur = buf_line(&ed.buffer, row).unwrap_or_default();
+            cur.chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect::<String>()
+        };
+        let content = indent.clone();
+        (format!("{indent}\n"), content)
     };
     ed.mutate_edit(Edit::InsertStr {
         at: Position::new(row, 0),
-        text: format!("{indent}\n"),
+        text: insert_text,
     });
     let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&ed.buffer);
     crate::motions::move_up(&mut ed.buffer, &folds, 1, &mut ed.sticky_col);
     let new_row = buf_cursor_pos(&ed.buffer).row;
-    buf_set_cursor_rc(&mut ed.buffer, new_row, indent.chars().count());
+    buf_set_cursor_rc(&mut ed.buffer, new_row, new_line_content.chars().count());
     ed.push_buffer_cursor_to_textarea();
 }
 
@@ -6411,3 +6552,115 @@ fn extract_inserted(before: &str, after: &str) -> String {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod comment_continuation_tests {
+    use super::*;
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_editor_with_lang(lang: &str, content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: lang.to_string(),
+            formatoptions: "ro".to_string(),
+            ..Options::default()
+        };
+        Editor::new(buf, host, opts)
+    }
+
+    #[test]
+    fn detect_rust_doc_comment() {
+        let result = detect_comment_on_line("rust", "/// foo bar");
+        assert!(result.is_some());
+        let (indent, prefix) = result.unwrap();
+        assert_eq!(indent, "");
+        assert_eq!(prefix, "/// ");
+    }
+
+    #[test]
+    fn detect_rust_inner_doc_comment() {
+        let result = detect_comment_on_line("rust", "//! crate docs");
+        assert!(result.is_some());
+        let (_, prefix) = result.unwrap();
+        assert_eq!(prefix, "//! ");
+    }
+
+    #[test]
+    fn detect_rust_plain_comment() {
+        let result = detect_comment_on_line("rust", "// normal comment");
+        assert!(result.is_some());
+        let (_, prefix) = result.unwrap();
+        assert_eq!(prefix, "// ");
+    }
+
+    #[test]
+    fn detect_indented_comment() {
+        let result = detect_comment_on_line("rust", "    // indented");
+        assert!(result.is_some());
+        let (indent, prefix) = result.unwrap();
+        assert_eq!(indent, "    ");
+        assert_eq!(prefix, "// ");
+    }
+
+    #[test]
+    fn detect_python_hash() {
+        let result = detect_comment_on_line("python", "# comment");
+        assert!(result.is_some());
+        let (_, prefix) = result.unwrap();
+        assert_eq!(prefix, "# ");
+    }
+
+    #[test]
+    fn detect_lua_double_dash() {
+        let result = detect_comment_on_line("lua", "-- a lua comment");
+        assert!(result.is_some());
+        let (_, prefix) = result.unwrap();
+        assert_eq!(prefix, "-- ");
+    }
+
+    #[test]
+    fn detect_non_comment_is_none() {
+        assert!(detect_comment_on_line("rust", "let x = 1;").is_none());
+        assert!(detect_comment_on_line("python", "x = 1").is_none());
+    }
+
+    #[test]
+    fn detect_bare_double_slash_still_matches() {
+        // A line that is exactly `//` with nothing after.
+        assert!(detect_comment_on_line("rust", "//").is_some());
+    }
+
+    #[test]
+    fn rust_doc_before_plain() {
+        // `///` must match before `//`.
+        let result = detect_comment_on_line("rust", "/// outer doc");
+        let (_, prefix) = result.unwrap();
+        assert_eq!(prefix, "/// ", "/// must match before //");
+    }
+
+    #[test]
+    fn continue_comment_returns_prefix_for_comment_row() {
+        let ed = make_editor_with_lang("rust", "/// hello\n");
+        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        assert_eq!(cont, Some("/// ".to_string()));
+    }
+
+    #[test]
+    fn continue_comment_returns_none_for_non_comment() {
+        let ed = make_editor_with_lang("rust", "let x = 1;\n");
+        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        assert!(cont.is_none());
+    }
+
+    #[test]
+    fn continue_comment_returns_none_when_filetype_empty() {
+        let buf = Buffer::from_str("// hello\n");
+        let host = DefaultHost::new();
+        // filetype defaults to "" in Options::default().
+        let ed = Editor::new(buf, host, Options::default());
+        let cont = continue_comment(&ed.buffer, &ed.settings, 0);
+        assert!(cont.is_none());
+    }
+}

@@ -726,6 +726,15 @@ pub struct Settings {
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
+    /// Format options flags (subset of vim's `formatoptions`).
+    /// `r` — auto-continue line comments on `<Enter>` in insert mode.
+    /// `o` — auto-continue line comments on `o` / `O` in normal mode.
+    /// Default: both on (`"ro"`).
+    pub formatoptions: String,
+    /// Active filetype (language name) for the current buffer.
+    /// Used by comment-continuation and future language-aware features.
+    /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
+    pub filetype: String,
 }
 
 impl Default for Settings {
@@ -755,6 +764,8 @@ impl Default for Settings {
             signcolumn: crate::types::SignColumnMode::Auto,
             foldcolumn: 0,
             colorcolumn: String::new(),
+            formatoptions: "ro".to_string(),
+            filetype: String::new(),
         }
     }
 }
@@ -796,6 +807,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         signcolumn: o.signcolumn,
         foldcolumn: o.foldcolumn,
         colorcolumn: o.colorcolumn.clone(),
+        formatoptions: o.formatoptions.clone(),
+        filetype: o.filetype.clone(),
     }
 }
 
@@ -1080,6 +1093,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// snapshot and overwrite via `*editor.settings_mut() = …`.
     pub fn settings_mut(&mut self) -> &mut Settings {
         &mut self.settings
+    }
+
+    /// Set the active filetype (language name) for the current buffer.
+    /// Used by comment-continuation and future language-aware features.
+    /// Equivalent to `:set filetype=<lang>`. Pass `""` to clear.
+    pub fn set_filetype(&mut self, lang: &str) {
+        self.settings.filetype = lang.to_string();
     }
 
     /// Returns `true` when `:set readonly` is active. Convenience
