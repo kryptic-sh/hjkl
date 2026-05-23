@@ -5,6 +5,7 @@ use crossterm::{
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
+use hjkl_engine_tui::EditorRatatuiExt;
 use hjkl_keymap::{Chord as KmChord, KeyEvent as KmKeyEvent};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::Stdout;
@@ -1305,6 +1306,18 @@ impl App {
                     let edits = self.active_mut().editor.take_content_edits();
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
+                        // Clear stale spans on row-count change — see
+                        // matching block in `App::sync_after_engine_mutation`
+                        // for rationale (renderer indexes buffer_spans by
+                        // row; old rows map to wrong new rows after a shift).
+                        let row_count_changed = edits
+                            .iter()
+                            .any(|e| e.old_end_position.0 != e.new_end_position.0);
+                        if row_count_changed {
+                            self.active_mut()
+                                .editor
+                                .install_ratatui_syntax_spans(Vec::new());
+                        }
                     }
                     self.lsp_notify_change_active();
                     self.recompute_and_install();
