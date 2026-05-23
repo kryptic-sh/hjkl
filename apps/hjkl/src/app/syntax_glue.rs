@@ -246,6 +246,48 @@ impl App {
 
         let is_active = out.buffer_id == active_id;
 
+        // Generation-aware install: a render result tagged with an older
+        // `dirty_gen` than what's already cached (or older than the
+        // buffer's current dirty_gen) is from a parse that was in flight
+        // when newer state landed — installing it would clobber the
+        // fresher sync `query_viewport` cache. Drop it.
+        //
+        // Symptoms when this guard is missing:
+        // - undo/redo of a multi-line edit: worker reparse for the
+        //   pre-undo source arrives after the sync query installed the
+        //   post-undo spans → editor paints with pre-undo colours that
+        //   don't match the visible text until the NEXT submit lands.
+        // - rapid typing: each keystroke ticks dirty_gen; worker results
+        //   are always one or two gens behind sync results.
+        let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let out_dg = out.key.0;
+        if out_dg < buf_dg {
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+            return false;
+        }
+        let existing_dg = match out.kind {
+            crate::syntax::ParseKind::Viewport => self.slots[slot_idx]
+                .viewport_render_output
+                .as_ref()
+                .map(|o| o.key.0),
+            crate::syntax::ParseKind::Top => self.slots[slot_idx]
+                .top_render_output
+                .as_ref()
+                .map(|o| o.key.0),
+            crate::syntax::ParseKind::Bottom => self.slots[slot_idx]
+                .bottom_render_output
+                .as_ref()
+                .map(|o| o.key.0),
+            // Unknown future kind: treat as install (conservative).
+            _ => None,
+        };
+        if let Some(existing) = existing_dg
+            && out_dg < existing
+        {
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+            return false;
+        }
+
         // Route into the correct per-slot cache field via the exhaustive dispatch
         // helper so no wildcard arm is needed despite ParseKind being #[non_exhaustive].
         use crate::syntax::ParseKindKind;
@@ -1259,15 +1301,18 @@ mod tests {
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
 
         // Build a synthetic viewport output tagged to slot 1's buffer_id.
+        // Tag the result with slot 1's current dirty_gen so the
+        // generation-aware install guard doesn't drop it as stale.
         let target_spans = vec![
             vec![(0usize, 5usize, Style::default())],
             vec![(0usize, 5usize, Style::default())],
         ];
+        let slot1_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
         let out = RenderOutput {
             buffer_id: slot1_buf_id,
             spans: target_spans.clone(),
             signs: Vec::new(),
-            key: (0, 0, 0),
+            key: (slot1_dg, 0, 0),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
         };
