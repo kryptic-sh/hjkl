@@ -1,5 +1,9 @@
 //! Language directory — facade over hjkl-bonsai's runtime grammar API.
 //!
+//! Also provides a pure-Rust comment-prefix table ([`comment`]) that is
+//! independent of any grammar loading and can be used by editor-engine crates
+//! without pulling in tree-sitter.
+//!
 //! Wraps a [`GrammarRegistry`] (manifest lookup), [`AsyncGrammarLoader`]
 //! (non-blocking clone+compile), and a cache behind a single struct that
 //! resolves a `Path` or language name to a cached `Arc<Grammar>`.
@@ -28,6 +32,8 @@
 //!     GrammarRequest::Unknown
 //! ));
 //! ```
+
+pub mod comment;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

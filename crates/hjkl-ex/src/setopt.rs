@@ -36,6 +36,10 @@ pub fn all_setting_names() -> Vec<String> {
         "scl".into(),
         "colorcolumn".into(),
         "cc".into(),
+        "formatoptions".into(),
+        "fo".into(),
+        "filetype".into(),
+        "ft".into(),
         // completion-only (handled by host in ex_dispatch.rs)
         "background".into(),
         "bg".into(),
@@ -91,7 +95,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -116,6 +120,8 @@ pub(crate) fn apply_set<H: Host>(
             scl,
             s.foldcolumn,
             s.colorcolumn,
+            s.formatoptions,
+            s.filetype,
         ));
     }
     for token in trimmed.split_whitespace() {
@@ -126,12 +132,37 @@ pub(crate) fn apply_set<H: Host>(
     ExEffect::Ok
 }
 
-/// Apply a single `:set` token. Supports `name=value`, bare `name`
-/// (turns booleans on), and `noname` (turns booleans off).
+/// Apply a single `:set` token. Supports `name=value`, `name+=flags`,
+/// `name-=flags`, bare `name` (turns booleans on), and `noname`
+/// (turns booleans off).
 fn apply_set_token<H: Host>(
     editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     token: &str,
 ) -> Result<(), String> {
+    // `formatoptions+=flags` — append flags.
+    if let Some(rest) = token
+        .strip_prefix("formatoptions+=")
+        .or_else(|| token.strip_prefix("fo+="))
+    {
+        for ch in rest.chars() {
+            if !editor.settings().formatoptions.contains(ch) {
+                editor.settings_mut().formatoptions.push(ch);
+            }
+        }
+        return Ok(());
+    }
+    // `formatoptions-=flags` — remove flags.
+    if let Some(rest) = token
+        .strip_prefix("formatoptions-=")
+        .or_else(|| token.strip_prefix("fo-="))
+    {
+        for ch in rest.chars() {
+            let fo = editor.settings().formatoptions.clone();
+            editor.settings_mut().formatoptions = fo.chars().filter(|&c| c != ch).collect();
+        }
+        return Ok(());
+    }
+
     if let Some((name, value)) = token.split_once('=') {
         // String-valued options short-circuit the numeric parse.
         if matches!(name, "iskeyword" | "isk") {
@@ -153,6 +184,14 @@ fn apply_set_token<H: Host>(
         }
         if matches!(name, "colorcolumn" | "cc") {
             editor.settings_mut().colorcolumn = value.to_string();
+            return Ok(());
+        }
+        if matches!(name, "formatoptions" | "fo") {
+            editor.settings_mut().formatoptions = value.to_string();
+            return Ok(());
+        }
+        if matches!(name, "filetype" | "ft") {
+            editor.settings_mut().filetype = value.to_string();
             return Ok(());
         }
         let parsed: usize = value
@@ -550,5 +589,103 @@ mod tests {
             names.iter().any(|n| n == "background"),
             "all_setting_names() must include \"background\" for :set Tab-completion"
         );
+    }
+
+    // ---- formatoptions -------------------------------------------------------
+
+    #[test]
+    fn set_formatoptions_equals() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "formatoptions=o"), ExEffect::Ok);
+        assert_eq!(editor.settings().formatoptions, "o");
+    }
+
+    #[test]
+    fn set_fo_alias() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "fo=r"), ExEffect::Ok);
+        assert_eq!(editor.settings().formatoptions, "r");
+    }
+
+    #[test]
+    fn set_fo_append_flag() {
+        let mut editor = make_editor();
+        editor.settings_mut().formatoptions = "r".to_string();
+        assert_eq!(apply_set(&mut editor, "fo+=o"), ExEffect::Ok);
+        assert!(editor.settings().formatoptions.contains('o'));
+        assert!(editor.settings().formatoptions.contains('r'));
+    }
+
+    #[test]
+    fn set_fo_remove_flag() {
+        let mut editor = make_editor();
+        editor.settings_mut().formatoptions = "ro".to_string();
+        assert_eq!(apply_set(&mut editor, "fo-=r"), ExEffect::Ok);
+        assert!(!editor.settings().formatoptions.contains('r'));
+        assert!(editor.settings().formatoptions.contains('o'));
+    }
+
+    #[test]
+    fn set_fo_append_no_duplicate() {
+        let mut editor = make_editor();
+        editor.settings_mut().formatoptions = "r".to_string();
+        assert_eq!(apply_set(&mut editor, "fo+=r"), ExEffect::Ok);
+        // Should not duplicate the `r` flag.
+        assert_eq!(
+            editor
+                .settings()
+                .formatoptions
+                .chars()
+                .filter(|&c| c == 'r')
+                .count(),
+            1
+        );
+    }
+
+    // ---- filetype -----------------------------------------------------------
+
+    #[test]
+    fn set_filetype_stores_lang() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "filetype=rust"), ExEffect::Ok);
+        assert_eq!(editor.settings().filetype, "rust");
+    }
+
+    #[test]
+    fn set_ft_alias_stores_lang() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "ft=python"), ExEffect::Ok);
+        assert_eq!(editor.settings().filetype, "python");
+    }
+
+    #[test]
+    fn bare_set_shows_formatoptions_and_filetype() {
+        let mut editor = make_editor();
+        editor.settings_mut().filetype = "rust".to_string();
+        let result = apply_set(&mut editor, "");
+        match result {
+            ExEffect::Info(s) => {
+                assert!(
+                    s.contains("formatoptions="),
+                    "missing formatoptions in :set output"
+                );
+                assert!(s.contains("filetype="), "missing filetype in :set output");
+            }
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn all_setting_names_contains_formatoptions() {
+        let names = super::all_setting_names();
+        assert!(names.iter().any(|n| n == "formatoptions"));
+        assert!(names.iter().any(|n| n == "fo"));
+    }
+
+    #[test]
+    fn all_setting_names_contains_filetype() {
+        let names = super::all_setting_names();
+        assert!(names.iter().any(|n| n == "filetype"));
+        assert!(names.iter().any(|n| n == "ft"));
     }
 }

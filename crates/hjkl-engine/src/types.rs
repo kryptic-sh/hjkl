@@ -310,6 +310,14 @@ pub struct Options {
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Empty string = no rulers. Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
+    /// Format-options flags (subset of vim's `formatoptions` / `fo`).
+    /// `r` — auto-continue line comments on `<Enter>` in insert mode.
+    /// `o` — auto-continue line comments on `o` / `O` in normal mode.
+    /// Default `"ro"` (both on).
+    pub formatoptions: String,
+    /// Active filetype for the current buffer (e.g. `"rust"`, `"python"`).
+    /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
+    pub filetype: String,
 }
 
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
@@ -386,6 +394,8 @@ impl Default for Options {
             signcolumn: SignColumnMode::Auto,
             foldcolumn: 0,
             colorcolumn: String::new(),
+            formatoptions: "ro".to_string(),
+            filetype: String::new(),
         }
     }
 }
@@ -562,6 +572,8 @@ impl Options {
                 Ok(())
             }
             "colorcolumn" | "cc" => set_string!(colorcolumn),
+            "formatoptions" | "fo" => set_string!(formatoptions),
+            "filetype" | "ft" => set_string!(filetype),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -603,6 +615,8 @@ impl Options {
             ),
             "foldcolumn" | "fdc" => OptionValue::Int(self.foldcolumn as i64),
             "colorcolumn" | "cc" => OptionValue::String(self.colorcolumn.clone()),
+            "formatoptions" | "fo" => OptionValue::String(self.formatoptions.clone()),
+            "filetype" | "ft" => OptionValue::String(self.filetype.clone()),
             _ => return None,
         })
     }
