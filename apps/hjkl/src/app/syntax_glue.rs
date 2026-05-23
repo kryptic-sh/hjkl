@@ -450,6 +450,12 @@ impl App {
                             oversize_top,
                             oversize_height,
                             line_count_arc,
+                            // dirty_gen here is the buffer's current
+                            // dirty_gen: the sync `tree.edit` deltas
+                            // already landed on the retained tree, so
+                            // we tag the result as fully up-to-date and
+                            // skip the merger's per-row dirty blanking.
+                            dg,
                             crate::syntax::ParseKind::Viewport,
                         ) {
                             self.install_render_result(sync_out);

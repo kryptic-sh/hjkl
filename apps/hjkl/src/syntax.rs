@@ -169,6 +169,7 @@ impl SyntaxLayer {
         viewport_top: usize,
         viewport_height: usize,
         row_count: usize,
+        dirty_gen: u64,
         kind: ParseKind,
     ) -> Option<RenderOutput> {
         let raw = self.inner.query_viewport(
@@ -179,6 +180,7 @@ impl SyntaxLayer {
             viewport_top,
             viewport_height,
             row_count,
+            dirty_gen,
             kind,
         )?;
         Some(convert_output(raw))

@@ -1248,6 +1248,7 @@ impl SyntaxLayer {
         viewport_top: usize,
         viewport_height: usize,
         row_count: usize,
+        dirty_gen: u64,
         kind: ParseKind,
     ) -> Option<RenderOutput> {
         use std::time::Instant;
@@ -1285,15 +1286,17 @@ impl SyntaxLayer {
             );
             perf.diag_us = t.elapsed().as_micros();
 
+            // `key.0` tags the result with the dirty_gen the caller
+            // built `source` for. Setting it to the *current* buffer
+            // dirty_gen tells the app-side merger that this cache is
+            // fully up to date (no row should be marked dirty against
+            // it). The retained tree was already edited synchronously
+            // via `apply_edits`, so byte positions align.
             Some(RenderOutput {
                 buffer_id: id,
                 spans: by_row,
                 signs,
-                key: (
-                    state.last_parsed_dirty_gen.unwrap_or(0),
-                    viewport_top,
-                    viewport_height,
-                ),
+                key: (dirty_gen, viewport_top, viewport_height),
                 perf,
                 kind,
             })
