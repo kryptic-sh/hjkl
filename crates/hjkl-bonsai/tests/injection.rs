@@ -312,3 +312,79 @@ fn markdown_inline_injection_directive_form_fires_in_range_variant() {
         "scoped variant must also fire the directive-form resolver; got: {names:?}"
     );
 }
+
+/// HTML's injections.scm uses ONLY directive-form `(#set! injection.language
+/// "css")` / `(... "javascript")` with no `@injection.language` capture at
+/// all. Regression for a bug where the highlighter early-returned when the
+/// query had no language capture, skipping the directive-form fallback and
+/// leaving CSS/JS inside `<style>`/`<script>` unhighlighted.
+#[test]
+#[ignore = "network + compiler: fetches html grammar"]
+fn html_directive_only_injection_query_fires_resolver() {
+    use std::cell::RefCell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (registry, meta) = registry_and_meta();
+    let loader = make_loader(&tmp);
+
+    let html_grammar = load_grammar("html", &loader, &registry, &meta);
+    assert!(
+        html_grammar.injections_scm().is_some(),
+        "html grammar must ship an injections.scm",
+    );
+    // Verify the query is genuinely directive-only — if upstream html ever
+    // adds an @injection.language capture this assertion will turn this
+    // test into a less-useful overlap with the markdown directive test;
+    // failing here is the signal to update.
+    let inj = html_grammar.injections_scm().unwrap();
+    assert!(
+        !inj.contains("@injection.language"),
+        "test assumes html injections.scm has no @injection.language capture; \
+         got:\n{inj}"
+    );
+
+    let source: &[u8] = b"<html><head><style>body { color: red; }</style></head></html>";
+
+    let asked: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut highlighter = Highlighter::new(html_grammar).unwrap();
+    let _ = highlighter.highlight_with_injections(source, |name: &str| {
+        asked.borrow_mut().push(name.to_string());
+        None
+    });
+
+    let names = asked.borrow();
+    assert!(
+        names.iter().any(|n| n == "css"),
+        "directive-only injection query must still fire the resolver; got: {names:?}"
+    );
+}
+
+/// Same as above but for the scoped variant — must produce identical
+/// behaviour so a viewport-restricted render doesn't silently lose
+/// directive-form injections.
+#[test]
+#[ignore = "network + compiler: fetches html grammar"]
+fn html_directive_only_injection_query_fires_in_range_variant() {
+    use std::cell::RefCell;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (registry, meta) = registry_and_meta();
+    let loader = make_loader(&tmp);
+
+    let html_grammar = load_grammar("html", &loader, &registry, &meta);
+    let source: &[u8] = b"<html><head><style>body { color: red; }</style></head></html>";
+
+    let asked: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let mut highlighter = Highlighter::new(html_grammar).unwrap();
+    highlighter.parse_initial(source);
+    let _ = highlighter.highlight_range_with_injections(source, 0..source.len(), |name: &str| {
+        asked.borrow_mut().push(name.to_string());
+        None
+    });
+
+    let names = asked.borrow();
+    assert!(
+        names.iter().any(|n| n == "css"),
+        "scoped variant must also fire directive-form resolver; got: {names:?}"
+    );
+}

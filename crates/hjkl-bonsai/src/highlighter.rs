@@ -652,22 +652,25 @@ impl Highlighter {
             return parent_spans;
         };
 
-        // Find the capture indices for @injection.language and @injection.content.
+        // Find the capture indices. `@injection.content` is required (the
+        // injection has to know WHICH bytes to recurse into). `@injection.language`
+        // is optional — many grammars (HTML's style/script, Markdown's html_block,
+        // etc.) use a pattern-level `(#set! injection.language "foo")` directive
+        // instead of a capture, in which case the language name is read from
+        // `Query::property_settings` per match below.
         let lang_idx = inj_query
             .capture_names()
             .iter()
-            .position(|n| *n == INJ_LANG_CAPTURE);
-        let content_idx = inj_query
+            .position(|n| *n == INJ_LANG_CAPTURE)
+            .map(|i| i as u32);
+        let Some(content_idx) = inj_query
             .capture_names()
             .iter()
-            .position(|n| *n == INJ_CONTENT_CAPTURE);
-
-        let (Some(lang_idx), Some(content_idx)) = (lang_idx, content_idx) else {
-            // This grammar's injections.scm doesn't use the standard captures.
+            .position(|n| *n == INJ_CONTENT_CAPTURE)
+        else {
+            // No content capture at all — nothing to inject.
             return parent_spans;
         };
-
-        let lang_idx = lang_idx as u32;
         let content_idx = content_idx as u32;
 
         let Some(tree) = self.tree.as_ref() else {
@@ -681,17 +684,16 @@ impl Highlighter {
             let mut matches = cursor.matches(inj_query, tree.root_node(), source);
 
             while let Some(m) = matches.next() {
-                // Each match may have both @injection.language and
-                // @injection.content captures, possibly in either order.
-                // Alternatively, the pattern may set injection.language as a
-                // `(#set! injection.language "foo")` directive — used by
-                // tree-sitter-markdown for (inline) → markdown_inline,
-                // (html_block) → html, (minus_metadata) → yaml, etc.
+                // Each match may have @injection.content + optional
+                // @injection.language captures, in any order. Alternatively
+                // (and commonly), the pattern uses a
+                // `(#set! injection.language "foo")` directive — picked up
+                // by the property_settings fallback below.
                 let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
                 for cap in m.captures {
-                    if cap.index == lang_idx {
+                    if Some(cap.index) == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
                         if s < e
@@ -857,21 +859,22 @@ impl Highlighter {
             return parent_spans;
         };
 
-        // Find the capture indices for @injection.language and @injection.content.
+        // `@injection.content` required; `@injection.language` optional
+        // (often supplied by `(#set! injection.language "foo")` directive).
+        // See the matching block in `highlight_with_injections` for full
+        // resolution policy notes.
         let lang_idx = inj_query
             .capture_names()
             .iter()
-            .position(|n| *n == INJ_LANG_CAPTURE);
-        let content_idx = inj_query
+            .position(|n| *n == INJ_LANG_CAPTURE)
+            .map(|i| i as u32);
+        let Some(content_idx) = inj_query
             .capture_names()
             .iter()
-            .position(|n| *n == INJ_CONTENT_CAPTURE);
-
-        let (Some(lang_idx), Some(content_idx)) = (lang_idx, content_idx) else {
+            .position(|n| *n == INJ_CONTENT_CAPTURE)
+        else {
             return parent_spans;
         };
-
-        let lang_idx = lang_idx as u32;
         let content_idx = content_idx as u32;
 
         let Some(tree) = self.tree.as_ref() else {
@@ -893,7 +896,7 @@ impl Highlighter {
                 let mut content_range: Option<Range<usize>> = None;
 
                 for cap in m.captures {
-                    if cap.index == lang_idx {
+                    if Some(cap.index) == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
                         if s < e
