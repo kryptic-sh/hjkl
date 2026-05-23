@@ -26,7 +26,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
 use hjkl_bonsai::runtime::{Grammar, LoadHandle};
-use hjkl_bonsai::{CommentMarkerPass, DotFallbackTheme, Highlighter, InputEdit, Point, Theme};
+use hjkl_bonsai::{
+    CommentMarkerPass, DotFallbackTheme, HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass,
+    Highlighter, InputEdit, MetaValue, Point, Theme,
+};
 use hjkl_engine::Query;
 
 use hjkl_lang::{GrammarRequest, LanguageDirectory};
@@ -661,6 +664,7 @@ fn worker_loop(
     let mut buffers: HashMap<BufferId, WorkerBufferState> = HashMap::new();
     let mut theme: Arc<dyn Theme + Send + Sync> = initial_theme;
     let marker_pass = CommentMarkerPass::new();
+    let hex_color_pass = HexColorPass::new();
 
     loop {
         let msg = {
@@ -766,6 +770,9 @@ fn worker_loop(
                 // Overlay TODO/FIXME/NOTE/WARN marker spans onto comment spans.
                 marker_pass.apply(&mut flat_spans, bytes);
 
+                // Inline hex-color preview overlay (#rgb / #rrggbb).
+                hex_color_pass.apply(&mut flat_spans, bytes);
+
                 let t = Instant::now();
                 let by_row = build_by_row(
                     &flat_spans,
@@ -813,10 +820,37 @@ pub fn build_by_row(
     let mut by_row: Vec<Vec<(usize, usize, StyleSpec)>> = vec![Vec::new(); row_count];
 
     for span in flat_spans {
-        let style = match theme.style(span.capture()) {
-            Some(s) => s,
-            None => continue,
+        // Hex-color preview overlay: bypass the theme and build a
+        // StyleSpec directly from the metadata that HexColorPass
+        // attached. `hex_color` is intentionally NOT a theme key —
+        // the colour comes from the source literal itself.
+        let hex_style: Option<StyleSpec> = if span.capture() == HEX_COLOR_CAPTURE {
+            let bg = match span.metadata.get(HEX_BG_KEY) {
+                Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
+                _ => None,
+            };
+            let fg = match span.metadata.get(HEX_FG_KEY) {
+                Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
+                _ => None,
+            };
+            bg.map(|bg| StyleSpec {
+                fg,
+                bg: Some(bg),
+                modifiers: hjkl_theme::Modifiers::default(),
+            })
+        } else {
+            None
         };
+
+        let style: StyleSpec = if let Some(s) = hex_style {
+            s
+        } else {
+            match theme.style(span.capture()) {
+                Some(s) => *s,
+                None => continue,
+            }
+        };
+        let style = &style;
 
         let span_start = span.byte_range.start;
         let span_end = span.byte_range.end;
@@ -1168,6 +1202,8 @@ impl SyntaxLayer {
 
         let marker_pass = CommentMarkerPass::new();
         marker_pass.apply(&mut flat_spans, bytes);
+        let hex_color_pass = HexColorPass::new();
+        hex_color_pass.apply(&mut flat_spans, bytes);
 
         let local_by_row = build_by_row(
             &flat_spans,
@@ -1655,6 +1691,51 @@ mod tests {
         assert_eq!(by_row.len(), 2);
         assert!(by_row[0].is_empty());
         assert!(by_row[1].is_empty());
+    }
+
+    /// `hex_color` capture spans must build a StyleSpec from their
+    /// metadata (`hex.bg` / `hex.fg`) instead of going through the
+    /// theme — that's the whole point of the inline-preview overlay.
+    #[test]
+    fn build_by_row_hex_color_uses_metadata_colors() {
+        let bytes = b"--accent: #bb9af7;";
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert(
+            HEX_BG_KEY.to_string(),
+            MetaValue::Str("#bb9af7".to_string()),
+        );
+        metadata.insert(
+            HEX_FG_KEY.to_string(),
+            MetaValue::Str("#ffffff".to_string()),
+        );
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 10..17,
+            capture: HEX_COLOR_CAPTURE.to_string(),
+            metadata,
+        };
+        let by_row = build_by_row(&[span], bytes, &[0], 1, &DotFallbackTheme::dark());
+        assert_eq!(by_row.len(), 1);
+        assert_eq!(by_row[0].len(), 1);
+        let (_, _, style) = by_row[0][0];
+        let bg = style.bg.expect("hex color must set background");
+        assert_eq!((bg.r, bg.g, bg.b), (0xbb, 0x9a, 0xf7));
+        let fg = style.fg.expect("hex color must set foreground");
+        assert_eq!((fg.r, fg.g, fg.b), (0xff, 0xff, 0xff));
+    }
+
+    /// `hex_color` spans without metadata fall back to skipping (no
+    /// theme key registered) instead of panicking — defensive guard
+    /// against a future caller that emits the capture without metadata.
+    #[test]
+    fn build_by_row_hex_color_without_metadata_skips() {
+        let span = hjkl_bonsai::HighlightSpan {
+            byte_range: 0..3,
+            capture: HEX_COLOR_CAPTURE.to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+        let by_row = build_by_row(&[span], b"foo", &[0], 1, &DotFallbackTheme::dark());
+        assert_eq!(by_row.len(), 1);
+        assert!(by_row[0].is_empty());
     }
 
     // --- Pending queue deduplication ---
