@@ -575,11 +575,17 @@ impl App {
                         // Re-feed each Input through route_chord_key by converting
                         // it back to a crossterm KeyEvent. During replay,
                         // is_replaying_macro() == true so the recorder hook skips
-                        // the replayed inputs.
+                        // the replayed inputs. Keys that the chord layer does not
+                        // consume (insert-mode chars, motions in normal mode that
+                        // don't bind to an app chord) must fall through to the
+                        // engine — same pattern as the live event-loop key path.
                         for input in inputs {
                             let ct_key = engine_input_to_key_event(input);
-                            if ct_key.code != KeyCode::Null {
-                                self.route_chord_key(ct_key);
+                            if ct_key.code == KeyCode::Null {
+                                continue;
+                            }
+                            if !self.route_chord_key(ct_key) {
+                                hjkl_vim_tui::handle_key(&mut self.active_mut().editor, ct_key);
                             }
                         }
                         self.active_mut().editor.end_macro_replay();
