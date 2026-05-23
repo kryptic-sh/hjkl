@@ -828,21 +828,36 @@ pub(super) fn compute_enter_indent(settings: &crate::editor::Settings, prev_line
         .collect();
 
     if settings.smartindent {
-        // If the last non-whitespace character is an open bracket, bump
-        // indent by one unit. This is the heuristic seam: a tree-sitter
-        // `indents.scm` provider would replace this branch.
+        let unit = if settings.expandtab {
+            if settings.softtabstop > 0 {
+                " ".repeat(settings.softtabstop)
+            } else {
+                " ".repeat(settings.shiftwidth)
+            }
+        } else {
+            "\t".to_string()
+        };
+
+        // Open-bracket bump — language-agnostic.
         let last_non_ws = prev_line.chars().rev().find(|c| !c.is_whitespace());
         if matches!(last_non_ws, Some('{' | '(' | '[')) {
-            let unit = if settings.expandtab {
-                if settings.softtabstop > 0 {
-                    " ".repeat(settings.softtabstop)
-                } else {
-                    " ".repeat(settings.shiftwidth)
-                }
-            } else {
-                "\t".to_string()
-            };
             return format!("{base}{unit}");
+        }
+
+        // HTML-family opening-tag bump: `<head>` / `<div class="...">`.
+        // Gated on filetype so Rust generics like `Vec<T>` don't trigger.
+        // Reuses scan_tag_opener which already filters self-closing and
+        // void elements.
+        if is_html_filetype(&settings.filetype) {
+            let trimmed_end_len = prev_line
+                .trim_end_matches(|c: char| c.is_whitespace())
+                .len();
+            let trimmed = &prev_line[..trimmed_end_len];
+            if let Some(stripped) = trimmed.strip_suffix('>')
+                && scan_tag_opener(trimmed, stripped.len()).is_some()
+            {
+                return format!("{base}{unit}");
+            }
         }
     }
 
