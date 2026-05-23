@@ -537,6 +537,42 @@ fn gcc_toggles_comment_on_current_line_via_app_layer() {
 }
 
 #[test]
+fn gcc_on_doc_comment_uncomments_via_app_layer() {
+    // User report: `gcc` is a no-op on `///` rustdoc lines in the live
+    // binary. The toggle is supposed to detect "already commented"
+    // (starts_with("//") covers "///") and uncomment by stripping one
+    // "//" + one optional space — turning `/// foo` → `/ foo`.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "/// doc line\nfn foo() {}");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    let line0 = app.active().editor.buffer().lines()[0].clone();
+    assert_ne!(
+        line0, "/// doc line",
+        "gcc must mutate the doc-comment line; got {line0:?} (no-op == bug)"
+    );
+}
+
+#[test]
+fn gcc_on_indented_doc_comment_via_app_layer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "    /// indented doc\nfn foo() {}");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 4);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    let line0 = app.active().editor.buffer().lines()[0].clone();
+    assert_ne!(
+        line0, "    /// indented doc",
+        "gcc on indented doc-comment must mutate; got {line0:?}"
+    );
+}
+
+#[test]
 fn opening_rust_file_auto_sets_filetype_so_gcc_works() {
     // User report: opening a .rs file from the CLI and pressing `gcc`
     // does nothing. Root cause: build_slot never called set_filetype, so
