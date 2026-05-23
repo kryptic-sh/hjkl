@@ -146,6 +146,44 @@ impl SyntaxLayer {
         Some(convert_output(raw))
     }
 
+    /// Borrow the buffer's cached `(source, row_starts, line_count)`,
+    /// populated as a side-effect of [`Self::submit_render`]. Forwarded so
+    /// the app's render-path can drive a sync `query_viewport` against the
+    /// same source the worker will see.
+    pub fn cached_source(
+        &self,
+        id: BufferId,
+    ) -> Option<(std::sync::Arc<String>, std::sync::Arc<Vec<usize>>, usize)> {
+        self.inner.cached_source(id)
+    }
+
+    /// Synchronous viewport highlight against the retained tree. See
+    /// [`hjkl_syntax::SyntaxLayer::query_viewport`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_viewport(
+        &self,
+        id: BufferId,
+        source: &str,
+        row_starts: &[usize],
+        viewport_byte_range: std::ops::Range<usize>,
+        viewport_top: usize,
+        viewport_height: usize,
+        row_count: usize,
+        kind: ParseKind,
+    ) -> Option<RenderOutput> {
+        let raw = self.inner.query_viewport(
+            id,
+            source,
+            row_starts,
+            viewport_byte_range,
+            viewport_top,
+            viewport_height,
+            row_count,
+            kind,
+        )?;
+        Some(convert_output(raw))
+    }
+
     /// Ask the worker to drop this buffer's retained tree on the next parse.
     pub fn reset(&mut self, id: BufferId) {
         self.inner.reset(id);

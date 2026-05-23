@@ -422,6 +422,39 @@ impl App {
                     submitted = true;
                     self.active_mut().last_recompute_at = Instant::now();
                     self.active_mut().last_recompute_key = Some(key);
+                    // Plan B (#233): run a sync `query_viewport` against
+                    // the retained tree (which already has this frame's
+                    // `tree.edit` deltas applied via `SyntaxLayer::apply_edits`)
+                    // and install immediately. Worker reparse follows and
+                    // refreshes the result asynchronously. Without this
+                    // step the active viewport always shows one-frame-old
+                    // colours after every edit / scroll because we'd be
+                    // waiting on the worker to deliver the new spans.
+                    if let Some((source, row_starts, line_count_arc)) =
+                        self.syntax.cached_source(buffer_id)
+                    {
+                        let bytes_len = source.len();
+                        let vp_start = row_starts.get(oversize_top).copied().unwrap_or(bytes_len);
+                        let vp_end_row = oversize_top + oversize_height + 1;
+                        let vp_end = row_starts
+                            .get(vp_end_row)
+                            .copied()
+                            .unwrap_or(bytes_len)
+                            .min(bytes_len)
+                            .max(vp_start);
+                        if let Some(sync_out) = self.syntax.query_viewport(
+                            buffer_id,
+                            source.as_str(),
+                            row_starts.as_ref(),
+                            vp_start..vp_end,
+                            oversize_top,
+                            oversize_height,
+                            line_count_arc,
+                            crate::syntax::ParseKind::Viewport,
+                        ) {
+                            self.install_render_result(sync_out);
+                        }
+                    }
                 }
             }
         }
