@@ -74,6 +74,10 @@ pub fn all_setting_names() -> Vec<String> {
         "lbr".into(),
         "foldenable".into(),
         "fen".into(),
+        "autopair".into(),
+        "ap".into(),
+        "autoclose-tag".into(),
+        "act".into(),
     ]
 }
 
@@ -97,7 +101,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -125,6 +129,8 @@ pub(crate) fn apply_set<H: Host>(
             s.formatoptions,
             s.filetype,
             s.commentstring,
+            if s.autopair { "on" } else { "off" },
+            if s.autoclose_tag { "on" } else { "off" },
         ));
     }
     for token in trimmed.split_whitespace() {
@@ -313,6 +319,8 @@ fn apply_set_token<H: Host>(
         // ex_dispatch.rs before hjkl-ex is consulted. Accept silently here so
         // hjkl-ex never emits an "unknown option" error if the token somehow
         // reaches this path.
+        "autopair" | "ap" => editor.settings_mut().autopair = value,
+        "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }

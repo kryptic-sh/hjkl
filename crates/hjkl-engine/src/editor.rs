@@ -744,6 +744,18 @@ pub struct Settings {
     /// prefix/suffix portion (before/after `%s`).  An empty string means "use
     /// the filetype default".  Default `""`.
     pub commentstring: String,
+    /// When `true`, typing an opening bracket or quote automatically inserts
+    /// the matching close character and parks the cursor between them.
+    /// Matches vim's `set autopairs` (Neovim) / nvim-autopairs behaviour.
+    /// Default `true`.
+    pub autopair: bool,
+    /// When `true`, typing `>` to close an HTML/XML opening tag automatically
+    /// inserts `</tagname>` after the cursor. Only fires for filetypes in the
+    /// HTML/XML family (`html`, `xml`, `svg`, `jsx`, `tsx`, `vue`, `svelte`).
+    /// Matches common editor "autoclose tag" behaviour. Default: `true` for
+    /// those filetypes (the caller gates on filetype), `true` stored here so
+    /// `:set noautoclose-tag` can disable it globally.
+    pub autoclose_tag: bool,
 }
 
 impl Default for Settings {
@@ -776,6 +788,8 @@ impl Default for Settings {
             formatoptions: "ro".to_string(),
             filetype: String::new(),
             commentstring: String::new(),
+            autopair: true,
+            autoclose_tag: true,
         }
     }
 }
@@ -820,6 +834,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         formatoptions: o.formatoptions.clone(),
         filetype: o.filetype.clone(),
         commentstring: String::new(),
+        autopair: true,
+        autoclose_tag: true,
     }
 }
 

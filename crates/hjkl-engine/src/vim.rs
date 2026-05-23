@@ -516,6 +516,14 @@ pub struct VimState {
     pub(crate) current_mode: crate::VimMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
     pub last_substitute: Option<crate::substitute::SubstituteCmd>,
+    /// Stack of auto-inserted closing characters awaiting skip-over.
+    ///
+    /// Each entry `(row, col, ch)` records where autopair placed a close
+    /// character. When the next typed char matches `ch` AND the cursor is
+    /// immediately before that position, the engine advances past it
+    /// ("skip-over") instead of inserting. The stack is cleared on any
+    /// cursor motion, mode change, or out-of-pair edit.
+    pub pending_closes: Vec<(usize, usize, char)>,
 }
 
 pub(crate) const SEARCH_HISTORY_MAX: usize = 100;
@@ -1210,9 +1218,124 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
 //     (currently a no-op but kept for migration hygiene).
 //   - Returns `true` when the buffer was mutated, `false` otherwise.
 
+/// Return the filetype-gated autopair close character for `open`, or `None`
+/// when no pairing applies.
+///
+/// Rules:
+/// - `(` → `)`, `[` → `]`, `{` → `}`, `"` → `"`, `` ` `` → `` ` `` always.
+/// - `<` → `>` only for HTML/XML family filetypes.
+/// - `'` → `'` unless the character immediately before the cursor is
+///   `[A-Za-z]` (prose apostrophe guard — "don't" stays "don't").
+fn autopair_close_for(ch: char, filetype: &str, prev_char: Option<char>) -> Option<char> {
+    match ch {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '"' => Some('"'),
+        '`' => Some('`'),
+        '<' => {
+            if is_html_filetype(filetype) {
+                Some('>')
+            } else {
+                None
+            }
+        }
+        '\'' => {
+            // Prose guard: skip pairing when the previous char is a letter
+            // (covers "don't", "it's", etc.).
+            if prev_char.map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
+                None
+            } else {
+                Some('\'')
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Filetypes that get HTML/XML-family treatment (`<` pairing + tag autoclose).
+fn is_html_filetype(ft: &str) -> bool {
+    matches!(
+        ft,
+        "html" | "xml" | "svg" | "jsx" | "tsx" | "vue" | "svelte"
+    )
+}
+
+/// Void HTML elements that must never get an auto-close tag.
+fn is_void_element(tag: &str) -> bool {
+    matches!(
+        tag.to_ascii_lowercase().as_str(),
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
+    )
+}
+
+/// Scan backward from `col` (exclusive) in `line` for a `<tagname…` opener.
+///
+/// Returns `Some(tag_name)` when:
+/// - An opening `<` is found
+/// - The tag name matches `[A-Za-z][A-Za-z0-9-]*`
+/// - The tag is not self-closing (does not end with `/` before `>`)
+/// - The tag is not a void element
+///
+/// Returns `None` otherwise (no opener, self-closing, void, or malformed).
+fn scan_tag_opener(line: &str, col: usize) -> Option<String> {
+    // col is where `>` was just inserted (the char is already in the line).
+    // We look at the slice BEFORE the `>`.
+    let before = if col > 0 { &line[..col] } else { return None };
+
+    // Walk backward to find the matching `<`.
+    let lt_pos = before.rfind('<')?;
+    let inner = &before[lt_pos + 1..]; // e.g. "div class=\"foo\""
+
+    // A `!` opener is a comment/doctype — skip.
+    if inner.starts_with('!') {
+        return None;
+    }
+    // Self-closing if the last non-space char before `>` was `/`.
+    if inner.trim_end().ends_with('/') {
+        return None;
+    }
+
+    // Extract tag name: first token of `inner`.
+    let tag: String = inner
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+    if tag.is_empty() {
+        return None;
+    }
+    // First char must be a letter.
+    if !tag
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    if is_void_element(&tag) {
+        return None;
+    }
+    Some(tag)
+}
+
 /// Insert a single character at the cursor. Handles replace-mode overstrike
 /// (when `InsertSession::reason` is `Replace`) and smart-indent dedent of
-/// closing brackets (}/)]/). Returns `true`.
+/// closing brackets (}/)]/). Also handles autopair insertion and skip-over.
+/// Returns `true`.
 pub(crate) fn insert_char_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     ch: char,
@@ -1225,7 +1348,56 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
         ed.vim.insert_session.as_ref().map(|s| &s.reason),
         Some(InsertReason::Replace)
     );
+
+    // ── Skip-over: if the typed char matches the top of the pending-closes
+    // stack AND the char currently under the cursor IS that close char,
+    // pop the stack and advance the cursor instead of inserting.
+    //
+    // We check the actual char in the buffer (not a stored col) so that
+    // characters typed between the pair don't invalidate the skip — the
+    // close char shifts right as the user types inside, but the buffer
+    // char check always finds it correctly.
+    if !in_replace
+        && !ed.vim.pending_closes.is_empty()
+        && let Some(&(pr, _pc, pch)) = ed.vim.pending_closes.last()
+        && ch == pch
+        && cursor.row == pr
+    {
+        let char_at_cursor =
+            buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col));
+        if char_at_cursor == Some(ch) {
+            ed.vim.pending_closes.pop();
+            // For `>` skip-over in HTML/XML: also run tag autoclose.
+            let filetype = ed.settings.filetype.clone();
+            let autoclose_tag = ed.settings.autoclose_tag;
+            if ch == '>' && autoclose_tag && is_html_filetype(&filetype) {
+                // Skip past the `>` that was auto-inserted.
+                let new_col = cursor.col + 1;
+                buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                // Now check for tag autoclose on the line up to new_col.
+                if let Some(line) = buf_line(&ed.buffer, cursor.row)
+                    && let Some(tag) = scan_tag_opener(&line, new_col.saturating_sub(1))
+                {
+                    let close_tag = format!("</{tag}>");
+                    let insert_pos = Position::new(cursor.row, new_col);
+                    ed.mutate_edit(Edit::InsertStr {
+                        at: insert_pos,
+                        text: close_tag,
+                    });
+                    // Cursor stays at new_col (between > and </tag>).
+                    buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                }
+            } else {
+                buf_set_cursor_rc(&mut ed.buffer, cursor.row, cursor.col + 1);
+            }
+            ed.push_buffer_cursor_to_textarea();
+            return true;
+        }
+    }
+
     if in_replace && cursor.col < line_chars {
+        // Replace mode: clear pending closes (edit outside the pair).
+        ed.vim.pending_closes.clear();
         ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
@@ -1233,6 +1405,70 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
         });
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     } else if !try_dedent_close_bracket(ed, cursor, ch) {
+        // Normal insert. Check autopair first.
+        let autopair = ed.settings.autopair;
+        let filetype = ed.settings.filetype.clone();
+        let autoclose_tag = ed.settings.autoclose_tag;
+
+        let prev_char = if cursor.col > 0 {
+            buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col - 1))
+        } else {
+            None
+        };
+
+        if autopair {
+            if let Some(close) = autopair_close_for(ch, &filetype, prev_char) {
+                // Insert open char.
+                ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+                // Insert close char immediately after the open char.
+                // After inserting open at cursor, buffer cursor is at cursor.col+1.
+                let after = Position::new(cursor.row, cursor.col + 1);
+                ed.mutate_edit(Edit::InsertChar {
+                    at: after,
+                    ch: close,
+                });
+                // After inserting close, buffer cursor is at cursor.col+2.
+                // We want cursor between open and close: cursor.col+1.
+                let between_col = cursor.col + 1;
+                buf_set_cursor_rc(&mut ed.buffer, cursor.row, between_col);
+                // Record the close char for skip-over. We store the row and
+                // the close char; col is not tracked precisely because chars
+                // typed inside the pair shift the close right. The skip-over
+                // logic checks the actual buffer char at cursor instead.
+                ed.vim.pending_closes.push((cursor.row, between_col, close));
+                ed.push_buffer_cursor_to_textarea();
+                return true;
+            }
+
+            // Tag autoclose: `>` in HTML/XML family (no prior `<` pair).
+            // This fires when autopair did NOT match `>` (e.g. `>` was
+            // typed directly, not via a skip-over of an auto-inserted `>`).
+            if ch == '>' && autoclose_tag && is_html_filetype(&filetype) {
+                ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+                let new_col = cursor.col + 1;
+                // scan_tag_opener looks at the line up to (new_col-1), i.e.
+                // the char just inserted is at index new_col-1.
+                if let Some(line) = buf_line(&ed.buffer, cursor.row)
+                    && let Some(tag) = scan_tag_opener(&line, new_col.saturating_sub(1))
+                {
+                    let close_tag = format!("</{tag}>");
+                    let insert_pos = Position::new(cursor.row, new_col);
+                    ed.mutate_edit(Edit::InsertStr {
+                        at: insert_pos,
+                        text: close_tag,
+                    });
+                    // Cursor stays at new_col (between `>` and `</tag>`).
+                    buf_set_cursor_rc(&mut ed.buffer, cursor.row, new_col);
+                }
+                ed.push_buffer_cursor_to_textarea();
+                return true;
+            }
+        }
+
+        // Plain insert — do not clear the pending-closes stack here.
+        // The stack is cleared on cursor motion or mode change (Esc).
+        // Clearing here would prevent skip-over from firing after the
+        // user types content inside an auto-paired bracket.
         ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
     }
     ed.push_buffer_cursor_to_textarea();
@@ -1241,6 +1477,8 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
 
 /// Insert a newline at the cursor, applying autoindent / smartindent and
 /// optionally continuing a line comment when `formatoptions` has `r`.
+/// Also handles open-pair-newline: Enter between `{|}` / `(|)` / `[|]`
+/// produces an indented block with the close on its own line.
 /// Returns `true`.
 pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
@@ -1252,12 +1490,63 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
         .unwrap_or_default()
         .to_string();
 
+    // Open-pair-newline: if autopair is on and the cursor is between a
+    // matching open/close bracket pair, split into two newlines so the
+    // close ends up on its own dedented line.
+    if ed.settings.autopair && !ed.vim.pending_closes.is_empty() {
+        // Check: char before cursor is an open bracket AND char at cursor
+        // is the matching close bracket (from our pending-closes stack).
+        let prev_char = if cursor.col > 0 {
+            prev_line.chars().nth(cursor.col - 1)
+        } else {
+            None
+        };
+        let next_char = prev_line.chars().nth(cursor.col);
+        let is_open_pair = matches!(
+            (prev_char, next_char),
+            (Some('{'), Some('}')) | (Some('('), Some(')')) | (Some('['), Some(']'))
+        );
+        if is_open_pair {
+            // The pending-closes stack refers to the close char at cursor.col.
+            // We clear it because the newline expansion moves the close.
+            ed.vim.pending_closes.clear();
+            // Compute indents: inner gets one extra unit, close gets base.
+            let base_indent: String = prev_line
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect();
+            let inner_indent = if ed.settings.expandtab {
+                let unit = if ed.settings.softtabstop > 0 {
+                    ed.settings.softtabstop
+                } else {
+                    ed.settings.shiftwidth
+                };
+                format!("{base_indent}{}", " ".repeat(unit))
+            } else {
+                format!("{base_indent}\t")
+            };
+            // Insert: \n<inner_indent>\n<base_indent>
+            // Then cursor lands after the first \n (inside the block).
+            let text = format!("\n{inner_indent}\n{base_indent}");
+            ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+            // Move cursor to end of first new line (inner_indent line).
+            let new_row = cursor.row + 1;
+            let new_col = inner_indent.len();
+            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            ed.push_buffer_cursor_to_textarea();
+            return true;
+        }
+    }
+
     // formatoptions `r`: continue comment on Enter in insert mode.
     let comment_cont = if ed.settings.formatoptions.contains('r') {
         continue_comment(&ed.buffer, &ed.settings, cursor.row)
     } else {
         None
     };
+
+    // Any Enter clears the pending-closes stack (cursor moved off the pair).
+    ed.vim.pending_closes.clear();
 
     let text = if let Some(cont) = comment_cont {
         // Comment continuation overrides autoindent: the indent is already
@@ -1422,12 +1711,14 @@ pub enum InsertDir {
 }
 
 /// Move the cursor one step in `dir`, breaking the undo group per
-/// `undo_break_on_motion`. Returns `false` (no mutation).
+/// `undo_break_on_motion`. Clears the autopair pending-closes stack (cursor
+/// moved off the pair). Returns `false` (no mutation).
 pub(crate) fn insert_arrow_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     dir: InsertDir,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
+    ed.vim.pending_closes.clear();
     match dir {
         InsertDir::Left => {
             crate::motions::move_left(&mut ed.buffer, 1);
@@ -1450,11 +1741,12 @@ pub(crate) fn insert_arrow_bridge<H: crate::types::Host>(
 }
 
 /// Move the cursor to the start of the current line, breaking the undo group.
-/// Returns `false` (no mutation).
+/// Clears the autopair pending-closes stack. Returns `false` (no mutation).
 pub(crate) fn insert_home_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
+    ed.vim.pending_closes.clear();
     crate::motions::move_line_start(&mut ed.buffer);
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -1462,11 +1754,12 @@ pub(crate) fn insert_home_bridge<H: crate::types::Host>(
 }
 
 /// Move the cursor to the end of the current line, breaking the undo group.
-/// Returns `false` (no mutation).
+/// Clears the autopair pending-closes stack. Returns `false` (no mutation).
 pub(crate) fn insert_end_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
     ed.sync_buffer_content_from_textarea();
+    ed.vim.pending_closes.clear();
     crate::motions::move_line_end(&mut ed.buffer);
     break_undo_group_in_insert(ed);
     ed.push_buffer_cursor_to_textarea();
@@ -1635,11 +1928,13 @@ pub(crate) fn insert_paste_register_bridge<H: crate::types::Host>(
 
 /// Exit insert mode to Normal: finish the insert session, step the cursor one
 /// cell left (vim convention), record the `gi` target, and update the sticky
-/// column. Returns `true` (always consumed — even if no buffer mutation, the
-/// mode change itself is a meaningful step).
+/// column. Clears the autopair pending-closes stack. Returns `true` (always
+/// consumed — even if no buffer mutation, the mode change itself is a
+/// meaningful step).
 pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
 ) -> bool {
+    ed.vim.pending_closes.clear();
     finish_insert_session(ed);
     ed.vim.mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
