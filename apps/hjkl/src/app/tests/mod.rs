@@ -492,9 +492,16 @@ fn ck(c: char) -> KeyEvent {
 
 fn macro_key_seq(app: &mut App, keys: &[KeyEvent]) {
     for &k in keys {
-        // route_chord_key returns false for unrecognised keys; forward to engine.
+        // route_chord_key returns false for unrecognised keys; forward to the
+        // same fallback the live event loop uses — dispatch_insert_key in
+        // Insert mode, hjkl_vim_tui::handle_key elsewhere — so test paths
+        // exercise the production recorder behaviour exactly.
         if !app.route_chord_key(k) {
-            hjkl_vim_tui::handle_key(&mut app.active_mut().editor, k);
+            if app.active().editor.vim_mode() == VimMode::Insert {
+                app.dispatch_insert_key(k);
+            } else {
+                hjkl_vim_tui::handle_key(&mut app.active_mut().editor, k);
+            }
         }
         app.sync_viewport_from_editor();
     }

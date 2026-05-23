@@ -93,6 +93,17 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
         use hjkl_engine::InsertDir;
 
+        // Recorder hook — this path bypasses begin_step / end_step (the
+        // engine's standard recorder site), so insert-mode chars must be
+        // pushed here when a macro is recording. Skipped during replay so
+        // played-back inputs don't append to the active recording.
+        if self.active().editor.is_recording_macro() && !self.active().editor.is_replaying_macro() {
+            let input = hjkl_engine_tui::crossterm_to_input(key);
+            if input.key != hjkl_engine::Key::Null {
+                self.active_mut().editor.record_input(input);
+            }
+        }
+
         // `Ctrl-R` two-key sequence: the previous key armed the register
         // selector. The next printable char names the register to paste.
         // Any non-printable key cancels (mirrors vim behaviour).

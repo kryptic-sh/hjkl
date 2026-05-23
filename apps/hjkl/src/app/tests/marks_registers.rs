@@ -465,6 +465,59 @@ fn record_macro_a_insert_text_esc_motion_replays_full() {
 }
 
 #[test]
+fn record_macro_a_comma_text_esc_j0_replays() {
+    // User scenario: qaA, this is a test<Esc>j0q  → @a
+    // Expected: append ", this is a test" to current line then move down/start.
+    // Actual bug report: replay went into insert at EOL then literally typed "j0".
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "line0\nline1\nline2");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(
+        &mut app,
+        &[
+            ck('q'),
+            ck('a'),
+            ck('A'),
+            ck(','),
+            ck(' '),
+            ck('t'),
+            ck('h'),
+            ck('i'),
+            ck('s'),
+            ck(' '),
+            ck('i'),
+            ck('s'),
+            ck(' '),
+            ck('a'),
+            ck(' '),
+            ck('t'),
+            ck('e'),
+            ck('s'),
+            ck('t'),
+            key(KeyCode::Esc),
+            ck('j'),
+            ck('0'),
+            ck('q'),
+        ],
+    );
+    assert!(!app.active().editor.is_recording_macro());
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "line0, this is a test",
+        "recording itself must append the text"
+    );
+
+    macro_key_seq(&mut app, &[ck('@'), ck('a')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[1],
+        "line1, this is a test",
+        "@a must re-append the text on line1"
+    );
+}
+
+#[test]
 fn at_at_repeats_last_macro() {
     // Record `qa j q`, play `@a`, then `@@` re-plays same macro.
     let mut app = App::new(None, false, None, None).unwrap();
