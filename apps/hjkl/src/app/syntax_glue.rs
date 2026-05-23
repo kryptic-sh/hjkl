@@ -320,6 +320,73 @@ impl App {
         false
     }
 
+    /// Run a sync `query_viewport` against the active buffer's retained
+    /// tree and install the result. Falls back to the one-shot
+    /// `preview_render` when no retained tree is available (cold open /
+    /// post-reset). Skips silently when the cached source is stale
+    /// (buffer changed but the submit-side cache rebuild was throttled).
+    ///
+    /// `oversize_top` / `oversize_height` are the parse range (3× the
+    /// visible viewport); `top` / `height` are the visible viewport
+    /// (used by `preview_render`'s tighter fallback range). `current_dg`
+    /// is the buffer's current dirty_gen — used both to detect cache
+    /// staleness and to tag the resulting `RenderOutput` so the install
+    /// path's generation guard knows this result is fresh.
+    fn sync_query_active_viewport(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        oversize_top: usize,
+        oversize_height: usize,
+        top: usize,
+        height: usize,
+        current_dg: u64,
+    ) {
+        let Some((source, row_starts, line_count_arc, cache_dg)) =
+            self.syntax.cached_source(buffer_id)
+        else {
+            return;
+        };
+        // Cache built for a stale dirty_gen — its bytes don't match the
+        // live buffer, so querying against the (correctly-edited) tree
+        // with this source would still produce wrong-offset spans.
+        // Wait for the next submit to rebuild.
+        if cache_dg != current_dg {
+            return;
+        }
+        let bytes_len = source.len();
+        let vp_start = row_starts.get(oversize_top).copied().unwrap_or(bytes_len);
+        let vp_end_row = oversize_top + oversize_height + 1;
+        let vp_end = row_starts
+            .get(vp_end_row)
+            .copied()
+            .unwrap_or(bytes_len)
+            .min(bytes_len)
+            .max(vp_start);
+        let sync_out = self.syntax.query_viewport(
+            buffer_id,
+            source.as_str(),
+            row_starts.as_ref(),
+            vp_start..vp_end,
+            oversize_top,
+            oversize_height,
+            line_count_arc,
+            current_dg,
+            crate::syntax::ParseKind::Viewport,
+        );
+        if let Some(sync_out) = sync_out {
+            self.install_render_result(sync_out);
+        } else {
+            // No retained tree (cold open / post-reset). Fall back to
+            // the one-shot `preview_render` so the visible rows paint
+            // immediately instead of waiting on the async worker.
+            let active_idx = self.focused_slot_idx();
+            let buf = self.slots[active_idx].editor.buffer();
+            if let Some(preview) = self.syntax.preview_render(buffer_id, buf, top, height) {
+                self.install_render_result(preview);
+            }
+        }
+    }
+
     /// Handle a `take_content_reset` event on the active buffer: clear the
     /// per-slot `RenderOutput` caches (their row counts no longer match
     /// the post-replace buffer), blank the editor's installed
@@ -484,61 +551,23 @@ impl App {
                     submitted = true;
                     self.active_mut().last_recompute_at = Instant::now();
                     self.active_mut().last_recompute_key = Some(key);
-                    // Plan B (#233): run a sync `query_viewport` against
-                    // the retained tree (which already has this frame's
-                    // `tree.edit` deltas applied via `SyntaxLayer::apply_edits`)
-                    // and install immediately. Worker reparse follows and
-                    // refreshes the result asynchronously. Without this
-                    // step the active viewport always shows one-frame-old
-                    // colours after every edit / scroll because we'd be
-                    // waiting on the worker to deliver the new spans.
-                    if let Some((source, row_starts, line_count_arc)) =
-                        self.syntax.cached_source(buffer_id)
-                    {
-                        let bytes_len = source.len();
-                        let vp_start = row_starts.get(oversize_top).copied().unwrap_or(bytes_len);
-                        let vp_end_row = oversize_top + oversize_height + 1;
-                        let vp_end = row_starts
-                            .get(vp_end_row)
-                            .copied()
-                            .unwrap_or(bytes_len)
-                            .min(bytes_len)
-                            .max(vp_start);
-                        let sync_out = self.syntax.query_viewport(
-                            buffer_id,
-                            source.as_str(),
-                            row_starts.as_ref(),
-                            vp_start..vp_end,
-                            oversize_top,
-                            oversize_height,
-                            line_count_arc,
-                            // dirty_gen here is the buffer's current
-                            // dirty_gen: the sync `tree.edit` deltas
-                            // already landed on the retained tree, so
-                            // we tag the result as fully up-to-date and
-                            // skip the merger's per-row dirty blanking.
-                            dg,
-                            crate::syntax::ParseKind::Viewport,
-                        );
-                        if let Some(sync_out) = sync_out {
-                            self.install_render_result(sync_out);
-                        } else {
-                            // No retained tree (cold open / post-reset).
-                            // Fall back to the one-shot `preview_render`
-                            // so the visible rows paint immediately
-                            // instead of waiting for the async worker.
-                            let active_idx = self.focused_slot_idx();
-                            let buf = self.slots[active_idx].editor.buffer();
-                            if let Some(preview) =
-                                self.syntax.preview_render(buffer_id, buf, top, height)
-                            {
-                                self.install_render_result(preview);
-                            }
-                        }
-                    }
                 }
             }
         }
+
+        // Plan B (#233): run a sync `query_viewport` against the retained
+        // tree (which already has this frame's `tree.edit` deltas applied
+        // via `SyntaxLayer::apply_edits`) every tick — NOT only when a
+        // submit fired. Pure-scroll ticks (no edit) take the cache-hit /
+        // throttle branch above and skip the submit; without this call
+        // the viewport keeps painting last frame's spans until the
+        // async worker delivers.
+        //
+        // Cheap: ~100µs on warm tree for an 80-row window. The sync
+        // result is tagged with the buffer's current dirty_gen so the
+        // generation guard in `install_render_result` will favour it
+        // over any older worker result still in flight.
+        self.sync_query_active_viewport(buffer_id, oversize_top, oversize_height, top, height, dg);
 
         // Top + Bottom pre-cache for the active buffer.
         //

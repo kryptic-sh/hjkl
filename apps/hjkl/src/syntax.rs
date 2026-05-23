@@ -146,14 +146,22 @@ impl SyntaxLayer {
         Some(convert_output(raw))
     }
 
-    /// Borrow the buffer's cached `(source, row_starts, line_count)`,
+    /// Borrow the buffer's cached `(source, row_starts, line_count, dirty_gen)`,
     /// populated as a side-effect of [`Self::submit_render`]. Forwarded so
     /// the app's render-path can drive a sync `query_viewport` against the
-    /// same source the worker will see.
+    /// same source the worker will see. `dirty_gen` is the buffer's
+    /// generation at cache-build time — compare against the buffer's
+    /// current generation to detect a stale cache.
+    #[allow(clippy::type_complexity)]
     pub fn cached_source(
         &self,
         id: BufferId,
-    ) -> Option<(std::sync::Arc<String>, std::sync::Arc<Vec<usize>>, usize)> {
+    ) -> Option<(
+        std::sync::Arc<String>,
+        std::sync::Arc<Vec<usize>>,
+        usize,
+        u64,
+    )> {
         self.inner.cached_source(id)
     }
 

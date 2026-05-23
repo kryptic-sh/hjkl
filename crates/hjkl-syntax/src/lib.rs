@@ -1204,17 +1204,26 @@ impl SyntaxLayer {
         self.worker.set_theme(theme);
     }
 
-    /// Borrow the buffer's cached `(source, row_starts)` Arcs, if any.
-    /// Populated as a side-effect of [`Self::submit_render`]; lets the app
-    /// run [`Self::query_viewport`] against the same source the worker
-    /// will see without rebuilding the source string from the buffer rows.
-    pub fn cached_source(&self, id: BufferId) -> Option<(Arc<String>, Arc<Vec<usize>>, usize)> {
+    /// Borrow the buffer's cached `(source, row_starts, line_count, dirty_gen)`
+    /// from the last [`Self::submit_render`] call, if any.
+    ///
+    /// `dirty_gen` is the buffer's generation at the time the cache was
+    /// built — callers compare it against the buffer's *current* generation
+    /// to decide whether to run a sync [`Self::query_viewport`] (cache is
+    /// up to date) or skip (cache is stale, throttled submit hasn't fired
+    /// the rebuild yet).
+    #[allow(clippy::type_complexity)]
+    pub fn cached_source(
+        &self,
+        id: BufferId,
+    ) -> Option<(Arc<String>, Arc<Vec<usize>>, usize, u64)> {
         let c = self.clients.get(&id)?;
         let rc = c.cache.as_ref()?;
         Some((
             Arc::clone(&rc.source),
             Arc::clone(&rc.row_starts),
             rc.line_count as usize,
+            rc.dirty_gen,
         ))
     }
 
