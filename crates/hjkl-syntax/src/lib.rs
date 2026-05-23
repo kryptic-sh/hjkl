@@ -958,6 +958,13 @@ impl SyntaxLayer {
     /// let dir = Arc::new(LanguageDirectory::new().unwrap());
     /// let layer = SyntaxLayer::new(theme, dir);
     /// ```
+    /// Borrow the shared language directory. Useful for cheap
+    /// path-to-language-name lookups (e.g. `name_for_path`) without
+    /// triggering any grammar load.
+    pub fn directory(&self) -> &Arc<LanguageDirectory> {
+        &self.directory
+    }
+
     pub fn new(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
         let worker = SyntaxWorker::spawn(Arc::clone(&theme), Arc::clone(&directory));
         Self {

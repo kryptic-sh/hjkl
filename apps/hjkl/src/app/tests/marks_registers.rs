@@ -518,6 +518,56 @@ fn record_macro_a_comma_text_esc_j0_replays() {
 }
 
 #[test]
+fn gcc_toggles_comment_on_current_line_via_app_layer() {
+    // User report: `gcc` doesn't toggle line comment in the live binary.
+    // Drive through the same path the event loop uses (handle_keypress →
+    // route_chord_key → engine via FallThrough).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "// let x = 1;",
+        "gcc must toggle a comment marker onto line 0"
+    );
+}
+
+#[test]
+fn opening_rust_file_auto_sets_filetype_so_gcc_works() {
+    // User report: opening a .rs file from the CLI and pressing `gcc`
+    // does nothing. Root cause: build_slot never called set_filetype, so
+    // toggle_comment_range took the no-known-syntax early return. This
+    // test drives the production file-open path end-to-end.
+    let dir = std::env::temp_dir().join(format!("hjkl-gcc-filetype-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file_path = dir.join("a.rs");
+    std::fs::write(&file_path, "let x = 1;\nlet y = 2;\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    assert_eq!(
+        app.active().editor.settings().filetype,
+        "rust",
+        "opening a .rs file must seed the editor's filetype to \"rust\""
+    );
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "// let x = 1;",
+        "gcc on a freshly-opened .rs file must toggle a comment marker"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn at_at_repeats_last_macro() {
     // Record `qa j q`, play `@a`, then `@@` re-plays same macro.
     let mut app = App::new(None, false, None, None).unwrap();

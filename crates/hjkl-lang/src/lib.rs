@@ -97,6 +97,18 @@ impl LanguageDirectory {
 
     // ── Async-friendly API (UI-thread callers) ────────────────────────────────
 
+    /// Resolve a path to its canonical language name (e.g. `"rust"` for
+    /// `foo.rs`). Returns `None` for unknown / extensionless paths.
+    ///
+    /// Cheap (extension lookup against the bonsai manifest) and synchronous
+    /// — does not load any grammar. Use this when you only need the
+    /// language identifier (e.g. for `:set filetype=`, commentstring
+    /// resolution, LSP language-id mapping) and don't care about the
+    /// grammar object.
+    pub fn name_for_path(&self, path: &Path) -> Option<String> {
+        self.registry.name_for_path(path).map(|s| s.to_string())
+    }
+
     /// Async-friendly resolution by path. Returns immediately; never blocks
     /// on clone+compile. See module-level docs for the three fast paths.
     pub fn request_for_path(&self, path: &Path) -> GrammarRequest {
