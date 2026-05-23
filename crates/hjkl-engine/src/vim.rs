@@ -1346,6 +1346,278 @@ fn is_html_filetype(ft: &str) -> bool {
     )
 }
 
+// ── Paired-tag auto-rename (issue #182) ────────────────────────────────────
+//
+// When the user edits the name of an HTML/XML opening tag (e.g. `ci<` to
+// change-inner the tag name, type a new name, then `<Esc>`), the matching
+// closing tag should rename automatically so the pair stays in sync.
+// Same on the close side: edit `</X>` → its opener gets renamed.
+//
+// Trigger: leave_insert_to_normal_bridge calls sync_paired_tag_on_exit, which
+// inspects the cursor's current position. If the cursor sits inside a tag
+// name and the paired tag has a different name, rewrite the paired tag.
+//
+// Pairing uses a stack-based scan so nested same-name tags
+// (`<div><div></div></div>`) pair correctly.
+
+/// Tag kind detected at a cursor position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagKind {
+    Open,
+    Close,
+}
+
+/// A single tag instance located in the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagSpan {
+    kind: TagKind,
+    name: String,
+    /// Row index in the buffer.
+    row: usize,
+    /// Char-column range of the tag NAME (excluding `<`, `</`, attributes, `>`).
+    name_start_col: usize,
+    name_end_col: usize,
+}
+
+/// Detect the tag containing `(row, col)` in `line`. Returns the tag kind
+/// (Open / Close), its name, and the char-column range of that name.
+/// Returns `None` when the cursor is not inside a tag-name region.
+fn detect_tag_at_cursor(line: &str, row: usize, col: usize) -> Option<TagSpan> {
+    let chars: Vec<char> = line.chars().collect();
+    // Find the nearest `<` at or before the cursor column.
+    let mut lt = None;
+    let mut i = col.min(chars.len());
+    while i > 0 {
+        i -= 1;
+        let c = chars[i];
+        if c == '<' {
+            lt = Some(i);
+            break;
+        }
+        // Bail if we cross a `>` (we're outside any open tag).
+        if c == '>' {
+            return None;
+        }
+    }
+    let lt = lt?;
+    // Detect close tag (`</`) vs open (`<`).
+    let (kind, name_start) = if chars.get(lt + 1) == Some(&'/') {
+        (TagKind::Close, lt + 2)
+    } else {
+        (TagKind::Open, lt + 1)
+    };
+    // First char of the name must be a letter.
+    let first = chars.get(name_start)?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    // Tag name = [A-Za-z][A-Za-z0-9-]*
+    let mut name_end = name_start;
+    while name_end < chars.len()
+        && (chars[name_end].is_ascii_alphanumeric() || chars[name_end] == '-')
+    {
+        name_end += 1;
+    }
+    // Cursor must be inside the name range (inclusive of both ends so that
+    // landing right after the name still resolves — vim Insert leaves the
+    // cursor one past the last typed char).
+    if col < name_start || col > name_end {
+        return None;
+    }
+    let name: String = chars[name_start..name_end].iter().collect();
+    Some(TagSpan {
+        kind,
+        name,
+        row,
+        name_start_col: name_start,
+        name_end_col: name_end,
+    })
+}
+
+/// Scan the buffer to find the structural partner of `anchor` using a
+/// depth counter. Names are intentionally NOT compared during the scan —
+/// the anchor is the source of truth and the partner inherits its name.
+/// Otherwise an in-flight rename (the whole point of this feature) would
+/// look like a malformed pair and bail.
+///
+/// Forward scan from an opener: opens increment depth, closes decrement
+/// depth. The close that brings depth back to zero is the partner.
+/// Backward scan from a closer is symmetric (closes increment, opens
+/// decrement).
+///
+/// Returns `None` when the buffer end is reached before depth hits zero
+/// (orphan tag or malformed input).
+fn find_matching_tag(buffer: &hjkl_buffer::Buffer, anchor: &TagSpan) -> Option<TagSpan> {
+    let row_count = buffer.row_count();
+    let scan_forward = anchor.kind == TagKind::Open;
+    let row_iter: Box<dyn Iterator<Item = usize>> = if scan_forward {
+        Box::new(anchor.row..row_count)
+    } else {
+        Box::new((0..=anchor.row).rev())
+    };
+    let push_kind = if scan_forward {
+        TagKind::Open
+    } else {
+        TagKind::Close
+    };
+    let mut depth: usize = 1;
+
+    for r in row_iter {
+        let line = buf_line(buffer, r)?;
+        let chars: Vec<char> = line.chars().collect();
+        let tags = scan_line_tags(&chars, r);
+        let tags_iter: Box<dyn Iterator<Item = TagSpan>> = if scan_forward {
+            Box::new(tags.into_iter())
+        } else {
+            Box::new(tags.into_iter().rev())
+        };
+        for tag in tags_iter {
+            // Skip the anchor itself when we walk over its line.
+            if r == anchor.row
+                && tag.name_start_col == anchor.name_start_col
+                && tag.kind == anchor.kind
+            {
+                continue;
+            }
+            // On the anchor's own row, gate by direction relative to anchor
+            // so the scan only inspects tags AFTER the anchor (forward) or
+            // BEFORE the anchor (backward).
+            if r == anchor.row {
+                if scan_forward && tag.name_start_col < anchor.name_start_col {
+                    continue;
+                }
+                if !scan_forward && tag.name_start_col > anchor.name_start_col {
+                    continue;
+                }
+            }
+            if tag.kind == push_kind {
+                depth += 1;
+            } else {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(tag);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Collect all tag opens / closes on a single line in left-to-right order.
+/// Skips comments (`<!-- ... -->`) and self-closing tags (`<br />`), and
+/// excludes void HTML elements that don't form a pair.
+fn scan_line_tags(chars: &[char], row: usize) -> Vec<TagSpan> {
+    let mut out = Vec::new();
+    let n = chars.len();
+    let mut i = 0;
+    while i < n {
+        if chars[i] != '<' {
+            i += 1;
+            continue;
+        }
+        // `<!--` comment — skip to `-->`.
+        if chars[i..].starts_with(&['<', '!', '-', '-']) {
+            let mut j = i + 4;
+            while j + 2 < n && !(chars[j] == '-' && chars[j + 1] == '-' && chars[j + 2] == '>') {
+                j += 1;
+            }
+            i = (j + 3).min(n);
+            continue;
+        }
+        let (kind, name_start) = if chars.get(i + 1) == Some(&'/') {
+            (TagKind::Close, i + 2)
+        } else {
+            (TagKind::Open, i + 1)
+        };
+        // Validate name start.
+        if chars
+            .get(name_start)
+            .is_none_or(|c| !c.is_ascii_alphabetic())
+        {
+            i += 1;
+            continue;
+        }
+        let mut name_end = name_start;
+        while name_end < n && (chars[name_end].is_ascii_alphanumeric() || chars[name_end] == '-') {
+            name_end += 1;
+        }
+        // Find the closing `>` to know whether this tag is self-closing.
+        let mut k = name_end;
+        let mut self_closing = false;
+        while k < n {
+            if chars[k] == '>' {
+                if k > name_end && chars[k - 1] == '/' {
+                    self_closing = true;
+                }
+                break;
+            }
+            k += 1;
+        }
+        if k >= n {
+            // Unterminated tag on this line — bail.
+            break;
+        }
+        let name: String = chars[name_start..name_end].iter().collect();
+        // Skip self-closing and void elements (no pair).
+        if !(self_closing || kind == TagKind::Open && is_void_element(&name)) {
+            out.push(TagSpan {
+                kind,
+                name,
+                row,
+                name_start_col: name_start,
+                name_end_col: name_end,
+            });
+        }
+        i = k + 1;
+    }
+    out
+}
+
+/// If the cursor sits inside an HTML/XML tag name AND the paired tag's name
+/// differs, rewrite the paired tag's name to match. Called from
+/// `leave_insert_to_normal_bridge` so the magical sync fires exactly when
+/// the user finishes editing.
+pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
+    if !is_html_filetype(&ed.settings.filetype) {
+        return;
+    }
+    let (row, col) = ed.cursor();
+    let line = match buf_line(&ed.buffer, row) {
+        Some(l) => l,
+        None => return,
+    };
+    let anchor = match detect_tag_at_cursor(&line, row, col) {
+        Some(t) => t,
+        None => return,
+    };
+    let partner = match find_matching_tag(&ed.buffer, &anchor) {
+        Some(t) => t,
+        None => return,
+    };
+    if partner.name == anchor.name {
+        return;
+    }
+    // Rewrite the partner's name range with the anchor's name.
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    let start = Position::new(partner.row, partner.name_start_col);
+    let end = Position::new(partner.row, partner.name_end_col);
+    ed.mutate_edit(Edit::DeleteRange {
+        start,
+        end,
+        kind: MotionKind::Char,
+    });
+    ed.mutate_edit(Edit::InsertStr {
+        at: start,
+        text: anchor.name.clone(),
+    });
+    // Restore the user's cursor — mutate_edit may have moved it during the
+    // partner-side rewrite when the partner is on a row before the cursor.
+    buf_set_cursor_rc(&mut ed.buffer, row, col);
+    ed.push_buffer_cursor_to_textarea();
+}
+
 /// Void HTML elements that must never get an auto-close tag.
 fn is_void_element(tag: &str) -> bool {
     matches!(
@@ -2056,6 +2328,10 @@ pub(crate) fn leave_insert_to_normal_bridge<H: crate::types::Host>(
 ) -> bool {
     ed.vim.pending_closes.clear();
     finish_insert_session(ed);
+    // Paired-tag auto-rename (issue #182). Must run BEFORE the cursor moves
+    // left (the move-left is vim's "leave-insert cursor adjustment"; the
+    // sync needs the post-insert cursor position to detect the tag name).
+    sync_paired_tag_on_exit(ed);
     ed.vim.mode = Mode::Normal;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
     ed.vim.current_mode = crate::VimMode::Normal;
