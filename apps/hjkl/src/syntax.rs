@@ -107,6 +107,15 @@ impl SyntaxLayer {
         self.inner.set_language_for_path(id, path)
     }
 
+    /// Resolve a path to its canonical language name (e.g. `"rust"` for
+    /// `foo.rs`) without loading any grammar. Returns `None` for unknown
+    /// extensions. Used to seed `Editor::set_filetype` on file open so
+    /// filetype-aware features (`gcc`, comment continuation, …) light up
+    /// regardless of whether the grammar itself is installed yet.
+    pub fn language_name_for_path(&self, path: &Path) -> Option<String> {
+        self.inner.directory().name_for_path(path)
+    }
+
     /// Poll all in-flight grammar loads. Call once per tick.
     pub fn poll_pending_loads(&mut self) -> Vec<LoadEvent> {
         self.inner.poll_pending_loads()

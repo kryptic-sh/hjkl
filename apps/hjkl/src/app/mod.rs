@@ -457,6 +457,14 @@ pub(super) fn build_slot(
     if let Some(ref p) = path {
         let outcome = syntax.set_language_for_path(buffer_id, p);
         let _ = outcome; // Outcome handled via poll_grammar_loads for Loading.
+        // Mirror the language detection onto the engine's filetype setting
+        // so filetype-aware features (comment-continuation, `gcc` toggle,
+        // `:set commentstring` defaults, future modeline knobs) light up
+        // automatically on file open. Cheap synchronous extension lookup;
+        // no grammar load.
+        if let Some(lang) = syntax.language_name_for_path(p) {
+            editor.set_filetype(&lang);
+        }
     }
 
     let (vp_top, vp_height) = {
