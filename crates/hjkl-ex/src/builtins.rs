@@ -1108,6 +1108,155 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 1,
         run: |editor, args, range| vglobal_handler(editor, args, range),
     });
+
+    // ---- Phase #187 -----------------------------------------------------------
+
+    // `:comment` (min_prefix=3; toggle line comments; range-aware)
+    reg.add(ExCommand {
+        name: "comment",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: comment_handler::<H>,
+    });
+
+    // `:uncomment` (min_prefix=5; force-strip line comments; range-aware)
+    reg.add(ExCommand {
+        name: "uncomment",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 5,
+        run: uncomment_handler::<H>,
+    });
+}
+
+// ---- comment / uncomment (#187) --------------------------------------------
+
+/// `:[range]comment` — toggle line comments on the range.
+///
+/// Toggle algorithm (vim-commentary parity):
+/// - Scan non-blank lines.  If every non-blank line is commented → uncomment.
+/// - Otherwise → comment all non-blank lines.
+///
+/// No range → current cursor line.
+fn comment_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    let (top, bot) = resolve_comment_range(editor, range);
+    editor.toggle_comment_range(top, bot);
+    Some(ExEffect::Ok)
+}
+
+/// `:[range]uncomment` — force-remove comment markers (idempotent no-op when
+/// not commented).
+///
+/// Achieves "force uncomment" by temporarily overriding the all-commented
+/// check: scan each non-blank line and strip exactly one occurrence of the
+/// comment marker if present. Lines that are not commented are left unchanged.
+fn uncomment_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    use hjkl_lang::comment::commentstring_for_lang;
+
+    let (top, bot) = resolve_comment_range(editor, range);
+    let lang = editor.settings().filetype.clone();
+
+    // Resolve comment markers (same priority as toggle_comment_range).
+    let (start, end): (String, Option<String>) = if !editor.settings().commentstring.is_empty() {
+        let cs = editor.settings().commentstring.clone();
+        if let Some(idx) = cs.find("%s") {
+            let s = cs[..idx].trim_end().to_string();
+            let e_raw = cs[idx + 2..].trim_start();
+            let e = if e_raw.is_empty() {
+                None
+            } else {
+                Some(e_raw.to_string())
+            };
+            (s, e)
+        } else {
+            (cs, None)
+        }
+    } else {
+        match commentstring_for_lang(&lang) {
+            Some((s, e)) => (s.to_string(), e.map(|v| v.to_string())),
+            None => return Some(ExEffect::Ok), // no-op
+        }
+    };
+
+    // Collect lines using the public buffer API.
+    let row_count = editor.buffer().row_count();
+    let top_c = top.min(row_count.saturating_sub(1));
+    let bot_c = bot.min(row_count.saturating_sub(1));
+
+    let lines: Vec<String> = (top_c..=bot_c)
+        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .collect();
+
+    let mut new_lines: Vec<String> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            new_lines.push(line.clone());
+            continue;
+        }
+        let indent_len = line.len() - trimmed.len();
+        let indent = &line[..indent_len];
+
+        if let Some(after_start) = trimmed.strip_prefix(start.as_str()) {
+            let after_space = after_start.strip_prefix(' ').unwrap_or(after_start);
+            let text = if let Some(ref end_marker) = end {
+                after_space
+                    .trim_end()
+                    .strip_suffix(end_marker.as_str())
+                    .map(|s| s.trim_end())
+                    .unwrap_or(after_space)
+            } else {
+                after_space
+            };
+            new_lines.push(format!("{indent}{text}"));
+        } else {
+            // Not commented — leave unchanged.
+            new_lines.push(line.clone());
+        }
+    }
+
+    editor.push_undo();
+    let total_rows = editor.buffer().row_count();
+    let all_before: Vec<String> = (0..top_c)
+        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .collect();
+    let all_after: Vec<String> = ((bot_c + 1)..total_rows)
+        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .collect();
+    let mut all: Vec<String> = all_before;
+    all.extend(new_lines);
+    all.extend(all_after);
+    editor.restore(all, (top_c, 0));
+
+    Some(ExEffect::Ok)
+}
+
+/// Resolve a `LineRange` to `(top, bot)` 0-based row indices.
+/// No range → current cursor line.
+fn resolve_comment_range<H: Host>(
+    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    range: Option<LineRange>,
+) -> (usize, usize) {
+    match range {
+        Some(lr) => {
+            let top = lr.start_one_based().saturating_sub(1);
+            let bot = lr.end_one_based().saturating_sub(1);
+            (top, bot)
+        }
+        None => {
+            let row = editor.cursor().0;
+            (row, row)
+        }
+    }
 }
 
 // ---- unit tests ------------------------------------------------------------
@@ -1996,5 +2145,94 @@ mod tests {
             "expected Substituted(1) (first only), got {result:?}"
         );
         assert_eq!(ed.buffer().line(1).unwrap_or_default(), "y x x");
+    }
+
+    // ── comment_handler / uncomment_handler (#187) ────────────────────────────
+
+    fn make_rust_editor() -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+        let buf = hjkl_buffer::Buffer::from_str("let a = 1;\nlet b = 2;\nlet c = 3;");
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "rust".to_string(),
+            ..Options::default()
+        };
+        Editor::new(buf, host, opts)
+    }
+
+    #[test]
+    fn comment_handler_gcc_toggles_current_line() {
+        let mut ed = make_rust_editor();
+        // No range → cursor line (row 0).
+        let result = comment_handler(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "// let a = 1;");
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "let b = 2;");
+    }
+
+    #[test]
+    fn comment_handler_range_toggles_range() {
+        let mut ed = make_rust_editor();
+        let range = LineRange::new(1, 3); // 1-based: lines 1–3
+        let result = comment_handler(&mut ed, "", Some(range));
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "// let a = 1;");
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "// let b = 2;");
+        assert_eq!(ed.buffer().line(2).unwrap_or_default(), "// let c = 3;");
+    }
+
+    #[test]
+    fn comment_handler_whole_buffer_toggle() {
+        // :%comment equivalent — toggle all lines.
+        let mut ed = make_rust_editor();
+        let range = LineRange::new(1, 3);
+        comment_handler(&mut ed, "", Some(range));
+        // All should be commented now.
+        assert!(ed.buffer().line(0).unwrap_or_default().starts_with("//"));
+        assert!(ed.buffer().line(1).unwrap_or_default().starts_with("//"));
+        // Toggle again → all uncommented.
+        comment_handler(&mut ed, "", Some(range));
+        assert!(!ed.buffer().line(0).unwrap_or_default().starts_with("//"));
+        assert!(!ed.buffer().line(1).unwrap_or_default().starts_with("//"));
+    }
+
+    #[test]
+    fn uncomment_handler_strips_comments_idempotent() {
+        let buf = hjkl_buffer::Buffer::from_str("// let a = 1;\nlet b = 2;");
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "rust".to_string(),
+            ..Options::default()
+        };
+        let mut ed = Editor::new(buf, host, opts);
+        let range = LineRange::new(1, 2);
+        let result = uncomment_handler(&mut ed, "", Some(range));
+        assert_eq!(result, Some(ExEffect::Ok));
+        // Line 0: comment stripped.
+        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "let a = 1;");
+        // Line 1: already uncommented — unchanged.
+        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "let b = 2;");
+    }
+
+    #[test]
+    fn mixed_state_range_gets_fully_commented() {
+        // 3 uncommented + 2 commented → all 5 get commented (vim-commentary parity).
+        let buf = hjkl_buffer::Buffer::from_str(
+            "let a = 1;\n// let b = 2;\nlet c = 3;\n// let d = 4;\nlet e = 5;",
+        );
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "rust".to_string(),
+            ..Options::default()
+        };
+        let mut ed = Editor::new(buf, host, opts);
+        let range = LineRange::new(1, 5);
+        comment_handler(&mut ed, "", Some(range));
+        for row in 0..5 {
+            let l = ed.buffer().line(row).unwrap_or_default();
+            assert!(
+                l.trim_start().starts_with("//"),
+                "row {row} should be commented; got {l:?}"
+            );
+        }
     }
 }

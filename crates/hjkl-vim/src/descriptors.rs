@@ -80,7 +80,7 @@ pub fn children_for(mode: Mode, prefix: &[KeyEvent]) -> Vec<VimDescriptor> {
 /// Expected count of root Normal-mode descriptors.
 pub const COUNT_NORMAL_ROOT: usize = 84;
 /// Expected count of g-prefix descriptors.
-pub const COUNT_G_PREFIX: usize = 19;
+pub const COUNT_G_PREFIX: usize = 20;
 /// Expected count of z-prefix descriptors.
 pub const COUNT_Z_PREFIX: usize = 11;
 /// Expected count of operator-pending root descriptors (d/c/y prefix children).
@@ -121,6 +121,11 @@ fn children_visual(prefix: &[KeyEvent]) -> Vec<VimDescriptor> {
     }
     if prefix.len() == 1 && prefix[0] == KeyEvent::char('z') {
         return z_prefix();
+    }
+    if prefix.len() == 1 && prefix[0] == KeyEvent::char('g') {
+        // In visual mode only `gc` is relevant; return the same g-prefix table
+        // so which-key shows it alongside gv / gj / gk that visual mode supports.
+        return g_prefix();
     }
     vec![]
 }
@@ -280,6 +285,8 @@ fn visual_root() -> Vec<VimDescriptor> {
         VimDescriptor::prefix('z'),
         // Mark goto.
         VimDescriptor::char('`', "goto mark (charwise)"),
+        // Comment toggle.
+        VimDescriptor::char('g', "g-prefix (gc = toggle comment)"),
     ]
 }
 
@@ -305,6 +312,7 @@ fn g_prefix() -> Vec<VimDescriptor> {
         VimDescriptor::char(',', "goto newer change"),
         VimDescriptor::char('*', "search word (partial) forward"),
         VimDescriptor::char('#', "search word (partial) backward"),
+        VimDescriptor::char('c', "toggle comment operator"),
     ]
 }
 

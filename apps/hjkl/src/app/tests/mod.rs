@@ -20,6 +20,7 @@ fn op_kind_to_operator(k: hjkl_vim::OperatorKind) -> hjkl_engine::Operator {
         hjkl_vim::OperatorKind::Reflow => hjkl_engine::Operator::Reflow,
         hjkl_vim::OperatorKind::AutoIndent => hjkl_engine::Operator::AutoIndent,
         hjkl_vim::OperatorKind::Filter => hjkl_engine::Operator::Filter,
+        hjkl_vim::OperatorKind::Comment => hjkl_engine::Operator::Comment,
     }
 }
 

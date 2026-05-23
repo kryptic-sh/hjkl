@@ -146,6 +146,12 @@ impl App {
                                 self.open_filter_prompt(top_row, bot_row);
                                 return;
                             }
+                            hjkl_vim::OperatorKind::Comment => {
+                                // Visual-block gc: toggle comments on the row range.
+                                self.active_mut()
+                                    .editor
+                                    .toggle_comment_range(top_row, bot_row);
+                            }
                             _ => return,
                         }
                         // Exit visual mode after the op (except Change above).
@@ -224,6 +230,11 @@ impl App {
                                 );
                                 self.open_filter_prompt(min_r, max_r);
                                 return;
+                            }
+                            hjkl_vim::OperatorKind::Comment => {
+                                // Visual-charwise gc: toggle comments on the row range.
+                                let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
+                                self.active_mut().editor.toggle_comment_range(min_r, max_r);
                             }
                             _ => return,
                         }
@@ -324,6 +335,12 @@ impl App {
                                 );
                                 self.open_filter_prompt(top_row, bot_row);
                                 return;
+                            }
+                            hjkl_vim::OperatorKind::Comment => {
+                                // Visual-line gc: toggle comments on the row range.
+                                self.active_mut()
+                                    .editor
+                                    .toggle_comment_range(top_row, bot_row);
                             }
                             _ => return,
                         }

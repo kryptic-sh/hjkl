@@ -202,6 +202,10 @@ pub enum Operator {
     /// range in the buffer. Non-zero exit or spawn failure returns an error
     /// to the caller without mutating the buffer.
     Filter,
+    /// `gc{motion}` / `gcc` — toggle line comments on the row range.
+    /// Dispatched through `Editor::toggle_comment_range` rather than the
+    /// normal `run_operator_over_range` pipeline (same pattern as `Filter`).
+    Comment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -685,6 +689,8 @@ impl VimState {
             Operator::Reflow => 'q',
             Operator::AutoIndent => '=',
             Operator::Filter => '!',
+            // `gc` prefix — doubled as `gcc`.
+            Operator::Comment => 'c',
         })
     }
 }
@@ -3298,13 +3304,28 @@ pub(crate) fn apply_op_motion_key<H: crate::types::Host>(
     }
 }
 
-/// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`).
+/// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`/`gcc`).
 /// Called by `Editor::apply_op_double` (the public controller API).
 pub(crate) fn apply_op_double<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
     total_count: usize,
 ) {
+    if op == Operator::Comment {
+        // `gcc` / `{N}gcc` — toggle comment on `total_count` lines starting at cursor.
+        let row = buf_cursor_pos(&ed.buffer).row;
+        let end_row = (row + total_count.max(1) - 1).min(ed.buffer.row_count().saturating_sub(1));
+        ed.toggle_comment_range(row, end_row);
+        ed.vim.mode = Mode::Normal;
+        if !ed.vim.replaying {
+            ed.vim.last_change = Some(LastChange::LineOp {
+                op,
+                count: total_count,
+                inserted: None,
+            });
+        }
+        return;
+    }
     execute_line_op(ed, op, total_count);
     if !ed.vim.replaying {
         ed.vim.last_change = Some(LastChange::LineOp {
@@ -3470,6 +3491,16 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
                 ed.jump_cursor(row, col);
             }
             begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
+        }
+        // `gc` — enter operator-pending for the comment-toggle operator.
+        // `gcc` (doubled 'c') is the line-wise form; `gc{motion}` is the
+        // motion form. The operator is Comment — the app layer (or the
+        // doubled-char path in handle_after_op) calls toggle_comment_range.
+        'c' => {
+            ed.vim.pending = Pending::Op {
+                op: Operator::Comment,
+                count1: count,
+            };
         }
         // `g;` / `g,` — walk the change list. `g;` toward older
         // entries, `g,` toward newer.
@@ -3725,6 +3756,16 @@ pub(crate) fn apply_op_with_motion<H: crate::types::Host>(
     let kind = motion_kind(motion);
     // Restore cursor before selecting (so Yank leaves cursor at start).
     ed.jump_cursor(start.0, start.1);
+
+    // Comment is always linewise regardless of motion kind — toggle rows.
+    if op == Operator::Comment {
+        let top = start.0.min(end.0);
+        let bot = start.0.max(end.0);
+        ed.toggle_comment_range(top, bot);
+        ed.vim.mode = Mode::Normal;
+        return;
+    }
+
     run_operator_over_range(ed, op, start, end, kind);
 }
 
@@ -3879,6 +3920,10 @@ fn run_operator_over_range<H: crate::types::Host>(
             // The app calls Editor::filter_range directly with a command string.
             // Reaching this arm means a caller invoked run_operator_over_range
             // with Operator::Filter by mistake — silently no-op.
+        }
+        Operator::Comment => {
+            // Comment is dispatched through Editor::toggle_comment_range.
+            // Reaching this arm is a caller mistake — silently no-op.
         }
     }
 }
@@ -4775,6 +4820,12 @@ fn execute_line_op<H: crate::types::Host>(
         Operator::Filter => {
             // Filter is dispatched through Editor::filter_range, not here.
         }
+        Operator::Comment => {
+            // Comment is dispatched through Editor::toggle_comment_range, not here.
+            // The doubled `gcc` path calls toggle_comment_range directly in
+            // apply_after_g, then records last_change. execute_line_op should
+            // not be reached for Comment — no-op if it is.
+        }
     }
 }
 
@@ -4870,6 +4921,8 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                 }
                 // Filter is dispatched through Editor::filter_range, not here.
                 Operator::Filter => {}
+                // Comment is dispatched through the app layer (engine_actions.rs), not here.
+                Operator::Comment => {}
                 // Visual `zf` is handled inline in `handle_after_z`,
                 // never routed through this dispatcher.
                 Operator::Fold => unreachable!("Visual zf takes its own path"),
@@ -4938,6 +4991,8 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                 }
                 // Filter is dispatched through Editor::filter_range, not here.
                 Operator::Filter => {}
+                // Comment is dispatched through the app layer (engine_actions.rs), not here.
+                Operator::Comment => {}
                 Operator::Fold => unreachable!("Visual zf takes its own path"),
             }
         }
@@ -5080,6 +5135,8 @@ fn apply_block_operator<H: crate::types::Host>(
         }
         // Filter is dispatched through Editor::filter_range, not here.
         Operator::Filter => {}
+        // Comment is dispatched through the app layer (engine_actions.rs), not here.
+        Operator::Comment => {}
     }
 }
 
@@ -6662,5 +6719,158 @@ mod comment_continuation_tests {
         let ed = Editor::new(buf, host, Options::default());
         let cont = continue_comment(&ed.buffer, &ed.settings, 0);
         assert!(cont.is_none());
+    }
+}
+
+#[cfg(test)]
+mod comment_toggle_tests {
+    use super::*;
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_rust_editor(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "rust".to_string(),
+            ..Options::default()
+        };
+        Editor::new(buf, host, opts)
+    }
+
+    fn line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+        buf_line(&ed.buffer, row).unwrap_or_default()
+    }
+
+    // ── gcc: toggle comment on current line ──────────────────────────────────
+
+    #[test]
+    fn gcc_comments_rust_line() {
+        let mut ed = make_rust_editor("let x = 1;");
+        ed.toggle_comment_range(0, 0);
+        assert_eq!(line(&ed, 0), "// let x = 1;");
+    }
+
+    #[test]
+    fn gcc_uncomments_rust_line() {
+        let mut ed = make_rust_editor("// let x = 1;");
+        ed.toggle_comment_range(0, 0);
+        assert_eq!(line(&ed, 0), "let x = 1;");
+    }
+
+    #[test]
+    fn gcc_indent_preserving() {
+        // Marker inserted after leading whitespace, not at column 0.
+        let mut ed = make_rust_editor("    let x = 1;");
+        ed.toggle_comment_range(0, 0);
+        assert_eq!(line(&ed, 0), "    // let x = 1;");
+    }
+
+    #[test]
+    fn gcc_indent_preserving_uncomment() {
+        let mut ed = make_rust_editor("    // let x = 1;");
+        ed.toggle_comment_range(0, 0);
+        assert_eq!(line(&ed, 0), "    let x = 1;");
+    }
+
+    // ── Multi-line toggle ────────────────────────────────────────────────────
+
+    #[test]
+    fn toggle_multi_line_all_uncommented() {
+        let content = "let a = 1;\nlet b = 2;\nlet c = 3;";
+        let mut ed = make_rust_editor(content);
+        ed.toggle_comment_range(0, 2);
+        assert_eq!(line(&ed, 0), "// let a = 1;");
+        assert_eq!(line(&ed, 1), "// let b = 2;");
+        assert_eq!(line(&ed, 2), "// let c = 3;");
+    }
+
+    #[test]
+    fn toggle_multi_line_all_commented() {
+        let content = "// let a = 1;\n// let b = 2;\n// let c = 3;";
+        let mut ed = make_rust_editor(content);
+        ed.toggle_comment_range(0, 2);
+        assert_eq!(line(&ed, 0), "let a = 1;");
+        assert_eq!(line(&ed, 1), "let b = 2;");
+        assert_eq!(line(&ed, 2), "let c = 3;");
+    }
+
+    // ── Mixed state → all gets commented (vim-commentary parity) ────────────
+
+    #[test]
+    fn toggle_mixed_state_comments_all() {
+        // 3 uncommented + 2 commented → all 5 get commented.
+        let content = "let a = 1;\n// let b = 2;\nlet c = 3;\n// let d = 4;\nlet e = 5;";
+        let mut ed = make_rust_editor(content);
+        ed.toggle_comment_range(0, 4);
+        for r in 0..5 {
+            assert!(
+                line(&ed, r).trim_start().starts_with("//"),
+                "row {r} not commented: {:?}",
+                line(&ed, r)
+            );
+        }
+    }
+
+    // ── Blank lines skipped ──────────────────────────────────────────────────
+
+    #[test]
+    fn blank_lines_not_commented() {
+        let content = "let a = 1;\n\nlet b = 2;";
+        let mut ed = make_rust_editor(content);
+        ed.toggle_comment_range(0, 2);
+        assert_eq!(line(&ed, 0), "// let a = 1;");
+        assert_eq!(line(&ed, 1), ""); // blank — untouched
+        assert_eq!(line(&ed, 2), "// let b = 2;");
+    }
+
+    // ── Python hash comments ─────────────────────────────────────────────────
+
+    #[test]
+    fn python_comment_toggle() {
+        let buf = Buffer::from_str("x = 1\ny = 2");
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "python".to_string(),
+            ..Options::default()
+        };
+        let mut ed = Editor::new(buf, host, opts);
+        ed.toggle_comment_range(0, 1);
+        assert_eq!(line(&ed, 0), "# x = 1");
+        assert_eq!(line(&ed, 1), "# y = 2");
+        // Toggle back.
+        ed.toggle_comment_range(0, 1);
+        assert_eq!(line(&ed, 0), "x = 1");
+        assert_eq!(line(&ed, 1), "y = 2");
+    }
+
+    // ── commentstring override ───────────────────────────────────────────────
+
+    #[test]
+    fn commentstring_override_via_setting() {
+        let buf = Buffer::from_str("hello world");
+        let host = DefaultHost::new();
+        let opts = Options {
+            filetype: "rust".to_string(),
+            ..Options::default()
+        };
+        let mut ed = Editor::new(buf, host, opts);
+        // Override with a custom marker.
+        ed.settings_mut().commentstring = "# %s".to_string();
+        ed.toggle_comment_range(0, 0);
+        assert_eq!(line(&ed, 0), "# hello world");
+    }
+
+    // ── Unknown language → no-op ─────────────────────────────────────────────
+
+    #[test]
+    fn unknown_lang_no_op() {
+        let buf = Buffer::from_str("hello");
+        let host = DefaultHost::new();
+        let opts = Options::default(); // filetype = ""
+        let mut ed = Editor::new(buf, host, opts);
+        ed.toggle_comment_range(0, 0);
+        // Should be unchanged — no comment string for "".
+        assert_eq!(line(&ed, 0), "hello");
     }
 }

@@ -656,6 +656,8 @@ fn handle_after_op<H: Host>(
         Operator::AutoIndent => Some('='),
         // `!!` filters the current line — vim's doubled form.
         Operator::Filter => Some('!'),
+        // `gcc` toggles comment on the current line — doubled 'c' after `gc`.
+        Operator::Comment => Some('c'),
     };
     if let Key::Char(c) = input.key
         && !input.ctrl
