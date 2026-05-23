@@ -46,3 +46,16 @@ initial_cursor = [0, 0]
 keys = "@z"
 expected_buffer = "hello\n"
 expected_cursor = [0, 0]
+
+# Record A+text+Esc+motion into 'a' on line0, then replay on line1.
+# Regression: app-layer `@{reg}` chord replay was dropping every key after
+# the first because route_chord_key returned false for insert-mode chars
+# and the caller discarded the return value (engine path works fine; this
+# corpus case pins the engine semantics so future refactors can't drift).
+[[cases]]
+name = "macro_record_A_text_esc_motion_replays_full"
+initial_buffer = "line0\nline1\nline2\nline3\n"
+initial_cursor = [0, 0]
+keys = "qaAtest<Esc>0jq@a"
+expected_buffer = "line0test\nline1test\nline2\nline3\n"
+expected_cursor = [2, 0]
