@@ -1287,6 +1287,42 @@ fn autopair_close_for(
     }
 }
 
+/// Detect a markdown / doc-comment code-fence opener on the current line.
+///
+/// Returns `Some(fence)` (the backtick run that should be used as the
+/// closing fence) when:
+/// - The cursor is at the end of the visible line (`cursor_col` equals the
+///   line's char count).
+/// - The line, after leading whitespace, begins with 3+ backticks followed
+///   by a non-empty language tag matching `[A-Za-z0-9_+-]+` and nothing
+///   else (no trailing space, no extra text).
+///
+/// The language tag requirement is deliberate: a bare ` ``` ` could be
+/// either an opener OR a closer, and we don't track fence parity here.
+/// Requiring a tag means we only fire when the user is clearly opening a
+/// fence (` ```rust `, ` ```ts `, etc.).
+fn detect_code_fence_opener(line: &str, cursor_col: usize) -> Option<String> {
+    if cursor_col != line.chars().count() {
+        return None;
+    }
+    let trimmed = line.trim_start();
+    let backtick_run = trimmed.chars().take_while(|c| *c == '`').count();
+    if backtick_run < 3 {
+        return None;
+    }
+    let rest = &trimmed[backtick_run..];
+    if rest.is_empty() {
+        return None;
+    }
+    let all_lang_chars = rest
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '+' || c == '-');
+    if !all_lang_chars {
+        return None;
+    }
+    Some("`".repeat(backtick_run))
+}
+
 /// Filetypes that get HTML/XML-family treatment (`<` pairing + tag autoclose).
 fn is_html_filetype(ft: &str) -> bool {
     matches!(
@@ -1580,6 +1616,31 @@ pub(crate) fn insert_newline_bridge<H: crate::types::Host>(
             ed.push_buffer_cursor_to_textarea();
             return true;
         }
+    }
+
+    // Code-fence expansion: line content is ` ``` ` (3+ backticks) followed
+    // by a non-empty language tag, cursor sits at end of line → insert the
+    // matching closing fence on the line below and park the cursor on a
+    // blank middle line. Matches the open-pair-newline shape but for
+    // markdown / doc-comment code blocks. Gated on a language tag because
+    // a bare ` ``` ` could just as easily be a closing fence — we'd need
+    // full document parity tracking to handle that safely, which v1
+    // doesn't have.
+    if ed.settings.autopair
+        && let Some(fence) = detect_code_fence_opener(&prev_line, cursor.col)
+    {
+        ed.vim.pending_closes.clear();
+        let base_indent: String = prev_line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let text = format!("\n{base_indent}\n{base_indent}{fence}");
+        ed.mutate_edit(Edit::InsertStr { at: cursor, text });
+        let new_row = cursor.row + 1;
+        let new_col = base_indent.chars().count();
+        buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+        ed.push_buffer_cursor_to_textarea();
+        return true;
     }
 
     // formatoptions `r`: continue comment on Enter in insert mode.

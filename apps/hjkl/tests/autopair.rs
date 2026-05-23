@@ -517,3 +517,78 @@ fn triple_single_quote_does_not_autopair_third() {
     );
     assert_eq!(cursor(&ed), (0, 3));
 }
+
+// ---------------------------------------------------------------------------
+// Code-fence Enter expansion
+// ---------------------------------------------------------------------------
+
+/// Typing ```rust then Enter must produce three lines: opener, blank
+/// middle, closer — with the cursor parked on the middle line.
+#[test]
+fn code_fence_with_lang_expands_on_enter() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "r");
+    feed_insert(&mut ed, "u");
+    feed_insert(&mut ed, "s");
+    feed_insert(&mut ed, "t");
+    feed_insert(&mut ed, "\n");
+    let lines = buf_lines(&ed);
+    assert_eq!(
+        lines,
+        vec!["```rust".to_string(), String::new(), "```".to_string()],
+        "expected three lines with cursor on middle, got {lines:?}"
+    );
+    let (row, col) = cursor(&ed);
+    assert_eq!(
+        (row, col),
+        (1, 0),
+        "cursor must land on the blank middle line"
+    );
+}
+
+/// Bare ``` (no language tag) on Enter must NOT expand — could be either
+/// an opener or a closer and we don't track parity.
+#[test]
+fn bare_triple_backtick_does_not_expand_on_enter() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "`");
+    feed_insert(&mut ed, "\n");
+    let lines = buf_lines(&ed);
+    assert_eq!(
+        lines,
+        vec!["```".to_string(), String::new()],
+        "bare fence + Enter must not expand, got {lines:?}"
+    );
+}
+
+/// Indented fence (e.g. inside a list item) preserves indentation on the
+/// opener, blank, and closer lines.
+#[test]
+fn indented_code_fence_preserves_indent_on_expand() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "    ```rust\n");
+    let lines = buf_lines(&ed);
+    assert_eq!(
+        lines,
+        vec![
+            "    ```rust".to_string(),
+            "    ".to_string(),
+            "    ```".to_string(),
+        ],
+        "expected indented fence pair, got {lines:?}"
+    );
+    let (row, col) = cursor(&ed);
+    assert_eq!(
+        (row, col),
+        (1, 4),
+        "cursor must land on the indented blank middle line"
+    );
+}
