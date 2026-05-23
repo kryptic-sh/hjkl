@@ -462,9 +462,21 @@ impl Pending {
     ///   coexist in the queue so all three regions can be pre-cached.
     /// - If the queue is at capacity and there is no existing entry for
     ///   this `(buffer_id, kind)`, evict the oldest entry before pushing.
-    fn push_parse(&mut self, req: ParseRequest) {
+    fn push_parse(&mut self, mut req: ParseRequest) {
         for slot in self.parse_queue.iter_mut() {
             if slot.buffer_id == req.buffer_id && slot.kind == req.kind {
+                // Merge: the existing slot's edits MUST survive the replace
+                // — they're tree-sitter `Tree::edit` deltas the worker still
+                // needs to apply before its retained tree matches the new
+                // source. Dropping them leaves the tree at a wrong byte
+                // baseline and every subsequent highlight returns spans
+                // with offsets matching a buffer state that no longer
+                // exists, producing visibly shifted / misaligned spans
+                // that don't recover until the next bulk parse (e.g.
+                // forced by a `take_content_reset`).
+                let mut merged = std::mem::take(&mut slot.edits);
+                merged.append(&mut req.edits);
+                req.edits = merged;
                 *slot = req;
                 return;
             }
@@ -1760,6 +1772,43 @@ mod tests {
         p.push_parse(make_req(ParseKind::Viewport, 2));
         // Same (buffer_id=0, kind=Viewport) — should replace, not append.
         assert_eq!(p.parse_queue.len(), 1);
+        assert_eq!(p.parse_queue[0].dirty_gen, 2);
+    }
+
+    #[test]
+    fn pending_push_parse_merges_edits_on_replace() {
+        let mut p = Pending::new();
+        let mk_edit = |start_byte: usize| InputEdit {
+            start_byte,
+            old_end_byte: start_byte,
+            new_end_byte: start_byte + 1,
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 1 },
+        };
+        let make_req = |dirty_gen: u64, edits: Vec<InputEdit>| ParseRequest {
+            buffer_id: 0,
+            source: Arc::new(String::new()),
+            row_starts: Arc::new(vec![]),
+            edits,
+            viewport_byte_range: 0..0,
+            viewport_top: 0,
+            viewport_height: 10,
+            row_count: 0,
+            dirty_gen,
+            reset: false,
+            kind: ParseKind::Viewport,
+        };
+        p.push_parse(make_req(1, vec![mk_edit(0)]));
+        p.push_parse(make_req(2, vec![mk_edit(10)]));
+        // Replace merged: edits from BOTH requests must survive — dropping
+        // the earlier ones leaves tree-sitter's retained tree at a stale
+        // byte baseline and produces visibly misaligned spans afterward.
+        assert_eq!(p.parse_queue.len(), 1);
+        assert_eq!(p.parse_queue[0].edits.len(), 2);
+        assert_eq!(p.parse_queue[0].edits[0].start_byte, 0);
+        assert_eq!(p.parse_queue[0].edits[1].start_byte, 10);
+        // The replacing request's dirty_gen is the latest.
         assert_eq!(p.parse_queue[0].dirty_gen, 2);
     }
 
