@@ -573,6 +573,34 @@ fn gcc_on_indented_doc_comment_via_app_layer() {
 }
 
 #[test]
+fn gcc_then_gcc_round_trips_via_app_layer() {
+    // User report: gcc comments a line, but a second gcc is a no-op —
+    // need to move cursor off and back (j then k) before a second gcc
+    // uncomments. Suggests stale Pending::Op{Comment} after the first
+    // toggle so the second `g` sets Pending::OpG{Comment} and the
+    // following `c` falls into apply_op_g_inner's silent no-op.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "// let x = 1;",
+        "first gcc must comment line 0"
+    );
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "let x = 1;",
+        "second gcc (immediately after) must uncomment line 0"
+    );
+}
+
+#[test]
 fn opening_rust_file_auto_sets_filetype_so_gcc_works() {
     // User report: opening a .rs file from the CLI and pressing `gcc`
     // does nothing. Root cause: build_slot never called set_filetype, so
