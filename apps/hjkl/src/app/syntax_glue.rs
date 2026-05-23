@@ -278,6 +278,26 @@ impl App {
         false
     }
 
+    /// Handle a `take_content_reset` event on the active buffer: clear the
+    /// per-slot `RenderOutput` caches (their row counts no longer match
+    /// the post-replace buffer), blank the editor's installed
+    /// `buffer_spans`, and tell the syntax layer to drop the shared
+    /// retained tree synchronously so the next `query_viewport` returns
+    /// `None` and falls back to the one-shot `preview_render`.
+    ///
+    /// Called from every site that drains `take_content_reset` — kept
+    /// here so the multi-step bookkeeping cannot drift between call
+    /// sites (4 in `event_loop.rs`, 1 in `sync_after_engine_mutation`).
+    pub(crate) fn handle_active_content_reset(&mut self, buffer_id: crate::syntax::BufferId) {
+        self.syntax.reset(buffer_id);
+        let active_idx = self.focused_slot_idx();
+        let slot = &mut self.slots[active_idx];
+        slot.viewport_render_output = None;
+        slot.top_render_output = None;
+        slot.bottom_render_output = None;
+        slot.editor.install_ratatui_syntax_spans(Vec::new());
+    }
+
     /// Translate the per-slot cached `RenderOutput.spans` row vectors
     /// in-place to track a batch of [`hjkl_engine::ContentEdit`]s, mirroring
     /// what [`hjkl_engine::Editor::shift_syntax_spans_for_edits`] does for
@@ -442,7 +462,7 @@ impl App {
                             .unwrap_or(bytes_len)
                             .min(bytes_len)
                             .max(vp_start);
-                        if let Some(sync_out) = self.syntax.query_viewport(
+                        let sync_out = self.syntax.query_viewport(
                             buffer_id,
                             source.as_str(),
                             row_starts.as_ref(),
@@ -457,8 +477,21 @@ impl App {
                             // skip the merger's per-row dirty blanking.
                             dg,
                             crate::syntax::ParseKind::Viewport,
-                        ) {
+                        );
+                        if let Some(sync_out) = sync_out {
                             self.install_render_result(sync_out);
+                        } else {
+                            // No retained tree (cold open / post-reset).
+                            // Fall back to the one-shot `preview_render`
+                            // so the visible rows paint immediately
+                            // instead of waiting for the async worker.
+                            let active_idx = self.focused_slot_idx();
+                            let buf = self.slots[active_idx].editor.buffer();
+                            if let Some(preview) =
+                                self.syntax.preview_render(buffer_id, buf, top, height)
+                            {
+                                self.install_render_result(preview);
+                            }
                         }
                     }
                 }

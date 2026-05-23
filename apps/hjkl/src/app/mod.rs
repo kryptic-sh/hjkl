@@ -790,7 +790,7 @@ impl App {
         }
         let buffer_id = self.active().buffer_id;
         if self.active_mut().editor.take_content_reset() {
-            self.syntax.reset(buffer_id);
+            self.handle_active_content_reset(buffer_id);
         }
         let edits = self.active_mut().editor.take_content_edits();
         if !edits.is_empty() {

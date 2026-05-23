@@ -1388,10 +1388,22 @@ impl SyntaxLayer {
         })
     }
 
-    /// Ask the worker to drop this buffer's retained tree on the next
-    /// parse so the next submission is cold.
+    /// Drop this buffer's retained tree **synchronously** so the next
+    /// `query_viewport` returns `None` (caller falls back to the one-shot
+    /// `preview_render`) and the next `submit_render` runs a cold parse.
+    ///
+    /// Wired into the editor's `take_content_reset` signal: bulk replaces
+    /// (`:e!`, undo of a multi-line edit, snapshot restore) emit a reset
+    /// instead of incremental `ContentEdit`s, so the retained tree's
+    /// byte positions no longer correlate with the new source. Letting
+    /// `query_viewport` run against that stale tree paints garbled spans
+    /// for one frame; dropping it sync avoids that frame entirely.
     pub fn reset(&mut self, id: BufferId) {
         self.client_mut(id).pending_reset = true;
+        with_buffer(&self.worker.buffers, id, |state| {
+            state.highlighter.reset();
+            state.last_parsed_dirty_gen = None;
+        });
     }
 
     /// Apply a batch of engine `ContentEdit`s to the shared retained tree
