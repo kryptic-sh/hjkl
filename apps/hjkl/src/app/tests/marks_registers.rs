@@ -557,6 +557,111 @@ fn gcc_on_doc_comment_uncomments_via_app_layer() {
 }
 
 #[test]
+fn gc_in_visual_line_toggles_selection_via_app_layer() {
+    // Visual `gc` must fire toggle_comment_range on the active selection
+    // immediately — no second key required. Before the routing fix, gc in
+    // visual went through engine.after_g which set Pending::Op{Comment}
+    // and stalled waiting for a motion that visual mode never delivers.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let x = 1;\nlet y = 2;\nlet z = 3;");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // V → visual-line, j → extend down, gc → toggle.
+    macro_key_seq(&mut app, &[ck('V'), ck('j'), ck('g'), ck('c')]);
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines[0], "// let x = 1;",
+        "visual gc must comment line 0; got {lines:?}"
+    );
+    assert_eq!(
+        lines[1], "// let y = 2;",
+        "visual gc must comment line 1; got {lines:?}"
+    );
+    assert_eq!(
+        lines[2], "let z = 3;",
+        "visual gc must NOT touch line 2 (outside selection); got {lines:?}"
+    );
+}
+
+#[test]
+fn gc_in_visual_charwise_toggles_selection_via_app_layer() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('v'), ck('j'), ck('g'), ck('c')]);
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines[0], "// let x = 1;");
+    assert_eq!(lines[1], "// let y = 2;");
+}
+
+#[test]
+fn gcc_then_gcc_round_trips_after_routing_fix() {
+    // Direct regression for the user-reported intermittent gcc no-op.
+    // After the routing fix, gc/gcc go through the App-level AfterOp
+    // reducer instead of engine Pending::Op, so the 1000ms engine chord-
+    // timeout can no longer drop the third `c` and reroute it into the
+    // bare-`c` Change operator path.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let x = 1;\nlet y = 2;");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(app.active().editor.buffer().lines()[0], "// let x = 1;");
+    // Critical: no engine pending leak between invocations.
+    assert!(!app.active().editor.is_chord_pending());
+    assert!(app.pending_state.is_none());
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('c')]);
+    assert_eq!(
+        app.active().editor.buffer().lines()[0],
+        "let x = 1;",
+        "second gcc must uncomment after the routing fix"
+    );
+    assert!(!app.active().editor.is_chord_pending());
+}
+
+#[test]
+fn gcc_with_count_3_toggles_3_lines_via_app_layer() {
+    // `3gcc` — comment 3 lines starting at cursor.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc\nd\ne");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('3'), ck('g'), ck('c'), ck('c')]);
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines[0], "// a");
+    assert_eq!(lines[1], "// b");
+    assert_eq!(lines[2], "// c");
+    assert_eq!(lines[3], "d", "line 3 must stay outside the count range");
+    assert_eq!(lines[4], "e");
+}
+
+#[test]
+fn gc_with_motion_j_toggles_2_lines_via_app_layer() {
+    // `gcj` — comment current line plus one line down (motion j).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc");
+    app.active_mut().editor.set_filetype("rust");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('j')]);
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(lines[0], "// a");
+    assert_eq!(lines[1], "// b");
+    assert_eq!(lines[2], "c");
+}
+
+#[test]
 fn gcc_on_indented_doc_comment_via_app_layer() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "    /// indented doc\nfn foo() {}");

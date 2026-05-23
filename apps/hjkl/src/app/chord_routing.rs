@@ -282,23 +282,47 @@ impl App {
                             }
                             _ => {}
                         }
-                        // Chord-init case-ops: intercept u/U/~/q and set
-                        // reducer AfterOp instead of calling after_g (which
-                        // would set engine Pending::Op). This keeps the full
-                        // gU/gu/g~/gq op-pending path inside the reducer.
+                        // Chord-init g-prefixed operators: intercept u/U/~/q/c.
+                        //
+                        // - In Normal mode: set the App-level AfterOp reducer
+                        //   (gives gU/gu/g~/gq/gc/gcc the same timeout-safe
+                        //   pending path as d/y/c — fixes intermittent gcc
+                        //   no-ops caused by the 1000ms engine chord-timeout
+                        //   firing between keystrokes when the chord went
+                        //   through the engine).
+                        // - In Visual modes: fire the operator immediately on
+                        //   the active selection (no additional keystroke
+                        //   needed — that's the vim semantics for visual gc /
+                        //   gu / gU / g~ / gq).
                         let case_op_kind = match ch {
                             'u' => Some(hjkl_vim::OperatorKind::Lowercase),
                             'U' => Some(hjkl_vim::OperatorKind::Uppercase),
                             '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
                             'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                            'c' => Some(hjkl_vim::OperatorKind::Comment),
                             _ => None,
                         };
                         if let Some(op) = case_op_kind {
-                            self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
-                                op,
-                                count1: count,
-                                inner_count: 0,
-                            });
+                            use hjkl_engine::VimMode;
+                            let mode = self.active().editor.vim_mode();
+                            if matches!(
+                                mode,
+                                VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+                            ) {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::VisualOp {
+                                        op,
+                                        count: count as u32,
+                                    },
+                                    count as u32,
+                                );
+                            } else {
+                                self.pending_state = Some(hjkl_vim::PendingState::AfterOp {
+                                    op,
+                                    count1: count,
+                                    inner_count: 0,
+                                });
+                            }
                             return true;
                         }
                         // All other g-chords: delegate to engine.
