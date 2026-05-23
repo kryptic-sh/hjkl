@@ -735,6 +735,15 @@ pub struct Settings {
     /// Used by comment-continuation and future language-aware features.
     /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
     pub filetype: String,
+    /// Override comment-string for the current buffer.
+    ///
+    /// When non-empty, used by `toggle_comment_range` instead of the
+    /// per-filetype default from `hjkl_lang::comment::commentstring_for_lang`.
+    /// Follows vim's `:set commentstring=…` — use `%s` as the text placeholder
+    /// (e.g. `"// %s"`) for compatibility; the toggle strips/inserts only the
+    /// prefix/suffix portion (before/after `%s`).  An empty string means "use
+    /// the filetype default".  Default `""`.
+    pub commentstring: String,
 }
 
 impl Default for Settings {
@@ -766,6 +775,7 @@ impl Default for Settings {
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
+            commentstring: String::new(),
         }
     }
 }
@@ -809,6 +819,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         colorcolumn: o.colorcolumn.clone(),
         formatoptions: o.formatoptions.clone(),
         filetype: o.filetype.clone(),
+        commentstring: String::new(),
     }
 }
 
@@ -3399,6 +3410,136 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.force_normal();
 
         Ok(())
+    }
+
+    // ─── Comment toggle (#187) ───────────────────────────────────────────────
+
+    /// Toggle line comments on rows `top_row..=bot_row` (0-based, inclusive).
+    ///
+    /// **Algorithm** (vim-commentary parity):
+    ///
+    /// 1. Determine the comment marker(s) for the active filetype.
+    ///    Priority: `settings.commentstring` (`:set commentstring=…`) → per-filetype
+    ///    default from `hjkl_lang::comment::commentstring_for_lang` → no-op.
+    /// 2. Scan non-blank lines.  If every non-blank line is already commented →
+    ///    strip the comment marker from each.  Otherwise → add it to all non-blank
+    ///    lines.
+    /// 3. Blank / whitespace-only lines are skipped (no marker added or removed).
+    /// 4. The marker is inserted AFTER the leading whitespace (indent-preserving).
+    /// 5. The entire operation is a single undo step.
+    ///
+    /// For block-comment languages (HTML, CSS) each line is individually wrapped
+    /// as `start text end` (per-line block style, not one multi-line block).
+    ///
+    /// `top_row` and `bot_row` are clamped to the buffer's valid row range.
+    pub fn toggle_comment_range(&mut self, top_row: usize, bot_row: usize) {
+        use hjkl_lang::comment::commentstring_for_lang;
+
+        let lang = self.settings.filetype.clone();
+
+        // Resolve the comment markers.
+        // If `settings.commentstring` is set (non-empty) parse `start %s end`
+        // from it; otherwise fall back to the filetype table.
+        let (start, end) = if !self.settings.commentstring.is_empty() {
+            let cs = &self.settings.commentstring;
+            if let Some(idx) = cs.find("%s") {
+                let s = cs[..idx].trim_end().to_string();
+                let e_raw = cs[idx + 2..].trim_start();
+                let e: Option<String> = if e_raw.is_empty() {
+                    None
+                } else {
+                    Some(e_raw.to_string())
+                };
+                (s, e)
+            } else {
+                // No %s placeholder — treat the whole string as start marker.
+                (cs.clone(), None)
+            }
+        } else {
+            match commentstring_for_lang(&lang) {
+                Some((s, e)) => (s.to_string(), e.map(|v| v.to_string())),
+                None => return, // no known comment syntax → no-op
+            }
+        };
+
+        let row_count = buf_row_count(&self.buffer);
+        let top = top_row.min(row_count.saturating_sub(1));
+        let bot = bot_row.min(row_count.saturating_sub(1));
+
+        // Collect all lines in the range.
+        let lines: Vec<String> = (top..=bot)
+            .map(|r| buf_line(&self.buffer, r).unwrap_or_default())
+            .collect();
+
+        // Check whether every non-blank line is already commented.
+        let all_commented = lines.iter().all(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                return true; // blank lines don't count against "all commented"
+            }
+            if let Some(ref end_marker) = end {
+                // Block style: line starts with start and ends with end.
+                trimmed.starts_with(start.as_str())
+                    && line.trim_end().ends_with(end_marker.as_str())
+            } else {
+                trimmed.starts_with(start.as_str())
+            }
+        });
+
+        let mut new_lines: Vec<String> = Vec::with_capacity(lines.len());
+        for line in &lines {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                // Blank line — leave as-is.
+                new_lines.push(line.clone());
+                continue;
+            }
+            let indent_len = line.len() - trimmed.len();
+            let indent = &line[..indent_len];
+
+            if all_commented {
+                // Uncomment: strip exactly one occurrence of start (+ optional space).
+                if let Some(after_start) = trimmed.strip_prefix(start.as_str()) {
+                    // Strip one leading space after the marker if present.
+                    let after_space = after_start.strip_prefix(' ').unwrap_or(after_start);
+                    // For block style also strip the trailing end marker.
+                    let text = if let Some(ref end_marker) = end {
+                        after_space
+                            .trim_end()
+                            .strip_suffix(end_marker.as_str())
+                            .map(|s| s.trim_end())
+                            .unwrap_or(after_space)
+                    } else {
+                        after_space
+                    };
+                    new_lines.push(format!("{indent}{text}"));
+                } else {
+                    new_lines.push(line.clone());
+                }
+            } else {
+                // Comment: insert marker after indent.
+                let commented = if let Some(ref end_marker) = end {
+                    format!("{indent}{start} {trimmed} {end_marker}")
+                } else {
+                    format!("{indent}{start} {trimmed}")
+                };
+                new_lines.push(commented);
+            }
+        }
+
+        // Replace the row range in the buffer — single undo step.
+        self.push_undo();
+        let row_count_after = buf_row_count(&self.buffer);
+        let all_before: Vec<String> = (0..top)
+            .map(|r| buf_line(&self.buffer, r).unwrap_or_default())
+            .collect();
+        let all_after: Vec<String> = ((bot + 1)..row_count_after)
+            .map(|r| buf_line(&self.buffer, r).unwrap_or_default())
+            .collect();
+        let mut all: Vec<String> = all_before;
+        all.extend(new_lines);
+        all.extend(all_after);
+        self.restore(all, (top, 0));
     }
 
     // ─── Phase 4b: pub text-object resolution (hjkl#70) ─────────────────────

@@ -40,6 +40,8 @@ pub fn all_setting_names() -> Vec<String> {
         "fo".into(),
         "filetype".into(),
         "ft".into(),
+        "commentstring".into(),
+        "cms".into(),
         // completion-only (handled by host in ex_dispatch.rs)
         "background".into(),
         "bg".into(),
@@ -95,7 +97,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -122,6 +124,7 @@ pub(crate) fn apply_set<H: Host>(
             s.colorcolumn,
             s.formatoptions,
             s.filetype,
+            s.commentstring,
         ));
     }
     for token in trimmed.split_whitespace() {
@@ -192,6 +195,10 @@ fn apply_set_token<H: Host>(
         }
         if matches!(name, "filetype" | "ft") {
             editor.settings_mut().filetype = value.to_string();
+            return Ok(());
+        }
+        if matches!(name, "commentstring" | "cms") {
+            editor.settings_mut().commentstring = value.to_string();
             return Ok(());
         }
         let parsed: usize = value

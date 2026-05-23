@@ -31,13 +31,17 @@ pub enum OperatorKind {
     /// range the grammar transitions to `PendingFilter` and waits for the
     /// app to supply a command string before emitting `EngineCmd::ApplyFilter`.
     Filter,
+    /// `gc` — toggle line comments on the range. `gcc` = current line (doubled-
+    /// char convention, like `dd`). `gc{motion}` = motion variant. All three
+    /// visual modes resolve to a row range and call `toggle_comment_range`.
+    Comment,
 }
 
 impl OperatorKind {
     /// The doubled-letter char for this operator.
     ///
     /// Used by the `AfterOp` reducer arm to detect the line-op doubled form:
-    /// `dd`, `yy`, `cc`, `>>`, `<<`, `gUU`, `guu`, `g~~`, `gqq`.
+    /// `dd`, `yy`, `cc`, `>>`, `<<`, `gUU`, `guu`, `g~~`, `gqq`, `gcc`.
     pub(crate) fn double_char(self) -> char {
         match self {
             OperatorKind::Delete => 'd',
@@ -51,6 +55,8 @@ impl OperatorKind {
             OperatorKind::Reflow => 'q',
             OperatorKind::AutoIndent => '=',
             OperatorKind::Filter => '!',
+            // `gcc` — doubled 'c' after `gc` enters the comment operator.
+            OperatorKind::Comment => 'c',
         }
     }
 }

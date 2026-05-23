@@ -74,6 +74,54 @@ pub fn detect_comment_prefix<'a>(lang: &str, line: &'a str) -> Option<(&'a str, 
     None
 }
 
+/// Return the comment-string markers for `lang` as `(start, end)`.
+///
+/// For line-comment languages `end` is `None` — the toggle inserts `start`
+/// (plus one space) before the non-blank text and removes it on uncomment.
+///
+/// For block-comment languages (HTML, CSS, …) `end` is `Some(end_marker)` —
+/// each line is wrapped individually as `start text end`.
+///
+/// Returns `None` for unrecognised languages. The caller should fall back to
+/// an empty prefix (no-op toggle) when `None` is returned.
+///
+/// The markers here deliberately do NOT include trailing/leading spaces —
+/// the toggle algorithm adds/removes exactly one space separator.
+///
+/// | Language group                           | start  | end     |
+/// |------------------------------------------|--------|---------|
+/// | Rust, C, C++, JS, TS, Go, Java, Swift    | `//`   | —       |
+/// | Python, Shell, TOML, YAML, Make, Ruby, Perl | `#` | —       |
+/// | Lua, SQL, Haskell, Ada                   | `--`   | —       |
+/// | Vim / Vimscript                          | `"`    | —       |
+/// | LaTeX, MATLAB                            | `%`    | —       |
+/// | HTML, XML, SVG                           | ``  | `` |
+/// | CSS, SCSS                                | `/*`   | `*/`    |
+pub fn commentstring_for_lang(lang: &str) -> Option<(&'static str, Option<&'static str>)> {
+    match lang {
+        // Rust — plain `//` for gc toggle (not the doc-comment variants).
+        "rust" => Some(("//", None)),
+        // C / C++ / JavaScript / TypeScript / Go / Java / Swift
+        "c" | "cpp" | "javascript" | "js" | "typescript" | "ts" | "go" | "java" | "swift" => {
+            Some(("//", None))
+        }
+        // Python / Shell variants / TOML / YAML / Makefile / Ruby / Perl
+        "python" | "sh" | "bash" | "zsh" | "fish" | "toml" | "yaml" | "make" | "makefile"
+        | "ruby" | "perl" => Some(("#", None)),
+        // Lua / SQL / Haskell / Ada
+        "lua" | "sql" | "haskell" | "ada" => Some(("--", None)),
+        // Vim / Vimscript
+        "vim" | "viml" => Some(("\"", None)),
+        // LaTeX / MATLAB
+        "latex" | "tex" | "matlab" => Some(("%", None)),
+        // HTML / XML / SVG — block style, wrap each line individually.
+        "html" | "xml" | "svg" => Some(("<!--", Some("-->"))),
+        // CSS / SCSS — block style.
+        "css" | "scss" => Some(("/*", Some("*/"))),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +187,47 @@ mod tests {
         // A line that is exactly `//` with nothing after it should still match.
         let result = detect_comment_prefix("rust", "//");
         assert!(result.is_some());
+    }
+
+    // ── commentstring_for_lang ───────────────────────────────────────────────
+
+    #[test]
+    fn commentstring_rust_is_slash_slash() {
+        let (start, end) = commentstring_for_lang("rust").unwrap();
+        assert_eq!(start, "//");
+        assert!(end.is_none());
+    }
+
+    #[test]
+    fn commentstring_python_is_hash() {
+        let (start, end) = commentstring_for_lang("python").unwrap();
+        assert_eq!(start, "#");
+        assert!(end.is_none());
+    }
+
+    #[test]
+    fn commentstring_lua_is_dash_dash() {
+        let (start, end) = commentstring_for_lang("lua").unwrap();
+        assert_eq!(start, "--");
+        assert!(end.is_none());
+    }
+
+    #[test]
+    fn commentstring_html_is_block() {
+        let (start, end) = commentstring_for_lang("html").unwrap();
+        assert_eq!(start, "<!--");
+        assert_eq!(end, Some("-->"));
+    }
+
+    #[test]
+    fn commentstring_css_is_block() {
+        let (start, end) = commentstring_for_lang("css").unwrap();
+        assert_eq!(start, "/*");
+        assert_eq!(end, Some("*/"));
+    }
+
+    #[test]
+    fn commentstring_unknown_lang_returns_none() {
+        assert!(commentstring_for_lang("brainfuck").is_none());
     }
 }
