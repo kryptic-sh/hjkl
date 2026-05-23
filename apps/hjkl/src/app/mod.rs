@@ -801,15 +801,20 @@ impl App {
             // current one — any cache older than this gen is stale for these
             // rows and should show blank until the worker returns.
             let new_dg = self.active().editor.buffer().dirty_gen();
-            // Row-count edits: translate the cached span rows in-place
-            // so untouched lines keep their existing colours while the
-            // worker reparses. Historically this branch blanked
-            // `buffer_spans` (visible as a white flash on every Enter /
-            // backspace-at-BOL); `shift_syntax_spans_for_edits` keeps
-            // the alignment correct without the flash.
+            // Row-count edits: translate cached span rows in-place so
+            // untouched lines keep their existing colours while the worker
+            // reparses. Historically this branch blanked `buffer_spans`
+            // (visible as a white flash on every Enter / backspace-at-BOL).
+            // We shift BOTH the editor's live `buffer_spans` (drives the
+            // next render frame) AND the per-slot `RenderOutput.spans`
+            // caches (drive `install_merged_spans_for_slot`, which would
+            // otherwise wholesale-reject the stale-length caches and blank
+            // the editor on the very next `recompute_and_install` tick).
             self.active_mut()
                 .editor
                 .shift_syntax_spans_for_edits(&edits);
+            let active_idx = self.focused_slot_idx();
+            self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
             for edit in &edits {
                 let start_row = edit.start_position.0 as usize;
                 let end_row =

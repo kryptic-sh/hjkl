@@ -278,6 +278,43 @@ impl App {
         false
     }
 
+    /// Translate the per-slot cached `RenderOutput.spans` row vectors
+    /// in-place to track a batch of [`hjkl_engine::ContentEdit`]s, mirroring
+    /// what [`hjkl_engine::Editor::shift_syntax_spans_for_edits`] does for
+    /// the live `buffer_spans`.
+    ///
+    /// Without this, after any row-count edit the cached outputs have
+    /// `spans.len()` matching the OLD line count. `merge_render_outputs`
+    /// then wholesale-rejects every cache (`out.spans.len() != line_count`),
+    /// produces an all-empty merged table, and `install_merged_spans_for_slot`
+    /// replaces the editor's in-memory spans with blank rows — visible as a
+    /// white flash on every Enter / backspace-at-BOL until the worker
+    /// delivers a fresh parse for the new line count.
+    ///
+    /// Shifting the cached spans keeps them shape-compatible so the merger
+    /// can fall through to its per-row dirty-log path: rows touched by the
+    /// edit stay blank for one frame (worker fills them in), untouched rows
+    /// keep their cached colours.
+    pub(crate) fn shift_cached_render_output_spans_for_slot(
+        &mut self,
+        slot_idx: usize,
+        edits: &[hjkl_engine::ContentEdit],
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        let slot = &mut self.slots[slot_idx];
+        if let Some(out) = slot.viewport_render_output.as_mut() {
+            shift_rows(&mut out.spans, edits);
+        }
+        if let Some(out) = slot.top_render_output.as_mut() {
+            shift_rows(&mut out.spans, edits);
+        }
+        if let Some(out) = slot.bottom_render_output.as_mut() {
+            shift_rows(&mut out.spans, edits);
+        }
+    }
+
     /// Merge `top_render_output`, `bottom_render_output`, and
     /// `viewport_render_output` for the slot at `slot_idx` into a single
     /// per-row span table and install it on the editor.
@@ -760,6 +797,43 @@ pub(crate) fn merge_render_outputs<'a>(
     merged
 }
 
+/// Translate per-row span vectors in-place to track a batch of
+/// [`hjkl_engine::ContentEdit`]s. Generic over the row payload type so the
+/// same helper applies to cached `RenderOutput.spans`
+/// (`Vec<Vec<(usize, usize, StyleSpec)>>`) and any other row-keyed cache
+/// shape that needs to follow line count changes.
+///
+/// For each edit:
+/// - row count grew by N → insert N empty rows at index `old_end_row + 1`.
+/// - row count shrank by N → drain `(new_end_row + 1)..(old_end_row + 1)`.
+///
+/// Edits apply in order, each interpreted relative to the post-state of
+/// the prior edits in the batch (matching engine emission order).
+pub(crate) fn shift_rows<T>(rows: &mut Vec<Vec<T>>, edits: &[hjkl_engine::ContentEdit]) {
+    for edit in edits {
+        let oer = edit.old_end_position.0 as usize;
+        let ner = edit.new_end_position.0 as usize;
+        if ner == oer {
+            continue;
+        }
+        if ner > oer {
+            let n = ner - oer;
+            let idx = (oer + 1).min(rows.len());
+            for _ in 0..n {
+                rows.insert(idx, Vec::new());
+            }
+        } else {
+            let n = oer - ner;
+            let len = rows.len();
+            let start = (ner + 1).min(len);
+            let end = (start + n).min(len);
+            if end > start {
+                rows.drain(start..end);
+            }
+        }
+    }
+}
+
 /// Number of off-screen rows above/below the visible window to include in the
 /// highlighter's byte range. Gives the injection query a buffer so a fenced
 /// code block whose opening backtick is just above the viewport (with content
@@ -839,6 +913,86 @@ fn format_anvil_status(status: &hjkl_anvil::InstallStatus) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn edit_insert_newline_at(row: u32, col: u32) -> hjkl_engine::ContentEdit {
+        hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (row, col),
+            old_end_position: (row, col),
+            new_end_position: (row + 1, 0),
+        }
+    }
+
+    fn edit_join_rows(row: u32, col: u32) -> hjkl_engine::ContentEdit {
+        hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 1,
+            new_end_byte: 0,
+            start_position: (row, col),
+            old_end_position: (row + 1, 0),
+            new_end_position: (row, col),
+        }
+    }
+
+    fn marked_rows(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![i as u8]).collect()
+    }
+
+    #[test]
+    fn shift_rows_insertion_grows_in_place() {
+        let mut rows = marked_rows(4);
+        shift_rows(&mut rows, &[edit_insert_newline_at(1, 0)]);
+        assert_eq!(rows.len(), 5);
+        // Inserted empty row sits at oer+1 = 2.
+        assert!(rows[2].is_empty(), "inserted row must be empty");
+        // Untouched neighbours keep their marker bytes.
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[3], vec![2]);
+        assert_eq!(rows[4], vec![3]);
+    }
+
+    #[test]
+    fn shift_rows_deletion_shrinks_in_place() {
+        let mut rows = marked_rows(4);
+        shift_rows(&mut rows, &[edit_join_rows(1, 0)]);
+        assert_eq!(rows.len(), 3);
+        // Drained range was (ner+1)..(oer+1) = 2..3, so row 2 (marker `2`)
+        // disappears. Survivors: 0, 1, 3.
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[2], vec![3]);
+    }
+
+    #[test]
+    fn shift_rows_same_row_edit_is_noop() {
+        let mut rows = marked_rows(3);
+        let same_row = hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (1, 0),
+            old_end_position: (1, 0),
+            new_end_position: (1, 1),
+        };
+        shift_rows(&mut rows, &[same_row]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[2], vec![2]);
+    }
+
+    #[test]
+    fn shift_rows_ordered_edits_compose() {
+        let mut rows = marked_rows(3);
+        shift_rows(
+            &mut rows,
+            &[edit_insert_newline_at(0, 0), edit_insert_newline_at(1, 0)],
+        );
+        assert_eq!(rows.len(), 5);
+    }
 
     /// Regression catcher for the picker preview injection wiring: a
     /// markdown buffer with a fenced rust code block must produce

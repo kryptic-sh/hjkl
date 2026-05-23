@@ -1308,10 +1308,13 @@ impl App {
                         // Translate cached span rows so untouched lines
                         // stay coloured while the worker reparses (no
                         // white flash on Enter / backspace-at-BOL); see
-                        // matching block in `App::sync_after_engine_mutation`.
+                        // matching block in `App::sync_after_engine_mutation`
+                        // for the full rationale.
                         self.active_mut()
                             .editor
                             .shift_syntax_spans_for_edits(&edits);
+                        let active_idx = self.focused_slot_idx();
+                        self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
                     }
                     self.lsp_notify_change_active();
                     self.recompute_and_install();
