@@ -133,12 +133,77 @@ pub(crate) fn apply_set<H: Host>(
             if s.autoclose_tag { "on" } else { "off" },
         ));
     }
+    let mut query_lines: Vec<String> = Vec::new();
     for token in trimmed.split_whitespace() {
+        // `:set <name>?` — print current value instead of mutating.
+        // Vim convention; works for any option known to query_option_value.
+        if let Some(name) = token.strip_suffix('?') {
+            match query_option_value(editor, name) {
+                Some(v) => query_lines.push(format!("{name}={v}")),
+                None => return ExEffect::Error(format!("unknown :set option `{name}`")),
+            }
+            continue;
+        }
         if let Err(e) = apply_set_token(editor, token) {
             return ExEffect::Error(e);
         }
     }
+    if !query_lines.is_empty() {
+        return ExEffect::Info(query_lines.join("  "));
+    }
     ExEffect::Ok
+}
+
+/// Return a display-form string for `name`'s current value, or `None`
+/// when the option isn't recognised. Used by the `:set <name>?` query
+/// form. Names accepted match those in [`apply_set_token`] (both the
+/// long and short aliases).
+fn query_option_value<H: Host>(
+    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    name: &str,
+) -> Option<String> {
+    let s = editor.settings();
+    let on_off = |b: bool| if b { "on" } else { "off" }.to_string();
+    Some(match name {
+        "shiftwidth" | "sw" => s.shiftwidth.to_string(),
+        "tabstop" | "ts" => s.tabstop.to_string(),
+        "softtabstop" | "sts" => s.softtabstop.to_string(),
+        "textwidth" | "tw" => s.textwidth.to_string(),
+        "undolevels" | "ul" => s.undo_levels.to_string(),
+        "timeoutlen" | "tm" => s.timeout_len.as_millis().to_string(),
+        "numberwidth" | "nuw" => s.numberwidth.to_string(),
+        "foldcolumn" | "fdc" => s.foldcolumn.to_string(),
+        "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
+        "colorcolumn" | "cc" => format!("\"{}\"", s.colorcolumn),
+        "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
+        "filetype" | "ft" => format!("\"{}\"", s.filetype),
+        "commentstring" | "cms" => format!("\"{}\"", s.commentstring),
+        "signcolumn" | "scl" => match s.signcolumn {
+            hjkl_engine::types::SignColumnMode::Yes => "yes".into(),
+            hjkl_engine::types::SignColumnMode::No => "no".into(),
+            hjkl_engine::types::SignColumnMode::Auto => "auto".into(),
+        },
+        "wrap" => match s.wrap {
+            hjkl_buffer::Wrap::None => "off".into(),
+            hjkl_buffer::Wrap::Char => "char".into(),
+            hjkl_buffer::Wrap::Word => "word".into(),
+        },
+        "expandtab" | "et" => on_off(s.expandtab),
+        "ignorecase" | "ic" => on_off(s.ignore_case),
+        "smartcase" | "scs" => on_off(s.smartcase),
+        "wrapscan" | "ws" => on_off(s.wrapscan),
+        "autoindent" | "ai" => on_off(s.autoindent),
+        "smartindent" | "si" => on_off(s.smartindent),
+        "undobreak" => on_off(s.undo_break_on_motion),
+        "readonly" | "ro" => on_off(s.readonly),
+        "number" | "nu" => on_off(s.number),
+        "relativenumber" | "rnu" => on_off(s.relativenumber),
+        "cursorline" | "cul" => on_off(s.cursorline),
+        "cursorcolumn" | "cuc" => on_off(s.cursorcolumn),
+        "autopair" | "ap" => on_off(s.autopair),
+        "autoclose-tag" | "act" => on_off(s.autoclose_tag),
+        _ => return None,
+    })
 }
 
 /// Apply a single `:set` token. Supports `name=value`, `name+=flags`,
@@ -702,5 +767,70 @@ mod tests {
         let names = super::all_setting_names();
         assert!(names.iter().any(|n| n == "filetype"));
         assert!(names.iter().any(|n| n == "ft"));
+    }
+
+    // ── `:set <name>?` query form ────────────────────────────────────────
+
+    #[test]
+    fn set_filetype_query_returns_info() {
+        let mut editor = make_editor();
+        editor.settings_mut().filetype = "rust".to_string();
+        match apply_set(&mut editor, "filetype?") {
+            ExEffect::Info(s) => assert_eq!(s, "filetype=\"rust\""),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_ft_alias_query_works() {
+        let mut editor = make_editor();
+        editor.settings_mut().filetype = "html".to_string();
+        match apply_set(&mut editor, "ft?") {
+            ExEffect::Info(s) => assert_eq!(s, "ft=\"html\""),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_bool_query_reports_on_off() {
+        let mut editor = make_editor();
+        editor.settings_mut().autopair = true;
+        match apply_set(&mut editor, "autopair?") {
+            ExEffect::Info(s) => assert_eq!(s, "autopair=on"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_int_query_reports_number() {
+        let mut editor = make_editor();
+        editor.settings_mut().shiftwidth = 4;
+        match apply_set(&mut editor, "sw?") {
+            ExEffect::Info(s) => assert_eq!(s, "sw=4"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_unknown_query_errors() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "bogus?") {
+            ExEffect::Error(s) => assert!(s.contains("bogus"), "got {s:?}"),
+            other => panic!("expected Error(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_mixed_query_and_apply_returns_info() {
+        let mut editor = make_editor();
+        editor.settings_mut().filetype = "rust".to_string();
+        // `:set number filetype?` — apply nu, then report ft.
+        match apply_set(&mut editor, "number filetype?") {
+            ExEffect::Info(s) => {
+                assert_eq!(s, "filetype=\"rust\"");
+                assert!(editor.settings().number, "number must be applied alongside");
+            }
+            other => panic!("expected Info(_), got {other:?}"),
+        }
     }
 }
