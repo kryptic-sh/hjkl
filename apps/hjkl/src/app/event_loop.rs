@@ -93,16 +93,10 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
         use hjkl_engine::InsertDir;
 
-        // Recorder hook — this path bypasses begin_step / end_step (the
-        // engine's standard recorder site), so insert-mode chars must be
-        // pushed here when a macro is recording. Skipped during replay so
-        // played-back inputs don't append to the active recording.
-        if self.active().editor.is_recording_macro() && !self.active().editor.is_replaying_macro() {
-            let input = hjkl_engine_tui::crossterm_to_input(key);
-            if input.key != hjkl_engine::Key::Null {
-                self.active_mut().editor.record_input(input);
-            }
-        }
+        // Macro recording for keys that reach this dispatcher happens upstream
+        // in `handle_keypress`'s Insert-mode block (the single hook there
+        // covers consume-and-return Continue paths AND fall-through paths so
+        // we don't double-record). Don't add a hook here.
 
         // `Ctrl-R` two-key sequence: the previous key armed the register
         // selector. The next printable char names the register to paste.
@@ -500,6 +494,24 @@ impl App {
         // This block intercepts specific keys in insert mode to
         // manage the completion popup, before forwarding to the engine.
         if self.active().editor.vim_mode() == VimMode::Insert {
+            // Recorder hook for Insert-mode keys that this block consumes
+            // (printable chars routed to insert_char, popup-open Backspace
+            // routed to insert_backspace, etc). Those paths return
+            // KeyOutcome::Continue without ever reaching dispatch_insert_key
+            // or the engine FSM step wrapper, so the engine end_step
+            // recorder doesn't fire. Skipped during replay so played-back
+            // inputs don't append to the active recording. Keys that
+            // fall through this block to dispatch_insert_key get their
+            // recording from dispatch_insert_key's own hook.
+            if self.active().editor.is_recording_macro()
+                && !self.active().editor.is_replaying_macro()
+            {
+                let input = hjkl_engine_tui::crossterm_to_input(key);
+                if input.key != hjkl_engine::Key::Null {
+                    self.active_mut().editor.record_input(input);
+                }
+            }
+
             // <C-x><C-o> manual omni-completion trigger.
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('x') {
                 self.pending_ctrl_x = true;
