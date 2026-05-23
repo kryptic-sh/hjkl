@@ -457,3 +457,63 @@ fn open_pair_newline_brace() {
         "cursor should be on the middle (indented) line, got row {row}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Triple-quote / triple-backtick guard
+// ---------------------------------------------------------------------------
+
+/// Typing three backticks must produce exactly three (markdown code-fence),
+/// not four. Regression for user report: `` ``` `` left a 4th backtick
+/// because the autopair fired on the third keystroke.
+#[test]
+fn triple_backtick_does_not_autopair_third() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "`"); // 1st → autopair → `|`
+    feed_insert(&mut ed, "`"); // 2nd → skip-over → ``|
+    feed_insert(&mut ed, "`"); // 3rd → triple-quote guard → bare insert → ```|
+    let lines = buf_lines(&ed);
+    assert_eq!(
+        lines,
+        vec!["```"],
+        "expected three backticks, got {lines:?}"
+    );
+    let (row, col) = cursor(&ed);
+    assert_eq!(
+        (row, col),
+        (0, 3),
+        "cursor should be after the three backticks"
+    );
+}
+
+/// Same guard for `"""` (Python triple-quoted strings).
+#[test]
+fn triple_double_quote_does_not_autopair_third() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "\"");
+    feed_insert(&mut ed, "\"");
+    feed_insert(&mut ed, "\"");
+    assert_eq!(
+        buf_lines(&ed),
+        vec!["\"\"\""],
+        "expected three double-quotes"
+    );
+    assert_eq!(cursor(&ed), (0, 3));
+}
+
+/// Same guard for `\u{27}\u{27}\u{27}` (rare but seen in some templating).
+#[test]
+fn triple_single_quote_does_not_autopair_third() {
+    let mut ed = editor("", "");
+    feed(&mut ed, "i");
+    feed_insert(&mut ed, "\u{27}");
+    feed_insert(&mut ed, "\u{27}");
+    feed_insert(&mut ed, "\u{27}");
+    assert_eq!(
+        buf_lines(&ed),
+        vec!["\u{27}\u{27}\u{27}"],
+        "expected three single quotes"
+    );
+    assert_eq!(cursor(&ed), (0, 3));
+}
