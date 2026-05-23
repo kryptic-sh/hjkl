@@ -1222,17 +1222,48 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
 /// when no pairing applies.
 ///
 /// Rules:
-/// - `(` → `)`, `[` → `]`, `{` → `}`, `"` → `"`, `` ` `` → `` ` `` always.
+/// - `(` → `)`, `[` → `]`, `{` → `}` always.
+/// - `"` → `"` and `` ` `` → `` ` `` always, EXCEPT when the previous two
+///   characters are the same quote — typing the third `` ` `` of a markdown
+///   code-fence or the third `"` of a Python triple-quoted string must
+///   emit a bare quote (no close) so the result is `` ``` `` / `"""` and
+///   not `` ```` `` / `""""`.
 /// - `<` → `>` only for HTML/XML family filetypes.
 /// - `'` → `'` unless the character immediately before the cursor is
-///   `[A-Za-z]` (prose apostrophe guard — "don't" stays "don't").
-fn autopair_close_for(ch: char, filetype: &str, prev_char: Option<char>) -> Option<char> {
+///   `[A-Za-z]` (prose apostrophe guard — "don't" stays "don't"), AND the
+///   same triple-quote guard as `"` / `` ` ``.
+fn autopair_close_for(
+    ch: char,
+    filetype: &str,
+    prev_char: Option<char>,
+    prev2_char: Option<char>,
+) -> Option<char> {
+    // Triple-quote guard — applies to ", `, and ' (the three quote chars
+    // that get same-char pairing). When the previous two characters are
+    // both this same quote, treat the third keystroke as a bare insert so
+    // the user lands on `` ``` `` / `"""` / `'''` without a stray fourth
+    // quote dangling after the cursor.
+    let is_triple_quote_third =
+        matches!(ch, '"' | '`' | '\'') && prev_char == Some(ch) && prev2_char == Some(ch);
+
     match ch {
         '(' => Some(')'),
         '[' => Some(']'),
         '{' => Some('}'),
-        '"' => Some('"'),
-        '`' => Some('`'),
+        '"' => {
+            if is_triple_quote_third {
+                None
+            } else {
+                Some('"')
+            }
+        }
+        '`' => {
+            if is_triple_quote_third {
+                None
+            } else {
+                Some('`')
+            }
+        }
         '<' => {
             if is_html_filetype(filetype) {
                 Some('>')
@@ -1241,6 +1272,9 @@ fn autopair_close_for(ch: char, filetype: &str, prev_char: Option<char>) -> Opti
             }
         }
         '\'' => {
+            if is_triple_quote_third {
+                return None;
+            }
             // Prose guard: skip pairing when the previous char is a letter
             // (covers "don't", "it's", etc.).
             if prev_char.map(|c| c.is_ascii_alphabetic()).unwrap_or(false) {
@@ -1410,14 +1444,24 @@ pub(crate) fn insert_char_bridge<H: crate::types::Host>(
         let filetype = ed.settings.filetype.clone();
         let autoclose_tag = ed.settings.autoclose_tag;
 
-        let prev_char = if cursor.col > 0 {
-            buf_line(&ed.buffer, cursor.row).and_then(|l| l.chars().nth(cursor.col - 1))
-        } else {
-            None
+        let (prev_char, prev2_char) = {
+            let line = buf_line(&ed.buffer, cursor.row).unwrap_or_default();
+            let chars: Vec<char> = line.chars().collect();
+            let p1 = if cursor.col > 0 {
+                chars.get(cursor.col - 1).copied()
+            } else {
+                None
+            };
+            let p2 = if cursor.col > 1 {
+                chars.get(cursor.col - 2).copied()
+            } else {
+                None
+            };
+            (p1, p2)
         };
 
         if autopair {
-            if let Some(close) = autopair_close_for(ch, &filetype, prev_char) {
+            if let Some(close) = autopair_close_for(ch, &filetype, prev_char, prev2_char) {
                 // Insert open char.
                 ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
                 // Insert close char immediately after the open char.
