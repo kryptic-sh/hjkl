@@ -1,29 +1,18 @@
 //! Renderer-agnostic syntax-highlighting pipeline for the hjkl editor stack.
 //!
-//! Owns a [`SyntaxWorker`] background thread (holding the `Highlighter`
-//! and retained `tree_sitter::Tree`) plus a main-thread `RenderCache` of
-//! `(source, row_starts)`. Call
-//! [`SyntaxLayer::set_language_for_path`] after opening a file, then
-//! [`SyntaxLayer::apply_edits`] for each frame's queued
-//! [`hjkl_engine::ContentEdit`] batch and [`SyntaxLayer::submit_render`]
-//! to enqueue a parse + viewport-scoped highlight on the worker. Drain
-//! results via [`SyntaxLayer::take_all_results`] each frame and route them
-//! to the correct per-slot cache field.
-//!
-//! # Design
+//! Fully synchronous: parse and highlight run on the main thread.
+//! Call [`SyntaxLayer::set_language_for_path`] after opening a file,
+//! [`SyntaxLayer::apply_edits`] after each batch of [`hjkl_engine::ContentEdit`]s,
+//! and [`SyntaxLayer::render_viewport`] to get styled spans for the visible rows.
 //!
 //! Output is renderer-agnostic: [`RenderOutput::spans`] carries
-//! `(byte_start, byte_end, `[`StyleSpec`]`)` triples rather than
-//! renderer-specific style types.  A TUI adapter ([`hjkl-syntax-tui`]) maps
-//! these to `ratatui::style::Style`; a future GUI adapter will map them to
-//! `cosmic_text` attributes.
-//!
-//! [`StyleSpec`]: hjkl_theme::StyleSpec
+//! `(byte_start, byte_end, [`StyleSpec`])` triples.
+//! A TUI adapter ([`hjkl-syntax-tui`]) maps these to `ratatui::style::Style`.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::{self, JoinHandle};
+use std::sync::Arc;
 
 use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{
@@ -31,14 +20,11 @@ use hjkl_bonsai::{
     Highlighter, InputEdit, MetaValue, Point, Theme,
 };
 use hjkl_engine::Query;
-
 use hjkl_lang::{GrammarRequest, LanguageDirectory};
 
 pub use hjkl_theme::{Color, Modifiers, StyleSpec};
 
-/// Stable identifier for an open buffer. Assigned by the App; carried
-/// through every syntax-pipeline message so the worker can multiplex
-/// per-buffer tree state.
+/// Stable identifier for an open buffer.
 ///
 /// # Examples
 ///
@@ -53,29 +39,7 @@ pub use hjkl_buffer::BufferId;
 // Public output types
 // ---------------------------------------------------------------------------
 
-/// Discriminates the purpose of a parse request / result so the App can
-/// route it to the correct per-slot cache field.
-///
-/// - `Viewport` — the current visible region.
-///
-/// # Examples
-///
-/// ```
-/// use hjkl_syntax::ParseKind;
-/// assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
-/// ```
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ParseKind {
-    /// The current visible viewport region.
-    Viewport,
-}
-
 /// A single diagnostic sign emitted from the syntax pipeline.
-///
-/// Carries only renderer-agnostic fields: `row`, `ch`, and `priority`.
-/// The TUI adapter converts these to ratatui-styled `hjkl_buffer::Sign`
-/// objects using its own colour choices.
 ///
 /// # Examples
 ///
@@ -114,16 +78,14 @@ impl DiagSign {
     /// use hjkl_syntax::DiagSign;
     /// let s = DiagSign::new(1, 'E', 100);
     /// assert_eq!(s.row, 1);
-    /// assert_eq!(s.ch, 'E');
-    /// assert_eq!(s.priority, 100);
     /// ```
     pub fn new(row: usize, ch: char, priority: u8) -> Self {
         Self { row, ch, priority }
     }
 }
 
-/// Per-call sub-step timings exposed to apps' `:perf` overlay.
-/// Recorded on the worker side and shipped back inside [`RenderOutput`].
+/// Per-call sub-step timings. Kept for API compat (PerfBreakdown is re-exported
+/// in the TUI shim and referenced from `:perf` overlay code).
 ///
 /// # Examples
 ///
@@ -162,54 +124,31 @@ impl PerfBreakdown {
     }
 }
 
-/// Per-frame output of the syntax worker.
+/// Per-frame output of the syntax pipeline.
 ///
-/// Contains the styled span table (one inner `Vec` per document row), the
-/// diagnostic signs for the gutter, the cache key the request was tagged
-/// with, and a [`PerfBreakdown`] describing where the worker spent its time.
-///
-/// Spans use [`StyleSpec`] (renderer-agnostic). The TUI adapter
-/// ([`hjkl-syntax-tui`]) converts these to `ratatui::style::Style`.
+/// Contains the styled span table (one inner `Vec` per document row) and the
+/// diagnostic signs for the gutter.
 ///
 /// # Examples
 ///
 /// ```
-/// use hjkl_syntax::{RenderOutput, ParseKind, PerfBreakdown};
-/// let out = RenderOutput::new(0, Vec::new(), Vec::new(), (0, 0, 0), PerfBreakdown::default(), ParseKind::Viewport);
-/// assert_eq!(out.kind, ParseKind::Viewport);
+/// use hjkl_syntax::{RenderOutput, PerfBreakdown};
+/// let out = RenderOutput::new(0, Vec::new(), Vec::new(), (0, 0, 0), PerfBreakdown::default());
+/// assert_eq!(out.buffer_id, 0);
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RenderOutput {
-    /// Routes spans/signs back to the matching buffer slot in App::slots.
-    /// Install path discards the result when this doesn't match the now-active
-    /// buffer (race fix: a parse queued before a tab/buffer switch must not
-    /// paint onto the new active buffer).
+    /// Routes spans/signs back to the matching buffer slot.
     pub buffer_id: BufferId,
-    /// Per-row span table. Each inner `Vec` contains `(byte_start, byte_end,
-    /// StyleSpec)` triples for the characters on that row. The outer index is
-    /// the document row (0-indexed). The table is sized to `row_count` even
-    /// when only a viewport slice was requested — rows outside the viewport
-    /// have empty inner Vecs.
+    /// Per-row span table.
     pub spans: Vec<Vec<(usize, usize, StyleSpec)>>,
-    /// Diagnostic signs for the gutter (one per row with a tree-sitter
-    /// ERROR / MISSING node intersecting the viewport).
+    /// Diagnostic signs for the gutter.
     pub signs: Vec<DiagSign>,
-    /// `(dirty_gen, viewport_top, viewport_height)` — same shape the App
-    /// uses for its own cache key. Pair the result with this on receive.
+    /// `(dirty_gen, viewport_top, viewport_height)` cache key.
     pub key: (u64, usize, usize),
-    /// Sub-step timing breakdown from the worker.
+    /// Sub-step timing breakdown (zeroed in fully-sync path).
     pub perf: PerfBreakdown,
-    /// Which region this result covers — used by the install path to route
-    /// into the correct per-slot cache field.
-    pub kind: ParseKind,
-    /// Byte ranges that tree-sitter reports as structurally changed
-    /// between the prior retained tree (with edits applied) and the
-    /// freshly-parsed tree. Empty on initial parse or when no structural
-    /// change occurred. The app uses this to refresh only the rows that
-    /// actually changed instead of re-walking the full viewport (the
-    /// remaining 25ms per keystroke).
-    pub changed_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl RenderOutput {
@@ -218,10 +157,9 @@ impl RenderOutput {
     /// # Examples
     ///
     /// ```
-    /// use hjkl_syntax::{RenderOutput, ParseKind, PerfBreakdown};
-    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new(), ParseKind::Viewport);
+    /// use hjkl_syntax::{RenderOutput, PerfBreakdown};
+    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new());
     /// assert_eq!(out.buffer_id, 1);
-    /// assert_eq!(out.kind, ParseKind::Viewport);
     /// ```
     pub fn new(
         buffer_id: BufferId,
@@ -229,7 +167,6 @@ impl RenderOutput {
         signs: Vec<DiagSign>,
         key: (u64, usize, usize),
         perf: PerfBreakdown,
-        kind: ParseKind,
     ) -> Self {
         Self {
             buffer_id,
@@ -237,16 +174,13 @@ impl RenderOutput {
             signs,
             key,
             perf,
-            kind,
-            changed_ranges: Vec::new(),
         }
     }
 }
 
 impl PartialEq for RenderOutput {
     fn eq(&self, other: &Self) -> bool {
-        self.kind == other.kind
-            && self.spans == other.spans
+        self.spans == other.spans
             && self.signs.len() == other.signs.len()
             && self
                 .signs
@@ -262,9 +196,6 @@ impl PartialEq for RenderOutput {
 
 /// Outcome of [`SyntaxLayer::set_language_for_path`].
 ///
-/// Callers that previously tested the return value as a `bool` should use
-/// `outcome.is_known()` for equivalent behaviour.
-///
 /// # Examples
 ///
 /// ```
@@ -275,28 +206,22 @@ impl PartialEq for RenderOutput {
 /// ```
 #[non_exhaustive]
 pub enum SetLanguageOutcome {
-    /// Grammar was already cached (or found fresh on disk) — installed
-    /// immediately. Buffer will highlight on the next render.
+    /// Grammar was already cached — installed immediately.
     Ready,
-    /// Grammar is being fetched/compiled on the background pool. Buffer
-    /// renders as plain text until [`SyntaxLayer::poll_pending_loads`] fires
-    /// the `Ready` event for this buffer. The inner `String` is the language
-    /// name (useful for status-line indicators).
+    /// Grammar is being fetched/compiled on the background pool.
     Loading(#[allow(dead_code)] String),
     /// Extension unrecognized. No grammar — plain text only.
     Unknown,
 }
 
 impl SetLanguageOutcome {
-    /// `true` when a grammar was found (either already cached or now in
-    /// flight). Drop-in replacement for the old `bool` return value.
+    /// `true` when a grammar was found (either already cached or now in flight).
     pub fn is_known(&self) -> bool {
         matches!(self, Self::Ready | Self::Loading(_))
     }
 }
 
-/// Event emitted by [`SyntaxLayer::poll_pending_loads`] for each handle that
-/// resolved during the tick.
+/// Event emitted by [`SyntaxLayer::poll_pending_loads`].
 ///
 /// # Examples
 ///
@@ -306,609 +231,622 @@ impl SetLanguageOutcome {
 /// match e {
 ///     LoadEvent::Ready { id, name } => assert_eq!(name, "rust"),
 ///     LoadEvent::Failed { .. } => panic!("unexpected"),
-///     // LoadEvent is #[non_exhaustive] — handle future variants.
 ///     _ => {}
 /// }
 /// ```
 #[non_exhaustive]
 pub enum LoadEvent {
-    /// Grammar installed; trigger a redraw + re-submit for `id`.
-    Ready {
-        /// The buffer id the grammar was loaded for.
-        id: BufferId,
-        /// The resolved language name (e.g. `"rust"`).
-        name: String,
-    },
-    /// Load failed (clone/compile error); buffer stays plain text.
+    /// Grammar installed; trigger a redraw + re-render for `id`.
+    Ready { id: BufferId, name: String },
+    /// Load failed; buffer stays plain text.
     Failed {
-        /// The buffer id the grammar was loaded for.
         id: BufferId,
-        /// The resolved language name.
         name: String,
-        /// Human-readable error message.
         error: String,
     },
 }
 
-/// Exhaustive view of a [`LoadEvent`] for use in
-/// [`SyntaxLayer::dispatch_load_event`] callbacks.
-///
-/// Unlike [`LoadEvent`] (which is `#[non_exhaustive]`), matching on this enum
-/// requires no wildcard arm and produces a compile error when new variants are
-/// added.
+/// Exhaustive view of a [`LoadEvent`] for dispatch callbacks.
 #[derive(Debug)]
 pub enum LoadEventKind<'a> {
     /// Grammar installed successfully.
-    Ready {
-        /// The buffer id the grammar was loaded for.
-        id: BufferId,
-        /// The resolved language name.
-        name: &'a str,
-    },
+    Ready { id: BufferId, name: &'a str },
     /// Grammar load failed.
     Failed {
-        /// The buffer id the grammar was loaded for.
         id: BufferId,
-        /// The resolved language name.
         name: &'a str,
-        /// Human-readable error message.
         error: &'a str,
     },
 }
 
-/// Exhaustive view of a [`ParseKind`] for use in
-/// [`SyntaxLayer::dispatch_parse_kind`] callbacks.
-///
-/// Unlike [`ParseKind`] (which is `#[non_exhaustive]`), matching on this enum
-/// requires no wildcard arm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseKindKind {
-    /// The current visible viewport region.
-    Viewport,
+// ---------------------------------------------------------------------------
+// In-flight grammar load tracking
+// ---------------------------------------------------------------------------
+
+struct PendingLoad {
+    id: BufferId,
+    name: String,
+    handle: LoadHandle,
 }
 
 // ---------------------------------------------------------------------------
-// Internal types
+// Per-buffer client state (main thread)
 // ---------------------------------------------------------------------------
 
-/// Cached `(source, row_starts)` keyed off buffer identity (dirty_gen +
-/// shape). Built once per buffer mutation on the **main** thread and
-/// shipped to the worker as `Arc`s so the worker doesn't memcpy a 1.3 MB
-/// Rust file for every parse request.
-struct RenderCache {
-    dirty_gen: u64,
-    len_bytes: usize,
-    line_count: u32,
-    source: Arc<String>,
-    row_starts: Arc<Vec<usize>>,
+/// Per-buffer state owned by the main-thread [`SyntaxLayer`].
+struct BufferClient {
+    has_language: bool,
+    current_lang: Option<Arc<Grammar>>,
+    /// Owns Parser + Tree for this buffer.
+    highlighter: Option<Highlighter>,
+    /// dirty_gen the cache was built at (None = cache absent).
+    cache_dirty_gen: Option<u64>,
+    /// Contiguous row range covered by `cache_spans`.
+    cache_rows: Range<usize>,
+    /// Per-row span table for `cache_rows`.
+    cache_spans: Vec<Vec<(usize, usize, StyleSpec)>>,
+    /// `(dirty_gen, row_starts)` — rebuilt only when dirty_gen changes.
+    cache_row_starts: Option<(u64, Arc<Vec<usize>>)>,
+    /// dirty_gen of the most recent successful parse. Gate reparsing.
+    parsed_dirty_gen: Option<u64>,
+    /// Cached diag signs keyed by `(dirty_gen, vp_top, vp_end)`.
+    cache_signs: Option<(u64, usize, usize, Vec<DiagSign>)>,
 }
 
-/// A parse + render job submitted to the worker. The worker reparses
-/// against the (already-edited) retained tree, runs the viewport
-/// highlight + error scan, builds the per-row span table, and sends the
-/// result back via mpsc.
-///
-/// As of plan-B (issue #233) `InputEdit`s are NOT carried here — they are
-/// applied synchronously by the main thread via [`SyntaxLayer::apply_edits`]
-/// directly onto the shared retained tree before any parse request is
-/// queued. The worker also no longer runs the highlight / build-by-row /
-/// signs pipeline; the main thread's `query_viewport` does that on each
-/// render tick. The fields below carry the byte range / viewport metadata
-/// that the worker emits back in the `RenderOutput` signal so the app can
-/// route the "tree updated" notification to the correct cache + region.
-struct ParseRequest {
-    buffer_id: BufferId,
-    source: Arc<String>,
-    #[allow(dead_code)]
-    row_starts: Arc<Vec<usize>>,
-    #[allow(dead_code)]
-    viewport_byte_range: std::ops::Range<usize>,
-    viewport_top: usize,
-    viewport_height: usize,
-    #[allow(dead_code)]
-    row_count: usize,
-    dirty_gen: u64,
-    /// When `true` the worker drops its retained tree before parsing.
-    /// Used after `:e` reload / theme swap so the next parse is cold.
-    reset: bool,
-    kind: ParseKind,
-}
-
-/// Control + data messages the worker thread waits on.
-enum Msg {
-    /// Set / replace the highlighter for a buffer. `None` detaches.
-    SetLanguage(BufferId, Option<Arc<Grammar>>),
-    /// Remove all worker state for a buffer (highlighter, retained tree,
-    /// parse-cache key). Sent on buffer close.
-    Forget(BufferId),
-    /// Replace the theme. Style resolution happens on the worker.
-    SetTheme(Arc<dyn Theme + Send + Sync>),
-    /// A parse + render job. Coalesced — only the latest pending
-    /// `Parse` survives if the worker is busy.
-    Parse(ParseRequest),
-    /// Worker should exit. Sent on `SyntaxWorker::drop`.
-    Quit,
-}
-
-/// Maximum number of parse requests allowed in the queue at once.
-const PARSE_QUEUE_CAP: usize = 8;
-
-/// Shared slot the main thread drops new requests into.
-struct Pending {
-    /// FIFO of parse requests. Per-(buffer_id, kind) deduped: submitting a
-    /// request for buffer A + kind Viewport replaces any existing entry for
-    /// that pair rather than appending. Capped at [`PARSE_QUEUE_CAP`] total entries.
-    parse_queue: std::collections::VecDeque<ParseRequest>,
-    /// FIFO of control messages (SetLanguage, Forget, SetTheme, Quit).
-    controls: std::collections::VecDeque<Msg>,
-}
-
-impl Pending {
-    fn new() -> Self {
+impl Default for BufferClient {
+    fn default() -> Self {
         Self {
-            parse_queue: std::collections::VecDeque::new(),
-            controls: std::collections::VecDeque::new(),
+            has_language: false,
+            current_lang: None,
+            highlighter: None,
+            cache_dirty_gen: None,
+            cache_rows: 0..0,
+            cache_spans: Vec::new(),
+            cache_row_starts: None,
+            parsed_dirty_gen: None,
+            cache_signs: None,
         }
     }
+}
 
-    fn has_work(&self) -> bool {
-        !self.parse_queue.is_empty() || !self.controls.is_empty()
-    }
-
-    /// Enqueue a parse request with per-`(buffer_id, kind)` deduplication.
-    ///
-    /// - If a request for the same `(buffer_id, kind)` pair is already in
-    ///   the queue, replace it in-place (latest wins). Requests with the
-    ///   same buffer_id but different kinds (Viewport / Top / Bottom)
-    ///   coexist in the queue so all three regions can be pre-cached.
-    /// - If the queue is at capacity and there is no existing entry for
-    ///   this `(buffer_id, kind)`, evict the oldest entry before pushing.
-    ///
-    /// Edit deltas are no longer carried on the request (plan B / #233):
-    /// `SyntaxLayer::apply_edits` calls `tree.edit(InputEdit)` synchronously
-    /// against the shared retained tree before any submit, so a replaced
-    /// request can be wholesale-discarded without losing edit history.
-    fn push_parse(&mut self, req: ParseRequest) {
-        for slot in self.parse_queue.iter_mut() {
-            if slot.buffer_id == req.buffer_id && slot.kind == req.kind {
-                *slot = req;
-                return;
-            }
-        }
-        if self.parse_queue.len() >= PARSE_QUEUE_CAP {
-            self.parse_queue.pop_front();
-        }
-        self.parse_queue.push_back(req);
+impl BufferClient {
+    fn invalidate_cache(&mut self) {
+        self.cache_dirty_gen = None;
+        self.cache_rows = 0..0;
+        self.cache_spans.clear();
+        self.cache_row_starts = None;
+        self.parsed_dirty_gen = None;
+        self.cache_signs = None;
     }
 }
 
 // ---------------------------------------------------------------------------
-// SyntaxWorker — background thread
+// SyntaxLayer — main-thread, fully synchronous
 // ---------------------------------------------------------------------------
 
-/// Background worker that owns the `Highlighter` and the retained
-/// tree-sitter `Tree`. Communicates with the main thread via a
-/// `Mutex<Pending>` + `Condvar` for submits, and an mpsc channel for
-/// rendered output.
+/// Per-App syntax highlighting layer. Multiplexes per-buffer state.
+/// Fully synchronous — no background thread.
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use std::sync::Arc;
-/// use hjkl_syntax::SyntaxWorker;
+/// use hjkl_syntax::SyntaxLayer;
 /// use hjkl_bonsai::DotFallbackTheme;
 /// use hjkl_lang::LanguageDirectory;
 ///
 /// let theme = Arc::new(DotFallbackTheme::dark());
 /// let dir = Arc::new(LanguageDirectory::new().unwrap());
-/// let worker = SyntaxWorker::spawn(theme, dir);
-/// drop(worker); // joins the thread
+/// let layer = SyntaxLayer::new(theme, dir);
 /// ```
-pub struct SyntaxWorker {
-    pending: Arc<(Mutex<Pending>, Condvar)>,
-    rx: std::sync::mpsc::Receiver<RenderOutput>,
-    /// Shared per-buffer pipeline state. Cloned to the worker thread at
-    /// spawn; cloned again to [`SyntaxLayer`] so main-thread sync queries
-    /// reach the same retained tree.
-    pub(crate) buffers: SharedBuffers,
-    handle: Option<JoinHandle<()>>,
+pub struct SyntaxLayer {
+    /// Shared grammar resolver.
+    pub directory: Arc<LanguageDirectory>,
+    theme: Arc<dyn Theme + Send + Sync>,
+    clients: HashMap<BufferId, BufferClient>,
+    pending_loads: Vec<PendingLoad>,
 }
 
-impl SyntaxWorker {
-    /// Spawn a fresh worker thread with the given theme and language directory.
-    pub fn spawn(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
-        let pending = Arc::new((Mutex::new(Pending::new()), Condvar::new()));
-        let (tx, rx) = std::sync::mpsc::channel();
-        let buffers: SharedBuffers = Arc::new(Mutex::new(HashMap::new()));
-        let pending_for_thread = Arc::clone(&pending);
-        let buffers_for_thread = Arc::clone(&buffers);
-        let handle = thread::Builder::new()
-            .name("hjkl-syntax".into())
-            .spawn(move || {
-                worker_loop(pending_for_thread, buffers_for_thread, tx, theme, directory)
-            })
-            .expect("spawn syntax worker");
-        Self {
-            pending,
-            rx,
-            buffers,
-            handle: Some(handle),
-        }
-    }
-
-    /// Send a control message. Wakes the worker.
-    fn enqueue_control(&self, msg: Msg) {
-        let (lock, cvar) = &*self.pending;
-        let mut p = lock.lock().expect("syntax pending mutex poisoned");
-        p.controls.push_back(msg);
-        cvar.notify_one();
-    }
-
-    /// Set / replace the highlighter for a buffer. `None` detaches.
-    pub fn set_language(&self, id: BufferId, grammar: Option<Arc<Grammar>>) {
-        self.enqueue_control(Msg::SetLanguage(id, grammar));
-    }
-
-    /// Forget all worker state for a buffer (highlighter + tree).
-    /// Sent on buffer close.
-    pub fn forget(&self, id: BufferId) {
-        self.enqueue_control(Msg::Forget(id));
-    }
-
-    /// Replace the theme used for capture → style resolution.
-    pub fn set_theme(&self, theme: Arc<dyn Theme + Send + Sync>) {
-        self.enqueue_control(Msg::SetTheme(theme));
-    }
-
-    /// Submit a parse job. Per-`(buffer_id, kind)` deduplication: if a
-    /// request for the same pair is already pending it is replaced in-place.
-    /// Across different pairs the queue is FIFO. Returns immediately.
-    fn submit(&self, req: ParseRequest) {
-        let (lock, cvar) = &*self.pending;
-        let mut p = lock.lock().expect("syntax pending mutex poisoned");
-        p.push_parse(req);
-        cvar.notify_one();
-    }
-
-    /// Drain all available render results, returning the most recent
-    /// one. Earlier results are discarded — they'd just be overwritten
-    /// by the latest install anyway, and this keeps the install path
-    /// O(1) per frame regardless of backlog depth.
-    #[allow(dead_code)]
-    pub fn try_recv_latest(&self) -> Option<RenderOutput> {
-        let mut latest: Option<RenderOutput> = None;
-        while let Ok(out) = self.rx.try_recv() {
-            latest = Some(out);
-        }
-        latest
-    }
-
-    /// Drain all available render results, returning them all (one per
-    /// `(buffer_id, kind)` pair that completed). Unlike
-    /// [`Self::try_recv_latest`] this does not discard earlier results —
-    /// required so pre-warmed results for non-active buffers can be routed
-    /// to the right slot cache.
-    pub fn try_recv_all(&self) -> Vec<RenderOutput> {
-        let mut results = Vec::new();
-        while let Ok(out) = self.rx.try_recv() {
-            if let Some(existing) = results
-                .iter_mut()
-                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id && r.kind == out.kind)
-            {
-                *existing = out;
-            } else {
-                results.push(out);
-            }
-        }
-        results
-    }
-
-    /// Wait up to `timeout` for the next result, then drain anything
-    /// else that arrived after it and return the latest.
-    pub fn wait_for_latest(&self, timeout: std::time::Duration) -> Option<RenderOutput> {
-        let mut latest = self.rx.recv_timeout(timeout).ok();
-        while let Ok(out) = self.rx.try_recv() {
-            latest = Some(out);
-        }
-        latest
-    }
-
-    /// Wait up to `timeout` for the first result to arrive, then drain
-    /// every additional result already in the channel. Returns ALL
-    /// results in arrival order (latest per `(buffer_id, kind)` coalesced).
+impl SyntaxLayer {
+    /// Create a new layer with no buffers attached.
     ///
-    /// Unlike [`Self::wait_for_latest`] this does NOT discard earlier
-    /// results — required when pre-warming non-active buffers so both the
-    /// active buffer's result and pre-warm results reach their slot caches.
-    pub fn wait_then_recv_all(&self, timeout: std::time::Duration) -> Vec<RenderOutput> {
-        let mut results: Vec<RenderOutput> = Vec::new();
-        if let Ok(first) = self.rx.recv_timeout(timeout) {
-            results.push(first);
-        }
-        while let Ok(out) = self.rx.try_recv() {
-            if let Some(existing) = results
-                .iter_mut()
-                .find(|r: &&mut RenderOutput| r.buffer_id == out.buffer_id && r.kind == out.kind)
-            {
-                *existing = out;
-            } else {
-                results.push(out);
-            }
-        }
-        results
-    }
-}
-
-impl Drop for SyntaxWorker {
-    fn drop(&mut self) {
-        {
-            let (lock, cvar) = &*self.pending;
-            if let Ok(mut p) = lock.lock() {
-                p.controls.push_back(Msg::Quit);
-                cvar.notify_one();
-            }
-        }
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use hjkl_syntax::SyntaxLayer;
+    /// use hjkl_bonsai::DotFallbackTheme;
+    /// use hjkl_lang::LanguageDirectory;
+    ///
+    /// let theme = Arc::new(DotFallbackTheme::dark());
+    /// let dir = Arc::new(LanguageDirectory::new().unwrap());
+    /// let layer = SyntaxLayer::new(theme, dir);
+    /// ```
+    pub fn new(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
+        Self {
+            directory,
+            theme,
+            clients: HashMap::new(),
+            pending_loads: Vec::new(),
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// Worker-side per-buffer state
-// ---------------------------------------------------------------------------
+    /// Borrow the shared language directory.
+    pub fn directory(&self) -> &Arc<LanguageDirectory> {
+        &self.directory
+    }
 
-/// Per-buffer state retained for the syntax pipeline. Shared between the
-/// background worker thread (parse + async highlight) and the main thread
-/// (sync `query_viewport`, sync `tree.edit` on each `ContentEdit` batch).
-///
-/// Each buffer's state is wrapped in its own `Arc<Mutex<_>>` so different
-/// buffers can be operated on concurrently — the only contention is between
-/// worker reparse + main-thread query on the SAME buffer.
-pub(crate) struct WorkerBufferState {
-    pub(crate) highlighter: Highlighter,
-    pub(crate) last_parsed_dirty_gen: Option<u64>,
-}
+    fn client_mut(&mut self, id: BufferId) -> &mut BufferClient {
+        self.clients.entry(id).or_default()
+    }
 
-/// Shared map of per-buffer pipeline state. Outer `Mutex` protects map
-/// mutation (add / remove); inner `Mutex` protects each buffer's state.
-/// Lookups clone the inner `Arc` and drop the outer lock immediately so
-/// only same-buffer ops contend.
-pub(crate) type SharedBuffers = Arc<Mutex<HashMap<BufferId, Arc<Mutex<WorkerBufferState>>>>>;
-
-/// Look up a buffer in [`SharedBuffers`] and run `f` against its locked
-/// state. Returns `None` if the buffer is not tracked.
-///
-/// Holds the outer (map) lock only long enough to clone the inner `Arc`,
-/// then drops it before taking the per-buffer lock — so worker + main do
-/// not serialise across different buffers.
-pub(crate) fn with_buffer<R>(
-    buffers: &SharedBuffers,
-    id: BufferId,
-    f: impl FnOnce(&mut WorkerBufferState) -> R,
-) -> Option<R> {
-    let cell = {
-        let map = buffers.lock().expect("syntax shared buffers poisoned");
-        map.get(&id).cloned()
-    };
-    let cell = cell?;
-    let mut guard = cell.lock().expect("per-buffer state mutex poisoned");
-    Some(f(&mut guard))
-}
-
-// ---------------------------------------------------------------------------
-// Worker loop
-// ---------------------------------------------------------------------------
-
-fn worker_loop(
-    pending: Arc<(Mutex<Pending>, Condvar)>,
-    buffers: SharedBuffers,
-    tx: std::sync::mpsc::Sender<RenderOutput>,
-    initial_theme: Arc<dyn Theme + Send + Sync>,
-    directory: Arc<LanguageDirectory>,
-) {
-    let mut theme: Arc<dyn Theme + Send + Sync> = initial_theme;
-    let marker_pass = CommentMarkerPass::new();
-    let hex_color_pass = HexColorPass::new();
-
-    loop {
-        let msg = {
-            let (lock, cvar) = &*pending;
-            let mut p = lock.lock().expect("syntax pending mutex poisoned");
-            while !p.has_work() {
-                p = cvar.wait(p).expect("syntax pending cvar poisoned");
+    /// Detect the language for `path` and attach a grammar.
+    ///
+    /// - `Ready`   — grammar cached; highlighter installed immediately.
+    /// - `Loading` — grammar compiling; renders as plain text until
+    ///   `poll_pending_loads` fires `LoadEvent::Ready`.
+    /// - `Unknown` — unrecognized extension; plain text only.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use std::path::Path;
+    /// use hjkl_syntax::{SyntaxLayer, SetLanguageOutcome};
+    /// use hjkl_bonsai::DotFallbackTheme;
+    /// use hjkl_lang::LanguageDirectory;
+    ///
+    /// let theme = Arc::new(DotFallbackTheme::dark());
+    /// let dir = Arc::new(LanguageDirectory::new().unwrap());
+    /// let mut layer = SyntaxLayer::new(theme, dir);
+    /// let outcome = layer.set_language_for_path(0, Path::new("a.zzz_not_real"));
+    /// assert!(!outcome.is_known());
+    /// ```
+    pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> SetLanguageOutcome {
+        match self.directory.request_for_path(path) {
+            GrammarRequest::Cached(grammar) => {
+                self.attach_grammar(id, grammar.clone());
+                let c = self.client_mut(id);
+                c.current_lang = Some(grammar);
+                c.has_language = true;
+                SetLanguageOutcome::Ready
             }
-            // Drain controls first so SetLanguage / Forget / SetTheme
-            // that arrived alongside a Parse get applied before we run
-            // the parse with stale state.
-            if let Some(c) = p.controls.pop_front() {
-                c
-            } else {
-                Msg::Parse(
-                    p.parse_queue
-                        .pop_front()
-                        .expect("has_work() implies parse_queue non-empty"),
-                )
+            GrammarRequest::Loading { name, handle } => {
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                c.highlighter = None;
+                c.invalidate_cache();
+                self.pending_loads.push(PendingLoad {
+                    id,
+                    name: name.clone(),
+                    handle,
+                });
+                SetLanguageOutcome::Loading(name)
             }
-        };
-
-        match msg {
-            Msg::Quit => return,
-            Msg::SetLanguage(id, None) => {
-                let mut map = buffers.lock().expect("syntax shared buffers poisoned");
-                map.remove(&id);
-            }
-            Msg::SetLanguage(id, Some(grammar)) => {
-                let lang = grammar.name().to_string();
-                match Highlighter::new(grammar) {
-                    Ok(h) => {
-                        let state = WorkerBufferState {
-                            highlighter: h,
-                            last_parsed_dirty_gen: None,
-                        };
-                        let mut map = buffers.lock().expect("syntax shared buffers poisoned");
-                        map.insert(id, Arc::new(Mutex::new(state)));
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            buffer_id = id,
-                            language = %lang,
-                            error = %e,
-                            "failed to attach syntax highlighter"
-                        );
-                        let mut map = buffers.lock().expect("syntax shared buffers poisoned");
-                        map.remove(&id);
-                    }
-                }
-            }
-            Msg::Forget(id) => {
-                let mut map = buffers.lock().expect("syntax shared buffers poisoned");
-                map.remove(&id);
-            }
-            Msg::SetTheme(t) => {
-                theme = t;
-            }
-            Msg::Parse(req) => {
-                let _ = run_parse_and_emit(
-                    &buffers,
-                    &req,
-                    &marker_pass,
-                    &hex_color_pass,
-                    theme.as_ref(),
-                    &directory,
-                    &tx,
-                );
+            GrammarRequest::Unknown | _ => {
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                c.highlighter = None;
+                c.invalidate_cache();
+                SetLanguageOutcome::Unknown
             }
         }
     }
-}
 
-/// Worker-side parse + highlight pipeline. Locks the buffer's per-state
-/// mutex briefly to apply edits + parse + run the highlight query + collect
-/// diag signs, then drops the lock before sending. Returns `Some(())` on
-/// success, `None` if the buffer was not tracked (was forgotten between
-/// request submission and dequeue).
-///
-/// Plan-B (#233): the worker now does **only** `parse_initial` or
-/// `parse_incremental` against the shared retained tree. The full
-/// highlight pipeline (highlight query, marker pass, hex-color pass,
-/// build-by-row, diag signs) that used to run here is gone — the main
-/// thread's `SyntaxLayer::query_viewport` runs the same work
-/// synchronously on every render tick against the retained tree.
-/// Producing it on the worker too was just a wasted equal-`dirty_gen`
-/// overwrite that the install path's generation guard had to discard.
-///
-/// The result message still uses [`RenderOutput`] (channel + install
-/// shape unchanged) but carries an EMPTY `spans` / `signs` and acts
-/// purely as a "tree updated for (buffer, kind, dg)" signal so the
-/// app can trigger a fresh sync query on the new tree.
-fn run_parse_and_emit(
-    buffers: &SharedBuffers,
-    req: &ParseRequest,
-    _marker_pass: &CommentMarkerPass,
-    _hex_color_pass: &HexColorPass,
-    _theme: &dyn Theme,
-    directory: &LanguageDirectory,
-    tx: &std::sync::mpsc::Sender<RenderOutput>,
-) -> Option<()> {
-    use std::time::Instant;
-    let bytes = req.source.as_bytes();
-    let (perf, did_parse, changed_ranges) = with_buffer(buffers, req.buffer_id, |state| {
-        let h = &mut state.highlighter;
-        let mut perf = PerfBreakdown::default();
-        // Clone the current tree BEFORE the reset/parse so we can diff
-        // against the freshly-parsed tree below. Tree clones are cheap
-        // (Arc-shared internals). Capturing this on the reset path lets
-        // us emit `changed_ranges` for undo/redo too — without it the
-        // install_render_result fallback runs a full ~30ms viewport
-        // refresh on every undo/redo.
-        let pre_parse_tree = h.tree().cloned();
-        if req.reset {
-            h.reset();
-            state.last_parsed_dirty_gen = None;
-        }
-        let needs_parse = h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
-        if !needs_parse {
-            return Some((perf, false, Vec::new()));
-        }
-        let t = Instant::now();
-        let was_initial = h.tree().is_none();
-        let changes: Vec<std::ops::Range<usize>> = if was_initial {
-            h.parse_initial(bytes);
-            // `parse_incremental_with_changes` would normally compute
-            // this for us, but on the reset path we just did
-            // `parse_initial` (no old tree visible inside the
-            // highlighter). Reach back to the pre-reset clone and diff
-            // against the post-parse tree directly.
-            match (pre_parse_tree.as_ref(), h.tree()) {
-                (Some(old), Some(new)) => old
-                    .changed_ranges(new)
-                    .map(|r| r.start_byte..r.end_byte)
-                    .collect(),
-                _ => Vec::new(),
+    /// Attach a grammar to a buffer, creating/replacing the Highlighter.
+    fn attach_grammar(&mut self, id: BufferId, grammar: Arc<Grammar>) {
+        let c = self.clients.entry(id).or_default();
+        c.invalidate_cache();
+        match Highlighter::new(grammar) {
+            Ok(h) => {
+                c.highlighter = Some(h);
             }
-        } else {
-            match h.parse_incremental_with_changes(bytes) {
-                Some(c) => c,
+            Err(e) => {
+                tracing::error!(buffer_id = id, error = %e, "failed to attach highlighter");
+                c.highlighter = None;
+            }
+        }
+    }
+
+    /// Poll all in-flight grammar loads. Call once per tick.
+    ///
+    /// Returns one `LoadEvent` per handle that resolved during this tick.
+    pub fn poll_pending_loads(&mut self) -> Vec<LoadEvent> {
+        let mut events = Vec::new();
+        let mut i = 0;
+        while i < self.pending_loads.len() {
+            match self.pending_loads[i].handle.try_recv() {
                 None => {
-                    tracing::debug!(
-                        target: "hjkl::profile",
-                        buffer_id = ?req.buffer_id,
-                        bytes_len = bytes.len(),
-                        "worker parse FAILED"
-                    );
-                    return None;
+                    i += 1;
+                }
+                Some(Ok(lib_path)) => {
+                    let name = self.pending_loads[i].name.clone();
+                    let bid = self.pending_loads[i].id;
+                    self.pending_loads.swap_remove(i);
+                    match self.directory.complete_load(&name, lib_path) {
+                        Ok(grammar) => {
+                            self.attach_grammar(bid, grammar.clone());
+                            let c = self.client_mut(bid);
+                            c.current_lang = Some(grammar);
+                            c.has_language = true;
+                            events.push(LoadEvent::Ready { id: bid, name });
+                        }
+                        Err(e) => {
+                            events.push(LoadEvent::Failed {
+                                id: bid,
+                                name,
+                                error: format!("{e:#}"),
+                            });
+                        }
+                    }
+                }
+                Some(Err(err)) => {
+                    let name = self.pending_loads[i].name.clone();
+                    let bid = self.pending_loads[i].id;
+                    self.pending_loads.swap_remove(i);
+                    events.push(LoadEvent::Failed {
+                        id: bid,
+                        name,
+                        error: err.to_string(),
+                    });
                 }
             }
-        };
-        perf.parse_us = t.elapsed().as_micros();
-        tracing::debug!(
-            target: "hjkl::profile",
-            buffer_id = ?req.buffer_id,
-            bytes_len = bytes.len(),
-            parse_us = perf.parse_us,
-            was_initial,
-            dg = req.dirty_gen,
-            kind = ?req.kind,
-            changed_count = changes.len(),
-            "worker parse done"
-        );
-        state.last_parsed_dirty_gen = Some(req.dirty_gen);
-        let _ = directory;
-        Some((perf, true, changes))
-    })??;
-
-    // Only emit the "tree updated" signal when we actually reparsed.
-    // Without this guard the worker fires an empty signal on every scroll
-    // tick (dg unchanged → `needs_parse=false`), which `install_render_result`
-    // then turns into a redundant sync `query_viewport` walk per scroll —
-    // visible as scroll lag at high event rates.
-    if !did_parse {
-        return Some(());
+        }
+        events
     }
 
-    let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
-    let _ = tx.send(RenderOutput {
-        buffer_id: req.buffer_id,
-        spans: Vec::new(),
-        signs: Vec::new(),
-        key,
-        perf,
-        kind: req.kind,
-        changed_ranges,
-    });
-    Some(())
+    /// Drop all state for a buffer. Call on close.
+    pub fn forget(&mut self, id: BufferId) {
+        self.clients.remove(&id);
+    }
+
+    /// Swap the active theme. Next `render_viewport` call uses the new theme.
+    pub fn set_theme(&mut self, theme: Arc<dyn Theme + Send + Sync>) {
+        self.theme = theme;
+        // Invalidate all per-buffer caches so they repaint with the new theme.
+        for c in self.clients.values_mut() {
+            c.invalidate_cache();
+        }
+    }
+
+    /// Apply a batch of engine `ContentEdit`s to the buffer's retained tree
+    /// synchronously. The cache will be invalidated on the next `render_viewport`
+    /// call via dirty_gen mismatch.
+    ///
+    /// No-op when no grammar is attached.
+    pub fn apply_edits(&mut self, id: BufferId, edits: &[hjkl_engine::ContentEdit]) {
+        let c = match self.clients.get_mut(&id) {
+            Some(c) if c.has_language => c,
+            _ => return,
+        };
+        let h = match c.highlighter.as_mut() {
+            Some(h) => h,
+            None => return,
+        };
+        for e in edits {
+            h.edit(&InputEdit {
+                start_byte: e.start_byte,
+                old_end_byte: e.old_end_byte,
+                new_end_byte: e.new_end_byte,
+                start_position: Point {
+                    row: e.start_position.0 as usize,
+                    column: e.start_position.1 as usize,
+                },
+                old_end_position: Point {
+                    row: e.old_end_position.0 as usize,
+                    column: e.old_end_position.1 as usize,
+                },
+                new_end_position: Point {
+                    row: e.new_end_position.0 as usize,
+                    column: e.new_end_position.1 as usize,
+                },
+            });
+        }
+        // dirty_gen will advance — invalidate parse + row_starts + sign caches.
+        // cache_spans / cache_rows are dropped on dirty_gen mismatch in render_viewport.
+        c.parsed_dirty_gen = None;
+        c.cache_row_starts = None;
+        c.cache_signs = None;
+    }
+
+    /// Drop the buffer's retained tree. Next `render_viewport` reparses from scratch.
+    ///
+    /// Call on `:e!` / content reset.
+    pub fn reset(&mut self, id: BufferId) {
+        if let Some(c) = self.clients.get_mut(&id) {
+            if let Some(h) = c.highlighter.as_mut() {
+                h.reset();
+            }
+            c.invalidate_cache();
+        }
+    }
+
+    /// Render spans for the visible viewport. Fully synchronous.
+    ///
+    /// 1. Returns `None` when no grammar is attached or buffer exceeds
+    ///    `huge_file_threshold` lines.
+    /// 2. Clears the cache when `buffer.dirty_gen()` has advanced.
+    /// 3. Returns cached rows when the request is fully inside the cached range.
+    /// 4. Walks only rows outside the cache (extend prefix/suffix), splices into
+    ///    `cache_spans`, extends `cache_rows`.
+    pub fn render_viewport(
+        &mut self,
+        id: BufferId,
+        buffer: &impl Query,
+        viewport_top: usize,
+        viewport_height: usize,
+        huge_file_threshold: u32,
+    ) -> Option<RenderOutput> {
+        if buffer.line_count() >= huge_file_threshold {
+            return None;
+        }
+
+        let client = self.clients.get_mut(&id)?;
+        if !client.has_language {
+            return None;
+        }
+        let dg = buffer.dirty_gen();
+        let row_count = buffer.line_count() as usize;
+        if row_count == 0 || viewport_height == 0 {
+            return None;
+        }
+
+        let vp_top = viewport_top.min(row_count);
+        let vp_end = (vp_top + viewport_height).min(row_count);
+        if vp_end <= vp_top {
+            return None;
+        }
+
+        // Single dirty_gen invalidation point.
+        if client.cache_dirty_gen != Some(dg) {
+            client.invalidate_cache();
+        }
+
+        // Build source. We always need it for parse + highlight.
+        let source = buffer.content_joined();
+        let bytes = source.as_bytes();
+
+        // Get or build row_starts, cached per dirty_gen.
+        let row_starts: Arc<Vec<usize>> = if client
+            .cache_row_starts
+            .as_ref()
+            .is_some_and(|(g, _)| *g == dg)
+        {
+            Arc::clone(&client.cache_row_starts.as_ref().unwrap().1)
+        } else {
+            let mut rs: Vec<usize> = vec![0];
+            for (i, &b) in bytes.iter().enumerate() {
+                if b == b'\n' {
+                    rs.push(i + 1);
+                }
+            }
+            let arc = Arc::new(rs);
+            client.cache_row_starts = Some((dg, Arc::clone(&arc)));
+            arc
+        };
+
+        // Reparse only when needed.
+        let needs_reparse = client.parsed_dirty_gen != Some(dg);
+        {
+            let highlighter = client.highlighter.as_mut()?;
+            if highlighter.tree().is_none() {
+                highlighter.parse_initial(bytes);
+                if highlighter.tree().is_some() {
+                    client.parsed_dirty_gen = Some(dg);
+                }
+            } else if needs_reparse {
+                let _ = highlighter.parse_incremental_with_changes(bytes);
+                if highlighter.tree().is_some() {
+                    client.parsed_dirty_gen = Some(dg);
+                }
+            }
+        }
+
+        // Re-borrow after parse.
+        let client = self.clients.get_mut(&id)?;
+        let highlighter = client.highlighter.as_mut()?;
+
+        // If still no tree (parse failed), give up.
+        highlighter.tree()?;
+
+        let theme = self.theme.as_ref();
+        let directory = Arc::clone(&self.directory);
+
+        // Extend cache to cover [vp_top, vp_end).
+        if client.cache_rows.is_empty() {
+            // Case A: empty cache — walk full range.
+            client.cache_spans = walk_rows(
+                highlighter,
+                bytes,
+                &row_starts,
+                row_count,
+                vp_top,
+                vp_end,
+                theme,
+                &directory,
+            );
+            client.cache_rows = vp_top..vp_end;
+            client.cache_dirty_gen = Some(dg);
+        } else {
+            let cache_covers_overlap =
+                vp_top < client.cache_rows.end && vp_end > client.cache_rows.start;
+            if !cache_covers_overlap {
+                // Disjoint — just rebuild the whole viewport.
+                client.cache_spans = walk_rows(
+                    highlighter,
+                    bytes,
+                    &row_starts,
+                    row_count,
+                    vp_top,
+                    vp_end,
+                    theme,
+                    &directory,
+                );
+                client.cache_rows = vp_top..vp_end;
+            } else {
+                // Case B: extend prefix if needed.
+                if vp_top < client.cache_rows.start {
+                    let new_rows = walk_rows(
+                        highlighter,
+                        bytes,
+                        &row_starts,
+                        row_count,
+                        vp_top,
+                        client.cache_rows.start,
+                        theme,
+                        &directory,
+                    );
+                    let mut combined = new_rows;
+                    combined.append(&mut client.cache_spans);
+                    client.cache_spans = combined;
+                    client.cache_rows.start = vp_top;
+                }
+                // Case C: extend suffix if needed.
+                if vp_end > client.cache_rows.end {
+                    let new_rows = walk_rows(
+                        highlighter,
+                        bytes,
+                        &row_starts,
+                        row_count,
+                        client.cache_rows.end,
+                        vp_end,
+                        theme,
+                        &directory,
+                    );
+                    client.cache_spans.extend(new_rows);
+                    client.cache_rows.end = vp_end;
+                }
+            }
+            client.cache_dirty_gen = Some(dg);
+        }
+
+        // Slice the requested viewport from the cache.
+        let offset = vp_top - client.cache_rows.start;
+        let len = vp_end - vp_top;
+        let spans: Vec<Vec<(usize, usize, StyleSpec)>> =
+            client.cache_spans[offset..offset + len].to_vec();
+
+        // Get or build signs, cached per (dirty_gen, vp_top, vp_end).
+        let signs = if client
+            .cache_signs
+            .as_ref()
+            .is_some_and(|(g, t, e, _)| *g == dg && *t == vp_top && *e == vp_end)
+        {
+            client.cache_signs.as_ref().unwrap().3.clone()
+        } else {
+            let s = collect_diag_signs_range(highlighter, bytes, &row_starts, vp_top, vp_end);
+            client.cache_signs = Some((dg, vp_top, vp_end, s.clone()));
+            s
+        };
+
+        Some(RenderOutput {
+            buffer_id: id,
+            spans,
+            signs,
+            key: (dg, vp_top, viewport_height),
+            perf: PerfBreakdown::default(),
+        })
+    }
+
+    /// Resolve a path to its language name without loading a grammar.
+    pub fn name_for_path(&self, path: &Path) -> Option<String> {
+        self.directory.name_for_path(path)
+    }
+
+    /// Returns `true` if a client is tracked for the given buffer id.
+    #[doc(hidden)]
+    pub fn has_client(&self, id: BufferId) -> bool {
+        self.clients.contains_key(&id)
+    }
+
+    /// Dispatch a [`LoadEvent`] through a caller-supplied handler.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hjkl_syntax::{LoadEvent, SyntaxLayer};
+    ///
+    /// let event = LoadEvent::Ready { id: 0, name: "rust".into() };
+    /// let mut got_ready = false;
+    /// let handled = SyntaxLayer::dispatch_load_event(&event, |ev| {
+    ///     use hjkl_syntax::LoadEventKind;
+    ///     match ev {
+    ///         LoadEventKind::Ready { id, name } => { got_ready = true; }
+    ///         LoadEventKind::Failed { .. } => {}
+    ///     }
+    /// });
+    /// assert!(handled);
+    /// assert!(got_ready);
+    /// ```
+    pub fn dispatch_load_event(
+        event: &LoadEvent,
+        mut handler: impl FnMut(LoadEventKind<'_>),
+    ) -> bool {
+        #[allow(unreachable_patterns)]
+        match event {
+            LoadEvent::Ready { id, name } => {
+                handler(LoadEventKind::Ready { id: *id, name });
+                true
+            }
+            LoadEvent::Failed { id, name, error } => {
+                handler(LoadEventKind::Failed {
+                    id: *id,
+                    name,
+                    error,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: walk a row range against the retained tree
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn walk_rows(
+    highlighter: &mut Highlighter,
+    bytes: &[u8],
+    row_starts: &[usize],
+    row_count: usize,
+    seg_start: usize,
+    seg_end: usize,
+    theme: &dyn Theme,
+    directory: &Arc<LanguageDirectory>,
+) -> Vec<Vec<(usize, usize, StyleSpec)>> {
+    let bytes_len = bytes.len();
+    let byte_start = row_starts.get(seg_start).copied().unwrap_or(bytes_len);
+    let byte_end = row_starts
+        .get(seg_end)
+        .copied()
+        .unwrap_or(bytes_len)
+        .min(bytes_len)
+        .max(byte_start);
+
+    let mut flat_spans =
+        highlighter.highlight_range_with_injections(bytes, byte_start..byte_end, |name| {
+            directory.by_name(name)
+        });
+
+    let marker_pass = CommentMarkerPass::new();
+    marker_pass.apply(&mut flat_spans, bytes);
+    let hex_color_pass = HexColorPass::new();
+    hex_color_pass.apply_range(&mut flat_spans, bytes, byte_start..byte_end);
+
+    // build_by_row on the full row_count, then slice out the segment.
+    let full = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);
+    full[seg_start..seg_end.min(full.len())].to_vec()
 }
 
 // ---------------------------------------------------------------------------
 // Helper: build per-row span table (renderer-agnostic StyleSpec output)
 // ---------------------------------------------------------------------------
 
-/// Resolve flat highlight spans into a per-row span table sized to
-/// `row_count`. Pulled out so the worker can call it in isolation and tests
-/// can exercise it without a running thread.
-///
-/// Output: `Vec<Vec<(byte_start, byte_end, StyleSpec)>>` indexed by row.
+/// Resolve flat highlight spans into a per-row span table sized to `row_count`.
 pub fn build_by_row(
     flat_spans: &[hjkl_bonsai::HighlightSpan],
     bytes: &[u8],
@@ -919,10 +857,6 @@ pub fn build_by_row(
     let mut by_row: Vec<Vec<(usize, usize, StyleSpec)>> = vec![Vec::new(); row_count];
 
     for span in flat_spans {
-        // Hex-color preview overlay: bypass the theme and build a
-        // StyleSpec directly from the metadata that HexColorPass
-        // attached. `hex_color` is intentionally NOT a theme key —
-        // the colour comes from the source literal itself.
         let hex_style: Option<StyleSpec> = if span.capture() == HEX_COLOR_CAPTURE {
             let bg = match span.metadata.get(HEX_BG_KEY) {
                 Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
@@ -988,15 +922,17 @@ pub fn build_by_row(
 // Helper: collect diagnostic signs
 // ---------------------------------------------------------------------------
 
-/// Collect diagnostic [`DiagSign`]s from tree-sitter ERROR / MISSING nodes
-/// intersecting the viewport, deduped to one per row.
-fn collect_diag_signs(
+fn collect_diag_signs_range(
     h: &mut Highlighter,
     bytes: &[u8],
-    viewport_byte_range: std::ops::Range<usize>,
     row_starts: &[usize],
+    vp_top: usize,
+    vp_end: usize,
 ) -> Vec<DiagSign> {
-    let errors = h.parse_errors_range(bytes, viewport_byte_range);
+    let bytes_len = bytes.len();
+    let byte_start = row_starts.get(vp_top).copied().unwrap_or(bytes_len);
+    let byte_end = row_starts.get(vp_end).copied().unwrap_or(bytes_len);
+    let errors = h.parse_errors_range(bytes, byte_start..byte_end);
     let mut signs: Vec<DiagSign> = Vec::new();
     let mut last_row: Option<usize> = None;
     for err in &errors {
@@ -1013,776 +949,6 @@ fn collect_diag_signs(
 }
 
 // ---------------------------------------------------------------------------
-// Per-buffer client state (main thread)
-// ---------------------------------------------------------------------------
-
-/// Per-buffer client-side state. One of these per open buffer in
-/// `SyntaxLayer.clients`. Mirrors the worker's `WorkerBufferState` but
-/// holds the source-cache + edit queue, which live on the main thread.
-#[derive(Default)]
-struct BufferClient {
-    has_language: bool,
-    current_lang: Option<Arc<Grammar>>,
-    cache: Option<RenderCache>,
-    pending_reset: bool,
-    last_submitted_dirty_gen: Option<u64>,
-}
-
-// ---------------------------------------------------------------------------
-// In-flight grammar load tracking
-// ---------------------------------------------------------------------------
-
-struct PendingLoad {
-    id: BufferId,
-    name: String,
-    handle: LoadHandle,
-}
-
-// ---------------------------------------------------------------------------
-// SyntaxLayer — main-thread facade
-// ---------------------------------------------------------------------------
-
-/// Per-App syntax highlighting layer. Multiplexes per-buffer state
-/// (helix-style): each open buffer carries its own retained tree
-/// (worker-side) plus source-cache and edit queue (here). One worker
-/// thread serves all buffers.
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::sync::Arc;
-/// use hjkl_syntax::SyntaxLayer;
-/// use hjkl_bonsai::DotFallbackTheme;
-/// use hjkl_lang::LanguageDirectory;
-///
-/// let theme = Arc::new(DotFallbackTheme::dark());
-/// let dir = Arc::new(LanguageDirectory::new().unwrap());
-/// let layer = SyntaxLayer::new(theme, dir);
-/// ```
-pub struct SyntaxLayer {
-    /// Shared grammar resolver.
-    pub directory: Arc<LanguageDirectory>,
-    /// Active theme.
-    theme: Arc<dyn Theme + Send + Sync>,
-    worker: SyntaxWorker,
-    clients: HashMap<BufferId, BufferClient>,
-    pending_loads: Vec<PendingLoad>,
-    /// Per-grammar synchronous `Highlighter` cache used by [`Self::preview_render`].
-    preview_highlighters: Mutex<HashMap<String, Highlighter>>,
-    /// Last perf breakdown received via `take_all_results`. Updated on every
-    /// successful drain.
-    pub last_perf: PerfBreakdown,
-}
-
-impl SyntaxLayer {
-    /// Create a new layer with no buffers attached, the given theme, and
-    /// the given language directory.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use hjkl_syntax::SyntaxLayer;
-    /// use hjkl_bonsai::DotFallbackTheme;
-    /// use hjkl_lang::LanguageDirectory;
-    ///
-    /// let theme = Arc::new(DotFallbackTheme::dark());
-    /// let dir = Arc::new(LanguageDirectory::new().unwrap());
-    /// let layer = SyntaxLayer::new(theme, dir);
-    /// ```
-    /// Borrow the shared language directory. Useful for cheap
-    /// path-to-language-name lookups (e.g. `name_for_path`) without
-    /// triggering any grammar load.
-    pub fn directory(&self) -> &Arc<LanguageDirectory> {
-        &self.directory
-    }
-
-    pub fn new(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
-        let worker = SyntaxWorker::spawn(Arc::clone(&theme), Arc::clone(&directory));
-        Self {
-            directory,
-            theme,
-            worker,
-            clients: HashMap::new(),
-            pending_loads: Vec::new(),
-            preview_highlighters: Mutex::new(HashMap::new()),
-            last_perf: PerfBreakdown::default(),
-        }
-    }
-
-    fn client_mut(&mut self, id: BufferId) -> &mut BufferClient {
-        self.clients.entry(id).or_default()
-    }
-
-    /// Detect the language for `path` and ship it to the worker.
-    ///
-    /// Non-blocking: uses the async grammar loader so opening a file with an
-    /// uninstalled grammar no longer freezes the UI.
-    ///
-    /// - `Ready`   — grammar cached/found on disk; installed immediately.
-    /// - `Loading` — clone+compile kicked off; buffer renders as plain text
-    ///   until `poll_pending_loads` fires the companion `LoadEvent::Ready`.
-    /// - `Unknown` — unrecognized extension; plain text only.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use std::path::Path;
-    /// use hjkl_syntax::{SyntaxLayer, SetLanguageOutcome};
-    /// use hjkl_bonsai::DotFallbackTheme;
-    /// use hjkl_lang::LanguageDirectory;
-    ///
-    /// let theme = Arc::new(DotFallbackTheme::dark());
-    /// let dir = Arc::new(LanguageDirectory::new().unwrap());
-    /// let mut layer = SyntaxLayer::new(theme, dir);
-    /// let outcome = layer.set_language_for_path(0, Path::new("a.zzz_not_real"));
-    /// assert!(!outcome.is_known());
-    /// ```
-    pub fn set_language_for_path(&mut self, id: BufferId, path: &Path) -> SetLanguageOutcome {
-        match self.directory.request_for_path(path) {
-            GrammarRequest::Cached(grammar) => {
-                self.worker.set_language(id, Some(grammar.clone()));
-                let c = self.client_mut(id);
-                c.current_lang = Some(grammar);
-                c.has_language = true;
-                SetLanguageOutcome::Ready
-            }
-            GrammarRequest::Loading { name, handle } => {
-                self.worker.set_language(id, None);
-                let c = self.client_mut(id);
-                c.current_lang = None;
-                c.has_language = false;
-                self.pending_loads.push(PendingLoad {
-                    id,
-                    name: name.clone(),
-                    handle,
-                });
-                SetLanguageOutcome::Loading(name)
-            }
-            GrammarRequest::Unknown => {
-                self.worker.set_language(id, None);
-                let c = self.client_mut(id);
-                c.current_lang = None;
-                c.has_language = false;
-                SetLanguageOutcome::Unknown
-            }
-            _ => {
-                // Future GrammarRequest variants — treat as Unknown.
-                self.worker.set_language(id, None);
-                let c = self.client_mut(id);
-                c.current_lang = None;
-                c.has_language = false;
-                SetLanguageOutcome::Unknown
-            }
-        }
-    }
-
-    /// Poll all in-flight grammar loads. Call this once per tick from the
-    /// main loop (alongside `take_all_results`) so completed loads install
-    /// immediately without waiting for the next file open.
-    ///
-    /// Returns one `LoadEvent` per handle that resolved during this tick.
-    /// Non-empty results should trigger a redraw and re-submit render.
-    pub fn poll_pending_loads(&mut self) -> Vec<LoadEvent> {
-        let mut events = Vec::new();
-        let mut i = 0;
-        while i < self.pending_loads.len() {
-            match self.pending_loads[i].handle.try_recv() {
-                None => {
-                    i += 1;
-                }
-                Some(Ok(lib_path)) => {
-                    let name = self.pending_loads[i].name.clone();
-                    let bid = self.pending_loads[i].id;
-                    self.pending_loads.swap_remove(i);
-                    match self.directory.complete_load(&name, lib_path) {
-                        Ok(grammar) => {
-                            self.worker.set_language(bid, Some(grammar.clone()));
-                            let c = self.client_mut(bid);
-                            c.current_lang = Some(grammar);
-                            c.has_language = true;
-                            events.push(LoadEvent::Ready { id: bid, name });
-                        }
-                        Err(e) => {
-                            events.push(LoadEvent::Failed {
-                                id: bid,
-                                name,
-                                error: format!("{e:#}"),
-                            });
-                        }
-                    }
-                }
-                Some(Err(err)) => {
-                    let name = self.pending_loads[i].name.clone();
-                    let bid = self.pending_loads[i].id;
-                    self.pending_loads.swap_remove(i);
-                    events.push(LoadEvent::Failed {
-                        id: bid,
-                        name,
-                        error: err.to_string(),
-                    });
-                }
-            }
-        }
-        events
-    }
-
-    /// Drop all state for a buffer. Call on close.
-    pub fn forget(&mut self, id: BufferId) {
-        self.clients.remove(&id);
-        self.worker.forget(id);
-    }
-
-    /// Swap the active theme. Next render call will use the new theme.
-    pub fn set_theme(&mut self, theme: Arc<dyn Theme + Send + Sync>) {
-        self.theme = Arc::clone(&theme);
-        self.worker.set_theme(theme);
-    }
-
-    /// Borrow the buffer's cached `(source, row_starts, line_count, dirty_gen)`
-    /// from the last [`Self::submit_render`] call, if any.
-    ///
-    /// `dirty_gen` is the buffer's generation at the time the cache was
-    /// built — callers compare it against the buffer's *current* generation
-    /// to decide whether to run a sync [`Self::query_viewport`] (cache is
-    /// up to date) or skip (cache is stale, throttled submit hasn't fired
-    /// the rebuild yet).
-    #[allow(clippy::type_complexity)]
-    pub fn cached_source(
-        &self,
-        id: BufferId,
-    ) -> Option<(Arc<String>, Arc<Vec<usize>>, usize, u64)> {
-        let c = self.clients.get(&id)?;
-        let rc = c.cache.as_ref()?;
-        Some((
-            Arc::clone(&rc.source),
-            Arc::clone(&rc.row_starts),
-            rc.line_count as usize,
-            rc.dirty_gen,
-        ))
-    }
-
-    /// Synchronous viewport highlight query against the **retained tree**
-    /// owned by the syntax worker.
-    ///
-    /// Unlike [`Self::submit_render`] (queues a parse + highlight on the
-    /// worker, result delivered later via [`Self::take_all_results`]), this
-    /// runs the highlight + marker + hex-color + diag-signs pipeline
-    /// synchronously on the calling thread using the worker's current
-    /// retained `tree_sitter::Tree`. No re-parse: the spans are extracted
-    /// against whatever tree the worker last produced.
-    ///
-    /// Returns `None` when:
-    /// - no grammar is attached to `id` yet (or it is still loading), or
-    /// - the worker has not produced its first parse for this buffer yet,
-    /// - the worker is currently parsing this buffer (lock would block —
-    ///   for now we wait; future revs may add a `try_*` variant).
-    ///
-    /// Intended use: render-time path on the main thread, so the visible
-    /// rows always paint against the freshest tree the layer has, even
-    /// while a follow-up parse is in flight. This is the foundation for
-    /// the bonsai cache redesign tracked at <https://github.com/kryptic-sh/hjkl/issues/233>.
-    #[allow(clippy::too_many_arguments)]
-    pub fn query_viewport(
-        &self,
-        id: BufferId,
-        source: &str,
-        row_starts: &[usize],
-        viewport_byte_range: std::ops::Range<usize>,
-        viewport_top: usize,
-        viewport_height: usize,
-        row_count: usize,
-        dirty_gen: u64,
-        kind: ParseKind,
-    ) -> Option<RenderOutput> {
-        use std::time::Instant;
-        let bytes = source.as_bytes();
-        let theme = self.theme.as_ref();
-        let directory = self.directory.clone();
-        with_buffer(&self.worker.buffers, id, |state| {
-            // No retained tree yet — caller should fall back to
-            // `preview_render` or wait for the worker's first delivery.
-            state.highlighter.tree()?;
-            let mut perf = PerfBreakdown::default();
-            let t = Instant::now();
-            let mut flat_spans = state.highlighter.highlight_range_with_injections(
-                bytes,
-                viewport_byte_range.clone(),
-                |name| directory.by_name(name),
-            );
-            perf.highlight_us = t.elapsed().as_micros();
-            let flat_span_count = flat_spans.len();
-
-            let t_marker = Instant::now();
-            let marker_pass = CommentMarkerPass::new();
-            marker_pass.apply(&mut flat_spans, bytes);
-            let marker_us = t_marker.elapsed().as_micros();
-
-            let t_hex = Instant::now();
-            // Scan only the viewport bytes for hex colors — full-document
-            // scan per keystroke was a ~200µs hit on 400-line files and
-            // grows with file size.
-            let hex_color_pass = HexColorPass::new();
-            hex_color_pass.apply_range(&mut flat_spans, bytes, viewport_byte_range.clone());
-            let hex_us = t_hex.elapsed().as_micros();
-
-            let t = Instant::now();
-            let by_row = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);
-            perf.by_row_us = t.elapsed().as_micros();
-
-            let t = Instant::now();
-            let signs = collect_diag_signs(
-                &mut state.highlighter,
-                bytes,
-                viewport_byte_range,
-                row_starts,
-            );
-            perf.diag_us = t.elapsed().as_micros();
-
-            tracing::debug!(
-                target: "hjkl::profile",
-                ?kind,
-                highlight_us = perf.highlight_us,
-                marker_us,
-                hex_us,
-                by_row_us = perf.by_row_us,
-                diag_us = perf.diag_us,
-                row_count,
-                flat_span_count,
-                "query_viewport breakdown"
-            );
-
-            // `key.0` tags the result with the dirty_gen the caller
-            // built `source` for. Setting it to the *current* buffer
-            // dirty_gen tells the app-side merger that this cache is
-            // fully up to date (no row should be marked dirty against
-            // it). The retained tree was already edited synchronously
-            // via `apply_edits`, so byte positions align.
-            Some(RenderOutput {
-                buffer_id: id,
-                spans: by_row,
-                signs,
-                key: (dirty_gen, viewport_top, viewport_height),
-                perf,
-                kind,
-                changed_ranges: Vec::new(),
-            })
-        })
-        .flatten()
-    }
-
-    /// Synchronous viewport-only preview render. Builds a `String`
-    /// containing **only** the visible rows, parses it from scratch with a
-    /// one-shot `Highlighter`, runs `highlight_range` over the slice, and
-    /// returns a `RenderOutput` whose `spans` table is padded with empty rows
-    /// above the viewport so the install path indexes the right rows.
-    ///
-    /// Returns `None` when no language is attached or when the viewport is empty.
-    pub fn preview_render(
-        &self,
-        id: BufferId,
-        buffer: &impl Query,
-        viewport_top: usize,
-        viewport_height: usize,
-    ) -> Option<RenderOutput> {
-        let grammar = self.clients.get(&id).and_then(|c| c.current_lang.clone())?;
-        let row_count = buffer.line_count() as usize;
-        if row_count == 0 || viewport_height == 0 {
-            return None;
-        }
-        let vp_top = viewport_top.min(row_count);
-        let vp_end_row = (vp_top + viewport_height).min(row_count);
-        if vp_end_row <= vp_top {
-            return None;
-        }
-
-        let mut source = String::new();
-        for r in vp_top..vp_end_row {
-            if r > vp_top {
-                source.push('\n');
-            }
-            source.push_str(&buffer.line(r as u32));
-        }
-        let bytes = source.as_bytes();
-        let mut row_starts: Vec<usize> = vec![0];
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == b'\n' {
-                row_starts.push(i + 1);
-            }
-        }
-        let local_row_count = vp_end_row - vp_top;
-
-        let grammar_name = grammar.name().to_string();
-        let mut cache = self.preview_highlighters.lock().ok()?;
-        let h = match cache.entry(grammar_name) {
-            std::collections::hash_map::Entry::Occupied(o) => {
-                let h = o.into_mut();
-                h.reset();
-                h
-            }
-            std::collections::hash_map::Entry::Vacant(v) => match Highlighter::new(grammar) {
-                Ok(h) => v.insert(h),
-                Err(_) => return None,
-            },
-        };
-        let mut flat_spans =
-            h.highlight_with_injections(bytes, |name| self.directory.by_name(name));
-        drop(cache);
-
-        let marker_pass = CommentMarkerPass::new();
-        marker_pass.apply(&mut flat_spans, bytes);
-        let hex_color_pass = HexColorPass::new();
-        hex_color_pass.apply(&mut flat_spans, bytes);
-
-        let local_by_row = build_by_row(
-            &flat_spans,
-            bytes,
-            &row_starts,
-            local_row_count,
-            self.theme.as_ref(),
-        );
-
-        let mut spans: Vec<Vec<(usize, usize, StyleSpec)>> = vec![Vec::new(); vp_top];
-        spans.extend(local_by_row);
-
-        Some(RenderOutput {
-            buffer_id: id,
-            spans,
-            signs: Vec::new(),
-            key: (buffer.dirty_gen(), viewport_top, viewport_height),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Viewport,
-            changed_ranges: Vec::new(),
-        })
-    }
-
-    /// Drop this buffer's retained tree **synchronously** so the next
-    /// `query_viewport` returns `None` (caller falls back to the one-shot
-    /// `preview_render`) and the next `submit_render` runs a cold parse.
-    ///
-    /// Wired into the editor's `take_content_reset` signal: bulk replaces
-    /// (`:e!`, undo of a multi-line edit, snapshot restore) emit a reset
-    /// instead of incremental `ContentEdit`s, so the retained tree's
-    /// byte positions no longer correlate with the new source. Letting
-    /// `query_viewport` run against that stale tree paints garbled spans
-    /// for one frame; dropping it sync avoids that frame entirely.
-    pub fn reset(&mut self, id: BufferId) {
-        self.client_mut(id).pending_reset = true;
-        with_buffer(&self.worker.buffers, id, |state| {
-            state.highlighter.reset();
-            state.last_parsed_dirty_gen = None;
-        });
-    }
-
-    /// Apply a batch of engine `ContentEdit`s to the shared retained tree
-    /// **synchronously** so the tree's byte positions track the new source
-    /// before the next `submit_render` or `query_viewport` runs.
-    ///
-    /// Plan-B (issue #233): edits are NOT queued on the request anymore —
-    /// they go straight onto the tree via `tree.edit(InputEdit)`. The
-    /// per-buffer mutex briefly serialises with worker reparse on the same
-    /// buffer; that contention is the only cost. The benefit: the very
-    /// next sync `query_viewport` returns spans whose byte ranges align
-    /// with the post-edit source, eliminating the per-frame stale-tree
-    /// flash that the old "ship edits to worker" path produced.
-    ///
-    /// If the buffer's grammar has not loaded yet (or the worker hasn't
-    /// installed the `Highlighter` for this buffer in the shared map yet),
-    /// the call is a no-op — the buffer's first parse will run against the
-    /// then-current source so edit history before grammar load doesn't matter.
-    pub fn apply_edits(&mut self, id: BufferId, edits: &[hjkl_engine::ContentEdit]) {
-        let c = self.client_mut(id);
-        if !c.has_language {
-            return;
-        }
-        let input_edits: Vec<InputEdit> = edits
-            .iter()
-            .map(|e| InputEdit {
-                start_byte: e.start_byte,
-                old_end_byte: e.old_end_byte,
-                new_end_byte: e.new_end_byte,
-                start_position: Point {
-                    row: e.start_position.0 as usize,
-                    column: e.start_position.1 as usize,
-                },
-                old_end_position: Point {
-                    row: e.old_end_position.0 as usize,
-                    column: e.old_end_position.1 as usize,
-                },
-                new_end_position: Point {
-                    row: e.new_end_position.0 as usize,
-                    column: e.new_end_position.1 as usize,
-                },
-            })
-            .collect();
-        with_buffer(&self.worker.buffers, id, |state| {
-            for e in &input_edits {
-                state.highlighter.edit(e);
-            }
-        });
-    }
-
-    /// Build (or reuse) the cached `(source, row_starts)` for the
-    /// current buffer state and submit a parse + render job to the worker.
-    /// Returns immediately. Drain the result with [`Self::take_all_results`].
-    ///
-    /// `kind` tags the request so the App can route the result to the correct
-    /// per-slot cache field. Pass [`ParseKind::Viewport`] for normal
-    /// scroll-driven parses.
-    ///
-    /// Returns `None` and submits nothing when no language is attached.
-    /// Returns `Some(source_build_us)` when a request was submitted — `0`
-    /// means the cache was reused.
-    pub fn submit_render(
-        &mut self,
-        id: BufferId,
-        buffer: &impl Query,
-        viewport_top: usize,
-        viewport_height: usize,
-        kind: ParseKind,
-    ) -> Option<u128> {
-        use std::time::Instant;
-        let c = self.client_mut(id);
-        if !c.has_language {
-            return None;
-        }
-
-        let dg = buffer.dirty_gen();
-        let lb = buffer.len_bytes();
-        let lc = buffer.line_count();
-        let row_count = lc as usize;
-
-        // Rebuild source + row_starts only when the buffer has changed.
-        let needs_rebuild = match &c.cache {
-            Some(rc) => rc.dirty_gen != dg || rc.len_bytes != lb || rc.line_count != lc,
-            None => true,
-        };
-        let mut source_build_us = 0u128;
-        if needs_rebuild {
-            let t = Instant::now();
-            // Share the joined source `Arc` with all other per-tick
-            // consumers (LSP notify, git signature, dirty hash) via
-            // `Buffer::content_joined`. The buffer caches against
-            // `dirty_gen` — first call this tick builds it, the rest
-            // are O(1) `Arc::clone`.
-            let source = buffer.content_joined();
-            let mut row_starts: Vec<usize> = vec![0];
-            for (i, &b) in source.as_bytes().iter().enumerate() {
-                if b == b'\n' {
-                    row_starts.push(i + 1);
-                }
-            }
-            c.cache = Some(RenderCache {
-                dirty_gen: dg,
-                len_bytes: lb,
-                line_count: lc,
-                source,
-                row_starts: Arc::new(row_starts),
-            });
-            source_build_us = t.elapsed().as_micros();
-        }
-        let cache = c.cache.as_ref().expect("cache populated above");
-
-        let bytes_len = cache.source.len();
-        let vp_start = buffer.byte_of_row(viewport_top);
-        let vp_end_row = viewport_top + viewport_height + 1;
-        let vp_end = buffer.byte_of_row(vp_end_row).min(bytes_len);
-        let vp_end = vp_end.max(vp_start);
-
-        let reset = std::mem::replace(&mut c.pending_reset, false);
-        c.last_submitted_dirty_gen = Some(dg);
-        let source_arc = Arc::clone(&cache.source);
-        let row_starts_arc = Arc::clone(&cache.row_starts);
-
-        self.worker.submit(ParseRequest {
-            buffer_id: id,
-            source: source_arc,
-            row_starts: row_starts_arc,
-            viewport_byte_range: vp_start..vp_end,
-            viewport_top,
-            viewport_height,
-            row_count,
-            dirty_gen: dg,
-            reset,
-            kind,
-        });
-
-        Some(source_build_us)
-    }
-
-    /// Drain the most recent render result the worker has produced (if any).
-    /// Older results are discarded — only the latest matters for install.
-    /// Updates `last_perf` as a side effect.
-    ///
-    /// Kept for use in perf-smoke tests; production code drains via
-    /// [`Self::take_all_results`] so multi-buffer results are routed.
-    #[allow(dead_code)]
-    pub fn take_result(&mut self) -> Option<RenderOutput> {
-        let out = self.worker.try_recv_latest()?;
-        self.last_perf = out.perf;
-        Some(out)
-    }
-
-    /// Drain all render results the worker has produced since the last drain
-    /// (one per `(buffer_id, kind)` that completed). Updates `last_perf` from
-    /// the last result if any are present.
-    pub fn take_all_results(&mut self) -> Vec<RenderOutput> {
-        let results = self.worker.try_recv_all();
-        if let Some(last) = results.last() {
-            self.last_perf = last.perf;
-        }
-        results
-    }
-
-    /// Block up to `timeout` for the worker's next result, then drain any
-    /// others that arrived after it.
-    pub fn wait_result(&mut self, timeout: std::time::Duration) -> Option<RenderOutput> {
-        let out = self.worker.wait_for_latest(timeout)?;
-        self.last_perf = out.perf;
-        Some(out)
-    }
-
-    /// Block up to `timeout` for the first result, then drain ALL available
-    /// results in arrival order (per-`(buffer_id, kind)` coalesced). Used for
-    /// big-jump paths that submit the active buffer's parse AND pre-warms for
-    /// other open buffers in the same tick.
-    pub fn wait_all_results(&mut self, timeout: std::time::Duration) -> Vec<RenderOutput> {
-        let results = self.worker.wait_then_recv_all(timeout);
-        if let Some(last) = results.last() {
-            self.last_perf = last.perf;
-        }
-        results
-    }
-
-    /// Synchronously drain the next result, blocking up to `timeout`.
-    /// Returns `None` on timeout. Used at startup so the very first frame
-    /// can paint with highlights when the worker is fast enough.
-    pub fn wait_for_initial_result(
-        &mut self,
-        timeout: std::time::Duration,
-    ) -> Option<RenderOutput> {
-        self.wait_result(timeout)
-    }
-
-    /// Test-only alias for [`Self::wait_for_initial_result`].
-    #[cfg(test)]
-    pub fn wait_for_result(&mut self, timeout: std::time::Duration) -> Option<RenderOutput> {
-        self.wait_for_initial_result(timeout)
-    }
-
-    /// Returns `true` if a client is tracked for the given buffer id.
-    /// Exposed for tests in consumer crates that wrap `SyntaxLayer`.
-    #[doc(hidden)]
-    pub fn has_client(&self, id: BufferId) -> bool {
-        self.clients.contains_key(&id)
-    }
-
-    /// Returns the `pending_reset` flag for the given buffer id, or `false`
-    /// if no client is tracked.
-    /// Exposed for tests in consumer crates that wrap `SyntaxLayer`.
-    #[doc(hidden)]
-    pub fn client_pending_reset(&self, id: BufferId) -> bool {
-        self.clients
-            .get(&id)
-            .map(|c| c.pending_reset)
-            .unwrap_or(false)
-    }
-
-    /// Dispatch a [`LoadEvent`] through a caller-supplied handler.
-    ///
-    /// The handler receives each known variant as an exhaustive inner enum so
-    /// consumers never need a `_ => {}` wildcard arm for `LoadEvent`'s
-    /// `#[non_exhaustive]` restriction.  Unknown future variants are silently
-    /// ignored (this method is updated when new variants land).
-    ///
-    /// Returns `true` when the event was dispatched to a known variant,
-    /// `false` when it was an unknown future variant and the handler was not
-    /// called.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use hjkl_syntax::{LoadEvent, SyntaxLayer};
-    ///
-    /// let event = LoadEvent::Ready { id: 0, name: "rust".into() };
-    /// let mut got_ready = false;
-    /// let handled = SyntaxLayer::dispatch_load_event(&event, |ev| {
-    ///     use hjkl_syntax::LoadEventKind;
-    ///     match ev {
-    ///         LoadEventKind::Ready { id, name } => { got_ready = true; }
-    ///         LoadEventKind::Failed { .. } => {}
-    ///     }
-    /// });
-    /// assert!(handled);
-    /// assert!(got_ready);
-    /// ```
-    pub fn dispatch_load_event(
-        event: &LoadEvent,
-        mut handler: impl FnMut(LoadEventKind<'_>),
-    ) -> bool {
-        // `#[allow(unreachable_patterns)]` because from inside this crate all
-        // LoadEvent variants are known; the wildcard exists so this helper
-        // stays future-proof for external consumers when new variants land.
-        #[allow(unreachable_patterns)]
-        match event {
-            LoadEvent::Ready { id, name } => {
-                handler(LoadEventKind::Ready { id: *id, name });
-                true
-            }
-            LoadEvent::Failed { id, name, error } => {
-                handler(LoadEventKind::Failed {
-                    id: *id,
-                    name,
-                    error,
-                });
-                true
-            }
-            // Unknown future variant — ignore gracefully.
-            _ => false,
-        }
-    }
-
-    /// Dispatch a [`ParseKind`] value through a caller-supplied handler.
-    ///
-    /// Eliminates `_ => {}` wildcards in consumer match arms by providing an
-    /// exhaustive inner enum.  Unknown future variants fall back to the
-    /// `ParseKind::Viewport` path (conservative: treat unknown as viewport).
-    ///
-    /// Returns `true` for known variants, `false` for unknown ones (and calls
-    /// the handler with `ParseKindKind::Viewport` as the fallback).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use hjkl_syntax::{ParseKind, ParseKindKind, SyntaxLayer};
-    ///
-    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Viewport, |k| {
-    ///     assert_eq!(k, ParseKindKind::Viewport);
-    /// });
-    /// assert!(known);
-    /// ```
-    pub fn dispatch_parse_kind(kind: ParseKind, mut handler: impl FnMut(ParseKindKind)) -> bool {
-        // `#[allow(unreachable_patterns)]` because from inside this crate all
-        // ParseKind variants are known; the wildcard exists so this helper
-        // stays future-proof for external consumers when new variants land.
-        #[allow(unreachable_patterns)]
-        match kind {
-            ParseKind::Viewport => {
-                handler(ParseKindKind::Viewport);
-                true
-            }
-            // Unknown future variant — fall back to Viewport so the caller
-            // still gets a sensible route.
-            _ => {
-                handler(ParseKindKind::Viewport);
-                false
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Factory helpers
 // ---------------------------------------------------------------------------
 
@@ -1795,7 +961,6 @@ pub fn layer_with_theme(
 }
 
 /// Build a `SyntaxLayer` with hjkl-bonsai's bundled dark theme.
-/// Used by tests; the production app constructs via [`layer_with_theme`].
 #[cfg(test)]
 pub fn default_layer() -> SyntaxLayer {
     let directory = Arc::new(LanguageDirectory::new().expect("language directory"));
@@ -1811,26 +976,8 @@ mod tests {
     use super::*;
     use hjkl_buffer::Buffer;
     use std::path::Path;
-    use std::time::Duration;
-
-    fn submit_and_wait(
-        layer: &mut SyntaxLayer,
-        buf: &Buffer,
-        top: usize,
-        height: usize,
-    ) -> Option<RenderOutput> {
-        layer.submit_render(TID, buf, top, height, ParseKind::Viewport)?;
-        layer.wait_for_result(Duration::from_secs(5))
-    }
 
     const TID: BufferId = 0;
-
-    // --- ParseKind ---
-
-    #[test]
-    fn parse_kind_viewport_equals_itself() {
-        assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
-    }
 
     // --- DiagSign ---
 
@@ -1881,10 +1028,8 @@ mod tests {
             vec![DiagSign::new(0, 'E', 100)],
             (7, 0, 30),
             PerfBreakdown::new(),
-            ParseKind::Viewport,
         );
         assert_eq!(out.buffer_id, 99);
-        assert_eq!(out.kind, ParseKind::Viewport);
         assert_eq!(out.key, (7, 0, 30));
         assert_eq!(out.signs.len(), 1);
     }
@@ -1897,30 +1042,8 @@ mod tests {
             vec![],
             (1, 0, 10),
             PerfBreakdown::default(),
-            ParseKind::Viewport,
         );
         let b = a.clone();
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn render_output_partial_eq_same_kind() {
-        let a = RenderOutput::new(
-            0,
-            vec![],
-            vec![],
-            (0, 0, 10),
-            PerfBreakdown::default(),
-            ParseKind::Viewport,
-        );
-        let b = RenderOutput::new(
-            0,
-            vec![],
-            vec![],
-            (0, 0, 10),
-            PerfBreakdown::default(),
-            ParseKind::Viewport,
-        );
         assert_eq!(a, b);
     }
 
@@ -1940,9 +1063,6 @@ mod tests {
         assert!(by_row[1].is_empty());
     }
 
-    /// `hex_color` capture spans must build a StyleSpec from their
-    /// metadata (`hex.bg` / `hex.fg`) instead of going through the
-    /// theme — that's the whole point of the inline-preview overlay.
     #[test]
     fn build_by_row_hex_color_uses_metadata_colors() {
         let bytes = b"--accent: #bb9af7;";
@@ -1970,9 +1090,6 @@ mod tests {
         assert_eq!((fg.r, fg.g, fg.b), (0xff, 0xff, 0xff));
     }
 
-    /// `hex_color` spans without metadata fall back to skipping (no
-    /// theme key registered) instead of panicking — defensive guard
-    /// against a future caller that emits the capture without metadata.
     #[test]
     fn build_by_row_hex_color_without_metadata_skips() {
         let span = hjkl_bonsai::HighlightSpan {
@@ -1985,78 +1102,10 @@ mod tests {
         assert!(by_row[0].is_empty());
     }
 
-    // --- Pending queue deduplication ---
-
-    #[test]
-    fn pending_push_parse_replaces_same_buffer_kind() {
-        let mut p = Pending::new();
-        let make_req = |kind: ParseKind, dirty_gen: u64| ParseRequest {
-            buffer_id: 0,
-            source: Arc::new(String::new()),
-            row_starts: Arc::new(vec![]),
-            viewport_byte_range: 0..0,
-            viewport_top: 0,
-            viewport_height: 10,
-            row_count: 0,
-            dirty_gen,
-            reset: false,
-            kind,
-        };
-        p.push_parse(make_req(ParseKind::Viewport, 1));
-        p.push_parse(make_req(ParseKind::Viewport, 2));
-        // Same (buffer_id=0, kind=Viewport) — should replace, not append.
-        assert_eq!(p.parse_queue.len(), 1);
-        assert_eq!(p.parse_queue[0].dirty_gen, 2);
-    }
-
-    #[test]
-    fn pending_push_parse_different_buffers_coexist() {
-        let mut p = Pending::new();
-        let make_req = |buffer_id: BufferId| ParseRequest {
-            buffer_id,
-            source: Arc::new(String::new()),
-            row_starts: Arc::new(vec![]),
-            viewport_byte_range: 0..0,
-            viewport_top: 0,
-            viewport_height: 10,
-            row_count: 0,
-            dirty_gen: 1,
-            reset: false,
-            kind: ParseKind::Viewport,
-        };
-        p.push_parse(make_req(0));
-        p.push_parse(make_req(1));
-        p.push_parse(make_req(2));
-        // Different buffer ids must coexist in the queue.
-        assert_eq!(p.parse_queue.len(), 3);
-    }
-
-    #[test]
-    fn pending_push_parse_evicts_oldest_at_cap() {
-        let mut p = Pending::new();
-        // Fill past capacity with distinct (buffer_id, kind) pairs.
-        for i in 0..(PARSE_QUEUE_CAP + 2) {
-            p.push_parse(ParseRequest {
-                buffer_id: i as BufferId,
-                source: Arc::new(String::new()),
-                row_starts: Arc::new(vec![]),
-                viewport_byte_range: 0..0,
-                viewport_top: 0,
-                viewport_height: 10,
-                row_count: 0,
-                dirty_gen: i as u64,
-                reset: false,
-                kind: ParseKind::Viewport,
-            });
-        }
-        // Queue must not grow past cap.
-        assert!(p.parse_queue.len() <= PARSE_QUEUE_CAP);
-    }
-
     // --- SyntaxLayer basics (no network required) ---
 
     #[test]
-    fn submit_with_no_language_returns_none() {
+    fn render_viewport_with_no_language_returns_none() {
         let buf = Buffer::from_str("hello world");
         let mut layer = default_layer();
         assert!(
@@ -2064,11 +1113,7 @@ mod tests {
                 .set_language_for_path(TID, Path::new("a.unknownext"))
                 .is_known()
         );
-        assert!(
-            layer
-                .submit_render(TID, &buf, 0, 10, ParseKind::Viewport)
-                .is_none()
-        );
+        assert!(layer.render_viewport(TID, &buf, 0, 10, u32::MAX).is_none());
     }
 
     #[test]
@@ -2083,16 +1128,7 @@ mod tests {
             new_end_position: (0, 1),
         }];
         layer.apply_edits(TID, &edits);
-        // No grammar attached → call must be a no-op (no panic, no shared
-        // state mutation). The buffer is also absent from the worker's
-        // shared map.
-        assert!(layer.worker.buffers.lock().unwrap().get(&TID).is_none());
-    }
-
-    #[test]
-    fn worker_handles_quit_cleanly() {
-        let layer = default_layer();
-        drop(layer);
+        // No grammar attached → call must be a no-op (no panic).
     }
 
     #[test]
@@ -2116,18 +1152,18 @@ mod tests {
     #[test]
     fn forget_removes_client_state() {
         let mut layer = default_layer();
-        // Trigger client entry creation.
         layer.set_language_for_path(TID, Path::new("a.zzz_unknown"));
-        // Even if no client was inserted (Unknown path), forget must not panic.
         layer.forget(TID);
         assert!(!layer.clients.contains_key(&TID));
     }
 
     #[test]
-    fn take_all_results_empty_when_nothing_submitted() {
+    fn huge_file_returns_none() {
+        let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
-        let results = layer.take_all_results();
-        assert!(results.is_empty());
+        // Language set but file threshold = 1 line (buffer has 1 line → over threshold).
+        // threshold = 0 means every file is "huge".
+        assert!(layer.render_viewport(TID, &buf, 0, 10, 0).is_none());
     }
 
     // --- Network-dependent tests (grammar needed) ---
@@ -2142,8 +1178,9 @@ mod tests {
                 .set_language_for_path(TID, Path::new("a.rs"))
                 .is_known()
         );
-        let out = submit_and_wait(&mut layer, &buf, 0, 10).expect("worker output");
-        assert_eq!(out.spans.len(), buf.row_count());
+        let out = layer
+            .render_viewport(TID, &buf, 0, 10, u32::MAX)
+            .expect("render output");
         assert!(
             out.spans.iter().any(|r| !r.is_empty()),
             "expected at least one styled span"
@@ -2152,34 +1189,11 @@ mod tests {
 
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn first_load_highlights_entire_viewport() {
-        let mut content = String::new();
-        for i in 0..50 {
-            content.push_str(&format!("fn f{i}() {{ let x = {i}; }}\n"));
-        }
-        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
-        let mut layer = default_layer();
-        assert!(
-            layer
-                .set_language_for_path(TID, Path::new("a.rs"))
-                .is_known()
-        );
-        let out = submit_and_wait(&mut layer, &buf, 0, 30).unwrap();
-        for (r, row) in out.spans.iter().take(30).enumerate() {
-            assert!(
-                !row.is_empty(),
-                "row {r} has no highlight spans on first load"
-            );
-        }
-    }
-
-    #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn diagnostics_emit_sign_for_syntax_error() {
         let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let out = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
+        let out = layer.render_viewport(TID, &buf, 0, 10, u32::MAX).unwrap();
         assert!(
             !out.signs.is_empty(),
             "expected at least one diagnostic sign for `let x = ;`"
@@ -2197,7 +1211,7 @@ mod tests {
         let pre = Buffer::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = submit_and_wait(&mut layer, &pre, 0, 10).unwrap();
+        let _ = layer.render_viewport(TID, &pre, 0, 10, u32::MAX).unwrap();
         layer.apply_edits(
             TID,
             &[hjkl_engine::ContentEdit {
@@ -2210,26 +1224,13 @@ mod tests {
             }],
         );
         let post = Buffer::from_str("fn Ymain() { let x = 1; }");
-        let inc = submit_and_wait(&mut layer, &post, 0, 10).unwrap();
+        let inc = layer.render_viewport(TID, &post, 0, 10, u32::MAX).unwrap();
         let mut cold_layer = default_layer();
         cold_layer.set_language_for_path(TID, Path::new("a.rs"));
-        let cold = submit_and_wait(&mut cold_layer, &post, 0, 10).unwrap();
+        let cold = cold_layer
+            .render_viewport(TID, &post, 0, 10, u32::MAX)
+            .unwrap();
         assert_eq!(inc.spans, cold.spans);
-    }
-
-    #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn reset_pending_request_is_consumed_once() {
-        let buf = Buffer::from_str("fn main() {}");
-        let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
-        layer.reset(TID);
-        assert!(layer.clients.get(&TID).unwrap().pending_reset);
-        let _ = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
-        assert!(
-            !layer.clients.get(&TID).unwrap().pending_reset,
-            "pending_reset should clear after submit"
-        );
     }
 
     #[test]
@@ -2238,58 +1239,9 @@ mod tests {
         let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = submit_and_wait(&mut layer, &buf, 0, 10).unwrap();
+        let _ = layer.render_viewport(TID, &buf, 0, 10, u32::MAX).unwrap();
         assert!(layer.clients.contains_key(&TID));
         layer.forget(TID);
         assert!(!layer.clients.contains_key(&TID));
-    }
-}
-
-#[cfg(test)]
-mod perf_smoke {
-    use super::*;
-    use hjkl_buffer::Buffer;
-    use std::path::Path;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn big_rs_smoke() {
-        let path = Path::new("/tmp/big.rs");
-        if !path.exists() {
-            eprintln!("/tmp/big.rs not present; skipping perf smoke");
-            return;
-        }
-        let content = std::fs::read_to_string(path).unwrap();
-        let buf = Buffer::from_str(content.strip_suffix('\n').unwrap_or(&content));
-        let mut layer = default_layer();
-        const TID: BufferId = 0;
-        assert!(layer.set_language_for_path(TID, path).is_known());
-
-        let t0 = Instant::now();
-        layer.submit_render(TID, &buf, 0, 50, ParseKind::Viewport);
-        let main_t = t0.elapsed();
-        let out = layer.wait_for_result(Duration::from_secs(10));
-        eprintln!(
-            "first submit_render main-thread: {:?}, worker turnaround total: {:?}",
-            main_t,
-            t0.elapsed()
-        );
-        assert!(out.is_some(), "first parse should produce output");
-
-        let t0 = Instant::now();
-        let mut main_total = Duration::ZERO;
-        for top in 0..100 {
-            let s = Instant::now();
-            layer.submit_render(TID, &buf, top * 100, 50, ParseKind::Viewport);
-            main_total += s.elapsed();
-        }
-        while layer.take_result().is_some() {}
-        eprintln!(
-            "100 viewport scrolls: total wall {:?}, main-thread total {:?} (avg {:?}/submit)",
-            t0.elapsed(),
-            main_total,
-            main_total / 100
-        );
     }
 }

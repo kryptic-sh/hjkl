@@ -148,14 +148,12 @@ impl App {
             match rest.trim() {
                 "dark" => {
                     self.syntax.set_theme(Arc::new(DotFallbackTheme::dark()));
-                    self.active_mut().last_recompute_key = None;
                     self.recompute_and_install();
                     self.bus.info("background=dark");
                     return;
                 }
                 "light" => {
                     self.syntax.set_theme(Arc::new(DotFallbackTheme::light()));
-                    self.active_mut().last_recompute_key = None;
                     self.recompute_and_install();
                     self.bus.info("background=light");
                     return;
@@ -640,18 +638,11 @@ impl App {
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
-                last_recompute_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
-                last_recompute_key: None,
                 saved_hash: 0,
                 saved_len: 0,
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                viewport_render_output: None,
-                last_sync_viewport_key: None,
-                installed_spans_dg: None,
-                installed_rows: None,
-                dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -723,18 +714,11 @@ impl App {
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
-                last_recompute_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
-                last_recompute_key: None,
                 saved_hash: 0,
                 saved_len: 0,
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                viewport_render_output: None,
-                last_sync_viewport_key: None,
-                installed_spans_dg: None,
-                installed_rows: None,
-                dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -818,14 +802,19 @@ impl App {
                 false
             }
             Some(p) => {
-                let lines = self.slots[idx].editor.buffer().lines();
-                let content = if lines.is_empty() {
-                    String::new()
-                } else {
-                    let mut s = lines.join("\n");
-                    s.push('\n');
-                    s
-                };
+                // Reuse the per-dirty_gen Arc<String> from content_joined() so
+                // saves share the same allocation that LSP / git / syntax / dirty
+                // signature paths already paid for. Was Buffer::lines().join()
+                // which re-cloned every line (162k allocs on a 162k-row buffer).
+                // Write in two pieces so the trailing newline doesn't force a
+                // full-buffer clone just to push a byte.
+                use hjkl_engine::Query;
+                use std::io::Write;
+                let joined = self.slots[idx].editor.buffer().content_joined();
+                let body: &[u8] = joined.as_bytes();
+                let needs_trailing_nl = !body.is_empty() && !body.ends_with(b"\n");
+                let line_count = self.slots[idx].editor.buffer().line_count() as usize;
+                let byte_count = body.len() + usize::from(needs_trailing_nl);
                 // Create parent dir(s) if missing so writing into a fresh
                 // path like ~/.config/hjkl/config.toml works first try.
                 if let Some(parent) = p.parent()
@@ -836,10 +825,16 @@ impl App {
                     self.bus.error(format!("E: {}: {e}", parent.display()));
                     return false;
                 }
-                match std::fs::write(&p, &content) {
+                let write_result = (|| -> std::io::Result<()> {
+                    let mut f = std::fs::File::create(&p)?;
+                    f.write_all(body)?;
+                    if needs_trailing_nl {
+                        f.write_all(b"\n")?;
+                    }
+                    Ok(())
+                })();
+                match write_result {
                     Ok(()) => {
-                        let line_count = lines.len();
-                        let byte_count = content.len();
                         self.bus.info(format!(
                             "\"{}\" {}L, {}B written",
                             p.display(),
@@ -1055,22 +1050,11 @@ impl App {
         let outcome = self.syntax.set_language_for_path(buffer_id, &path);
         let _ = outcome.is_known(); // Suppresses unused-result warning.
         self.syntax.reset(buffer_id);
-        self.active_mut().last_recompute_key = None;
+
         self.active_mut()
             .editor
             .install_ratatui_syntax_spans(Vec::new());
-        let (vp_top, vp_height) = {
-            let vp = self.active().editor.host().viewport();
-            (vp.top_row, vp.height as usize)
-        };
-        if let Some(out) =
-            self.syntax
-                .preview_render(buffer_id, self.active().editor.buffer(), vp_top, vp_height)
-        {
-            self.active_mut()
-                .editor
-                .install_ratatui_syntax_spans(out.spans);
-        }
+        // recompute_and_install runs render_viewport sync — no preview warm-up needed.
         self.recompute_and_install();
         self.active_mut().snapshot_saved();
         self.refresh_git_signs_force();
@@ -1154,25 +1138,13 @@ impl App {
                         let outcome = self.syntax.set_language_for_path(buffer_id, &path);
                         let _ = outcome.is_known(); // Suppresses unused-result warning.
                         self.syntax.reset(buffer_id);
-                        self.slots[idx].last_recompute_key = None;
+
                         if idx == self.focused_slot_idx() {
                             self.slots[idx]
                                 .editor
                                 .install_ratatui_syntax_spans(Vec::new());
-                            let (vp_top, vp_height) = {
-                                let vp = self.slots[idx].editor.host().viewport();
-                                (vp.top_row, vp.height as usize)
-                            };
-                            if let Some(out) = self.syntax.preview_render(
-                                buffer_id,
-                                self.slots[idx].editor.buffer(),
-                                vp_top,
-                                vp_height,
-                            ) {
-                                self.slots[idx]
-                                    .editor
-                                    .install_ratatui_syntax_spans(out.spans);
-                            }
+                            // recompute_and_install runs render_viewport sync — no
+                            // preview warm-up needed.
                             self.recompute_and_install();
                             self.refresh_git_signs_force();
                         }
@@ -1379,18 +1351,11 @@ impl App {
                 git_signs: Vec::new(),
                 last_git_dirty_gen: None,
                 last_git_refresh_at: std::time::Instant::now(),
-                last_recompute_at: std::time::Instant::now() - std::time::Duration::from_secs(1),
-                last_recompute_key: None,
                 saved_hash: 0,
                 saved_len: 0,
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
-                viewport_render_output: None,
-                last_sync_viewport_key: None,
-                installed_spans_dg: None,
-                installed_rows: None,
-                dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();
             self.slots.push(slot);

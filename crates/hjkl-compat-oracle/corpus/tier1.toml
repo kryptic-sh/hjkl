@@ -374,6 +374,42 @@ keys = "yyp"
 expected_buffer = "foo\nfoo\nbar\n"
 expected_cursor = [1, 0]
 
+# {count}p — paste linewise yank N times
+[[cases]]
+name = "register_yy_5p_pastes_five_times"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = "yy5p"
+expected_buffer = "x\nx\nx\nx\nx\nx\n"
+expected_cursor = [5, 0]
+
+# {count}p with embedded zero — 10p
+[[cases]]
+name = "register_yy_10p_pastes_ten_times"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = "yy10p"
+expected_buffer = "x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\n"
+expected_cursor = [10, 0]
+
+# {count}P — paste-before linewise with count
+[[cases]]
+name = "register_yy_3P_pastes_three_times_before"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = "yy3P"
+expected_buffer = "x\nx\nx\nx\n"
+expected_cursor = [2, 0]
+
+# {count}p charwise — yank one char, paste N times after cursor
+[[cases]]
+name = "register_yl_5p_charwise_pastes_five_times"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "yl5p"
+expected_buffer = "aaaaaabc\n"
+expected_cursor = [0, 5]
+
 [[cases]]
 name = "register_ayy_yank_to_named"
 initial_buffer = "hello\nworld\n"

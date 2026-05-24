@@ -730,18 +730,11 @@ impl App {
             git_signs: Vec::new(),
             last_git_dirty_gen: None,
             last_git_refresh_at: Instant::now(),
-            last_recompute_at: Instant::now(),
-            last_recompute_key: None,
             saved_hash: 0,
             saved_len: 0,
             disk_mtime: None,
             disk_len: None,
             disk_state: crate::app::DiskState::Synced,
-            viewport_render_output: None,
-            last_sync_viewport_key: None,
-            installed_spans_dg: None,
-            installed_rows: None,
-            dirty_rows_log: Vec::new(),
         };
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;

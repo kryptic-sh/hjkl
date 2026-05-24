@@ -7023,6 +7023,16 @@ fn do_paste<H: crate::types::Host>(
     // the final paste, `]` = last inserted char of the final paste.
     // We track (lo, hi) across iterations; the last value wins.
     let mut paste_mark: Option<((usize, usize), (usize, usize))> = None;
+    // Capture the cursor row before any paste iterations. Vim's
+    // linewise `[count]p` lands the cursor on the FIRST pasted line
+    // (original_row + 1), not on the last iteration's paste row.
+    // Without this snapshot the per-iteration cursor advancement leaves
+    // the cursor at `original_row + count` instead.
+    let original_row_for_linewise_after = if linewise && !before {
+        Some(buf_cursor_pos(&ed.buffer).row)
+    } else {
+        None
+    };
     for _ in 0..count {
         ed.sync_buffer_content_from_textarea();
         let yank = yank.clone();
@@ -7085,6 +7095,16 @@ fn do_paste<H: crate::types::Host>(
     if let Some((lo, hi)) = paste_mark {
         ed.set_mark('[', lo);
         ed.set_mark(']', hi);
+    }
+    // Linewise `p` (after) with count: cursor lands on the FIRST pasted
+    // line (original_row + 1) — vim parity. The per-iteration loop
+    // moves cursor to each paste's target_row, so without this reset
+    // `5p` would land at original_row + 5 instead of original_row + 1.
+    if let Some(orig_row) = original_row_for_linewise_after {
+        let first_target = orig_row.saturating_add(1);
+        buf_set_cursor_rc(&mut ed.buffer, first_target, 0);
+        crate::motions::move_first_non_blank(&mut ed.buffer);
+        ed.push_buffer_cursor_to_textarea();
     }
     // Any paste re-anchors the sticky column to the new cursor position.
     ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);

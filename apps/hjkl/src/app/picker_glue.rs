@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::picker_action::AppAction;
 
@@ -760,18 +760,10 @@ fn build_scratch_slot(
         let vp = editor.host().viewport();
         (vp.top_row, vp.height as usize)
     };
-    if let Some(out) = syntax.preview_render(buffer_id, editor.buffer(), vp_top, vp_height) {
+    let huge = config.editor.huge_file_threshold;
+    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height, huge) {
         editor.install_ratatui_syntax_spans(out.spans);
     }
-    let initial_dg = editor.buffer().dirty_gen();
-    let (key, signs) = if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150))
-    {
-        let k = out.key;
-        editor.install_ratatui_syntax_spans(out.spans);
-        (Some(k), out.signs)
-    } else {
-        (Some((initial_dg, vp_top, vp_height)), Vec::new())
-    };
 
     let mut slot = BufferSlot {
         buffer_id,
@@ -780,25 +772,18 @@ fn build_scratch_slot(
         dirty: false,
         is_new_file: false,
         is_untracked: false,
-        diag_signs: signs,
+        diag_signs: Vec::new(),
         diag_signs_lsp: Vec::new(),
         lsp_diags: Vec::new(),
         last_lsp_dirty_gen: None,
         git_signs: Vec::new(),
         last_git_dirty_gen: None,
         last_git_refresh_at: Instant::now(),
-        last_recompute_at: Instant::now() - Duration::from_secs(1),
-        last_recompute_key: key,
         saved_hash: 0,
         saved_len: 0,
         disk_mtime: None,
         disk_len: None,
         disk_state: DiskState::Synced,
-        viewport_render_output: None,
-        last_sync_viewport_key: None,
-        installed_spans_dg: None,
-        installed_rows: None,
-        dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
     Ok(slot)

@@ -207,30 +207,23 @@ pub struct App {
     pub(crate) preview_highlighters:
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
     /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
-    /// is bypassed: spans stay empty, no submit_render fires, and
+    /// is bypassed: spans stay empty, no render_viewport fires, and
     /// `recompute_and_install` returns immediately. Re-enabling re-attaches
     /// the language for every slot's path and triggers a fresh recompute.
     /// Default `true` — vim parity.
     pub syntax_enabled: bool,
+    /// Cache for `render::search_count` — keyed by buffer id, dirty_gen,
+    /// cursor, and pattern text so the same result is returned on every
+    /// frame between input/edits. Without this the status line scans the
+    /// whole document on every render — 50 %+ of CPU on big files with an
+    /// active `/` pattern (per samply).
+    pub(crate) search_count_cache: std::cell::RefCell<Option<SearchCountCache>>,
     /// Set when an event handler decided a `recompute_and_install` is
     /// needed but deferred it to coalesce. The main event loop runs the
     /// recompute once after the event-drain loop ends, so a burst of
     /// mouse-scroll events fires one sync query instead of N.
     pub(crate) pending_recompute: bool,
-    pub last_recompute_us: u128,
-    pub last_install_us: u128,
     pub last_signature_us: u128,
-    pub last_git_us: u128,
-    pub last_perf: crate::syntax::PerfBreakdown,
-    /// Counters surfaced in `:perf` so the user can verify cache ratios.
-    pub recompute_hits: u64,
-    pub recompute_throttled: u64,
-    pub recompute_runs: u64,
-    /// Count of async syntax results dropped because their tagged
-    /// buffer_id no longer matches the active buffer (race: parse
-    /// queued before a tab/buffer switch). Surfaced in `:perf` and
-    /// asserted in the regression test on the install path.
-    pub syntax_stale_drops: u64,
     /// User config (bundled defaults + optional XDG overrides). Tests
     /// receive `Config::default()` (the bundled values); main wires the
     /// XDG-merged value via [`Self::with_config`] before entering the
@@ -346,6 +339,18 @@ pub struct App {
     /// after [`INDENT_FLASH_DURATION`] has elapsed. Drained by
     /// [`Self::indent_flash_active`].
     pub(crate) indent_flash: Option<IndentFlash>,
+}
+
+/// Memoised result of [`crate::render::search_count`]. Stored in a
+/// `RefCell` on `App` so the render path (taking `&App`) can refresh
+/// it without restructuring callers.
+#[derive(Debug, Clone)]
+pub(crate) struct SearchCountCache {
+    pub buffer_id: crate::syntax::BufferId,
+    pub dirty_gen: u64,
+    pub cursor: (usize, usize),
+    pub pattern: String,
+    pub result: Option<(usize, usize)>,
 }
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.
@@ -480,25 +485,13 @@ pub(super) fn build_slot(
         let vp = editor.host().viewport();
         (vp.top_row, vp.height as usize)
     };
-    if let Some(out) = syntax.preview_render(buffer_id, editor.buffer(), vp_top, vp_height) {
+    // Sync render for immediate paint on open. recompute_and_install can't
+    // be called here (slot isn't wired into App.slots yet), so go through
+    // the layer directly.
+    let huge = config.editor.huge_file_threshold;
+    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height, huge) {
         editor.install_ratatui_syntax_spans(out.spans);
     }
-    syntax.submit_render(
-        buffer_id,
-        editor.buffer(),
-        vp_top,
-        vp_height,
-        crate::syntax::ParseKind::Viewport,
-    );
-    let initial_dg = editor.buffer().dirty_gen();
-    let (key, signs) = if let Some(out) = syntax.wait_for_initial_result(Duration::from_millis(150))
-    {
-        let k = out.key;
-        editor.install_ratatui_syntax_spans(out.spans);
-        (Some(k), out.signs)
-    } else {
-        (Some((initial_dg, vp_top, vp_height)), Vec::new())
-    };
     let _ = editor.take_content_edits();
     let _ = editor.take_content_reset();
 
@@ -509,25 +502,18 @@ pub(super) fn build_slot(
         dirty: false,
         is_new_file,
         is_untracked: false,
-        diag_signs: signs,
+        diag_signs: Vec::new(),
         diag_signs_lsp: Vec::new(),
         lsp_diags: Vec::new(),
         last_lsp_dirty_gen: None,
         git_signs: Vec::new(),
         last_git_dirty_gen: None,
         last_git_refresh_at: Instant::now(),
-        last_recompute_at: Instant::now() - Duration::from_secs(1),
-        last_recompute_key: key,
         saved_hash: 0,
         saved_len: 0,
         disk_mtime,
         disk_len,
         disk_state: DiskState::Synced,
-        viewport_render_output: None,
-        last_sync_viewport_key: None,
-        installed_spans_dg: None,
-        installed_rows: None,
-        dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
     Ok(slot)
@@ -805,41 +791,9 @@ impl App {
         let edits = self.active_mut().editor.take_content_edits();
         if !edits.is_empty() {
             self.syntax.apply_edits(buffer_id, &edits);
-            // Record which rows were touched by this batch of edits so the
-            // merger can keep untouched cache rows visible while the worker
-            // parses the new content.  The dirty_gen AFTER the edit is the
-            // current one — any cache older than this gen is stale for these
-            // rows and should show blank until the worker returns.
-            let new_dg = self.active().editor.buffer().dirty_gen();
-            // Row-count edits: translate cached span rows in-place so
-            // untouched lines keep their existing colours while the worker
-            // reparses. Historically this branch blanked `buffer_spans`
-            // (visible as a white flash on every Enter / backspace-at-BOL).
-            // We shift BOTH the editor's live `buffer_spans` (drives the
-            // next render frame) AND the per-slot `RenderOutput.spans`
-            // caches (drive `install_merged_spans_for_slot`, which would
-            // otherwise wholesale-reject the stale-length caches and blank
-            // the editor on the very next `recompute_and_install` tick).
             self.active_mut()
                 .editor
                 .shift_syntax_spans_for_edits(&edits);
-            let active_idx = self.focused_slot_idx();
-            self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
-            for edit in &edits {
-                let start_row = edit.start_position.0 as usize;
-                let end_row =
-                    (edit.old_end_position.0 as usize).max(edit.new_end_position.0 as usize);
-                self.active_mut()
-                    .dirty_rows_log
-                    .push((new_dg, start_row..=end_row));
-            }
-            // Cap to 256 entries to avoid unbounded growth.
-            const DIRTY_LOG_CAP: usize = 256;
-            let log = &mut self.active_mut().dirty_rows_log;
-            if log.len() > DIRTY_LOG_CAP {
-                let drain_count = log.len() - DIRTY_LOG_CAP;
-                log.drain(..drain_count);
-            }
         }
         self.lsp_notify_change_active();
         self.recompute_and_install();
@@ -1176,16 +1130,9 @@ impl App {
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             syntax_enabled: true,
+            search_count_cache: std::cell::RefCell::new(None),
             pending_recompute: false,
-            last_recompute_us: 0,
-            last_install_us: 0,
             last_signature_us: 0,
-            last_git_us: 0,
-            last_perf: crate::syntax::PerfBreakdown::default(),
-            recompute_hits: 0,
-            recompute_throttled: 0,
-            recompute_runs: 0,
-            syntax_stale_drops: 0,
             config: hjkl_app::config::Config::default(),
             start_screen,
             lsp: None,

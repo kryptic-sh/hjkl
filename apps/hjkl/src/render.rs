@@ -1225,20 +1225,42 @@ fn status_line(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 /// `current_idx` is 1-based (the match the cursor is on or just passed).
 /// Returns `None` when no pattern is active or there are no matches.
 /// Caps at 10 000 matches to avoid stalling on huge files.
+///
+/// Result is memoised on `App::search_count_cache` keyed by
+/// `(buffer_id, dirty_gen, cursor, pattern_text)` — the status line
+/// re-runs this every render, but the scan only re-runs when one of
+/// those changes. On a cache miss the scan walks
+/// `Buffer::content_joined` (cached `Arc<String>`) once with regex's
+/// SIMD-fast `find_iter`, translating each match position back to its
+/// row via the cumulative newline count instead of cloning per-line
+/// `Vec<String>`s.
 pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     const MATCH_CAP: usize = 10_000;
     let st = app.active().editor.search_state();
     let pat = st.pattern.as_ref()?;
+    let pattern_str = pat.as_str();
+
     let buf = app.active().editor.buffer();
-    let (cursor_row, cursor_col) = app.active().editor.cursor();
-    // The engine reports `cursor_col` as a char index, but `regex::Match::start`
-    // returns a byte offset. On lines with multi-byte chars before the match
-    // (e.g. an em-dash in a doc comment) byte > char and the comparison drops
-    // the match the cursor is sitting on. Convert the cursor to a byte offset
-    // on its own line so both sides of the inequality are byte-counted.
-    let cursor_byte = buf
-        .lines()
-        .get(cursor_row)
+    let buffer_id = app.active().buffer_id;
+    let dirty_gen = buf.dirty_gen();
+    let cursor = app.active().editor.cursor();
+
+    // Cache hit — return immediately.
+    if let Some(cached) = app.search_count_cache.borrow().as_ref()
+        && cached.buffer_id == buffer_id
+        && cached.dirty_gen == dirty_gen
+        && cached.cursor == cursor
+        && cached.pattern == pattern_str
+    {
+        return cached.result;
+    }
+
+    let (cursor_row, cursor_col) = cursor;
+
+    // `cursor_col` is a char index; regex match offsets are bytes.
+    // Convert cursor's column to a byte offset within its own line.
+    let cursor_byte_in_row = buf
+        .line(cursor_row)
         .map(|line| {
             line.char_indices()
                 .nth(cursor_col)
@@ -1246,24 +1268,55 @@ pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
                 .unwrap_or(line.len())
         })
         .unwrap_or(0);
-    let mut total = 0usize;
-    let mut current_idx = 0usize;
-    'outer: for (row_idx, line) in buf.lines().iter().enumerate() {
-        for m in pat.find_iter(line) {
-            total += 1;
-            if (row_idx, m.start()) <= (cursor_row, cursor_byte) {
-                current_idx = total;
-            }
-            if total >= MATCH_CAP {
-                break 'outer;
+
+    // Single shared `Arc<String>` of the whole document — cached against
+    // `dirty_gen`, so calling content_joined here costs an `Arc::clone`.
+    let content = buf.content_joined();
+    let bytes = content.as_bytes();
+
+    // Compute cursor's global byte position in `content`. We walk newlines
+    // until we hit row `cursor_row` — capped by the row index, not file size.
+    let mut cursor_global_byte = 0usize;
+    if cursor_row > 0 {
+        let mut seen = 0usize;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' {
+                seen += 1;
+                if seen == cursor_row {
+                    cursor_global_byte = i + 1;
+                    break;
+                }
             }
         }
     }
-    if total == 0 {
+    cursor_global_byte += cursor_byte_in_row;
+
+    let mut total = 0usize;
+    let mut current_idx = 0usize;
+    for m in pat.find_iter(&content) {
+        total += 1;
+        if m.start() <= cursor_global_byte {
+            current_idx = total;
+        }
+        if total >= MATCH_CAP {
+            break;
+        }
+    }
+    let result = if total == 0 {
         None
     } else {
         Some((current_idx, total))
-    }
+    };
+
+    *app.search_count_cache.borrow_mut() = Some(crate::app::SearchCountCache {
+        buffer_id,
+        dirty_gen,
+        cursor,
+        pattern: pattern_str.to_string(),
+        result,
+    });
+
+    result
 }
 
 /// Build the status line text as a ratatui [`Line`].
