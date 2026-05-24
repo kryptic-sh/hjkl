@@ -4187,11 +4187,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert or Replace mode before
     /// calling this method.
     pub fn insert_char(&mut self, ch: char) {
-        let mutated = vim::insert_char_bridge(self, ch);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_char_bridge(self, ch) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4200,12 +4197,33 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_newline(&mut self) {
-        let mutated = vim::insert_newline_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_newline_bridge(self) {
+            self.after_insert_mutation();
         }
+    }
+
+    /// Common post-mutation sync for the `insert_*` primitives. The vim
+    /// FSM's `step` runs `ensure_cursor_in_scrolloff` at the end of every
+    /// normal/visual motion; insert-mode primitives bypass `step` and
+    /// must self-correct or the cursor scrolls off the viewport (held
+    /// Enter, multi-line backspace at BOL, arrow keys at edge, etc.).
+    ///
+    /// Marks the content dirty, widens the insert row's autoindent
+    /// tracking, and re-checks scrolloff.
+    fn after_insert_mutation(&mut self) {
+        self.mark_content_dirty();
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+        self.ensure_cursor_in_scrolloff();
+    }
+
+    /// Like `after_insert_mutation` but for cursor-only insert ops that
+    /// don't change content (arrows, Home/End, PageUp/Down). Skips the
+    /// dirty mark.
+    fn after_insert_motion(&mut self) {
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+        self.ensure_cursor_in_scrolloff();
     }
 
     /// Insert a tab character (or spaces up to the next `softtabstop` boundary
@@ -4213,11 +4231,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_tab(&mut self) {
-        let mutated = vim::insert_tab_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_tab_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4227,11 +4242,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_backspace(&mut self) {
-        let mutated = vim::insert_backspace_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_backspace_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4240,11 +4252,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_delete(&mut self) {
-        let mutated = vim::insert_delete_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_delete_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4254,8 +4263,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_arrow(&mut self, dir: vim::InsertDir) {
         vim::insert_arrow_bridge(self, dir);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Move the cursor to the start of the current line (Home key), breaking
@@ -4264,8 +4272,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_home(&mut self) {
         vim::insert_home_bridge(self);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Move the cursor to the end of the current line (End key), breaking the
@@ -4274,8 +4281,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_end(&mut self) {
         vim::insert_end_bridge(self);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Scroll up one full viewport height (PageUp), moving the cursor with it.
@@ -4285,8 +4291,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_pageup(&mut self, viewport_h: u16) {
         vim::insert_pageup_bridge(self, viewport_h);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Scroll down one full viewport height (PageDown), moving the cursor with
@@ -4295,8 +4300,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_pagedown(&mut self, viewport_h: u16) {
         vim::insert_pagedown_bridge(self, viewport_h);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
@@ -4304,11 +4308,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_w(&mut self) {
-        let mutated = vim::insert_ctrl_w_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_w_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4317,11 +4318,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_u(&mut self) {
-        let mutated = vim::insert_ctrl_u_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_u_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4330,11 +4328,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_h(&mut self) {
-        let mutated = vim::insert_ctrl_h_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_h_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -5652,5 +5647,84 @@ mod shift_syntax_spans_tests {
             edit_insert_newline_at(1, 1),
         ]);
         assert_eq!(e.buffer_spans().len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod insert_mode_scrolloff_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Host, Options};
+    use crate::vim::Mode;
+    use hjkl_buffer::Buffer;
+
+    fn ed_with_lines(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("row{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        // Viewport: 20 rows tall, starts at top.
+        let vp = e.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.top_row = 0;
+        vp.top_col = 0;
+        e.set_viewport_height(20);
+        e.vim.mode = Mode::Insert;
+        e
+    }
+
+    /// Regression: holding Enter in insert mode used to scroll the cursor
+    /// off the viewport because `insert_newline` (called from the app's
+    /// `dispatch_insert_key`) bypasses the FSM `step` that runs
+    /// `ensure_cursor_in_scrolloff`. The post-mutation helper now runs
+    /// scrolloff for every insert primitive — the cursor must stay
+    /// within `SCROLLOFF` rows of the bottom edge.
+    #[test]
+    fn insert_newline_keeps_cursor_in_scrolloff() {
+        let mut e = ed_with_lines(200);
+        // Park cursor at the bottom edge of the viewport (row 19).
+        e.set_cursor_doc(19, 0);
+        // Press Enter 50 times. Cursor moves down each newline; without
+        // scrolloff the cursor would slide off the bottom of the
+        // viewport at row 20+ and the user would type blind.
+        for _ in 0..50 {
+            e.insert_newline();
+        }
+        let (cursor_row, _) = e.cursor();
+        let vp = e.host().viewport();
+        let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF
+            .min(vp.height as usize - 1) / 2;
+        let max_screen_row = vp.height as usize - 1 - margin;
+        assert!(
+            cursor_screen_row <= max_screen_row,
+            "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row} \
+             (cursor_row={cursor_row}, vp.top_row={vp_top}, vp.height={vp_h})",
+            vp_top = vp.top_row,
+            vp_h = vp.height,
+        );
+    }
+
+    /// Same check for `insert_arrow(Down)` — cursor-only motion that also
+    /// must trigger scrolloff.
+    #[test]
+    fn insert_arrow_down_keeps_cursor_in_scrolloff() {
+        let mut e = ed_with_lines(200);
+        e.set_cursor_doc(19, 0);
+        for _ in 0..50 {
+            e.insert_arrow(vim::InsertDir::Down);
+        }
+        let (cursor_row, _) = e.cursor();
+        let vp = e.host().viewport();
+        let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF
+            .min(vp.height as usize - 1) / 2;
+        let max_screen_row = vp.height as usize - 1 - margin;
+        assert!(
+            cursor_screen_row <= max_screen_row,
+            "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row}"
+        );
     }
 }
