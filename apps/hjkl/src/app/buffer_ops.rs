@@ -44,40 +44,34 @@ impl App {
             (vp.top_row, vp.height as usize)
         };
 
-        // T3/T4: Re-install cached spans from the last completed parse for
-        // this slot — gives the first frame after a buffer switch correct
+        // T3: Re-install cached spans from the last completed viewport parse
+        // for this slot — gives the first frame after a buffer switch correct
         // highlight colours while the fresh parse runs in the background.
-        // T4: Drop all three caches if the buffer's dirty_gen has advanced
-        // since they were computed (stale spans would show wrong highlights).
-        // Uses the merged install so top + bottom + viewport all contribute.
+        // Drop the cache if dirty_gen has advanced (stale spans would show wrong highlights).
         let cached_spans_installed = {
             let current_dg = self.slots[idx].editor.buffer().dirty_gen();
-            // Check staleness: if any cache exists, its dirty_gen key must match.
-            let any_stale = [
-                &self.slots[idx].viewport_render_output,
-                &self.slots[idx].top_render_output,
-                &self.slots[idx].bottom_render_output,
-            ]
-            .iter()
-            .any(|c| c.as_ref().is_some_and(|o| o.key.0 != current_dg));
+            // Check staleness: if the viewport cache exists, its dirty_gen must match.
+            let any_stale = self.slots[idx]
+                .viewport_render_output
+                .as_ref()
+                .is_some_and(|o| o.key.0 != current_dg);
             if any_stale {
                 self.slots[idx].viewport_render_output = None;
-                self.slots[idx].top_render_output = None;
-                self.slots[idx].bottom_render_output = None;
                 false
             } else {
-                let has_any = self.slots[idx].viewport_render_output.is_some()
-                    || self.slots[idx].top_render_output.is_some()
-                    || self.slots[idx].bottom_render_output.is_some();
-                if has_any {
+                let has_viewport = self.slots[idx].viewport_render_output.is_some();
+                if has_viewport {
                     // Install the diag signs from the viewport cache (most recent live parse).
                     if let Some(ref vp) = self.slots[idx].viewport_render_output {
                         let signs = vp.signs.clone();
                         self.slots[idx].diag_signs = signs;
                     }
-                    self.install_merged_spans_for_slot(idx);
+                    if let Some(ref vp) = self.slots[idx].viewport_render_output {
+                        let spans = vp.spans.clone();
+                        self.slots[idx].editor.install_ratatui_syntax_spans(spans);
+                    }
                 }
-                has_any
+                has_viewport
             }
         };
 
@@ -172,8 +166,6 @@ impl App {
             slot.last_git_dirty_gen = None;
             slot.last_recompute_key = None;
             slot.viewport_render_output = None;
-            slot.top_render_output = None;
-            slot.bottom_render_output = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;
@@ -275,8 +267,6 @@ impl App {
             slot.last_git_dirty_gen = None;
             slot.last_recompute_key = None;
             slot.viewport_render_output = None;
-            slot.top_render_output = None;
-            slot.bottom_render_output = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;

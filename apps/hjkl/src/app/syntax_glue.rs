@@ -73,8 +73,12 @@ impl App {
             return;
         }
 
-        let lines = self.active().editor.buffer().lines();
-        let mut bytes = lines.join("\n").into_bytes();
+        // Reuse the per-dirty_gen cached `Arc<String>` so this doesn't
+        // re-clone every row per keystroke (paired with the same call
+        // in `lsp_notify_change_active` + `buffer_signature` + the
+        // syntax submit path — all share one allocation per generation).
+        let text = self.active().editor.buffer().content_joined();
+        let mut bytes = text.as_bytes().to_vec();
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
@@ -246,6 +250,191 @@ impl App {
 
         let is_active = out.buffer_id == active_id;
 
+        // Plan-B (#233): the worker now ships EMPTY span tables — it
+        // only refreshes the shared retained tree.
+        //
+        // For `Viewport` kind: the empty signal is discarded.
+        // `recompute_and_install` already runs a sync `query_viewport`
+        // against the fresh tree at the end of every tick, so firing
+        // an extra sync here only duplicates work (the signal's range
+        // is the async submit's over-provisioned span, not the visible
+        // viewport — different dedup key, so it wouldn't short-circuit).
+        //
+        // For `Top` / `Bottom`: the recompute path no longer runs sync
+        // for these kinds on every tick (typing was 1Hz because each
+        // keystroke re-highlighted ~240 prewarm rows with full CSS
+        // injection reparse). Instead, trigger sync here when the
+        // async worker delivers a fresh tree for that prewarm region.
+        // The buffer's current dirty_gen is used so the sync result
+        // is tagged correctly even if the worker's parse was for an
+        // older gen — the dedup + generation guard handle the rest.
+        if out.spans.is_empty() {
+            if !is_active {
+                return false;
+            }
+            match out.kind {
+                crate::syntax::ParseKind::Viewport => {
+                    // Worker just refreshed the retained tree. The sync
+                    // query that ran during the keystroke was deferred
+                    // (tree was dirty); now the tree is fresh, refresh
+                    // the install cache.
+                    //
+                    // Use the `changed_ranges` tree-sitter reports
+                    // between the pre-edit tree and the post-parse tree
+                    // to walk only the row regions that actually
+                    // changed — typically one row for single-char
+                    // typing, vs a full ~25ms viewport walk. Rows
+                    // outside `changed_ranges` keep their existing
+                    // installed spans (tree-sitter says they didn't
+                    // change so they're still correct).
+                    self.slots[slot_idx].last_sync_viewport_key = None;
+                    let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+                    let (vp_top, vp_height) = {
+                        let vp = self.active().editor.host().viewport();
+                        (vp.top_row, vp.height as usize)
+                    };
+                    let vp_byte_to_row = |bytes: &[usize], byte: usize| {
+                        bytes.partition_point(|&b| b <= byte).saturating_sub(1)
+                    };
+                    if out.changed_ranges.is_empty() {
+                        // Cold parse or no structural change → full
+                        // viewport refresh. Clear the per-row cache so
+                        // the sync_query_region walk fires.
+                        self.slots[slot_idx].installed_spans_dg = None;
+                        self.slots[slot_idx].installed_rows = None;
+                        self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
+                    } else if let Some((_, row_starts, _, cache_dg)) =
+                        self.syntax.cached_source(out.buffer_id)
+                        && cache_dg == buf_dg
+                    {
+                        // Compute the total row footprint of all
+                        // changed_ranges, capped at 2x viewport. Above
+                        // that cap (e.g. undo of a huge paste where
+                        // tree-sitter reports `[3..991925]`) we'd
+                        // freeze the UI for seconds walking each
+                        // changed row synchronously. Fall back to a
+                        // viewport-only walk + drop the per-row cache
+                        // for off-viewport rows (they'll be walked on
+                        // demand when the user scrolls there).
+                        let row_starts = row_starts.as_ref();
+                        let prior_installed = self.slots[slot_idx].installed_rows.clone();
+                        let row_spans: Vec<(usize, usize)> = out
+                            .changed_ranges
+                            .iter()
+                            .map(|r| {
+                                let row_start = vp_byte_to_row(row_starts, r.start);
+                                let row_end =
+                                    vp_byte_to_row(row_starts, r.end.saturating_sub(1)) + 1;
+                                (row_start, row_end)
+                            })
+                            .collect();
+                        let total_changed_rows: usize =
+                            row_spans.iter().map(|(s, e)| e.saturating_sub(*s)).sum();
+                        let huge = total_changed_rows > vp_height.saturating_mul(2);
+                        tracing::debug!(
+                            target: "hjkl::profile",
+                            ranges = ?out.changed_ranges,
+                            prior = ?prior_installed,
+                            vp_top, vp_height,
+                            total_changed_rows,
+                            huge,
+                            "changed_ranges raw"
+                        );
+                        if huge {
+                            // Drop the cache; sync_query_region will
+                            // walk just the visible viewport, and
+                            // off-viewport rows will be walked lazily.
+                            self.slots[slot_idx].installed_spans_dg = None;
+                            self.slots[slot_idx].installed_rows = None;
+                            self.sync_query_region(
+                                out.buffer_id,
+                                vp_top,
+                                vp_height,
+                                buf_dg,
+                                out.kind,
+                            );
+                            return true;
+                        }
+                        for (row_start, row_end) in row_spans {
+                            let (clamp_start, clamp_end) = match &prior_installed {
+                                Some(r) => (r.start, r.end),
+                                None => (vp_top, vp_top + vp_height),
+                            };
+                            let row_start = row_start.max(clamp_start);
+                            let row_end = row_end.min(clamp_end);
+                            if row_start >= row_end {
+                                continue;
+                            }
+                            let _ = self.sync_query_changed_rows(
+                                out.buffer_id,
+                                slot_idx,
+                                row_start,
+                                row_end - row_start,
+                                buf_dg,
+                            );
+                        }
+                        // Shrink installed_rows to JUST the viewport.
+                        // We only re-walked the changed regions inside
+                        // the prior installed range; rows that were in
+                        // the prior installed range but OUTSIDE both
+                        // the viewport AND the changed_ranges still
+                        // hold pre-undo spans (which may be stale or
+                        // empty after the buffer shrank). Letting the
+                        // row-cache claim coverage for those would
+                        // paint stale / blank rows when the user
+                        // scrolls there. Shrinking forces a row-cache
+                        // miss → delta walk on demand for off-viewport
+                        // rows, refreshing them against the
+                        // post-undo tree.
+                        self.slots[slot_idx].installed_spans_dg = Some(buf_dg);
+                        self.slots[slot_idx].installed_rows = Some(vp_top..(vp_top + vp_height));
+                        self.slots[slot_idx].last_sync_viewport_key = None;
+                    } else {
+                        // Source cache stale — fall back to full refresh.
+                        self.slots[slot_idx].installed_spans_dg = None;
+                        self.slots[slot_idx].installed_rows = None;
+                        self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
+                    }
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        // Generation-aware install: a render result tagged with an older
+        // `dirty_gen` than what's already cached (or older than the
+        // buffer's current dirty_gen) is from a parse that was in flight
+        // when newer state landed — installing it would clobber the
+        // fresher sync `query_viewport` cache. Drop it.
+        //
+        // Symptoms when this guard is missing:
+        // - undo/redo of a multi-line edit: worker reparse for the
+        //   pre-undo source arrives after the sync query installed the
+        //   post-undo spans → editor paints with pre-undo colours that
+        //   don't match the visible text until the NEXT submit lands.
+        // - rapid typing: each keystroke ticks dirty_gen; worker results
+        //   are always one or two gens behind sync results.
+        let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+        let out_dg = out.key.0;
+        if out_dg < buf_dg {
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+            return false;
+        }
+        let existing_dg = match out.kind {
+            crate::syntax::ParseKind::Viewport => self.slots[slot_idx]
+                .viewport_render_output
+                .as_ref()
+                .map(|o| o.key.0),
+            // Unknown future kind: treat as install (conservative).
+            _ => None,
+        };
+        if let Some(existing) = existing_dg
+            && out_dg < existing
+        {
+            self.syntax_stale_drops = self.syntax_stale_drops.saturating_add(1);
+            return false;
+        }
+
         // Route into the correct per-slot cache field via the exhaustive dispatch
         // helper so no wildcard arm is needed despite ParseKind being #[non_exhaustive].
         use crate::syntax::ParseKindKind;
@@ -260,51 +449,377 @@ impl App {
                 }
                 self.slots[slot_idx].viewport_render_output = Some(out.clone());
             }
-            ParseKindKind::Top => {
-                self.slots[slot_idx].top_render_output = Some(out.clone());
-            }
-            ParseKindKind::Bottom => {
-                self.slots[slot_idx].bottom_render_output = Some(out.clone());
-            }
         });
 
         if is_active {
-            // Active buffer: merge all three caches and install on the editor.
+            // Active buffer: patch ONLY the result's range on the editor
+            // instead of re-running the merger over `line_count`. This
+            // keeps per-keystroke install cost proportional to viewport
+            // height (~80 rows) rather than file size — without it j/k
+            // on a 10k-row file shows visible cursor lag because the
+            // merger + full ratatui install touch every row.
+            //
+            // Cross-region rows (e.g. Top + Viewport overlap when the
+            // cursor is near the top) auto-resolve: the most recently
+            // installed kind wins. Because Viewport is the kind that
+            // moves on every j/k, "newest = correct viewport" naturally
+            // holds.
+            use hjkl_engine_tui::EditorRatatuiExt;
+            let range_top = out.key.1;
+            let range_height = out.key.2;
             let active_idx = self.focused_slot_idx();
-            self.install_merged_spans_for_slot(active_idx);
+            let line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+            let end = (range_top + range_height)
+                .min(line_count)
+                .min(out.spans.len());
+            let start = range_top.min(end);
+            let slice = &out.spans[start..end];
+            self.slots[active_idx]
+                .editor
+                .patch_ratatui_syntax_spans_range(start..end, slice);
             return true;
         }
         // Non-active buffer: cached above, live install deferred to switch_to.
         false
     }
 
-    /// Merge `top_render_output`, `bottom_render_output`, and
-    /// `viewport_render_output` for the slot at `slot_idx` into a single
-    /// per-row span table and install it on the editor.
+    /// Walk + install spans for a specific row range, bypassing the
+    /// per-row install cache. Used by the changed-ranges refresh path
+    /// in `install_render_result`: after the worker delivers, walk
+    /// only the rows tree-sitter reports as structurally changed
+    /// rather than re-walking the full viewport.
+    fn sync_query_changed_rows(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        slot_idx: usize,
+        row_top: usize,
+        row_height: usize,
+        current_dg: u64,
+    ) -> bool {
+        let _ = slot_idx;
+        let Some((source, row_starts, line_count_arc, cache_dg)) =
+            self.syntax.cached_source(buffer_id)
+        else {
+            return false;
+        };
+        if cache_dg != current_dg {
+            return false;
+        }
+        let bytes_len = source.len();
+        let byte_start = row_starts.get(row_top).copied().unwrap_or(bytes_len);
+        let end_row = row_top + row_height + 1;
+        let byte_end = row_starts
+            .get(end_row)
+            .copied()
+            .unwrap_or(bytes_len)
+            .min(bytes_len)
+            .max(byte_start);
+        let t_q = Instant::now();
+        let sync_out = self.syntax.query_viewport(
+            buffer_id,
+            source.as_str(),
+            row_starts.as_ref(),
+            byte_start..byte_end,
+            row_top,
+            row_height,
+            line_count_arc,
+            current_dg,
+            crate::syntax::ParseKind::Viewport,
+        );
+        let q_us = t_q.elapsed().as_micros();
+        let installed = if let Some(sync_out) = sync_out {
+            self.install_render_result(sync_out);
+            true
+        } else {
+            false
+        };
+        tracing::debug!(
+            target: "hjkl::profile",
+            row_top, row_height,
+            byte_len = byte_end - byte_start,
+            q_us,
+            installed,
+            "sync_query changed-rows"
+        );
+        installed
+    }
+
+    /// Run a sync `query_viewport` against the active buffer's retained
+    /// tree for an arbitrary `(top, height)` region and install the
+    /// result. Skips silently when the cached source is stale (throttled
+    /// submit hasn't fired the cache rebuild yet) or when no retained
+    /// tree exists. Generic over `ParseKind` so Viewport / Top / Bottom
+    /// all use the same code path.
     ///
-    /// Merge order: top → bottom → viewport. Viewport wins for any row
-    /// that appears in multiple caches (so the freshest parse of the
-    /// current scroll position always takes precedence).
-    pub(crate) fn install_merged_spans_for_slot(&mut self, slot_idx: usize) {
-        // (see free fn `merge_render_outputs` below — pure helper, testable
-        // without an Editor.)
-        let line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
-        let current_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
-        let dirty_rows_log = &self.slots[slot_idx].dirty_rows_log;
-        let sources = [
-            self.slots[slot_idx].top_render_output.as_ref(),
-            self.slots[slot_idx].bottom_render_output.as_ref(),
-            self.slots[slot_idx].viewport_render_output.as_ref(),
-        ];
-        let merged = merge_render_outputs(line_count, current_dg, dirty_rows_log, sources);
-        self.slots[slot_idx]
-            .editor
-            .install_ratatui_syntax_spans(merged);
+    /// `current_dg` is the buffer's current dirty_gen — used both to
+    /// detect cache staleness and to tag the resulting `RenderOutput`
+    /// so the install path's generation guard knows this result is fresh.
+    fn sync_query_region(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        range_top: usize,
+        range_height: usize,
+        current_dg: u64,
+        kind: crate::syntax::ParseKind,
+    ) -> bool {
+        // Per-tick dedup: skip the highlight + merge + install pipeline
+        // when nothing changed since the previous run for this
+        // `(buffer, kind)`. Without this gate `recompute_and_install`
+        // re-walks the whole `line_count` x 3-cache merger every event
+        // loop iteration, which scrolls a large file feels visibly
+        // laggy at idle.
+        let Some(slot_idx) = self.slots.iter().position(|s| s.buffer_id == buffer_id) else {
+            return false;
+        };
+        let new_key = (current_dg, range_top, range_height);
+        let last_key = match kind {
+            crate::syntax::ParseKind::Viewport => self.slots[slot_idx].last_sync_viewport_key,
+            _ => None,
+        };
+        if last_key == Some(new_key) {
+            tracing::debug!(target: "hjkl::profile", ?kind, range_top, range_height, current_dg, "sync_query dedup-hit");
+            return true;
+        }
+
+        // Per-row install cache: when the new viewport's row range is
+        // already fully covered by previously-installed rows for the
+        // current dirty_gen, skip the walk entirely (j/k within an
+        // already-walked region is free). Otherwise walk only the
+        // *delta* rows — the parts of the new viewport that aren't yet
+        // installed. Scroll-by-one then costs one row's worth of
+        // tree-sitter walk, not a full 55-row viewport walk.
+        let vp_range = range_top..(range_top + range_height);
+        let cached_dg_opt = self.slots[slot_idx].installed_spans_dg;
+        let cached_for_dg =
+            matches!(kind, crate::syntax::ParseKind::Viewport) && cached_dg_opt == Some(current_dg);
+
+        // Typing path: dg bumped since last walk AND we have a prior
+        // install. Tree was just edited (tree.edit synced) but the
+        // worker reparse is in flight. Walking the dirty tree here
+        // would block the key handler ~30-50ms per char and return
+        // partial results. Instead, leave the row-shifted installed
+        // spans visible for one frame; worker delivery will trigger
+        // `install_render_result`'s Viewport branch, which re-runs
+        // this method against the freshly-parsed tree.
+        if matches!(kind, crate::syntax::ParseKind::Viewport)
+            && cached_dg_opt.is_some()
+            && cached_dg_opt != Some(current_dg)
+        {
+            tracing::debug!(
+                target: "hjkl::profile",
+                cached_dg = ?cached_dg_opt,
+                current_dg,
+                "sync_query defer (tree dirty)"
+            );
+            // Update dedup so we don't keep re-checking the same key.
+            self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+            return true;
+        }
+
+        let cached_rows = if cached_for_dg {
+            self.slots[slot_idx].installed_rows.clone()
+        } else {
+            None
+        };
+        let walk_ranges: Vec<std::ops::Range<usize>> = match cached_rows.as_ref() {
+            Some(installed)
+                if installed.start <= vp_range.start && installed.end >= vp_range.end =>
+            {
+                // Fully covered — no walk needed. Update dedup key so
+                // subsequent identical calls also short-circuit.
+                tracing::debug!(
+                    target: "hjkl::profile",
+                    ?kind, range_top, range_height, current_dg,
+                    installed_start = installed.start, installed_end = installed.end,
+                    "sync_query row-cache hit"
+                );
+                if let crate::syntax::ParseKind::Viewport = kind {
+                    self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+                }
+                return true;
+            }
+            Some(installed) => {
+                let mut deltas = Vec::with_capacity(2);
+                if vp_range.start < installed.start {
+                    deltas.push(vp_range.start..installed.start.min(vp_range.end));
+                }
+                if vp_range.end > installed.end {
+                    deltas.push(installed.end.max(vp_range.start)..vp_range.end);
+                }
+                deltas
+            }
+            None => vec![vp_range.clone()],
+        };
+
+        let t_sync = Instant::now();
+        let Some((source, row_starts, line_count_arc, cache_dg)) =
+            self.syntax.cached_source(buffer_id)
+        else {
+            return false;
+        };
+        if cache_dg != current_dg {
+            return false;
+        }
+        let bytes_len = source.len();
+
+        let mut installed_any = false;
+        let mut total_q_us: u128 = 0;
+        let mut total_install_us: u128 = 0;
+        let mut total_byte_len: usize = 0;
+        for delta in &walk_ranges {
+            if delta.start >= delta.end {
+                continue;
+            }
+            let d_byte_start = row_starts.get(delta.start).copied().unwrap_or(bytes_len);
+            let d_end_row = delta.end + 1;
+            let d_byte_end = row_starts
+                .get(d_end_row)
+                .copied()
+                .unwrap_or(bytes_len)
+                .min(bytes_len)
+                .max(d_byte_start);
+            total_byte_len += d_byte_end - d_byte_start;
+            let t_q = Instant::now();
+            let sync_out = self.syntax.query_viewport(
+                buffer_id,
+                source.as_str(),
+                row_starts.as_ref(),
+                d_byte_start..d_byte_end,
+                delta.start,
+                delta.end - delta.start,
+                line_count_arc,
+                current_dg,
+                kind,
+            );
+            total_q_us += t_q.elapsed().as_micros();
+            if let Some(sync_out) = sync_out {
+                let t_install = Instant::now();
+                self.install_render_result(sync_out);
+                total_install_us += t_install.elapsed().as_micros();
+                installed_any = true;
+            }
+        }
+
+        if !installed_any {
+            return false;
+        }
+
+        tracing::debug!(
+            target: "hjkl::profile",
+            ?kind, range_top, range_height,
+            byte_len = total_byte_len,
+            delta_count = walk_ranges.len(),
+            q_us = total_q_us,
+            install_us = total_install_us,
+            total_us = t_sync.elapsed().as_micros(),
+            "sync_query miss"
+        );
+
+        if let crate::syntax::ParseKind::Viewport = kind {
+            self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+            // Extend the per-row install cache to cover the full viewport
+            // (existing installed range ∪ new vp range). Single-range
+            // representation keeps the membership check O(1).
+            let new_installed = match cached_rows {
+                Some(existing) => {
+                    existing.start.min(vp_range.start)..existing.end.max(vp_range.end)
+                }
+                None => vp_range,
+            };
+            self.slots[slot_idx].installed_spans_dg = Some(current_dg);
+            self.slots[slot_idx].installed_rows = Some(new_installed);
+        }
+        true
+    }
+
+    /// Run sync `query_viewport` for the active buffer's Viewport region
+    /// (the over-provisioned visible window). On cold-open / post-reset
+    /// where no retained tree exists, falls back to the one-shot
+    /// `preview_render` so the visible rows paint immediately.
+    fn sync_query_active_viewport(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        oversize_top: usize,
+        oversize_height: usize,
+        fallback_top: usize,
+        fallback_height: usize,
+        current_dg: u64,
+    ) {
+        let installed = self.sync_query_region(
+            buffer_id,
+            oversize_top,
+            oversize_height,
+            current_dg,
+            crate::syntax::ParseKind::Viewport,
+        );
+        if installed {
+            return;
+        }
+        // No retained tree (cold open / post-reset). Fall back to the
+        // one-shot `preview_render` so the visible rows paint immediately
+        // instead of waiting on the async worker.
+        let active_idx = self.focused_slot_idx();
+        let buf = self.slots[active_idx].editor.buffer();
+        if let Some(preview) =
+            self.syntax
+                .preview_render(buffer_id, buf, fallback_top, fallback_height)
+        {
+            self.install_render_result(preview);
+        }
+    }
+
+    /// Handle a `take_content_reset` event on the active buffer: clear the
+    /// per-slot `RenderOutput` caches (their row counts no longer match
+    /// the post-replace buffer), blank the editor's installed
+    /// `buffer_spans`, and tell the syntax layer to drop the shared
+    /// retained tree synchronously so the next `query_viewport` returns
+    /// `None` and falls back to the one-shot `preview_render`.
+    ///
+    /// Called from every site that drains `take_content_reset` — kept
+    /// here so the multi-step bookkeeping cannot drift between call
+    /// sites (4 in `event_loop.rs`, 1 in `sync_after_engine_mutation`).
+    pub(crate) fn handle_active_content_reset(&mut self, buffer_id: crate::syntax::BufferId) {
+        self.syntax.reset(buffer_id);
+        let active_idx = self.focused_slot_idx();
+        let slot = &mut self.slots[active_idx];
+        slot.viewport_render_output = None;
+        // Clear sync dedup key so the post-reset sync query is not
+        // skipped if the new dirty_gen + viewport happen to match a
+        // pre-reset key.
+        slot.last_sync_viewport_key = None;
+        slot.installed_spans_dg = None;
+        slot.installed_rows = None;
+        slot.editor.install_ratatui_syntax_spans(Vec::new());
+    }
+
+    /// Translate the per-slot cached `RenderOutput.spans` row vectors
+    /// in-place to track a batch of [`hjkl_engine::ContentEdit`]s, mirroring
+    /// what [`hjkl_engine::Editor::shift_syntax_spans_for_edits`] does for
+    /// the live `buffer_spans`.
+    ///
+    /// Shifting the viewport cache keeps it shape-compatible with the new
+    /// line count: rows touched by the edit stay blank for one frame
+    /// (worker fills them in), untouched rows keep their cached colours.
+    pub(crate) fn shift_cached_render_output_spans_for_slot(
+        &mut self,
+        slot_idx: usize,
+        edits: &[hjkl_engine::ContentEdit],
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        let slot = &mut self.slots[slot_idx];
+        if let Some(out) = slot.viewport_render_output.as_mut() {
+            shift_rows(&mut out.spans, edits);
+        }
     }
 
     /// Submit a new viewport-scoped parse on the syntax worker and install
     /// whatever the worker has produced since the last frame.
     pub(crate) fn recompute_and_install(&mut self) {
+        if !self.syntax_enabled {
+            return;
+        }
         const RECOMPUTE_THROTTLE: Duration = Duration::from_millis(100);
         let buffer_id = self.active().buffer_id;
         let (focused_top, focused_height) = {
@@ -331,15 +846,11 @@ impl App {
         let top = union_top;
         let height = union_bot - union_top;
 
-        // T1: Over-provision the parse range to 3× the visible height
-        // (one viewport above + current + one viewport below). The
-        // math lives in `hjkl_buffer::over_provisioned_range` so future
-        // host crates (floem GUI, web …) compute the same range from
-        // their own viewport without re-deriving it.
-        let line_count = self.active().editor.buffer().line_count() as usize;
-        let (oversize_top, oversize_height) =
-            hjkl_buffer::over_provisioned_range(top, height, line_count);
-
+        // Worker requests carry only the visible viewport now. The 3x
+        // over-provisioned range was a pre-cache hint for the (now-gone)
+        // parent-spans cache; without it the request range only affects
+        // the result's `key` tag and the worker still parses the full
+        // source either way.
         let dg = self.active().editor.buffer().dirty_gen();
         let key = (dg, top, height);
 
@@ -372,12 +883,11 @@ impl App {
                 let submit_result = {
                     let active_idx = self.focused_slot_idx();
                     let buf = self.slots[active_idx].editor.buffer();
-                    // T1: Submit oversized range so ahead-of-scroll spans are ready.
                     self.syntax.submit_render(
                         buffer_id,
                         buf,
-                        oversize_top,
-                        oversize_height,
+                        top,
+                        height,
                         crate::syntax::ParseKind::Viewport,
                     )
                 };
@@ -389,71 +899,36 @@ impl App {
             }
         }
 
-        // Top + Bottom pre-cache for the active buffer.
+        // Plan B (#233): run a sync `query_viewport` against the retained
+        // tree (which already has this frame's `tree.edit` deltas applied
+        // via `SyntaxLayer::apply_edits`) every tick — NOT only when a
+        // submit fired. Pure-scroll ticks (no edit) take the cache-hit /
+        // throttle branch above and skip the submit; without this call
+        // the viewport keeps painting last frame's spans until the
+        // async worker delivers.
         //
-        // Submit alongside the Viewport request — worker processes FIFO so
-        // Viewport runs first (cold parse builds tree), then Top + Bottom
-        // ride along on the same retained tree (incremental highlight, ~1-5 ms
-        // each). Startup latency is unchanged: viewport blocking wait is
-        // the only thing that gates the first paint. Top + Bottom land soon
-        // after with no extra user-perceived delay.
+        // Cheap: ~100µs on warm tree for an 80-row window. The sync
+        // result is tagged with the buffer's current dirty_gen so the
+        // generation guard in `install_render_result` will favour it
+        // over any older worker result still in flight.
         //
-        // Per-(buffer_id, kind) queue dedup means re-submitting the same
-        // kind on subsequent ticks just replaces the in-flight request.
-        // We skip the submit when the cache for that kind is already populated
-        // AND fresh for the current dirty_gen (avoid redundant work).
-        // A cache that is `Some` but carries a stale dirty_gen is treated
-        // the same as `None` — the merger will reject its spans anyway, so
-        // we must re-submit to get a fresh result.  Not checking this was
-        // the secondary cause of the delete+undo staleness bug: a stale-dg
-        // top/bottom cache prevented re-submission indefinitely.
-        {
-            let active_idx = self.focused_slot_idx();
-            let needs_top = self.slots[active_idx]
-                .top_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != dg);
-            let needs_bottom = self.slots[active_idx]
-                .bottom_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != dg);
-            let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+        // Use the VISIBLE viewport (not the 3x over-provisioned range
+        // the async worker submits) for sync. Over-provisioning helped
+        // the worker pre-cache ahead-of-scroll rows; the sync path
+        // doesn't cache, it just re-queries every tick, so highlighting
+        // 240 rows when only 80 are visible is wasted CPU per j/k.
+        self.sync_query_active_viewport(buffer_id, top, height, top, height, dg);
 
-            if needs_top {
-                let (top_range_start, top_range_height) =
-                    hjkl_buffer::over_provisioned_range(0, height, slot_line_count);
-                let buf = self.slots[active_idx].editor.buffer();
-                self.syntax.submit_render(
-                    buffer_id,
-                    buf,
-                    top_range_start,
-                    top_range_height,
-                    crate::syntax::ParseKind::Top,
-                );
-            }
+        // Top / Bottom span-cache prewarms were removed alongside the
+        // parent-spans cache (bonsai refactor). With the tree-as-only-cache
+        // model, `gg` / `G` reparse the viewport against the retained tree
+        // synchronously (~1ms walk on a warm tree). No per-slot Top/Bottom
+        // submits are needed.
 
-            if needs_bottom {
-                let bottom_anchor = slot_line_count.saturating_sub(height);
-                let (bot_range_start, bot_range_height) =
-                    hjkl_buffer::over_provisioned_range(bottom_anchor, height, slot_line_count);
-                let buf = self.slots[active_idx].editor.buffer();
-                self.syntax.submit_render(
-                    buffer_id,
-                    buf,
-                    bot_range_start,
-                    bot_range_height,
-                    crate::syntax::ParseKind::Bottom,
-                );
-            }
-        }
-
-        // T2: Pre-warm other open slots. The per-buffer dedup on the queue
-        // ensures this never starves the active buffer's request — active
-        // was enqueued first and the worker drains FIFO. If the active
-        // buffer's result is not yet back, we still queue the pre-warms
-        // so the worker can pipeline: it processes active, then the others.
-        // Also submit Top + Bottom for non-active slots so switching to them
-        // and immediately pressing `gg` or `G` is also snappy.
+        // Pre-warm the retained tree for non-active slots so a buffer
+        // switch finds a warm tree (avoids cold-parse latency on switch).
+        // We submit only Viewport; the worker dedups per (buffer, kind)
+        // so this stays a single in-flight parse per other slot.
         let active_idx = self.focused_slot_idx();
         let slot_indices: Vec<usize> = (0..self.slots.len()).filter(|&i| i != active_idx).collect();
         for slot_idx in slot_indices {
@@ -462,64 +937,14 @@ impl App {
                 let vp = self.slots[slot_idx].editor.host().viewport();
                 (vp.top_row, vp.height as usize)
             };
-            // Over-provision the secondary slots too so switching into
-            // them is likely already covered. Same host-agnostic helper.
-            let slot_line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
-            let (slot_oversize_top, slot_oversize_height) =
-                hjkl_buffer::over_provisioned_range(slot_top, slot_height, slot_line_count);
             let buf = self.slots[slot_idx].editor.buffer();
             self.syntax.submit_render(
                 slot_buf_id,
                 buf,
-                slot_oversize_top,
-                slot_oversize_height,
+                slot_top,
+                slot_height,
                 crate::syntax::ParseKind::Viewport,
             );
-
-            // Top + Bottom for non-active slots — submit alongside Viewport,
-            // worker handles FIFO + per-(buffer, kind) dedup.
-            // Use the same stale-dg check as for the active slot: a cache
-            // that exists but was computed for an old dirty_gen is useless
-            // (merger rejects it) and must be refreshed.
-            let slot_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
-            let needs_top = self.slots[slot_idx]
-                .top_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != slot_dg);
-            let needs_bottom = self.slots[slot_idx]
-                .bottom_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != slot_dg);
-
-            if needs_top {
-                let (top_range_start, top_range_height) =
-                    hjkl_buffer::over_provisioned_range(0, slot_height, slot_line_count);
-                let buf = self.slots[slot_idx].editor.buffer();
-                self.syntax.submit_render(
-                    slot_buf_id,
-                    buf,
-                    top_range_start,
-                    top_range_height,
-                    crate::syntax::ParseKind::Top,
-                );
-            }
-
-            if needs_bottom {
-                let bottom_anchor = slot_line_count.saturating_sub(slot_height);
-                let (bot_range_start, bot_range_height) = hjkl_buffer::over_provisioned_range(
-                    bottom_anchor,
-                    slot_height,
-                    slot_line_count,
-                );
-                let buf = self.slots[slot_idx].editor.buffer();
-                self.syntax.submit_render(
-                    slot_buf_id,
-                    buf,
-                    bot_range_start,
-                    bot_range_height,
-                    crate::syntax::ParseKind::Bottom,
-                );
-            }
         }
 
         // Detect a "big jump" (viewport teleport past the over-provisioned
@@ -543,27 +968,14 @@ impl App {
             None => true,
             Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
         };
-        // Cold = the DESTINATION region of the jump has no cached spans.
-        // Three sub-cases:
-        // - Jump to top (vp_top < h): need top_render_output.
-        // - Jump to bottom (vp_top + h >= line_count): need bottom_render_output.
-        // - Jump to mid: need viewport_render_output (it's about to be
-        //   replaced, but its presence proves the worker has a warm tree).
-        //
-        // Pre-fix this only checked viewport_render_output, so the first `G`
-        // after open detected as warm (top viewport just installed) and used
-        // the 40 ms cap — bottom parse hadn't completed yet → flash.
-        let active_line_count = self.active().editor.buffer().line_count() as usize;
-        let jumps_to_top = top < height;
-        let jumps_to_bottom = top + height >= active_line_count;
-        let destination_cached = if jumps_to_top {
-            self.active().top_render_output.is_some()
-        } else if jumps_to_bottom {
-            self.active().bottom_render_output.is_some()
-        } else {
-            self.active().viewport_render_output.is_some()
-        };
-        let is_cold = !destination_cached;
+        // Cold = the worker hasn't produced its first tree for this
+        // buffer yet. With Top/Bottom span-cache prewarms gone, the
+        // only "has the worker walked something" signal we have is
+        // `viewport_render_output`. Its absence means the sync walk
+        // would return empty (no retained tree yet) → block longer
+        // on the first `gg`/`G` after open so the destination paints
+        // with spans instead of flashing un-highlighted.
+        let is_cold = self.active().viewport_render_output.is_none();
         let big_jump_wait = if is_cold {
             COLD_JUMP_WAIT
         } else {
@@ -598,6 +1010,16 @@ impl App {
         self.refresh_git_signs();
         self.last_git_us = t_git.elapsed().as_micros();
         self.last_recompute_us = t_total.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            total_us = self.last_recompute_us,
+            install_us = self.last_install_us,
+            git_us = self.last_git_us,
+            submitted,
+            top, height,
+            dg,
+            "recompute_and_install"
+        );
         let _ = submitted;
     }
 
@@ -695,69 +1117,79 @@ impl App {
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)
     }
+
+    /// `:syntax on` / `:syntax off` — toggle bonsai highlighting app-wide.
+    ///
+    /// `false` clears installed spans on every slot, drops per-slot install
+    /// caches, and short-circuits future `recompute_and_install` calls so
+    /// no parser thread work is queued.
+    ///
+    /// `true` re-registers the detected language for every slot's filename
+    /// (no-op for unnamed scratch buffers) and runs a fresh recompute for
+    /// the active slot so its viewport repaints immediately.
+    pub(crate) fn set_syntax_enabled(&mut self, enabled: bool) {
+        if self.syntax_enabled == enabled {
+            return;
+        }
+        self.syntax_enabled = enabled;
+        if !enabled {
+            for slot in &mut self.slots {
+                slot.editor.install_ratatui_syntax_spans(Vec::new());
+                slot.diag_signs.clear();
+                slot.viewport_render_output = None;
+                slot.last_sync_viewport_key = None;
+                slot.last_recompute_key = None;
+                slot.installed_spans_dg = None;
+                slot.installed_rows = None;
+            }
+        } else {
+            for i in 0..self.slots.len() {
+                let buffer_id = self.slots[i].buffer_id;
+                if let Some(p) = self.slots[i].filename.clone() {
+                    let _ = self.syntax.set_language_for_path(buffer_id, &p);
+                }
+            }
+            self.recompute_and_install();
+        }
+    }
 }
 
-/// Merge per-row span tables from up to three cached [`RenderOutput`]s into
-/// a single `line_count`-sized table.
+/// Translate per-row span vectors in-place to track a batch of
+/// [`hjkl_engine::ContentEdit`]s. Generic over the row payload type so the
+/// same helper applies to cached `RenderOutput.spans`
+/// (`Vec<Vec<(usize, usize, StyleSpec)>>`) and any other row-keyed cache
+/// shape that needs to follow line count changes.
 ///
-/// Order: `sources` is consumed left-to-right; later sources overwrite
-/// earlier ones for any row that is non-empty in both. App passes
-/// `[top, bottom, viewport]` so the freshest (viewport) wins.
+/// For each edit:
+/// - row count grew by N → insert N empty rows at index `old_end_row + 1`.
+/// - row count shrank by N → drain `(new_end_row + 1)..(old_end_row + 1)`.
 ///
-/// **Staleness rejection** — a cached `RenderOutput` is silently skipped when:
-///
-/// 1. `spans.len() != line_count` — buffer was resized (visual delete,
-///    paste, undo of either) and the cached row indices no longer match.
-///    Wholesale rejection: row indices are wrong for the whole cache.
-///
-/// **Per-row dirty tracking** — when a cache has the right row count but
-/// `key.0 < current_dirty_gen` (stale from an edit), we no longer reject
-/// it wholesale. Instead, for each row we check whether that row was touched
-/// by any edit that arrived after the cache's parse (i.e. any log entry with
-/// `dirty_gen > cache_key.0`). Touched rows are left blank so the fresh
-/// worker result can fill them in; untouched rows keep their cached spans.
-///
-/// This eliminates the "white flash" where ALL rows briefly go blank after
-/// a single keystroke because the whole-cache rejection fired before the
-/// background worker returned.
-///
-/// Blanket dirty-gen rejection was removed as of 2026-05-16 in favour of
-/// per-row tracking. The `spans.len() != line_count` guard (row-count shift)
-/// is still in place — that case invalidates row indices for the whole cache.
-pub(crate) fn merge_render_outputs<'a>(
-    line_count: usize,
-    current_dirty_gen: u64,
-    dirty_rows_log: &[(u64, std::ops::RangeInclusive<usize>)],
-    sources: impl IntoIterator<Item = Option<&'a crate::syntax::RenderOutput>>,
-) -> Vec<Vec<(usize, usize, ratatui::style::Style)>> {
-    let mut merged: Vec<Vec<(usize, usize, ratatui::style::Style)>> = vec![Vec::new(); line_count];
-    for out in sources.into_iter().flatten() {
-        // Reject wholesale when the row count shifted (insertion/deletion of
-        // whole lines). Row indices in the cache no longer map correctly.
-        if out.spans.len() != line_count {
+/// Edits apply in order, each interpreted relative to the post-state of
+/// the prior edits in the batch (matching engine emission order).
+pub(crate) fn shift_rows<T>(rows: &mut Vec<Vec<T>>, edits: &[hjkl_engine::ContentEdit]) {
+    for edit in edits {
+        let oer = edit.old_end_position.0 as usize;
+        let ner = edit.new_end_position.0 as usize;
+        if ner == oer {
             continue;
         }
-        let cache_dg = out.key.0;
-        for (row, row_spans) in out.spans.iter().enumerate() {
-            if row >= line_count {
-                break;
-            }
-            if row_spans.is_empty() {
-                continue;
-            }
-            // Check whether this row was touched by any edit that landed
-            // AFTER this cache was parsed (dirty_gen > cache_dg).
-            // If so, the cached bytes no longer match the live buffer at
-            // this row — leave blank and let the worker fill it in.
-            let row_is_dirty = dirty_rows_log.iter().any(|(dg, range)| {
-                *dg > cache_dg && *dg <= current_dirty_gen && range.contains(&row)
-            });
-            if !row_is_dirty {
-                merged[row] = row_spans.clone();
+        if ner > oer {
+            let n = ner - oer;
+            // O(len + n) via splice; the prior per-row `insert(idx, ...)`
+            // loop was O(n × (len - idx)) — see the matching fix in
+            // hjkl_engine::editor::shift_syntax_spans_for_edits.
+            let idx = (oer + 1).min(rows.len());
+            rows.splice(idx..idx, std::iter::repeat_with(Vec::new).take(n));
+        } else {
+            let n = oer - ner;
+            let len = rows.len();
+            let start = (ner + 1).min(len);
+            let end = (start + n).min(len);
+            if end > start {
+                rows.drain(start..end);
             }
         }
     }
-    merged
 }
 
 /// Number of off-screen rows above/below the visible window to include in the
@@ -839,6 +1271,86 @@ fn format_anvil_status(status: &hjkl_anvil::InstallStatus) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn edit_insert_newline_at(row: u32, col: u32) -> hjkl_engine::ContentEdit {
+        hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (row, col),
+            old_end_position: (row, col),
+            new_end_position: (row + 1, 0),
+        }
+    }
+
+    fn edit_join_rows(row: u32, col: u32) -> hjkl_engine::ContentEdit {
+        hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 1,
+            new_end_byte: 0,
+            start_position: (row, col),
+            old_end_position: (row + 1, 0),
+            new_end_position: (row, col),
+        }
+    }
+
+    fn marked_rows(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| vec![i as u8]).collect()
+    }
+
+    #[test]
+    fn shift_rows_insertion_grows_in_place() {
+        let mut rows = marked_rows(4);
+        shift_rows(&mut rows, &[edit_insert_newline_at(1, 0)]);
+        assert_eq!(rows.len(), 5);
+        // Inserted empty row sits at oer+1 = 2.
+        assert!(rows[2].is_empty(), "inserted row must be empty");
+        // Untouched neighbours keep their marker bytes.
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[3], vec![2]);
+        assert_eq!(rows[4], vec![3]);
+    }
+
+    #[test]
+    fn shift_rows_deletion_shrinks_in_place() {
+        let mut rows = marked_rows(4);
+        shift_rows(&mut rows, &[edit_join_rows(1, 0)]);
+        assert_eq!(rows.len(), 3);
+        // Drained range was (ner+1)..(oer+1) = 2..3, so row 2 (marker `2`)
+        // disappears. Survivors: 0, 1, 3.
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[2], vec![3]);
+    }
+
+    #[test]
+    fn shift_rows_same_row_edit_is_noop() {
+        let mut rows = marked_rows(3);
+        let same_row = hjkl_engine::ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (1, 0),
+            old_end_position: (1, 0),
+            new_end_position: (1, 1),
+        };
+        shift_rows(&mut rows, &[same_row]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], vec![0]);
+        assert_eq!(rows[1], vec![1]);
+        assert_eq!(rows[2], vec![2]);
+    }
+
+    #[test]
+    fn shift_rows_ordered_edits_compose() {
+        let mut rows = marked_rows(3);
+        shift_rows(
+            &mut rows,
+            &[edit_insert_newline_at(0, 0), edit_insert_newline_at(1, 0)],
+        );
+        assert_eq!(rows.len(), 5);
+    }
 
     /// Regression catcher for the picker preview injection wiring: a
     /// markdown buffer with a fenced rust code block must produce
@@ -941,6 +1453,7 @@ mod tests {
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
             kind: crate::syntax::ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
 
         let installed = app.install_render_result(stale);
@@ -976,6 +1489,7 @@ mod tests {
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
             kind: crate::syntax::ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
         let installed = app.install_render_result(fresh);
         assert!(installed, "matching buffer_id must install");
@@ -1033,17 +1547,21 @@ mod tests {
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
 
         // Build a synthetic viewport output tagged to slot 1's buffer_id.
+        // Tag the result with slot 1's current dirty_gen so the
+        // generation-aware install guard doesn't drop it as stale.
         let target_spans = vec![
             vec![(0usize, 5usize, Style::default())],
             vec![(0usize, 5usize, Style::default())],
         ];
+        let slot1_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
         let out = RenderOutput {
             buffer_id: slot1_buf_id,
             spans: target_spans.clone(),
             signs: Vec::new(),
-            key: (0, 0, 0),
+            key: (slot1_dg, 0, 0),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
 
         // Active slot is still slot 0 — install must NOT touch it.
@@ -1106,6 +1624,7 @@ mod tests {
             key: (current_dg, 0, 40),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         });
 
         // Switch to slot 1 — cached spans should be installed immediately.
@@ -1122,8 +1641,7 @@ mod tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// T5d: `switch_to` must drop all three caches when dirty_gen mismatches
-    /// and must NOT install the stale spans.
+    /// T5d: `switch_to` must drop the viewport cache when dirty_gen mismatches.
     #[test]
     fn switch_to_drops_stale_cache_when_dirty_gen_mismatch() {
         use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
@@ -1138,7 +1656,7 @@ mod tests {
         let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
         let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
 
-        // Seed all three caches with an old dirty_gen.
+        // Seed viewport cache with an old dirty_gen.
         let stale_dg = current_dg.wrapping_sub(1);
         let stale_out = RenderOutput {
             buffer_id: slot1_buf_id,
@@ -1147,653 +1665,26 @@ mod tests {
             key: (stale_dg, 0, 40),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
-        app.slots_mut()[slot1_idx].viewport_render_output = Some(stale_out.clone());
-        app.slots_mut()[slot1_idx].top_render_output = Some(RenderOutput {
-            kind: ParseKind::Top,
-            ..stale_out.clone()
-        });
-        app.slots_mut()[slot1_idx].bottom_render_output = Some(RenderOutput {
-            kind: ParseKind::Bottom,
-            ..stale_out
-        });
+        app.slots_mut()[slot1_idx].viewport_render_output = Some(stale_out);
 
-        // Switch to slot 1 — all stale caches must be evicted.
+        // Switch to slot 1 — stale cache must be evicted.
         app.switch_to(slot1_idx);
 
-        // All three caches must have been cleared or replaced with fresh data.
-        // Note: switch_to calls recompute_and_install which may re-populate
-        // caches if the worker responds fast enough. Any populated cache
-        // must NOT carry the stale_dg.
-        for (name, cache_opt) in [
-            (
-                "viewport_render_output",
-                &app.slots()[slot1_idx].viewport_render_output,
-            ),
-            (
-                "top_render_output",
-                &app.slots()[slot1_idx].top_render_output,
-            ),
-            (
-                "bottom_render_output",
-                &app.slots()[slot1_idx].bottom_render_output,
-            ),
-        ] {
-            if let Some(cached) = cache_opt {
-                assert_ne!(
-                    cached.key.0, stale_dg,
-                    "{name}: stale cache must have been replaced, not re-installed"
-                );
-            }
+        // Viewport cache must be None or refreshed (not stale_dg).
+        if let Some(cached) = &app.slots()[slot1_idx].viewport_render_output {
+            assert_ne!(
+                cached.key.0, stale_dg,
+                "viewport: stale cache must have been replaced, not re-installed"
+            );
         }
         // (If None, the cache was cleared and nothing re-populated yet — also correct.)
 
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// T5 new test: `install_merged_spans_for_slot` populates top rows
-    /// when only `top_render_output` is set; rows past 3h are empty.
-    #[test]
-    fn install_merged_spans_top_only() {
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::Style;
-
-        let mut app = App::new(None, false, None, None).unwrap();
-        let slot_idx = app.focused_slot_idx();
-        // Build a buffer with 10 lines.
-        let content = (0..10)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        {
-            let buf = hjkl_buffer::Buffer::from_str(&content);
-            let host = crate::host::TuiHost::new();
-            let editor = hjkl_engine::Editor::new(buf, host, hjkl_engine::Options::default());
-            app.slots_mut()[slot_idx].editor = editor;
-        }
-
-        let line_count = app.slots()[slot_idx].editor.buffer().line_count() as usize;
-        // Build a top RenderOutput covering rows 0..5.
-        let top_spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
-            .map(|i| {
-                if i < 5 {
-                    vec![(0usize, 4usize, Style::default())]
-                } else {
-                    vec![]
-                }
-            })
-            .collect();
-        app.slots_mut()[slot_idx].top_render_output = Some(RenderOutput {
-            buffer_id: app.slots()[slot_idx].buffer_id,
-            spans: top_spans,
-            signs: Vec::new(),
-            key: (0, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        });
-
-        app.install_merged_spans_for_slot(slot_idx);
-        // The editor's styled spans for rows 0..5 should now be non-empty.
-        // We verify no panic occurred (install completed) and that caches survived.
-        assert!(
-            app.slots()[slot_idx].top_render_output.is_some(),
-            "top cache must remain after merge install"
-        );
-    }
-
-    /// T5 new test: viewport wins over top when rows overlap.
-    #[test]
-    fn install_merged_spans_viewport_overrides_top() {
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let mut app = App::new(None, false, None, None).unwrap();
-        let slot_idx = app.focused_slot_idx();
-        // 5-line buffer.
-        let content = (0..5)
-            .map(|i| format!("row {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        {
-            let buf = hjkl_buffer::Buffer::from_str(&content);
-            let host = crate::host::TuiHost::new();
-            let editor = hjkl_engine::Editor::new(buf, host, hjkl_engine::Options::default());
-            app.slots_mut()[slot_idx].editor = editor;
-        }
-
-        let line_count = app.slots()[slot_idx].editor.buffer().line_count() as usize;
-        let buf_id = app.slots()[slot_idx].buffer_id;
-
-        // Top cache: all 5 rows with red style.
-        let top_style = Style::default().fg(Color::Red);
-        let top_spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
-            .map(|_| vec![(0usize, 3usize, top_style)])
-            .collect();
-        app.slots_mut()[slot_idx].top_render_output = Some(RenderOutput {
-            buffer_id: buf_id,
-            spans: top_spans,
-            signs: Vec::new(),
-            key: (0, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        });
-
-        // Viewport cache: rows 2..5 with green style (overlaps top rows 2..5).
-        let vp_style = Style::default().fg(Color::Green);
-        let mut vp_spans: Vec<Vec<(usize, usize, Style)>> = vec![vec![]; line_count];
-        for slot in vp_spans.iter_mut().take(5).skip(2) {
-            *slot = vec![(0usize, 3usize, vp_style)];
-        }
-        app.slots_mut()[slot_idx].viewport_render_output = Some(RenderOutput {
-            buffer_id: buf_id,
-            spans: vp_spans,
-            signs: Vec::new(),
-            key: (0, 2, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Viewport,
-        });
-
-        // install_merged_spans_for_slot should not panic.
-        app.install_merged_spans_for_slot(slot_idx);
-
-        // Verify both caches survived.
-        assert!(app.slots()[slot_idx].top_render_output.is_some());
-        assert!(app.slots()[slot_idx].viewport_render_output.is_some());
-    }
-
-    /// Regression: a cached render output whose row count no longer matches
-    /// the current buffer (e.g. after a visual-mode delete shrank line
-    /// count) must NOT have its spans painted at the old row indices.
-    /// Reported 2026-05-16 — "highlights for deleted lines stay so
-    /// highlights for anything below break".
-    #[test]
-    fn merge_render_outputs_skips_stale_row_count_cache() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let buf_id = 42;
-        let stale_style = Style::default().fg(Color::Red);
-        let mut stale_spans: Vec<Vec<(usize, usize, Style)>> = vec![vec![]; 8];
-        stale_spans[7] = vec![(0usize, 1usize, stale_style)];
-        let stale_top = RenderOutput {
-            buffer_id: buf_id,
-            spans: stale_spans,
-            signs: Vec::new(),
-            key: (0, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        // Buffer shrank to 3 rows; stale top reflects pre-delete 8 rows.
-        // current_dirty_gen matches the stale cache's gen so the only
-        // rejection reason here is the spans.len() mismatch.
-        let merged = merge_render_outputs(3, 0, &[], [Some(&stale_top), None, None]);
-
-        assert_eq!(merged.len(), 3, "merged length must match line_count");
-        for (row, spans) in merged.iter().enumerate() {
-            assert!(
-                spans.is_empty(),
-                "row {row} must not carry stale-cache spans; got {spans:?}"
-            );
-        }
-    }
-
-    /// Per-row dirty tracking: rows explicitly recorded in the dirty_rows_log
-    /// are blanked even when the cache has a matching row count.  Rows NOT in
-    /// the log keep their cached spans (the "no white flash" property).
-    #[test]
-    fn merge_render_outputs_per_row_dirty_blanks_logged_rows_only() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let buf_id = 42;
-        let stale_style = Style::default().fg(Color::Red);
-        // Cache has row count 5, parsed at dirty_gen=7.
-        let stale_spans: Vec<Vec<(usize, usize, Style)>> = (0..5)
-            .map(|_| vec![(0usize, 3usize, stale_style)])
-            .collect();
-        let stale_top = RenderOutput {
-            buffer_id: buf_id,
-            spans: stale_spans,
-            signs: Vec::new(),
-            key: (7, 0, 40), // cache dirty_gen = 7
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        // Edit landed at gen=8, touching row 2 only.
-        // Current dirty_gen is 8 (one edit since cache was parsed).
-        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(8, 2..=2)];
-        let merged = merge_render_outputs(5, 8, log, [Some(&stale_top), None, None]);
-
-        assert_eq!(merged.len(), 5);
-        // Row 2 was edited — must be blank.
-        assert!(
-            merged[2].is_empty(),
-            "row 2 (edited) must be blank; got {:?}",
-            merged[2]
-        );
-        // Rows 0, 1, 3, 4 were NOT edited — must keep cached spans.
-        for row in [0, 1, 3, 4] {
-            assert!(
-                !merged[row].is_empty(),
-                "row {row} (untouched) must keep cached spans; got {:?}",
-                merged[row]
-            );
-        }
-    }
-
-    /// Sanity: matching row count AND matching dirty_gen → spans installed.
-    #[test]
-    fn merge_render_outputs_accepts_fresh_cache() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let style = Style::default().fg(Color::Green);
-        let spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..3).map(|_| vec![(0usize, 1usize, style)]).collect();
-        let fresh = RenderOutput {
-            buffer_id: 1,
-            spans,
-            signs: Vec::new(),
-            key: (5, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        let merged = merge_render_outputs(3, 5, &[], [Some(&fresh), None, None]);
-
-        assert_eq!(merged.len(), 3);
-        for spans in &merged {
-            assert!(!spans.is_empty(), "fresh cache spans must be installed");
-        }
-    }
-
-    /// T5 new test: bumping dirty_gen invalidates all three caches.
-    #[test]
-    fn dirty_gen_change_invalidates_all_three_caches() {
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::Style;
-        use std::path::PathBuf;
-
-        let mut app = App::new(None, false, None, None).unwrap();
-
-        let tmp = std::env::temp_dir().join("hjkl_test_dirty_invalidate.txt");
-        std::fs::write(&tmp, "a\nb\nc\n").unwrap();
-        let slot1_idx = app.open_new_slot(PathBuf::from(&tmp)).unwrap();
-        let slot1_buf_id = app.slots()[slot1_idx].buffer_id;
-        let current_dg = app.slots()[slot1_idx].editor.buffer().dirty_gen();
-
-        // Seed all three caches at current_dg.
-        let make_out = |kind: ParseKind| RenderOutput {
-            buffer_id: slot1_buf_id,
-            spans: vec![vec![(0usize, 1usize, Style::default())]],
-            signs: Vec::new(),
-            key: (current_dg, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind,
-        };
-        app.slots_mut()[slot1_idx].viewport_render_output = Some(make_out(ParseKind::Viewport));
-        app.slots_mut()[slot1_idx].top_render_output = Some(make_out(ParseKind::Top));
-        app.slots_mut()[slot1_idx].bottom_render_output = Some(make_out(ParseKind::Bottom));
-
-        // Simulate dirty_gen change by seeding stale_dg caches and then
-        // switching to the slot — switch_to detects the mismatch and clears.
-        let stale_dg = current_dg.wrapping_sub(1);
-        let make_stale = |kind: ParseKind| RenderOutput {
-            buffer_id: slot1_buf_id,
-            spans: vec![vec![(0usize, 1usize, Style::default())]],
-            signs: Vec::new(),
-            key: (stale_dg, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind,
-        };
-        app.slots_mut()[slot1_idx].viewport_render_output = Some(make_stale(ParseKind::Viewport));
-        app.slots_mut()[slot1_idx].top_render_output = Some(make_stale(ParseKind::Top));
-        app.slots_mut()[slot1_idx].bottom_render_output = Some(make_stale(ParseKind::Bottom));
-
-        // switch_to should detect the stale dirty_gen and clear all three.
-        app.switch_to(slot1_idx);
-
-        // All three caches must be None or refreshed (not stale_dg).
-        for (name, cache_opt) in [
-            (
-                "viewport_render_output",
-                &app.slots()[slot1_idx].viewport_render_output,
-            ),
-            (
-                "top_render_output",
-                &app.slots()[slot1_idx].top_render_output,
-            ),
-            (
-                "bottom_render_output",
-                &app.slots()[slot1_idx].bottom_render_output,
-            ),
-        ] {
-            if let Some(c) = cache_opt {
-                assert_ne!(
-                    c.key.0, stale_dg,
-                    "{name} must not carry stale dirty_gen after switch_to"
-                );
-            }
-        }
-
-        let _ = std::fs::remove_file(&tmp);
-    }
-
-    /// A stale-dirty_gen top/bottom cache whose rows are all logged as dirty
-    /// must have ALL rows blanked — this models a delete+undo cycle where
-    /// bytes shifted for every row even though line count stayed the same.
-    ///
-    /// Also verifies that a cache for rows NOT in the dirty log keeps its
-    /// spans visible (the "no white flash" property for untouched rows).
-    ///
-    /// The `needs_top`/`needs_bottom` re-submit guard in `recompute_and_install`
-    /// still fires on `key.0 != current_dg` — this test focuses on what the
-    /// merger shows to the user DURING the latency window before the fresh
-    /// parse arrives.
-    #[test]
-    fn stale_dg_top_bottom_cache_is_rejected_by_merger_and_needs_resubmit() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        // Simulate: buffer has line_count=5, current_dg=3.
-        // Top cache was computed at dg=1 (two edits ago).
-        // Bottom cache was computed at dg=2 (one edit ago).
-        // Both have the right span count (5) — only dirty_gen differs.
-        let line_count = 5usize;
-        let current_dg = 3u64;
-
-        let stale_style = Style::default().fg(Color::Magenta);
-
-        // Top cache: correct length, STALE dg.
-        let top_spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..line_count).map(|_| vec![(0, 4, stale_style)]).collect();
-        let stale_top = RenderOutput {
-            buffer_id: 7,
-            spans: top_spans,
-            signs: Vec::new(),
-            key: (1, 0, 40), // dg=1 ≠ current_dg=3
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        // Bottom cache: correct length, STALE dg.
-        let bot_spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..line_count).map(|_| vec![(0, 4, stale_style)]).collect();
-        let stale_bottom = RenderOutput {
-            buffer_id: 7,
-            spans: bot_spans,
-            signs: Vec::new(),
-            key: (2, 0, 40), // dg=2 ≠ current_dg=3
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Bottom,
-        };
-
-        // Dirty log: all rows touched (simulates delete+undo where bytes shifted
-        // everywhere even though line count stayed the same).  Two edit batches:
-        // dg=2 touched rows 0..=4, dg=3 also touched rows 0..=4.
-        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(2, 0..=4), (3, 0..=4)];
-
-        // No viewport cache yet (fresh buffer state after undo).
-        let merged = merge_render_outputs(
-            line_count,
-            current_dg,
-            log,
-            [Some(&stale_top), Some(&stale_bottom), None],
-        );
-
-        // All rows touched → merger must blank them so byte-offset-wrong spans
-        // are never painted.  Worker re-submit (driven by needs_top=key.0!=dg)
-        // will fill them in when the fresh parse arrives.
-        assert_eq!(merged.len(), line_count);
-        for (row, spans) in merged.iter().enumerate() {
-            assert!(
-                spans.is_empty(),
-                "row {row}: all-dirty log must blank stale-dg spans; got {spans:?}"
-            );
-        }
-
-        // Confirm: a FRESH top cache (dg=current_dg) IS accepted even with log.
-        let fresh_style = Style::default().fg(Color::Green);
-        let fresh_spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..line_count).map(|_| vec![(0, 4, fresh_style)]).collect();
-        let fresh_top = RenderOutput {
-            buffer_id: 7,
-            spans: fresh_spans,
-            signs: Vec::new(),
-            key: (current_dg, 0, 40), // dg=3 == current_dg ✓
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-        // Fresh cache key.0 == current_dg → no log entry has dg > current_dg,
-        // so the row-dirty check is false for every row → spans installed.
-        let merged_fresh =
-            merge_render_outputs(line_count, current_dg, log, [Some(&fresh_top), None, None]);
-        for (row, spans) in merged_fresh.iter().enumerate() {
-            assert!(
-                !spans.is_empty(),
-                "row {row}: fresh top cache must be installed"
-            );
-        }
-    }
-
-    /// Per-row dirty tracking: unchanged rows keep their cached spans.
-    ///
-    /// Cache covers rows 0..10 with red spans, parsed at dirty_gen=5.
-    /// Edit log records (6, 3..=3) — row 3 was edited at gen 6.
-    /// After merge: rows 0-2, 4-9 keep red spans; row 3 is blank.
-    #[test]
-    fn merge_partial_keeps_unchanged_row_spans() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let red = Style::default().fg(Color::Red);
-        let spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..10).map(|_| vec![(0usize, 1usize, red)]).collect();
-        let cache = RenderOutput {
-            buffer_id: 1,
-            spans,
-            signs: Vec::new(),
-            key: (5, 0, 40), // parsed at dirty_gen=5
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        // Row 3 was edited at gen=6.
-        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(6, 3..=3)];
-        let merged = merge_render_outputs(10, 6, log, [Some(&cache), None, None]);
-
-        assert_eq!(merged.len(), 10);
-        // Row 3 was touched — must be blank.
-        assert!(
-            merged[3].is_empty(),
-            "row 3 (edited at gen 6) must be blank; got {:?}",
-            merged[3]
-        );
-        // All other rows must keep their cached red spans.
-        for row in (0..10).filter(|&r| r != 3) {
-            assert!(
-                !merged[row].is_empty(),
-                "row {row} (untouched) must keep red spans; got {:?}",
-                merged[row]
-            );
-        }
-    }
-
-    /// Per-row dirty tracking: multiple edits at different gens blank
-    /// all affected rows and leave the rest intact.
-    ///
-    /// Cache at dirty_gen=5 with spans on rows 0..10.
-    /// Log: [(6, 2..=4), (7, 0..=0)]. Current dg=7.
-    /// Assert: rows 0, 2, 3, 4 blank; rows 1, 5, 6, 7, 8, 9 keep spans.
-    #[test]
-    fn merge_partial_blanks_all_edited_rows() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let blue = Style::default().fg(Color::Blue);
-        let spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..10).map(|_| vec![(0usize, 1usize, blue)]).collect();
-        let cache = RenderOutput {
-            buffer_id: 2,
-            spans,
-            signs: Vec::new(),
-            key: (5, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Viewport,
-        };
-
-        let log: &[(u64, std::ops::RangeInclusive<usize>)] = &[(6, 2..=4), (7, 0..=0)];
-        let merged = merge_render_outputs(10, 7, log, [None, None, Some(&cache)]);
-
-        assert_eq!(merged.len(), 10);
-        let dirty_rows = [0usize, 2, 3, 4];
-        let clean_rows = [1usize, 5, 6, 7, 8, 9];
-
-        for row in dirty_rows {
-            assert!(
-                merged[row].is_empty(),
-                "row {row} (edited) must be blank; got {:?}",
-                merged[row]
-            );
-        }
-        for row in clean_rows {
-            assert!(
-                !merged[row].is_empty(),
-                "row {row} (untouched) must keep blue spans; got {:?}",
-                merged[row]
-            );
-        }
-    }
-
-    /// Row-count mismatch still causes wholesale cache rejection regardless
-    /// of the dirty_rows_log content.
-    #[test]
-    fn merge_partial_full_row_count_mismatch_still_rejects() {
-        use crate::app::syntax_glue::merge_render_outputs;
-        use crate::syntax::{ParseKind, PerfBreakdown, RenderOutput};
-        use ratatui::style::{Color, Style};
-
-        let green = Style::default().fg(Color::Green);
-        // Cache has 8 spans but current line_count is 5.
-        let spans: Vec<Vec<(usize, usize, Style)>> =
-            (0..8).map(|_| vec![(0usize, 1usize, green)]).collect();
-        let cache = RenderOutput {
-            buffer_id: 3,
-            spans,
-            signs: Vec::new(),
-            key: (10, 0, 40),
-            perf: PerfBreakdown::default(),
-            kind: ParseKind::Top,
-        };
-
-        // Even with an empty log the cache must be rejected (row indices wrong).
-        let merged = merge_render_outputs(5, 10, &[], [Some(&cache), None, None]);
-
-        assert_eq!(merged.len(), 5, "merged must have line_count rows");
-        for (row, spans) in merged.iter().enumerate() {
-            assert!(
-                spans.is_empty(),
-                "row {row}: row-count mismatch must blank all rows; got {spans:?}"
-            );
-        }
-    }
-
-    /// Regression: worker must not re-apply stale InputEdits when the retained
-    /// tree already represents the requested dirty_gen.
-    ///
-    /// Without the fix, submitting Top before Viewport for the same dirty_gen
-    /// (which happens when Top replaces an old in-flight entry in the front of
-    /// the parse queue while Viewport is appended at the back) causes:
-    ///   1. Top is processed first: cold-parses from the new source → correct tree.
-    ///   2. Viewport is processed second: `!edits.is_empty()` was true →
-    ///      `tree.edit()` applied with positions from the OLD source → tree
-    ///      corruption → highlight spans with wrong byte offsets.
-    ///
-    /// This test cannot run without a real grammar (the worker drops requests
-    /// with no language attached), so it is gated `#[ignore]`.  Run with
-    /// `cargo test -p hjkl --bin hjkl worker_ordering -- --ignored --nocapture`
-    /// on a machine with grammars installed.
-    #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
-    fn worker_ordering_stale_edits_do_not_corrupt_spans() {
-        use crate::syntax::{BufferId, ParseKind, default_layer};
-        use hjkl_buffer::Buffer;
-        use hjkl_engine::ContentEdit;
-        use std::path::Path;
-        use std::time::Duration;
-
-        const TID: BufferId = 0;
-
-        // Source: a simple rust snippet where the highlight spans have distinct
-        // token boundaries we can check.
-        let initial_src = "fn main() {}\n";
-        let edited_src = "fn xmain() {}\n"; // insert 'x' at byte 3
-
-        let initial_buf = Buffer::from_str(initial_src.trim_end_matches('\n'));
-        let edited_buf = Buffer::from_str(edited_src.trim_end_matches('\n'));
-
-        let edit = ContentEdit {
-            start_byte: 3,
-            old_end_byte: 3,
-            new_end_byte: 4,
-            start_position: (0, 3),
-            old_end_position: (0, 3),
-            new_end_position: (0, 4),
-        };
-
-        // --- Baseline: Viewport-first ordering (correct) ---
-        let mut layer_correct = default_layer();
-        layer_correct.set_language_for_path(TID, Path::new("a.rs"));
-
-        // Initial parse.
-        layer_correct.submit_render(TID, &initial_buf, 0, 40, ParseKind::Viewport);
-        let _ = layer_correct.wait_all_results(Duration::from_secs(5));
-
-        // Apply edit, submit Viewport first (normal production order).
-        layer_correct.apply_edits(TID, std::slice::from_ref(&edit));
-        layer_correct.submit_render(TID, &edited_buf, 0, 40, ParseKind::Viewport);
-        let r_viewport_first = layer_correct
-            .wait_all_results(Duration::from_secs(5))
-            .into_iter()
-            .find(|r| r.kind == ParseKind::Viewport)
-            .expect("viewport result");
-
-        // --- Bug path: Top-first ordering (triggers the race) ---
-        let mut layer_buggy = default_layer();
-        layer_buggy.set_language_for_path(TID, Path::new("a.rs"));
-
-        // Initial parse.
-        layer_buggy.submit_render(TID, &initial_buf, 0, 40, ParseKind::Viewport);
-        let _ = layer_buggy.wait_all_results(Duration::from_secs(5));
-
-        // Simulate the race: apply edits, then submit Top FIRST (taking the
-        // edits), then Viewport (empty edits — same as in the real queue race).
-        layer_buggy.apply_edits(TID, std::slice::from_ref(&edit));
-        // Top submit consumes the edits.
-        layer_buggy.submit_render(TID, &edited_buf, 0, 40, ParseKind::Top);
-        // Viewport submit gets empty edits (already taken by Top).
-        layer_buggy.submit_render(TID, &edited_buf, 0, 40, ParseKind::Viewport);
-        let results = layer_buggy.wait_all_results(Duration::from_secs(5));
-        let r_top_first = results
-            .into_iter()
-            .find(|r| r.kind == ParseKind::Viewport)
-            .expect("viewport result from top-first ordering");
-
-        // Both orderings must produce identical viewport spans.
-        // Before the worker fix, r_top_first had wrong byte offsets because
-        // Viewport's edits were applied to the tree already built by Top.
-        assert_eq!(
-            r_viewport_first.spans, r_top_first.spans,
-            "Viewport spans must be identical regardless of whether Top or Viewport \
-             was processed first by the worker — stale edits must not corrupt the tree"
-        );
-    }
+    // (deleted: install_merged_spans_top_only and subsequent tests that exercised
+    // top_render_output / bottom_render_output / merge_render_outputs — all dead code
+    // after the Top/Bottom ParseKind removal.)
 }

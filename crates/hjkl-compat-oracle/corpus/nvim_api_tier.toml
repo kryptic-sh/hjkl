@@ -41,3 +41,39 @@ initial_cursor = [0, 0]
 keys = ":s/xyz/bar/<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
+
+# :syntax off — buffer unchanged (vim-compat no-op as far as content)
+[[cases]]
+name = "syntax_off_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":syntax off<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :syntax on — buffer unchanged
+[[cases]]
+name = "syntax_on_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":syntax on<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :syn off — vim-style 3-char abbreviation
+[[cases]]
+name = "syntax_abbrev_syn_off"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":syn off<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :syntax enable — alias for :syntax on
+[[cases]]
+name = "syntax_enable_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":syntax enable<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]

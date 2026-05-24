@@ -206,8 +206,17 @@ pub struct App {
     /// preview-only highlight path.
     pub(crate) preview_highlighters:
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
-    /// Toggled by `:perf`. When true, render shows last-frame timings.
-    pub perf_overlay: bool,
+    /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
+    /// is bypassed: spans stay empty, no submit_render fires, and
+    /// `recompute_and_install` returns immediately. Re-enabling re-attaches
+    /// the language for every slot's path and triggers a fresh recompute.
+    /// Default `true` — vim parity.
+    pub syntax_enabled: bool,
+    /// Set when an event handler decided a `recompute_and_install` is
+    /// needed but deferred it to coalesce. The main event loop runs the
+    /// recompute once after the event-drain loop ends, so a burst of
+    /// mouse-scroll events fires one sync query instead of N.
+    pub(crate) pending_recompute: bool,
     pub last_recompute_us: u128,
     pub last_install_us: u128,
     pub last_signature_us: u128,
@@ -515,8 +524,9 @@ pub(super) fn build_slot(
         disk_len,
         disk_state: DiskState::Synced,
         viewport_render_output: None,
-        top_render_output: None,
-        bottom_render_output: None,
+        last_sync_viewport_key: None,
+        installed_spans_dg: None,
+        installed_rows: None,
         dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
@@ -790,7 +800,7 @@ impl App {
         }
         let buffer_id = self.active().buffer_id;
         if self.active_mut().editor.take_content_reset() {
-            self.syntax.reset(buffer_id);
+            self.handle_active_content_reset(buffer_id);
         }
         let edits = self.active_mut().editor.take_content_edits();
         if !edits.is_empty() {
@@ -801,23 +811,20 @@ impl App {
             // current one — any cache older than this gen is stale for these
             // rows and should show blank until the worker returns.
             let new_dg = self.active().editor.buffer().dirty_gen();
-            // If any edit changed the row count, the entire installed
-            // buffer_spans cache (indexed by row) is invalid — old rows
-            // map to new rows after the shift. Renderer would otherwise
-            // paint last-frame's spans at the wrong line until the syntax
-            // worker returns a fresh result. Clear immediately so the
-            // intermediate frames render uncoloured rather than mis-
-            // coloured. Same-row edits (typing within one line) don't
-            // need this — buffer_spans rows still map to the right line,
-            // even if individual span byte-ranges are momentarily stale.
-            let row_count_changed = edits
-                .iter()
-                .any(|e| e.old_end_position.0 != e.new_end_position.0);
-            if row_count_changed {
-                self.active_mut()
-                    .editor
-                    .install_ratatui_syntax_spans(Vec::new());
-            }
+            // Row-count edits: translate cached span rows in-place so
+            // untouched lines keep their existing colours while the worker
+            // reparses. Historically this branch blanked `buffer_spans`
+            // (visible as a white flash on every Enter / backspace-at-BOL).
+            // We shift BOTH the editor's live `buffer_spans` (drives the
+            // next render frame) AND the per-slot `RenderOutput.spans`
+            // caches (drive `install_merged_spans_for_slot`, which would
+            // otherwise wholesale-reject the stale-length caches and blank
+            // the editor on the very next `recompute_and_install` tick).
+            self.active_mut()
+                .editor
+                .shift_syntax_spans_for_edits(&edits);
+            let active_idx = self.focused_slot_idx();
+            self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
             for edit in &edits {
                 let start_row = edit.start_position.0 as usize;
                 let end_row =
@@ -1168,7 +1175,8 @@ impl App {
             directory,
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
-            perf_overlay: false,
+            syntax_enabled: true,
+            pending_recompute: false,
             last_recompute_us: 0,
             last_install_us: 0,
             last_signature_us: 0,

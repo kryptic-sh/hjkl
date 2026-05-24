@@ -648,8 +648,9 @@ impl App {
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
                 viewport_render_output: None,
-                top_render_output: None,
-                bottom_render_output: None,
+                last_sync_viewport_key: None,
+                installed_spans_dg: None,
+                installed_rows: None,
                 dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();
@@ -730,8 +731,9 @@ impl App {
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
                 viewport_render_output: None,
-                top_render_output: None,
-                bottom_render_output: None,
+                last_sync_viewport_key: None,
+                installed_spans_dg: None,
+                installed_rows: None,
                 dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();
@@ -1385,8 +1387,9 @@ impl App {
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
                 viewport_render_output: None,
-                top_render_output: None,
-                bottom_render_output: None,
+                last_sync_viewport_key: None,
+                installed_spans_dg: None,
+                installed_rows: None,
                 dirty_rows_log: Vec::new(),
             };
             slot.snapshot_saved();

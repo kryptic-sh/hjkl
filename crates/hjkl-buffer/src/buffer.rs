@@ -294,6 +294,7 @@ impl Buffer {
             let line_chars = c.lines[row].chars().count();
             let col = self.cursor.col.min(line_chars);
             c.dirty_gen = c.dirty_gen.wrapping_add(1);
+            c.cached_joined = None;
             Position::new(row, col)
         };
         self.cursor = new_cursor;
@@ -305,6 +306,28 @@ impl Buffer {
     pub(crate) fn dirty_gen_bump(&mut self) {
         let mut c = self.content.lock().unwrap();
         c.dirty_gen = c.dirty_gen.wrapping_add(1);
+        c.cached_joined = None;
+    }
+
+    /// Return an `Arc<String>` of the full document joined by `\n`,
+    /// cached against `dirty_gen`. Multiple per-tick consumers (syntax
+    /// pipeline, LSP notify, git signature, dirty hash) share the
+    /// same `Arc` for the same generation — first caller pays the join
+    /// cost (one alloc + one lock), the rest are O(1).
+    ///
+    /// Cache invalidates automatically on every `dirty_gen_bump` and on
+    /// `set_content`, so callers never need to manage invalidation.
+    pub fn content_joined(&self) -> std::sync::Arc<String> {
+        let mut c = self.content.lock().unwrap();
+        let dg = c.dirty_gen;
+        if let Some((cached_dg, ref s)) = c.cached_joined
+            && cached_dg == dg
+        {
+            return std::sync::Arc::clone(s);
+        }
+        let joined = std::sync::Arc::new(c.lines.join("\n"));
+        c.cached_joined = Some((dg, std::sync::Arc::clone(&joined)));
+        joined
     }
 
     /// Shared access to the folds vec. Crate-internal.

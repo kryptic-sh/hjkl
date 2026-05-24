@@ -156,6 +156,10 @@ impl Query for RopeBuffer {
         RopeBuffer::dirty_gen(self)
     }
 
+    fn content_joined(&self) -> std::sync::Arc<String> {
+        RopeBuffer::content_joined(self)
+    }
+
     fn slice(&self, range: core::ops::Range<Pos>) -> Cow<'_, str> {
         let start = pos_to_position(range.start);
         let end = pos_to_position(range.end);

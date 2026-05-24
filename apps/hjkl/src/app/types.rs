@@ -238,18 +238,12 @@ pub enum LspPendingRequest {
 /// newline). Used to detect "buffer matches the saved snapshot" so undo
 /// back to the saved state clears the dirty flag.
 fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
+    // Reuse the per-dirty_gen cached `Arc<String>` so we hash + measure
+    // a single allocation instead of re-cloning every row per keystroke.
+    let text = editor.buffer().content_joined();
     let mut hasher = DefaultHasher::new();
-    let mut len = 0usize;
-    let lines = editor.buffer().lines();
-    for (i, l) in lines.iter().enumerate() {
-        if i > 0 {
-            b'\n'.hash(&mut hasher);
-            len += 1;
-        }
-        l.hash(&mut hasher);
-        len += l.len();
-    }
-    (hasher.finish(), len)
+    text.hash(&mut hasher);
+    (hasher.finish(), text.len())
 }
 
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
@@ -330,14 +324,6 @@ pub struct BufferSlot {
     /// spans while a fresh parse runs in the background (T3 — per-slot
     /// span cache). `None` until the first viewport parse result arrives.
     pub(crate) viewport_render_output: Option<crate::syntax::RenderOutput>,
-    /// Pre-cached spans for the top of the file (`0..min(3*h, line_count)`).
-    /// Populated after the first cold viewport parse so `gg` never flashes
-    /// un-highlighted rows even on large files.
-    pub(crate) top_render_output: Option<crate::syntax::RenderOutput>,
-    /// Pre-cached spans for the bottom of the file
-    /// (`line_count - min(3*h, line_count)..line_count`). Populated after
-    /// the cold viewport parse so `G` never flashes un-highlighted rows.
-    pub(crate) bottom_render_output: Option<crate::syntax::RenderOutput>,
     /// Per-row edit log: each entry is `(dirty_gen, row_range)` where
     /// `dirty_gen` is the buffer's `dirty_gen` AFTER the edit landed and
     /// `row_range` is the inclusive row range touched by that edit.
@@ -348,6 +334,24 @@ pub struct BufferSlot {
     ///
     /// Capped at 256 entries to bound memory on long sessions.
     pub(crate) dirty_rows_log: Vec<(u64, std::ops::RangeInclusive<usize>)>,
+    /// Last `(dirty_gen, range_top, range_height)` the sync
+    /// `query_viewport` was run with per `ParseKind`. Used by
+    /// `sync_query_region` to skip work when nothing changed since the
+    /// previous tick — without this guard `recompute_and_install`
+    /// re-runs the highlight + merge + install pipeline on every event
+    /// loop iteration even when the buffer is idle, which shows up as
+    /// scroll lag on large files.
+    pub(crate) last_sync_viewport_key: Option<(u64, usize, usize)>,
+    /// Per-row span install cache. Tracks the row range that has had
+    /// spans installed via `patch_ratatui_syntax_spans_range` for the
+    /// current `dirty_gen`. When the next viewport read's row range
+    /// already lies inside this range, the sync walk is skipped —
+    /// j/k scrolling within a previously-walked area becomes free.
+    /// When the viewport extends past the range, only the *delta* rows
+    /// are walked (cost proportional to scroll distance, not viewport
+    /// size). Invalidated on `dirty_gen` change.
+    pub(crate) installed_spans_dg: Option<u64>,
+    pub(crate) installed_rows: Option<std::ops::Range<usize>>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

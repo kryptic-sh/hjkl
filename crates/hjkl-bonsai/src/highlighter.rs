@@ -129,57 +129,60 @@ fn hash_bytes(b: &[u8]) -> u64 {
 /// the same length).
 struct CachedChild {
     highlighter: Highlighter,
-    /// FNV hash of the slice that was last parsed.
+    /// FNV hash of the slice that was last parsed (matches the latest
+    /// `spans_by_hash` entry the highlighter was used to produce). Only kept
+    /// to short-circuit `parse_initial` when re-rendering the same slice
+    /// twice in a row.
     source_hash: u64,
 }
 
-/// Cache of child `Highlighter` instances, keyed by
-/// `(language_name, content_range_start, content_range_end)`.
+/// Cache of child `Highlighter` instances, keyed by **language name only**.
 ///
-/// Eviction policy: after each `highlight_range_with_injections` / `highlight_with_injections`
-/// call the cache is pruned to only the keys that appeared in the *current*
-/// injection set.  This keeps memory bounded as the user scrolls or edits.
+/// Keying by `(language, content_range_start, content_range_end)` was the
+/// original design but it invalidates on every keystroke inside an injected
+/// region — typing one char in an HTML `<style>` block shifts the end byte,
+/// blowing the cache + triggering a full `Highlighter::new` (which calls
+/// the expensive `compile_query` on the child's `highlights.scm`) every
+/// char. That was the dominant per-keystroke cost on injected files
+/// (~10-50 ms / char on HTML + CSS), measured under the plan-B sync
+/// query path.
+///
+/// Lang-only keying lets the same `Highlighter` (and its compiled query)
+/// survive across edits — only the cheap `parse_initial` on the slice
+/// re-runs.
+///
+/// Eviction policy: after each call the cache is pruned to only the
+/// languages that appeared in the *current* injection set, bounded by
+/// how many distinct languages a single document can embed (typically 1-3).
 #[derive(Default)]
 struct ChildCache {
-    map: HashMap<(String, usize, usize), CachedChild>,
+    /// One Highlighter per language (compile_query is the expensive part —
+    /// retained across content changes).
+    map: HashMap<String, CachedChild>,
+    /// Span cache keyed by content hash. Multiple `<style>` blocks (HTML +
+    /// N CSS chunks) all share the per-lang highlighter but get their own
+    /// spans entry, so scrolling past a 19-chunk doc doesn't redo the CSS
+    /// query 19 times per tick.
+    spans_by_hash: HashMap<u64, Vec<HighlightSpan>>,
 }
 
 impl ChildCache {
-    /// Return the cached child for `(lang, start, end)` *if* its stored hash
-    /// matches `content_hash`.  On a hash miss the entry is evicted so the
-    /// caller can rebuild and re-insert.
-    fn get_if_fresh(
-        &mut self,
-        lang: &str,
-        start: usize,
-        end: usize,
-        content_hash: u64,
-    ) -> Option<&mut Highlighter> {
-        let key = (lang.to_string(), start, end);
-        // Check freshness without holding a mutable borrow across the remove path.
-        let fresh = self.map.get(&key).map(|c| c.source_hash == content_hash);
-        match fresh {
-            Some(true) => Some(&mut self.map.get_mut(&key).unwrap().highlighter),
-            Some(false) => {
-                // Content drifted — evict so we rebuild.
-                self.map.remove(&key);
-                None
-            }
-            None => None,
-        }
+    fn get_highlighter(&mut self, lang: &str) -> Option<&mut CachedChild> {
+        self.map.get_mut(lang)
     }
 
-    /// Insert a freshly built `Highlighter` for `(lang, start, end)`.
-    fn insert(
-        &mut self,
-        lang: String,
-        start: usize,
-        end: usize,
-        hl: Highlighter,
-        content_hash: u64,
-    ) {
+    fn get_spans(&self, content_hash: u64) -> Option<&Vec<HighlightSpan>> {
+        self.spans_by_hash.get(&content_hash)
+    }
+
+    fn insert_spans(&mut self, content_hash: u64, spans: Vec<HighlightSpan>) {
+        self.spans_by_hash.insert(content_hash, spans);
+    }
+
+    /// Insert a freshly built `Highlighter` for `lang`.
+    fn insert_highlighter(&mut self, lang: String, hl: Highlighter, content_hash: u64) {
         self.map.insert(
-            (lang, start, end),
+            lang,
             CachedChild {
                 highlighter: hl,
                 source_hash: content_hash,
@@ -187,11 +190,11 @@ impl ChildCache {
         );
     }
 
-    /// Remove every entry whose key is not in `keep`.  Called once per render
-    /// pass with the set of injections that were actually used, so stale
-    /// entries (code blocks that were deleted/scrolled away) don't accumulate.
-    fn evict_stale(&mut self, keep: &[(String, usize, usize)]) {
-        self.map.retain(|k, _| keep.iter().any(|kk| kk == k));
+    /// Remove highlighter entries for unused langs + span entries for unused
+    /// content hashes. Bounds memory at the working set this render touched.
+    fn evict_stale(&mut self, keep_langs: &[String], keep_hashes: &[u64]) {
+        self.map.retain(|k, _| keep_langs.iter().any(|kk| kk == k));
+        self.spans_by_hash.retain(|h, _| keep_hashes.contains(h));
     }
 }
 
@@ -231,10 +234,35 @@ pub mod parse_counter {
 /// Owns a `Parser`, a compiled `Query`, and a reference-counted handle on the
 /// [`Grammar`] so the underlying shared library cannot drop while a parse
 /// tree is live.
+/// Per-pattern fast-path flags computed once at highlighter construction.
+/// Avoids per-match cost of asking the query whether the pattern has any
+/// predicates/directives/property_settings/pre_extracted — the hot loop
+/// in `highlight_range` can then skip allocation + iteration entirely
+/// when a pattern has none of these (the common case for most
+/// highlight-only patterns).
+#[derive(Default, Clone, Copy)]
+struct PatternInfo {
+    has_predicate: bool,
+    has_directive: bool,
+    has_property_setting: bool,
+    has_pre_extracted: bool,
+}
+
+impl PatternInfo {
+    fn needs_cap_pairs(&self) -> bool {
+        self.has_predicate || self.has_directive
+    }
+    fn needs_meta(&self) -> bool {
+        self.has_directive || self.has_property_setting || self.has_pre_extracted
+    }
+}
+
 pub struct Highlighter {
     parser: Parser,
     query: Query,
     capture_names: Vec<String>,
+    /// Per-pattern fast-path flags. Indexed by `pattern_index`.
+    pattern_info: Vec<PatternInfo>,
     /// Compiled injection query from `injections.scm`, if the grammar ships
     /// one. `None` = this grammar has no injection rules.
     injection_query: Option<Query>,
@@ -283,6 +311,24 @@ impl Highlighter {
             .map(|s| s.to_string())
             .collect();
 
+        // Precompute per-pattern fast-path flags so the hot loop in
+        // `highlight_range` can skip predicate/directive iteration +
+        // associated allocations for patterns that have none of them
+        // (the common case).
+        let pattern_count = query.pattern_count();
+        let mut pattern_info: Vec<PatternInfo> = vec![PatternInfo::default(); pattern_count];
+        for (idx, info) in pattern_info.iter_mut().enumerate() {
+            let preds = query.general_predicates(idx);
+            info.has_predicate = preds.iter().any(|p| p.operator.as_ref().ends_with('?'));
+            info.has_directive = preds.iter().any(|p| p.operator.as_ref().ends_with('!'));
+            info.has_property_setting = !query.property_settings(idx).is_empty();
+        }
+        for pe in &pre_extracted {
+            if let Some(info) = pattern_info.get_mut(pe.pattern_index) {
+                info.has_pre_extracted = true;
+            }
+        }
+
         // Compile the injection query if present. Failure is non-fatal: a
         // grammar whose injections.scm uses unsupported predicates will still
         // highlight normally, just without injection support.
@@ -305,6 +351,7 @@ impl Highlighter {
             parser,
             query,
             capture_names,
+            pattern_info,
             injection_query,
             tree: None,
             parse_timeout_micros: DEFAULT_PARSE_TIMEOUT_MICROS,
@@ -317,10 +364,18 @@ impl Highlighter {
 
     /// Apply an `InputEdit` to the retained tree, if any. No-op when the
     /// highlighter has no retained tree.
+    ///
+    /// The parent-spans cache was removed (bonsai cache redesign). The tree
+    /// is the only cache — `highlight_range` walks the tree on every call.
+    /// Child caches are keyed by content hash on the OLD source; after an
+    /// edit those hashes no longer match so we clear them.
     pub fn edit(&mut self, edit: &tree_sitter::InputEdit) {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(edit);
         }
+        // Child span caches were keyed by content hash on the OLD source.
+        // After an edit those slices no longer match for the edited block.
+        self.child_cache.spans_by_hash.clear();
     }
 
     /// Reparse `source` against the retained tree (if any) under the
@@ -332,15 +387,38 @@ impl Highlighter {
     /// [`Highlighter::highlight_range`] until a subsequent
     /// `parse_incremental` succeeds — the retained tree is stale relative
     /// to `source`.
+    ///
+    /// The parent-spans cache has been removed. The tree is the only cache.
+    /// `highlight_range` walks the tree (via `QueryCursor::set_byte_range`)
+    /// on every call; no post-parse cache update is needed here.
     pub fn parse_incremental(&mut self, source: &[u8]) -> bool {
+        self.parse_incremental_with_changes(source).is_some()
+    }
+
+    /// Like `parse_incremental` but on success returns the byte ranges
+    /// tree-sitter reports as structurally changed between the prior
+    /// retained tree (with `tree.edit` deltas already applied via
+    /// [`Highlighter::edit`]) and the freshly-parsed tree. Empty on
+    /// initial parse (no prior tree to diff against). Returns `None` on
+    /// parse failure / timeout.
+    pub fn parse_incremental_with_changes(&mut self, source: &[u8]) -> Option<Vec<Range<usize>>> {
+        let old_tree = self.tree.clone();
         if self.parse_timeout_micros == 0 {
             let result = self.parser.parse(source, self.tree.as_ref());
             return match result {
                 Some(t) => {
+                    let changes: Vec<Range<usize>> = old_tree
+                        .as_ref()
+                        .map(|old| {
+                            old.changed_ranges(&t)
+                                .map(|r| r.start_byte..r.end_byte)
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     self.tree = Some(t);
-                    true
+                    Some(changes)
                 }
-                None => false,
+                None => None,
             };
         }
         let deadline = Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros);
@@ -366,10 +444,18 @@ impl Highlighter {
         );
         match result {
             Some(t) => {
+                let changes: Vec<Range<usize>> = old_tree
+                    .as_ref()
+                    .map(|old| {
+                        old.changed_ranges(&t)
+                            .map(|r| r.start_byte..r.end_byte)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.tree = Some(t);
-                true
+                Some(changes)
             }
-            None => false,
+            None => None,
         }
     }
 
@@ -387,6 +473,11 @@ impl Highlighter {
     /// Run the highlights query against the retained tree, scoped to
     /// `byte_range`. Returns spans whose byte range overlaps `byte_range`,
     /// sorted by start byte. Empty when there's no retained tree.
+    ///
+    /// The parent-spans cache has been removed (bonsai cache redesign).
+    /// This method walks the tree-sitter query restricted to `byte_range`
+    /// via `QueryCursor::set_byte_range` on every call. The tree is the
+    /// only cache — no incremental span cache needed.
     pub fn highlight_range(
         &mut self,
         source: &[u8],
@@ -405,125 +496,127 @@ impl Highlighter {
         let pre_extracted = &self.pre_extracted;
 
         let mut spans: Vec<HighlightSpan> = Vec::new();
+        let pattern_info = &self.pattern_info;
         while let Some(m) = matches.next() {
             let pattern_idx = m.pattern_index;
+            let info = pattern_info.get(pattern_idx).copied().unwrap_or_default();
 
-            // Build the (capture_idx, node) pairs used by MatchContext.
-            let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> =
-                m.captures.iter().map(|c| (c.index, c.node)).collect();
+            // Build the (capture_idx, node) pairs used by MatchContext —
+            // only when the pattern actually invokes predicates or
+            // directives that need them. For most highlight-only patterns
+            // (Rust ~95% of matches) this branch is skipped entirely.
+            let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> = if info.needs_cap_pairs() {
+                m.captures.iter().map(|c| (c.index, c.node)).collect()
+            } else {
+                Vec::new()
+            };
 
-            // Evaluate general predicates (custom ones only; builtins like
-            // eq?/match?/any-of? are handled by tree-sitter itself).
-            let mut skip_match = false;
-            for pred in self.query.general_predicates(pattern_idx) {
-                let op = pred.operator.as_ref();
-                // Only dispatch predicates (ending in `?`); directives end in `!`.
-                if !op.ends_with('?') {
+            if info.has_predicate {
+                let mut skip_match = false;
+                for pred in self.query.general_predicates(pattern_idx) {
+                    let op = pred.operator.as_ref();
+                    if !op.ends_with('?') {
+                        continue;
+                    }
+                    let args: Vec<PredicateArg<'_>> = pred
+                        .args
+                        .iter()
+                        .map(|a| match a {
+                            QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
+                            QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
+                        })
+                        .collect();
+                    let ctx = MatchContext {
+                        pattern_index: pattern_idx,
+                        captures: &cap_pairs,
+                        source,
+                        args: &args,
+                        capture_names,
+                    };
+                    match registry.get_predicate(op) {
+                        Some(p) => {
+                            if !p.eval(&ctx) {
+                                skip_match = true;
+                                break;
+                            }
+                        }
+                        None => warn_unknown_predicate_once(op),
+                    }
+                }
+                if skip_match {
                     continue;
                 }
-                // Build args for this predicate (skip the operator).
-                let args: Vec<PredicateArg<'_>> = pred
-                    .args
-                    .iter()
-                    .map(|a| match a {
-                        QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
-                        QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
-                    })
-                    .collect();
-                let ctx = MatchContext {
-                    pattern_index: pattern_idx,
-                    captures: &cap_pairs,
-                    source,
-                    args: &args,
-                    capture_names,
-                };
-                match registry.get_predicate(op) {
-                    Some(p) => {
-                        if !p.eval(&ctx) {
-                            skip_match = true;
-                            break;
+            }
+
+            // Build MatchMetadata only if any source actually contributes.
+            let meta = if info.needs_meta() {
+                let mut meta = MatchMetadata::default();
+                if info.has_property_setting {
+                    for prop in self.query.property_settings(pattern_idx) {
+                        let key = prop.key.as_ref();
+                        let val = prop.value.as_deref();
+                        let value = match val {
+                            Some(v) => MetaValue::Str(v.to_string()),
+                            None => MetaValue::Bool(true),
+                        };
+                        if let Some(cap_id) = prop.capture_id {
+                            meta.capture_mut(cap_id as u32)
+                                .insert(key.to_string(), value);
+                        } else {
+                            meta.pattern.insert(key.to_string(), value);
                         }
                     }
-                    None => {
-                        warn_unknown_predicate_once(op);
-                        // Unknown predicate — don't veto the match.
+                }
+                if info.has_directive {
+                    for pred in self.query.general_predicates(pattern_idx) {
+                        let op = pred.operator.as_ref();
+                        if !op.ends_with('!') {
+                            continue;
+                        }
+                        let args: Vec<PredicateArg<'_>> = pred
+                            .args
+                            .iter()
+                            .map(|a| match a {
+                                QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
+                                QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
+                            })
+                            .collect();
+                        let ctx = MatchContext {
+                            pattern_index: pattern_idx,
+                            captures: &cap_pairs,
+                            source,
+                            args: &args,
+                            capture_names,
+                        };
+                        if let Some(d) = registry.get_directive(op) {
+                            d.apply(&ctx, &mut meta);
+                        } else {
+                            warn_unknown_predicate_once(op);
+                        }
                     }
                 }
-            }
-            if skip_match {
-                continue;
-            }
-
-            // Build MatchMetadata for this match.
-            let mut meta = MatchMetadata::default();
-
-            // Apply literal property_settings (the `#set! "key" val` forms
-            // that tree-sitter parsed natively via property_settings()).
-            for prop in self.query.property_settings(pattern_idx) {
-                let key = prop.key.as_ref();
-                let val = prop.value.as_deref();
-                if let Some(cap_id) = prop.capture_id {
-                    let value = match val {
-                        Some(v) => MetaValue::Str(v.to_string()),
-                        None => MetaValue::Bool(true),
-                    };
-                    meta.capture_mut(cap_id as u32)
-                        .insert(key.to_string(), value);
-                } else {
-                    let value = match val {
-                        Some(v) => MetaValue::Str(v.to_string()),
-                        None => MetaValue::Bool(true),
-                    };
-                    meta.pattern.insert(key.to_string(), value);
+                if info.has_pre_extracted {
+                    for pe in pre_extracted
+                        .iter()
+                        .filter(|d| d.pattern_index == pattern_idx)
+                    {
+                        let cap_idx = capture_names
+                            .iter()
+                            .position(|n| n == &pe.capture_name)
+                            .map(|i| i as u32);
+                        if let Some(cap_idx) = cap_idx {
+                            let value = match &pe.value {
+                                Some(v) => MetaValue::Str(v.clone()),
+                                None => MetaValue::Bool(true),
+                            };
+                            meta.capture_mut(cap_idx).insert(pe.key.clone(), value);
+                        }
+                    }
                 }
-            }
-
-            // Apply general directives (ending in `!`) from general_predicates.
-            for pred in self.query.general_predicates(pattern_idx) {
-                let op = pred.operator.as_ref();
-                if !op.ends_with('!') {
-                    continue;
-                }
-                let args: Vec<PredicateArg<'_>> = pred
-                    .args
-                    .iter()
-                    .map(|a| match a {
-                        QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
-                        QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
-                    })
-                    .collect();
-                let ctx = MatchContext {
-                    pattern_index: pattern_idx,
-                    captures: &cap_pairs,
-                    source,
-                    args: &args,
-                    capture_names,
-                };
-                if let Some(d) = registry.get_directive(op) {
-                    d.apply(&ctx, &mut meta);
-                } else {
-                    warn_unknown_predicate_once(op);
-                }
-            }
-
-            // Apply pre-extracted `(#set! @cap key val)` directives for this pattern.
-            for pe in pre_extracted
-                .iter()
-                .filter(|d| d.pattern_index == pattern_idx)
-            {
-                // Resolve capture name → capture index.
-                let cap_idx = capture_names
-                    .iter()
-                    .position(|n| n == &pe.capture_name)
-                    .map(|i| i as u32);
-                if let Some(cap_idx) = cap_idx {
-                    let value = match &pe.value {
-                        Some(v) => MetaValue::Str(v.clone()),
-                        None => MetaValue::Bool(true),
-                    };
-                    meta.capture_mut(cap_idx).insert(pe.key.clone(), value);
-                }
-            }
+                Some(meta)
+            } else {
+                None
+            };
 
             // Emit spans for each capture in the match.
             for capture in m.captures {
@@ -533,18 +626,26 @@ impl Highlighter {
                 if start >= end || end > source.len() {
                     continue;
                 }
-                if start >= byte_range.end || end <= byte_range.start {
-                    continue;
-                }
                 let capture_name = capture_names[capture.index as usize].clone();
 
-                // Merge metadata: pattern-level first, per-capture wins on collision.
-                let mut span_meta: HashMap<String, MetaValue> = meta.pattern.clone();
-                if let Some(cap_meta) = meta.per_capture.get(&capture.index) {
-                    for (k, v) in cap_meta {
-                        span_meta.insert(k.clone(), v.clone());
+                // Skip the HashMap clone for the common no-meta path
+                // (HashMap::new() is alloc-free at zero capacity, so the
+                // resulting empty map stays cheap).
+                let span_meta: HashMap<String, MetaValue> = match meta.as_ref() {
+                    Some(meta)
+                        if !meta.pattern.is_empty()
+                            || meta.per_capture.contains_key(&capture.index) =>
+                    {
+                        let mut m = meta.pattern.clone();
+                        if let Some(cap_meta) = meta.per_capture.get(&capture.index) {
+                            for (k, v) in cap_meta {
+                                m.insert(k.clone(), v.clone());
+                            }
+                        }
+                        m
                     }
-                }
+                    _ => HashMap::new(),
+                };
 
                 spans.push(HighlightSpan {
                     byte_range: start..end,
@@ -590,6 +691,7 @@ impl Highlighter {
     /// Drop the retained tree.
     pub fn reset(&mut self) {
         self.tree = None;
+        self.child_cache.spans_by_hash.clear();
     }
 
     /// Parse `source` and return the resulting `Syntax`. Standalone — does
@@ -742,69 +844,65 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Build the set of cache keys used this call so we can evict stale entries.
-        let cache_keys: Vec<(String, usize, usize)> = injections
-            .iter()
-            .map(|(lang, r)| (lang.clone(), r.start, r.end))
-            .collect();
+        // Per-lang highlighter cache + per-content-hash span cache (one HTML
+        // doc with many `<style>` blocks shares the css Highlighter but each
+        // block has its own spans entry — no re-parse on scroll).
+        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
 
-        // For each injection, reuse a cached child Highlighter when the content
-        // is unchanged, and fall back to a fresh parse otherwise.
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
-        // Track which byte ranges have child coverage for the merge step.
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
         for (lang_name, content_range) in &injections {
-            let Some(child_grammar) = resolve(lang_name) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+            cache_hashes.push(content_hash);
 
-            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
-                lang_name,
-                content_range.start,
-                content_range.end,
-                content_hash,
-            ) {
-                // Cache hit: skip grammar instantiation + re-parse.
-                tracing::trace!(
-                    lang = %lang_name,
-                    range = ?content_range,
-                    "child-hl cache hit"
-                );
-                child_hl.highlight_range(slice, 0..slice.len())
+            // Span cache hit — skip parse + highlight entirely.
+            if let Some(cached) = self.child_cache.get_spans(content_hash) {
+                for span in cached {
+                    child_spans.push(HighlightSpan {
+                        byte_range: (span.byte_range.start + offset)
+                            ..(span.byte_range.end + offset),
+                        capture: span.capture.clone(),
+                        metadata: span.metadata.clone(),
+                    });
+                }
+                injected_ranges.push(content_range.clone());
+                continue;
+            }
+
+            let spans = if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
+                cached.highlighter.parse_initial(slice);
+                cached.source_hash = content_hash;
+                cached.highlighter.highlight_range(slice, 0..slice.len())
             } else {
-                // Cache miss: build a new child highlighter and parse.
+                let Some(child_grammar) = resolve(lang_name) else {
+                    continue;
+                };
                 let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
                 let spans = new_hl.highlight_range(slice, 0..slice.len());
-                // Store into cache for future calls.
-                self.child_cache.insert(
-                    lang_name.clone(),
-                    content_range.start,
-                    content_range.end,
-                    new_hl,
-                    content_hash,
-                );
+                self.child_cache
+                    .insert_highlighter(lang_name.clone(), new_hl, content_hash);
                 spans
             };
 
-            for span in child_raw {
+            for span in &spans {
                 child_spans.push(HighlightSpan {
                     byte_range: (span.byte_range.start + offset)..(span.byte_range.end + offset),
-                    capture: span.capture,
-                    metadata: span.metadata,
+                    capture: span.capture.clone(),
+                    metadata: span.metadata.clone(),
                 });
             }
+            self.child_cache.insert_spans(content_hash, spans);
             injected_ranges.push(content_range.clone());
         }
 
-        // Evict child entries that were not used in this call.
-        self.child_cache.evict_stale(&cache_keys);
+        self.child_cache.evict_stale(&cache_langs, &cache_hashes);
 
         // Merge: keep parent spans that do NOT fall entirely within an injected range.
         // Spans that partially overlap are kept (rare edge case — see doc comment).
@@ -853,7 +951,11 @@ impl Highlighter {
     where
         F: FnMut(&str) -> Option<Arc<Grammar>>,
     {
+        let t_parent = std::time::Instant::now();
         let parent_spans = self.highlight_range(source, byte_range.clone());
+        let parent_us = t_parent.elapsed().as_micros();
+        let parent_count = parent_spans.len();
+        let t_inj = std::time::Instant::now();
 
         let Some(inj_query) = self.injection_query.as_ref() else {
             return parent_spans;
@@ -946,57 +1048,45 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Build the set of cache keys used this call so we can evict stale entries.
-        let cache_keys: Vec<(String, usize, usize)> = injections
-            .iter()
-            .map(|(lang, r)| (lang.clone(), r.start, r.end))
-            .collect();
+        // Per-lang highlighter cache + per-content-hash span cache.
+        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
 
-        // For each injection, reuse a cached child Highlighter when the content
-        // is unchanged, and fall back to a fresh parse otherwise.
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
         for (lang_name, content_range) in &injections {
-            let Some(child_grammar) = resolve(lang_name) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+            cache_hashes.push(content_hash);
 
-            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
-                lang_name,
-                content_range.start,
-                content_range.end,
-                content_hash,
-            ) {
-                // Cache hit: skip grammar instantiation + re-parse.
-                tracing::trace!(
-                    lang = %lang_name,
-                    range = ?content_range,
-                    "child-hl cache hit"
-                );
-                child_hl.highlight_range(slice, 0..slice.len())
+            let cached_spans_opt: Option<Vec<HighlightSpan>> =
+                self.child_cache.get_spans(content_hash).cloned();
+            let spans = if let Some(s) = cached_spans_opt {
+                s
+            } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
+                cached.highlighter.parse_initial(slice);
+                cached.source_hash = content_hash;
+                let s = cached.highlighter.highlight_range(slice, 0..slice.len());
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
             } else {
-                // Cache miss: build a new child highlighter and parse.
+                let Some(child_grammar) = resolve(lang_name) else {
+                    continue;
+                };
                 let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
-                let spans = new_hl.highlight_range(slice, 0..slice.len());
-                // Store into cache for future calls.
-                self.child_cache.insert(
-                    lang_name.clone(),
-                    content_range.start,
-                    content_range.end,
-                    new_hl,
-                    content_hash,
-                );
-                spans
+                let s = new_hl.highlight_range(slice, 0..slice.len());
+                self.child_cache
+                    .insert_highlighter(lang_name.clone(), new_hl, content_hash);
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
             };
 
-            for span in child_raw {
+            for span in spans {
                 let abs_start = span.byte_range.start + offset;
                 let abs_end = span.byte_range.end + offset;
                 // Clip to viewport.
@@ -1014,8 +1104,7 @@ impl Highlighter {
             injected_ranges.push(content_range.clone());
         }
 
-        // Evict child entries that were not used in this call.
-        self.child_cache.evict_stale(&cache_keys);
+        self.child_cache.evict_stale(&cache_langs, &cache_hashes);
 
         // Merge: keep parent spans not entirely inside an injected range.
         let mut merged: Vec<HighlightSpan> = parent_spans
@@ -1027,8 +1116,19 @@ impl Highlighter {
             })
             .collect();
 
+        let child_count = child_spans.len();
         merged.extend(child_spans);
         sort_by_start_then_depth(&mut merged);
+        let inj_us = t_inj.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            parent_us,
+            inj_us,
+            parent_count,
+            inj_count = injections.len(),
+            child_count,
+            "highlight_range_with_injections"
+        );
         merged
     }
 

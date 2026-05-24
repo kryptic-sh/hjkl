@@ -1128,6 +1128,34 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 5,
         run: uncomment_handler::<H>,
     });
+
+    // `:syntax [on|off|enable|disable]` — vim-compat syntax-highlight toggle.
+    // Engine never touches highlighting; this returns Ok so headless/nvim-api
+    // paths see success. The TUI app overrides via the host registry to
+    // actually drop/re-attach bonsai layers (see ex_host_cmds::SyntaxCmd).
+    reg.add(ExCommand {
+        name: "syntax",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: syntax_handler::<H>,
+    });
+}
+
+// ---- :syntax ---------------------------------------------------------------
+
+/// `:syntax [on|off|enable|disable|...]` — engine-side no-op for vim parity.
+///
+/// Recognised subcommands return `ExEffect::Ok`. Unknown args also return
+/// `Ok` (vim's `:syntax <bareword>` is permissive — many forms like
+/// `:syntax sync`, `:syntax clear`, `:syntax reset` are accepted without
+/// error).
+fn syntax_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Ok)
 }
 
 // ---- comment / uncomment (#187) --------------------------------------------
@@ -1979,6 +2007,43 @@ mod tests {
         assert!(
             matches!(result, Some(ExEffect::Error(_))),
             "got: {result:?}"
+        );
+    }
+
+    // ── :syntax (engine handler is a no-op; app overrides via host registry) ──
+
+    #[test]
+    fn syntax_handler_on_returns_ok() {
+        let mut ed = make_editor();
+        let result = syntax_handler(&mut ed, "on", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+    }
+
+    #[test]
+    fn syntax_handler_off_returns_ok() {
+        let mut ed = make_editor();
+        let result = syntax_handler(&mut ed, "off", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+    }
+
+    #[test]
+    fn syntax_handler_unknown_arg_returns_ok() {
+        let mut ed = make_editor();
+        let result = syntax_handler(&mut ed, "sync", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+    }
+
+    #[test]
+    fn syntax_resolves_via_prefix_syn() {
+        let reg = crate::default_registry::<hjkl_engine::DefaultHost>();
+        assert!(reg.resolve("syn").is_some(), ":syn must resolve");
+        assert!(reg.resolve("syntax").is_some(), ":syntax must resolve");
+        // Below min_prefix=3: must NOT resolve to syntax via prefix path.
+        // (`:s` correctly resolves to `substitute` instead.)
+        let sy = reg.resolve("sy");
+        assert!(
+            sy.map(|c| c.name != "syntax").unwrap_or(true),
+            "`:sy` must not resolve to syntax (min_prefix=3)"
         );
     }
 

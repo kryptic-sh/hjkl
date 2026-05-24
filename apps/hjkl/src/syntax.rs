@@ -49,6 +49,10 @@ pub struct RenderOutput {
     pub perf: PerfBreakdown,
     /// Which region this result covers (Viewport / Top / Bottom).
     pub kind: ParseKind,
+    /// Byte ranges tree-sitter reports as structurally changed since
+    /// the prior retained tree (forwarded from
+    /// [`hjkl_syntax::RenderOutput::changed_ranges`]).
+    pub changed_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl PartialEq for RenderOutput {
@@ -76,6 +80,7 @@ fn convert_output(raw: hjkl_syntax::RenderOutput) -> RenderOutput {
         key: raw.key,
         perf: raw.perf,
         kind: raw.kind,
+        changed_ranges: raw.changed_ranges,
     }
 }
 
@@ -143,6 +148,54 @@ impl SyntaxLayer {
         let raw = self
             .inner
             .preview_render(id, buffer, viewport_top, viewport_height)?;
+        Some(convert_output(raw))
+    }
+
+    /// Borrow the buffer's cached `(source, row_starts, line_count, dirty_gen)`,
+    /// populated as a side-effect of [`Self::submit_render`]. Forwarded so
+    /// the app's render-path can drive a sync `query_viewport` against the
+    /// same source the worker will see. `dirty_gen` is the buffer's
+    /// generation at cache-build time — compare against the buffer's
+    /// current generation to detect a stale cache.
+    #[allow(clippy::type_complexity)]
+    pub fn cached_source(
+        &self,
+        id: BufferId,
+    ) -> Option<(
+        std::sync::Arc<String>,
+        std::sync::Arc<Vec<usize>>,
+        usize,
+        u64,
+    )> {
+        self.inner.cached_source(id)
+    }
+
+    /// Synchronous viewport highlight against the retained tree. See
+    /// [`hjkl_syntax::SyntaxLayer::query_viewport`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_viewport(
+        &self,
+        id: BufferId,
+        source: &str,
+        row_starts: &[usize],
+        viewport_byte_range: std::ops::Range<usize>,
+        viewport_top: usize,
+        viewport_height: usize,
+        row_count: usize,
+        dirty_gen: u64,
+        kind: ParseKind,
+    ) -> Option<RenderOutput> {
+        let raw = self.inner.query_viewport(
+            id,
+            source,
+            row_starts,
+            viewport_byte_range,
+            viewport_top,
+            viewport_height,
+            row_count,
+            dirty_gen,
+            kind,
+        )?;
         Some(convert_output(raw))
     }
 

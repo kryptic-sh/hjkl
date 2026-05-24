@@ -261,8 +261,12 @@ impl App {
         slot.last_lsp_dirty_gen = Some(dg);
 
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        let text = slot.editor.buffer().lines().to_vec().join("\n");
-        mgr.notify_change(buffer_id, &text);
+        // Reuse the buffer's per-dirty_gen cached joined `Arc<String>`
+        // so this doesn't re-clone every row + re-join per keystroke
+        // (was ~1ms / char on a 400-line file, multiplied across all
+        // per-tick callers).
+        let text = slot.editor.buffer().content_joined();
+        mgr.notify_change(buffer_id, text.as_str());
     }
 
     /// File-type label for the active buffer — the language id string when

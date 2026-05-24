@@ -1140,6 +1140,26 @@ pub trait Query: Send {
         }
         acc
     }
+
+    /// Return the canonical `lines().join("\n")` rendering of the
+    /// document as an `Arc<String>`. Multiple per-tick consumers (syntax
+    /// pipeline, LSP notify, git signature, dirty hash) need this; the
+    /// `Buffer` impl caches against `dirty_gen` so they share one
+    /// allocation per generation.
+    ///
+    /// Default impl walks `line(r)` for every row — slow but correct.
+    /// Backends with cheaper paths (rope contiguous view) should override.
+    fn content_joined(&self) -> std::sync::Arc<String> {
+        let n = self.line_count() as usize;
+        let mut acc = String::with_capacity(self.len_bytes());
+        for r in 0..n {
+            if r > 0 {
+                acc.push('\n');
+            }
+            acc.push_str(&self.line(r as u32));
+        }
+        std::sync::Arc::new(acc)
+    }
 }
 
 /// Mutating sub-trait of [`Buffer`]. Distinct trait name from the

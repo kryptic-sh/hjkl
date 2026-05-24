@@ -56,33 +56,19 @@ pub use hjkl_buffer::BufferId;
 /// Discriminates the purpose of a parse request / result so the App can
 /// route it to the correct per-slot cache field.
 ///
-/// - `Viewport` — the current visible region (already existed; default).
-/// - `Top` — rows `0..min(3*h, line_count)` pre-cached so `gg` never
-///   flashes un-highlighted rows.
-/// - `Bottom` — rows `line_count - min(3*h, line_count)..line_count`
-///   pre-cached so `G` never flashes un-highlighted rows.
-///
-/// **Ordering is load-bearing for the perf invariant:** the worker queue
-/// is FIFO, so submitting `Viewport` first, then `Top`, then `Bottom`
-/// ensures the retained tree is built on the Viewport pass and the
-/// subsequent passes ride it incrementally (~1-5 ms each).
+/// - `Viewport` — the current visible region.
 ///
 /// # Examples
 ///
 /// ```
 /// use hjkl_syntax::ParseKind;
-/// assert_ne!(ParseKind::Viewport, ParseKind::Top);
-/// assert_ne!(ParseKind::Top, ParseKind::Bottom);
+/// assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ParseKind {
     /// The current visible viewport region.
     Viewport,
-    /// The top of the document (rows 0..N) — pre-cached for `gg`.
-    Top,
-    /// The bottom of the document (rows line_count-N..line_count) — pre-cached for `G`.
-    Bottom,
 }
 
 /// A single diagnostic sign emitted from the syntax pipeline.
@@ -217,6 +203,13 @@ pub struct RenderOutput {
     /// Which region this result covers — used by the install path to route
     /// into the correct per-slot cache field.
     pub kind: ParseKind,
+    /// Byte ranges that tree-sitter reports as structurally changed
+    /// between the prior retained tree (with edits applied) and the
+    /// freshly-parsed tree. Empty on initial parse or when no structural
+    /// change occurred. The app uses this to refresh only the rows that
+    /// actually changed instead of re-walking the full viewport (the
+    /// remaining 25ms per keystroke).
+    pub changed_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl RenderOutput {
@@ -226,9 +219,9 @@ impl RenderOutput {
     ///
     /// ```
     /// use hjkl_syntax::{RenderOutput, ParseKind, PerfBreakdown};
-    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new(), ParseKind::Top);
+    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new(), ParseKind::Viewport);
     /// assert_eq!(out.buffer_id, 1);
-    /// assert_eq!(out.kind, ParseKind::Top);
+    /// assert_eq!(out.kind, ParseKind::Viewport);
     /// ```
     pub fn new(
         buffer_id: BufferId,
@@ -245,6 +238,7 @@ impl RenderOutput {
             key,
             perf,
             kind,
+            changed_ranges: Vec::new(),
         }
     }
 }
@@ -371,10 +365,6 @@ pub enum LoadEventKind<'a> {
 pub enum ParseKindKind {
     /// The current visible viewport region.
     Viewport,
-    /// The top of the document — pre-cached for `gg`.
-    Top,
-    /// The bottom of the document — pre-cached for `G`.
-    Bottom,
 }
 
 // ---------------------------------------------------------------------------
@@ -393,18 +383,29 @@ struct RenderCache {
     row_starts: Arc<Vec<usize>>,
 }
 
-/// A parse + render job submitted to the worker. The worker owns the
-/// retained tree, applies any queued `InputEdit`s, reparses, runs the
-/// viewport highlight + error scan, builds the per-row span table, and
-/// sends the result back via mpsc.
+/// A parse + render job submitted to the worker. The worker reparses
+/// against the (already-edited) retained tree, runs the viewport
+/// highlight + error scan, builds the per-row span table, and sends the
+/// result back via mpsc.
+///
+/// As of plan-B (issue #233) `InputEdit`s are NOT carried here — they are
+/// applied synchronously by the main thread via [`SyntaxLayer::apply_edits`]
+/// directly onto the shared retained tree before any parse request is
+/// queued. The worker also no longer runs the highlight / build-by-row /
+/// signs pipeline; the main thread's `query_viewport` does that on each
+/// render tick. The fields below carry the byte range / viewport metadata
+/// that the worker emits back in the `RenderOutput` signal so the app can
+/// route the "tree updated" notification to the correct cache + region.
 struct ParseRequest {
     buffer_id: BufferId,
     source: Arc<String>,
+    #[allow(dead_code)]
     row_starts: Arc<Vec<usize>>,
-    edits: Vec<InputEdit>,
+    #[allow(dead_code)]
     viewport_byte_range: std::ops::Range<usize>,
     viewport_top: usize,
     viewport_height: usize,
+    #[allow(dead_code)]
     row_count: usize,
     dirty_gen: u64,
     /// When `true` the worker drops its retained tree before parsing.
@@ -462,21 +463,14 @@ impl Pending {
     ///   coexist in the queue so all three regions can be pre-cached.
     /// - If the queue is at capacity and there is no existing entry for
     ///   this `(buffer_id, kind)`, evict the oldest entry before pushing.
-    fn push_parse(&mut self, mut req: ParseRequest) {
+    ///
+    /// Edit deltas are no longer carried on the request (plan B / #233):
+    /// `SyntaxLayer::apply_edits` calls `tree.edit(InputEdit)` synchronously
+    /// against the shared retained tree before any submit, so a replaced
+    /// request can be wholesale-discarded without losing edit history.
+    fn push_parse(&mut self, req: ParseRequest) {
         for slot in self.parse_queue.iter_mut() {
             if slot.buffer_id == req.buffer_id && slot.kind == req.kind {
-                // Merge: the existing slot's edits MUST survive the replace
-                // — they're tree-sitter `Tree::edit` deltas the worker still
-                // needs to apply before its retained tree matches the new
-                // source. Dropping them leaves the tree at a wrong byte
-                // baseline and every subsequent highlight returns spans
-                // with offsets matching a buffer state that no longer
-                // exists, producing visibly shifted / misaligned spans
-                // that don't recover until the next bulk parse (e.g.
-                // forced by a `take_content_reset`).
-                let mut merged = std::mem::take(&mut slot.edits);
-                merged.append(&mut req.edits);
-                req.edits = merged;
                 *slot = req;
                 return;
             }
@@ -513,6 +507,10 @@ impl Pending {
 pub struct SyntaxWorker {
     pending: Arc<(Mutex<Pending>, Condvar)>,
     rx: std::sync::mpsc::Receiver<RenderOutput>,
+    /// Shared per-buffer pipeline state. Cloned to the worker thread at
+    /// spawn; cloned again to [`SyntaxLayer`] so main-thread sync queries
+    /// reach the same retained tree.
+    pub(crate) buffers: SharedBuffers,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -521,14 +519,19 @@ impl SyntaxWorker {
     pub fn spawn(theme: Arc<dyn Theme + Send + Sync>, directory: Arc<LanguageDirectory>) -> Self {
         let pending = Arc::new((Mutex::new(Pending::new()), Condvar::new()));
         let (tx, rx) = std::sync::mpsc::channel();
+        let buffers: SharedBuffers = Arc::new(Mutex::new(HashMap::new()));
         let pending_for_thread = Arc::clone(&pending);
+        let buffers_for_thread = Arc::clone(&buffers);
         let handle = thread::Builder::new()
             .name("hjkl-syntax".into())
-            .spawn(move || worker_loop(pending_for_thread, tx, theme, directory))
+            .spawn(move || {
+                worker_loop(pending_for_thread, buffers_for_thread, tx, theme, directory)
+            })
             .expect("spawn syntax worker");
         Self {
             pending,
             rx,
+            buffers,
             handle: Some(handle),
         }
     }
@@ -655,10 +658,42 @@ impl Drop for SyntaxWorker {
 // Worker-side per-buffer state
 // ---------------------------------------------------------------------------
 
-/// Per-buffer state retained on the worker side.
-struct WorkerBufferState {
-    highlighter: Highlighter,
-    last_parsed_dirty_gen: Option<u64>,
+/// Per-buffer state retained for the syntax pipeline. Shared between the
+/// background worker thread (parse + async highlight) and the main thread
+/// (sync `query_viewport`, sync `tree.edit` on each `ContentEdit` batch).
+///
+/// Each buffer's state is wrapped in its own `Arc<Mutex<_>>` so different
+/// buffers can be operated on concurrently — the only contention is between
+/// worker reparse + main-thread query on the SAME buffer.
+pub(crate) struct WorkerBufferState {
+    pub(crate) highlighter: Highlighter,
+    pub(crate) last_parsed_dirty_gen: Option<u64>,
+}
+
+/// Shared map of per-buffer pipeline state. Outer `Mutex` protects map
+/// mutation (add / remove); inner `Mutex` protects each buffer's state.
+/// Lookups clone the inner `Arc` and drop the outer lock immediately so
+/// only same-buffer ops contend.
+pub(crate) type SharedBuffers = Arc<Mutex<HashMap<BufferId, Arc<Mutex<WorkerBufferState>>>>>;
+
+/// Look up a buffer in [`SharedBuffers`] and run `f` against its locked
+/// state. Returns `None` if the buffer is not tracked.
+///
+/// Holds the outer (map) lock only long enough to clone the inner `Arc`,
+/// then drops it before taking the per-buffer lock — so worker + main do
+/// not serialise across different buffers.
+pub(crate) fn with_buffer<R>(
+    buffers: &SharedBuffers,
+    id: BufferId,
+    f: impl FnOnce(&mut WorkerBufferState) -> R,
+) -> Option<R> {
+    let cell = {
+        let map = buffers.lock().expect("syntax shared buffers poisoned");
+        map.get(&id).cloned()
+    };
+    let cell = cell?;
+    let mut guard = cell.lock().expect("per-buffer state mutex poisoned");
+    Some(f(&mut guard))
 }
 
 // ---------------------------------------------------------------------------
@@ -667,13 +702,11 @@ struct WorkerBufferState {
 
 fn worker_loop(
     pending: Arc<(Mutex<Pending>, Condvar)>,
+    buffers: SharedBuffers,
     tx: std::sync::mpsc::Sender<RenderOutput>,
     initial_theme: Arc<dyn Theme + Send + Sync>,
     directory: Arc<LanguageDirectory>,
 ) {
-    use std::time::Instant;
-
-    let mut buffers: HashMap<BufferId, WorkerBufferState> = HashMap::new();
     let mut theme: Arc<dyn Theme + Send + Sync> = initial_theme;
     let marker_pass = CommentMarkerPass::new();
     let hex_color_pass = HexColorPass::new();
@@ -702,19 +735,19 @@ fn worker_loop(
         match msg {
             Msg::Quit => return,
             Msg::SetLanguage(id, None) => {
-                buffers.remove(&id);
+                let mut map = buffers.lock().expect("syntax shared buffers poisoned");
+                map.remove(&id);
             }
             Msg::SetLanguage(id, Some(grammar)) => {
                 let lang = grammar.name().to_string();
                 match Highlighter::new(grammar) {
                     Ok(h) => {
-                        buffers.insert(
-                            id,
-                            WorkerBufferState {
-                                highlighter: h,
-                                last_parsed_dirty_gen: None,
-                            },
-                        );
+                        let state = WorkerBufferState {
+                            highlighter: h,
+                            last_parsed_dirty_gen: None,
+                        };
+                        let mut map = buffers.lock().expect("syntax shared buffers poisoned");
+                        map.insert(id, Arc::new(Mutex::new(state)));
                     }
                     Err(e) => {
                         tracing::error!(
@@ -723,94 +756,148 @@ fn worker_loop(
                             error = %e,
                             "failed to attach syntax highlighter"
                         );
-                        buffers.remove(&id);
+                        let mut map = buffers.lock().expect("syntax shared buffers poisoned");
+                        map.remove(&id);
                     }
                 }
             }
             Msg::Forget(id) => {
-                buffers.remove(&id);
+                let mut map = buffers.lock().expect("syntax shared buffers poisoned");
+                map.remove(&id);
             }
             Msg::SetTheme(t) => {
                 theme = t;
             }
             Msg::Parse(req) => {
-                let Some(state) = buffers.get_mut(&req.buffer_id) else {
-                    continue;
-                };
-                let h = &mut state.highlighter;
-                let mut perf = PerfBreakdown::default();
-                if req.reset {
-                    h.reset();
-                    state.last_parsed_dirty_gen = None;
-                }
-                // Only (re-)parse if the retained tree does not already
-                // represent this dirty_gen. Non-empty `edits` are applied
-                // below when a parse IS needed; if the tree is already current
-                // they are stale (a prior request for the same dirty_gen
-                // already processed them) and must be discarded — applying
-                // them again would corrupt the tree's node positions.
-                let needs_parse =
-                    h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
-                if needs_parse {
-                    for e in &req.edits {
-                        h.edit(e);
-                    }
-                    let bytes = req.source.as_bytes();
-                    let t = Instant::now();
-                    let parsed_ok = if h.tree().is_none() {
-                        h.parse_initial(bytes);
-                        true
-                    } else {
-                        h.parse_incremental(bytes)
-                    };
-                    if !parsed_ok {
-                        continue;
-                    }
-                    perf.parse_us = t.elapsed().as_micros();
-                    state.last_parsed_dirty_gen = Some(req.dirty_gen);
-                }
-                let bytes = req.source.as_bytes();
-
-                let t = Instant::now();
-                let mut flat_spans = h.highlight_range_with_injections(
-                    bytes,
-                    req.viewport_byte_range.clone(),
-                    |name| directory.by_name(name),
-                );
-                perf.highlight_us = t.elapsed().as_micros();
-
-                // Overlay TODO/FIXME/NOTE/WARN marker spans onto comment spans.
-                marker_pass.apply(&mut flat_spans, bytes);
-
-                // Inline hex-color preview overlay (#rgb / #rrggbb).
-                hex_color_pass.apply(&mut flat_spans, bytes);
-
-                let t = Instant::now();
-                let by_row = build_by_row(
-                    &flat_spans,
-                    bytes,
-                    &req.row_starts,
-                    req.row_count,
+                let _ = run_parse_and_emit(
+                    &buffers,
+                    &req,
+                    &marker_pass,
+                    &hex_color_pass,
                     theme.as_ref(),
+                    &directory,
+                    &tx,
                 );
-                perf.by_row_us = t.elapsed().as_micros();
-
-                let t = Instant::now();
-                let signs = collect_diag_signs(h, bytes, req.viewport_byte_range, &req.row_starts);
-                perf.diag_us = t.elapsed().as_micros();
-
-                let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
-                let _ = tx.send(RenderOutput {
-                    buffer_id: req.buffer_id,
-                    spans: by_row,
-                    signs,
-                    key,
-                    perf,
-                    kind: req.kind,
-                });
             }
         }
     }
+}
+
+/// Worker-side parse + highlight pipeline. Locks the buffer's per-state
+/// mutex briefly to apply edits + parse + run the highlight query + collect
+/// diag signs, then drops the lock before sending. Returns `Some(())` on
+/// success, `None` if the buffer was not tracked (was forgotten between
+/// request submission and dequeue).
+///
+/// Plan-B (#233): the worker now does **only** `parse_initial` or
+/// `parse_incremental` against the shared retained tree. The full
+/// highlight pipeline (highlight query, marker pass, hex-color pass,
+/// build-by-row, diag signs) that used to run here is gone — the main
+/// thread's `SyntaxLayer::query_viewport` runs the same work
+/// synchronously on every render tick against the retained tree.
+/// Producing it on the worker too was just a wasted equal-`dirty_gen`
+/// overwrite that the install path's generation guard had to discard.
+///
+/// The result message still uses [`RenderOutput`] (channel + install
+/// shape unchanged) but carries an EMPTY `spans` / `signs` and acts
+/// purely as a "tree updated for (buffer, kind, dg)" signal so the
+/// app can trigger a fresh sync query on the new tree.
+fn run_parse_and_emit(
+    buffers: &SharedBuffers,
+    req: &ParseRequest,
+    _marker_pass: &CommentMarkerPass,
+    _hex_color_pass: &HexColorPass,
+    _theme: &dyn Theme,
+    directory: &LanguageDirectory,
+    tx: &std::sync::mpsc::Sender<RenderOutput>,
+) -> Option<()> {
+    use std::time::Instant;
+    let bytes = req.source.as_bytes();
+    let (perf, did_parse, changed_ranges) = with_buffer(buffers, req.buffer_id, |state| {
+        let h = &mut state.highlighter;
+        let mut perf = PerfBreakdown::default();
+        // Clone the current tree BEFORE the reset/parse so we can diff
+        // against the freshly-parsed tree below. Tree clones are cheap
+        // (Arc-shared internals). Capturing this on the reset path lets
+        // us emit `changed_ranges` for undo/redo too — without it the
+        // install_render_result fallback runs a full ~30ms viewport
+        // refresh on every undo/redo.
+        let pre_parse_tree = h.tree().cloned();
+        if req.reset {
+            h.reset();
+            state.last_parsed_dirty_gen = None;
+        }
+        let needs_parse = h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
+        if !needs_parse {
+            return Some((perf, false, Vec::new()));
+        }
+        let t = Instant::now();
+        let was_initial = h.tree().is_none();
+        let changes: Vec<std::ops::Range<usize>> = if was_initial {
+            h.parse_initial(bytes);
+            // `parse_incremental_with_changes` would normally compute
+            // this for us, but on the reset path we just did
+            // `parse_initial` (no old tree visible inside the
+            // highlighter). Reach back to the pre-reset clone and diff
+            // against the post-parse tree directly.
+            match (pre_parse_tree.as_ref(), h.tree()) {
+                (Some(old), Some(new)) => old
+                    .changed_ranges(new)
+                    .map(|r| r.start_byte..r.end_byte)
+                    .collect(),
+                _ => Vec::new(),
+            }
+        } else {
+            match h.parse_incremental_with_changes(bytes) {
+                Some(c) => c,
+                None => {
+                    tracing::debug!(
+                        target: "hjkl::profile",
+                        buffer_id = ?req.buffer_id,
+                        bytes_len = bytes.len(),
+                        "worker parse FAILED"
+                    );
+                    return None;
+                }
+            }
+        };
+        perf.parse_us = t.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            buffer_id = ?req.buffer_id,
+            bytes_len = bytes.len(),
+            parse_us = perf.parse_us,
+            was_initial,
+            dg = req.dirty_gen,
+            kind = ?req.kind,
+            changed_count = changes.len(),
+            "worker parse done"
+        );
+        state.last_parsed_dirty_gen = Some(req.dirty_gen);
+        let _ = directory;
+        Some((perf, true, changes))
+    })??;
+
+    // Only emit the "tree updated" signal when we actually reparsed.
+    // Without this guard the worker fires an empty signal on every scroll
+    // tick (dg unchanged → `needs_parse=false`), which `install_render_result`
+    // then turns into a redundant sync `query_viewport` walk per scroll —
+    // visible as scroll lag at high event rates.
+    if !did_parse {
+        return Some(());
+    }
+
+    let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
+    let _ = tx.send(RenderOutput {
+        buffer_id: req.buffer_id,
+        spans: Vec::new(),
+        signs: Vec::new(),
+        key,
+        perf,
+        kind: req.kind,
+        changed_ranges,
+    });
+    Some(())
 }
 
 // ---------------------------------------------------------------------------
@@ -937,7 +1024,6 @@ struct BufferClient {
     has_language: bool,
     current_lang: Option<Arc<Grammar>>,
     cache: Option<RenderCache>,
-    pending_edits: Vec<InputEdit>,
     pending_reset: bool,
     last_submitted_dirty_gen: Option<u64>,
 }
@@ -1154,6 +1240,138 @@ impl SyntaxLayer {
         self.worker.set_theme(theme);
     }
 
+    /// Borrow the buffer's cached `(source, row_starts, line_count, dirty_gen)`
+    /// from the last [`Self::submit_render`] call, if any.
+    ///
+    /// `dirty_gen` is the buffer's generation at the time the cache was
+    /// built — callers compare it against the buffer's *current* generation
+    /// to decide whether to run a sync [`Self::query_viewport`] (cache is
+    /// up to date) or skip (cache is stale, throttled submit hasn't fired
+    /// the rebuild yet).
+    #[allow(clippy::type_complexity)]
+    pub fn cached_source(
+        &self,
+        id: BufferId,
+    ) -> Option<(Arc<String>, Arc<Vec<usize>>, usize, u64)> {
+        let c = self.clients.get(&id)?;
+        let rc = c.cache.as_ref()?;
+        Some((
+            Arc::clone(&rc.source),
+            Arc::clone(&rc.row_starts),
+            rc.line_count as usize,
+            rc.dirty_gen,
+        ))
+    }
+
+    /// Synchronous viewport highlight query against the **retained tree**
+    /// owned by the syntax worker.
+    ///
+    /// Unlike [`Self::submit_render`] (queues a parse + highlight on the
+    /// worker, result delivered later via [`Self::take_all_results`]), this
+    /// runs the highlight + marker + hex-color + diag-signs pipeline
+    /// synchronously on the calling thread using the worker's current
+    /// retained `tree_sitter::Tree`. No re-parse: the spans are extracted
+    /// against whatever tree the worker last produced.
+    ///
+    /// Returns `None` when:
+    /// - no grammar is attached to `id` yet (or it is still loading), or
+    /// - the worker has not produced its first parse for this buffer yet,
+    /// - the worker is currently parsing this buffer (lock would block —
+    ///   for now we wait; future revs may add a `try_*` variant).
+    ///
+    /// Intended use: render-time path on the main thread, so the visible
+    /// rows always paint against the freshest tree the layer has, even
+    /// while a follow-up parse is in flight. This is the foundation for
+    /// the bonsai cache redesign tracked at <https://github.com/kryptic-sh/hjkl/issues/233>.
+    #[allow(clippy::too_many_arguments)]
+    pub fn query_viewport(
+        &self,
+        id: BufferId,
+        source: &str,
+        row_starts: &[usize],
+        viewport_byte_range: std::ops::Range<usize>,
+        viewport_top: usize,
+        viewport_height: usize,
+        row_count: usize,
+        dirty_gen: u64,
+        kind: ParseKind,
+    ) -> Option<RenderOutput> {
+        use std::time::Instant;
+        let bytes = source.as_bytes();
+        let theme = self.theme.as_ref();
+        let directory = self.directory.clone();
+        with_buffer(&self.worker.buffers, id, |state| {
+            // No retained tree yet — caller should fall back to
+            // `preview_render` or wait for the worker's first delivery.
+            state.highlighter.tree()?;
+            let mut perf = PerfBreakdown::default();
+            let t = Instant::now();
+            let mut flat_spans = state.highlighter.highlight_range_with_injections(
+                bytes,
+                viewport_byte_range.clone(),
+                |name| directory.by_name(name),
+            );
+            perf.highlight_us = t.elapsed().as_micros();
+            let flat_span_count = flat_spans.len();
+
+            let t_marker = Instant::now();
+            let marker_pass = CommentMarkerPass::new();
+            marker_pass.apply(&mut flat_spans, bytes);
+            let marker_us = t_marker.elapsed().as_micros();
+
+            let t_hex = Instant::now();
+            // Scan only the viewport bytes for hex colors — full-document
+            // scan per keystroke was a ~200µs hit on 400-line files and
+            // grows with file size.
+            let hex_color_pass = HexColorPass::new();
+            hex_color_pass.apply_range(&mut flat_spans, bytes, viewport_byte_range.clone());
+            let hex_us = t_hex.elapsed().as_micros();
+
+            let t = Instant::now();
+            let by_row = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);
+            perf.by_row_us = t.elapsed().as_micros();
+
+            let t = Instant::now();
+            let signs = collect_diag_signs(
+                &mut state.highlighter,
+                bytes,
+                viewport_byte_range,
+                row_starts,
+            );
+            perf.diag_us = t.elapsed().as_micros();
+
+            tracing::debug!(
+                target: "hjkl::profile",
+                ?kind,
+                highlight_us = perf.highlight_us,
+                marker_us,
+                hex_us,
+                by_row_us = perf.by_row_us,
+                diag_us = perf.diag_us,
+                row_count,
+                flat_span_count,
+                "query_viewport breakdown"
+            );
+
+            // `key.0` tags the result with the dirty_gen the caller
+            // built `source` for. Setting it to the *current* buffer
+            // dirty_gen tells the app-side merger that this cache is
+            // fully up to date (no row should be marked dirty against
+            // it). The retained tree was already edited synchronously
+            // via `apply_edits`, so byte positions align.
+            Some(RenderOutput {
+                buffer_id: id,
+                spans: by_row,
+                signs,
+                key: (dirty_gen, viewport_top, viewport_height),
+                perf,
+                kind,
+                changed_ranges: Vec::new(),
+            })
+        })
+        .flatten()
+    }
+
     /// Synchronous viewport-only preview render. Builds a `String`
     /// containing **only** the visible rows, parses it from scratch with a
     /// one-shot `Highlighter`, runs `highlight_range` over the slice, and
@@ -1235,25 +1453,52 @@ impl SyntaxLayer {
             key: (buffer.dirty_gen(), viewport_top, viewport_height),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         })
     }
 
-    /// Ask the worker to drop this buffer's retained tree on the next
-    /// parse so the next submission is cold.
+    /// Drop this buffer's retained tree **synchronously** so the next
+    /// `query_viewport` returns `None` (caller falls back to the one-shot
+    /// `preview_render`) and the next `submit_render` runs a cold parse.
+    ///
+    /// Wired into the editor's `take_content_reset` signal: bulk replaces
+    /// (`:e!`, undo of a multi-line edit, snapshot restore) emit a reset
+    /// instead of incremental `ContentEdit`s, so the retained tree's
+    /// byte positions no longer correlate with the new source. Letting
+    /// `query_viewport` run against that stale tree paints garbled spans
+    /// for one frame; dropping it sync avoids that frame entirely.
     pub fn reset(&mut self, id: BufferId) {
         self.client_mut(id).pending_reset = true;
+        with_buffer(&self.worker.buffers, id, |state| {
+            state.highlighter.reset();
+            state.last_parsed_dirty_gen = None;
+        });
     }
 
-    /// Buffer a batch of engine `ContentEdit`s to be shipped to the
-    /// worker on the next `submit_render`. Translates the engine's
-    /// position pairs into `tree_sitter::InputEdit`s up front.
+    /// Apply a batch of engine `ContentEdit`s to the shared retained tree
+    /// **synchronously** so the tree's byte positions track the new source
+    /// before the next `submit_render` or `query_viewport` runs.
+    ///
+    /// Plan-B (issue #233): edits are NOT queued on the request anymore —
+    /// they go straight onto the tree via `tree.edit(InputEdit)`. The
+    /// per-buffer mutex briefly serialises with worker reparse on the same
+    /// buffer; that contention is the only cost. The benefit: the very
+    /// next sync `query_viewport` returns spans whose byte ranges align
+    /// with the post-edit source, eliminating the per-frame stale-tree
+    /// flash that the old "ship edits to worker" path produced.
+    ///
+    /// If the buffer's grammar has not loaded yet (or the worker hasn't
+    /// installed the `Highlighter` for this buffer in the shared map yet),
+    /// the call is a no-op — the buffer's first parse will run against the
+    /// then-current source so edit history before grammar load doesn't matter.
     pub fn apply_edits(&mut self, id: BufferId, edits: &[hjkl_engine::ContentEdit]) {
         let c = self.client_mut(id);
         if !c.has_language {
             return;
         }
-        for e in edits {
-            c.pending_edits.push(InputEdit {
+        let input_edits: Vec<InputEdit> = edits
+            .iter()
+            .map(|e| InputEdit {
                 start_byte: e.start_byte,
                 old_end_byte: e.old_end_byte,
                 new_end_byte: e.new_end_byte,
@@ -1269,8 +1514,13 @@ impl SyntaxLayer {
                     row: e.new_end_position.0 as usize,
                     column: e.new_end_position.1 as usize,
                 },
-            });
-        }
+            })
+            .collect();
+        with_buffer(&self.worker.buffers, id, |state| {
+            for e in &input_edits {
+                state.highlighter.edit(e);
+            }
+        });
     }
 
     /// Build (or reuse) the cached `(source, row_starts)` for the
@@ -1311,13 +1561,12 @@ impl SyntaxLayer {
         let mut source_build_us = 0u128;
         if needs_rebuild {
             let t = Instant::now();
-            let mut source = String::with_capacity(lb);
-            for r in 0..row_count {
-                if r > 0 {
-                    source.push('\n');
-                }
-                source.push_str(&buffer.line(r as u32));
-            }
+            // Share the joined source `Arc` with all other per-tick
+            // consumers (LSP notify, git signature, dirty hash) via
+            // `Buffer::content_joined`. The buffer caches against
+            // `dirty_gen` — first call this tick builds it, the rest
+            // are O(1) `Arc::clone`.
+            let source = buffer.content_joined();
             let mut row_starts: Vec<usize> = vec![0];
             for (i, &b) in source.as_bytes().iter().enumerate() {
                 if b == b'\n' {
@@ -1328,7 +1577,7 @@ impl SyntaxLayer {
                 dirty_gen: dg,
                 len_bytes: lb,
                 line_count: lc,
-                source: Arc::new(source),
+                source,
                 row_starts: Arc::new(row_starts),
             });
             source_build_us = t.elapsed().as_micros();
@@ -1341,7 +1590,6 @@ impl SyntaxLayer {
         let vp_end = buffer.byte_of_row(vp_end_row).min(bytes_len);
         let vp_end = vp_end.max(vp_start);
 
-        let edits = std::mem::take(&mut c.pending_edits);
         let reset = std::mem::replace(&mut c.pending_reset, false);
         c.last_submitted_dirty_gen = Some(dg);
         let source_arc = Arc::clone(&cache.source);
@@ -1351,7 +1599,6 @@ impl SyntaxLayer {
             buffer_id: id,
             source: source_arc,
             row_starts: row_starts_arc,
-            edits,
             viewport_byte_range: vp_start..vp_end,
             viewport_top,
             viewport_height,
@@ -1510,8 +1757,8 @@ impl SyntaxLayer {
     /// ```rust
     /// use hjkl_syntax::{ParseKind, ParseKindKind, SyntaxLayer};
     ///
-    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Top, |k| {
-    ///     assert_eq!(k, ParseKindKind::Top);
+    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Viewport, |k| {
+    ///     assert_eq!(k, ParseKindKind::Viewport);
     /// });
     /// assert!(known);
     /// ```
@@ -1523,14 +1770,6 @@ impl SyntaxLayer {
         match kind {
             ParseKind::Viewport => {
                 handler(ParseKindKind::Viewport);
-                true
-            }
-            ParseKind::Top => {
-                handler(ParseKindKind::Top);
-                true
-            }
-            ParseKind::Bottom => {
-                handler(ParseKindKind::Bottom);
                 true
             }
             // Unknown future variant — fall back to Viewport so the caller
@@ -1586,15 +1825,11 @@ mod tests {
 
     const TID: BufferId = 0;
 
-    // --- ParseKind ordering ---
+    // --- ParseKind ---
 
     #[test]
-    fn parse_kind_ordering_is_distinct() {
-        // Perf invariant: the three variants must be distinct so the queue
-        // deduplication does not accidentally coalesce different region requests.
-        assert_ne!(ParseKind::Viewport, ParseKind::Top);
-        assert_ne!(ParseKind::Viewport, ParseKind::Bottom);
-        assert_ne!(ParseKind::Top, ParseKind::Bottom);
+    fn parse_kind_viewport_equals_itself() {
+        assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
     }
 
     // --- DiagSign ---
@@ -1646,10 +1881,10 @@ mod tests {
             vec![DiagSign::new(0, 'E', 100)],
             (7, 0, 30),
             PerfBreakdown::new(),
-            ParseKind::Bottom,
+            ParseKind::Viewport,
         );
         assert_eq!(out.buffer_id, 99);
-        assert_eq!(out.kind, ParseKind::Bottom);
+        assert_eq!(out.kind, ParseKind::Viewport);
         assert_eq!(out.key, (7, 0, 30));
         assert_eq!(out.signs.len(), 1);
     }
@@ -1669,7 +1904,7 @@ mod tests {
     }
 
     #[test]
-    fn render_output_partial_eq_different_kind() {
+    fn render_output_partial_eq_same_kind() {
         let a = RenderOutput::new(
             0,
             vec![],
@@ -1684,9 +1919,9 @@ mod tests {
             vec![],
             (0, 0, 10),
             PerfBreakdown::default(),
-            ParseKind::Top,
+            ParseKind::Viewport,
         );
-        assert_ne!(a, b);
+        assert_eq!(a, b);
     }
 
     // --- build_by_row ---
@@ -1759,7 +1994,6 @@ mod tests {
             buffer_id: 0,
             source: Arc::new(String::new()),
             row_starts: Arc::new(vec![]),
-            edits: vec![],
             viewport_byte_range: 0..0,
             viewport_top: 0,
             viewport_height: 10,
@@ -1776,62 +2010,24 @@ mod tests {
     }
 
     #[test]
-    fn pending_push_parse_merges_edits_on_replace() {
+    fn pending_push_parse_different_buffers_coexist() {
         let mut p = Pending::new();
-        let mk_edit = |start_byte: usize| InputEdit {
-            start_byte,
-            old_end_byte: start_byte,
-            new_end_byte: start_byte + 1,
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 1 },
-        };
-        let make_req = |dirty_gen: u64, edits: Vec<InputEdit>| ParseRequest {
-            buffer_id: 0,
+        let make_req = |buffer_id: BufferId| ParseRequest {
+            buffer_id,
             source: Arc::new(String::new()),
             row_starts: Arc::new(vec![]),
-            edits,
-            viewport_byte_range: 0..0,
-            viewport_top: 0,
-            viewport_height: 10,
-            row_count: 0,
-            dirty_gen,
-            reset: false,
-            kind: ParseKind::Viewport,
-        };
-        p.push_parse(make_req(1, vec![mk_edit(0)]));
-        p.push_parse(make_req(2, vec![mk_edit(10)]));
-        // Replace merged: edits from BOTH requests must survive — dropping
-        // the earlier ones leaves tree-sitter's retained tree at a stale
-        // byte baseline and produces visibly misaligned spans afterward.
-        assert_eq!(p.parse_queue.len(), 1);
-        assert_eq!(p.parse_queue[0].edits.len(), 2);
-        assert_eq!(p.parse_queue[0].edits[0].start_byte, 0);
-        assert_eq!(p.parse_queue[0].edits[1].start_byte, 10);
-        // The replacing request's dirty_gen is the latest.
-        assert_eq!(p.parse_queue[0].dirty_gen, 2);
-    }
-
-    #[test]
-    fn pending_push_parse_keeps_different_kinds() {
-        let mut p = Pending::new();
-        let make_req = |kind: ParseKind| ParseRequest {
-            buffer_id: 0,
-            source: Arc::new(String::new()),
-            row_starts: Arc::new(vec![]),
-            edits: vec![],
             viewport_byte_range: 0..0,
             viewport_top: 0,
             viewport_height: 10,
             row_count: 0,
             dirty_gen: 1,
             reset: false,
-            kind,
+            kind: ParseKind::Viewport,
         };
-        p.push_parse(make_req(ParseKind::Viewport));
-        p.push_parse(make_req(ParseKind::Top));
-        p.push_parse(make_req(ParseKind::Bottom));
-        // All three kinds for the same buffer must coexist.
+        p.push_parse(make_req(0));
+        p.push_parse(make_req(1));
+        p.push_parse(make_req(2));
+        // Different buffer ids must coexist in the queue.
         assert_eq!(p.parse_queue.len(), 3);
     }
 
@@ -1844,7 +2040,6 @@ mod tests {
                 buffer_id: i as BufferId,
                 source: Arc::new(String::new()),
                 row_starts: Arc::new(vec![]),
-                edits: vec![],
                 viewport_byte_range: 0..0,
                 viewport_top: 0,
                 viewport_height: 10,
@@ -1888,13 +2083,10 @@ mod tests {
             new_end_position: (0, 1),
         }];
         layer.apply_edits(TID, &edits);
-        assert!(
-            layer
-                .clients
-                .get(&TID)
-                .map(|c| c.pending_edits.is_empty())
-                .unwrap_or(true)
-        );
+        // No grammar attached → call must be a no-op (no panic, no shared
+        // state mutation). The buffer is also absent from the worker's
+        // shared map.
+        assert!(layer.worker.buffers.lock().unwrap().get(&TID).is_none());
     }
 
     #[test]

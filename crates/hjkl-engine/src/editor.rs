@@ -1339,14 +1339,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// 0.1.0 freeze the unprefixed name is the universally-available
     /// engine-native variant.
     pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, crate::types::Style)>>) {
-        let line_byte_lens: Vec<usize> = (0..buf_row_count(&self.buffer))
-            .map(|r| buf_line(&self.buffer, r).map(|s| s.len()).unwrap_or(0))
-            .collect();
+        // Note: do NOT pre-collect `line_byte_lens` here. `buf_line` clones
+        // the row string under a content-mutex lock; pre-collecting for
+        // every row turns a 10k-row file's install into 10k mutex-locked
+        // String clones (visible as j/k cursor lag). The typical install
+        // has spans on at most a few hundred rows (the parsed viewport
+        // window); lazy lookup keeps the cost proportional to populated
+        // rows, not file size.
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         let mut engine_spans: Vec<Vec<(usize, usize, crate::types::Style)>> =
             Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
-            let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
+            if row_spans.is_empty() {
+                by_row.push(Vec::new());
+                engine_spans.push(Vec::new());
+                continue;
+            }
+            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
             let mut translated = Vec::with_capacity(row_spans.len());
             let mut translated_e = Vec::with_capacity(row_spans.len());
             for (start, end, style) in row_spans {
@@ -1363,6 +1372,139 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         self.buffer_spans = by_row;
         self.styled_spans = engine_spans;
+    }
+
+    /// Patch only `rows` of the installed `buffer_spans` / `styled_spans`,
+    /// leaving rows outside that range untouched. `spans` is indexed by
+    /// row offset within `rows` — `spans[0]` is for `rows.start`,
+    /// `spans[1]` for `rows.start + 1`, etc.
+    ///
+    /// Use this instead of [`Self::install_syntax_spans`] when a sync
+    /// `query_viewport` produced spans for the visible region only.
+    /// Walking the full `line_count` and re-installing every row on
+    /// every j/k that nudges the viewport dominated the per-keystroke
+    /// cost on large files; patching just the changed range keeps the
+    /// cost proportional to viewport size, not file size.
+    ///
+    /// Ensures `buffer_spans` / `styled_spans` are sized to the buffer's
+    /// current `line_count` (resizes if a row-count edit shifted them).
+    pub fn patch_syntax_spans_range(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        spans: &[Vec<(usize, usize, crate::types::Style)>],
+    ) {
+        let line_count = buf_row_count(&self.buffer);
+        if self.buffer_spans.len() != line_count {
+            self.buffer_spans.resize_with(line_count, Vec::new);
+        }
+        if self.styled_spans.len() != line_count {
+            self.styled_spans.resize_with(line_count, Vec::new);
+        }
+        for (i, row_spans) in spans.iter().enumerate() {
+            let row = rows.start + i;
+            if row >= line_count {
+                break;
+            }
+            if row_spans.is_empty() {
+                self.buffer_spans[row] = Vec::new();
+                self.styled_spans[row] = Vec::new();
+                continue;
+            }
+            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
+            let mut translated = Vec::with_capacity(row_spans.len());
+            let mut translated_e = Vec::with_capacity(row_spans.len());
+            for (start, end, style) in row_spans {
+                let end_clamped = (*end).min(line_len);
+                if end_clamped <= *start {
+                    continue;
+                }
+                let id = self.intern_style(*style);
+                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
+                translated_e.push((*start, end_clamped, *style));
+            }
+            self.buffer_spans[row] = translated;
+            self.styled_spans[row] = translated_e;
+        }
+    }
+
+    /// Translate the cached `buffer_spans` / `styled_spans` row indices
+    /// in-place to track a batch of [`crate::types::ContentEdit`]s without
+    /// blanking the cache.
+    ///
+    /// Why: spans are installed by the async syntax worker, which can lag
+    /// the buffer by one or more frames after an edit. If the edit changes
+    /// the row count and we keep the old span rows in place, the renderer
+    /// paints last-frame's spans at the wrong line — visibly garbled colours.
+    /// The historical fix was to blank `buffer_spans` whenever a row-count
+    /// change came through, but that produces a white flash on every Enter
+    /// or backspace-at-BOL.
+    ///
+    /// What this does instead: for each edit, insert empty span rows where
+    /// the edit grew the buffer and drain rows where it shrank, so the
+    /// surviving rows still index the right line. Spans on the edited row
+    /// itself stay (they'll show stale colours for that one row until the
+    /// worker delivers a fresh parse, which is invisible compared to the
+    /// blank flash).
+    ///
+    /// Edits are applied in order — each edit's `(row, col)` positions are
+    /// taken to be relative to the post-state of the prior edits in the
+    /// batch (matching the order the engine emitted them).
+    pub fn shift_syntax_spans_for_edits(&mut self, edits: &[crate::types::ContentEdit]) {
+        for edit in edits {
+            let oer = edit.old_end_position.0 as usize;
+            let ner = edit.new_end_position.0 as usize;
+            if ner == oer {
+                continue;
+            }
+            let start_row = edit.start_position.0 as usize;
+            let start_col = edit.start_position.1 as usize;
+            // Insert/drain index depends on whether the edit starts at
+            // the BEGINNING of `start_row` or somewhere INSIDE it.
+            //   col == 0 → edit is at the very start of `start_row`; new
+            //              rows go BEFORE row `start_row`, so the affected
+            //              indices begin AT `start_row`.
+            //   col > 0 → edit is inside `start_row`; new rows go AFTER
+            //              `start_row`, so affected indices begin at
+            //              `start_row + 1`.
+            //
+            // Pre-fix this always used `oer + 1` (the col-> 0 branch),
+            // which left row `start_row`'s spans at its old index while
+            // the file's row `start_row` was now the freshly-pasted
+            // content — visible as wrong-row colour mappings after
+            // `ggP` / `P` / any insert at column 0.
+            let affected_idx = if start_col == 0 {
+                start_row
+            } else {
+                start_row + 1
+            };
+            if ner > oer {
+                let n = ner - oer;
+                // O(len + n) via splice; the prior per-row `insert(idx, ...)`
+                // loop was O(n × (len - idx)), which on a 60k-row paste at
+                // the BOL became ~1.8 G memmove ops (87 % of paste CPU per
+                // samply). Splice memmove-shifts once, then fills.
+                let idx = affected_idx.min(self.buffer_spans.len());
+                self.buffer_spans
+                    .splice(idx..idx, std::iter::repeat_with(Vec::new).take(n));
+                let idx_s = affected_idx.min(self.styled_spans.len());
+                self.styled_spans
+                    .splice(idx_s..idx_s, std::iter::repeat_with(Vec::new).take(n));
+            } else {
+                let n = oer - ner;
+                let len_b = self.buffer_spans.len();
+                let start_b = affected_idx.min(len_b);
+                let end_b = (start_b + n).min(len_b);
+                if end_b > start_b {
+                    self.buffer_spans.drain(start_b..end_b);
+                }
+                let len_s = self.styled_spans.len();
+                let start_s = affected_idx.min(len_s);
+                let end_s = (start_s + n).min(len_s);
+                if end_s > start_s {
+                    self.styled_spans.drain(start_s..end_s);
+                }
+            }
+        }
     }
 
     /// Read-only view of the style table in engine-native form —
@@ -2804,13 +2946,44 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Replace the buffer with `lines` joined by `\n` and set the
     /// cursor to `cursor`. Used by undo / `:e!` / snapshot restore
     /// paths. Marks the editor dirty.
+    ///
+    /// Emits a single whole-buffer `ContentEdit` describing the
+    /// transition so the syntax layer can apply it as an `InputEdit`
+    /// on the retained tree and run an INCREMENTAL parse — tree-sitter
+    /// reuses unchanged subtrees and `Tree::changed_ranges` reports
+    /// just the bytes that differ, which lets the install path walk
+    /// only the changed rows instead of the full viewport. Big undos
+    /// that revert a large paste now refresh in ~1ms per affected
+    /// row instead of a ~30ms full-viewport sync walk.
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
+        use crate::types::Query as _;
         let text = lines.join("\n");
+        let old_len_bytes = self.buffer.len_bytes();
+        let old_row_count = buf_row_count(&self.buffer);
+        let old_last_row = old_row_count.saturating_sub(1);
+        let old_last_col = buf_line(&self.buffer, old_last_row)
+            .map(|s| s.len())
+            .unwrap_or(0);
         crate::types::BufferEdit::replace_all(&mut self.buffer, &text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
-        // Bulk replace — supersedes any queued ContentEdits.
+        let new_len_bytes = self.buffer.len_bytes();
+        let new_row_count = buf_row_count(&self.buffer);
+        let new_last_row = new_row_count.saturating_sub(1);
+        let new_last_col = buf_line(&self.buffer, new_last_row)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        // Bulk replace — supersedes any prior queued edits, then push a
+        // single whole-buffer edit so the syntax pipeline can run
+        // incremental.
         self.pending_content_edits.clear();
-        self.pending_content_reset = true;
+        self.pending_content_edits.push(crate::types::ContentEdit {
+            start_byte: 0,
+            old_end_byte: old_len_bytes,
+            new_end_byte: new_len_bytes,
+            start_position: (0, 0),
+            old_end_position: (old_last_row as u32, old_last_col as u32),
+            new_end_position: (new_last_row as u32, new_last_col as u32),
+        });
         self.mark_content_dirty();
     }
 
@@ -4068,11 +4241,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert or Replace mode before
     /// calling this method.
     pub fn insert_char(&mut self, ch: char) {
-        let mutated = vim::insert_char_bridge(self, ch);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_char_bridge(self, ch) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4081,12 +4251,33 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_newline(&mut self) {
-        let mutated = vim::insert_newline_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_newline_bridge(self) {
+            self.after_insert_mutation();
         }
+    }
+
+    /// Common post-mutation sync for the `insert_*` primitives. The vim
+    /// FSM's `step` runs `ensure_cursor_in_scrolloff` at the end of every
+    /// normal/visual motion; insert-mode primitives bypass `step` and
+    /// must self-correct or the cursor scrolls off the viewport (held
+    /// Enter, multi-line backspace at BOL, arrow keys at edge, etc.).
+    ///
+    /// Marks the content dirty, widens the insert row's autoindent
+    /// tracking, and re-checks scrolloff.
+    fn after_insert_mutation(&mut self) {
+        self.mark_content_dirty();
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+        self.ensure_cursor_in_scrolloff();
+    }
+
+    /// Like `after_insert_mutation` but for cursor-only insert ops that
+    /// don't change content (arrows, Home/End, PageUp/Down). Skips the
+    /// dirty mark.
+    fn after_insert_motion(&mut self) {
+        let (row, _) = self.cursor();
+        self.vim.widen_insert_row(row);
+        self.ensure_cursor_in_scrolloff();
     }
 
     /// Insert a tab character (or spaces up to the next `softtabstop` boundary
@@ -4094,11 +4285,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_tab(&mut self) {
-        let mutated = vim::insert_tab_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_tab_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4108,11 +4296,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_backspace(&mut self) {
-        let mutated = vim::insert_backspace_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_backspace_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4121,11 +4306,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_delete(&mut self) {
-        let mutated = vim::insert_delete_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_delete_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4135,8 +4317,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_arrow(&mut self, dir: vim::InsertDir) {
         vim::insert_arrow_bridge(self, dir);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Move the cursor to the start of the current line (Home key), breaking
@@ -4145,8 +4326,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_home(&mut self) {
         vim::insert_home_bridge(self);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Move the cursor to the end of the current line (End key), breaking the
@@ -4155,8 +4335,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_end(&mut self) {
         vim::insert_end_bridge(self);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Scroll up one full viewport height (PageUp), moving the cursor with it.
@@ -4166,8 +4345,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_pageup(&mut self, viewport_h: u16) {
         vim::insert_pageup_bridge(self, viewport_h);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Scroll down one full viewport height (PageDown), moving the cursor with
@@ -4176,8 +4354,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_pagedown(&mut self, viewport_h: u16) {
         vim::insert_pagedown_bridge(self, viewport_h);
-        let (row, _) = self.cursor();
-        self.vim.widen_insert_row(row);
+        self.after_insert_motion();
     }
 
     /// Delete from the cursor back to the start of the previous word (`Ctrl-W`).
@@ -4185,11 +4362,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_w(&mut self) {
-        let mutated = vim::insert_ctrl_w_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_w_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4198,11 +4372,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_u(&mut self) {
-        let mutated = vim::insert_ctrl_u_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_u_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -4211,11 +4382,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     ///
     /// Callers must ensure the editor is in Insert mode before calling.
     pub fn insert_ctrl_h(&mut self) {
-        let mutated = vim::insert_ctrl_h_bridge(self);
-        if mutated {
-            self.mark_content_dirty();
-            let (row, _) = self.cursor();
-            self.vim.widen_insert_row(row);
+        if vim::insert_ctrl_h_bridge(self) {
+            self.after_insert_mutation();
         }
     }
 
@@ -5424,4 +5592,327 @@ fn visual_col_for_char(line: &str, char_col: usize, tab_width: usize) -> usize {
         }
     }
     visual
+}
+
+#[cfg(test)]
+mod shift_syntax_spans_tests {
+    use super::*;
+    use crate::types::{ContentEdit, DefaultHost, Options, Style};
+    use hjkl_buffer::Buffer;
+
+    fn ed_with_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("row{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        // Synthesize span rows so we can detect which survive a shift.
+        // Use a distinct fg colour per row so spans are identifiable.
+        let style = Style::default();
+        let spans: Vec<Vec<(usize, usize, Style)>> =
+            (0..line_count).map(|_| vec![(0, 1, style)]).collect();
+        e.install_syntax_spans(spans);
+        e
+    }
+
+    fn edit_insert_newline_at(row: u32, col: u32) -> ContentEdit {
+        // Pressing Enter: zero-width insertion that produces one new row.
+        ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (row, col),
+            old_end_position: (row, col),
+            new_end_position: (row + 1, 0),
+        }
+    }
+
+    fn edit_join_rows(row: u32, col: u32) -> ContentEdit {
+        // Backspace at start of `row+1`: removes the newline, joining the
+        // two rows. old_end is on `row+1`, new_end on `row`.
+        ContentEdit {
+            start_byte: 0,
+            old_end_byte: 1,
+            new_end_byte: 0,
+            start_position: (row, col),
+            old_end_position: (row + 1, 0),
+            new_end_position: (row, col),
+        }
+    }
+
+    #[test]
+    fn insert_grows_buffer_spans_in_place() {
+        let mut e = ed_with_spans(4);
+        // Newline at row 1 → buffer grew by one row.
+        e.shift_syntax_spans_for_edits(&[edit_insert_newline_at(1, 1)]);
+        assert_eq!(
+            e.buffer_spans().len(),
+            5,
+            "row-count grew → spans rows must match"
+        );
+        // The empty row should be at index 2 (right after the split point).
+        assert!(e.buffer_spans()[2].is_empty(), "inserted row sits at oer+1");
+        // Surrounding rows kept their content.
+        assert!(!e.buffer_spans()[0].is_empty());
+        assert!(!e.buffer_spans()[1].is_empty());
+        assert!(!e.buffer_spans()[3].is_empty());
+        assert!(!e.buffer_spans()[4].is_empty());
+    }
+
+    #[test]
+    fn delete_shrinks_buffer_spans_in_place() {
+        let mut e = ed_with_spans(4);
+        e.shift_syntax_spans_for_edits(&[edit_join_rows(1, 1)]);
+        assert_eq!(
+            e.buffer_spans().len(),
+            3,
+            "row-count shrank → spans rows must match"
+        );
+    }
+
+    #[test]
+    fn same_row_edit_leaves_rows_untouched() {
+        let mut e = ed_with_spans(3);
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 1,
+            start_position: (1, 0),
+            old_end_position: (1, 0),
+            new_end_position: (1, 1),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 3);
+        for row in 0..3 {
+            assert!(
+                !e.buffer_spans()[row].is_empty(),
+                "row {row} should still hold its span"
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_edits_apply_against_prior_state() {
+        let mut e = ed_with_spans(3);
+        // Two consecutive inserts: each adds a row.
+        e.shift_syntax_spans_for_edits(&[
+            edit_insert_newline_at(0, 1),
+            edit_insert_newline_at(1, 1),
+        ]);
+        assert_eq!(e.buffer_spans().len(), 5);
+    }
+
+    /// Build a buffer with `line_count` rows where row `i` has a span at
+    /// column `i + 1` so the rows are independently identifiable after a
+    /// shift (otherwise all spans look identical and can't tell which
+    /// original row's spans landed at which post-shift index).
+    fn ed_with_distinguishable_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("rowwwwwwwwww{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        let style = Style::default();
+        let spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
+            .map(|i| vec![(i + 1, i + 2, style)])
+            .collect();
+        e.install_syntax_spans(spans);
+        e
+    }
+
+    /// Regression for off-by-one in `shift_syntax_spans_for_edits`.
+    ///
+    /// `P` (paste-before) at column 0 of row 0 inserts new lines BEFORE
+    /// row 0. The pre-paste rows should shift down by N. The fix inserts
+    /// empty rows at idx `start.row` (not `oer + 1`) when `start.col == 0`.
+    ///
+    /// Symptom before the fix: row 0's spans stayed at idx 0 after a
+    /// 4-row `ggP`, but the file's row 0 was now the pasted content (no
+    /// spans available yet). Display: pasted row 0 painted with the
+    /// pre-paste row 0's spans (LUCKILY identical content in many cases)
+    /// while the *shifted* pre-paste row 0 (now at file row 4) painted
+    /// with the pre-paste row 1's spans — visible as the WRONG row
+    /// showing the wrong-row colours.
+    #[test]
+    fn shift_for_paste_at_start_of_row_zero() {
+        let mut e = ed_with_distinguishable_spans(7);
+        // Snapshot: row i has a span at col (i+1, i+2).
+        let pre = e.buffer_spans().to_vec();
+        // P at (0, 0) inserting 4 lines.
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 4,
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (4, 0),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 11, "row count grew by 4");
+        // Rows 0..4 are the new pasted lines — should be EMPTY placeholders.
+        for row in 0..4 {
+            assert!(
+                e.buffer_spans()[row].is_empty(),
+                "row {row} (new paste) must be empty placeholder, got {:?}",
+                e.buffer_spans()[row]
+            );
+        }
+        // Rows 4..11 are the original rows 0..7 shifted down by 4.
+        for (orig_row, orig_spans) in pre.iter().enumerate() {
+            let new_row = orig_row + 4;
+            assert_eq!(
+                &e.buffer_spans()[new_row],
+                orig_spans,
+                "original row {orig_row} should be at file row {new_row} after \
+                 paste-before-row-0"
+            );
+        }
+    }
+
+    /// Same idea for paste at start of a non-zero row: `2GP` inserts 3
+    /// lines before row 2.
+    #[test]
+    fn shift_for_paste_at_start_of_middle_row() {
+        let mut e = ed_with_distinguishable_spans(5);
+        let pre = e.buffer_spans().to_vec();
+        // Insert 3 lines at (2, 0).
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 3,
+            start_position: (2, 0),
+            old_end_position: (2, 0),
+            new_end_position: (5, 0),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 8);
+        // Rows 0..2 unchanged (before the insertion point).
+        assert_eq!(e.buffer_spans()[0], pre[0]);
+        assert_eq!(e.buffer_spans()[1], pre[1]);
+        // Rows 2..5 are new pasted lines.
+        for row in 2..5 {
+            assert!(
+                e.buffer_spans()[row].is_empty(),
+                "row {row} must be empty placeholder"
+            );
+        }
+        // Rows 5..8 are originals 2..5 shifted down by 3.
+        for (orig_row, orig_spans) in pre.iter().enumerate().take(5).skip(2) {
+            let new_row = orig_row + 3;
+            assert_eq!(
+                &e.buffer_spans()[new_row],
+                orig_spans,
+                "original row {orig_row} should land at file row {new_row}"
+            );
+        }
+    }
+
+    /// Regression: pasting N rows at the beginning of the buffer used to
+    /// run `Vec::insert(0, ...)` once per row → O(N²) memmove. samply
+    /// showed this path eating 87 % of paste CPU on a 60 k-row paste.
+    /// The splice rewrite is O(N).
+    ///
+    /// Asserting a hard wall-clock bound is brittle on slow CI, so we
+    /// pick a budget the old code blows past by >10×: 60 k rows in
+    /// under 200 ms even on a debug build. Old impl: ~3-5 seconds.
+    #[test]
+    fn shift_for_60k_row_paste_at_row_zero_is_under_200ms() {
+        let mut e = ed_with_distinguishable_spans(8);
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 60_000,
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (60_000, 0),
+        };
+        let t = std::time::Instant::now();
+        e.shift_syntax_spans_for_edits(&[edit]);
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 200,
+            "60k-row shift took {elapsed:?}; budget is 200 ms (catches \
+             reintroduction of the O(N²) per-row insert loop)"
+        );
+        assert_eq!(e.buffer_spans().len(), 60_008);
+    }
+}
+
+#[cfg(test)]
+mod insert_mode_scrolloff_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Host, Options};
+    use crate::vim::Mode;
+    use hjkl_buffer::Buffer;
+
+    fn ed_with_lines(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("row{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        // Viewport: 20 rows tall, starts at top.
+        let vp = e.host_mut().viewport_mut();
+        vp.width = 80;
+        vp.height = 20;
+        vp.top_row = 0;
+        vp.top_col = 0;
+        e.set_viewport_height(20);
+        e.vim.mode = Mode::Insert;
+        e
+    }
+
+    /// Regression: holding Enter in insert mode used to scroll the cursor
+    /// off the viewport because `insert_newline` (called from the app's
+    /// `dispatch_insert_key`) bypasses the FSM `step` that runs
+    /// `ensure_cursor_in_scrolloff`. The post-mutation helper now runs
+    /// scrolloff for every insert primitive — the cursor must stay
+    /// within `SCROLLOFF` rows of the bottom edge.
+    #[test]
+    fn insert_newline_keeps_cursor_in_scrolloff() {
+        let mut e = ed_with_lines(200);
+        // Park cursor at the bottom edge of the viewport (row 19).
+        e.set_cursor_doc(19, 0);
+        // Press Enter 50 times. Cursor moves down each newline; without
+        // scrolloff the cursor would slide off the bottom of the
+        // viewport at row 20+ and the user would type blind.
+        for _ in 0..50 {
+            e.insert_newline();
+        }
+        let (cursor_row, _) = e.cursor();
+        let vp = e.host().viewport();
+        let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
+        let max_screen_row = vp.height as usize - 1 - margin;
+        assert!(
+            cursor_screen_row <= max_screen_row,
+            "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row} \
+             (cursor_row={cursor_row}, vp.top_row={vp_top}, vp.height={vp_h})",
+            vp_top = vp.top_row,
+            vp_h = vp.height,
+        );
+    }
+
+    /// Same check for `insert_arrow(Down)` — cursor-only motion that also
+    /// must trigger scrolloff.
+    #[test]
+    fn insert_arrow_down_keeps_cursor_in_scrolloff() {
+        let mut e = ed_with_lines(200);
+        e.set_cursor_doc(19, 0);
+        for _ in 0..50 {
+            e.insert_arrow(vim::InsertDir::Down);
+        }
+        let (cursor_row, _) = e.cursor();
+        let vp = e.host().viewport();
+        let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
+        let max_screen_row = vp.height as usize - 1 - margin;
+        assert!(
+            cursor_screen_row <= max_screen_row,
+            "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row}"
+        );
+    }
 }
