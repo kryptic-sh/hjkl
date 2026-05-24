@@ -1374,6 +1374,59 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.styled_spans = engine_spans;
     }
 
+    /// Patch only `rows` of the installed `buffer_spans` / `styled_spans`,
+    /// leaving rows outside that range untouched. `spans` is indexed by
+    /// row offset within `rows` — `spans[0]` is for `rows.start`,
+    /// `spans[1]` for `rows.start + 1`, etc.
+    ///
+    /// Use this instead of [`Self::install_syntax_spans`] when a sync
+    /// `query_viewport` produced spans for the visible region only.
+    /// Walking the full `line_count` and re-installing every row on
+    /// every j/k that nudges the viewport dominated the per-keystroke
+    /// cost on large files; patching just the changed range keeps the
+    /// cost proportional to viewport size, not file size.
+    ///
+    /// Ensures `buffer_spans` / `styled_spans` are sized to the buffer's
+    /// current `line_count` (resizes if a row-count edit shifted them).
+    pub fn patch_syntax_spans_range(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        spans: &[Vec<(usize, usize, crate::types::Style)>],
+    ) {
+        let line_count = buf_row_count(&self.buffer);
+        if self.buffer_spans.len() != line_count {
+            self.buffer_spans.resize_with(line_count, Vec::new);
+        }
+        if self.styled_spans.len() != line_count {
+            self.styled_spans.resize_with(line_count, Vec::new);
+        }
+        for (i, row_spans) in spans.iter().enumerate() {
+            let row = rows.start + i;
+            if row >= line_count {
+                break;
+            }
+            if row_spans.is_empty() {
+                self.buffer_spans[row] = Vec::new();
+                self.styled_spans[row] = Vec::new();
+                continue;
+            }
+            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
+            let mut translated = Vec::with_capacity(row_spans.len());
+            let mut translated_e = Vec::with_capacity(row_spans.len());
+            for (start, end, style) in row_spans {
+                let end_clamped = (*end).min(line_len);
+                if end_clamped <= *start {
+                    continue;
+                }
+                let id = self.intern_style(*style);
+                translated.push(hjkl_buffer::Span::new(*start, end_clamped, id));
+                translated_e.push((*start, end_clamped, *style));
+            }
+            self.buffer_spans[row] = translated;
+            self.styled_spans[row] = translated_e;
+        }
+    }
+
     /// Translate the cached `buffer_spans` / `styled_spans` row indices
     /// in-place to track a batch of [`crate::types::ContentEdit`]s without
     /// blanking the cache.

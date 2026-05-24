@@ -158,6 +158,15 @@ pub trait EditorRatatuiExt {
     /// runs and clamps `end` to the line's char length.
     fn install_ratatui_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, RStyle)>>);
 
+    /// Patch only `rows` of the installed spans (ratatui-typed input).
+    /// Mirrors [`hjkl_engine::Editor::patch_syntax_spans_range`] for
+    /// callers that have ratatui styles.
+    fn patch_ratatui_syntax_spans_range(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        spans: &[Vec<(usize, usize, RStyle)>],
+    );
+
     /// Allocate and return the style table converted to ratatui styles.
     /// Convenience for render paths that need a `Vec<ratatui::style::Style>`.
     /// Allocates on every call — prefer a per-draw local binding.
@@ -180,6 +189,23 @@ impl<H: Host> EditorRatatuiExt for Editor<hjkl_buffer::Buffer, H> {
             })
             .collect();
         self.install_syntax_spans(engine_spans);
+    }
+
+    fn patch_ratatui_syntax_spans_range(
+        &mut self,
+        rows: std::ops::Range<usize>,
+        spans: &[Vec<(usize, usize, RStyle)>],
+    ) {
+        let engine_spans: Vec<Vec<(usize, usize, Style)>> = spans
+            .iter()
+            .map(|row_spans| {
+                row_spans
+                    .iter()
+                    .map(|(start, end, style)| (*start, *end, style_from_ratatui(*style)))
+                    .collect()
+            })
+            .collect();
+        self.patch_syntax_spans_range(rows, &engine_spans);
     }
 
     fn ratatui_style_table(&self) -> Vec<RStyle> {

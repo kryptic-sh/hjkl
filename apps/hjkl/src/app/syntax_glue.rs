@@ -330,9 +330,31 @@ impl App {
         });
 
         if is_active {
-            // Active buffer: merge all three caches and install on the editor.
+            // Active buffer: patch ONLY the result's range on the editor
+            // instead of re-running the merger over `line_count`. This
+            // keeps per-keystroke install cost proportional to viewport
+            // height (~80 rows) rather than file size — without it j/k
+            // on a 10k-row file shows visible cursor lag because the
+            // merger + full ratatui install touch every row.
+            //
+            // Cross-region rows (e.g. Top + Viewport overlap when the
+            // cursor is near the top) auto-resolve: the most recently
+            // installed kind wins. Because Viewport is the kind that
+            // moves on every j/k, "newest = correct viewport" naturally
+            // holds.
+            use hjkl_engine_tui::EditorRatatuiExt;
+            let range_top = out.key.1;
+            let range_height = out.key.2;
             let active_idx = self.focused_slot_idx();
-            self.install_merged_spans_for_slot(active_idx);
+            let line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+            let end = (range_top + range_height)
+                .min(line_count)
+                .min(out.spans.len());
+            let start = range_top.min(end);
+            let slice = &out.spans[start..end];
+            self.slots[active_idx]
+                .editor
+                .patch_ratatui_syntax_spans_range(start..end, slice);
             return true;
         }
         // Non-active buffer: cached above, live install deferred to switch_to.
@@ -650,7 +672,13 @@ impl App {
         // result is tagged with the buffer's current dirty_gen so the
         // generation guard in `install_render_result` will favour it
         // over any older worker result still in flight.
-        self.sync_query_active_viewport(buffer_id, oversize_top, oversize_height, top, height, dg);
+        //
+        // Use the VISIBLE viewport (not the 3x over-provisioned range
+        // the async worker submits) for sync. Over-provisioning helped
+        // the worker pre-cache ahead-of-scroll rows; the sync path
+        // doesn't cache, it just re-queries every tick, so highlighting
+        // 240 rows when only 80 are visible is wasted CPU per j/k.
+        self.sync_query_active_viewport(buffer_id, top, height, top, height, dg);
 
         // Top + Bottom pre-cache for the active buffer.
         //
