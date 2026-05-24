@@ -302,13 +302,7 @@ impl App {
                         // the sync_query_region walk fires.
                         self.slots[slot_idx].installed_spans_dg = None;
                         self.slots[slot_idx].installed_rows = None;
-                        self.sync_query_region(
-                            out.buffer_id,
-                            vp_top,
-                            vp_height,
-                            buf_dg,
-                            out.kind,
-                        );
+                        self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
                     } else if let Some((_, row_starts, _, cache_dg)) =
                         self.syntax.cached_source(out.buffer_id)
                         && cache_dg == buf_dg
@@ -334,10 +328,8 @@ impl App {
                                 (row_start, row_end)
                             })
                             .collect();
-                        let total_changed_rows: usize = row_spans
-                            .iter()
-                            .map(|(s, e)| e.saturating_sub(*s))
-                            .sum();
+                        let total_changed_rows: usize =
+                            row_spans.iter().map(|(s, e)| e.saturating_sub(*s)).sum();
                         let huge = total_changed_rows > vp_height.saturating_mul(2);
                         tracing::debug!(
                             target: "hjkl::profile",
@@ -395,20 +387,13 @@ impl App {
                         // rows, refreshing them against the
                         // post-undo tree.
                         self.slots[slot_idx].installed_spans_dg = Some(buf_dg);
-                        self.slots[slot_idx].installed_rows =
-                            Some(vp_top..(vp_top + vp_height));
+                        self.slots[slot_idx].installed_rows = Some(vp_top..(vp_top + vp_height));
                         self.slots[slot_idx].last_sync_viewport_key = None;
                     } else {
                         // Source cache stale — fall back to full refresh.
                         self.slots[slot_idx].installed_spans_dg = None;
                         self.slots[slot_idx].installed_rows = None;
-                        self.sync_query_region(
-                            out.buffer_id,
-                            vp_top,
-                            vp_height,
-                            buf_dg,
-                            out.kind,
-                        );
+                        self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
                     }
                     return true;
                 }
@@ -605,8 +590,8 @@ impl App {
         // tree-sitter walk, not a full 55-row viewport walk.
         let vp_range = range_top..(range_top + range_height);
         let cached_dg_opt = self.slots[slot_idx].installed_spans_dg;
-        let cached_for_dg = matches!(kind, crate::syntax::ParseKind::Viewport)
-            && cached_dg_opt == Some(current_dg);
+        let cached_for_dg =
+            matches!(kind, crate::syntax::ParseKind::Viewport) && cached_dg_opt == Some(current_dg);
 
         // Typing path: dg bumped since last walk AND we have a prior
         // install. Tree was just edited (tree.edit synced) but the
@@ -637,7 +622,9 @@ impl App {
             None
         };
         let walk_ranges: Vec<std::ops::Range<usize>> = match cached_rows.as_ref() {
-            Some(installed) if installed.start <= vp_range.start && installed.end >= vp_range.end => {
+            Some(installed)
+                if installed.start <= vp_range.start && installed.end >= vp_range.end =>
+            {
                 // Fully covered — no walk needed. Update dedup key so
                 // subsequent identical calls also short-circuit.
                 tracing::debug!(
@@ -830,6 +817,9 @@ impl App {
     /// Submit a new viewport-scoped parse on the syntax worker and install
     /// whatever the worker has produced since the last frame.
     pub(crate) fn recompute_and_install(&mut self) {
+        if !self.syntax_enabled {
+            return;
+        }
         const RECOMPUTE_THROTTLE: Duration = Duration::from_millis(100);
         let buffer_id = self.active().buffer_id;
         let (focused_top, focused_height) = {
@@ -1126,6 +1116,41 @@ impl App {
             })
             .collect();
         PreviewSpans::from_byte_ranges(&ranges, bytes)
+    }
+
+    /// `:syntax on` / `:syntax off` — toggle bonsai highlighting app-wide.
+    ///
+    /// `false` clears installed spans on every slot, drops per-slot install
+    /// caches, and short-circuits future `recompute_and_install` calls so
+    /// no parser thread work is queued.
+    ///
+    /// `true` re-registers the detected language for every slot's filename
+    /// (no-op for unnamed scratch buffers) and runs a fresh recompute for
+    /// the active slot so its viewport repaints immediately.
+    pub(crate) fn set_syntax_enabled(&mut self, enabled: bool) {
+        if self.syntax_enabled == enabled {
+            return;
+        }
+        self.syntax_enabled = enabled;
+        if !enabled {
+            for slot in &mut self.slots {
+                slot.editor.install_ratatui_syntax_spans(Vec::new());
+                slot.diag_signs.clear();
+                slot.viewport_render_output = None;
+                slot.last_sync_viewport_key = None;
+                slot.last_recompute_key = None;
+                slot.installed_spans_dg = None;
+                slot.installed_rows = None;
+            }
+        } else {
+            for i in 0..self.slots.len() {
+                let buffer_id = self.slots[i].buffer_id;
+                if let Some(p) = self.slots[i].filename.clone() {
+                    let _ = self.syntax.set_language_for_path(buffer_id, &p);
+                }
+            }
+            self.recompute_and_install();
+        }
     }
 }
 

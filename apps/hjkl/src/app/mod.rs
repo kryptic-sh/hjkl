@@ -208,6 +208,12 @@ pub struct App {
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
     /// Toggled by `:perf`. When true, render shows last-frame timings.
     pub perf_overlay: bool,
+    /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
+    /// is bypassed: spans stay empty, no submit_render fires, and
+    /// `recompute_and_install` returns immediately. Re-enabling re-attaches
+    /// the language for every slot's path and triggers a fresh recompute.
+    /// Default `true` — vim parity.
+    pub syntax_enabled: bool,
     /// Set when an event handler decided a `recompute_and_install` is
     /// needed but deferred it to coalesce. The main event loop runs the
     /// recompute once after the event-drain loop ends, so a burst of
@@ -521,8 +527,8 @@ pub(super) fn build_slot(
         disk_state: DiskState::Synced,
         viewport_render_output: None,
         last_sync_viewport_key: None,
-            installed_spans_dg: None,
-            installed_rows: None,
+        installed_spans_dg: None,
+        installed_rows: None,
         dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();
@@ -1172,6 +1178,7 @@ impl App {
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             perf_overlay: false,
+            syntax_enabled: true,
             pending_recompute: false,
             last_recompute_us: 0,
             last_install_us: 0,

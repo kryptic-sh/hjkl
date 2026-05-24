@@ -1222,6 +1222,55 @@ impl HostCmd<App> for NotificationsCmd {
     }
 }
 
+/// `:syntax [on|off|enable|disable|...]` — toggle bonsai syntax highlighting.
+///
+/// `on`/`enable` re-attaches grammars for every open slot's path and triggers
+/// a fresh recompute. `off`/`disable` clears installed spans on every slot
+/// and short-circuits future parses. Other args (e.g. `:syntax sync`,
+/// `:syntax clear`) are accepted as no-ops for vim parity. Bare `:syntax`
+/// reports current state.
+pub(crate) struct SyntaxCmd;
+
+impl HostCmd<App> for SyntaxCmd {
+    fn name(&self) -> &'static str {
+        "syntax"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// vim COMMAND_NAMES lists `:syntax` with abbrev `:syn`; match that.
+    fn min_prefix(&self) -> usize {
+        3
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::Raw
+    }
+
+    fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        let arg = args.trim();
+        if arg.is_empty() {
+            let state = if app.syntax_enabled { "ON" } else { "OFF" };
+            return Some(ExEffect::Info(format!("syntax: {state}")));
+        }
+        match arg.to_ascii_lowercase().as_str() {
+            "on" | "enable" => {
+                app.set_syntax_enabled(true);
+                Some(ExEffect::Ok)
+            }
+            "off" | "disable" => {
+                app.set_syntax_enabled(false);
+                Some(ExEffect::Ok)
+            }
+            // Vim-permissive: accept other subcommands (`sync`, `clear`,
+            // `reset`, language names, …) as no-ops rather than errors.
+            _ => Some(ExEffect::Ok),
+        }
+    }
+}
+
 // ── Registry ─────────────────────────────────────────────────────────────────
 
 fn build_registry() -> hjkl_ex::HostRegistry<App> {
@@ -1271,6 +1320,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(LspInfoCmd));
     reg.add(Box::new(AnvilCmd));
     reg.add(Box::new(NotificationsCmd));
+    reg.add(Box::new(SyntaxCmd));
     reg
 }
 

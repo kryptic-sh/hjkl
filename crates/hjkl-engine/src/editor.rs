@@ -5853,8 +5853,7 @@ mod insert_mode_scrolloff_tests {
         let (cursor_row, _) = e.cursor();
         let vp = e.host().viewport();
         let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
-        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF
-            .min(vp.height as usize - 1) / 2;
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
         let max_screen_row = vp.height as usize - 1 - margin;
         assert!(
             cursor_screen_row <= max_screen_row,
@@ -5877,8 +5876,7 @@ mod insert_mode_scrolloff_tests {
         let (cursor_row, _) = e.cursor();
         let vp = e.host().viewport();
         let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
-        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF
-            .min(vp.height as usize - 1) / 2;
+        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
         let max_screen_row = vp.height as usize - 1 - margin;
         assert!(
             cursor_screen_row <= max_screen_row,

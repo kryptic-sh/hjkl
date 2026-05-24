@@ -401,10 +401,7 @@ impl Highlighter {
     /// [`Highlighter::edit`]) and the freshly-parsed tree. Empty on
     /// initial parse (no prior tree to diff against). Returns `None` on
     /// parse failure / timeout.
-    pub fn parse_incremental_with_changes(
-        &mut self,
-        source: &[u8],
-    ) -> Option<Vec<Range<usize>>> {
+    pub fn parse_incremental_with_changes(&mut self, source: &[u8]) -> Option<Vec<Range<usize>>> {
         let old_tree = self.tree.clone();
         if self.parse_timeout_micros == 0 {
             let result = self.parser.parse(source, self.tree.as_ref());
@@ -502,10 +499,7 @@ impl Highlighter {
         let pattern_info = &self.pattern_info;
         while let Some(m) = matches.next() {
             let pattern_idx = m.pattern_index;
-            let info = pattern_info
-                .get(pattern_idx)
-                .copied()
-                .unwrap_or_default();
+            let info = pattern_info.get(pattern_idx).copied().unwrap_or_default();
 
             // Build the (capture_idx, node) pairs used by MatchContext —
             // only when the pattern actually invokes predicates or
