@@ -1006,6 +1006,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         hjkl_hover_tui::render(frame, popup, &hover_theme, frame.area());
     }
 
+    // Perf panel (`:perf` toggle) — floats top-right above everything except
+    // toast notifications so the table stays visible while toggling features.
+    if app.perf_overlay {
+        perf_overlay_panel(frame, app, frame.area());
+    }
+
     // Toast notifications — float top-right, newest on top.
     let holler_layout = HollerLayout::default();
     render_active(
@@ -1323,35 +1329,8 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Perf overlay (toggled via `:perf`) ──────────────────────────────────
-    if app.perf_overlay {
-        let p = &app.last_perf;
-        let content = format!(
-            " perf  total={}µs src={} parse={} hl={} byrow={} diag={} install={} sig={} git={} | runs={} hits={} thr={} ",
-            app.last_recompute_us,
-            p.source_build_us,
-            p.parse_us,
-            p.highlight_us,
-            p.by_row_us,
-            p.diag_us,
-            app.last_install_us,
-            app.last_signature_us,
-            app.last_git_us,
-            app.recompute_runs,
-            app.recompute_hits,
-            app.recompute_throttled,
-        );
-        let padded = format!("{content:<width$}", width = width as usize);
-        return (
-            Line::from(vec![Span::styled(
-                padded,
-                Style::default()
-                    .bg(app.theme.ui.surface_bg)
-                    .fg(app.theme.ui.text),
-            )]),
-            None,
-        );
-    }
+    // ── Perf overlay status line is rendered as a floating panel via
+    // `perf_overlay_panel` — see the main render() function.
 
     // ── Macro recording indicator ───────────────────────────────────────────
     // Vim shows "recording @r" while `q{reg}` is active. Render it as a
@@ -1622,6 +1601,87 @@ fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
     };
     let theme = hjkl_info_popup_tui::InfoPopupTheme::new(app.theme.ui.border_active);
     hjkl_info_popup_tui::render(frame, popup, &theme, buf_area);
+}
+
+/// Floating perf panel anchored to the top-right of `area`, shown while
+/// `:perf` is on. Sorts every recorded hot path by descending `last_us`
+/// and renders `name | last | max | avg | count`.
+fn perf_overlay_panel(frame: &mut Frame, app: &App, area: Rect) {
+    const MAX_ROWS: usize = 24;
+    let entries = app.perf.top_by_last(MAX_ROWS);
+    if entries.is_empty() {
+        return;
+    }
+
+    let header = " perf  name                                last(µs) max(µs)  avg(µs) count";
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(entries.len() + 1);
+    lines.push(Line::from(Span::styled(
+        header.to_string(),
+        Style::default()
+            .fg(app.theme.ui.text)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for e in &entries {
+        let avg = if e.count > 0 {
+            e.total_us / e.count as u128
+        } else {
+            0
+        };
+        let row = format!(
+            " {:<40} {:>8} {:>8} {:>8} {:>5}",
+            truncate_name(e.name, 40),
+            e.last_us,
+            e.max_us,
+            avg,
+            e.count,
+        );
+        lines.push(Line::from(Span::styled(
+            row,
+            Style::default().fg(app.theme.ui.text),
+        )));
+    }
+
+    let width = lines
+        .iter()
+        .map(|l| l.width() as u16)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(2);
+    let height = (lines.len() as u16).saturating_add(2);
+    let w = width.min(area.width.saturating_sub(2));
+    let h = height.min(area.height.saturating_sub(2));
+    if w == 0 || h == 0 {
+        return;
+    }
+    let x = area.x + area.width.saturating_sub(w + 1);
+    let y = area.y + 1;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    frame.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.ui.border_active))
+        .style(
+            Style::default()
+                .bg(app.theme.ui.panel_bg)
+                .fg(app.theme.ui.text),
+        );
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, rect);
+}
+
+fn truncate_name(name: &'static str, max: usize) -> String {
+    if name.len() <= max {
+        name.to_string()
+    } else {
+        let keep = max.saturating_sub(1);
+        format!("{}…", &name[..keep])
+    }
 }
 
 /// Render the which-key popup anchored at the bottom of `buf_area`.

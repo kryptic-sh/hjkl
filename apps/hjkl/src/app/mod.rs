@@ -208,6 +208,11 @@ pub struct App {
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
     /// Toggled by `:perf`. When true, render shows last-frame timings.
     pub perf_overlay: bool,
+    /// Per-path timing table — all hot paths record their elapsed time
+    /// here via [`PerfStats::record`]. `:perf` overlay renders it as a
+    /// floating panel sorted by most-recent `last_us` desc. Always
+    /// populated (record cost is ~50 ns), shown only when overlay on.
+    pub perf: PerfStats,
     /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
     /// is bypassed: spans stay empty, no submit_render fires, and
     /// `recompute_and_install` returns immediately. Re-enabling re-attaches
@@ -348,6 +353,79 @@ pub struct App {
     /// after [`INDENT_FLASH_DURATION`] has elapsed. Drained by
     /// [`Self::indent_flash_active`].
     pub(crate) indent_flash: Option<IndentFlash>,
+}
+
+/// Per-path timing entry.  One row in the [`PerfStats`] table.
+#[derive(Debug, Clone)]
+pub struct PerfEntry {
+    /// Static label — must match the call-site name passed to
+    /// [`PerfStats::record`].  Used as the table key.
+    pub name: &'static str,
+    /// Microseconds the path took on its most recent invocation.
+    pub last_us: u128,
+    /// All-time maximum of any single invocation.
+    pub max_us: u128,
+    /// Cumulative microseconds across every invocation.
+    pub total_us: u128,
+    /// Invocation counter.
+    pub count: u64,
+}
+
+/// Per-path timing table.  Records every hot path that calls
+/// [`Self::record`] with `(last_us, max_us, total_us, count)`.  Storage is a
+/// `Vec` (linear lookup) — the table holds at most a few dozen entries so
+/// the constant factor beats a `HashMap` allocator hit on the hot path.
+///
+/// The renderer reads [`Self::top_by_last`] to populate the `:perf` overlay
+/// panel.  `:perf` also calls [`Self::reset`] to clear accumulators.
+#[derive(Debug, Default)]
+pub struct PerfStats {
+    entries: Vec<PerfEntry>,
+}
+
+impl PerfStats {
+    /// Record one invocation.  `name` must be a stable `&'static str` so
+    /// the lookup is a pointer-compare in the common case.
+    pub fn record(&mut self, name: &'static str, dur: std::time::Duration) {
+        let us = dur.as_micros();
+        if let Some(e) = self.entries.iter_mut().find(|e| e.name == name) {
+            e.last_us = us;
+            if us > e.max_us {
+                e.max_us = us;
+            }
+            e.total_us = e.total_us.saturating_add(us);
+            e.count = e.count.saturating_add(1);
+            return;
+        }
+        self.entries.push(PerfEntry {
+            name,
+            last_us: us,
+            max_us: us,
+            total_us: us,
+            count: 1,
+        });
+    }
+
+    /// Clear all entries.  Called by `:perf` so counters reset on every
+    /// toggle, mirroring the old `recompute_*` counter reset.
+    pub fn reset(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Borrow all entries unsorted (mostly for tests).
+    #[allow(dead_code)]
+    pub fn entries(&self) -> &[PerfEntry] {
+        &self.entries
+    }
+
+    /// Return up to `n` entries sorted by descending `last_us` — the most
+    /// recently-expensive path first.  Used by the `:perf` overlay.
+    pub fn top_by_last(&self, n: usize) -> Vec<&PerfEntry> {
+        let mut v: Vec<&PerfEntry> = self.entries.iter().collect();
+        v.sort_by_key(|e| std::cmp::Reverse(e.last_us));
+        v.truncate(n);
+        v
+    }
 }
 
 /// Tracks how long the mouse has been stationary at a given terminal cell.
@@ -1178,6 +1256,7 @@ impl App {
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             perf_overlay: false,
+            perf: PerfStats::default(),
             syntax_enabled: true,
             pending_recompute: false,
             last_recompute_us: 0,

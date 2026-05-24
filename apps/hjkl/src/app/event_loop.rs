@@ -1339,19 +1339,43 @@ impl App {
                     let t_rec = std::time::Instant::now();
                     self.recompute_and_install();
                     let rec_us = t_rec.elapsed().as_micros();
-                    tracing::debug!(
-                        target: "hjkl::profile",
-                        insert_mode = mode_was_insert,
-                        dispatch_us,
-                        after_us,
-                        apply_us,
-                        shift_spans_us,
-                        shift_cached_us,
-                        lsp_us,
-                        rec_us,
-                        edit_count,
-                        "keypress edit-path"
+                    self.perf.record(
+                        "keypress::dispatch",
+                        std::time::Duration::from_micros(dispatch_us as u64),
                     );
+                    self.perf.record(
+                        "keypress::after",
+                        std::time::Duration::from_micros(after_us as u64),
+                    );
+                    if edit_count > 0 {
+                        self.perf.record(
+                            "keypress::syntax_apply_edits",
+                            std::time::Duration::from_micros(apply_us as u64),
+                        );
+                        self.perf.record(
+                            "keypress::shift_spans",
+                            std::time::Duration::from_micros(shift_spans_us as u64),
+                        );
+                        self.perf.record(
+                            "keypress::shift_cached_render_output",
+                            std::time::Duration::from_micros(shift_cached_us as u64),
+                        );
+                    }
+                    self.perf.record(
+                        "keypress::lsp_notify",
+                        std::time::Duration::from_micros(lsp_us as u64),
+                    );
+                    self.perf.record(
+                        "keypress::recompute_install",
+                        std::time::Duration::from_micros(rec_us as u64),
+                    );
+                    // Drain engine-side perf samples (undo / redo / restore /
+                    // push_undo / shift_syntax_spans …) into the table.
+                    let samples = self.active_mut().editor.take_perf_log();
+                    for (name, us) in samples {
+                        self.perf
+                            .record(name, std::time::Duration::from_micros(us as u64));
+                    }
                 }
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);

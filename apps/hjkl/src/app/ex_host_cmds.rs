@@ -438,6 +438,7 @@ impl HostCmd<App> for PerfCmd {
         app.recompute_hits = 0;
         app.recompute_throttled = 0;
         app.recompute_runs = 0;
+        app.perf.reset();
         app.bus.info(if app.perf_overlay {
             "perf overlay: on (counters reset)"
         } else {

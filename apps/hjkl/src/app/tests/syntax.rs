@@ -80,3 +80,22 @@ fn syn_abbrev_resolves_to_syntax() {
     app.dispatch_ex("syn off");
     assert!(!app.syntax_enabled, ":syn off must resolve to :syntax off");
 }
+
+#[test]
+fn perf_stats_record_accumulates_and_resets() {
+    use std::time::Duration;
+    let mut stats = crate::app::PerfStats::default();
+    stats.record("a::path", Duration::from_micros(100));
+    stats.record("a::path", Duration::from_micros(50));
+    stats.record("b::path", Duration::from_micros(200));
+    let entries = stats.entries();
+    let a = entries.iter().find(|e| e.name == "a::path").unwrap();
+    assert_eq!(a.count, 2);
+    assert_eq!(a.last_us, 50);
+    assert_eq!(a.max_us, 100);
+    assert_eq!(a.total_us, 150);
+    let top = stats.top_by_last(1);
+    assert_eq!(top[0].name, "b::path", "highest last_us must sort first");
+    stats.reset();
+    assert!(stats.entries().is_empty(), "reset must clear all entries");
+}
