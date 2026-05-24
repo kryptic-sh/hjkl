@@ -324,10 +324,23 @@ impl App {
                         // advances.
                         let row_starts = row_starts.as_ref();
                         let prior_installed = self.slots[slot_idx].installed_rows.clone();
+                        tracing::debug!(
+                            target: "hjkl::profile",
+                            ranges = ?out.changed_ranges,
+                            prior = ?prior_installed,
+                            vp_top, vp_height,
+                            "changed_ranges raw"
+                        );
                         for r in &out.changed_ranges {
                             let row_start = vp_byte_to_row(row_starts, r.start);
                             let row_end =
                                 vp_byte_to_row(row_starts, r.end.saturating_sub(1)) + 1;
+                            tracing::debug!(
+                                target: "hjkl::profile",
+                                range = ?r,
+                                row_start, row_end,
+                                "changed_range → rows"
+                            );
                             // Clamp to the prior installed range — no
                             // point walking rows we never had spans
                             // for; they'll be walked on demand when
