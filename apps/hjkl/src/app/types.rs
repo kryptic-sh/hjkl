@@ -238,18 +238,12 @@ pub enum LspPendingRequest {
 /// newline). Used to detect "buffer matches the saved snapshot" so undo
 /// back to the saved state clears the dirty flag.
 fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
+    // Reuse the per-dirty_gen cached `Arc<String>` so we hash + measure
+    // a single allocation instead of re-cloning every row per keystroke.
+    let text = editor.buffer().content_joined();
     let mut hasher = DefaultHasher::new();
-    let mut len = 0usize;
-    let lines = editor.buffer().lines();
-    for (i, l) in lines.iter().enumerate() {
-        if i > 0 {
-            b'\n'.hash(&mut hasher);
-            len += 1;
-        }
-        l.hash(&mut hasher);
-        len += l.len();
-    }
-    (hasher.finish(), len)
+    text.hash(&mut hasher);
+    (hasher.finish(), text.len())
 }
 
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.

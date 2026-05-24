@@ -1506,13 +1506,12 @@ impl SyntaxLayer {
         let mut source_build_us = 0u128;
         if needs_rebuild {
             let t = Instant::now();
-            let mut source = String::with_capacity(lb);
-            for r in 0..row_count {
-                if r > 0 {
-                    source.push('\n');
-                }
-                source.push_str(&buffer.line(r as u32));
-            }
+            // Share the joined source `Arc` with all other per-tick
+            // consumers (LSP notify, git signature, dirty hash) via
+            // `Buffer::content_joined`. The buffer caches against
+            // `dirty_gen` — first call this tick builds it, the rest
+            // are O(1) `Arc::clone`.
+            let source = buffer.content_joined();
             let mut row_starts: Vec<usize> = vec![0];
             for (i, &b) in source.as_bytes().iter().enumerate() {
                 if b == b'\n' {
@@ -1523,7 +1522,7 @@ impl SyntaxLayer {
                 dirty_gen: dg,
                 len_bytes: lb,
                 line_count: lc,
-                source: Arc::new(source),
+                source,
                 row_starts: Arc::new(row_starts),
             });
             source_build_us = t.elapsed().as_micros();

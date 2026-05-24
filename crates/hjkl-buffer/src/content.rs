@@ -43,6 +43,12 @@ pub struct Content {
     /// `pub(crate)` so the [`crate::folds`] module can read/write
     /// directly (same visibility as before the split).
     pub(crate) folds: Vec<Fold>,
+    /// Cached `lines.join("\n")` keyed by the `dirty_gen` at build time.
+    /// Multiple per-tick consumers (syntax submit, LSP notify, git
+    /// signature, dirty hash) all need the joined document; rebuilding
+    /// per consumer was ~4× the line-clone + alloc cost per keystroke
+    /// on a 400-line file (visible as insert-mode lag).
+    pub(crate) cached_joined: Option<(u64, std::sync::Arc<String>)>,
 }
 
 impl Default for Content {
@@ -58,6 +64,7 @@ impl Content {
             lines: vec![String::new()],
             dirty_gen: 0,
             folds: Vec::new(),
+            cached_joined: None,
         }
     }
 
@@ -73,6 +80,7 @@ impl Content {
             lines,
             dirty_gen: 0,
             folds: Vec::new(),
+            cached_joined: None,
         }
     }
 }

@@ -73,8 +73,12 @@ impl App {
             return;
         }
 
-        let lines = self.active().editor.buffer().lines();
-        let mut bytes = lines.join("\n").into_bytes();
+        // Reuse the per-dirty_gen cached `Arc<String>` so this doesn't
+        // re-clone every row per keystroke (paired with the same call
+        // in `lsp_notify_change_active` + `buffer_signature` + the
+        // syntax submit path — all share one allocation per generation).
+        let text = self.active().editor.buffer().content_joined();
+        let mut bytes = text.as_bytes().to_vec();
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
