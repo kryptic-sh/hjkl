@@ -665,15 +665,11 @@ impl App {
         let top = union_top;
         let height = union_bot - union_top;
 
-        // T1: Over-provision the parse range to 3× the visible height
-        // (one viewport above + current + one viewport below). The
-        // math lives in `hjkl_buffer::over_provisioned_range` so future
-        // host crates (floem GUI, web …) compute the same range from
-        // their own viewport without re-deriving it.
-        let line_count = self.active().editor.buffer().line_count() as usize;
-        let (oversize_top, oversize_height) =
-            hjkl_buffer::over_provisioned_range(top, height, line_count);
-
+        // Worker requests carry only the visible viewport now. The 3x
+        // over-provisioned range was a pre-cache hint for the (now-gone)
+        // parent-spans cache; without it the request range only affects
+        // the result's `key` tag and the worker still parses the full
+        // source either way.
         let dg = self.active().editor.buffer().dirty_gen();
         let key = (dg, top, height);
 
@@ -706,12 +702,11 @@ impl App {
                 let submit_result = {
                     let active_idx = self.focused_slot_idx();
                     let buf = self.slots[active_idx].editor.buffer();
-                    // T1: Submit oversized range so ahead-of-scroll spans are ready.
                     self.syntax.submit_render(
                         buffer_id,
                         buf,
-                        oversize_top,
-                        oversize_height,
+                        top,
+                        height,
                         crate::syntax::ParseKind::Viewport,
                     )
                 };
@@ -743,85 +738,16 @@ impl App {
         // 240 rows when only 80 are visible is wasted CPU per j/k.
         self.sync_query_active_viewport(buffer_id, top, height, top, height, dg);
 
-        // Top + Bottom pre-cache for the active buffer.
-        //
-        // Submit alongside the Viewport request — worker processes FIFO so
-        // Viewport runs first (cold parse builds tree), then Top + Bottom
-        // ride along on the same retained tree (incremental highlight, ~1-5 ms
-        // each). Startup latency is unchanged: viewport blocking wait is
-        // the only thing that gates the first paint. Top + Bottom land soon
-        // after with no extra user-perceived delay.
-        //
-        // Per-(buffer_id, kind) queue dedup means re-submitting the same
-        // kind on subsequent ticks just replaces the in-flight request.
-        // We skip the submit when the cache for that kind is already populated
-        // AND fresh for the current dirty_gen (avoid redundant work).
-        // A cache that is `Some` but carries a stale dirty_gen is treated
-        // the same as `None` — the merger will reject its spans anyway, so
-        // we must re-submit to get a fresh result.  Not checking this was
-        // the secondary cause of the delete+undo staleness bug: a stale-dg
-        // top/bottom cache prevented re-submission indefinitely.
-        {
-            let active_idx = self.focused_slot_idx();
-            // Top / Bottom are prewarms for `gg` / `G`. They do NOT need
-            // to refresh on every `dirty_gen` tick — rapid typing would
-            // re-submit + worker-signal-trigger their sync highlight on
-            // every char, dragging insert-mode to ~1Hz on HTML+CSS files
-            // because each refresh costs ~120 rows × CSS injection
-            // reparse. Stale-but-present prewarm spans are acceptable:
-            // when the user finally jumps, the viewport sync refreshes
-            // the now-visible rows for the current `dirty_gen`.
-            //
-            // `handle_active_content_reset` clears these caches on
-            // bulk-replace (`:e!`, undo) so the re-submit fires there.
-            let needs_top = self.slots[active_idx].top_render_output.is_none();
-            let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
-            let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
+        // Top / Bottom span-cache prewarms were removed alongside the
+        // parent-spans cache (bonsai refactor). With the tree-as-only-cache
+        // model, `gg` / `G` reparse the viewport against the retained tree
+        // synchronously (~1ms walk on a warm tree). No per-slot Top/Bottom
+        // submits are needed.
 
-            if needs_top {
-                let (top_range_start, top_range_height) =
-                    hjkl_buffer::over_provisioned_range(0, height, slot_line_count);
-                let buf = self.slots[active_idx].editor.buffer();
-                self.syntax.submit_render(
-                    buffer_id,
-                    buf,
-                    top_range_start,
-                    top_range_height,
-                    crate::syntax::ParseKind::Top,
-                );
-                // Top/Bottom sync is intentionally NOT run per-tick.
-                // Each insert-mode keystroke ticks `dirty_gen`, which
-                // would re-fire the Top + Bottom highlight every char
-                // — on HTML with CSS injection that's ~240 rows × CSS
-                // sub-tree reparse per keystroke, visible as 1Hz typing
-                // lag. The async worker handles the refresh; the
-                // empty-result signal in `install_render_result`
-                // triggers a one-off sync query when the worker delivers
-                // a fresh tree for Top/Bottom.
-            }
-
-            if needs_bottom {
-                let bottom_anchor = slot_line_count.saturating_sub(height);
-                let (bot_range_start, bot_range_height) =
-                    hjkl_buffer::over_provisioned_range(bottom_anchor, height, slot_line_count);
-                let buf = self.slots[active_idx].editor.buffer();
-                self.syntax.submit_render(
-                    buffer_id,
-                    buf,
-                    bot_range_start,
-                    bot_range_height,
-                    crate::syntax::ParseKind::Bottom,
-                );
-            }
-        }
-
-        // T2: Pre-warm other open slots. The per-buffer dedup on the queue
-        // ensures this never starves the active buffer's request — active
-        // was enqueued first and the worker drains FIFO. If the active
-        // buffer's result is not yet back, we still queue the pre-warms
-        // so the worker can pipeline: it processes active, then the others.
-        // Also submit Top + Bottom for non-active slots so switching to them
-        // and immediately pressing `gg` or `G` is also snappy.
+        // Pre-warm the retained tree for non-active slots so a buffer
+        // switch finds a warm tree (avoids cold-parse latency on switch).
+        // We submit only Viewport; the worker dedups per (buffer, kind)
+        // so this stays a single in-flight parse per other slot.
         let active_idx = self.focused_slot_idx();
         let slot_indices: Vec<usize> = (0..self.slots.len()).filter(|&i| i != active_idx).collect();
         for slot_idx in slot_indices {
@@ -830,64 +756,14 @@ impl App {
                 let vp = self.slots[slot_idx].editor.host().viewport();
                 (vp.top_row, vp.height as usize)
             };
-            // Over-provision the secondary slots too so switching into
-            // them is likely already covered. Same host-agnostic helper.
-            let slot_line_count = self.slots[slot_idx].editor.buffer().line_count() as usize;
-            let (slot_oversize_top, slot_oversize_height) =
-                hjkl_buffer::over_provisioned_range(slot_top, slot_height, slot_line_count);
             let buf = self.slots[slot_idx].editor.buffer();
             self.syntax.submit_render(
                 slot_buf_id,
                 buf,
-                slot_oversize_top,
-                slot_oversize_height,
+                slot_top,
+                slot_height,
                 crate::syntax::ParseKind::Viewport,
             );
-
-            // Top + Bottom for non-active slots — submit alongside Viewport,
-            // worker handles FIFO + per-(buffer, kind) dedup.
-            // Use the same stale-dg check as for the active slot: a cache
-            // that exists but was computed for an old dirty_gen is useless
-            // (merger rejects it) and must be refreshed.
-            let slot_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
-            let needs_top = self.slots[slot_idx]
-                .top_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != slot_dg);
-            let needs_bottom = self.slots[slot_idx]
-                .bottom_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != slot_dg);
-
-            if needs_top {
-                let (top_range_start, top_range_height) =
-                    hjkl_buffer::over_provisioned_range(0, slot_height, slot_line_count);
-                let buf = self.slots[slot_idx].editor.buffer();
-                self.syntax.submit_render(
-                    slot_buf_id,
-                    buf,
-                    top_range_start,
-                    top_range_height,
-                    crate::syntax::ParseKind::Top,
-                );
-            }
-
-            if needs_bottom {
-                let bottom_anchor = slot_line_count.saturating_sub(slot_height);
-                let (bot_range_start, bot_range_height) = hjkl_buffer::over_provisioned_range(
-                    bottom_anchor,
-                    slot_height,
-                    slot_line_count,
-                );
-                let buf = self.slots[slot_idx].editor.buffer();
-                self.syntax.submit_render(
-                    slot_buf_id,
-                    buf,
-                    bot_range_start,
-                    bot_range_height,
-                    crate::syntax::ParseKind::Bottom,
-                );
-            }
         }
 
         // Detect a "big jump" (viewport teleport past the over-provisioned
@@ -911,27 +787,14 @@ impl App {
             None => true,
             Some((_, prev_top, _)) => hjkl_buffer::is_big_viewport_jump(prev_top, top, height),
         };
-        // Cold = the DESTINATION region of the jump has no cached spans.
-        // Three sub-cases:
-        // - Jump to top (vp_top < h): need top_render_output.
-        // - Jump to bottom (vp_top + h >= line_count): need bottom_render_output.
-        // - Jump to mid: need viewport_render_output (it's about to be
-        //   replaced, but its presence proves the worker has a warm tree).
-        //
-        // Pre-fix this only checked viewport_render_output, so the first `G`
-        // after open detected as warm (top viewport just installed) and used
-        // the 40 ms cap — bottom parse hadn't completed yet → flash.
-        let active_line_count = self.active().editor.buffer().line_count() as usize;
-        let jumps_to_top = top < height;
-        let jumps_to_bottom = top + height >= active_line_count;
-        let destination_cached = if jumps_to_top {
-            self.active().top_render_output.is_some()
-        } else if jumps_to_bottom {
-            self.active().bottom_render_output.is_some()
-        } else {
-            self.active().viewport_render_output.is_some()
-        };
-        let is_cold = !destination_cached;
+        // Cold = the worker hasn't produced its first tree for this
+        // buffer yet. With Top/Bottom span-cache prewarms gone, the
+        // only "has the worker walked something" signal we have is
+        // `viewport_render_output`. Its absence means the sync walk
+        // would return empty (no retained tree yet) → block longer
+        // on the first `gg`/`G` after open so the destination paints
+        // with spans instead of flashing un-highlighted.
+        let is_cold = self.active().viewport_render_output.is_none();
         let big_jump_wait = if is_cold {
             COLD_JUMP_WAIT
         } else {
