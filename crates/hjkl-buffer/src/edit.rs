@@ -309,11 +309,12 @@ impl Buffer {
                 }
                 tails.push(tail);
             }
-            // Re-insert head + tails in document order.
+            // Re-insert head + tails in document order via splice (O(len + n)
+            // vs O(n × (len - row)) for the prior per-row insert loop).
             c.lines[row] = working;
-            for (i, tail) in tails.into_iter().rev().enumerate() {
-                c.lines.insert(row + 1 + i, tail);
-            }
+            let insert_at = row + 1;
+            c.lines
+                .splice(insert_at..insert_at, tails.into_iter().rev());
             row
         };
         self.dirty_gen_bump();
@@ -371,10 +372,11 @@ fn splice_at(lines: &mut Vec<String>, at: Position, text: &str) {
     let mut last = pieces.last().copied().unwrap_or("").to_string();
     last.push_str(&suffix);
     new_rows.push(last);
+    // O(len + n) via splice; the prior per-row `insert(insert_at + i, ...)`
+    // loop was O(n × (len - insert_at)) — samply attributed 74 % of CPU on a
+    // 60 k-row paste to this single function (~3.6 G memmove ops).
     let insert_at = row + 1;
-    for (i, l) in new_rows.into_iter().enumerate() {
-        lines.insert(insert_at + i, l);
-    }
+    lines.splice(insert_at..insert_at, new_rows);
 }
 
 /// Remove `[start, end)` (charwise) and return what was removed
@@ -595,5 +597,33 @@ mod tests {
             kind: MotionKind::Char,
         });
         assert_eq!(b.dirty_gen(), g0 + 2);
+    }
+
+    /// Regression: a 60 k-row multi-line `InsertStr` into a 60 k-row buffer
+    /// used to call `Vec::insert(insert_at + i, …)` per row → O(N²) memmove.
+    /// samply attributed 74 % of CPU on a release-mode big-paste session
+    /// to this single function (~3.6 G memmove ops). The splice rewrite
+    /// is O(N + n).
+    ///
+    /// 200 ms ceiling on debug build catches reintroduction of the loop
+    /// (the old code took multiple seconds even on release).
+    #[test]
+    fn splice_at_60k_paste_at_row_zero_is_under_200ms() {
+        // Buffer with 60 k rows of empty content.
+        let initial = "\n".repeat(60_000);
+        let mut b = Buffer::from_str(&initial);
+        // Multi-line payload: 60 k "x" lines glued by \n.
+        let payload = vec!["x"; 60_000].join("\n");
+        let t = std::time::Instant::now();
+        b.apply_edit(Edit::InsertStr {
+            at: Position::new(0, 0),
+            text: payload,
+        });
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 200,
+            "60k-row InsertStr took {elapsed:?}; budget 200 ms (catches \
+             reintroduction of the O(N²) per-row insert loop)"
+        );
     }
 }
