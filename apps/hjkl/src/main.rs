@@ -10,6 +10,7 @@ mod keymap_actions;
 mod keymap_translate;
 pub(crate) mod menu;
 mod nvim_api;
+mod perf;
 mod picker;
 mod picker_action;
 mod picker_git;
@@ -26,7 +27,7 @@ use crossterm::{event, execute, terminal};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::path::PathBuf;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, reload, util::SubscriberInitExt};
 
 /// ASCII-art banner. Regenerate with:
 ///
@@ -417,15 +418,18 @@ fn init_tracing() {
         }
     };
 
+    // Two-layer filter so `:perf` can flip `hjkl::profile=debug` at runtime
+    // via a `reload::Handle` without rebuilding the whole subscriber.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let (env_layer, env_handle) = reload::Layer::new(env_filter);
+    crate::perf::install_filter_handle(env_handle);
 
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(move || file.try_clone().expect("clone hjkl.log file handle"))
-        .finish();
+        .with_filter(env_layer);
 
-    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+    if let Err(e) = tracing_subscriber::registry().with(fmt_layer).try_init() {
         eprintln!("hjkl: tracing disabled (set global subscriber): {e}");
     }
 }

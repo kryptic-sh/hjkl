@@ -625,12 +625,6 @@ pub struct Editor<
     /// [`Editor::take_last_indent_range`] so it can display a brief
     /// visual flash over the reindented rows.
     pub(crate) last_indent_range: Option<(usize, usize)>,
-    /// Per-call timing samples emitted by engine hot paths (undo, redo,
-    /// push_undo, restore, shift_syntax_spans_for_edits, …). Drained by
-    /// the host via [`Editor::take_perf_log`] once per tick to feed an
-    /// in-process perf table. Capped at 256 entries to bound memory in
-    /// case the host stops draining.
-    pub(crate) perf_log: Vec<(&'static str, u128)>,
 }
 
 /// Vim-style options surfaced by `:set`. New fields land here as
@@ -895,7 +889,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             pending_content_edits: Vec::new(),
             pending_content_reset: false,
             last_indent_range: None,
-            perf_log: Vec::new(),
         }
     }
 }
@@ -1456,23 +1449,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Edits are applied in order — each edit's `(row, col)` positions are
     /// taken to be relative to the post-state of the prior edits in the
     /// batch (matching the order the engine emitted them).
-    /// Push one perf sample onto [`Self::perf_log`].  Hosts drain via
-    /// [`Self::take_perf_log`].  Capped at 256 entries to bound memory
-    /// when a host isn't draining (tests, headless paths).
-    pub(crate) fn record_perf(&mut self, name: &'static str, dur: std::time::Duration) {
-        if self.perf_log.len() >= 256 {
-            self.perf_log.remove(0);
-        }
-        self.perf_log.push((name, dur.as_micros()));
-    }
-
-    /// Drain the per-call perf samples accumulated since the last call.
-    /// Hosts call this once per tick to feed an in-process perf table
-    /// (e.g. `App::perf` driving the `:perf` overlay).
-    pub fn take_perf_log(&mut self) -> Vec<(&'static str, u128)> {
-        std::mem::take(&mut self.perf_log)
-    }
-
     pub fn shift_syntax_spans_for_edits(&mut self, edits: &[crate::types::ContentEdit]) {
         let t = std::time::Instant::now();
         for edit in edits {
@@ -1528,7 +1504,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 }
             }
         }
-        self.record_perf("editor::shift_syntax_spans_for_edits", t.elapsed());
+        tracing::debug!(
+            target: "hjkl::profile",
+            elapsed_us = t.elapsed().as_micros(),
+            edit_count = edits.len(),
+            buffer_spans_after = self.buffer_spans.len(),
+            styled_spans_after = self.styled_spans.len(),
+            "editor::shift_syntax_spans_for_edits"
+        );
     }
 
     /// Read-only view of the style table in engine-native form —
@@ -2930,7 +2913,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn undo(&mut self) {
         let t = std::time::Instant::now();
         crate::vim::do_undo(self);
-        self.record_perf("editor::undo", t.elapsed());
+        tracing::debug!(
+            target: "hjkl::profile",
+            elapsed_us = t.elapsed().as_micros(),
+            "editor::undo"
+        );
     }
 
     /// Walk one step forward through the redo history. Equivalent to
@@ -2938,7 +2925,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn redo(&mut self) {
         let t = std::time::Instant::now();
         crate::vim::do_redo(self);
-        self.record_perf("editor::redo", t.elapsed());
+        tracing::debug!(
+            target: "hjkl::profile",
+            elapsed_us = t.elapsed().as_micros(),
+            "editor::redo"
+        );
     }
 
     /// Snapshot current buffer state onto the undo stack and clear
@@ -2948,12 +2939,19 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn push_undo(&mut self) {
         let t = std::time::Instant::now();
         let snap = self.snapshot();
-        let snap_dur = t.elapsed();
+        let snap_us = t.elapsed().as_micros();
+        let row_count = snap.0.len();
         self.undo_stack.push(snap);
         self.cap_undo();
         self.redo_stack.clear();
-        self.record_perf("editor::push_undo::snapshot", snap_dur);
-        self.record_perf("editor::push_undo", t.elapsed());
+        tracing::debug!(
+            target: "hjkl::profile",
+            snap_us,
+            total_us = t.elapsed().as_micros(),
+            row_count,
+            stack_len = self.undo_stack.len(),
+            "editor::push_undo"
+        );
     }
 
     /// Trim the undo stack down to `settings.undo_levels`, dropping
@@ -2990,8 +2988,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
         use crate::types::Query as _;
         let t = std::time::Instant::now();
+        let row_count = lines.len();
         let text = lines.join("\n");
-        let join_dur = t.elapsed();
+        let join_us = t.elapsed().as_micros();
         let old_len_bytes = self.buffer.len_bytes();
         let old_row_count = buf_row_count(&self.buffer);
         let old_last_row = old_row_count.saturating_sub(1);
@@ -3019,8 +3018,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             new_end_position: (new_last_row as u32, new_last_col as u32),
         });
         self.mark_content_dirty();
-        self.record_perf("editor::restore::join", join_dur);
-        self.record_perf("editor::restore", t.elapsed());
+        tracing::debug!(
+            target: "hjkl::profile",
+            total_us = t.elapsed().as_micros(),
+            join_us,
+            row_count,
+            old_len_bytes,
+            new_len_bytes,
+            "editor::restore"
+        );
     }
 
     /// Returns true if the key was consumed by the editor.

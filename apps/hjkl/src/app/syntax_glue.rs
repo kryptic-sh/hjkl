@@ -79,27 +79,30 @@ impl App {
         // syntax submit path — all share one allocation per generation).
         let t = Instant::now();
         let text = self.active().editor.buffer().content_joined();
-        let join_dur = t.elapsed();
+        let join_us = t.elapsed().as_micros();
         let mut bytes = text.as_bytes().to_vec();
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
-        let bytes_dur = t.elapsed();
+        let bytes_us = t.elapsed().as_micros();
         let buffer_id = self.active().buffer_id;
         self.active_mut().last_git_refresh_at = now;
 
+        let bytes_len = bytes.len();
         self.git_worker.submit(GitJob {
             buffer_id,
             path,
             bytes,
             dirty_gen: dg,
         });
-        let total_dur = t.elapsed();
-        self.perf
-            .record("refresh_git_signs::content_joined", join_dur);
-        self.perf
-            .record("refresh_git_signs::bytes_clone", bytes_dur - join_dur);
-        self.perf.record("refresh_git_signs", total_dur);
+        tracing::debug!(
+            target: "hjkl::profile",
+            total_us = t.elapsed().as_micros(),
+            join_us,
+            clone_us = bytes_us - join_us,
+            bytes_len,
+            "refresh_git_signs (submit)"
+        );
     }
 
     /// Drain completed git-sign results from the worker and install them

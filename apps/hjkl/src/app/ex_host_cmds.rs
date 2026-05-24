@@ -438,12 +438,30 @@ impl HostCmd<App> for PerfCmd {
         app.recompute_hits = 0;
         app.recompute_throttled = 0;
         app.recompute_runs = 0;
-        app.perf.reset();
-        app.bus.info(if app.perf_overlay {
-            "perf overlay: on (counters reset)"
+        let directive = if app.perf_overlay {
+            "info,hjkl::profile=debug"
         } else {
-            "perf overlay: off"
-        });
+            "info"
+        };
+        let msg = match crate::perf::try_set_filter(directive) {
+            Ok(()) => {
+                if app.perf_overlay {
+                    "perf logging: on (hjkl::profile=debug)"
+                } else {
+                    "perf logging: off"
+                }
+            }
+            Err(_) => {
+                // Filter handle absent (tests / headless) — flag stays toggled
+                // so the unit test can still observe the flip.
+                if app.perf_overlay {
+                    "perf logging: on (no subscriber)"
+                } else {
+                    "perf logging: off"
+                }
+            }
+        };
+        app.bus.info(msg);
         Some(ExEffect::Ok)
     }
 }

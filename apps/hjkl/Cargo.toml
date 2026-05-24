@@ -69,7 +69,7 @@ crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }
 regex = "1"
 git2 = { version = "0.21", default-features = false }
 toml = "1.1"
