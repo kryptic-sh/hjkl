@@ -313,39 +313,57 @@ impl App {
                         self.syntax.cached_source(out.buffer_id)
                         && cache_dg == buf_dg
                     {
-                        // Take the existing installed_rows as the
-                        // "previously-walked" coverage. Rows outside
-                        // the changed_ranges keep their old spans
-                        // (tree-sitter says they didn't change so
-                        // they're still correct). We just need to
-                        // re-walk + install the rows INSIDE the
-                        // changed_ranges, then bump installed_spans_dg
-                        // to current — coverage stays the same, dg
-                        // advances.
+                        // Compute the total row footprint of all
+                        // changed_ranges, capped at 2x viewport. Above
+                        // that cap (e.g. undo of a huge paste where
+                        // tree-sitter reports `[3..991925]`) we'd
+                        // freeze the UI for seconds walking each
+                        // changed row synchronously. Fall back to a
+                        // viewport-only walk + drop the per-row cache
+                        // for off-viewport rows (they'll be walked on
+                        // demand when the user scrolls there).
                         let row_starts = row_starts.as_ref();
                         let prior_installed = self.slots[slot_idx].installed_rows.clone();
+                        let row_spans: Vec<(usize, usize)> = out
+                            .changed_ranges
+                            .iter()
+                            .map(|r| {
+                                let row_start = vp_byte_to_row(row_starts, r.start);
+                                let row_end =
+                                    vp_byte_to_row(row_starts, r.end.saturating_sub(1)) + 1;
+                                (row_start, row_end)
+                            })
+                            .collect();
+                        let total_changed_rows: usize = row_spans
+                            .iter()
+                            .map(|(s, e)| e.saturating_sub(*s))
+                            .sum();
+                        let huge = total_changed_rows > vp_height.saturating_mul(2);
                         tracing::debug!(
                             target: "hjkl::profile",
                             ranges = ?out.changed_ranges,
                             prior = ?prior_installed,
                             vp_top, vp_height,
+                            total_changed_rows,
+                            huge,
                             "changed_ranges raw"
                         );
-                        for r in &out.changed_ranges {
-                            let row_start = vp_byte_to_row(row_starts, r.start);
-                            let row_end =
-                                vp_byte_to_row(row_starts, r.end.saturating_sub(1)) + 1;
-                            tracing::debug!(
-                                target: "hjkl::profile",
-                                range = ?r,
-                                row_start, row_end,
-                                "changed_range → rows"
+                        if huge {
+                            // Drop the cache; sync_query_region will
+                            // walk just the visible viewport, and
+                            // off-viewport rows will be walked lazily.
+                            self.slots[slot_idx].installed_spans_dg = None;
+                            self.slots[slot_idx].installed_rows = None;
+                            self.sync_query_region(
+                                out.buffer_id,
+                                vp_top,
+                                vp_height,
+                                buf_dg,
+                                out.kind,
                             );
-                            // Clamp to the prior installed range — no
-                            // point walking rows we never had spans
-                            // for; they'll be walked on demand when
-                            // the user scrolls to them. Walking the
-                            // full edit range on paste would be huge.
+                            return true;
+                        }
+                        for (row_start, row_end) in row_spans {
                             let (clamp_start, clamp_end) = match &prior_installed {
                                 Some(r) => (r.start, r.end),
                                 None => (vp_top, vp_top + vp_height),
@@ -363,16 +381,22 @@ impl App {
                                 buf_dg,
                             );
                         }
-                        // Coverage unchanged, dg advanced. Force the
-                        // next sync_query_region call (the one
-                        // immediately following from recompute) to
-                        // see a fresh dedup key so it re-checks the
-                        // row cache.
+                        // Shrink installed_rows to JUST the viewport.
+                        // We only re-walked the changed regions inside
+                        // the prior installed range; rows that were in
+                        // the prior installed range but OUTSIDE both
+                        // the viewport AND the changed_ranges still
+                        // hold pre-undo spans (which may be stale or
+                        // empty after the buffer shrank). Letting the
+                        // row-cache claim coverage for those would
+                        // paint stale / blank rows when the user
+                        // scrolls there. Shrinking forces a row-cache
+                        // miss → delta walk on demand for off-viewport
+                        // rows, refreshing them against the
+                        // post-undo tree.
                         self.slots[slot_idx].installed_spans_dg = Some(buf_dg);
-                        if self.slots[slot_idx].installed_rows.is_none() {
-                            self.slots[slot_idx].installed_rows =
-                                Some(vp_top..(vp_top + vp_height));
-                        }
+                        self.slots[slot_idx].installed_rows =
+                            Some(vp_top..(vp_top + vp_height));
                         self.slots[slot_idx].last_sync_viewport_key = None;
                     } else {
                         // Source cache stale — fall back to full refresh.

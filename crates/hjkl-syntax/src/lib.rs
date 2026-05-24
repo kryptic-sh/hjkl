@@ -816,6 +816,13 @@ fn run_parse_and_emit(
     let (perf, did_parse, changed_ranges) = with_buffer(buffers, req.buffer_id, |state| {
         let h = &mut state.highlighter;
         let mut perf = PerfBreakdown::default();
+        // Clone the current tree BEFORE the reset/parse so we can diff
+        // against the freshly-parsed tree below. Tree clones are cheap
+        // (Arc-shared internals). Capturing this on the reset path lets
+        // us emit `changed_ranges` for undo/redo too — without it the
+        // install_render_result fallback runs a full ~30ms viewport
+        // refresh on every undo/redo.
+        let pre_parse_tree = h.tree().cloned();
         if req.reset {
             h.reset();
             state.last_parsed_dirty_gen = None;
@@ -828,7 +835,18 @@ fn run_parse_and_emit(
         let was_initial = h.tree().is_none();
         let changes: Vec<std::ops::Range<usize>> = if was_initial {
             h.parse_initial(bytes);
-            Vec::new()
+            // `parse_incremental_with_changes` would normally compute
+            // this for us, but on the reset path we just did
+            // `parse_initial` (no old tree visible inside the
+            // highlighter). Reach back to the pre-reset clone and diff
+            // against the post-parse tree directly.
+            match (pre_parse_tree.as_ref(), h.tree()) {
+                (Some(old), Some(new)) => old
+                    .changed_ranges(new)
+                    .map(|r| r.start_byte..r.end_byte)
+                    .collect(),
+                _ => Vec::new(),
+            }
         } else {
             match h.parse_incremental_with_changes(bytes) {
                 Some(c) => c,
