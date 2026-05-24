@@ -398,17 +398,24 @@ struct RenderCache {
 /// highlight + error scan, builds the per-row span table, and sends the
 /// result back via mpsc.
 ///
-/// As of plan-B (issue #233) `InputEdit`s are NOT carried here. They are
+/// As of plan-B (issue #233) `InputEdit`s are NOT carried here — they are
 /// applied synchronously by the main thread via [`SyntaxLayer::apply_edits`]
 /// directly onto the shared retained tree before any parse request is
-/// queued; the worker just reparses the new source.
+/// queued. The worker also no longer runs the highlight / build-by-row /
+/// signs pipeline; the main thread's `query_viewport` does that on each
+/// render tick. The fields below carry the byte range / viewport metadata
+/// that the worker emits back in the `RenderOutput` signal so the app can
+/// route the "tree updated" notification to the correct cache + region.
 struct ParseRequest {
     buffer_id: BufferId,
     source: Arc<String>,
+    #[allow(dead_code)]
     row_starts: Arc<Vec<usize>>,
+    #[allow(dead_code)]
     viewport_byte_range: std::ops::Range<usize>,
     viewport_top: usize,
     viewport_height: usize,
+    #[allow(dead_code)]
     row_count: usize,
     dirty_gen: u64,
     /// When `true` the worker drops its retained tree before parsing.
@@ -791,18 +798,32 @@ fn worker_loop(
 /// diag signs, then drops the lock before sending. Returns `Some(())` on
 /// success, `None` if the buffer was not tracked (was forgotten between
 /// request submission and dequeue).
+///
+/// Plan-B (#233): the worker now does **only** `parse_initial` or
+/// `parse_incremental` against the shared retained tree. The full
+/// highlight pipeline (highlight query, marker pass, hex-color pass,
+/// build-by-row, diag signs) that used to run here is gone — the main
+/// thread's `SyntaxLayer::query_viewport` runs the same work
+/// synchronously on every render tick against the retained tree.
+/// Producing it on the worker too was just a wasted equal-`dirty_gen`
+/// overwrite that the install path's generation guard had to discard.
+///
+/// The result message still uses [`RenderOutput`] (channel + install
+/// shape unchanged) but carries an EMPTY `spans` / `signs` and acts
+/// purely as a "tree updated for (buffer, kind, dg)" signal so the
+/// app can trigger a fresh sync query on the new tree.
 fn run_parse_and_emit(
     buffers: &SharedBuffers,
     req: &ParseRequest,
-    marker_pass: &CommentMarkerPass,
-    hex_color_pass: &HexColorPass,
-    theme: &dyn Theme,
-    directory: &LanguageDirectory,
+    _marker_pass: &CommentMarkerPass,
+    _hex_color_pass: &HexColorPass,
+    _theme: &dyn Theme,
+    _directory: &LanguageDirectory,
     tx: &std::sync::mpsc::Sender<RenderOutput>,
 ) -> Option<()> {
     use std::time::Instant;
     let bytes = req.source.as_bytes();
-    let (by_row, signs, perf) = with_buffer(buffers, req.buffer_id, |state| {
+    let perf = with_buffer(buffers, req.buffer_id, |state| {
         let h = &mut state.highlighter;
         let mut perf = PerfBreakdown::default();
         if req.reset {
@@ -830,33 +851,14 @@ fn run_parse_and_emit(
             perf.parse_us = t.elapsed().as_micros();
             state.last_parsed_dirty_gen = Some(req.dirty_gen);
         }
-
-        let t = Instant::now();
-        let mut flat_spans =
-            h.highlight_range_with_injections(bytes, req.viewport_byte_range.clone(), |name| {
-                directory.by_name(name)
-            });
-        perf.highlight_us = t.elapsed().as_micros();
-
-        marker_pass.apply(&mut flat_spans, bytes);
-        hex_color_pass.apply(&mut flat_spans, bytes);
-
-        let t = Instant::now();
-        let by_row = build_by_row(&flat_spans, bytes, &req.row_starts, req.row_count, theme);
-        perf.by_row_us = t.elapsed().as_micros();
-
-        let t = Instant::now();
-        let signs = collect_diag_signs(h, bytes, req.viewport_byte_range.clone(), &req.row_starts);
-        perf.diag_us = t.elapsed().as_micros();
-
-        Some((by_row, signs, perf))
+        Some(perf)
     })??;
 
     let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
     let _ = tx.send(RenderOutput {
         buffer_id: req.buffer_id,
-        spans: by_row,
-        signs,
+        spans: Vec::new(),
+        signs: Vec::new(),
         key,
         perf,
         kind: req.kind,
