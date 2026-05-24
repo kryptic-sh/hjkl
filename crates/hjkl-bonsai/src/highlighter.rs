@@ -129,7 +129,10 @@ fn hash_bytes(b: &[u8]) -> u64 {
 /// the same length).
 struct CachedChild {
     highlighter: Highlighter,
-    /// FNV hash of the slice that was last parsed.
+    /// FNV hash of the slice that was last parsed (matches the latest
+    /// `spans_by_hash` entry the highlighter was used to produce). Only kept
+    /// to short-circuit `parse_initial` when re-rendering the same slice
+    /// twice in a row.
     source_hash: u64,
 }
 
@@ -153,21 +156,31 @@ struct CachedChild {
 /// how many distinct languages a single document can embed (typically 1-3).
 #[derive(Default)]
 struct ChildCache {
+    /// One Highlighter per language (compile_query is the expensive part —
+    /// retained across content changes).
     map: HashMap<String, CachedChild>,
+    /// Span cache keyed by content hash. Multiple `<style>` blocks (HTML +
+    /// N CSS chunks) all share the per-lang highlighter but get their own
+    /// spans entry, so scrolling past a 19-chunk doc doesn't redo the CSS
+    /// query 19 times per tick.
+    spans_by_hash: HashMap<u64, Vec<HighlightSpan>>,
 }
 
 impl ChildCache {
-    /// Return the cached child for `lang` *if* its stored hash matches
-    /// `content_hash`. On a hash miss returns `Some` anyway so the caller
-    /// can reuse the highlighter (skipping the expensive query compile)
-    /// and just re-parse the new slice. The `content_hash` is updated
-    /// at the insert site after re-parse.
-    fn get(&mut self, lang: &str) -> Option<&mut CachedChild> {
+    fn get_highlighter(&mut self, lang: &str) -> Option<&mut CachedChild> {
         self.map.get_mut(lang)
     }
 
+    fn get_spans(&self, content_hash: u64) -> Option<&Vec<HighlightSpan>> {
+        self.spans_by_hash.get(&content_hash)
+    }
+
+    fn insert_spans(&mut self, content_hash: u64, spans: Vec<HighlightSpan>) {
+        self.spans_by_hash.insert(content_hash, spans);
+    }
+
     /// Insert a freshly built `Highlighter` for `lang`.
-    fn insert(&mut self, lang: String, hl: Highlighter, content_hash: u64) {
+    fn insert_highlighter(&mut self, lang: String, hl: Highlighter, content_hash: u64) {
         self.map.insert(
             lang,
             CachedChild {
@@ -177,12 +190,11 @@ impl ChildCache {
         );
     }
 
-    /// Remove every entry whose lang is not in `keep`. Called once per
-    /// render pass with the set of languages that were actually used,
-    /// so stale entries (e.g. a markdown doc that just lost its only
-    /// `rust` fence) don't accumulate.
-    fn evict_stale(&mut self, keep: &[String]) {
-        self.map.retain(|k, _| keep.iter().any(|kk| kk == k));
+    /// Remove highlighter entries for unused langs + span entries for unused
+    /// content hashes. Bounds memory at the working set this render touched.
+    fn evict_stale(&mut self, keep_langs: &[String], keep_hashes: &[u64]) {
+        self.map.retain(|k, _| keep_langs.iter().any(|kk| kk == k));
+        self.spans_by_hash.retain(|h, _| keep_hashes.contains(h));
     }
 }
 
@@ -308,10 +320,18 @@ impl Highlighter {
 
     /// Apply an `InputEdit` to the retained tree, if any. No-op when the
     /// highlighter has no retained tree.
+    ///
+    /// The parent-spans cache was removed (bonsai cache redesign). The tree
+    /// is the only cache — `highlight_range` walks the tree on every call.
+    /// Child caches are keyed by content hash on the OLD source; after an
+    /// edit those hashes no longer match so we clear them.
     pub fn edit(&mut self, edit: &tree_sitter::InputEdit) {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(edit);
         }
+        // Child span caches were keyed by content hash on the OLD source.
+        // After an edit those slices no longer match for the edited block.
+        self.child_cache.spans_by_hash.clear();
     }
 
     /// Reparse `source` against the retained tree (if any) under the
@@ -323,6 +343,10 @@ impl Highlighter {
     /// [`Highlighter::highlight_range`] until a subsequent
     /// `parse_incremental` succeeds — the retained tree is stale relative
     /// to `source`.
+    ///
+    /// The parent-spans cache has been removed. The tree is the only cache.
+    /// `highlight_range` walks the tree (via `QueryCursor::set_byte_range`)
+    /// on every call; no post-parse cache update is needed here.
     pub fn parse_incremental(&mut self, source: &[u8]) -> bool {
         if self.parse_timeout_micros == 0 {
             let result = self.parser.parse(source, self.tree.as_ref());
@@ -378,6 +402,11 @@ impl Highlighter {
     /// Run the highlights query against the retained tree, scoped to
     /// `byte_range`. Returns spans whose byte range overlaps `byte_range`,
     /// sorted by start byte. Empty when there's no retained tree.
+    ///
+    /// The parent-spans cache has been removed (bonsai cache redesign).
+    /// This method walks the tree-sitter query restricted to `byte_range`
+    /// via `QueryCursor::set_byte_range` on every call. The tree is the
+    /// only cache — no incremental span cache needed.
     pub fn highlight_range(
         &mut self,
         source: &[u8],
@@ -516,15 +545,14 @@ impl Highlighter {
                 }
             }
 
-            // Emit spans for each capture in the match.
+            // Emit spans for each capture in the match. The QueryCursor
+            // was already restricted to `byte_range` via `set_byte_range`
+            // so tree-sitter only visits nodes that overlap the range.
             for capture in m.captures {
                 let node = capture.node;
                 let start = node.start_byte();
                 let end = node.end_byte();
                 if start >= end || end > source.len() {
-                    continue;
-                }
-                if start >= byte_range.end || end <= byte_range.start {
                     continue;
                 }
                 let capture_name = capture_names[capture.index as usize].clone();
@@ -581,6 +609,7 @@ impl Highlighter {
     /// Drop the retained tree.
     pub fn reset(&mut self) {
         self.tree = None;
+        self.child_cache.spans_by_hash.clear();
     }
 
     /// Parse `source` and return the resulting `Syntax`. Standalone — does
@@ -733,9 +762,11 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Cache keyed by language only — see ChildCache docs for the
-        // keystroke-lag rationale (range-keyed invalidated on every char).
+        // Per-lang highlighter cache + per-content-hash span cache (one HTML
+        // doc with many `<style>` blocks shares the css Highlighter but each
+        // block has its own spans entry — no re-parse on scroll).
         let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
 
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
@@ -744,12 +775,25 @@ impl Highlighter {
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+            cache_hashes.push(content_hash);
 
-            let child_raw = if let Some(cached) = self.child_cache.get(lang_name) {
-                if cached.source_hash != content_hash {
-                    cached.highlighter.parse_initial(slice);
-                    cached.source_hash = content_hash;
+            // Span cache hit — skip parse + highlight entirely.
+            if let Some(cached) = self.child_cache.get_spans(content_hash) {
+                for span in cached {
+                    child_spans.push(HighlightSpan {
+                        byte_range: (span.byte_range.start + offset)
+                            ..(span.byte_range.end + offset),
+                        capture: span.capture.clone(),
+                        metadata: span.metadata.clone(),
+                    });
                 }
+                injected_ranges.push(content_range.clone());
+                continue;
+            }
+
+            let spans = if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
+                cached.highlighter.parse_initial(slice);
+                cached.source_hash = content_hash;
                 cached.highlighter.highlight_range(slice, 0..slice.len())
             } else {
                 let Some(child_grammar) = resolve(lang_name) else {
@@ -761,21 +805,22 @@ impl Highlighter {
                 new_hl.parse_initial(slice);
                 let spans = new_hl.highlight_range(slice, 0..slice.len());
                 self.child_cache
-                    .insert(lang_name.clone(), new_hl, content_hash);
+                    .insert_highlighter(lang_name.clone(), new_hl, content_hash);
                 spans
             };
 
-            for span in child_raw {
+            for span in &spans {
                 child_spans.push(HighlightSpan {
                     byte_range: (span.byte_range.start + offset)..(span.byte_range.end + offset),
-                    capture: span.capture,
-                    metadata: span.metadata,
+                    capture: span.capture.clone(),
+                    metadata: span.metadata.clone(),
                 });
             }
+            self.child_cache.insert_spans(content_hash, spans);
             injected_ranges.push(content_range.clone());
         }
 
-        self.child_cache.evict_stale(&cache_langs);
+        self.child_cache.evict_stale(&cache_langs, &cache_hashes);
 
         // Merge: keep parent spans that do NOT fall entirely within an injected range.
         // Spans that partially overlap are kept (rare edge case — see doc comment).
@@ -824,7 +869,11 @@ impl Highlighter {
     where
         F: FnMut(&str) -> Option<Arc<Grammar>>,
     {
+        let t_parent = std::time::Instant::now();
         let parent_spans = self.highlight_range(source, byte_range.clone());
+        let parent_us = t_parent.elapsed().as_micros();
+        let parent_count = parent_spans.len();
+        let t_inj = std::time::Instant::now();
 
         let Some(inj_query) = self.injection_query.as_ref() else {
             return parent_spans;
@@ -917,15 +966,10 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Build the set of languages used this call so we can evict
-        // stale entries (cache is keyed by language only — see ChildCache
-        // docs for the keystroke-lag rationale).
+        // Per-lang highlighter cache + per-content-hash span cache.
         let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
 
-        // For each injection, reuse a cached child Highlighter when the
-        // language is the same. Re-parse the slice (cheap) instead of
-        // re-instantiating the highlighter (expensive — `compile_query`
-        // on `highlights.scm`).
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
@@ -933,16 +977,18 @@ impl Highlighter {
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
+            cache_hashes.push(content_hash);
 
-            let child_raw = if let Some(cached) = self.child_cache.get(lang_name) {
-                if cached.source_hash != content_hash {
-                    // Content changed: re-parse against the existing
-                    // (already-compiled) highlighter. `parse_initial`
-                    // replaces the retained tree.
-                    cached.highlighter.parse_initial(slice);
-                    cached.source_hash = content_hash;
-                }
-                cached.highlighter.highlight_range(slice, 0..slice.len())
+            let cached_spans_opt: Option<Vec<HighlightSpan>> =
+                self.child_cache.get_spans(content_hash).cloned();
+            let spans = if let Some(s) = cached_spans_opt {
+                s
+            } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
+                cached.highlighter.parse_initial(slice);
+                cached.source_hash = content_hash;
+                let s = cached.highlighter.highlight_range(slice, 0..slice.len());
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
             } else {
                 let Some(child_grammar) = resolve(lang_name) else {
                     continue;
@@ -951,13 +997,14 @@ impl Highlighter {
                     continue;
                 };
                 new_hl.parse_initial(slice);
-                let spans = new_hl.highlight_range(slice, 0..slice.len());
+                let s = new_hl.highlight_range(slice, 0..slice.len());
                 self.child_cache
-                    .insert(lang_name.clone(), new_hl, content_hash);
-                spans
+                    .insert_highlighter(lang_name.clone(), new_hl, content_hash);
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
             };
 
-            for span in child_raw {
+            for span in spans {
                 let abs_start = span.byte_range.start + offset;
                 let abs_end = span.byte_range.end + offset;
                 // Clip to viewport.
@@ -975,8 +1022,7 @@ impl Highlighter {
             injected_ranges.push(content_range.clone());
         }
 
-        // Evict child entries whose languages weren't used in this call.
-        self.child_cache.evict_stale(&cache_langs);
+        self.child_cache.evict_stale(&cache_langs, &cache_hashes);
 
         // Merge: keep parent spans not entirely inside an injected range.
         let mut merged: Vec<HighlightSpan> = parent_spans
@@ -988,8 +1034,19 @@ impl Highlighter {
             })
             .collect();
 
+        let child_count = child_spans.len();
         merged.extend(child_spans);
         sort_by_start_then_depth(&mut merged);
+        let inj_us = t_inj.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            parent_us,
+            inj_us,
+            parent_count,
+            inj_count = injections.len(),
+            child_count,
+            "highlight_range_with_injections"
+        );
         merged
     }
 

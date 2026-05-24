@@ -818,41 +818,63 @@ fn run_parse_and_emit(
     _marker_pass: &CommentMarkerPass,
     _hex_color_pass: &HexColorPass,
     _theme: &dyn Theme,
-    _directory: &LanguageDirectory,
+    directory: &LanguageDirectory,
     tx: &std::sync::mpsc::Sender<RenderOutput>,
 ) -> Option<()> {
     use std::time::Instant;
     let bytes = req.source.as_bytes();
-    let perf = with_buffer(buffers, req.buffer_id, |state| {
+    let (perf, did_parse) = with_buffer(buffers, req.buffer_id, |state| {
         let h = &mut state.highlighter;
         let mut perf = PerfBreakdown::default();
         if req.reset {
             h.reset();
             state.last_parsed_dirty_gen = None;
         }
-        // Only (re-)parse if the retained tree does not already represent
-        // this dirty_gen. `tree.edit(InputEdit)` deltas are applied
-        // synchronously by the main thread inside `SyntaxLayer::apply_edits`
-        // — by the time we get here the tree's byte positions already
-        // reflect this dirty_gen's source, we just need to re-parse against
-        // the new bytes to produce a fresh node structure.
         let needs_parse = h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
-        if needs_parse {
-            let t = Instant::now();
-            let parsed_ok = if h.tree().is_none() {
-                h.parse_initial(bytes);
-                true
-            } else {
-                h.parse_incremental(bytes)
-            };
-            if !parsed_ok {
-                return None;
-            }
-            perf.parse_us = t.elapsed().as_micros();
-            state.last_parsed_dirty_gen = Some(req.dirty_gen);
+        if !needs_parse {
+            return Some((perf, false));
         }
-        Some(perf)
+        let t = Instant::now();
+        let was_initial = h.tree().is_none();
+        let parsed_ok = if was_initial {
+            h.parse_initial(bytes);
+            true
+        } else {
+            h.parse_incremental(bytes)
+        };
+        if !parsed_ok {
+            tracing::debug!(
+                target: "hjkl::profile",
+                buffer_id = ?req.buffer_id,
+                bytes_len = bytes.len(),
+                "worker parse FAILED"
+            );
+            return None;
+        }
+        perf.parse_us = t.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            buffer_id = ?req.buffer_id,
+            bytes_len = bytes.len(),
+            parse_us = perf.parse_us,
+            was_initial,
+            dg = req.dirty_gen,
+            kind = ?req.kind,
+            "worker parse done"
+        );
+        state.last_parsed_dirty_gen = Some(req.dirty_gen);
+        let _ = directory;
+        Some((perf, true))
     })??;
+
+    // Only emit the "tree updated" signal when we actually reparsed.
+    // Without this guard the worker fires an empty signal on every scroll
+    // tick (dg unchanged → `needs_parse=false`), which `install_render_result`
+    // then turns into a redundant sync `query_viewport` walk per scroll —
+    // visible as scroll lag at high event rates.
+    if !did_parse {
+        return Some(());
+    }
 
     let key = (req.dirty_gen, req.viewport_top, req.viewport_height);
     let _ = tx.send(RenderOutput {
@@ -1278,14 +1300,20 @@ impl SyntaxLayer {
                 |name| directory.by_name(name),
             );
             perf.highlight_us = t.elapsed().as_micros();
+            let flat_span_count = flat_spans.len();
 
+            let t_marker = Instant::now();
             let marker_pass = CommentMarkerPass::new();
             marker_pass.apply(&mut flat_spans, bytes);
+            let marker_us = t_marker.elapsed().as_micros();
+
+            let t_hex = Instant::now();
             // Scan only the viewport bytes for hex colors — full-document
             // scan per keystroke was a ~200µs hit on 400-line files and
             // grows with file size.
             let hex_color_pass = HexColorPass::new();
             hex_color_pass.apply_range(&mut flat_spans, bytes, viewport_byte_range.clone());
+            let hex_us = t_hex.elapsed().as_micros();
 
             let t = Instant::now();
             let by_row = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);
@@ -1299,6 +1327,19 @@ impl SyntaxLayer {
                 row_starts,
             );
             perf.diag_us = t.elapsed().as_micros();
+
+            tracing::debug!(
+                target: "hjkl::profile",
+                ?kind,
+                highlight_us = perf.highlight_us,
+                marker_us,
+                hex_us,
+                by_row_us = perf.by_row_us,
+                diag_us = perf.diag_us,
+                row_count,
+                flat_span_count,
+                "query_viewport breakdown"
+            );
 
             // `key.0` tags the result with the dirty_gen the caller
             // built `source` for. Setting it to the *current* buffer

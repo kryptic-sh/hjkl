@@ -1221,7 +1221,13 @@ impl App {
             }
 
             // ── Draw ──────────────────────────────────────────────
+            let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
+            tracing::debug!(
+                target: "hjkl::profile",
+                draw_us = t_draw.elapsed().as_micros(),
+                "draw"
+            );
 
             // ── Async polls ───────────────────────────────────────
             self.drain_async_polls();
@@ -1284,17 +1290,17 @@ impl App {
                     // Insert mode uses the inline dispatcher which calls
                     // Editor::insert_* primitives directly. Normal / Visual
                     // modes route through the FSM via hjkl_vim_tui::handle_key.
-                    if self.active().editor.vim_mode() == VimMode::Insert {
+                    let t_dispatch = std::time::Instant::now();
+                    let mode_was_insert = self.active().editor.vim_mode() == VimMode::Insert;
+                    if mode_was_insert {
                         self.dispatch_insert_key(key);
-                        // dispatch_insert_key calls Editor primitives directly and
-                        // does not go through hjkl_vim_tui::handle_key, which is the
-                        // normal site for emit_cursor_shape_if_changed. Emit here
-                        // so Esc (→ Normal/Block) and Ctrl-O surface immediately.
                         self.active_mut().editor.emit_cursor_shape_if_changed();
                     } else {
                         hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
                     }
+                    let dispatch_us = t_dispatch.elapsed().as_micros();
 
+                    let t_after = std::time::Instant::now();
                     self.sync_viewport_from_editor();
                     if self.active_mut().editor.take_dirty() {
                         let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -1308,21 +1314,44 @@ impl App {
                         self.handle_active_content_reset(buffer_id);
                     }
                     let edits = self.active_mut().editor.take_content_edits();
+                    let edit_count = edits.len();
+                    let t_apply = std::time::Instant::now();
+                    let mut apply_us = 0u128;
+                    let mut shift_spans_us = 0u128;
+                    let mut shift_cached_us = 0u128;
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
-                        // Translate cached span rows so untouched lines
-                        // stay coloured while the worker reparses (no
-                        // white flash on Enter / backspace-at-BOL); see
-                        // matching block in `App::sync_after_engine_mutation`
-                        // for the full rationale.
+                        apply_us = t_apply.elapsed().as_micros();
+                        let t_ss = std::time::Instant::now();
                         self.active_mut()
                             .editor
                             .shift_syntax_spans_for_edits(&edits);
+                        shift_spans_us = t_ss.elapsed().as_micros();
+                        let t_sc = std::time::Instant::now();
                         let active_idx = self.focused_slot_idx();
                         self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
+                        shift_cached_us = t_sc.elapsed().as_micros();
                     }
+                    let t_lsp = std::time::Instant::now();
                     self.lsp_notify_change_active();
+                    let lsp_us = t_lsp.elapsed().as_micros();
+                    let after_us = t_after.elapsed().as_micros();
+                    let t_rec = std::time::Instant::now();
                     self.recompute_and_install();
+                    let rec_us = t_rec.elapsed().as_micros();
+                    tracing::debug!(
+                        target: "hjkl::profile",
+                        insert_mode = mode_was_insert,
+                        dispatch_us,
+                        after_us,
+                        apply_us,
+                        shift_spans_us,
+                        shift_cached_us,
+                        lsp_us,
+                        rec_us,
+                        edit_count,
+                        "keypress edit-path"
+                    );
                 }
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);
@@ -1343,7 +1372,10 @@ impl App {
             // query. Each scroll handler set `pending_recompute = true`
             // instead of firing `recompute_and_install` synchronously,
             // so we collapse the whole burst into one sync query install.
+            let t_drain = std::time::Instant::now();
+            let mut drained = 0usize;
             while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                drained += 1;
                 if let Ok(extra) = event::read() {
                     match extra {
                         Event::Key(k) => match self.handle_keypress(k) {
@@ -1353,12 +1385,17 @@ impl App {
                             }
                             KeyOutcome::Continue => continue,
                             KeyOutcome::FallThrough => {
-                                if self.active().editor.vim_mode() == VimMode::Insert {
+                                let t_dispatch = std::time::Instant::now();
+                                let mode_was_insert =
+                                    self.active().editor.vim_mode() == VimMode::Insert;
+                                if mode_was_insert {
                                     self.dispatch_insert_key(k);
                                     self.active_mut().editor.emit_cursor_shape_if_changed();
                                 } else {
                                     hjkl_vim_tui::handle_key(&mut self.active_mut().editor, k);
                                 }
+                                let dispatch_us = t_dispatch.elapsed().as_micros();
+                                let t_after = std::time::Instant::now();
                                 self.sync_viewport_from_editor();
                                 if self.active_mut().editor.take_dirty() {
                                     let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -1372,16 +1409,42 @@ impl App {
                                     self.handle_active_content_reset(bid);
                                 }
                                 let edits = self.active_mut().editor.take_content_edits();
+                                let edit_count = edits.len();
+                                let mut apply_us = 0u128;
+                                let mut shift_spans_us = 0u128;
+                                let mut shift_cached_us = 0u128;
                                 if !edits.is_empty() {
+                                    let t_apply = std::time::Instant::now();
                                     self.syntax.apply_edits(bid, &edits);
+                                    apply_us = t_apply.elapsed().as_micros();
+                                    let t_ss = std::time::Instant::now();
                                     self.active_mut()
                                         .editor
                                         .shift_syntax_spans_for_edits(&edits);
+                                    shift_spans_us = t_ss.elapsed().as_micros();
+                                    let t_sc = std::time::Instant::now();
                                     let aidx = self.focused_slot_idx();
                                     self.shift_cached_render_output_spans_for_slot(aidx, &edits);
+                                    shift_cached_us = t_sc.elapsed().as_micros();
                                 }
+                                let t_lsp = std::time::Instant::now();
                                 self.lsp_notify_change_active();
+                                let lsp_us = t_lsp.elapsed().as_micros();
+                                let after_us = t_after.elapsed().as_micros();
                                 self.pending_recompute = true;
+                                tracing::debug!(
+                                    target: "hjkl::profile",
+                                    insert_mode = mode_was_insert,
+                                    in_drain = true,
+                                    dispatch_us,
+                                    after_us,
+                                    apply_us,
+                                    shift_spans_us,
+                                    shift_cached_us,
+                                    lsp_us,
+                                    edit_count,
+                                    "keypress edit-path"
+                                );
                             }
                         },
                         Event::Mouse(me2) => {
@@ -1403,6 +1466,14 @@ impl App {
             // Flush deferred recompute once after the drain loop ends.
             // Coalesces burst-scrolls (and rapid keystrokes within one
             // poll tick) into a single sync query + install.
+            if drained > 0 {
+                tracing::debug!(
+                    target: "hjkl::profile",
+                    drained,
+                    drain_us = t_drain.elapsed().as_micros(),
+                    "event drain"
+                );
+            }
             if self.pending_recompute {
                 self.pending_recompute = false;
                 self.recompute_and_install();

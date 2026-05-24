@@ -274,7 +274,28 @@ impl App {
             }
             match out.kind {
                 crate::syntax::ParseKind::Viewport => {
-                    return false;
+                    // Worker just refreshed the retained tree. The
+                    // parent-spans cache is gone (bonsai cache redesign);
+                    // `highlight_range` now walks the tree on every call.
+                    // The sync query that ran before the worker delivered
+                    // walked against the pre-parse tree — now that the tree
+                    // is fresh we must re-run to pick up the new structure.
+                    // Without this the editor paints stale spans until the
+                    // next user event triggers `recompute_and_install`.
+                    //
+                    // Use the VISIBLE viewport (not `out.key.1/2` which
+                    // is the worker's 3x over-provisioned range, ~168
+                    // rows / 7KB) — that's the only region painted right
+                    // now, and a 3x-size sync query on every worker
+                    // delivery costs ~1.5ms each, visible as typing lag.
+                    self.slots[slot_idx].last_sync_viewport_key = None;
+                    let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+                    let (vp_top, vp_height) = {
+                        let vp = self.active().editor.host().viewport();
+                        (vp.top_row, vp.height as usize)
+                    };
+                    self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
+                    return true;
                 }
                 crate::syntax::ParseKind::Top | crate::syntax::ParseKind::Bottom => {
                     let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
@@ -424,9 +445,11 @@ impl App {
             _ => None,
         };
         if last_key == Some(new_key) {
+            tracing::debug!(target: "hjkl::profile", ?kind, range_top, range_height, current_dg, "sync_query dedup-hit");
             return true;
         }
 
+        let t_sync = Instant::now();
         let Some((source, row_starts, line_count_arc, cache_dg)) =
             self.syntax.cached_source(buffer_id)
         else {
@@ -444,6 +467,8 @@ impl App {
             .unwrap_or(bytes_len)
             .min(bytes_len)
             .max(vp_start);
+        let byte_len = vp_end - vp_start;
+        let t_q = Instant::now();
         let sync_out = self.syntax.query_viewport(
             buffer_id,
             source.as_str(),
@@ -455,8 +480,18 @@ impl App {
             current_dg,
             kind,
         );
+        let q_us = t_q.elapsed().as_micros();
         if let Some(sync_out) = sync_out {
+            let t_install = Instant::now();
             self.install_render_result(sync_out);
+            let install_us = t_install.elapsed().as_micros();
+            tracing::debug!(
+                target: "hjkl::profile",
+                ?kind, range_top, range_height, byte_len,
+                q_us, install_us,
+                total_us = t_sync.elapsed().as_micros(),
+                "sync_query miss"
+            );
             // Mark this `(buffer, kind, key)` as done so the next idle
             // tick short-circuits before re-running the highlight +
             // merge + install pipeline.
@@ -931,6 +966,16 @@ impl App {
         self.refresh_git_signs();
         self.last_git_us = t_git.elapsed().as_micros();
         self.last_recompute_us = t_total.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            total_us = self.last_recompute_us,
+            install_us = self.last_install_us,
+            git_us = self.last_git_us,
+            submitted,
+            top, height,
+            dg,
+            "recompute_and_install"
+        );
         let _ = submitted;
     }
 
