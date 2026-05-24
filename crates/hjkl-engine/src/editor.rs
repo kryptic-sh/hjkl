@@ -1456,26 +1456,47 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             if ner == oer {
                 continue;
             }
+            let start_row = edit.start_position.0 as usize;
+            let start_col = edit.start_position.1 as usize;
+            // Insert/drain index depends on whether the edit starts at
+            // the BEGINNING of `start_row` or somewhere INSIDE it.
+            //   col == 0 → edit is at the very start of `start_row`; new
+            //              rows go BEFORE row `start_row`, so the affected
+            //              indices begin AT `start_row`.
+            //   col > 0 → edit is inside `start_row`; new rows go AFTER
+            //              `start_row`, so affected indices begin at
+            //              `start_row + 1`.
+            //
+            // Pre-fix this always used `oer + 1` (the col-> 0 branch),
+            // which left row `start_row`'s spans at its old index while
+            // the file's row `start_row` was now the freshly-pasted
+            // content — visible as wrong-row colour mappings after
+            // `ggP` / `P` / any insert at column 0.
+            let affected_idx = if start_col == 0 {
+                start_row
+            } else {
+                start_row + 1
+            };
             if ner > oer {
                 let n = ner - oer;
-                let idx = (oer + 1).min(self.buffer_spans.len());
+                let idx = affected_idx.min(self.buffer_spans.len());
                 for _ in 0..n {
                     self.buffer_spans.insert(idx, Vec::new());
                 }
-                let idx_s = (oer + 1).min(self.styled_spans.len());
+                let idx_s = affected_idx.min(self.styled_spans.len());
                 for _ in 0..n {
                     self.styled_spans.insert(idx_s, Vec::new());
                 }
             } else {
                 let n = oer - ner;
                 let len_b = self.buffer_spans.len();
-                let start_b = (ner + 1).min(len_b);
+                let start_b = affected_idx.min(len_b);
                 let end_b = (start_b + n).min(len_b);
                 if end_b > start_b {
                     self.buffer_spans.drain(start_b..end_b);
                 }
                 let len_s = self.styled_spans.len();
-                let start_s = (ner + 1).min(len_s);
+                let start_s = affected_idx.min(len_s);
                 let end_s = (start_s + n).min(len_s);
                 if end_s > start_s {
                     self.styled_spans.drain(start_s..end_s);
@@ -5647,6 +5668,112 @@ mod shift_syntax_spans_tests {
             edit_insert_newline_at(1, 1),
         ]);
         assert_eq!(e.buffer_spans().len(), 5);
+    }
+
+    /// Build a buffer with `line_count` rows where row `i` has a span at
+    /// column `i + 1` so the rows are independently identifiable after a
+    /// shift (otherwise all spans look identical and can't tell which
+    /// original row's spans landed at which post-shift index).
+    fn ed_with_distinguishable_spans(line_count: usize) -> Editor<Buffer, DefaultHost> {
+        let text = (0..line_count)
+            .map(|i| format!("rowwwwwwwwww{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let buf = Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::new(), Options::default());
+        let style = Style::default();
+        let spans: Vec<Vec<(usize, usize, Style)>> = (0..line_count)
+            .map(|i| vec![(i + 1, i + 2, style)])
+            .collect();
+        e.install_syntax_spans(spans);
+        e
+    }
+
+    /// Regression for off-by-one in `shift_syntax_spans_for_edits`.
+    ///
+    /// `P` (paste-before) at column 0 of row 0 inserts new lines BEFORE
+    /// row 0. The pre-paste rows should shift down by N. The fix inserts
+    /// empty rows at idx `start.row` (not `oer + 1`) when `start.col == 0`.
+    ///
+    /// Symptom before the fix: row 0's spans stayed at idx 0 after a
+    /// 4-row `ggP`, but the file's row 0 was now the pasted content (no
+    /// spans available yet). Display: pasted row 0 painted with the
+    /// pre-paste row 0's spans (LUCKILY identical content in many cases)
+    /// while the *shifted* pre-paste row 0 (now at file row 4) painted
+    /// with the pre-paste row 1's spans — visible as the WRONG row
+    /// showing the wrong-row colours.
+    #[test]
+    fn shift_for_paste_at_start_of_row_zero() {
+        let mut e = ed_with_distinguishable_spans(7);
+        // Snapshot: row i has a span at col (i+1, i+2).
+        let pre = e.buffer_spans().to_vec();
+        // P at (0, 0) inserting 4 lines.
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 4,
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (4, 0),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 11, "row count grew by 4");
+        // Rows 0..4 are the new pasted lines — should be EMPTY placeholders.
+        for row in 0..4 {
+            assert!(
+                e.buffer_spans()[row].is_empty(),
+                "row {row} (new paste) must be empty placeholder, got {:?}",
+                e.buffer_spans()[row]
+            );
+        }
+        // Rows 4..11 are the original rows 0..7 shifted down by 4.
+        for (orig_row, orig_spans) in pre.iter().enumerate() {
+            let new_row = orig_row + 4;
+            assert_eq!(
+                &e.buffer_spans()[new_row],
+                orig_spans,
+                "original row {orig_row} should be at file row {new_row} after \
+                 paste-before-row-0"
+            );
+        }
+    }
+
+    /// Same idea for paste at start of a non-zero row: `2GP` inserts 3
+    /// lines before row 2.
+    #[test]
+    fn shift_for_paste_at_start_of_middle_row() {
+        let mut e = ed_with_distinguishable_spans(5);
+        let pre = e.buffer_spans().to_vec();
+        // Insert 3 lines at (2, 0).
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 3,
+            start_position: (2, 0),
+            old_end_position: (2, 0),
+            new_end_position: (5, 0),
+        };
+        e.shift_syntax_spans_for_edits(&[edit]);
+        assert_eq!(e.buffer_spans().len(), 8);
+        // Rows 0..2 unchanged (before the insertion point).
+        assert_eq!(e.buffer_spans()[0], pre[0]);
+        assert_eq!(e.buffer_spans()[1], pre[1]);
+        // Rows 2..5 are new pasted lines.
+        for row in 2..5 {
+            assert!(
+                e.buffer_spans()[row].is_empty(),
+                "row {row} must be empty placeholder"
+            );
+        }
+        // Rows 5..8 are originals 2..5 shifted down by 3.
+        for (orig_row, orig_spans) in pre.iter().enumerate().take(5).skip(2) {
+            let new_row = orig_row + 3;
+            assert_eq!(
+                &e.buffer_spans()[new_row],
+                orig_spans,
+                "original row {orig_row} should land at file row {new_row}"
+            );
+        }
     }
 }
 
