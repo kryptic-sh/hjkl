@@ -1479,14 +1479,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             };
             if ner > oer {
                 let n = ner - oer;
+                // O(len + n) via splice; the prior per-row `insert(idx, ...)`
+                // loop was O(n × (len - idx)), which on a 60k-row paste at
+                // the BOL became ~1.8 G memmove ops (87 % of paste CPU per
+                // samply). Splice memmove-shifts once, then fills.
                 let idx = affected_idx.min(self.buffer_spans.len());
-                for _ in 0..n {
-                    self.buffer_spans.insert(idx, Vec::new());
-                }
+                self.buffer_spans
+                    .splice(idx..idx, std::iter::repeat_with(Vec::new).take(n));
                 let idx_s = affected_idx.min(self.styled_spans.len());
-                for _ in 0..n {
-                    self.styled_spans.insert(idx_s, Vec::new());
-                }
+                self.styled_spans
+                    .splice(idx_s..idx_s, std::iter::repeat_with(Vec::new).take(n));
             } else {
                 let n = oer - ner;
                 let len_b = self.buffer_spans.len();
@@ -5805,6 +5807,36 @@ mod shift_syntax_spans_tests {
                 "original row {orig_row} should land at file row {new_row}"
             );
         }
+    }
+
+    /// Regression: pasting N rows at the beginning of the buffer used to
+    /// run `Vec::insert(0, ...)` once per row → O(N²) memmove. samply
+    /// showed this path eating 87 % of paste CPU on a 60 k-row paste.
+    /// The splice rewrite is O(N).
+    ///
+    /// Asserting a hard wall-clock bound is brittle on slow CI, so we
+    /// pick a budget the old code blows past by >10×: 60 k rows in
+    /// under 200 ms even on a debug build. Old impl: ~3-5 seconds.
+    #[test]
+    fn shift_for_60k_row_paste_at_row_zero_is_under_200ms() {
+        let mut e = ed_with_distinguishable_spans(8);
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: 60_000,
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (60_000, 0),
+        };
+        let t = std::time::Instant::now();
+        e.shift_syntax_spans_for_edits(&[edit]);
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 200,
+            "60k-row shift took {elapsed:?}; budget is 200 ms (catches \
+             reintroduction of the O(N²) per-row insert loop)"
+        );
+        assert_eq!(e.buffer_spans().len(), 60_008);
     }
 }
 

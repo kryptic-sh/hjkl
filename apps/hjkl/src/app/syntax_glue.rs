@@ -1175,10 +1175,11 @@ pub(crate) fn shift_rows<T>(rows: &mut Vec<Vec<T>>, edits: &[hjkl_engine::Conten
         }
         if ner > oer {
             let n = ner - oer;
+            // O(len + n) via splice; the prior per-row `insert(idx, ...)`
+            // loop was O(n × (len - idx)) — see the matching fix in
+            // hjkl_engine::editor::shift_syntax_spans_for_edits.
             let idx = (oer + 1).min(rows.len());
-            for _ in 0..n {
-                rows.insert(idx, Vec::new());
-            }
+            rows.splice(idx..idx, std::iter::repeat_with(Vec::new).take(n));
         } else {
             let n = oer - ner;
             let len = rows.len();
