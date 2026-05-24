@@ -724,14 +724,19 @@ impl App {
         // top/bottom cache prevented re-submission indefinitely.
         {
             let active_idx = self.focused_slot_idx();
-            let needs_top = self.slots[active_idx]
-                .top_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != dg);
-            let needs_bottom = self.slots[active_idx]
-                .bottom_render_output
-                .as_ref()
-                .is_none_or(|o| o.key.0 != dg);
+            // Top / Bottom are prewarms for `gg` / `G`. They do NOT need
+            // to refresh on every `dirty_gen` tick — rapid typing would
+            // re-submit + worker-signal-trigger their sync highlight on
+            // every char, dragging insert-mode to ~1Hz on HTML+CSS files
+            // because each refresh costs ~120 rows × CSS injection
+            // reparse. Stale-but-present prewarm spans are acceptable:
+            // when the user finally jumps, the viewport sync refreshes
+            // the now-visible rows for the current `dirty_gen`.
+            //
+            // `handle_active_content_reset` clears these caches on
+            // bulk-replace (`:e!`, undo) so the re-submit fires there.
+            let needs_top = self.slots[active_idx].top_render_output.is_none();
+            let needs_bottom = self.slots[active_idx].bottom_render_output.is_none();
             let slot_line_count = self.slots[active_idx].editor.buffer().line_count() as usize;
 
             if needs_top {
