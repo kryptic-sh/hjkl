@@ -321,41 +321,34 @@ impl App {
     }
 
     /// Run a sync `query_viewport` against the active buffer's retained
-    /// tree and install the result. Falls back to the one-shot
-    /// `preview_render` when no retained tree is available (cold open /
-    /// post-reset). Skips silently when the cached source is stale
-    /// (buffer changed but the submit-side cache rebuild was throttled).
+    /// tree for an arbitrary `(top, height)` region and install the
+    /// result. Skips silently when the cached source is stale (throttled
+    /// submit hasn't fired the cache rebuild yet) or when no retained
+    /// tree exists. Generic over `ParseKind` so Viewport / Top / Bottom
+    /// all use the same code path.
     ///
-    /// `oversize_top` / `oversize_height` are the parse range (3× the
-    /// visible viewport); `top` / `height` are the visible viewport
-    /// (used by `preview_render`'s tighter fallback range). `current_dg`
-    /// is the buffer's current dirty_gen — used both to detect cache
-    /// staleness and to tag the resulting `RenderOutput` so the install
-    /// path's generation guard knows this result is fresh.
-    fn sync_query_active_viewport(
+    /// `current_dg` is the buffer's current dirty_gen — used both to
+    /// detect cache staleness and to tag the resulting `RenderOutput`
+    /// so the install path's generation guard knows this result is fresh.
+    fn sync_query_region(
         &mut self,
         buffer_id: crate::syntax::BufferId,
-        oversize_top: usize,
-        oversize_height: usize,
-        top: usize,
-        height: usize,
+        range_top: usize,
+        range_height: usize,
         current_dg: u64,
-    ) {
+        kind: crate::syntax::ParseKind,
+    ) -> bool {
         let Some((source, row_starts, line_count_arc, cache_dg)) =
             self.syntax.cached_source(buffer_id)
         else {
-            return;
+            return false;
         };
-        // Cache built for a stale dirty_gen — its bytes don't match the
-        // live buffer, so querying against the (correctly-edited) tree
-        // with this source would still produce wrong-offset spans.
-        // Wait for the next submit to rebuild.
         if cache_dg != current_dg {
-            return;
+            return false;
         }
         let bytes_len = source.len();
-        let vp_start = row_starts.get(oversize_top).copied().unwrap_or(bytes_len);
-        let vp_end_row = oversize_top + oversize_height + 1;
+        let vp_start = row_starts.get(range_top).copied().unwrap_or(bytes_len);
+        let vp_end_row = range_top + range_height + 1;
         let vp_end = row_starts
             .get(vp_end_row)
             .copied()
@@ -367,23 +360,53 @@ impl App {
             source.as_str(),
             row_starts.as_ref(),
             vp_start..vp_end,
-            oversize_top,
-            oversize_height,
+            range_top,
+            range_height,
             line_count_arc,
             current_dg,
-            crate::syntax::ParseKind::Viewport,
+            kind,
         );
         if let Some(sync_out) = sync_out {
             self.install_render_result(sync_out);
+            true
         } else {
-            // No retained tree (cold open / post-reset). Fall back to
-            // the one-shot `preview_render` so the visible rows paint
-            // immediately instead of waiting on the async worker.
-            let active_idx = self.focused_slot_idx();
-            let buf = self.slots[active_idx].editor.buffer();
-            if let Some(preview) = self.syntax.preview_render(buffer_id, buf, top, height) {
-                self.install_render_result(preview);
-            }
+            false
+        }
+    }
+
+    /// Run sync `query_viewport` for the active buffer's Viewport region
+    /// (the over-provisioned visible window). On cold-open / post-reset
+    /// where no retained tree exists, falls back to the one-shot
+    /// `preview_render` so the visible rows paint immediately.
+    fn sync_query_active_viewport(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        oversize_top: usize,
+        oversize_height: usize,
+        fallback_top: usize,
+        fallback_height: usize,
+        current_dg: u64,
+    ) {
+        let installed = self.sync_query_region(
+            buffer_id,
+            oversize_top,
+            oversize_height,
+            current_dg,
+            crate::syntax::ParseKind::Viewport,
+        );
+        if installed {
+            return;
+        }
+        // No retained tree (cold open / post-reset). Fall back to the
+        // one-shot `preview_render` so the visible rows paint immediately
+        // instead of waiting on the async worker.
+        let active_idx = self.focused_slot_idx();
+        let buf = self.slots[active_idx].editor.buffer();
+        if let Some(preview) =
+            self.syntax
+                .preview_render(buffer_id, buf, fallback_top, fallback_height)
+        {
+            self.install_render_result(preview);
         }
     }
 
@@ -610,6 +633,16 @@ impl App {
                     top_range_height,
                     crate::syntax::ParseKind::Top,
                 );
+                // Plan B (#233): immediately produce the Top spans against
+                // the retained tree so a follow-up `gg` paints instantly
+                // instead of waiting on the worker.
+                self.sync_query_region(
+                    buffer_id,
+                    top_range_start,
+                    top_range_height,
+                    dg,
+                    crate::syntax::ParseKind::Top,
+                );
             }
 
             if needs_bottom {
@@ -622,6 +655,14 @@ impl App {
                     buf,
                     bot_range_start,
                     bot_range_height,
+                    crate::syntax::ParseKind::Bottom,
+                );
+                // Plan B (#233): same as Top — `G` paints instantly.
+                self.sync_query_region(
+                    buffer_id,
+                    bot_range_start,
+                    bot_range_height,
+                    dg,
                     crate::syntax::ParseKind::Bottom,
                 );
             }
