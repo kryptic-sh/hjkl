@@ -348,6 +348,16 @@ pub struct BufferSlot {
     ///
     /// Capped at 256 entries to bound memory on long sessions.
     pub(crate) dirty_rows_log: Vec<(u64, std::ops::RangeInclusive<usize>)>,
+    /// Last `(dirty_gen, range_top, range_height)` the sync
+    /// `query_viewport` was run with per `ParseKind`. Used by
+    /// `sync_query_region` to skip work when nothing changed since the
+    /// previous tick — without this guard `recompute_and_install`
+    /// re-runs the highlight + merge + install pipeline on every event
+    /// loop iteration even when the buffer is idle, which shows up as
+    /// scroll lag on large files.
+    pub(crate) last_sync_viewport_key: Option<(u64, usize, usize)>,
+    pub(crate) last_sync_top_key: Option<(u64, usize, usize)>,
+    pub(crate) last_sync_bottom_key: Option<(u64, usize, usize)>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

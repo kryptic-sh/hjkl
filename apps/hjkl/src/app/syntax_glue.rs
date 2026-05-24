@@ -357,6 +357,26 @@ impl App {
         current_dg: u64,
         kind: crate::syntax::ParseKind,
     ) -> bool {
+        // Per-tick dedup: skip the highlight + merge + install pipeline
+        // when nothing changed since the previous run for this
+        // `(buffer, kind)`. Without this gate `recompute_and_install`
+        // re-walks the whole `line_count` x 3-cache merger every event
+        // loop iteration, which scrolls a large file feels visibly
+        // laggy at idle.
+        let Some(slot_idx) = self.slots.iter().position(|s| s.buffer_id == buffer_id) else {
+            return false;
+        };
+        let new_key = (current_dg, range_top, range_height);
+        let last_key = match kind {
+            crate::syntax::ParseKind::Viewport => self.slots[slot_idx].last_sync_viewport_key,
+            crate::syntax::ParseKind::Top => self.slots[slot_idx].last_sync_top_key,
+            crate::syntax::ParseKind::Bottom => self.slots[slot_idx].last_sync_bottom_key,
+            _ => None,
+        };
+        if last_key == Some(new_key) {
+            return true;
+        }
+
         let Some((source, row_starts, line_count_arc, cache_dg)) =
             self.syntax.cached_source(buffer_id)
         else {
@@ -387,6 +407,21 @@ impl App {
         );
         if let Some(sync_out) = sync_out {
             self.install_render_result(sync_out);
+            // Mark this `(buffer, kind, key)` as done so the next idle
+            // tick short-circuits before re-running the highlight +
+            // merge + install pipeline.
+            match kind {
+                crate::syntax::ParseKind::Viewport => {
+                    self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+                }
+                crate::syntax::ParseKind::Top => {
+                    self.slots[slot_idx].last_sync_top_key = Some(new_key);
+                }
+                crate::syntax::ParseKind::Bottom => {
+                    self.slots[slot_idx].last_sync_bottom_key = Some(new_key);
+                }
+                _ => {}
+            }
             true
         } else {
             false
@@ -446,6 +481,12 @@ impl App {
         slot.viewport_render_output = None;
         slot.top_render_output = None;
         slot.bottom_render_output = None;
+        // Clear sync dedup keys so the post-reset sync query is not
+        // skipped if the new dirty_gen + viewport happen to match a
+        // pre-reset key.
+        slot.last_sync_viewport_key = None;
+        slot.last_sync_top_key = None;
+        slot.last_sync_bottom_key = None;
         slot.editor.install_ratatui_syntax_spans(Vec::new());
     }
 
