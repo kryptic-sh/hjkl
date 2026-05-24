@@ -54,13 +54,30 @@ impl HexColorPass {
     /// not modified — renderers handle the colour-override at paint
     /// time by inspecting `span.metadata`.
     pub fn apply(&self, spans: &mut Vec<HighlightSpan>, bytes: &[u8]) {
-        for hit in scan_hex_colors(bytes) {
-            let lit_bytes = &bytes[hit.clone()];
+        self.apply_range(spans, bytes, 0..bytes.len());
+    }
+
+    /// Same as [`Self::apply`] but only scans `range` of `bytes`. Used
+    /// by the sync `query_viewport` path so each keystroke only walks
+    /// the visible viewport (~80 rows) instead of the full document
+    /// (~400 rows on a 400-line file → 5× wasted work per char).
+    pub fn apply_range(
+        &self,
+        spans: &mut Vec<HighlightSpan>,
+        bytes: &[u8],
+        range: std::ops::Range<usize>,
+    ) {
+        let start = range.start.min(bytes.len());
+        let end = range.end.min(bytes.len()).max(start);
+        let slice = &bytes[start..end];
+        for hit in scan_hex_colors(slice) {
+            let abs_hit = (hit.start + start)..(hit.end + start);
+            let lit_bytes = &bytes[abs_hit.clone()];
             // Safe: scan_hex_colors only emits ASCII hex digit ranges.
             let bg_hex = std::str::from_utf8(lit_bytes).unwrap();
             let fg_hex = contrasting_fg(bg_hex);
             let mut span = HighlightSpan {
-                byte_range: hit,
+                byte_range: abs_hit,
                 capture: HEX_COLOR_CAPTURE.to_string(),
                 metadata: std::collections::HashMap::new(),
             };

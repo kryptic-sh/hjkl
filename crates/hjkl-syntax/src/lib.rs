@@ -1281,8 +1281,11 @@ impl SyntaxLayer {
 
             let marker_pass = CommentMarkerPass::new();
             marker_pass.apply(&mut flat_spans, bytes);
+            // Scan only the viewport bytes for hex colors — full-document
+            // scan per keystroke was a ~200µs hit on 400-line files and
+            // grows with file size.
             let hex_color_pass = HexColorPass::new();
-            hex_color_pass.apply(&mut flat_spans, bytes);
+            hex_color_pass.apply_range(&mut flat_spans, bytes, viewport_byte_range.clone());
 
             let t = Instant::now();
             let by_row = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);

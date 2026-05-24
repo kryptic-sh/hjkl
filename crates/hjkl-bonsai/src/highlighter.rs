@@ -133,53 +133,43 @@ struct CachedChild {
     source_hash: u64,
 }
 
-/// Cache of child `Highlighter` instances, keyed by
-/// `(language_name, content_range_start, content_range_end)`.
+/// Cache of child `Highlighter` instances, keyed by **language name only**.
 ///
-/// Eviction policy: after each `highlight_range_with_injections` / `highlight_with_injections`
-/// call the cache is pruned to only the keys that appeared in the *current*
-/// injection set.  This keeps memory bounded as the user scrolls or edits.
+/// Keying by `(language, content_range_start, content_range_end)` was the
+/// original design but it invalidates on every keystroke inside an injected
+/// region — typing one char in an HTML `<style>` block shifts the end byte,
+/// blowing the cache + triggering a full `Highlighter::new` (which calls
+/// the expensive `compile_query` on the child's `highlights.scm`) every
+/// char. That was the dominant per-keystroke cost on injected files
+/// (~10-50 ms / char on HTML + CSS), measured under the plan-B sync
+/// query path.
+///
+/// Lang-only keying lets the same `Highlighter` (and its compiled query)
+/// survive across edits — only the cheap `parse_initial` on the slice
+/// re-runs.
+///
+/// Eviction policy: after each call the cache is pruned to only the
+/// languages that appeared in the *current* injection set, bounded by
+/// how many distinct languages a single document can embed (typically 1-3).
 #[derive(Default)]
 struct ChildCache {
-    map: HashMap<(String, usize, usize), CachedChild>,
+    map: HashMap<String, CachedChild>,
 }
 
 impl ChildCache {
-    /// Return the cached child for `(lang, start, end)` *if* its stored hash
-    /// matches `content_hash`.  On a hash miss the entry is evicted so the
-    /// caller can rebuild and re-insert.
-    fn get_if_fresh(
-        &mut self,
-        lang: &str,
-        start: usize,
-        end: usize,
-        content_hash: u64,
-    ) -> Option<&mut Highlighter> {
-        let key = (lang.to_string(), start, end);
-        // Check freshness without holding a mutable borrow across the remove path.
-        let fresh = self.map.get(&key).map(|c| c.source_hash == content_hash);
-        match fresh {
-            Some(true) => Some(&mut self.map.get_mut(&key).unwrap().highlighter),
-            Some(false) => {
-                // Content drifted — evict so we rebuild.
-                self.map.remove(&key);
-                None
-            }
-            None => None,
-        }
+    /// Return the cached child for `lang` *if* its stored hash matches
+    /// `content_hash`. On a hash miss returns `Some` anyway so the caller
+    /// can reuse the highlighter (skipping the expensive query compile)
+    /// and just re-parse the new slice. The `content_hash` is updated
+    /// at the insert site after re-parse.
+    fn get(&mut self, lang: &str) -> Option<&mut CachedChild> {
+        self.map.get_mut(lang)
     }
 
-    /// Insert a freshly built `Highlighter` for `(lang, start, end)`.
-    fn insert(
-        &mut self,
-        lang: String,
-        start: usize,
-        end: usize,
-        hl: Highlighter,
-        content_hash: u64,
-    ) {
+    /// Insert a freshly built `Highlighter` for `lang`.
+    fn insert(&mut self, lang: String, hl: Highlighter, content_hash: u64) {
         self.map.insert(
-            (lang, start, end),
+            lang,
             CachedChild {
                 highlighter: hl,
                 source_hash: content_hash,
@@ -187,10 +177,11 @@ impl ChildCache {
         );
     }
 
-    /// Remove every entry whose key is not in `keep`.  Called once per render
-    /// pass with the set of injections that were actually used, so stale
-    /// entries (code blocks that were deleted/scrolled away) don't accumulate.
-    fn evict_stale(&mut self, keep: &[(String, usize, usize)]) {
+    /// Remove every entry whose lang is not in `keep`. Called once per
+    /// render pass with the set of languages that were actually used,
+    /// so stale entries (e.g. a markdown doc that just lost its only
+    /// `rust` fence) don't accumulate.
+    fn evict_stale(&mut self, keep: &[String]) {
         self.map.retain(|k, _| keep.iter().any(|kk| kk == k));
     }
 }
@@ -742,54 +733,35 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Build the set of cache keys used this call so we can evict stale entries.
-        let cache_keys: Vec<(String, usize, usize)> = injections
-            .iter()
-            .map(|(lang, r)| (lang.clone(), r.start, r.end))
-            .collect();
+        // Cache keyed by language only — see ChildCache docs for the
+        // keystroke-lag rationale (range-keyed invalidated on every char).
+        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
 
-        // For each injection, reuse a cached child Highlighter when the content
-        // is unchanged, and fall back to a fresh parse otherwise.
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
-        // Track which byte ranges have child coverage for the merge step.
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
         for (lang_name, content_range) in &injections {
-            let Some(child_grammar) = resolve(lang_name) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
 
-            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
-                lang_name,
-                content_range.start,
-                content_range.end,
-                content_hash,
-            ) {
-                // Cache hit: skip grammar instantiation + re-parse.
-                tracing::trace!(
-                    lang = %lang_name,
-                    range = ?content_range,
-                    "child-hl cache hit"
-                );
-                child_hl.highlight_range(slice, 0..slice.len())
+            let child_raw = if let Some(cached) = self.child_cache.get(lang_name) {
+                if cached.source_hash != content_hash {
+                    cached.highlighter.parse_initial(slice);
+                    cached.source_hash = content_hash;
+                }
+                cached.highlighter.highlight_range(slice, 0..slice.len())
             } else {
-                // Cache miss: build a new child highlighter and parse.
+                let Some(child_grammar) = resolve(lang_name) else {
+                    continue;
+                };
                 let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
                 let spans = new_hl.highlight_range(slice, 0..slice.len());
-                // Store into cache for future calls.
-                self.child_cache.insert(
-                    lang_name.clone(),
-                    content_range.start,
-                    content_range.end,
-                    new_hl,
-                    content_hash,
-                );
+                self.child_cache
+                    .insert(lang_name.clone(), new_hl, content_hash);
                 spans
             };
 
@@ -803,8 +775,7 @@ impl Highlighter {
             injected_ranges.push(content_range.clone());
         }
 
-        // Evict child entries that were not used in this call.
-        self.child_cache.evict_stale(&cache_keys);
+        self.child_cache.evict_stale(&cache_langs);
 
         // Merge: keep parent spans that do NOT fall entirely within an injected range.
         // Spans that partially overlap are kept (rare edge case — see doc comment).
@@ -946,53 +917,43 @@ impl Highlighter {
             return parent_spans;
         }
 
-        // Build the set of cache keys used this call so we can evict stale entries.
-        let cache_keys: Vec<(String, usize, usize)> = injections
-            .iter()
-            .map(|(lang, r)| (lang.clone(), r.start, r.end))
-            .collect();
+        // Build the set of languages used this call so we can evict
+        // stale entries (cache is keyed by language only — see ChildCache
+        // docs for the keystroke-lag rationale).
+        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
 
-        // For each injection, reuse a cached child Highlighter when the content
-        // is unchanged, and fall back to a fresh parse otherwise.
+        // For each injection, reuse a cached child Highlighter when the
+        // language is the same. Re-parse the slice (cheap) instead of
+        // re-instantiating the highlighter (expensive — `compile_query`
+        // on `highlights.scm`).
         let mut child_spans: Vec<HighlightSpan> = Vec::new();
         let mut injected_ranges: Vec<Range<usize>> = Vec::new();
 
         for (lang_name, content_range) in &injections {
-            let Some(child_grammar) = resolve(lang_name) else {
-                continue;
-            };
             let slice = &source[content_range.clone()];
             let content_hash = hash_bytes(slice);
             let offset = content_range.start;
 
-            let child_raw = if let Some(child_hl) = self.child_cache.get_if_fresh(
-                lang_name,
-                content_range.start,
-                content_range.end,
-                content_hash,
-            ) {
-                // Cache hit: skip grammar instantiation + re-parse.
-                tracing::trace!(
-                    lang = %lang_name,
-                    range = ?content_range,
-                    "child-hl cache hit"
-                );
-                child_hl.highlight_range(slice, 0..slice.len())
+            let child_raw = if let Some(cached) = self.child_cache.get(lang_name) {
+                if cached.source_hash != content_hash {
+                    // Content changed: re-parse against the existing
+                    // (already-compiled) highlighter. `parse_initial`
+                    // replaces the retained tree.
+                    cached.highlighter.parse_initial(slice);
+                    cached.source_hash = content_hash;
+                }
+                cached.highlighter.highlight_range(slice, 0..slice.len())
             } else {
-                // Cache miss: build a new child highlighter and parse.
+                let Some(child_grammar) = resolve(lang_name) else {
+                    continue;
+                };
                 let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
                     continue;
                 };
                 new_hl.parse_initial(slice);
                 let spans = new_hl.highlight_range(slice, 0..slice.len());
-                // Store into cache for future calls.
-                self.child_cache.insert(
-                    lang_name.clone(),
-                    content_range.start,
-                    content_range.end,
-                    new_hl,
-                    content_hash,
-                );
+                self.child_cache
+                    .insert(lang_name.clone(), new_hl, content_hash);
                 spans
             };
 
@@ -1014,8 +975,8 @@ impl Highlighter {
             injected_ranges.push(content_range.clone());
         }
 
-        // Evict child entries that were not used in this call.
-        self.child_cache.evict_stale(&cache_keys);
+        // Evict child entries whose languages weren't used in this call.
+        self.child_cache.evict_stale(&cache_langs);
 
         // Merge: keep parent spans not entirely inside an injected range.
         let mut merged: Vec<HighlightSpan> = parent_spans
