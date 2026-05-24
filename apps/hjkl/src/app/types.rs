@@ -303,12 +303,6 @@ pub struct BufferSlot {
     /// to throttle the libgit2 diff to ~4 Hz during active typing on
     /// large files.
     pub(super) last_git_refresh_at: Instant,
-    /// Wall-clock time of the last syntax recompute+install.
-    pub(super) last_recompute_at: Instant,
-    /// `(dirty_gen, vp_top, vp_height)` snapshot of the last call to
-    /// `recompute_and_install`. When the next call has identical
-    /// inputs, the syntax span recompute + install is skipped.
-    pub(super) last_recompute_key: Option<(u64, usize, usize)>,
     /// Hash + byte-length of the buffer content as it was at the most
     /// recent save (or load).
     pub(super) saved_hash: u64,
@@ -319,39 +313,6 @@ pub struct BufferSlot {
     pub disk_len: Option<u64>,
     /// Whether the on-disk file is in sync, changed, or deleted.
     pub disk_state: DiskState,
-    /// Most recent completed viewport-scoped `RenderOutput` for this buffer.
-    /// Cached so a buffer switch can immediately re-install the last known
-    /// spans while a fresh parse runs in the background (T3 — per-slot
-    /// span cache). `None` until the first viewport parse result arrives.
-    pub(crate) viewport_render_output: Option<crate::syntax::RenderOutput>,
-    /// Per-row edit log: each entry is `(dirty_gen, row_range)` where
-    /// `dirty_gen` is the buffer's `dirty_gen` AFTER the edit landed and
-    /// `row_range` is the inclusive row range touched by that edit.
-    ///
-    /// Used by `merge_render_outputs` so rows untouched since a cache's
-    /// parse are still painted from the cache, avoiding the "white flash"
-    /// where ALL spans vanish until the background worker returns.
-    ///
-    /// Capped at 256 entries to bound memory on long sessions.
-    pub(crate) dirty_rows_log: Vec<(u64, std::ops::RangeInclusive<usize>)>,
-    /// Last `(dirty_gen, range_top, range_height)` the sync
-    /// `query_viewport` was run with per `ParseKind`. Used by
-    /// `sync_query_region` to skip work when nothing changed since the
-    /// previous tick — without this guard `recompute_and_install`
-    /// re-runs the highlight + merge + install pipeline on every event
-    /// loop iteration even when the buffer is idle, which shows up as
-    /// scroll lag on large files.
-    pub(crate) last_sync_viewport_key: Option<(u64, usize, usize)>,
-    /// Per-row span install cache. Tracks the row range that has had
-    /// spans installed via `patch_ratatui_syntax_spans_range` for the
-    /// current `dirty_gen`. When the next viewport read's row range
-    /// already lies inside this range, the sync walk is skipped —
-    /// j/k scrolling within a previously-walked area becomes free.
-    /// When the viewport extends past the range, only the *delta* rows
-    /// are walked (cost proportional to scroll distance, not viewport
-    /// size). Invalidated on `dirty_gen` change.
-    pub(crate) installed_spans_dg: Option<u64>,
-    pub(crate) installed_rows: Option<std::ops::Range<usize>>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

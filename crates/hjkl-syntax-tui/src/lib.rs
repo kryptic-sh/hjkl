@@ -8,11 +8,11 @@
 //! # Quick-start
 //!
 //! ```rust
-//! use hjkl_syntax::{DiagSign, RenderOutput, PerfBreakdown, ParseKind};
+//! use hjkl_syntax::{DiagSign, RenderOutput, PerfBreakdown};
 //! use hjkl_syntax_tui::{to_ratatui_spans, diag_signs_to_buffer_signs};
 //!
 //! // An empty output with no spans and no signs.
-//! let out = RenderOutput::new(0, vec![], vec![], (0, 0, 10), PerfBreakdown::new(), ParseKind::Viewport);
+//! let out = RenderOutput::new(0, vec![], vec![], (0, 0, 10), PerfBreakdown::new());
 //! let rows = to_ratatui_spans(&out.spans);
 //! assert!(rows.is_empty());
 //!
@@ -125,7 +125,7 @@ pub fn diag_signs_to_buffer_signs(signs: &[DiagSign]) -> Vec<Sign> {
 /// # Examples
 ///
 /// ```rust
-/// use hjkl_syntax::{RenderOutput, PerfBreakdown, ParseKind};
+/// use hjkl_syntax::{RenderOutput, PerfBreakdown};
 /// use hjkl_syntax_tui::render_output_to_tui;
 ///
 /// let out = RenderOutput::new(
@@ -134,7 +134,6 @@ pub fn diag_signs_to_buffer_signs(signs: &[DiagSign]) -> Vec<Sign> {
 ///     vec![],
 ///     (1, 0, 30),
 ///     PerfBreakdown::new(),
-///     ParseKind::Viewport,
 /// );
 /// let (spans, signs) = render_output_to_tui(&out);
 /// assert_eq!(spans.len(), 1);
@@ -155,7 +154,7 @@ pub fn render_output_to_tui(out: &RenderOutput) -> (Vec<Vec<(usize, usize, Style
 mod tests {
     use super::*;
     use hjkl_syntax::{
-        Color as ThemeColor, DiagSign, Modifiers, ParseKind, PerfBreakdown, RenderOutput, StyleSpec,
+        Color as ThemeColor, DiagSign, Modifiers, PerfBreakdown, RenderOutput, StyleSpec,
     };
     use ratatui::style::Modifier;
 
@@ -266,14 +265,7 @@ mod tests {
 
     #[test]
     fn render_output_to_tui_empty() {
-        let out = RenderOutput::new(
-            0,
-            vec![],
-            vec![],
-            (0, 0, 10),
-            PerfBreakdown::new(),
-            ParseKind::Viewport,
-        );
+        let out = RenderOutput::new(0, vec![], vec![], (0, 0, 10), PerfBreakdown::new());
         let (spans, signs) = render_output_to_tui(&out);
         assert!(spans.is_empty());
         assert!(signs.is_empty());
@@ -287,7 +279,6 @@ mod tests {
             vec![DiagSign::new(0, 'E', 100)],
             (3, 0, 10),
             PerfBreakdown::new(),
-            ParseKind::Viewport,
         );
         let (spans, signs) = render_output_to_tui(&out);
         assert_eq!(spans.len(), 1);

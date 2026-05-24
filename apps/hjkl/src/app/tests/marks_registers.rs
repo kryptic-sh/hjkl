@@ -1346,3 +1346,99 @@ fn count_then_dot_5_dot_repeats_five_times() {
         "5. must repeat x 5 more times; got {lines_after_dot:?}"
     );
 }
+
+/// Regression: `{count}p` (5p, 10p, 100p) must paste the register
+/// `count` times. Drives through `macro_key_seq` so it exercises the
+/// full event-loop digit-buffering path (handle_keypress →
+/// pending_count.try_accumulate → keymap dispatch).
+#[test]
+fn count_p_pastes_register_count_times() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "x");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // yy5p — linewise yank, then 5p.
+    macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('5'), ck('p')]);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.len(),
+        6,
+        "5p on a 1-line linewise yank must produce 6 lines (1 + 5); got {lines:?}"
+    );
+    assert!(
+        lines.iter().all(|l| l == "x"),
+        "every line should be 'x'; got {lines:?}"
+    );
+}
+
+/// Regression: counts with embedded zeros (10p, 100p) must accumulate
+/// correctly through the event-loop digit-buffering path.
+#[test]
+fn count_with_zero_digits_pastes_correctly() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "x");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // yy10p — linewise yank, then 10p.
+    macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('1'), ck('0'), ck('p')]);
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.len(),
+        11,
+        "10p must produce 11 lines (1 + 10); got {lines:?}"
+    );
+}
+
+/// Regression: charwise paste with count must also repeat. Charwise
+/// pastes take a different branch inside `do_paste` than linewise.
+#[test]
+fn count_p_charwise_yank_pastes_count_times() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abc");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    // yl5p — charwise yank one char, then 5p.
+    macro_key_seq(&mut app, &[ck('y'), ck('l'), ck('5'), ck('p')]);
+
+    let first_line = app
+        .active()
+        .editor
+        .buffer()
+        .lines()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    // Started with "abc", yanked 'a', `5p` pastes 'a' 5 times after cursor (col 0):
+    // "a" + "aaaaa" + "bc" = "aaaaaabc".
+    assert_eq!(
+        first_line, "aaaaaabc",
+        "5p of charwise 'a' must produce 'aaaaaabc'; got {first_line:?}"
+    );
+}
+
+/// Regression: three-digit counts (100p) must accumulate correctly.
+#[test]
+fn count_100p_pastes_100_times() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "x");
+    app.active_mut().editor.jump_cursor(0, 0);
+    app.sync_viewport_from_editor();
+
+    macro_key_seq(
+        &mut app,
+        &[ck('y'), ck('y'), ck('1'), ck('0'), ck('0'), ck('p')],
+    );
+
+    let lines = app.active().editor.buffer().lines().to_vec();
+    assert_eq!(
+        lines.len(),
+        101,
+        "100p must produce 101 lines (1 + 100); got {} lines",
+        lines.len()
+    );
+}

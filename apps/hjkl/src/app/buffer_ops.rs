@@ -1,6 +1,5 @@
 use hjkl_buffer::Buffer;
 use hjkl_engine::{Editor, Host, MarkJump, Options};
-use hjkl_engine_tui::EditorRatatuiExt;
 use std::path::PathBuf;
 
 use super::{App, DiskState, STATUS_LINE_HEIGHT};
@@ -38,58 +37,8 @@ impl App {
             vp.width = size.0;
             vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
         }
-        let buffer_id = self.active().buffer_id;
-        let (vp_top, vp_height) = {
-            let vp = self.active().editor.host().viewport();
-            (vp.top_row, vp.height as usize)
-        };
-
-        // T3: Re-install cached spans from the last completed viewport parse
-        // for this slot — gives the first frame after a buffer switch correct
-        // highlight colours while the fresh parse runs in the background.
-        // Drop the cache if dirty_gen has advanced (stale spans would show wrong highlights).
-        let cached_spans_installed = {
-            let current_dg = self.slots[idx].editor.buffer().dirty_gen();
-            // Check staleness: if the viewport cache exists, its dirty_gen must match.
-            let any_stale = self.slots[idx]
-                .viewport_render_output
-                .as_ref()
-                .is_some_and(|o| o.key.0 != current_dg);
-            if any_stale {
-                self.slots[idx].viewport_render_output = None;
-                false
-            } else {
-                let has_viewport = self.slots[idx].viewport_render_output.is_some();
-                if has_viewport {
-                    // Install the diag signs from the viewport cache (most recent live parse).
-                    if let Some(ref vp) = self.slots[idx].viewport_render_output {
-                        let signs = vp.signs.clone();
-                        self.slots[idx].diag_signs = signs;
-                    }
-                    if let Some(ref vp) = self.slots[idx].viewport_render_output {
-                        let spans = vp.spans.clone();
-                        self.slots[idx].editor.install_ratatui_syntax_spans(spans);
-                    }
-                }
-                has_viewport
-            }
-        };
-
-        // Fall back to the cheap preview render when no valid cache.
-        if !cached_spans_installed
-            && let Some(out) = self.syntax.preview_render(
-                buffer_id,
-                self.active().editor.buffer(),
-                vp_top,
-                vp_height,
-            )
-        {
-            self.active_mut()
-                .editor
-                .install_ratatui_syntax_spans(out.spans);
-        }
-
-        self.active_mut().last_recompute_key = None;
+        // recompute_and_install runs render_viewport sync (post fully-sync
+        // refactor) — no need for a preview_render warm-up paint.
         self.recompute_and_install();
         self.refresh_git_signs_force();
     }
@@ -164,8 +113,6 @@ impl App {
             slot.diag_signs.clear();
             slot.git_signs.clear();
             slot.last_git_dirty_gen = None;
-            slot.last_recompute_key = None;
-            slot.viewport_render_output = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;
@@ -265,8 +212,6 @@ impl App {
             slot.diag_signs.clear();
             slot.git_signs.clear();
             slot.last_git_dirty_gen = None;
-            slot.last_recompute_key = None;
-            slot.viewport_render_output = None;
             slot.saved_hash = 0;
             slot.saved_len = 0;
             slot.disk_mtime = None;

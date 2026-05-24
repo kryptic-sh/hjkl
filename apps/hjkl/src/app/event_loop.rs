@@ -1316,8 +1316,6 @@ impl App {
                         self.active_mut()
                             .editor
                             .shift_syntax_spans_for_edits(&edits);
-                        let active_idx = self.focused_slot_idx();
-                        self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
                     }
                     self.lsp_notify_change_active();
                     self.recompute_and_install();
@@ -1380,8 +1378,6 @@ impl App {
                                     self.active_mut()
                                         .editor
                                         .shift_syntax_spans_for_edits(&edits);
-                                    let aidx = self.focused_slot_idx();
-                                    self.shift_cached_render_output_spans_for_slot(aidx, &edits);
                                 }
                                 self.lsp_notify_change_active();
                                 self.pending_recompute = true;
