@@ -473,12 +473,15 @@ pub struct Editor<
     /// ([`Editor::buffer_mark`], [`Editor::last_jump_back`],
     /// [`Editor::last_edit_pos`], [`Editor::take_lsp_intent`], …).
     pub(crate) vim: VimState,
-    /// Undo history: each entry is (lines, cursor) before the edit.
-    /// Internal — managed by [`Editor::push_undo`] / [`Editor::restore`]
-    /// / [`Editor::pop_last_undo`].
-    pub(crate) undo_stack: Vec<(Vec<String>, (usize, usize))>,
+    /// Undo history: each entry is `(joined_document, cursor)` before the
+    /// edit. Stored as `Arc<String>` so it shares the
+    /// `Buffer::content_joined` cache — push_undo is an `Arc::clone`
+    /// (one ptr bump) when LSP / git / syntax already joined this
+    /// generation. Previously this held `Vec<String>` and paid 162 k
+    /// per-line allocations on a 162 k-row buffer per snapshot.
+    pub(crate) undo_stack: Vec<(std::sync::Arc<String>, (usize, usize))>,
     /// Redo history: entries pushed when undoing.
-    pub(super) redo_stack: Vec<(Vec<String>, (usize, usize))>,
+    pub(super) redo_stack: Vec<(std::sync::Arc<String>, (usize, usize))>,
     /// Set whenever the buffer content changes; cleared by `take_dirty`.
     pub(super) content_dirty: bool,
     /// Cached snapshot of `lines().join("\n") + "\n"` wrapped in an Arc
@@ -2895,9 +2898,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.mark_content_dirty();
     }
 
-    pub(super) fn snapshot(&self) -> (Vec<String>, (usize, usize)) {
+    /// Capture the buffer state for undo / redo.  Uses
+    /// [`Query::content_joined`], which the `Buffer` impl caches as an
+    /// `Arc<String>` against `dirty_gen` — so when LSP / git / syntax
+    /// already joined this generation, the snapshot is an `Arc::clone`
+    /// (one ptr bump). Previously this cloned every line into a
+    /// `Vec<String>` (162 k allocations on a 162 k-row buffer) and the
+    /// matching `restore` re-joined them — samply showed it at ~9 % of
+    /// CPU on a big-paste session.
+    pub(super) fn snapshot(&self) -> (std::sync::Arc<String>, (usize, usize)) {
+        use crate::types::Query;
         let rc = buf_cursor_rc(&self.buffer);
-        (buf_lines_to_vec(&self.buffer), rc)
+        (Query::content_joined(&self.buffer), rc)
     }
 
     /// Walk one step back through the undo history. Equivalent to the
@@ -2956,15 +2968,27 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// that revert a large paste now refresh in ~1ms per affected
     /// row instead of a ~30ms full-viewport sync walk.
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
-        use crate::types::Query as _;
         let text = lines.join("\n");
+        self.restore_text(&text, cursor);
+    }
+
+    /// Variant of [`Self::restore`] that takes the already-joined
+    /// document text. Used by undo / redo because the snapshot is held
+    /// as `Arc<String>` (shared with `Buffer::content_joined`) — passing
+    /// it through avoids a `Vec<String>` round-trip and a re-join.
+    pub fn restore_arc(&mut self, text: std::sync::Arc<String>, cursor: (usize, usize)) {
+        self.restore_text(&text, cursor);
+    }
+
+    fn restore_text(&mut self, text: &str, cursor: (usize, usize)) {
+        use crate::types::Query as _;
         let old_len_bytes = self.buffer.len_bytes();
         let old_row_count = buf_row_count(&self.buffer);
         let old_last_row = old_row_count.saturating_sub(1);
         let old_last_col = buf_line(&self.buffer, old_last_row)
             .map(|s| s.len())
             .unwrap_or(0);
-        crate::types::BufferEdit::replace_all(&mut self.buffer, &text);
+        crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
         let new_len_bytes = self.buffer.len_bytes();
         let new_row_count = buf_row_count(&self.buffer);
@@ -5837,6 +5861,36 @@ mod shift_syntax_spans_tests {
              reintroduction of the O(N²) per-row insert loop)"
         );
         assert_eq!(e.buffer_spans().len(), 60_008);
+    }
+
+    /// Regression: `push_undo` used to clone every line into a
+    /// `Vec<String>` (162 k heap allocations on a 162 k-row buffer per
+    /// snapshot). Now stores an `Arc<String>` shared with
+    /// `Buffer::content_joined`'s per-dirty_gen cache — a warm snapshot
+    /// is an `Arc::clone` (one ptr bump).
+    ///
+    /// Test: snapshot a 60 k-row buffer 100 times. With the Arc impl
+    /// this is essentially free (one join then 99 Arc::clones). The
+    /// old `Vec<String>` impl required 60 k allocations per call =
+    /// 6 M allocations, easily seconds even on release.
+    #[test]
+    fn push_undo_snapshot_arc_clone_is_under_100ms_for_100_snapshots() {
+        use crate::types::{DefaultHost, Options};
+        let text = "x\n".repeat(60_000);
+        let buf = hjkl_buffer::Buffer::from_str(&text);
+        let mut e = Editor::new(buf, DefaultHost::default(), Options::default());
+        // Warm the cache: one join, subsequent snapshots Arc::clone it.
+        e.push_undo();
+        let t = std::time::Instant::now();
+        for _ in 0..100 {
+            e.push_undo();
+        }
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 100,
+            "100 snapshots of a 60k-row buffer took {elapsed:?}; budget \
+             100 ms. Likely regressed to per-line cloning."
+        );
     }
 }
 
