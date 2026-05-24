@@ -203,6 +203,13 @@ pub struct RenderOutput {
     /// Which region this result covers — used by the install path to route
     /// into the correct per-slot cache field.
     pub kind: ParseKind,
+    /// Byte ranges that tree-sitter reports as structurally changed
+    /// between the prior retained tree (with edits applied) and the
+    /// freshly-parsed tree. Empty on initial parse or when no structural
+    /// change occurred. The app uses this to refresh only the rows that
+    /// actually changed instead of re-walking the full viewport (the
+    /// remaining 25ms per keystroke).
+    pub changed_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl RenderOutput {
@@ -231,6 +238,7 @@ impl RenderOutput {
             key,
             perf,
             kind,
+            changed_ranges: Vec::new(),
         }
     }
 }
@@ -805,7 +813,7 @@ fn run_parse_and_emit(
 ) -> Option<()> {
     use std::time::Instant;
     let bytes = req.source.as_bytes();
-    let (perf, did_parse) = with_buffer(buffers, req.buffer_id, |state| {
+    let (perf, did_parse, changed_ranges) = with_buffer(buffers, req.buffer_id, |state| {
         let h = &mut state.highlighter;
         let mut perf = PerfBreakdown::default();
         if req.reset {
@@ -814,25 +822,27 @@ fn run_parse_and_emit(
         }
         let needs_parse = h.tree().is_none() || state.last_parsed_dirty_gen != Some(req.dirty_gen);
         if !needs_parse {
-            return Some((perf, false));
+            return Some((perf, false, Vec::new()));
         }
         let t = Instant::now();
         let was_initial = h.tree().is_none();
-        let parsed_ok = if was_initial {
+        let changes: Vec<std::ops::Range<usize>> = if was_initial {
             h.parse_initial(bytes);
-            true
+            Vec::new()
         } else {
-            h.parse_incremental(bytes)
+            match h.parse_incremental_with_changes(bytes) {
+                Some(c) => c,
+                None => {
+                    tracing::debug!(
+                        target: "hjkl::profile",
+                        buffer_id = ?req.buffer_id,
+                        bytes_len = bytes.len(),
+                        "worker parse FAILED"
+                    );
+                    return None;
+                }
+            }
         };
-        if !parsed_ok {
-            tracing::debug!(
-                target: "hjkl::profile",
-                buffer_id = ?req.buffer_id,
-                bytes_len = bytes.len(),
-                "worker parse FAILED"
-            );
-            return None;
-        }
         perf.parse_us = t.elapsed().as_micros();
         tracing::debug!(
             target: "hjkl::profile",
@@ -842,11 +852,12 @@ fn run_parse_and_emit(
             was_initial,
             dg = req.dirty_gen,
             kind = ?req.kind,
+            changed_count = changes.len(),
             "worker parse done"
         );
         state.last_parsed_dirty_gen = Some(req.dirty_gen);
         let _ = directory;
-        Some((perf, true))
+        Some((perf, true, changes))
     })??;
 
     // Only emit the "tree updated" signal when we actually reparsed.
@@ -866,6 +877,7 @@ fn run_parse_and_emit(
         key,
         perf,
         kind: req.kind,
+        changed_ranges,
     });
     Some(())
 }
@@ -1336,6 +1348,7 @@ impl SyntaxLayer {
                 key: (dirty_gen, viewport_top, viewport_height),
                 perf,
                 kind,
+                changed_ranges: Vec::new(),
             })
         })
         .flatten()
@@ -1422,6 +1435,7 @@ impl SyntaxLayer {
             key: (buffer.dirty_gen(), viewport_top, viewport_height),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         })
     }
 

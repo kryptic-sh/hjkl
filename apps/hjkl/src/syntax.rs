@@ -49,6 +49,10 @@ pub struct RenderOutput {
     pub perf: PerfBreakdown,
     /// Which region this result covers (Viewport / Top / Bottom).
     pub kind: ParseKind,
+    /// Byte ranges tree-sitter reports as structurally changed since
+    /// the prior retained tree (forwarded from
+    /// [`hjkl_syntax::RenderOutput::changed_ranges`]).
+    pub changed_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl PartialEq for RenderOutput {
@@ -76,6 +80,7 @@ fn convert_output(raw: hjkl_syntax::RenderOutput) -> RenderOutput {
         key: raw.key,
         perf: raw.perf,
         kind: raw.kind,
+        changed_ranges: raw.changed_ranges,
     }
 }
 

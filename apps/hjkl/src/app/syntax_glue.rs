@@ -274,25 +274,105 @@ impl App {
             }
             match out.kind {
                 crate::syntax::ParseKind::Viewport => {
-                    // Worker just refreshed the retained tree. The
-                    // sync query that ran during the keystroke was
-                    // deferred (tree was dirty); now the tree is
-                    // fresh, refresh the install cache.
+                    // Worker just refreshed the retained tree. The sync
+                    // query that ran during the keystroke was deferred
+                    // (tree was dirty); now the tree is fresh, refresh
+                    // the install cache.
                     //
-                    // Clear `installed_spans_dg` + `installed_rows` so
-                    // the sync_query_region call below falls through
-                    // to a real walk (without this, the "defer when
-                    // dg mismatches" branch in sync_query_region
-                    // would short-circuit forever — chicken/egg).
+                    // Use the `changed_ranges` tree-sitter reports
+                    // between the pre-edit tree and the post-parse tree
+                    // to walk only the row regions that actually
+                    // changed — typically one row for single-char
+                    // typing, vs a full ~25ms viewport walk. Rows
+                    // outside `changed_ranges` keep their existing
+                    // installed spans (tree-sitter says they didn't
+                    // change so they're still correct).
                     self.slots[slot_idx].last_sync_viewport_key = None;
-                    self.slots[slot_idx].installed_spans_dg = None;
-                    self.slots[slot_idx].installed_rows = None;
                     let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
                     let (vp_top, vp_height) = {
                         let vp = self.active().editor.host().viewport();
                         (vp.top_row, vp.height as usize)
                     };
-                    self.sync_query_region(out.buffer_id, vp_top, vp_height, buf_dg, out.kind);
+                    let vp_byte_to_row = |bytes: &[usize], byte: usize| {
+                        bytes.partition_point(|&b| b <= byte).saturating_sub(1)
+                    };
+                    if out.changed_ranges.is_empty() {
+                        // Cold parse or no structural change → full
+                        // viewport refresh. Clear the per-row cache so
+                        // the sync_query_region walk fires.
+                        self.slots[slot_idx].installed_spans_dg = None;
+                        self.slots[slot_idx].installed_rows = None;
+                        self.sync_query_region(
+                            out.buffer_id,
+                            vp_top,
+                            vp_height,
+                            buf_dg,
+                            out.kind,
+                        );
+                    } else if let Some((_, row_starts, _, cache_dg)) =
+                        self.syntax.cached_source(out.buffer_id)
+                        && cache_dg == buf_dg
+                    {
+                        // Take the existing installed_rows as the
+                        // "previously-walked" coverage. Rows outside
+                        // the changed_ranges keep their old spans
+                        // (tree-sitter says they didn't change so
+                        // they're still correct). We just need to
+                        // re-walk + install the rows INSIDE the
+                        // changed_ranges, then bump installed_spans_dg
+                        // to current — coverage stays the same, dg
+                        // advances.
+                        let row_starts = row_starts.as_ref();
+                        let prior_installed = self.slots[slot_idx].installed_rows.clone();
+                        for r in &out.changed_ranges {
+                            let row_start = vp_byte_to_row(row_starts, r.start);
+                            let row_end =
+                                vp_byte_to_row(row_starts, r.end.saturating_sub(1)) + 1;
+                            // Clamp to the prior installed range — no
+                            // point walking rows we never had spans
+                            // for; they'll be walked on demand when
+                            // the user scrolls to them. Walking the
+                            // full edit range on paste would be huge.
+                            let (clamp_start, clamp_end) = match &prior_installed {
+                                Some(r) => (r.start, r.end),
+                                None => (vp_top, vp_top + vp_height),
+                            };
+                            let row_start = row_start.max(clamp_start);
+                            let row_end = row_end.min(clamp_end);
+                            if row_start >= row_end {
+                                continue;
+                            }
+                            let _ = self.sync_query_changed_rows(
+                                out.buffer_id,
+                                slot_idx,
+                                row_start,
+                                row_end - row_start,
+                                buf_dg,
+                            );
+                        }
+                        // Coverage unchanged, dg advanced. Force the
+                        // next sync_query_region call (the one
+                        // immediately following from recompute) to
+                        // see a fresh dedup key so it re-checks the
+                        // row cache.
+                        self.slots[slot_idx].installed_spans_dg = Some(buf_dg);
+                        if self.slots[slot_idx].installed_rows.is_none() {
+                            self.slots[slot_idx].installed_rows =
+                                Some(vp_top..(vp_top + vp_height));
+                        }
+                        self.slots[slot_idx].last_sync_viewport_key = None;
+                    } else {
+                        // Source cache stale — fall back to full refresh.
+                        self.slots[slot_idx].installed_spans_dg = None;
+                        self.slots[slot_idx].installed_rows = None;
+                        self.sync_query_region(
+                            out.buffer_id,
+                            vp_top,
+                            vp_height,
+                            buf_dg,
+                            out.kind,
+                        );
+                    }
                     return true;
                 }
                 _ => return false,
@@ -379,6 +459,67 @@ impl App {
         }
         // Non-active buffer: cached above, live install deferred to switch_to.
         false
+    }
+
+    /// Walk + install spans for a specific row range, bypassing the
+    /// per-row install cache. Used by the changed-ranges refresh path
+    /// in `install_render_result`: after the worker delivers, walk
+    /// only the rows tree-sitter reports as structurally changed
+    /// rather than re-walking the full viewport.
+    fn sync_query_changed_rows(
+        &mut self,
+        buffer_id: crate::syntax::BufferId,
+        slot_idx: usize,
+        row_top: usize,
+        row_height: usize,
+        current_dg: u64,
+    ) -> bool {
+        let _ = slot_idx;
+        let Some((source, row_starts, line_count_arc, cache_dg)) =
+            self.syntax.cached_source(buffer_id)
+        else {
+            return false;
+        };
+        if cache_dg != current_dg {
+            return false;
+        }
+        let bytes_len = source.len();
+        let byte_start = row_starts.get(row_top).copied().unwrap_or(bytes_len);
+        let end_row = row_top + row_height + 1;
+        let byte_end = row_starts
+            .get(end_row)
+            .copied()
+            .unwrap_or(bytes_len)
+            .min(bytes_len)
+            .max(byte_start);
+        let t_q = Instant::now();
+        let sync_out = self.syntax.query_viewport(
+            buffer_id,
+            source.as_str(),
+            row_starts.as_ref(),
+            byte_start..byte_end,
+            row_top,
+            row_height,
+            line_count_arc,
+            current_dg,
+            crate::syntax::ParseKind::Viewport,
+        );
+        let q_us = t_q.elapsed().as_micros();
+        let installed = if let Some(sync_out) = sync_out {
+            self.install_render_result(sync_out);
+            true
+        } else {
+            false
+        };
+        tracing::debug!(
+            target: "hjkl::profile",
+            row_top, row_height,
+            byte_len = byte_end - byte_start,
+            q_us,
+            installed,
+            "sync_query changed-rows"
+        );
+        installed
     }
 
     /// Run a sync `query_viewport` against the active buffer's retained
@@ -1249,6 +1390,7 @@ mod tests {
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
             kind: crate::syntax::ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
 
         let installed = app.install_render_result(stale);
@@ -1284,6 +1426,7 @@ mod tests {
             key: (0, 0, 0),
             perf: PerfBreakdown::default(),
             kind: crate::syntax::ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
         let installed = app.install_render_result(fresh);
         assert!(installed, "matching buffer_id must install");
@@ -1355,6 +1498,7 @@ mod tests {
             key: (slot1_dg, 0, 0),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
 
         // Active slot is still slot 0 — install must NOT touch it.
@@ -1417,6 +1561,7 @@ mod tests {
             key: (current_dg, 0, 40),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         });
 
         // Switch to slot 1 — cached spans should be installed immediately.
@@ -1457,6 +1602,7 @@ mod tests {
             key: (stale_dg, 0, 40),
             perf: PerfBreakdown::default(),
             kind: ParseKind::Viewport,
+            changed_ranges: Vec::new(),
         };
         app.slots_mut()[slot1_idx].viewport_render_output = Some(stale_out);
 

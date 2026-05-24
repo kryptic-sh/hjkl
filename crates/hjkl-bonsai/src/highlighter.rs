@@ -392,14 +392,36 @@ impl Highlighter {
     /// `highlight_range` walks the tree (via `QueryCursor::set_byte_range`)
     /// on every call; no post-parse cache update is needed here.
     pub fn parse_incremental(&mut self, source: &[u8]) -> bool {
+        self.parse_incremental_with_changes(source).is_some()
+    }
+
+    /// Like `parse_incremental` but on success returns the byte ranges
+    /// tree-sitter reports as structurally changed between the prior
+    /// retained tree (with `tree.edit` deltas already applied via
+    /// [`Highlighter::edit`]) and the freshly-parsed tree. Empty on
+    /// initial parse (no prior tree to diff against). Returns `None` on
+    /// parse failure / timeout.
+    pub fn parse_incremental_with_changes(
+        &mut self,
+        source: &[u8],
+    ) -> Option<Vec<Range<usize>>> {
+        let old_tree = self.tree.clone();
         if self.parse_timeout_micros == 0 {
             let result = self.parser.parse(source, self.tree.as_ref());
             return match result {
                 Some(t) => {
+                    let changes: Vec<Range<usize>> = old_tree
+                        .as_ref()
+                        .map(|old| {
+                            old.changed_ranges(&t)
+                                .map(|r| r.start_byte..r.end_byte)
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     self.tree = Some(t);
-                    true
+                    Some(changes)
                 }
-                None => false,
+                None => None,
             };
         }
         let deadline = Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros);
@@ -425,10 +447,18 @@ impl Highlighter {
         );
         match result {
             Some(t) => {
+                let changes: Vec<Range<usize>> = old_tree
+                    .as_ref()
+                    .map(|old| {
+                        old.changed_ranges(&t)
+                            .map(|r| r.start_byte..r.end_byte)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 self.tree = Some(t);
-                true
+                Some(changes)
             }
-            None => false,
+            None => None,
         }
     }
 
