@@ -521,6 +521,8 @@ pub(super) fn build_slot(
         disk_state: DiskState::Synced,
         viewport_render_output: None,
         last_sync_viewport_key: None,
+            installed_spans_dg: None,
+            installed_rows: None,
         dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();

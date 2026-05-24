@@ -342,6 +342,16 @@ pub struct BufferSlot {
     /// loop iteration even when the buffer is idle, which shows up as
     /// scroll lag on large files.
     pub(crate) last_sync_viewport_key: Option<(u64, usize, usize)>,
+    /// Per-row span install cache. Tracks the row range that has had
+    /// spans installed via `patch_ratatui_syntax_spans_range` for the
+    /// current `dirty_gen`. When the next viewport read's row range
+    /// already lies inside this range, the sync walk is skipped —
+    /// j/k scrolling within a previously-walked area becomes free.
+    /// When the viewport extends past the range, only the *delta* rows
+    /// are walked (cost proportional to scroll distance, not viewport
+    /// size). Invalidated on `dirty_gen` change.
+    pub(crate) installed_spans_dg: Option<u64>,
+    pub(crate) installed_rows: Option<std::ops::Range<usize>>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

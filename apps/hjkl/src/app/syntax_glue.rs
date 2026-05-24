@@ -275,20 +275,18 @@ impl App {
             match out.kind {
                 crate::syntax::ParseKind::Viewport => {
                     // Worker just refreshed the retained tree. The
-                    // parent-spans cache is gone (bonsai cache redesign);
-                    // `highlight_range` now walks the tree on every call.
-                    // The sync query that ran before the worker delivered
-                    // walked against the pre-parse tree — now that the tree
-                    // is fresh we must re-run to pick up the new structure.
-                    // Without this the editor paints stale spans until the
-                    // next user event triggers `recompute_and_install`.
+                    // sync query that ran during the keystroke was
+                    // deferred (tree was dirty); now the tree is
+                    // fresh, refresh the install cache.
                     //
-                    // Use the VISIBLE viewport (not `out.key.1/2` which
-                    // is the worker's 3x over-provisioned range, ~168
-                    // rows / 7KB) — that's the only region painted right
-                    // now, and a 3x-size sync query on every worker
-                    // delivery costs ~1.5ms each, visible as typing lag.
+                    // Clear `installed_spans_dg` + `installed_rows` so
+                    // the sync_query_region call below falls through
+                    // to a real walk (without this, the "defer when
+                    // dg mismatches" branch in sync_query_region
+                    // would short-circuit forever — chicken/egg).
                     self.slots[slot_idx].last_sync_viewport_key = None;
+                    self.slots[slot_idx].installed_spans_dg = None;
+                    self.slots[slot_idx].installed_rows = None;
                     let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
                     let (vp_top, vp_height) = {
                         let vp = self.active().editor.host().viewport();
@@ -420,6 +418,74 @@ impl App {
             return true;
         }
 
+        // Per-row install cache: when the new viewport's row range is
+        // already fully covered by previously-installed rows for the
+        // current dirty_gen, skip the walk entirely (j/k within an
+        // already-walked region is free). Otherwise walk only the
+        // *delta* rows — the parts of the new viewport that aren't yet
+        // installed. Scroll-by-one then costs one row's worth of
+        // tree-sitter walk, not a full 55-row viewport walk.
+        let vp_range = range_top..(range_top + range_height);
+        let cached_dg_opt = self.slots[slot_idx].installed_spans_dg;
+        let cached_for_dg = matches!(kind, crate::syntax::ParseKind::Viewport)
+            && cached_dg_opt == Some(current_dg);
+
+        // Typing path: dg bumped since last walk AND we have a prior
+        // install. Tree was just edited (tree.edit synced) but the
+        // worker reparse is in flight. Walking the dirty tree here
+        // would block the key handler ~30-50ms per char and return
+        // partial results. Instead, leave the row-shifted installed
+        // spans visible for one frame; worker delivery will trigger
+        // `install_render_result`'s Viewport branch, which re-runs
+        // this method against the freshly-parsed tree.
+        if matches!(kind, crate::syntax::ParseKind::Viewport)
+            && cached_dg_opt.is_some()
+            && cached_dg_opt != Some(current_dg)
+        {
+            tracing::debug!(
+                target: "hjkl::profile",
+                cached_dg = ?cached_dg_opt,
+                current_dg,
+                "sync_query defer (tree dirty)"
+            );
+            // Update dedup so we don't keep re-checking the same key.
+            self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+            return true;
+        }
+
+        let cached_rows = if cached_for_dg {
+            self.slots[slot_idx].installed_rows.clone()
+        } else {
+            None
+        };
+        let walk_ranges: Vec<std::ops::Range<usize>> = match cached_rows.as_ref() {
+            Some(installed) if installed.start <= vp_range.start && installed.end >= vp_range.end => {
+                // Fully covered — no walk needed. Update dedup key so
+                // subsequent identical calls also short-circuit.
+                tracing::debug!(
+                    target: "hjkl::profile",
+                    ?kind, range_top, range_height, current_dg,
+                    installed_start = installed.start, installed_end = installed.end,
+                    "sync_query row-cache hit"
+                );
+                if let crate::syntax::ParseKind::Viewport = kind {
+                    self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+                }
+                return true;
+            }
+            Some(installed) => {
+                let mut deltas = Vec::with_capacity(2);
+                if vp_range.start < installed.start {
+                    deltas.push(vp_range.start..installed.start.min(vp_range.end));
+                }
+                if vp_range.end > installed.end {
+                    deltas.push(installed.end.max(vp_range.start)..vp_range.end);
+                }
+                deltas
+            }
+            None => vec![vp_range.clone()],
+        };
+
         let t_sync = Instant::now();
         let Some((source, row_starts, line_count_arc, cache_dg)) =
             self.syntax.cached_source(buffer_id)
@@ -430,49 +496,75 @@ impl App {
             return false;
         }
         let bytes_len = source.len();
-        let vp_start = row_starts.get(range_top).copied().unwrap_or(bytes_len);
-        let vp_end_row = range_top + range_height + 1;
-        let vp_end = row_starts
-            .get(vp_end_row)
-            .copied()
-            .unwrap_or(bytes_len)
-            .min(bytes_len)
-            .max(vp_start);
-        let byte_len = vp_end - vp_start;
-        let t_q = Instant::now();
-        let sync_out = self.syntax.query_viewport(
-            buffer_id,
-            source.as_str(),
-            row_starts.as_ref(),
-            vp_start..vp_end,
-            range_top,
-            range_height,
-            line_count_arc,
-            current_dg,
-            kind,
-        );
-        let q_us = t_q.elapsed().as_micros();
-        if let Some(sync_out) = sync_out {
-            let t_install = Instant::now();
-            self.install_render_result(sync_out);
-            let install_us = t_install.elapsed().as_micros();
-            tracing::debug!(
-                target: "hjkl::profile",
-                ?kind, range_top, range_height, byte_len,
-                q_us, install_us,
-                total_us = t_sync.elapsed().as_micros(),
-                "sync_query miss"
-            );
-            // Mark this `(buffer, kind, key)` as done so the next idle
-            // tick short-circuits before re-running the highlight +
-            // merge + install pipeline.
-            if let crate::syntax::ParseKind::Viewport = kind {
-                self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+
+        let mut installed_any = false;
+        let mut total_q_us: u128 = 0;
+        let mut total_install_us: u128 = 0;
+        let mut total_byte_len: usize = 0;
+        for delta in &walk_ranges {
+            if delta.start >= delta.end {
+                continue;
             }
-            true
-        } else {
-            false
+            let d_byte_start = row_starts.get(delta.start).copied().unwrap_or(bytes_len);
+            let d_end_row = delta.end + 1;
+            let d_byte_end = row_starts
+                .get(d_end_row)
+                .copied()
+                .unwrap_or(bytes_len)
+                .min(bytes_len)
+                .max(d_byte_start);
+            total_byte_len += d_byte_end - d_byte_start;
+            let t_q = Instant::now();
+            let sync_out = self.syntax.query_viewport(
+                buffer_id,
+                source.as_str(),
+                row_starts.as_ref(),
+                d_byte_start..d_byte_end,
+                delta.start,
+                delta.end - delta.start,
+                line_count_arc,
+                current_dg,
+                kind,
+            );
+            total_q_us += t_q.elapsed().as_micros();
+            if let Some(sync_out) = sync_out {
+                let t_install = Instant::now();
+                self.install_render_result(sync_out);
+                total_install_us += t_install.elapsed().as_micros();
+                installed_any = true;
+            }
         }
+
+        if !installed_any {
+            return false;
+        }
+
+        tracing::debug!(
+            target: "hjkl::profile",
+            ?kind, range_top, range_height,
+            byte_len = total_byte_len,
+            delta_count = walk_ranges.len(),
+            q_us = total_q_us,
+            install_us = total_install_us,
+            total_us = t_sync.elapsed().as_micros(),
+            "sync_query miss"
+        );
+
+        if let crate::syntax::ParseKind::Viewport = kind {
+            self.slots[slot_idx].last_sync_viewport_key = Some(new_key);
+            // Extend the per-row install cache to cover the full viewport
+            // (existing installed range ∪ new vp range). Single-range
+            // representation keeps the membership check O(1).
+            let new_installed = match cached_rows {
+                Some(existing) => {
+                    existing.start.min(vp_range.start)..existing.end.max(vp_range.end)
+                }
+                None => vp_range,
+            };
+            self.slots[slot_idx].installed_spans_dg = Some(current_dg);
+            self.slots[slot_idx].installed_rows = Some(new_installed);
+        }
+        true
     }
 
     /// Run sync `query_viewport` for the active buffer's Viewport region
@@ -530,6 +622,8 @@ impl App {
         // skipped if the new dirty_gen + viewport happen to match a
         // pre-reset key.
         slot.last_sync_viewport_key = None;
+        slot.installed_spans_dg = None;
+        slot.installed_rows = None;
         slot.editor.install_ratatui_syntax_spans(Vec::new());
     }
 
