@@ -1323,9 +1323,6 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Perf overlay status line is rendered as a floating panel via
-    // `perf_overlay_panel` — see the main render() function.
-
     // ── Macro recording indicator ───────────────────────────────────────────
     // Vim shows "recording @r" while `q{reg}` is active. Render it as a
     // status-message-equivalent so it visually pre-empts the lualine row,

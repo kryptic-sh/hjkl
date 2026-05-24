@@ -1263,26 +1263,6 @@ fn colon_clipboard_via_host_registry() {
 // ── Phase 4d2: misc host-registry tests ──────────────────────────────────────
 
 #[test]
-fn colon_perf_toggles_overlay_on() {
-    let mut app = App::new(None, false, None, None).unwrap();
-    assert!(!app.perf_overlay, "perf_overlay must start off");
-    app.dispatch_ex("perf");
-    assert!(app.perf_overlay, ":perf must enable perf_overlay");
-    let msg = app.bus.last_body_or_empty().to_string();
-    assert!(msg.contains("on"), ":perf status must say 'on'");
-}
-
-#[test]
-fn colon_perf_toggles_overlay_off() {
-    let mut app = App::new(None, false, None, None).unwrap();
-    app.perf_overlay = true;
-    app.dispatch_ex("perf");
-    assert!(!app.perf_overlay, ":perf must disable perf_overlay");
-    let msg = app.bus.last_body_or_empty().to_string();
-    assert!(msg.contains("off"), ":perf status must say 'off'");
-}
-
-#[test]
 fn colon_picker_via_host_registry() {
     let mut app = App::new(None, false, None, None).unwrap();
     assert!(app.picker.is_none(), "picker must start None");

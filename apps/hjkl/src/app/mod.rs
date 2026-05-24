@@ -206,10 +206,6 @@ pub struct App {
     /// preview-only highlight path.
     pub(crate) preview_highlighters:
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
-    /// Toggled by `:perf`. When true, the tracing filter is reloaded so
-    /// every `target: "hjkl::profile"` debug event lands in the log file.
-    /// No on-screen overlay — see [`crate::perf`] for the reload handle.
-    pub perf_overlay: bool,
     /// Toggled by `:syntax on|off`. When false, the bonsai syntax pipeline
     /// is bypassed: spans stay empty, no submit_render fires, and
     /// `recompute_and_install` returns immediately. Re-enabling re-attaches
@@ -1179,7 +1175,6 @@ impl App {
             directory,
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
-            perf_overlay: false,
             syntax_enabled: true,
             pending_recompute: false,
             last_recompute_us: 0,

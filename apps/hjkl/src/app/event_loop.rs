@@ -1290,7 +1290,6 @@ impl App {
                     // Insert mode uses the inline dispatcher which calls
                     // Editor::insert_* primitives directly. Normal / Visual
                     // modes route through the FSM via hjkl_vim_tui::handle_key.
-                    let t_dispatch = std::time::Instant::now();
                     let mode_was_insert = self.active().editor.vim_mode() == VimMode::Insert;
                     if mode_was_insert {
                         self.dispatch_insert_key(key);
@@ -1298,9 +1297,7 @@ impl App {
                     } else {
                         hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
                     }
-                    let dispatch_us = t_dispatch.elapsed().as_micros();
 
-                    let t_after = std::time::Instant::now();
                     self.sync_viewport_from_editor();
                     if self.active_mut().editor.take_dirty() {
                         let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -1314,43 +1311,16 @@ impl App {
                         self.handle_active_content_reset(buffer_id);
                     }
                     let edits = self.active_mut().editor.take_content_edits();
-                    let edit_count = edits.len();
-                    let t_apply = std::time::Instant::now();
-                    let mut apply_us = 0u128;
-                    let mut shift_spans_us = 0u128;
-                    let mut shift_cached_us = 0u128;
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
-                        apply_us = t_apply.elapsed().as_micros();
-                        let t_ss = std::time::Instant::now();
                         self.active_mut()
                             .editor
                             .shift_syntax_spans_for_edits(&edits);
-                        shift_spans_us = t_ss.elapsed().as_micros();
-                        let t_sc = std::time::Instant::now();
                         let active_idx = self.focused_slot_idx();
                         self.shift_cached_render_output_spans_for_slot(active_idx, &edits);
-                        shift_cached_us = t_sc.elapsed().as_micros();
                     }
-                    let t_lsp = std::time::Instant::now();
                     self.lsp_notify_change_active();
-                    let lsp_us = t_lsp.elapsed().as_micros();
-                    let after_us = t_after.elapsed().as_micros();
-                    let t_rec = std::time::Instant::now();
                     self.recompute_and_install();
-                    let rec_us = t_rec.elapsed().as_micros();
-                    tracing::debug!(
-                        target: "hjkl::profile",
-                        dispatch_us,
-                        after_us,
-                        apply_us,
-                        shift_spans_us,
-                        shift_cached_us,
-                        lsp_us,
-                        rec_us,
-                        edit_count,
-                        "keypress edit-path"
-                    );
                 }
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);
@@ -1384,7 +1354,6 @@ impl App {
                             }
                             KeyOutcome::Continue => continue,
                             KeyOutcome::FallThrough => {
-                                let t_dispatch = std::time::Instant::now();
                                 let mode_was_insert =
                                     self.active().editor.vim_mode() == VimMode::Insert;
                                 if mode_was_insert {
@@ -1393,8 +1362,6 @@ impl App {
                                 } else {
                                     hjkl_vim_tui::handle_key(&mut self.active_mut().editor, k);
                                 }
-                                let dispatch_us = t_dispatch.elapsed().as_micros();
-                                let t_after = std::time::Instant::now();
                                 self.sync_viewport_from_editor();
                                 if self.active_mut().editor.take_dirty() {
                                     let elapsed = self.active_mut().refresh_dirty_against_saved();
@@ -1408,42 +1375,16 @@ impl App {
                                     self.handle_active_content_reset(bid);
                                 }
                                 let edits = self.active_mut().editor.take_content_edits();
-                                let edit_count = edits.len();
-                                let mut apply_us = 0u128;
-                                let mut shift_spans_us = 0u128;
-                                let mut shift_cached_us = 0u128;
                                 if !edits.is_empty() {
-                                    let t_apply = std::time::Instant::now();
                                     self.syntax.apply_edits(bid, &edits);
-                                    apply_us = t_apply.elapsed().as_micros();
-                                    let t_ss = std::time::Instant::now();
                                     self.active_mut()
                                         .editor
                                         .shift_syntax_spans_for_edits(&edits);
-                                    shift_spans_us = t_ss.elapsed().as_micros();
-                                    let t_sc = std::time::Instant::now();
                                     let aidx = self.focused_slot_idx();
                                     self.shift_cached_render_output_spans_for_slot(aidx, &edits);
-                                    shift_cached_us = t_sc.elapsed().as_micros();
                                 }
-                                let t_lsp = std::time::Instant::now();
                                 self.lsp_notify_change_active();
-                                let lsp_us = t_lsp.elapsed().as_micros();
-                                let after_us = t_after.elapsed().as_micros();
                                 self.pending_recompute = true;
-                                tracing::debug!(
-                                    target: "hjkl::profile",
-                                    insert_mode = mode_was_insert,
-                                    in_drain = true,
-                                    dispatch_us,
-                                    after_us,
-                                    apply_us,
-                                    shift_spans_us,
-                                    shift_cached_us,
-                                    lsp_us,
-                                    edit_count,
-                                    "keypress edit-path"
-                                );
                             }
                         },
                         Event::Mouse(me2) => {

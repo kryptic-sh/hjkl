@@ -77,32 +77,20 @@ impl App {
         // re-clone every row per keystroke (paired with the same call
         // in `lsp_notify_change_active` + `buffer_signature` + the
         // syntax submit path — all share one allocation per generation).
-        let t = Instant::now();
         let text = self.active().editor.buffer().content_joined();
-        let join_us = t.elapsed().as_micros();
         let mut bytes = text.as_bytes().to_vec();
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
-        let bytes_us = t.elapsed().as_micros();
         let buffer_id = self.active().buffer_id;
         self.active_mut().last_git_refresh_at = now;
 
-        let bytes_len = bytes.len();
         self.git_worker.submit(GitJob {
             buffer_id,
             path,
             bytes,
             dirty_gen: dg,
         });
-        tracing::debug!(
-            target: "hjkl::profile",
-            total_us = t.elapsed().as_micros(),
-            join_us,
-            clone_us = bytes_us - join_us,
-            bytes_len,
-            "refresh_git_signs (submit)"
-        );
     }
 
     /// Drain completed git-sign results from the worker and install them

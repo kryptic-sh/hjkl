@@ -10,7 +10,6 @@ mod keymap_actions;
 mod keymap_translate;
 pub(crate) mod menu;
 mod nvim_api;
-mod perf;
 mod picker;
 mod picker_action;
 mod picker_git;
@@ -27,7 +26,7 @@ use crossterm::{event, execute, terminal};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::io::{self, stdout};
 use std::path::PathBuf;
-use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, reload, util::SubscriberInitExt};
+use tracing_subscriber::EnvFilter;
 
 /// ASCII-art banner. Regenerate with:
 ///
@@ -42,7 +41,7 @@ const LONG_ABOUT: &str = concat!(
 );
 
 /// Pre-flight CLI surface. clap handles `--help` / `--version` / `-R`
-/// natively; vim-style `+N`, `+/pattern`, `+perf`, `+picker` are
+/// natively; vim-style `+N`, `+/pattern`, `+picker` are
 /// pre-processed out of `argv` before clap sees it (see [`split_vim_tokens`]).
 #[derive(Parser, Debug)]
 #[command(
@@ -50,7 +49,7 @@ const LONG_ABOUT: &str = concat!(
     version,
     about = "vim-modal terminal editor",
     long_about = LONG_ABOUT,
-    after_help = "Vim-style tokens (interspersed with FILEs):\n  +N           jump to 1-based line N on open\n  +/PATTERN    search for PATTERN on open\n  +perf        enable the :perf overlay\n  +picker      open the file picker\n  +CMD         run any other text as an ex command (e.g. +vsp, +'vsp other.rs', +set\\ nomouse)",
+    after_help = "Vim-style tokens (interspersed with FILEs):\n  +N           jump to 1-based line N on open\n  +/PATTERN    search for PATTERN on open\n  +picker      open the file picker\n  +CMD         run any other text as an ex command (e.g. +vsp, +'vsp other.rs', +set\\ nomouse)",
 )]
 struct Cli {
     /// Open files read-only.
@@ -101,7 +100,6 @@ pub struct Args {
     pub line: Option<usize>,
     pub pattern: Option<String>,
     pub readonly: bool,
-    pub perf: bool,
     pub picker: bool,
     pub config: Option<PathBuf>,
     /// Run without a terminal (no ratatui/crossterm). Phase 1 of issue #26.
@@ -169,8 +167,6 @@ fn apply_vim_tokens(args: &mut Args, vim_tokens: &[String]) -> Vec<String> {
             args.pattern = Some(pat.to_string());
         } else if let Ok(n) = rest.parse::<usize>() {
             args.line = Some(n);
-        } else if rest == "perf" {
-            args.perf = true;
         } else if rest == "picker" {
             args.picker = true;
         } else {
@@ -199,7 +195,6 @@ fn parse_argv(raw: Vec<String>) -> Result<(Args, Vec<String>)> {
         line: None,
         pattern: None,
         readonly: cli.readonly,
-        perf: false,
         picker: false,
         config: cli.config,
         headless: cli.headless || cli.embed || cli.nvim_api,
@@ -337,9 +332,6 @@ fn main() -> Result<()> {
             eprintln!("hjkl: {e}");
         }
     }
-    if args.perf {
-        app.perf_overlay = true;
-    }
     if args.picker {
         app.open_picker();
     }
@@ -418,18 +410,15 @@ fn init_tracing() {
         }
     };
 
-    // Two-layer filter so `:perf` can flip `hjkl::profile=debug` at runtime
-    // via a `reload::Handle` without rebuilding the whole subscriber.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let (env_layer, env_handle) = reload::Layer::new(env_filter);
-    crate::perf::install_filter_handle(env_handle);
 
-    let fmt_layer = tracing_subscriber::fmt::layer()
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
         .with_ansi(false)
         .with_writer(move || file.try_clone().expect("clone hjkl.log file handle"))
-        .with_filter(env_layer);
+        .finish();
 
-    if let Err(e) = tracing_subscriber::registry().with(fmt_layer).try_init() {
+    if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!("hjkl: tracing disabled (set global subscriber): {e}");
     }
 }
@@ -481,30 +470,24 @@ mod cli_tests {
 
     #[test]
     fn split_vim_tokens_separates_plus_args() {
-        let raw: Vec<String> = ["hjkl", "src/main.rs", "+42", "+/foo", "+perf", "-R"]
+        let raw: Vec<String> = ["hjkl", "src/main.rs", "+42", "+/foo", "+picker", "-R"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let (clap_argv, vim) = split_vim_tokens(raw);
         assert_eq!(clap_argv, vec!["hjkl", "src/main.rs", "-R"]);
-        assert_eq!(vim, vec!["+42", "+/foo", "+perf"]);
+        assert_eq!(vim, vec!["+42", "+/foo", "+picker"]);
     }
 
     #[test]
-    fn apply_vim_tokens_sets_line_pattern_perf_picker() {
+    fn apply_vim_tokens_sets_line_pattern_picker() {
         let mut args = blank_args();
         let warnings = apply_vim_tokens(
             &mut args,
-            &[
-                "+42".into(),
-                "+/needle".into(),
-                "+perf".into(),
-                "+picker".into(),
-            ],
+            &["+42".into(), "+/needle".into(), "+picker".into()],
         );
         assert_eq!(args.line, Some(42));
         assert_eq!(args.pattern.as_deref(), Some("needle"));
-        assert!(args.perf);
         assert!(args.picker);
         assert!(warnings.is_empty());
     }
@@ -583,7 +566,6 @@ mod cli_tests {
         // Pre-existing state untouched.
         assert_eq!(args.line, Some(7));
         assert_eq!(args.pattern, None);
-        assert!(!args.perf);
         assert!(!args.picker);
     }
 
@@ -612,7 +594,6 @@ mod cli_tests {
         assert_eq!(args.line, Some(42));
         assert_eq!(args.pattern.as_deref(), Some("foo"));
         assert_eq!(args.files, vec![PathBuf::from("src/main.rs")]);
-        assert!(!args.perf);
         assert!(!args.picker);
         assert!(
             warnings.is_empty(),
@@ -627,7 +608,6 @@ mod cli_tests {
             line: None,
             pattern: None,
             readonly: false,
-            perf: false,
             picker: false,
             config: None,
             headless: false,

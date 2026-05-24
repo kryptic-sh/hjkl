@@ -1450,7 +1450,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// taken to be relative to the post-state of the prior edits in the
     /// batch (matching the order the engine emitted them).
     pub fn shift_syntax_spans_for_edits(&mut self, edits: &[crate::types::ContentEdit]) {
-        let t = std::time::Instant::now();
         for edit in edits {
             let oer = edit.old_end_position.0 as usize;
             let ner = edit.new_end_position.0 as usize;
@@ -1504,14 +1503,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 }
             }
         }
-        tracing::debug!(
-            target: "hjkl::profile",
-            elapsed_us = t.elapsed().as_micros(),
-            edit_count = edits.len(),
-            buffer_spans_after = self.buffer_spans.len(),
-            styled_spans_after = self.styled_spans.len(),
-            "editor::shift_syntax_spans_for_edits"
-        );
     }
 
     /// Read-only view of the style table in engine-native form —
@@ -2911,25 +2902,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// user pressing `u` in normal mode. Drains the most recent undo
     /// entry and pushes it onto the redo stack.
     pub fn undo(&mut self) {
-        let t = std::time::Instant::now();
         crate::vim::do_undo(self);
-        tracing::debug!(
-            target: "hjkl::profile",
-            elapsed_us = t.elapsed().as_micros(),
-            "editor::undo"
-        );
     }
 
     /// Walk one step forward through the redo history. Equivalent to
     /// `<C-r>` in normal mode.
     pub fn redo(&mut self) {
-        let t = std::time::Instant::now();
         crate::vim::do_redo(self);
-        tracing::debug!(
-            target: "hjkl::profile",
-            elapsed_us = t.elapsed().as_micros(),
-            "editor::redo"
-        );
     }
 
     /// Snapshot current buffer state onto the undo stack and clear
@@ -2937,21 +2916,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// entries pruned. Call before any group of buffer mutations the
     /// user might want to undo as a single step.
     pub fn push_undo(&mut self) {
-        let t = std::time::Instant::now();
         let snap = self.snapshot();
-        let snap_us = t.elapsed().as_micros();
-        let row_count = snap.0.len();
         self.undo_stack.push(snap);
         self.cap_undo();
         self.redo_stack.clear();
-        tracing::debug!(
-            target: "hjkl::profile",
-            snap_us,
-            total_us = t.elapsed().as_micros(),
-            row_count,
-            stack_len = self.undo_stack.len(),
-            "editor::push_undo"
-        );
     }
 
     /// Trim the undo stack down to `settings.undo_levels`, dropping
@@ -2987,10 +2955,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// row instead of a ~30ms full-viewport sync walk.
     pub fn restore(&mut self, lines: Vec<String>, cursor: (usize, usize)) {
         use crate::types::Query as _;
-        let t = std::time::Instant::now();
-        let row_count = lines.len();
         let text = lines.join("\n");
-        let join_us = t.elapsed().as_micros();
         let old_len_bytes = self.buffer.len_bytes();
         let old_row_count = buf_row_count(&self.buffer);
         let old_last_row = old_row_count.saturating_sub(1);
@@ -3018,15 +2983,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             new_end_position: (new_last_row as u32, new_last_col as u32),
         });
         self.mark_content_dirty();
-        tracing::debug!(
-            target: "hjkl::profile",
-            total_us = t.elapsed().as_micros(),
-            join_us,
-            row_count,
-            old_len_bytes,
-            new_len_bytes,
-            "editor::restore"
-        );
     }
 
     /// Returns true if the key was consumed by the editor.

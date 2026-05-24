@@ -413,59 +413,6 @@ impl HostCmd<App> for ClipboardCmd {
 
 // ── Phase 4d2 commands ───────────────────────────────────────────────────────
 
-/// `:perf` — toggle perf overlay and reset counters.
-pub(crate) struct PerfCmd;
-
-impl HostCmd<App> for PerfCmd {
-    fn name(&self) -> &'static str {
-        "perf"
-    }
-
-    fn aliases(&self) -> &'static [&'static str] {
-        &[]
-    }
-
-    fn min_prefix(&self) -> usize {
-        4
-    }
-
-    fn arg_kind(&self) -> ArgKind {
-        ArgKind::None
-    }
-
-    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
-        app.perf_overlay = !app.perf_overlay;
-        app.recompute_hits = 0;
-        app.recompute_throttled = 0;
-        app.recompute_runs = 0;
-        let directive = if app.perf_overlay {
-            "info,hjkl::profile=debug"
-        } else {
-            "info"
-        };
-        let msg = match crate::perf::try_set_filter(directive) {
-            Ok(()) => {
-                if app.perf_overlay {
-                    "perf logging: on (hjkl::profile=debug)"
-                } else {
-                    "perf logging: off"
-                }
-            }
-            Err(_) => {
-                // Filter handle absent (tests / headless) — flag stays toggled
-                // so the unit test can still observe the flip.
-                if app.perf_overlay {
-                    "perf logging: on (no subscriber)"
-                } else {
-                    "perf logging: off"
-                }
-            }
-        };
-        app.bus.info(msg);
-        Some(ExEffect::Ok)
-    }
-}
-
 /// `:picker` — open the fuzzy file picker.
 pub(crate) struct PickerCmd;
 
@@ -1313,7 +1260,6 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(BuffersCmd));
     reg.add(Box::new(ClipboardCmd));
     // Phase 4d2
-    reg.add(Box::new(PerfCmd));
     reg.add(Box::new(PickerCmd));
     reg.add(Box::new(RgCmd));
     reg.add(Box::new(BCmd));
