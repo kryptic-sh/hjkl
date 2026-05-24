@@ -247,21 +247,15 @@ impl App {
         let is_active = out.buffer_id == active_id;
 
         // Plan-B (#233): the worker now ships EMPTY span tables — it
-        // only refreshes the shared retained tree. An empty-spans
-        // result is a "tree updated, please re-query" signal. Trigger
-        // a fresh sync `query_viewport` for this `(buffer, kind)` so
-        // the new tree's spans land in the cache. `preview_render`
-        // outputs (which still have real spans) and any future
-        // backward-compat full-output callers fall through to the
-        // normal install path below.
-        if out.spans.is_empty() && is_active {
-            let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
-            let (range_top, range_height) = (out.key.1, out.key.2);
-            self.sync_query_region(out.buffer_id, range_top, range_height, buf_dg, out.kind);
-            return true;
-        }
+        // only refreshes the shared retained tree. Discard the empty
+        // "tree updated" signal here without re-triggering a sync
+        // query: `recompute_and_install` already runs a sync
+        // `query_viewport` against the (now-fresh) tree at the end of
+        // every tick. Firing an extra sync from this drain path
+        // duplicated the work per j/k (different dedup key — the
+        // signal's range is the async submit's over-provisioned span,
+        // not the visible viewport) and showed up as cursor lag.
         if out.spans.is_empty() {
-            // Non-active buffer: nothing to install or trigger.
             return false;
         }
 
