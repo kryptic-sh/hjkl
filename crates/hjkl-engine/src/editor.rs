@@ -1339,14 +1339,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// 0.1.0 freeze the unprefixed name is the universally-available
     /// engine-native variant.
     pub fn install_syntax_spans(&mut self, spans: Vec<Vec<(usize, usize, crate::types::Style)>>) {
-        let line_byte_lens: Vec<usize> = (0..buf_row_count(&self.buffer))
-            .map(|r| buf_line(&self.buffer, r).map(|s| s.len()).unwrap_or(0))
-            .collect();
+        // Note: do NOT pre-collect `line_byte_lens` here. `buf_line` clones
+        // the row string under a content-mutex lock; pre-collecting for
+        // every row turns a 10k-row file's install into 10k mutex-locked
+        // String clones (visible as j/k cursor lag). The typical install
+        // has spans on at most a few hundred rows (the parsed viewport
+        // window); lazy lookup keeps the cost proportional to populated
+        // rows, not file size.
         let mut by_row: Vec<Vec<hjkl_buffer::Span>> = Vec::with_capacity(spans.len());
         let mut engine_spans: Vec<Vec<(usize, usize, crate::types::Style)>> =
             Vec::with_capacity(spans.len());
         for (row, row_spans) in spans.iter().enumerate() {
-            let line_len = line_byte_lens.get(row).copied().unwrap_or(0);
+            if row_spans.is_empty() {
+                by_row.push(Vec::new());
+                engine_spans.push(Vec::new());
+                continue;
+            }
+            let line_len = buf_line(&self.buffer, row).map(|s| s.len()).unwrap_or(0);
             let mut translated = Vec::with_capacity(row_spans.len());
             let mut translated_e = Vec::with_capacity(row_spans.len());
             for (start, end, style) in row_spans {
