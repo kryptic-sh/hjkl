@@ -773,44 +773,49 @@ impl App {
                 false
             }
         }
+        // Scroll arms set `pending_recompute` instead of calling
+        // `recompute_and_install` synchronously. The main event loop
+        // drains all currently-ready events before firing one recompute,
+        // so a burst of mouse-wheel scroll events runs the sync query +
+        // install pipeline ONCE per drain instead of N times per burst.
+        // Without this the per-event ~2-5ms sync query stacked into
+        // visible scroll lag.
         match me.kind {
             MouseEventKind::ScrollDown => {
                 if me.modifiers.contains(KeyModifiers::SHIFT) {
-                    // Shift+ScrollDown → scroll viewport right.
                     if focus_window_under_cursor(self, me.column, me.row) {
                         self.active_mut().editor.scroll_right(WHEEL_TICKS);
                         self.sync_viewport_from_editor();
-                        self.recompute_and_install();
+                        self.pending_recompute = true;
                     }
                 } else if focus_window_under_cursor(self, me.column, me.row) {
                     self.active_mut().editor.scroll_down(WHEEL_TICKS);
                     self.sync_viewport_from_editor();
-                    self.recompute_and_install();
+                    self.pending_recompute = true;
                 }
             }
             MouseEventKind::ScrollUp => {
                 if me.modifiers.contains(KeyModifiers::SHIFT) {
-                    // Shift+ScrollUp → scroll viewport left.
                     if focus_window_under_cursor(self, me.column, me.row) {
                         self.active_mut().editor.scroll_left(WHEEL_TICKS);
                         self.sync_viewport_from_editor();
-                        self.recompute_and_install();
+                        self.pending_recompute = true;
                     }
                 } else if focus_window_under_cursor(self, me.column, me.row) {
                     self.active_mut().editor.scroll_up(WHEEL_TICKS);
                     self.sync_viewport_from_editor();
-                    self.recompute_and_install();
+                    self.pending_recompute = true;
                 }
             }
             MouseEventKind::ScrollLeft if focus_window_under_cursor(self, me.column, me.row) => {
                 self.active_mut().editor.scroll_left(WHEEL_TICKS);
                 self.sync_viewport_from_editor();
-                self.recompute_and_install();
+                self.pending_recompute = true;
             }
             MouseEventKind::ScrollRight if focus_window_under_cursor(self, me.column, me.row) => {
                 self.active_mut().editor.scroll_right(WHEEL_TICKS);
                 self.sync_viewport_from_editor();
-                self.recompute_and_install();
+                self.pending_recompute = true;
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 use crate::app::mouse;
@@ -1331,6 +1336,76 @@ impl App {
                     self.checktime_all();
                 }
                 _ => {}
+            }
+
+            // Drain any additional events currently ready (e.g. a burst
+            // of mouse-wheel scrolls) before running the deferred sync
+            // query. Each scroll handler set `pending_recompute = true`
+            // instead of firing `recompute_and_install` synchronously,
+            // so we collapse the whole burst into one sync query install.
+            while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+                if let Ok(extra) = event::read() {
+                    match extra {
+                        Event::Key(k) => match self.handle_keypress(k) {
+                            KeyOutcome::Break => {
+                                self.exit_requested = true;
+                                break;
+                            }
+                            KeyOutcome::Continue => continue,
+                            KeyOutcome::FallThrough => {
+                                if self.active().editor.vim_mode() == VimMode::Insert {
+                                    self.dispatch_insert_key(k);
+                                    self.active_mut().editor.emit_cursor_shape_if_changed();
+                                } else {
+                                    hjkl_vim_tui::handle_key(&mut self.active_mut().editor, k);
+                                }
+                                self.sync_viewport_from_editor();
+                                if self.active_mut().editor.take_dirty() {
+                                    let elapsed = self.active_mut().refresh_dirty_against_saved();
+                                    self.last_signature_us = elapsed;
+                                    if self.active().dirty {
+                                        self.active_mut().is_new_file = false;
+                                    }
+                                }
+                                let bid = self.active().buffer_id;
+                                if self.active_mut().editor.take_content_reset() {
+                                    self.handle_active_content_reset(bid);
+                                }
+                                let edits = self.active_mut().editor.take_content_edits();
+                                if !edits.is_empty() {
+                                    self.syntax.apply_edits(bid, &edits);
+                                    self.active_mut()
+                                        .editor
+                                        .shift_syntax_spans_for_edits(&edits);
+                                    let aidx = self.focused_slot_idx();
+                                    self.shift_cached_render_output_spans_for_slot(aidx, &edits);
+                                }
+                                self.lsp_notify_change_active();
+                                self.pending_recompute = true;
+                            }
+                        },
+                        Event::Mouse(me2) => {
+                            let _ = self.handle_mouse(me2);
+                        }
+                        Event::Resize(w, h) => {
+                            let vp = self.active_mut().editor.host_mut().viewport_mut();
+                            vp.width = w;
+                            vp.height = h.saturating_sub(STATUS_LINE_HEIGHT);
+                        }
+                        Event::FocusGained => {
+                            self.checktime_all();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Flush deferred recompute once after the drain loop ends.
+            // Coalesces burst-scrolls (and rapid keystrokes within one
+            // poll tick) into a single sync query + install.
+            if self.pending_recompute {
+                self.pending_recompute = false;
+                self.recompute_and_install();
             }
 
             if self.exit_requested {

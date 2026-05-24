@@ -208,6 +208,11 @@ pub struct App {
         std::sync::Mutex<std::collections::HashMap<String, hjkl_bonsai::Highlighter>>,
     /// Toggled by `:perf`. When true, render shows last-frame timings.
     pub perf_overlay: bool,
+    /// Set when an event handler decided a `recompute_and_install` is
+    /// needed but deferred it to coalesce. The main event loop runs the
+    /// recompute once after the event-drain loop ends, so a burst of
+    /// mouse-scroll events fires one sync query instead of N.
+    pub(crate) pending_recompute: bool,
     pub last_recompute_us: u128,
     pub last_install_us: u128,
     pub last_signature_us: u128,
@@ -1169,6 +1174,7 @@ impl App {
             theme,
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             perf_overlay: false,
+            pending_recompute: false,
             last_recompute_us: 0,
             last_install_us: 0,
             last_signature_us: 0,
