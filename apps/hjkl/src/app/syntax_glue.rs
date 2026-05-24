@@ -247,16 +247,46 @@ impl App {
         let is_active = out.buffer_id == active_id;
 
         // Plan-B (#233): the worker now ships EMPTY span tables — it
-        // only refreshes the shared retained tree. Discard the empty
-        // "tree updated" signal here without re-triggering a sync
-        // query: `recompute_and_install` already runs a sync
-        // `query_viewport` against the (now-fresh) tree at the end of
-        // every tick. Firing an extra sync from this drain path
-        // duplicated the work per j/k (different dedup key — the
-        // signal's range is the async submit's over-provisioned span,
-        // not the visible viewport) and showed up as cursor lag.
+        // only refreshes the shared retained tree.
+        //
+        // For `Viewport` kind: the empty signal is discarded.
+        // `recompute_and_install` already runs a sync `query_viewport`
+        // against the fresh tree at the end of every tick, so firing
+        // an extra sync here only duplicates work (the signal's range
+        // is the async submit's over-provisioned span, not the visible
+        // viewport — different dedup key, so it wouldn't short-circuit).
+        //
+        // For `Top` / `Bottom`: the recompute path no longer runs sync
+        // for these kinds on every tick (typing was 1Hz because each
+        // keystroke re-highlighted ~240 prewarm rows with full CSS
+        // injection reparse). Instead, trigger sync here when the
+        // async worker delivers a fresh tree for that prewarm region.
+        // The buffer's current dirty_gen is used so the sync result
+        // is tagged correctly even if the worker's parse was for an
+        // older gen — the dedup + generation guard handle the rest.
         if out.spans.is_empty() {
-            return false;
+            if !is_active {
+                return false;
+            }
+            match out.kind {
+                crate::syntax::ParseKind::Viewport => {
+                    return false;
+                }
+                crate::syntax::ParseKind::Top | crate::syntax::ParseKind::Bottom => {
+                    let buf_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
+                    let range_top = out.key.1;
+                    let range_height = out.key.2;
+                    self.sync_query_region(
+                        out.buffer_id,
+                        range_top,
+                        range_height,
+                        buf_dg,
+                        out.kind,
+                    );
+                    return true;
+                }
+                _ => return false,
+            }
         }
 
         // Generation-aware install: a render result tagged with an older
@@ -715,16 +745,15 @@ impl App {
                     top_range_height,
                     crate::syntax::ParseKind::Top,
                 );
-                // Plan B (#233): immediately produce the Top spans against
-                // the retained tree so a follow-up `gg` paints instantly
-                // instead of waiting on the worker.
-                self.sync_query_region(
-                    buffer_id,
-                    top_range_start,
-                    top_range_height,
-                    dg,
-                    crate::syntax::ParseKind::Top,
-                );
+                // Top/Bottom sync is intentionally NOT run per-tick.
+                // Each insert-mode keystroke ticks `dirty_gen`, which
+                // would re-fire the Top + Bottom highlight every char
+                // — on HTML with CSS injection that's ~240 rows × CSS
+                // sub-tree reparse per keystroke, visible as 1Hz typing
+                // lag. The async worker handles the refresh; the
+                // empty-result signal in `install_render_result`
+                // triggers a one-off sync query when the worker delivers
+                // a fresh tree for Top/Bottom.
             }
 
             if needs_bottom {
@@ -737,14 +766,6 @@ impl App {
                     buf,
                     bot_range_start,
                     bot_range_height,
-                    crate::syntax::ParseKind::Bottom,
-                );
-                // Plan B (#233): same as Top — `G` paints instantly.
-                self.sync_query_region(
-                    buffer_id,
-                    bot_range_start,
-                    bot_range_height,
-                    dg,
                     crate::syntax::ParseKind::Bottom,
                 );
             }
