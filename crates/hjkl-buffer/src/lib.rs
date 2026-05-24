@@ -62,7 +62,7 @@ pub use motion::is_keyword_char;
 pub use position::Position;
 pub use selection::{RowSpan, Selection};
 pub use span::Span;
-pub use viewport::{Viewport, is_big_viewport_jump, over_provisioned_range};
+pub use viewport::{Viewport, is_big_viewport_jump};
 pub use wrap::Wrap;
 
 /// Stable per-buffer identifier carried through async pipelines

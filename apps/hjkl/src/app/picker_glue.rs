@@ -796,10 +796,6 @@ fn build_scratch_slot(
         disk_state: DiskState::Synced,
         viewport_render_output: None,
         last_sync_viewport_key: None,
-        last_sync_top_key: None,
-        last_sync_bottom_key: None,
-        top_render_output: None,
-        bottom_render_output: None,
         dirty_rows_log: Vec::new(),
     };
     slot.snapshot_saved();

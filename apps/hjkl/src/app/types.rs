@@ -324,14 +324,6 @@ pub struct BufferSlot {
     /// spans while a fresh parse runs in the background (T3 — per-slot
     /// span cache). `None` until the first viewport parse result arrives.
     pub(crate) viewport_render_output: Option<crate::syntax::RenderOutput>,
-    /// Pre-cached spans for the top of the file (`0..min(3*h, line_count)`).
-    /// Populated after the first cold viewport parse so `gg` never flashes
-    /// un-highlighted rows even on large files.
-    pub(crate) top_render_output: Option<crate::syntax::RenderOutput>,
-    /// Pre-cached spans for the bottom of the file
-    /// (`line_count - min(3*h, line_count)..line_count`). Populated after
-    /// the cold viewport parse so `G` never flashes un-highlighted rows.
-    pub(crate) bottom_render_output: Option<crate::syntax::RenderOutput>,
     /// Per-row edit log: each entry is `(dirty_gen, row_range)` where
     /// `dirty_gen` is the buffer's `dirty_gen` AFTER the edit landed and
     /// `row_range` is the inclusive row range touched by that edit.
@@ -350,8 +342,6 @@ pub struct BufferSlot {
     /// loop iteration even when the buffer is idle, which shows up as
     /// scroll lag on large files.
     pub(crate) last_sync_viewport_key: Option<(u64, usize, usize)>,
-    pub(crate) last_sync_top_key: Option<(u64, usize, usize)>,
-    pub(crate) last_sync_bottom_key: Option<(u64, usize, usize)>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

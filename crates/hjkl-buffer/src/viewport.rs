@@ -106,45 +106,13 @@ impl Viewport {
 }
 
 /// `true` when a viewport scroll from `prev_top` to `cur_top` lands
-/// past the over-provisioned band computed by [`over_provisioned_range`].
-///
-/// The over-provisioned range extends `±viewport_height` rows around
-/// the viewport, so a jump of MORE than `viewport_height` rows in either
-/// direction guarantees the new viewport sits on un-cached territory —
+/// more than `viewport_height` rows away from the previous position —
 /// hosts use this signal to decide whether to block briefly on a fresh
 /// parse (avoids the un-highlighted flash on `gg` / `G` / `<C-d>` / `:N`).
 ///
-/// Host-agnostic: same shape as [`over_provisioned_range`], pure math.
+/// Host-agnostic: pure math.
 pub fn is_big_viewport_jump(prev_top: usize, cur_top: usize, viewport_height: usize) -> bool {
     prev_top.abs_diff(cur_top) > viewport_height
-}
-
-/// Compute an **over-provisioned** row range for ahead-of-scroll work
-/// (syntax highlight, diagnostics gather, etc.): one viewport above +
-/// the current viewport + one viewport below, clamped to `[0, line_count)`.
-///
-/// Host-agnostic: takes only document line counts and viewport extents,
-/// no terminal cells or pixels. Future GUI hosts (floem, web, …) call
-/// the same function with their own viewport dimensions.
-///
-/// Returns `(top, height)` satisfying:
-/// - `top <= viewport_top`
-/// - `top + height >= viewport_top + viewport_height` (when room exists)
-/// - `top + height <= line_count` (clamped at the bottom edge)
-/// - `height <= viewport_height * 3`
-///
-/// Why 3×: gives the worker enough margin that a fast scroll within one
-/// viewport-height stays inside an already-parsed region. Halving (2×)
-/// is too tight in practice; quadrupling adds cost without payoff.
-pub fn over_provisioned_range(
-    viewport_top: usize,
-    viewport_height: usize,
-    line_count: usize,
-) -> (usize, usize) {
-    let top = viewport_top.saturating_sub(viewport_height);
-    let max_height = line_count.saturating_sub(top);
-    let height = viewport_height.saturating_mul(3).min(max_height);
-    (top, height)
 }
 
 #[cfg(test)]
@@ -207,52 +175,6 @@ mod tests {
         assert_eq!(v.top_col, 0);
     }
 
-    // ── over_provisioned_range (host-agnostic ahead-of-scroll helper) ──────
-
-    #[test]
-    fn over_provisioned_range_middle_of_buffer() {
-        // 1000-line buffer, viewport at row 100, height 30.
-        // Expect: top = 100 - 30 = 70, height = 90 (3 viewports).
-        let (top, height) = over_provisioned_range(100, 30, 1000);
-        assert_eq!(top, 70);
-        assert_eq!(height, 90);
-    }
-
-    #[test]
-    fn over_provisioned_range_top_of_buffer() {
-        // Near the top: viewport at row 5, height 30 → top saturates at 0,
-        // height tries 90 but the buffer is only 1000 rows from 0 so it can
-        // fit the full 90.
-        let (top, height) = over_provisioned_range(5, 30, 1000);
-        assert_eq!(top, 0);
-        assert_eq!(height, 90);
-    }
-
-    #[test]
-    fn over_provisioned_range_bottom_of_buffer_clamps_height() {
-        // 50-line buffer, viewport at row 30, height 30 → top = 0, but
-        // height is capped at line_count - top = 50, not 90.
-        let (top, height) = over_provisioned_range(30, 30, 50);
-        assert_eq!(top, 0);
-        assert_eq!(height, 50);
-    }
-
-    #[test]
-    fn over_provisioned_range_zero_viewport_height() {
-        // Defensive: zero-height viewport returns zero-height oversize.
-        let (top, height) = over_provisioned_range(10, 0, 100);
-        assert_eq!(top, 10);
-        assert_eq!(height, 0);
-    }
-
-    #[test]
-    fn over_provisioned_range_zero_line_count() {
-        // Empty buffer — everything zero.
-        let (top, height) = over_provisioned_range(0, 30, 0);
-        assert_eq!(top, 0);
-        assert_eq!(height, 0);
-    }
-
     #[test]
     fn is_big_viewport_jump_within_one_height_is_not_big() {
         // Scroll within ±1 viewport-height stays in the over-provisioned band.
@@ -271,26 +193,5 @@ mod tests {
         assert!(is_big_viewport_jump(0, 31, 30));
         // Exactly viewport_height is NOT a big jump (the row at the band's edge).
         assert!(!is_big_viewport_jump(0, 30, 30));
-    }
-
-    #[test]
-    fn over_provisioned_range_covers_viewport() {
-        // The over-provisioned range MUST cover the original viewport when
-        // there's enough buffer to do so — that's the load-bearing invariant
-        // (the renderer paints rows in the original viewport, the cache holds
-        // ones above + below).
-        let viewport_top = 100;
-        let viewport_height = 30;
-        let line_count = 1000;
-        let (top, height) = over_provisioned_range(viewport_top, viewport_height, line_count);
-        assert!(top <= viewport_top, "top must not exceed viewport_top");
-        assert!(
-            top + height >= viewport_top + viewport_height,
-            "oversize range must end at or past the viewport's bottom"
-        );
-        assert!(
-            top + height <= line_count,
-            "oversize range must stay inside the buffer"
-        );
     }
 }

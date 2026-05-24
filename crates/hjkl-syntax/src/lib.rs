@@ -56,33 +56,19 @@ pub use hjkl_buffer::BufferId;
 /// Discriminates the purpose of a parse request / result so the App can
 /// route it to the correct per-slot cache field.
 ///
-/// - `Viewport` — the current visible region (already existed; default).
-/// - `Top` — rows `0..min(3*h, line_count)` pre-cached so `gg` never
-///   flashes un-highlighted rows.
-/// - `Bottom` — rows `line_count - min(3*h, line_count)..line_count`
-///   pre-cached so `G` never flashes un-highlighted rows.
-///
-/// **Ordering is load-bearing for the perf invariant:** the worker queue
-/// is FIFO, so submitting `Viewport` first, then `Top`, then `Bottom`
-/// ensures the retained tree is built on the Viewport pass and the
-/// subsequent passes ride it incrementally (~1-5 ms each).
+/// - `Viewport` — the current visible region.
 ///
 /// # Examples
 ///
 /// ```
 /// use hjkl_syntax::ParseKind;
-/// assert_ne!(ParseKind::Viewport, ParseKind::Top);
-/// assert_ne!(ParseKind::Top, ParseKind::Bottom);
+/// assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ParseKind {
     /// The current visible viewport region.
     Viewport,
-    /// The top of the document (rows 0..N) — pre-cached for `gg`.
-    Top,
-    /// The bottom of the document (rows line_count-N..line_count) — pre-cached for `G`.
-    Bottom,
 }
 
 /// A single diagnostic sign emitted from the syntax pipeline.
@@ -226,9 +212,9 @@ impl RenderOutput {
     ///
     /// ```
     /// use hjkl_syntax::{RenderOutput, ParseKind, PerfBreakdown};
-    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new(), ParseKind::Top);
+    /// let out = RenderOutput::new(1, Vec::new(), Vec::new(), (7, 0, 30), PerfBreakdown::new(), ParseKind::Viewport);
     /// assert_eq!(out.buffer_id, 1);
-    /// assert_eq!(out.kind, ParseKind::Top);
+    /// assert_eq!(out.kind, ParseKind::Viewport);
     /// ```
     pub fn new(
         buffer_id: BufferId,
@@ -371,10 +357,6 @@ pub enum LoadEventKind<'a> {
 pub enum ParseKindKind {
     /// The current visible viewport region.
     Viewport,
-    /// The top of the document — pre-cached for `gg`.
-    Top,
-    /// The bottom of the document — pre-cached for `G`.
-    Bottom,
 }
 
 // ---------------------------------------------------------------------------
@@ -1743,8 +1725,8 @@ impl SyntaxLayer {
     /// ```rust
     /// use hjkl_syntax::{ParseKind, ParseKindKind, SyntaxLayer};
     ///
-    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Top, |k| {
-    ///     assert_eq!(k, ParseKindKind::Top);
+    /// let known = SyntaxLayer::dispatch_parse_kind(ParseKind::Viewport, |k| {
+    ///     assert_eq!(k, ParseKindKind::Viewport);
     /// });
     /// assert!(known);
     /// ```
@@ -1756,14 +1738,6 @@ impl SyntaxLayer {
         match kind {
             ParseKind::Viewport => {
                 handler(ParseKindKind::Viewport);
-                true
-            }
-            ParseKind::Top => {
-                handler(ParseKindKind::Top);
-                true
-            }
-            ParseKind::Bottom => {
-                handler(ParseKindKind::Bottom);
                 true
             }
             // Unknown future variant — fall back to Viewport so the caller
@@ -1819,15 +1793,11 @@ mod tests {
 
     const TID: BufferId = 0;
 
-    // --- ParseKind ordering ---
+    // --- ParseKind ---
 
     #[test]
-    fn parse_kind_ordering_is_distinct() {
-        // Perf invariant: the three variants must be distinct so the queue
-        // deduplication does not accidentally coalesce different region requests.
-        assert_ne!(ParseKind::Viewport, ParseKind::Top);
-        assert_ne!(ParseKind::Viewport, ParseKind::Bottom);
-        assert_ne!(ParseKind::Top, ParseKind::Bottom);
+    fn parse_kind_viewport_equals_itself() {
+        assert_eq!(ParseKind::Viewport, ParseKind::Viewport);
     }
 
     // --- DiagSign ---
@@ -1879,10 +1849,10 @@ mod tests {
             vec![DiagSign::new(0, 'E', 100)],
             (7, 0, 30),
             PerfBreakdown::new(),
-            ParseKind::Bottom,
+            ParseKind::Viewport,
         );
         assert_eq!(out.buffer_id, 99);
-        assert_eq!(out.kind, ParseKind::Bottom);
+        assert_eq!(out.kind, ParseKind::Viewport);
         assert_eq!(out.key, (7, 0, 30));
         assert_eq!(out.signs.len(), 1);
     }
@@ -1902,7 +1872,7 @@ mod tests {
     }
 
     #[test]
-    fn render_output_partial_eq_different_kind() {
+    fn render_output_partial_eq_same_kind() {
         let a = RenderOutput::new(
             0,
             vec![],
@@ -1917,9 +1887,9 @@ mod tests {
             vec![],
             (0, 0, 10),
             PerfBreakdown::default(),
-            ParseKind::Top,
+            ParseKind::Viewport,
         );
-        assert_ne!(a, b);
+        assert_eq!(a, b);
     }
 
     // --- build_by_row ---
@@ -2008,10 +1978,10 @@ mod tests {
     }
 
     #[test]
-    fn pending_push_parse_keeps_different_kinds() {
+    fn pending_push_parse_different_buffers_coexist() {
         let mut p = Pending::new();
-        let make_req = |kind: ParseKind| ParseRequest {
-            buffer_id: 0,
+        let make_req = |buffer_id: BufferId| ParseRequest {
+            buffer_id,
             source: Arc::new(String::new()),
             row_starts: Arc::new(vec![]),
             viewport_byte_range: 0..0,
@@ -2020,12 +1990,12 @@ mod tests {
             row_count: 0,
             dirty_gen: 1,
             reset: false,
-            kind,
+            kind: ParseKind::Viewport,
         };
-        p.push_parse(make_req(ParseKind::Viewport));
-        p.push_parse(make_req(ParseKind::Top));
-        p.push_parse(make_req(ParseKind::Bottom));
-        // All three kinds for the same buffer must coexist.
+        p.push_parse(make_req(0));
+        p.push_parse(make_req(1));
+        p.push_parse(make_req(2));
+        // Different buffer ids must coexist in the queue.
         assert_eq!(p.parse_queue.len(), 3);
     }
 
