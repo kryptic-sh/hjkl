@@ -77,50 +77,45 @@ impl Cursor for RopeBuffer {
     fn byte_offset(&self, pos: Pos) -> usize {
         let p = pos_to_position(pos);
         let rope = self.rope();
-        // Sum byte lengths of every line strictly above `p.row` plus
-        // the trailing `\n`, then the col-byte-offset on `p.row`.
-        let mut byte = 0usize;
-        for r in 0..p.row.min(self.row_count()) {
-            byte += hjkl_buffer::rope_line_bytes(&rope, r) + 1; // +1 for '\n'
-        }
-        if p.row < rope.len_lines() {
+        let n = rope.len_lines();
+        // O(log N) rope index — no per-row String materialization.
+        let row = p.row.min(n);
+        let line_start = rope.line_to_byte(row);
+        if p.row < n {
+            // Only the cursor's own line needs to materialize for the
+            // col→byte offset translation.
             let line = hjkl_buffer::rope_line_str(&rope, p.row);
-            byte += p.byte_offset(&line);
+            line_start + p.byte_offset(&line)
+        } else {
+            line_start
         }
-        byte
     }
 
     fn pos_at_byte(&self, byte: usize) -> Pos {
         let rope = self.rope();
-        let mut remaining = byte;
-        for r in 0..self.row_count() {
-            let line = hjkl_buffer::rope_line_str(&rope, r);
-            let line_bytes = line.len();
-            // Each row contributes its bytes plus the trailing `\n`.
-            // `byte` indexing the trailing `\n` itself maps to the
-            // start of the next row (col 0).
-            if remaining <= line_bytes {
-                // Round down to the nearest char boundary so a byte index
-                // landing inside a multi-byte codepoint maps to the column
-                // of the char that contains it (not a slice panic).
-                let mut end = remaining.min(line_bytes);
-                while end > 0 && !line.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let col = line[..end].chars().count();
-                return Pos {
-                    line: r as u32,
-                    col: col as u32,
-                };
-            }
-            remaining -= line_bytes + 1;
+        let total = rope.len_bytes();
+        if total == 0 {
+            return Pos { line: 0, col: 0 };
         }
-        // Past end → clamp to end of last line.
-        let last = self.row_count().saturating_sub(1);
-        let line = hjkl_buffer::rope_line_str(&rope, last);
+        // Clamp into [0, total]; `byte_to_line` panics on OOB.
+        let byte_clamped = byte.min(total);
+        // O(log N) rope index — no per-row scan.
+        let row = rope.byte_to_line(byte_clamped);
+        let line_start = rope.line_to_byte(row);
+        let line = hjkl_buffer::rope_line_str(&rope, row);
+        let mut col_byte = byte_clamped.saturating_sub(line_start);
+        // Clamp to the line body (exclude the trailing `\n` if any).
+        col_byte = col_byte.min(line.len());
+        // Round down to the nearest char boundary so a byte index
+        // landing inside a multi-byte codepoint maps to the column
+        // of the char that contains it (not a slice panic).
+        while col_byte > 0 && !line.is_char_boundary(col_byte) {
+            col_byte -= 1;
+        }
+        let col = line[..col_byte].chars().count();
         Pos {
-            line: last as u32,
-            col: line.chars().count() as u32,
+            line: row as u32,
+            col: col as u32,
         }
     }
 }
