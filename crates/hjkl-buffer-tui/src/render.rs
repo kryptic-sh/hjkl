@@ -225,11 +225,27 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
     fn render(self, area: Rect, term_buf: &mut TermBuffer) {
         let viewport = *self.viewport;
         let cursor = self.buffer.cursor();
-        let lines = self.buffer.lines();
         let spans = self.spans;
         let folds = self.buffer.folds();
         let top_row = viewport.top_row;
         let top_col = viewport.top_col;
+        // Fetch only the viewport-bounded row slice. The render loop walks
+        // at most `area.height` screen rows, so on a 100K-row buffer we
+        // clone ~50 rows instead of the entire Vec<String>. Closed folds
+        // can skip past the precomputed bound — the rare overflow branch
+        // falls back to `Buffer::line(row)`.
+        let total_rows = self.buffer.row_count();
+        let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
+        let lines_prefetch = self.buffer.lines_range(top_row..prefetch_end);
+        let prefetch_base = top_row;
+        let prefetch_end_idx = prefetch_end;
+        let line_at = |row: usize| -> String {
+            if row >= prefetch_base && row < prefetch_end_idx {
+                lines_prefetch[row - prefetch_base].clone()
+            } else {
+                self.buffer.line(row).unwrap_or_default()
+            }
+        };
 
         let gutter_total = self
             .gutter
@@ -242,7 +258,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             height: area.height,
         };
 
-        let total_rows = lines.len();
+        // total_rows already captured above.
         let mut doc_row = top_row;
         let mut screen_row: u16 = 0;
         let wrap_mode = viewport.wrap;
@@ -271,7 +287,8 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 .iter()
                 .find(|f| f.closed && f.start_row == doc_row)
                 .copied();
-            let line = &lines[doc_row];
+            let line_owned = line_at(doc_row);
+            let line: &str = line_owned.as_str();
             let row_spans = spans.get(doc_row).map(Vec::as_slice).unwrap_or(&[]);
             let sel_range = self.selection.and_then(|s| s.row_span(doc_row));
             let is_cursor_row = doc_row == cursor.row;

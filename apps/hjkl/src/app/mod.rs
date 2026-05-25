@@ -488,8 +488,7 @@ pub(super) fn build_slot(
     // Sync render for immediate paint on open. recompute_and_install can't
     // be called here (slot isn't wired into App.slots yet), so go through
     // the layer directly.
-    let huge = config.editor.huge_file_threshold;
-    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height, huge) {
+    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height) {
         editor.install_ratatui_syntax_spans(out.spans);
     }
     let _ = editor.take_content_edits();
@@ -511,6 +510,7 @@ pub(super) fn build_slot(
         last_git_refresh_at: Instant::now(),
         saved_hash: 0,
         saved_len: 0,
+        signature_cache: None,
         disk_mtime,
         disk_len,
         disk_state: DiskState::Synced,

@@ -260,7 +260,6 @@ fn config_load_from_disk_then_with_config_propagates_overrides() {
 
     let cfg = hjkl_app::config::load_from(tmp.path()).expect("load_from must succeed");
     // Bundled defaults survived for fields the user file omitted:
-    assert_eq!(cfg.editor.huge_file_threshold, 50_000);
     assert!(cfg.editor.expandtab);
     // User overrides won where present:
     assert_eq!(cfg.editor.leader, '\\');
@@ -282,13 +281,13 @@ fn config_load_from_disk_validation_failure_surfaces() {
     // identify the offending key.
     use std::io::Write as _;
     let mut tmp = tempfile::NamedTempFile::new().unwrap();
-    writeln!(tmp, "[editor]\nhuge_file_threshold = 0").unwrap();
+    writeln!(tmp, "[editor]\ntab_width = 0").unwrap();
 
     let cfg = hjkl_app::config::load_from(tmp.path()).expect("parse must succeed");
 
     use hjkl_config::Validate;
     let err = cfg.validate().unwrap_err();
-    assert_eq!(err.field, "editor.huge_file_threshold");
+    assert_eq!(err.field, "editor.tab_width");
 }
 
 // ── Render-level :set option tests ──────────────────────────────────────────

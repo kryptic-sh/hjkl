@@ -14,7 +14,7 @@ use std::path::Path;
 
 use hjkl_config::{
     AppConfig, ConfigError, ConfigSource, Validate, ValidationError, ensure_non_empty_str,
-    ensure_non_zero, ensure_range, load_layered, load_layered_from,
+    ensure_range, load_layered, load_layered_from,
 };
 use serde::Deserialize;
 
@@ -60,8 +60,6 @@ pub struct EditorConfig {
     pub tab_width: u8,
     /// Fallback for spaces-vs-tabs when no `.editorconfig` covers the file.
     pub expandtab: bool,
-    /// Files with this many lines or more skip per-keystroke git diff recompute.
-    pub huge_file_threshold: u32,
     /// Whether mouse capture (and wheel-scrolls-viewport) is on at startup.
     /// Runtime-togglable via `:set [no]mouse`.
     pub mouse: bool,
@@ -124,10 +122,6 @@ impl Validate for Config {
             ));
         }
         ensure_range(self.editor.tab_width, 1, 16, "editor.tab_width")?;
-        ensure_non_zero(
-            self.editor.huge_file_threshold,
-            "editor.huge_file_threshold",
-        )?;
         // Empty theme.name is meaningless. Unknown *non-empty* names still
         // fall back to "dark" with a runtime warning (permissive rollout
         // for future themes), but `name = ""` indicates a config bug, not
@@ -150,7 +144,6 @@ mod tests {
         assert_eq!(cfg.editor.leader, ' ');
         assert_eq!(cfg.editor.tab_width, 4);
         assert!(cfg.editor.expandtab);
-        assert_eq!(cfg.editor.huge_file_threshold, 50_000);
         assert!(cfg.editor.mouse, "mouse defaults on");
         assert_eq!(cfg.theme.name, "dark");
     }
@@ -220,14 +213,6 @@ mod tests {
         assert!(cfg.validate().is_ok());
         cfg.editor.tab_width = 16;
         assert!(cfg.validate().is_ok());
-    }
-
-    #[test]
-    fn validate_rejects_zero_huge_file_threshold() {
-        let mut cfg = Config::default();
-        cfg.editor.huge_file_threshold = 0;
-        let err = cfg.validate().unwrap_err();
-        assert_eq!(err.field, "editor.huge_file_threshold");
     }
 
     /// Multi-char leader strings must be rejected at parse time — serde's

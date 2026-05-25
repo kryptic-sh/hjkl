@@ -40,9 +40,9 @@ pub struct GitResult {
 /// per buffer_id (latest-wins) so a burst of buffer switches or edits
 /// never queues more than one job per buffer at a time.
 pub struct GitSignsWorker {
-    tx: Sender<GitJob>,
+    tx: Option<Sender<GitJob>>,
     rx: Receiver<GitResult>,
-    _join: thread::JoinHandle<()>,
+    join: Option<thread::JoinHandle<()>>,
 }
 
 impl GitSignsWorker {
@@ -61,9 +61,9 @@ impl GitSignsWorker {
             .expect("spawn git-signs worker");
 
         Self {
-            tx: job_tx,
+            tx: Some(job_tx),
             rx: res_rx,
-            _join: handle,
+            join: Some(handle),
         }
     }
 
@@ -77,13 +77,32 @@ impl GitSignsWorker {
         // Ignore send errors — if the channel is disconnected (worker
         // panicked and was cleaned up), silently drop the job. The UI
         // will simply not receive updated git changes.
-        let _ = self.tx.send(job);
+        if let Some(tx) = self.tx.as_ref() {
+            let _ = tx.send(job);
+        }
     }
 
     /// Non-blocking drain. Returns the next completed result, if any.
     /// Call repeatedly per tick to process all queued results.
     pub fn try_recv(&self) -> Option<GitResult> {
         self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for GitSignsWorker {
+    /// Close the job channel and join the worker thread before returning.
+    ///
+    /// **Why join, not detach.** The worker calls `libgit2`, which lazily
+    /// initialises OpenSSL on the worker thread. Without a join, the
+    /// worker can still be mid-`Repository::discover` when `libc`'s
+    /// `atexit` handler runs `OPENSSL_cleanup`, racing the worker's
+    /// crypto state and crashing in `pthread_rwlock_unlock`. Joining
+    /// guarantees the worker is fully torn down before process exit.
+    fn drop(&mut self) {
+        drop(self.tx.take());
+        if let Some(h) = self.join.take() {
+            let _ = h.join();
+        }
     }
 }
 

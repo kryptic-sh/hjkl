@@ -129,6 +129,31 @@ impl Buffer {
         self.content_lock().lines.get(row).cloned()
     }
 
+    /// Byte length of row `row`, or 0 if out of bounds. One lock, no
+    /// String clone — `Buffer::line(row).map(|s| s.len()).unwrap_or(0)`
+    /// pays a full clone of the row's contents just to read its length.
+    pub fn line_bytes(&self, row: usize) -> usize {
+        self.content_lock()
+            .lines
+            .get(row)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    }
+
+    /// Clone only `range` rows under a single lock. Out-of-bounds end is
+    /// clamped to `row_count()`; if the start exceeds the row count the
+    /// result is empty.
+    ///
+    /// Hot-path replacement for [`Buffer::lines`] in the TUI renderer:
+    /// cloning the whole `Vec<String>` per frame is O(N) in document size,
+    /// but only the visible viewport is ever painted.
+    pub fn lines_range(&self, range: std::ops::Range<usize>) -> Vec<String> {
+        let c = self.content_lock();
+        let end = range.end.min(c.lines.len());
+        let start = range.start.min(end);
+        c.lines[start..end].to_vec()
+    }
+
     pub fn cursor(&self) -> Position {
         self.cursor
     }

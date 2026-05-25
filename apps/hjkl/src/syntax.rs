@@ -116,15 +116,10 @@ impl SyntaxLayer {
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
-        huge_file_threshold: u32,
     ) -> Option<RenderOutput> {
-        let raw = self.inner.render_viewport(
-            id,
-            buffer,
-            viewport_top,
-            viewport_height,
-            huge_file_threshold,
-        )?;
+        let raw = self
+            .inner
+            .render_viewport(id, buffer, viewport_top, viewport_height)?;
         Some(convert_output(raw))
     }
 }
@@ -171,7 +166,7 @@ mod tests {
                 .set_language_for_path(TID, Path::new("a.unknownext"))
                 .is_known()
         );
-        assert!(layer.render_viewport(TID, &buf, 0, 10, u32::MAX).is_none());
+        assert!(layer.render_viewport(TID, &buf, 0, 10).is_none());
     }
 
     #[test]
@@ -221,7 +216,7 @@ mod tests {
                 .is_known()
         );
         let out = layer
-            .render_viewport(TID, &buf, 0, 10, u32::MAX)
+            .render_viewport(TID, &buf, 0, 10)
             .expect("render output");
         assert!(
             out.spans.iter().any(|r| !r.is_empty()),
@@ -235,7 +230,7 @@ mod tests {
         let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let out = layer.render_viewport(TID, &buf, 0, 10, u32::MAX).unwrap();
+        let out = layer.render_viewport(TID, &buf, 0, 10).unwrap();
         assert!(
             !out.signs.is_empty(),
             "expected at least one diagnostic sign for `let x = ;`"
@@ -253,7 +248,7 @@ mod tests {
         let pre = Buffer::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = layer.render_viewport(TID, &pre, 0, 10, u32::MAX).unwrap();
+        let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
         layer.apply_edits(
             TID,
             &[hjkl_engine::ContentEdit {
@@ -266,12 +261,10 @@ mod tests {
             }],
         );
         let post = Buffer::from_str("fn Ymain() { let x = 1; }");
-        let inc = layer.render_viewport(TID, &post, 0, 10, u32::MAX).unwrap();
+        let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
         let mut cold_layer = default_layer();
         cold_layer.set_language_for_path(TID, Path::new("a.rs"));
-        let cold = cold_layer
-            .render_viewport(TID, &post, 0, 10, u32::MAX)
-            .unwrap();
+        let cold = cold_layer.render_viewport(TID, &post, 0, 10).unwrap();
         assert_eq!(inc.spans, cold.spans);
     }
 }

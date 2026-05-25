@@ -437,8 +437,8 @@ pub(super) enum CursorScrollTarget {
 // `use` so the editor body keeps its terse call shape.
 
 use crate::buf_helpers::{
-    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_chars,
-    buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
+    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_bytes,
+    buf_line_chars, buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
 };
 
 /// Return value from the engine's `try_goto_mark_*` methods. Tells the
@@ -2985,17 +2985,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let old_len_bytes = self.buffer.len_bytes();
         let old_row_count = buf_row_count(&self.buffer);
         let old_last_row = old_row_count.saturating_sub(1);
-        let old_last_col = buf_line(&self.buffer, old_last_row)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let old_last_col = buf_line_bytes(&self.buffer, old_last_row);
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
         let new_len_bytes = self.buffer.len_bytes();
         let new_row_count = buf_row_count(&self.buffer);
         let new_last_row = new_row_count.saturating_sub(1);
-        let new_last_col = buf_line(&self.buffer, new_last_row)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let new_last_col = buf_line_bytes(&self.buffer, new_last_row);
         // Bulk replace — supersedes any prior queued edits, then push a
         // single whole-buffer edit so the syntax pipeline can run
         // incremental.

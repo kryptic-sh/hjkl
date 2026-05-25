@@ -565,8 +565,7 @@ impl SyntaxLayer {
 
     /// Render spans for the visible viewport. Fully synchronous.
     ///
-    /// 1. Returns `None` when no grammar is attached or buffer exceeds
-    ///    `huge_file_threshold` lines.
+    /// 1. Returns `None` when no grammar is attached.
     /// 2. Clears the cache when `buffer.dirty_gen()` has advanced.
     /// 3. Returns cached rows when the request is fully inside the cached range.
     /// 4. Walks only rows outside the cache (extend prefix/suffix), splices into
@@ -577,12 +576,7 @@ impl SyntaxLayer {
         buffer: &impl Query,
         viewport_top: usize,
         viewport_height: usize,
-        huge_file_threshold: u32,
     ) -> Option<RenderOutput> {
-        if buffer.line_count() >= huge_file_threshold {
-            return None;
-        }
-
         let client = self.clients.get_mut(&id)?;
         if !client.has_language {
             return None;
@@ -1113,7 +1107,7 @@ mod tests {
                 .set_language_for_path(TID, Path::new("a.unknownext"))
                 .is_known()
         );
-        assert!(layer.render_viewport(TID, &buf, 0, 10, u32::MAX).is_none());
+        assert!(layer.render_viewport(TID, &buf, 0, 10).is_none());
     }
 
     #[test]
@@ -1157,15 +1151,6 @@ mod tests {
         assert!(!layer.clients.contains_key(&TID));
     }
 
-    #[test]
-    fn huge_file_returns_none() {
-        let buf = Buffer::from_str("fn main() {}");
-        let mut layer = default_layer();
-        // Language set but file threshold = 1 line (buffer has 1 line → over threshold).
-        // threshold = 0 means every file is "huge".
-        assert!(layer.render_viewport(TID, &buf, 0, 10, 0).is_none());
-    }
-
     // --- Network-dependent tests (grammar needed) ---
 
     #[test]
@@ -1179,7 +1164,7 @@ mod tests {
                 .is_known()
         );
         let out = layer
-            .render_viewport(TID, &buf, 0, 10, u32::MAX)
+            .render_viewport(TID, &buf, 0, 10)
             .expect("render output");
         assert!(
             out.spans.iter().any(|r| !r.is_empty()),
@@ -1193,7 +1178,7 @@ mod tests {
         let buf = Buffer::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let out = layer.render_viewport(TID, &buf, 0, 10, u32::MAX).unwrap();
+        let out = layer.render_viewport(TID, &buf, 0, 10).unwrap();
         assert!(
             !out.signs.is_empty(),
             "expected at least one diagnostic sign for `let x = ;`"
@@ -1211,7 +1196,7 @@ mod tests {
         let pre = Buffer::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = layer.render_viewport(TID, &pre, 0, 10, u32::MAX).unwrap();
+        let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
         layer.apply_edits(
             TID,
             &[hjkl_engine::ContentEdit {
@@ -1224,12 +1209,10 @@ mod tests {
             }],
         );
         let post = Buffer::from_str("fn Ymain() { let x = 1; }");
-        let inc = layer.render_viewport(TID, &post, 0, 10, u32::MAX).unwrap();
+        let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
         let mut cold_layer = default_layer();
         cold_layer.set_language_for_path(TID, Path::new("a.rs"));
-        let cold = cold_layer
-            .render_viewport(TID, &post, 0, 10, u32::MAX)
-            .unwrap();
+        let cold = cold_layer.render_viewport(TID, &post, 0, 10).unwrap();
         assert_eq!(inc.spans, cold.spans);
     }
 
@@ -1239,7 +1222,7 @@ mod tests {
         let buf = Buffer::from_str("fn main() {}");
         let mut layer = default_layer();
         layer.set_language_for_path(TID, Path::new("a.rs"));
-        let _ = layer.render_viewport(TID, &buf, 0, 10, u32::MAX).unwrap();
+        let _ = layer.render_viewport(TID, &buf, 0, 10).unwrap();
         assert!(layer.clients.contains_key(&TID));
         layer.forget(TID);
         assert!(!layer.clients.contains_key(&TID));

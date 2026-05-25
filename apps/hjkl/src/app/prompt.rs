@@ -732,6 +732,7 @@ impl App {
             last_git_refresh_at: Instant::now(),
             saved_hash: 0,
             saved_len: 0,
+            signature_cache: None,
             disk_mtime: None,
             disk_len: None,
             disk_state: crate::app::DiskState::Synced,

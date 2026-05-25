@@ -20,10 +20,6 @@ tab_width = 4
 # Fallback for spaces-vs-tabs when no .editorconfig covers the file.
 expandtab = true
 
-# Files with this many lines or more skip the per-keystroke git diff
-# recomputation. Lower this on slower machines.
-huge_file_threshold = 50000
-
 # Mouse support. When true, wheel scrolls the viewport (with scrolloff)
 # and the terminal's native text-selection requires Shift to bypass
 # capture (vim/nvim/helix convention). Toggle at runtime with

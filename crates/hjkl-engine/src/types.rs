@@ -1160,6 +1160,39 @@ pub trait Query: Send {
         }
         std::sync::Arc::new(acc)
     }
+
+    /// Byte length of `row`. Out-of-range rows return 0.
+    ///
+    /// Default impl pays a full `line(row)` clone just to read its length.
+    /// Backends with row-indexed storage (canonical `hjkl_buffer::Buffer`)
+    /// should override to read the byte length under one lock with no
+    /// allocation — `Editor::restore_text` calls this on every undo/redo
+    /// to recompute the inverse `ContentEdit`.
+    fn line_bytes(&self, row: usize) -> usize {
+        let n = self.line_count() as usize;
+        if row >= n {
+            return 0;
+        }
+        self.line(row as u32).len()
+    }
+
+    /// Clone every row into an owned `Vec<String>`. Vim text-object
+    /// helpers (word/sentence/quote/bracket) need a full snapshot to
+    /// walk byte-by-byte, and per-row `line(r)` calls on a
+    /// mutex-backed backend pay one lock per row — a 100K-row buffer
+    /// pays 100K locks per `daw`/`ciw`. Backends with a contiguous
+    /// row store should override this with a single-lock bulk clone.
+    ///
+    /// Default impl preserves the per-row walk so non-canonical
+    /// backends keep working.
+    fn lines_to_vec(&self) -> Vec<String> {
+        let n = self.line_count() as usize;
+        let mut out = Vec::with_capacity(n);
+        for r in 0..n {
+            out.push(self.line(r as u32));
+        }
+        out
+    }
 }
 
 /// Mutating sub-trait of [`Buffer`]. Distinct trait name from the

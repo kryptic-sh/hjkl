@@ -1,5 +1,13 @@
 //! `hjkl` — standalone vim-modal terminal editor.
 
+// mimalloc as the global Rust allocator. Tree-sitter parsing dominates
+// the hot path and is heavily allocation-bound (every subtree node is a
+// short-lived `malloc`); mimalloc's segmented free-list outperforms
+// glibc's ptmalloc on this exact workload. The TS C core is routed
+// through mimalloc separately by `hjkl_bonsai::ensure_mimalloc_allocator()`.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app;
 mod completion;
 mod embed;
@@ -289,9 +297,9 @@ fn main() -> Result<()> {
             std::process::exit(2);
         }
     };
-    // Bounds-check the parsed config (tab_width range, huge_file_threshold > 0).
-    // Schema-level validation already ran during parse; this catches semantic
-    // values that parsed cleanly but would break the editor.
+    // Bounds-check the parsed config (tab_width range, etc.). Schema-level
+    // validation already ran during parse; this catches semantic values that
+    // parsed cleanly but would break the editor.
     {
         use hjkl_config::Validate;
         if let Err(e) = cfg.validate() {

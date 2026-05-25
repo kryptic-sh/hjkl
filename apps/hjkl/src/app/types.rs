@@ -307,6 +307,11 @@ pub struct BufferSlot {
     /// recent save (or load).
     pub(super) saved_hash: u64,
     pub(super) saved_len: usize,
+    /// Cached `(hash, len)` of the buffer at a specific `dirty_gen`.
+    /// Hashing the full document on every keystroke is O(N) in buffer size
+    /// (~3 MB on a 100 K-line file = ~9 % of per-keystroke CPU); cache by
+    /// `dirty_gen` so the hash runs at most once per content change.
+    pub(super) signature_cache: Option<(u64, (u64, usize))>,
     /// mtime of the file on disk at the most recent load or save.
     pub disk_mtime: Option<SystemTime>,
     /// Byte length of the file on disk at the most recent load or save.
@@ -348,7 +353,7 @@ pub(crate) fn find_project_root(start: &std::path::Path) -> PathBuf {
 impl BufferSlot {
     /// Snapshot the loaded content so undo-to-saved clears dirty.
     pub(super) fn snapshot_saved(&mut self) {
-        let (h, l) = buffer_signature(&self.editor);
+        let (h, l) = self.cached_signature();
         self.saved_hash = h;
         self.saved_len = l;
         self.dirty = false;
@@ -357,9 +362,26 @@ impl BufferSlot {
     /// Sync `self.dirty` against a fresh content comparison.
     pub(super) fn refresh_dirty_against_saved(&mut self) -> u128 {
         let t = std::time::Instant::now();
-        let (h, l) = buffer_signature(&self.editor);
+        let (h, l) = self.cached_signature();
         let elapsed = t.elapsed().as_micros();
         self.dirty = h != self.saved_hash || l != self.saved_len;
         elapsed
+    }
+
+    /// Return `(hash, len)` of the current buffer content. Memoized by
+    /// `dirty_gen`: while the buffer is unchanged subsequent calls return
+    /// the cached value without re-hashing. Without this, every keystroke
+    /// re-hashes the full `content_joined()` Arc (~3 MB on a 100 K-line
+    /// file, ~9 % of per-keystroke CPU in profiling).
+    fn cached_signature(&mut self) -> (u64, usize) {
+        let dg = self.editor.buffer().dirty_gen();
+        if let Some((cached_dg, sig)) = self.signature_cache
+            && cached_dg == dg
+        {
+            return sig;
+        }
+        let sig = buffer_signature(&self.editor);
+        self.signature_cache = Some((dg, sig));
+        sig
     }
 }

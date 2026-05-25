@@ -17,6 +17,7 @@ hjkl-xdg.workspace = true
 hjkl-theme.workspace = true
 tree-sitter = "0.26"
 tree-sitter-language = "0.1"
+libmimalloc-sys = { version = "0.1", default-features = false }
 toml = "1.1"
 serde = { version = "1", features = ["derive"] }
 anyhow = "1"

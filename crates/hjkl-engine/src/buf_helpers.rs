@@ -80,14 +80,13 @@ pub(crate) fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
 /// Snapshot every line into a `Vec<String>`. Allocates — call sites
 /// that previously borrowed `lines() -> &[String]` and immediately
 /// `.to_vec()`'d / `.iter().map(...)`'d collapse cleanly onto this.
+///
+/// Delegates to [`Query::lines_to_vec`] so backends that can clone in
+/// bulk under a single lock (e.g. the canonical `hjkl_buffer::Buffer`)
+/// avoid the per-row mutex acquire that the default walk would pay.
 #[inline]
 pub(crate) fn buf_lines_to_vec<B: Query + ?Sized>(b: &B) -> Vec<String> {
-    let n = Query::line_count(b) as usize;
-    let mut out = Vec::with_capacity(n);
-    for r in 0..n {
-        out.push(Query::line(b, r as u32));
-    }
-    out
+    Query::lines_to_vec(b)
 }
 
 /// Length (chars) of `row`. Returns 0 for out-of-bounds rows so call
@@ -102,9 +101,12 @@ pub(crate) fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
 /// Length (bytes) of `row`. Returns 0 for out-of-bounds rows. The
 /// byte-shape mirror of [`buf_line_chars`] — used by call sites that
 /// pre-0.0.42 inspected `buf.lines()[row].len()`.
+///
+/// Delegates to [`Query::line_bytes`] so backends with row-indexed
+/// storage skip the per-row `String` clone the default walk would do.
 #[inline]
 pub(crate) fn buf_line_bytes<B: Query + ?Sized>(b: &B, row: usize) -> usize {
-    buf_line(b, row).map(|l| l.len()).unwrap_or(0)
+    Query::line_bytes(b, row)
 }
 
 /// Apply a [`hjkl_buffer::Edit`] and return the inverse for undo.

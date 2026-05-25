@@ -1,4 +1,4 @@
-use hjkl_engine::{Host, Query};
+use hjkl_engine::Host;
 use hjkl_engine_tui::EditorRatatuiExt;
 use std::path::Path;
 
@@ -45,7 +45,6 @@ impl App {
     pub(crate) fn refresh_git_signs_inner(&mut self, force: bool) {
         use std::time::{Duration, Instant};
         const REFRESH_MIN_INTERVAL: Duration = Duration::from_millis(250);
-        let huge_file_lines = self.config.editor.huge_file_threshold;
 
         let path = match self.active().filename.as_deref() {
             Some(p) => p.to_path_buf(),
@@ -58,9 +57,6 @@ impl App {
         };
         let dg = self.active().editor.buffer().dirty_gen();
         if !force && self.active().last_git_dirty_gen == Some(dg) {
-            return;
-        }
-        if !force && self.active().editor.buffer().line_count() >= huge_file_lines {
             return;
         }
         let now = Instant::now();
@@ -208,8 +204,7 @@ impl App {
     }
 
     /// Run `render_viewport` for the active buffer and install the result.
-    /// Returns empty spans when no grammar is attached, grammar is loading,
-    /// or the buffer exceeds `huge_file_threshold`.
+    /// Returns empty spans when no grammar is attached or grammar is loading.
     pub(crate) fn recompute_and_install(&mut self) {
         if !self.syntax_enabled {
             return;
@@ -235,13 +230,10 @@ impl App {
             (union_top, union_bot - union_top)
         };
 
-        let huge = self.config.editor.huge_file_threshold;
         let active_idx = self.focused_slot_idx();
         let buf = self.slots[active_idx].editor.buffer();
 
-        let out = self
-            .syntax
-            .render_viewport(buffer_id, buf, top, height, huge);
+        let out = self.syntax.render_viewport(buffer_id, buf, top, height);
 
         if let Some(out) = out {
             let start = out.key.1;
@@ -251,7 +243,7 @@ impl App {
                 .patch_ratatui_syntax_spans_range(start..end, &out.spans);
             self.slots[active_idx].diag_signs = out.signs;
         } else {
-            // No spans available (no language, grammar loading, or huge file).
+            // No spans available (no language or grammar still loading).
             // Clear stale spans and let the renderer draw plain text.
             self.slots[active_idx]
                 .editor

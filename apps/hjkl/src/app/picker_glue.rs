@@ -760,8 +760,7 @@ fn build_scratch_slot(
         let vp = editor.host().viewport();
         (vp.top_row, vp.height as usize)
     };
-    let huge = config.editor.huge_file_threshold;
-    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height, huge) {
+    if let Some(out) = syntax.render_viewport(buffer_id, editor.buffer(), vp_top, vp_height) {
         editor.install_ratatui_syntax_spans(out.spans);
     }
 
@@ -781,6 +780,7 @@ fn build_scratch_slot(
         last_git_refresh_at: Instant::now(),
         saved_hash: 0,
         saved_len: 0,
+        signature_cache: None,
         disk_mtime: None,
         disk_len: None,
         disk_state: DiskState::Synced,

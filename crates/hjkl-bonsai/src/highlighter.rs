@@ -229,6 +229,53 @@ pub mod parse_counter {
     }
 }
 
+/// Route tree-sitter's C-side `malloc/calloc/realloc/free` through mimalloc.
+///
+/// `#[global_allocator]` only redirects Rust's `alloc::*`. Tree-sitter is a
+/// C library and calls the libc allocator directly via FFI; without this
+/// routing, every subtree node still lands in glibc's ptmalloc even when
+/// the host binary uses mimalloc as its Rust allocator. Tree-sitter parse
+/// is heavily allocation-bound (millions of short-lived subtree nodes per
+/// document), so routing the C-side calls through mimalloc compounds with
+/// the Rust-side switch.
+///
+/// Idempotent — runs at most once per process via `Once`. Called from
+/// every `Highlighter::with_registry` so consumers don't have to remember
+/// to call it; the cost after the first call is one atomic load.
+fn ensure_mimalloc_allocator() {
+    use std::ffi::c_void;
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+
+    unsafe extern "C" fn ts_mi_malloc(size: usize) -> *mut c_void {
+        unsafe { libmimalloc_sys::mi_malloc(size) }
+    }
+    unsafe extern "C" fn ts_mi_calloc(nmemb: usize, size: usize) -> *mut c_void {
+        // mimalloc exposes `mi_zalloc(size)` (single-arg, zeroed) but not the
+        // two-arg `mi_calloc(nmemb, size)` symbol. Compute the product with
+        // overflow check — C's `calloc` returns NULL on overflow.
+        match nmemb.checked_mul(size) {
+            Some(total) => unsafe { libmimalloc_sys::mi_zalloc(total) },
+            None => std::ptr::null_mut(),
+        }
+    }
+    unsafe extern "C" fn ts_mi_realloc(ptr: *mut c_void, size: usize) -> *mut c_void {
+        unsafe { libmimalloc_sys::mi_realloc(ptr, size) }
+    }
+    unsafe extern "C" fn ts_mi_free(ptr: *mut c_void) {
+        unsafe { libmimalloc_sys::mi_free(ptr) }
+    }
+
+    INIT.call_once(|| unsafe {
+        tree_sitter::set_allocator(
+            Some(ts_mi_malloc),
+            Some(ts_mi_calloc),
+            Some(ts_mi_realloc),
+            Some(ts_mi_free),
+        );
+    });
+}
+
 /// Stateful syntax highlighter for a single language.
 ///
 /// Owns a `Parser`, a compiled `Query`, and a reference-counted handle on the
@@ -297,6 +344,7 @@ impl Highlighter {
     /// Like [`Highlighter::new`] but with a caller-supplied registry, allowing
     /// consumers to extend predicates/directives beyond the builtins.
     pub fn with_registry(grammar: Arc<Grammar>, registry: Arc<PredicateRegistry>) -> Result<Self> {
+        ensure_mimalloc_allocator();
         let mut parser = Parser::new();
         parser
             .set_language(grammar.language())
