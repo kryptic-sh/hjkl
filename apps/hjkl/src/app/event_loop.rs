@@ -1188,6 +1188,24 @@ impl App {
 
     /// Main event loop. Draws every frame, routes key events through
     /// the vim FSM, handles resize, exits on Ctrl-C.
+    ///
+    /// WARN: This loop batches expensive sync work (tree-sitter reparse,
+    /// span query, git signs) via `self.pending_recompute = true` flushed
+    /// at the top of each iteration right before `terminal.draw`. The
+    /// invariants are load-bearing — break them and per-keystroke CPU
+    /// regresses by multiple TS parses per key on huge files:
+    ///
+    /// 1. Keystroke arms (insert + normal) MUST set `pending_recompute = true`
+    ///    and never call `recompute_and_install()` inline.
+    /// 2. `KeyOutcome::Continue` MUST NOT `continue` to the top of the loop —
+    ///    it must fall through to the drain block below so queued events
+    ///    fold into the same flush. Use the `consumed_inline` flag pattern.
+    /// 3. `render::frame` MUST NOT call `recompute_and_install()` — the
+    ///    flush above already handled it. `App::new` seeds
+    ///    `pending_recompute = true` so the first frame still runs an
+    ///    initial parse via this flush.
+    /// 4. Order is fixed: lsp drain → viewport → cursor shape → FLUSH →
+    ///    draw → async polls → poll(timeout) → read → handle + drain.
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             // ── Per-tick setup ────────────────────────────────────
