@@ -198,6 +198,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                 ExEffect::Cwd(_) => {
                     // Directory already changed by the handler — no-op.
                 }
+
+                ExEffect::Redraw { .. } => {
+                    // No terminal to clear in headless mode — no-op.
+                }
             }
         }
 

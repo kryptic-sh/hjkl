@@ -452,6 +452,14 @@ impl App {
                 // `:cd` already applied std::env::set_current_dir; show new path.
                 self.bus.info(new_cwd);
             }
+            ExEffect::Redraw { clear } => {
+                if clear {
+                    // `:redraw!` — clear the terminal before the next draw.
+                    self.force_clear_screen = true;
+                }
+                // `:redraw` (no `!`) — ratatui's diff-based renderer will
+                // repaint on the next event-loop tick without a full clear.
+            }
         }
     }
 

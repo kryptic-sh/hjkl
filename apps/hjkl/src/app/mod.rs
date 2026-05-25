@@ -339,6 +339,11 @@ pub struct App {
     /// after [`INDENT_FLASH_DURATION`] has elapsed. Drained by
     /// [`Self::indent_flash_active`].
     pub(crate) indent_flash: Option<IndentFlash>,
+    /// Set by `:redraw!` to force `terminal.clear()` before the next draw.
+    /// Cleared immediately after the clear is issued so subsequent frames
+    /// draw normally. `:redraw` (no `!`) leaves this `false` — ratatui's
+    /// diff-based renderer already issues a repaint on the next tick.
+    pub(crate) force_clear_screen: bool,
 }
 
 /// Memoised result of [`crate::render::search_count`]. Stored in a
@@ -1186,6 +1191,7 @@ impl App {
             hover_timer: None,
             border_drag: None,
             indent_flash: None,
+            force_clear_screen: false,
         })
     }
 

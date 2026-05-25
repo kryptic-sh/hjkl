@@ -77,3 +77,21 @@ initial_cursor = [0, 0]
 keys = ":syntax enable<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
+
+# :redraw — plain repaint, no buffer/cursor change
+[[cases]]
+name = "redraw_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":redraw<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :redraw! — clear + repaint, no buffer/cursor change
+[[cases]]
+name = "redraw_bang_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":redraw!<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]

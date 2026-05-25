@@ -1255,6 +1255,13 @@ impl App {
             }
 
             // ── Draw ──────────────────────────────────────────────
+            // `:redraw!` sets force_clear_screen; clear before drawing so
+            // stale terminal content is wiped. Cleared immediately so only
+            // the next frame pays the cost.
+            if self.force_clear_screen {
+                self.force_clear_screen = false;
+                terminal.clear()?;
+            }
             let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(

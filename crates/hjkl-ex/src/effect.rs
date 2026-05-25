@@ -55,4 +55,9 @@ pub enum ExEffect {
     /// `$HOME`. The directory change is applied inside the handler; the new
     /// path is surfaced so the host can update its status-line / title.
     Cwd(String),
+    /// `:redraw[!]` — signal the host to repaint on the next frame.
+    /// When `clear` is `true` (`:redraw!`) the host should clear the terminal
+    /// before repainting. `:redraw` (no `!`) requests a plain repaint without
+    /// clearing.
+    Redraw { clear: bool },
 }

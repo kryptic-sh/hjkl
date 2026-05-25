@@ -189,6 +189,10 @@ fn dispatch(
                     // Directory already changed by the handler — no-op.
                     success(id, Value::Null)
                 }
+                ExEffect::Redraw { .. } => {
+                    // No terminal to clear in embed mode — treat as no-op.
+                    success(id, Value::Null)
+                }
             }
         }
 

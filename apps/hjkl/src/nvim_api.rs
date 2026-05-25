@@ -460,6 +460,10 @@ fn dispatch(
                     // Directory already changed by the handler — no-op.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::Redraw { .. } => {
+                    // No terminal to clear in nvim-api mode — treat as no-op.
+                    ok(stdout, msgid, Value::Nil)
+                }
             }
         }
 

@@ -1158,6 +1158,44 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 3,
         run: syntax_handler::<H>,
     });
+
+    // `:redraw` — repaint without clearing (min_prefix=6; "redraw" is 6 chars).
+    reg.add(ExCommand {
+        name: "redraw",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 6,
+        run: redraw_handler::<H>,
+    });
+
+    // `:redraw!` — clear terminal then repaint (min_prefix=7).
+    reg.add(ExCommand {
+        name: "redraw!",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 7,
+        run: redraw_clear_handler::<H>,
+    });
+}
+
+// ---- :redraw ---------------------------------------------------------------
+
+/// `:redraw` — signal the host to repaint without clearing.
+fn redraw_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Redraw { clear: false })
+}
+
+/// `:redraw!` — signal the host to clear the terminal then repaint.
+fn redraw_clear_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Redraw { clear: true })
 }
 
 // ---- :syntax ---------------------------------------------------------------
@@ -2396,5 +2434,27 @@ mod tests {
                 "row {row} should be commented; got {l:?}"
             );
         }
+    }
+
+    // ── redraw_handler / redraw_clear_handler ─────────────────────────────────
+
+    #[test]
+    fn dispatch_redraw_returns_redraw_effect() {
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let cmd = reg.resolve("redraw").expect(":redraw must resolve");
+        let result = (cmd.run)(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Redraw { clear: false }));
+    }
+
+    #[test]
+    fn dispatch_redraw_bang_returns_redraw_clear_effect() {
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let cmd = reg.resolve("redraw!").expect(":redraw! must resolve");
+        let result = (cmd.run)(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Redraw { clear: true }));
     }
 }
