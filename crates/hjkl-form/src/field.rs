@@ -162,12 +162,8 @@ impl TextFieldEditor {
         let n = self.editor.buffer().row_count();
         if n > 0 {
             let row = n - 1;
-            let col = self
-                .editor
-                .buffer()
-                .line(row)
-                .map(|s| s.chars().count())
-                .unwrap_or(0);
+            let rope = self.editor.buffer().rope();
+            let col = hjkl_buffer::rope_line_str(&rope, row).chars().count();
             self.editor
                 .buffer_mut()
                 .set_cursor(hjkl_buffer::Position::new(row, col));
@@ -192,12 +188,8 @@ impl TextFieldEditor {
         // Move cursor to end of last line.
         let n = self.editor.buffer().row_count();
         let row = n.saturating_sub(1);
-        let col = self
-            .editor
-            .buffer()
-            .line(row)
-            .map(|s| s.chars().count())
-            .unwrap_or(0);
+        let eol_rope = self.editor.buffer().rope();
+        let col = hjkl_buffer::rope_line_str(&eol_rope, row).chars().count();
         self.editor
             .buffer_mut()
             .set_cursor(hjkl_buffer::Position::new(row, col));

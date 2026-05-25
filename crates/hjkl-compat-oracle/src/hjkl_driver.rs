@@ -53,7 +53,10 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     }
 
     // 5. Read back state.
-    let lines = editor.buffer().lines().to_vec();
+    let rope = editor.buffer().rope();
+    let lines: Vec<String> = (0..rope.len_lines())
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
     // Reconstruct the buffer string: join with '\n'. If the last line is empty
     // (buffer originally ended with '\n'), the join produces a trailing '\n'.
     let buffer_str = lines.join("\n");

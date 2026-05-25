@@ -355,6 +355,10 @@ mod tests {
         e
     }
 
+    fn buf_line(e: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), row)
+    }
+
     // ── Parser tests ─────────────────────────────────────────────────
 
     #[test]
@@ -484,7 +488,7 @@ mod tests {
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 1);
         assert_eq!(out.lines_changed, 1);
-        assert_eq!(e.buffer().lines()[0], "bar foo");
+        assert_eq!(buf_line(&e, 0), "bar foo");
     }
 
     #[test]
@@ -494,7 +498,7 @@ mod tests {
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 3);
         assert_eq!(out.lines_changed, 1);
-        assert_eq!(e.buffer().lines()[0], "bar bar bar");
+        assert_eq!(buf_line(&e, 0), "bar bar bar");
     }
 
     #[test]
@@ -504,20 +508,20 @@ mod tests {
         let out = apply_substitute(&mut e, &cmd, 0..=2).unwrap();
         assert_eq!(out.replacements, 3);
         assert_eq!(out.lines_changed, 2);
-        assert_eq!(e.buffer().lines()[0], "xyz");
-        assert_eq!(e.buffer().lines()[1], "xyz xyz");
-        assert_eq!(e.buffer().lines()[2], "bar");
+        assert_eq!(buf_line(&e, 0), "xyz");
+        assert_eq!(buf_line(&e, 1), "xyz xyz");
+        assert_eq!(buf_line(&e, 2), "bar");
     }
 
     #[test]
     fn apply_no_match_returns_zero() {
         let mut e = editor_with("hello");
-        let original = e.buffer().lines()[0].to_string();
+        let original = buf_line(&e, 0);
         let cmd = parse_substitute("/xyz/abc/").unwrap();
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 0);
         assert_eq!(out.lines_changed, 0);
-        assert_eq!(e.buffer().lines()[0], original);
+        assert_eq!(buf_line(&e, 0), original);
     }
 
     #[test]
@@ -526,7 +530,7 @@ mod tests {
         let cmd = parse_substitute("/foo/bar/gi").unwrap();
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 3);
-        assert_eq!(e.buffer().lines()[0], "bar bar bar");
+        assert_eq!(buf_line(&e, 0), "bar bar bar");
     }
 
     #[test]
@@ -539,7 +543,7 @@ mod tests {
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         // Only the lowercase "foo" matches.
         assert_eq!(out.replacements, 1);
-        assert_eq!(e.buffer().lines()[0], "Foo bar");
+        assert_eq!(buf_line(&e, 0), "Foo bar");
     }
 
     #[test]
@@ -549,7 +553,7 @@ mod tests {
         let cmd = parse_substitute("//planet/").unwrap();
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 1);
-        assert_eq!(e.buffer().lines()[0], "hello planet");
+        assert_eq!(buf_line(&e, 0), "hello planet");
     }
 
     #[test]
@@ -577,7 +581,7 @@ mod tests {
         let cmd = parse_substitute("/world//").unwrap();
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 1);
-        assert_eq!(e.buffer().lines()[0], "hello ");
+        assert_eq!(buf_line(&e, 0), "hello ");
     }
 
     #[test]
@@ -585,9 +589,9 @@ mod tests {
         let mut e = editor_with("foo");
         let cmd = parse_substitute("/foo/bar/").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
-        assert_eq!(e.buffer().lines()[0], "bar");
+        assert_eq!(buf_line(&e, 0), "bar");
         e.undo();
-        assert_eq!(e.buffer().lines()[0], "foo");
+        assert_eq!(buf_line(&e, 0), "foo");
     }
 
     #[test]
@@ -595,7 +599,7 @@ mod tests {
         let mut e = editor_with("foo");
         let cmd = parse_substitute("/foo/[&]/").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
-        assert_eq!(e.buffer().lines()[0], "[foo]");
+        assert_eq!(buf_line(&e, 0), "[foo]");
     }
 
     #[test]
@@ -603,6 +607,6 @@ mod tests {
         let mut e = editor_with("hello world");
         let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
-        assert_eq!(e.buffer().lines()[0], "<<hello>> <<world>>");
+        assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
     }
 }

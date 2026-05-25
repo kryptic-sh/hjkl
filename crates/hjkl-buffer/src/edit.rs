@@ -510,6 +510,7 @@ fn order(a: Position, b: Position) -> (Position, Position) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer::rope_line_str;
 
     fn round_trip_check(initial: &str, edit: Edit) {
         let mut b = Buffer::from_str(initial);
@@ -634,7 +635,7 @@ mod tests {
             kind: MotionKind::Line,
         });
         assert_eq!(b.row_count(), 1);
-        assert_eq!(b.line(0).as_deref(), Some(""));
+        assert_eq!(rope_line_str(&b.rope(), 0), "");
     }
 
     #[test]
@@ -646,7 +647,7 @@ mod tests {
             ch: 'X',
         });
         assert_eq!(b.cursor(), Position::new(0, 2));
-        assert_eq!(b.line(0).as_deref(), Some("aXbc"));
+        assert_eq!(rope_line_str(&b.rope(), 0), "aXbc");
     }
 
     #[test]

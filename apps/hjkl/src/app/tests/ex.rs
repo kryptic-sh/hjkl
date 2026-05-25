@@ -63,7 +63,17 @@ fn edit_percent_reloads_current_file() {
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     std::fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
     app.dispatch_ex("e %");
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
     let _ = std::fs::remove_file(&path);
 }
@@ -75,7 +85,19 @@ fn edit_no_arg_reloads_current_file() {
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     std::fs::write(&path, "v2\n").unwrap();
     app.dispatch_ex("e");
-    assert_eq!(app.active().editor.buffer().lines(), vec!["v2".to_string()]);
+    assert_eq!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["v2".to_string()]
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -99,7 +121,16 @@ fn edit_force_reloads_dirty_buffer() {
     app.active_mut().dirty = true;
     app.dispatch_ex("e!");
     assert_eq!(
-        app.active().editor.buffer().lines(),
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         vec!["disk".to_string()]
     );
     assert!(!app.active().dirty);
@@ -143,7 +174,16 @@ fn edit_new_path_appends_slot_and_switches() {
     assert_eq!(app.slots.len(), 2);
     assert_eq!(app.active_index(), 1);
     assert_eq!(
-        app.active().editor.buffer().lines(),
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         vec!["beta".to_string()]
     );
     let _ = std::fs::remove_file(&path_a);
@@ -246,7 +286,19 @@ fn bdelete_force_removes_dirty_slot() {
     app.dispatch_ex("bd!");
     assert_eq!(app.slots.len(), 1);
     assert_eq!(app.active_index(), 0);
-    assert_eq!(app.active().editor.buffer().lines(), vec!["a".to_string()]);
+    assert_eq!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["a".to_string()]
+    );
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
 }
@@ -259,7 +311,17 @@ fn bdelete_on_last_slot_resets_to_no_name() {
     app.dispatch_ex("bd");
     assert_eq!(app.slots.len(), 1);
     assert!(app.active().filename.is_none());
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         lines.is_empty() || (lines.len() == 1 && lines[0].is_empty()),
         "expected empty scratch buffer, got: {lines:?}"
@@ -655,13 +717,34 @@ fn checktime_reloads_clean_buffer_when_disk_changed() {
     let path = std::env::temp_dir().join("hjkl_ct_reload.txt");
     std::fs::write(&path, "line1\nline2\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
-    assert_eq!(app.active().editor.buffer().lines(), vec!["line1", "line2"]);
+    assert_eq!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["line1", "line2"]
+    );
 
     write_and_wait(&path, "new content\n");
     app.checktime_all();
 
     assert_eq!(
-        app.active().editor.buffer().lines(),
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         vec!["new content"],
         "buffer should be reloaded from disk"
     );
@@ -684,7 +767,16 @@ fn checktime_marks_dirty_buffer_as_changed_on_disk_no_reload() {
 
     // Content must NOT have changed.
     assert_eq!(
-        app.active().editor.buffer().lines(),
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         vec!["original"],
         "dirty buffer must not be reloaded"
     );
@@ -707,7 +799,19 @@ fn checktime_marks_deleted_when_file_removed() {
 
     assert_eq!(app.active().disk_state, DiskState::DeletedOnDisk);
     // Buffer content preserved.
-    assert_eq!(app.active().editor.buffer().lines(), vec!["content"]);
+    assert_eq!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["content"]
+    );
 }
 
 #[test]
@@ -726,7 +830,16 @@ fn checktime_recovers_after_file_recreated() {
     app.checktime_all();
 
     assert_eq!(
-        app.active().editor.buffer().lines(),
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         vec!["v2"],
         "recreated file should be reloaded"
     );
@@ -742,7 +855,17 @@ fn substitute_percent_global_multi_line() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo foo\nfoo");
     app.dispatch_ex("%s/foo/bar/g");
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["bar bar", "bar"],
@@ -758,7 +881,17 @@ fn substitute_current_line_first_only() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo foo\nfoo");
     app.dispatch_ex("s/foo/bar/");
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "bar foo", "only first occurrence on current line");
     assert_eq!(lines[1], "foo", "second line unchanged");
     let msg = app.bus.last_body_or_empty().to_string();
@@ -775,7 +908,17 @@ fn substitute_empty_pattern_reuses_last_search() {
         .editor
         .set_last_search(Some("world".to_string()), true);
     app.dispatch_ex("s//planet/");
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines[0], "hello planet",
         "should replace using last search pattern"
@@ -790,7 +933,17 @@ fn substitute_no_match_shows_pattern_not_found() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world");
     app.dispatch_ex("s/xyz/bar/");
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "hello world", "buffer should be unchanged");
     let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "Pattern not found", "status: {msg}");
@@ -938,7 +1091,17 @@ fn colon_e_path_opens_file_via_hjkl_ex() {
     // dispatch_ex expects a command string without the leading `:`.
     app.dispatch_ex(&format!("e {}", path.display()));
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["hello from hjkl-ex"],
@@ -967,7 +1130,17 @@ fn colon_bd_via_hjkl_ex_clears_sole_buffer() {
     // Mark clean so buffer_delete doesn't refuse.
     app.active_mut().dirty = false;
     app.dispatch_ex("bd");
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // After :bd on the last slot the buffer is reset to empty unnamed scratch.
     assert_eq!(
         lines,

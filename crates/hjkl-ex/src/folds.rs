@@ -13,8 +13,11 @@ pub(crate) fn apply_fold_indent<H: Host>(
     _args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    let lines = editor.buffer().lines().to_vec();
-    let total = lines.len();
+    let rope = editor.buffer().rope();
+    let total = rope.len_lines();
+    let lines: Vec<String> = (0..total)
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
     if total == 0 {
         return Some(ExEffect::Ok);
     }

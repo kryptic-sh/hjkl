@@ -1096,7 +1096,7 @@ fn accept_completion_inserts_selected_item() {
     // Popup must be gone.
     assert!(app.completion.is_none());
     // Buffer line should start with "world" (inserted at col 0).
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with("world"),
         "buffer line should start with inserted text, got: {line:?}"
@@ -1153,7 +1153,17 @@ fn apply_workspace_edit_single_file() {
         .expect("apply_workspace_edit failed");
     assert_eq!(count, 1);
 
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines[0], "hello rust",
         "edit should replace 'world' with 'rust'"
@@ -1213,7 +1223,17 @@ fn apply_workspace_edit_sorts_edits_descending() {
         change_annotations: None,
     };
     app.apply_workspace_edit(edit).expect("apply failed");
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "hi earth foo", "both edits must apply correctly");
     let _ = std::fs::remove_file(&path);
 }
@@ -1319,7 +1339,17 @@ fn rename_response_applies_workspace_edit() {
         msg.contains("renamed"),
         "rename response must set status, got: {msg}"
     );
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "new_name here");
     let _ = std::fs::remove_file(&path);
 }
@@ -1370,7 +1400,17 @@ fn format_response_applies_text_edits() {
     app.handle_lsp_response(pending, Ok(val));
     let msg = app.bus.last_body_or_empty().to_string();
     assert_eq!(msg, "formatted");
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // "fn foo(){}" with space inserted at pos 9 → "fn foo(){ }"
     assert_eq!(lines[0], "fn foo(){ }");
     let _ = std::fs::remove_file(&path);
@@ -1454,7 +1494,17 @@ fn code_action_response_single_applies_action() {
         msg.contains("files changed"),
         "single action apply must set status, got: {msg}"
     );
-    let lines = app.active().editor.buffer().lines();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "new content");
     let _ = std::fs::remove_file(&path);
 }

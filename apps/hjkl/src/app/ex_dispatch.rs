@@ -481,11 +481,8 @@ impl App {
                 text: format!("{text}\n"),
             });
         } else {
-            let line_len = editor
-                .buffer()
-                .line(row)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
+            let paste_rope = editor.buffer().rope();
+            let line_len = hjkl_buffer::rope_line_str(&paste_rope, row).chars().count();
             editor.mutate_edit(Edit::InsertStr {
                 at: Position::new(row, line_len),
                 text: format!("\n{text}"),

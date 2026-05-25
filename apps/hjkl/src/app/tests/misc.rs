@@ -70,10 +70,9 @@ fn dot_repeat_replays_last_change() {
     );
     // Buffer now "bc". Dot-repeat should delete one more char.
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
-    let line0 = app.active().editor.buffer().line(0).map(|l| l.to_string());
+    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
-        line0.as_deref(),
-        Some("c"),
+        line0, "c",
         "`.` after `x` must delete one more char, got {line0:?}"
     );
 }
@@ -97,10 +96,9 @@ fn dot_repeat_with_count_3_replays_three_times() {
     // the keymap layer's count-prefix accumulation.
     app.pending_count.try_accumulate('3');
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
-    let line0 = app.active().editor.buffer().line(0).map(|l| l.to_string());
+    let line0 = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
-        line0.as_deref(),
-        Some("ef"),
+        line0, "ef",
         "`3.` after `x` must delete 3 more chars, got {line0:?}"
     );
 }

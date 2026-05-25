@@ -160,7 +160,8 @@ fn position_to_byte_coords(
     pos: hjkl_buffer::Position,
 ) -> (usize, (u32, u32)) {
     let row = pos.row.min(buf.row_count().saturating_sub(1));
-    let line = buf.line(row).unwrap_or_default();
+    let rope = buf.rope();
+    let line = hjkl_buffer::rope_line_str(&rope, row);
     let col_byte = pos.byte_offset(&line);
     let byte = buffer_byte_of_row(buf, row) + col_byte;
     (byte, (row as u32, col_byte as u32))
@@ -335,11 +336,9 @@ fn content_edits_from_buffer_edit(
                         buffer_byte_of_row(buf, hi + 1)
                     } else {
                         // No row after; clamp to end-of-buffer byte.
+                        let last_row = buf.row_count().saturating_sub(1);
                         buffer_byte_of_row(buf, buf.row_count())
-                            + buf
-                                .line(buf.row_count().saturating_sub(1))
-                                .map(|s| s.len())
-                                .unwrap_or(0)
+                            + hjkl_buffer::rope_line_bytes(&buf.rope(), last_row)
                     };
                     out.push(crate::types::ContentEdit {
                         start_byte,
@@ -404,20 +403,19 @@ fn content_edits_from_buffer_edit(
             // a single space for simplicity).
             let row = (*row).min(buf.row_count().saturating_sub(1));
             let last_join_row = (row + count).min(buf.row_count().saturating_sub(1));
-            let line = buf.line(row).unwrap_or_default();
+            let buf_rope = buf.rope();
+            let line = hjkl_buffer::rope_line_str(&buf_rope, row);
             let row_eol_byte = buffer_byte_of_row(buf, row) + line.len();
             let row_eol_col = line.len() as u32;
             let next_row_after = last_join_row + 1;
             let old_end_byte = if next_row_after < buf.row_count() {
                 buffer_byte_of_row(buf, next_row_after).saturating_sub(1)
             } else {
+                let last_row = buf.row_count().saturating_sub(1);
                 buffer_byte_of_row(buf, buf.row_count())
-                    + buf
-                        .line(buf.row_count().saturating_sub(1))
-                        .map(|s| s.len())
-                        .unwrap_or(0)
+                    + hjkl_buffer::rope_line_bytes(&buf_rope, last_row)
             };
-            let last_line = buf.line(last_join_row).unwrap_or_default();
+            let last_line = hjkl_buffer::rope_line_str(&buf_rope, last_join_row);
             let old_end_pos = (last_join_row as u32, last_line.len() as u32);
             let replacement_len = if *with_space { 1 } else { 0 };
             let new_end_byte = row_eol_byte + replacement_len;
@@ -443,7 +441,8 @@ fn content_edits_from_buffer_edit(
             // buffer state during emission is *pre-edit*, so all cols
             // index into the same pre-edit row.
             let row = (*row).min(buf.row_count().saturating_sub(1));
-            let line = buf.line(row).unwrap_or_default();
+            let split_rope = buf.rope();
+            let line = hjkl_buffer::rope_line_str(&split_rope, row);
             let row_byte = buffer_byte_of_row(buf, row);
             let insert = if *inserted_space { "\n " } else { "\n" };
             for &c in cols {
@@ -2052,7 +2051,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Convert char column to visual column so cursor lands on the
         // correct cell when the line contains tabs (which the renderer
         // expands to TAB_WIDTH stops). Tab width must match the renderer.
-        let line = self.buffer.line(pos_row).unwrap_or_default();
+        let cursor_rope = self.buffer.rope();
+        let pos_row_safe = pos_row.min(cursor_rope.len_lines().saturating_sub(1));
+        let line = hjkl_buffer::rope_line_str(&cursor_rope, pos_row_safe);
         let tab_width = if v.tab_width == 0 {
             4
         } else {
@@ -5476,11 +5477,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                 Mode::VisualLine => {
                     let r_lo = snap.anchor.0.min(snap.cursor.0);
                     let r_hi = snap.anchor.0.max(snap.cursor.0);
-                    let last_col = self
-                        .buffer()
-                        .line(r_hi)
-                        .map(|l| l.chars().count().saturating_sub(1))
-                        .unwrap_or(0);
+                    let vl_rope = self.buffer().rope();
+                    let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
+                    let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
+                        .chars()
+                        .count()
+                        .saturating_sub(1);
                     ((r_lo, 0), (r_hi, last_col))
                 }
                 Mode::VisualBlock => {

@@ -113,7 +113,10 @@ fn di_quote_deletes_content() {
     let mut e = editor_with("foo \"bar\" baz");
     e.jump_cursor(0, 6); // inside quotes
     run_keys(&mut e, "di\"");
-    assert_eq!(e.buffer().lines()[0], "foo \"\" baz");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo \"\" baz"
+    );
 }
 
 #[test]
@@ -123,7 +126,7 @@ fn da_quote_deletes_with_quotes() {
     let mut e = editor_with("foo \"bar\" baz");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "da\"");
-    assert_eq!(e.buffer().lines()[0], "foo baz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo baz");
 }
 
 #[test]
@@ -132,7 +135,7 @@ fn ci_paren_deletes_and_inserts() {
     e.jump_cursor(0, 5);
     run_keys(&mut e, "ci(");
     assert_eq!(e.vim_mode(), VimMode::Insert);
-    assert_eq!(e.buffer().lines()[0], "fn()");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fn()");
 }
 
 #[test]
@@ -140,14 +143,14 @@ fn diw_deletes_inner_word() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "diw");
-    assert_eq!(e.buffer().lines()[0], " world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " world");
 }
 
 #[test]
 fn daw_deletes_word_with_trailing_space() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "daw");
-    assert_eq!(e.buffer().lines()[0], "world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "world");
 }
 
 #[test]
@@ -164,20 +167,26 @@ fn percent_jumps_to_matching_bracket() {
 fn dot_repeats_last_change() {
     let mut e = editor_with("aaa bbb ccc");
     run_keys(&mut e, "dw");
-    assert_eq!(e.buffer().lines()[0], "bbb ccc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "bbb ccc");
     run_keys(&mut e, ".");
-    assert_eq!(e.buffer().lines()[0], "ccc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ccc");
 }
 
 #[test]
 fn dot_repeats_change_operator_with_text() {
     let mut e = editor_with("foo foo foo");
     run_keys(&mut e, "cwbar<Esc>");
-    assert_eq!(e.buffer().lines()[0], "bar foo foo");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "bar foo foo"
+    );
     // Move past the space.
     run_keys(&mut e, "w");
     run_keys(&mut e, ".");
-    assert_eq!(e.buffer().lines()[0], "bar bar foo");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "bar bar foo"
+    );
 }
 
 #[test]
@@ -185,22 +194,25 @@ fn dot_repeats_x() {
     let mut e = editor_with("abcdef");
     run_keys(&mut e, "x");
     run_keys(&mut e, "..");
-    assert_eq!(e.buffer().lines()[0], "def");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "def");
 }
 
 #[test]
 fn count_operator_motion_compose() {
     let mut e = editor_with("one two three four five");
     run_keys(&mut e, "d3w");
-    assert_eq!(e.buffer().lines()[0], "four five");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "four five"
+    );
 }
 
 #[test]
 fn two_dd_deletes_two_lines() {
     let mut e = editor_with("a\nb\nc");
     run_keys(&mut e, "2dd");
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "c");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "c");
 }
 
 /// Vim's `dd` leaves the cursor on the first non-blank of the line
@@ -213,7 +225,10 @@ fn dd_in_middle_puts_cursor_on_first_non_blank_of_next() {
     e.jump_cursor(1, 2);
     run_keys(&mut e, "dd");
     // Buffer: ["one", "    three", "four"]
-    assert_eq!(e.buffer().lines()[1], "    three");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
+        "    three"
+    );
     assert_eq!(e.cursor(), (1, 4));
 }
 
@@ -223,7 +238,7 @@ fn dd_on_last_line_puts_cursor_on_first_non_blank_of_prev() {
     e.jump_cursor(2, 0);
     run_keys(&mut e, "dd");
     // Buffer: ["one", "  two"]
-    assert_eq!(e.buffer().lines().len(), 2);
+    assert_eq!(e.buffer().row_count(), 2);
     assert_eq!(e.cursor(), (1, 2));
 }
 
@@ -231,8 +246,8 @@ fn dd_on_last_line_puts_cursor_on_first_non_blank_of_prev() {
 fn dd_on_only_line_leaves_empty_buffer_and_cursor_at_zero() {
     let mut e = editor_with("lonely");
     run_keys(&mut e, "dd");
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
     assert_eq!(e.cursor(), (0, 0));
 }
 
@@ -242,7 +257,17 @@ fn count_dd_puts_cursor_on_first_non_blank_of_remaining() {
     // Cursor on row 1, "3dd" deletes b/c/   d → lines become [a, e].
     e.jump_cursor(1, 0);
     run_keys(&mut e, "3dd");
-    assert_eq!(e.buffer().lines(), &["a".to_string(), "e".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["a".to_string(), "e".to_string()]
+    );
     assert_eq!(e.cursor(), (1, 0));
 }
 
@@ -294,7 +319,10 @@ fn dd_then_j_uses_first_non_blank_not_sticky_col() {
 fn gu_lowercases_motion_range() {
     let mut e = editor_with("HELLO WORLD");
     run_keys(&mut e, "guw");
-    assert_eq!(e.buffer().lines()[0], "hello WORLD");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hello WORLD"
+    );
     assert_eq!(e.cursor(), (0, 0));
 }
 
@@ -303,7 +331,10 @@ fn g_u_uppercases_text_object() {
     let mut e = editor_with("hello world");
     // gUiw uppercases the word at the cursor.
     run_keys(&mut e, "gUiw");
-    assert_eq!(e.buffer().lines()[0], "HELLO world");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "HELLO world"
+    );
     assert_eq!(e.cursor(), (0, 0));
 }
 
@@ -311,22 +342,31 @@ fn g_u_uppercases_text_object() {
 fn g_tilde_toggles_case_of_range() {
     let mut e = editor_with("Hello World");
     run_keys(&mut e, "g~iw");
-    assert_eq!(e.buffer().lines()[0], "hELLO World");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hELLO World"
+    );
 }
 
 #[test]
 fn g_uu_uppercases_current_line() {
     let mut e = editor_with("select 1\nselect 2");
     run_keys(&mut e, "gUU");
-    assert_eq!(e.buffer().lines()[0], "SELECT 1");
-    assert_eq!(e.buffer().lines()[1], "select 2");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "SELECT 1"
+    );
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
+        "select 2"
+    );
 }
 
 #[test]
 fn gugu_lowercases_current_line() {
     let mut e = editor_with("FOO BAR\nBAZ");
     run_keys(&mut e, "gugu");
-    assert_eq!(e.buffer().lines()[0], "foo bar");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo bar");
 }
 
 #[test]
@@ -334,15 +374,21 @@ fn visual_u_uppercases_selection() {
     let mut e = editor_with("hello world");
     // v + e selects "hello" (inclusive of last char), U uppercases.
     run_keys(&mut e, "veU");
-    assert_eq!(e.buffer().lines()[0], "HELLO world");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "HELLO world"
+    );
 }
 
 #[test]
 fn visual_line_u_lowercases_line() {
     let mut e = editor_with("HELLO WORLD\nOTHER");
     run_keys(&mut e, "Vu");
-    assert_eq!(e.buffer().lines()[0], "hello world");
-    assert_eq!(e.buffer().lines()[1], "OTHER");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hello world"
+    );
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "OTHER");
 }
 
 #[test]
@@ -350,17 +396,17 @@ fn g_uu_with_count_uppercases_multiple_lines() {
     let mut e = editor_with("one\ntwo\nthree\nfour");
     // `3gUU` uppercases 3 lines starting from the cursor.
     run_keys(&mut e, "3gUU");
-    assert_eq!(e.buffer().lines()[0], "ONE");
-    assert_eq!(e.buffer().lines()[1], "TWO");
-    assert_eq!(e.buffer().lines()[2], "THREE");
-    assert_eq!(e.buffer().lines()[3], "four");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ONE");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "TWO");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "THREE");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 3), "four");
 }
 
 #[test]
 fn double_gt_indents_current_line() {
     let mut e = editor_with("hello");
     run_keys(&mut e, ">>");
-    assert_eq!(e.buffer().lines()[0], "  hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  hello");
     // Cursor lands on first non-blank.
     assert_eq!(e.cursor(), (0, 2));
 }
@@ -369,7 +415,7 @@ fn double_gt_indents_current_line() {
 fn double_lt_outdents_current_line() {
     let mut e = editor_with("    hello");
     run_keys(&mut e, "<lt><lt>");
-    assert_eq!(e.buffer().lines()[0], "  hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  hello");
     assert_eq!(e.cursor(), (0, 2));
 }
 
@@ -378,10 +424,10 @@ fn count_double_gt_indents_multiple_lines() {
     let mut e = editor_with("a\nb\nc\nd");
     // `3>>` indents 3 lines starting at cursor.
     run_keys(&mut e, "3>>");
-    assert_eq!(e.buffer().lines()[0], "  a");
-    assert_eq!(e.buffer().lines()[1], "  b");
-    assert_eq!(e.buffer().lines()[2], "  c");
-    assert_eq!(e.buffer().lines()[3], "d");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  a");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "  b");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "  c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 3), "d");
 }
 
 #[test]
@@ -390,7 +436,7 @@ fn outdent_clips_ragged_leading_whitespace() {
     // there, not leave anything negative.
     let mut e = editor_with(" x");
     run_keys(&mut e, "<lt><lt>");
-    assert_eq!(e.buffer().lines()[0], "x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x");
 }
 
 #[test]
@@ -399,7 +445,10 @@ fn indent_motion_is_always_linewise() {
     // insert spaces into the middle of the word.
     let mut e = editor_with("foo bar");
     run_keys(&mut e, ">w");
-    assert_eq!(e.buffer().lines()[0], "  foo bar");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "  foo bar"
+    );
 }
 
 #[test]
@@ -407,10 +456,10 @@ fn indent_text_object_extends_over_paragraph() {
     let mut e = editor_with("a\nb\n\nc\nd");
     // `>ap` indents the whole paragraph (rows 0..=1).
     run_keys(&mut e, ">ap");
-    assert_eq!(e.buffer().lines()[0], "  a");
-    assert_eq!(e.buffer().lines()[1], "  b");
-    assert_eq!(e.buffer().lines()[2], "");
-    assert_eq!(e.buffer().lines()[3], "c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  a");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "  b");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 3), "c");
 }
 
 #[test]
@@ -418,16 +467,16 @@ fn visual_line_indent_shifts_selected_rows() {
     let mut e = editor_with("x\ny\nz");
     // Vj selects rows 0..=1 linewise; `>` indents.
     run_keys(&mut e, "Vj>");
-    assert_eq!(e.buffer().lines()[0], "  x");
-    assert_eq!(e.buffer().lines()[1], "  y");
-    assert_eq!(e.buffer().lines()[2], "z");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "  y");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "z");
 }
 
 #[test]
 fn outdent_empty_line_is_noop() {
     let mut e = editor_with("\nfoo");
     run_keys(&mut e, "<lt><lt>");
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -436,7 +485,7 @@ fn indent_skips_empty_lines() {
     // trailing whitespace.
     let mut e = editor_with("");
     run_keys(&mut e, ">>");
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -444,7 +493,7 @@ fn insert_ctrl_t_indents_current_line() {
     let mut e = editor_with("x");
     // Enter insert, Ctrl-t indents the line; cursor advances too.
     run_keys(&mut e, "i<C-t>");
-    assert_eq!(e.buffer().lines()[0], "  x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  x");
     // After insert-mode start `i` cursor was at (0, 0); Ctrl-t
     // shifts it by SHIFTWIDTH=2.
     assert_eq!(e.cursor(), (0, 2));
@@ -455,7 +504,7 @@ fn insert_ctrl_d_outdents_current_line() {
     let mut e = editor_with("    x");
     // Enter insert-at-end `A`, Ctrl-d outdents by shiftwidth.
     run_keys(&mut e, "A<C-d>");
-    assert_eq!(e.buffer().lines()[0], "  x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  x");
 }
 
 #[test]
@@ -502,7 +551,7 @@ fn dl_on_last_char_still_deletes_it() {
     let mut e = editor_with("ab");
     e.jump_cursor(0, 1);
     run_keys(&mut e, "dl");
-    assert_eq!(e.buffer().lines()[0], "a");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a");
 }
 
 #[test]
@@ -512,7 +561,7 @@ fn case_op_preserves_yank_register() {
     let yank_before = e.yank().to_string();
     // gUU changes the line but must not clobber the yank register.
     run_keys(&mut e, "gUU");
-    assert_eq!(e.buffer().lines()[0], "TARGET");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "TARGET");
     assert_eq!(
         e.yank(),
         yank_before,
@@ -524,7 +573,10 @@ fn case_op_preserves_yank_register() {
 fn dap_deletes_paragraph() {
     let mut e = editor_with("a\nb\n\nc\nd");
     run_keys(&mut e, "dap");
-    assert_eq!(e.buffer().lines().first().map(String::as_str), Some("c"));
+    assert_eq!(
+        Some(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0).as_str()),
+        Some("c")
+    );
 }
 
 #[test]
@@ -533,7 +585,7 @@ fn dit_deletes_inner_tag_content() {
     // Cursor on `e`.
     e.jump_cursor(0, 4);
     run_keys(&mut e, "dit");
-    assert_eq!(e.buffer().lines()[0], "<b></b>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "<b></b>");
 }
 
 #[test]
@@ -541,7 +593,7 @@ fn dat_deletes_around_tag() {
     let mut e = editor_with("hi <b>foo</b> bye");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "dat");
-    assert_eq!(e.buffer().lines()[0], "hi  bye");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hi  bye");
 }
 
 #[test]
@@ -551,7 +603,10 @@ fn dit_picks_innermost_tag() {
     e.jump_cursor(0, 6);
     run_keys(&mut e, "dit");
     // Inner of <b> is removed; <a> wrapping stays.
-    assert_eq!(e.buffer().lines()[0], "<a><b></b></a>");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "<a><b></b></a>"
+    );
 }
 
 #[test]
@@ -559,7 +614,7 @@ fn dat_innermost_tag_pair() {
     let mut e = editor_with("<a><b>x</b></a>");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "dat");
-    assert_eq!(e.buffer().lines()[0], "<a></a>");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "<a></a>");
 }
 
 #[test]
@@ -568,7 +623,10 @@ fn dit_outside_any_tag_no_op() {
     e.jump_cursor(0, 3);
     run_keys(&mut e, "dit");
     // No tag pair surrounds the cursor — buffer unchanged.
-    assert_eq!(e.buffer().lines()[0], "plain text");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "plain text"
+    );
 }
 
 #[test]
@@ -576,7 +634,10 @@ fn cit_changes_inner_tag_content() {
     let mut e = editor_with("<b>hello</b>");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "citNEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "<b>NEW</b>");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "<b>NEW</b>"
+    );
 }
 
 #[test]
@@ -584,7 +645,10 @@ fn cat_changes_around_tag() {
     let mut e = editor_with("hi <b>foo</b> bye");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "catBAR<Esc>");
-    assert_eq!(e.buffer().lines()[0], "hi BAR bye");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hi BAR bye"
+    );
 }
 
 #[test]
@@ -632,7 +696,7 @@ fn diW_deletes_inner_big_word() {
     e.jump_cursor(0, 2);
     run_keys(&mut e, "diW");
     // Big word treats `foo.bar` as one token.
-    assert_eq!(e.buffer().lines()[0], " baz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " baz");
 }
 
 #[test]
@@ -641,7 +705,7 @@ fn daW_deletes_around_big_word() {
     let mut e = editor_with("foo.bar baz");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "daW");
-    assert_eq!(e.buffer().lines()[0], "baz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "baz");
 }
 
 #[test]
@@ -649,7 +713,10 @@ fn di_double_quote_deletes_inside() {
     let mut e = editor_with("a \"hello\" b");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "di\"");
-    assert_eq!(e.buffer().lines()[0], "a \"\" b");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "a \"\" b"
+    );
 }
 
 #[test]
@@ -658,7 +725,7 @@ fn da_double_quote_deletes_around() {
     let mut e = editor_with("a \"hello\" b");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "da\"");
-    assert_eq!(e.buffer().lines()[0], "a b");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b");
 }
 
 #[test]
@@ -666,7 +733,7 @@ fn di_single_quote_deletes_inside() {
     let mut e = editor_with("x 'foo' y");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "di'");
-    assert_eq!(e.buffer().lines()[0], "x '' y");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x '' y");
 }
 
 #[test]
@@ -675,7 +742,7 @@ fn da_single_quote_deletes_around() {
     let mut e = editor_with("x 'foo' y");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "da'");
-    assert_eq!(e.buffer().lines()[0], "x y");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x y");
 }
 
 #[test]
@@ -683,7 +750,7 @@ fn di_backtick_deletes_inside() {
     let mut e = editor_with("p `q` r");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "di`");
-    assert_eq!(e.buffer().lines()[0], "p `` r");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "p `` r");
 }
 
 #[test]
@@ -692,7 +759,7 @@ fn da_backtick_deletes_around() {
     let mut e = editor_with("p `q` r");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "da`");
-    assert_eq!(e.buffer().lines()[0], "p r");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "p r");
 }
 
 #[test]
@@ -700,7 +767,7 @@ fn di_paren_deletes_inside() {
     let mut e = editor_with("f(arg)");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "di(");
-    assert_eq!(e.buffer().lines()[0], "f()");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "f()");
 }
 
 #[test]
@@ -708,7 +775,7 @@ fn di_paren_alias_b_works() {
     let mut e = editor_with("f(arg)");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "dib");
-    assert_eq!(e.buffer().lines()[0], "f()");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "f()");
 }
 
 #[test]
@@ -716,7 +783,7 @@ fn di_bracket_deletes_inside() {
     let mut e = editor_with("a[b,c]d");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "di[");
-    assert_eq!(e.buffer().lines()[0], "a[]d");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a[]d");
 }
 
 #[test]
@@ -724,7 +791,7 @@ fn da_bracket_deletes_around() {
     let mut e = editor_with("a[b,c]d");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "da[");
-    assert_eq!(e.buffer().lines()[0], "ad");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ad");
 }
 
 #[test]
@@ -732,7 +799,7 @@ fn di_brace_deletes_inside() {
     let mut e = editor_with("x{y}z");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "di{");
-    assert_eq!(e.buffer().lines()[0], "x{}z");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x{}z");
 }
 
 #[test]
@@ -740,7 +807,7 @@ fn da_brace_deletes_around() {
     let mut e = editor_with("x{y}z");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "da{");
-    assert_eq!(e.buffer().lines()[0], "xz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "xz");
 }
 
 #[test]
@@ -748,7 +815,7 @@ fn di_brace_alias_capital_b_works() {
     let mut e = editor_with("x{y}z");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "diB");
-    assert_eq!(e.buffer().lines()[0], "x{}z");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x{}z");
 }
 
 #[test]
@@ -757,7 +824,7 @@ fn di_angle_deletes_inside() {
     e.jump_cursor(0, 2);
     // `<lt>` so run_keys doesn't treat `<` as the start of a special-key tag.
     run_keys(&mut e, "di<lt>");
-    assert_eq!(e.buffer().lines()[0], "p<>r");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "p<>r");
 }
 
 #[test]
@@ -765,7 +832,7 @@ fn da_angle_deletes_around() {
     let mut e = editor_with("p<q>r");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "da<lt>");
-    assert_eq!(e.buffer().lines()[0], "pr");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "pr");
 }
 
 #[test]
@@ -775,7 +842,17 @@ fn dip_deletes_inner_paragraph() {
     run_keys(&mut e, "dip");
     // Inner paragraph (rows 0..=2) drops; the trailing blank
     // separator + remaining paragraph stay.
-    assert_eq!(e.buffer().lines(), vec!["".to_string(), "d".into()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["".to_string(), "d".into()]
+    );
 }
 
 // ─── Operator pipeline spot checks (non-tag text objects) ───────
@@ -818,7 +895,10 @@ fn dis_deletes_inner_sentence() {
     e.jump_cursor(0, 13);
     run_keys(&mut e, "dis");
     // Removed "Second one." inclusive of its terminator.
-    assert_eq!(e.buffer().lines()[0], "First one.  Third one.");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "First one.  Third one."
+    );
 }
 
 #[test]
@@ -828,7 +908,10 @@ fn das_deletes_around_sentence_with_trailing_space() {
     run_keys(&mut e, "das");
     // `as` swallows the trailing whitespace before the next
     // sentence — exactly one space here.
-    assert_eq!(e.buffer().lines()[0], "Alpha. Gamma.");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "Alpha. Gamma."
+    );
 }
 
 #[test]
@@ -838,7 +921,7 @@ fn dis_handles_double_terminator() {
     run_keys(&mut e, "dis");
     // Run of `!?` collapses into one boundary; sentence body
     // including both terminators is removed.
-    assert_eq!(e.buffer().lines()[0], " Next.");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " Next.");
 }
 
 #[test]
@@ -846,7 +929,7 @@ fn dis_first_sentence_from_cursor_at_zero() {
     let mut e = editor_with("Alpha. Beta.");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "dis");
-    assert_eq!(e.buffer().lines()[0], " Beta.");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " Beta.");
 }
 
 #[test]
@@ -872,7 +955,10 @@ fn ciw_changes_inner_word() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 1);
     run_keys(&mut e, "ciwHEY<Esc>");
-    assert_eq!(e.buffer().lines()[0], "HEY world");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "HEY world"
+    );
 }
 
 #[test]
@@ -898,7 +984,7 @@ fn ci_paren_changes_inside() {
     let mut e = editor_with("f(old)");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "ci(NEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "f(NEW)");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "f(NEW)");
 }
 
 #[test]
@@ -1036,7 +1122,10 @@ fn di_single_quote() {
     let mut e = editor_with("say 'hello world' now");
     e.jump_cursor(0, 7);
     run_keys(&mut e, "di'");
-    assert_eq!(e.buffer().lines()[0], "say '' now");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "say '' now"
+    );
 }
 
 #[test]
@@ -1045,7 +1134,7 @@ fn da_single_quote() {
     let mut e = editor_with("say 'hello' now");
     e.jump_cursor(0, 7);
     run_keys(&mut e, "da'");
-    assert_eq!(e.buffer().lines()[0], "say now");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "say now");
 }
 
 #[test]
@@ -1053,7 +1142,10 @@ fn di_backtick() {
     let mut e = editor_with("say `hi` now");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "di`");
-    assert_eq!(e.buffer().lines()[0], "say `` now");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "say `` now"
+    );
 }
 
 #[test]
@@ -1061,7 +1153,7 @@ fn di_brace() {
     let mut e = editor_with("fn { a; b; c }");
     e.jump_cursor(0, 7);
     run_keys(&mut e, "di{");
-    assert_eq!(e.buffer().lines()[0], "fn {}");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fn {}");
 }
 
 #[test]
@@ -1069,7 +1161,7 @@ fn di_bracket() {
     let mut e = editor_with("arr[1, 2, 3]");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "di[");
-    assert_eq!(e.buffer().lines()[0], "arr[]");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "arr[]");
 }
 
 #[test]
@@ -1077,7 +1169,7 @@ fn dab_deletes_around_paren() {
     let mut e = editor_with("fn(a, b) + 1");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "dab");
-    assert_eq!(e.buffer().lines()[0], "fn + 1");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fn + 1");
 }
 
 #[test]
@@ -1085,7 +1177,7 @@ fn da_big_b_deletes_around_brace() {
     let mut e = editor_with("x = {a: 1}");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "daB");
-    assert_eq!(e.buffer().lines()[0], "x = ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x = ");
 }
 
 #[test]
@@ -1093,7 +1185,7 @@ fn di_big_w_deletes_bigword() {
     let mut e = editor_with("foo-bar baz");
     e.jump_cursor(0, 2);
     run_keys(&mut e, "diW");
-    assert_eq!(e.buffer().lines()[0], " baz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " baz");
 }
 
 #[test]
@@ -1140,7 +1232,10 @@ fn ci_paren_forward_scans_when_cursor_before_pair() {
     let mut e = editor_with("foo(bar)");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "ci(NEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "foo(NEW)");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo(NEW)"
+    );
 }
 
 #[test]
@@ -1148,7 +1243,10 @@ fn ci_paren_forward_scans_across_lines() {
     let mut e = editor_with("first\nfoo(bar)\nlast");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "ci(NEW<Esc>");
-    assert_eq!(e.buffer().lines()[1], "foo(NEW)");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
+        "foo(NEW)"
+    );
 }
 
 #[test]
@@ -1156,7 +1254,10 @@ fn ci_brace_forward_scans_when_cursor_before_pair() {
     let mut e = editor_with("let x = {y};");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "ci{NEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "let x = {NEW};");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "let x = {NEW};"
+    );
 }
 
 #[test]
@@ -1166,7 +1267,10 @@ fn cit_forward_scans_when_cursor_before_tag() {
     let mut e = editor_with("text <b>hello</b> rest");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "citNEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "text <b>NEW</b> rest");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "text <b>NEW</b> rest"
+    );
 }
 
 #[test]
@@ -1175,7 +1279,10 @@ fn dat_forward_scans_when_cursor_before_tag() {
     let mut e = editor_with("text <b>hello</b> rest");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "dat");
-    assert_eq!(e.buffer().lines()[0], "text  rest");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "text  rest"
+    );
 }
 
 #[test]
@@ -1185,14 +1292,17 @@ fn ci_paren_still_works_when_cursor_inside() {
     let mut e = editor_with("fn(a, b)");
     e.jump_cursor(0, 4);
     run_keys(&mut e, "ci(NEW<Esc>");
-    assert_eq!(e.buffer().lines()[0], "fn(NEW)");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fn(NEW)");
 }
 
 #[test]
 fn caw_changes_word_with_trailing_space() {
     let mut e = editor_with("hello world");
     run_keys(&mut e, "cawfoo<Esc>");
-    assert_eq!(e.buffer().lines()[0], "fooworld");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "fooworld"
+    );
 }
 
 #[test]
@@ -1340,7 +1450,7 @@ fn d_dollar_deletes_to_eol() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "d$");
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1348,7 +1458,7 @@ fn d_zero_deletes_to_line_start() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "d0");
-    assert_eq!(e.buffer().lines()[0], "world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "world");
 }
 
 #[test]
@@ -1356,7 +1466,7 @@ fn d_caret_deletes_to_first_non_blank() {
     let mut e = editor_with("    hello");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "d^");
-    assert_eq!(e.buffer().lines()[0], "    llo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    llo");
 }
 
 #[test]
@@ -1364,7 +1474,17 @@ fn d_capital_g_deletes_to_end_of_file() {
     let mut e = editor_with("a\nb\nc\nd");
     e.jump_cursor(1, 0);
     run_keys(&mut e, "dG");
-    assert_eq!(e.buffer().lines(), &["a".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["a".to_string()]
+    );
 }
 
 #[test]
@@ -1372,7 +1492,17 @@ fn d_gg_deletes_to_start_of_file() {
     let mut e = editor_with("a\nb\nc\nd");
     e.jump_cursor(2, 0);
     run_keys(&mut e, "dgg");
-    assert_eq!(e.buffer().lines(), &["d".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["d".to_string()]
+    );
 }
 
 #[test]
@@ -1381,7 +1511,7 @@ fn cw_is_ce_quirk() {
     // it behaves like `ce` so the replacement lands before the space.
     let mut e = editor_with("foo bar");
     run_keys(&mut e, "cwxyz<Esc>");
-    assert_eq!(e.buffer().lines()[0], "xyz bar");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "xyz bar");
 }
 
 // ─── Single-char edits ────────────────────────────────────────────────
@@ -1391,7 +1521,7 @@ fn big_d_deletes_to_eol() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "D");
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1399,21 +1529,41 @@ fn big_c_deletes_to_eol_and_inserts() {
     let mut e = editor_with("hello world");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "C!<Esc>");
-    assert_eq!(e.buffer().lines()[0], "hello!");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello!");
 }
 
 #[test]
 fn j_joins_next_line_with_space() {
     let mut e = editor_with("hello\nworld");
     run_keys(&mut e, "J");
-    assert_eq!(e.buffer().lines(), &["hello world".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["hello world".to_string()]
+    );
 }
 
 #[test]
 fn j_strips_leading_whitespace_on_join() {
     let mut e = editor_with("hello\n    world");
     run_keys(&mut e, "J");
-    assert_eq!(e.buffer().lines(), &["hello world".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["hello world".to_string()]
+    );
 }
 
 #[test]
@@ -1421,21 +1571,21 @@ fn big_x_deletes_char_before_cursor() {
     let mut e = editor_with("hello");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "X");
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
 }
 
 #[test]
 fn s_substitutes_char_and_enters_insert() {
     let mut e = editor_with("hello");
     run_keys(&mut e, "sX<Esc>");
-    assert_eq!(e.buffer().lines()[0], "Xello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xello");
 }
 
 #[test]
 fn count_x_deletes_many() {
     let mut e = editor_with("abcdef");
     run_keys(&mut e, "3x");
-    assert_eq!(e.buffer().lines()[0], "def");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "def");
 }
 
 // ─── Paste ────────────────────────────────────────────────────────────
@@ -1445,7 +1595,10 @@ fn p_pastes_charwise_after_cursor() {
     let mut e = editor_with("hello");
     run_keys(&mut e, "yw");
     run_keys(&mut e, "$p");
-    assert_eq!(e.buffer().lines()[0], "hellohello");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hellohello"
+    );
 }
 
 #[test]
@@ -1458,7 +1611,7 @@ fn capital_p_pastes_charwise_before_cursor() {
     run_keys(&mut e, "$P");
     // After yank cursor is at 0; $ goes to end (col 4), P pastes
     // before cursor — "hell" + "he" + "o" = "hellheo".
-    assert_eq!(e.buffer().lines()[0], "hellheo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hellheo");
 }
 
 #[test]
@@ -1467,7 +1620,14 @@ fn p_pastes_linewise_below() {
     run_keys(&mut e, "yy");
     run_keys(&mut e, "p");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &[
             "one".to_string(),
             "one".to_string(),
@@ -1484,7 +1644,14 @@ fn capital_p_pastes_linewise_above() {
     run_keys(&mut e, "yy");
     run_keys(&mut e, "P");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["one".to_string(), "two".to_string(), "two".to_string()]
     );
 }
@@ -1506,7 +1673,17 @@ fn hash_finds_previous_occurrence() {
 fn visual_line_delete_removes_full_lines() {
     let mut e = editor_with("a\nb\nc\nd");
     run_keys(&mut e, "Vjd");
-    assert_eq!(e.buffer().lines(), &["c".to_string(), "d".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["c".to_string(), "d".to_string()]
+    );
 }
 
 #[test]
@@ -1518,7 +1695,17 @@ fn visual_line_change_leaves_blank_line() {
     // `Vjc` wipes rows 0-1's contents and leaves a blank line in
     // their place (vim convention). Typing `X` lands on that blank
     // first line.
-    assert_eq!(e.buffer().lines(), &["X".to_string(), "c".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["X".to_string(), "c".to_string()]
+    );
 }
 
 #[test]
@@ -1527,7 +1714,14 @@ fn cc_leaves_blank_line() {
     e.jump_cursor(1, 0);
     run_keys(&mut e, "ccX<Esc>");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["a".to_string(), "X".to_string(), "c".to_string()]
     );
 }
@@ -1575,7 +1769,7 @@ fn dw_with_big_word_variant() {
     // `dW` uses the WORD motion, so `foo-bar` deletes as a unit.
     let mut e = editor_with("foo-bar baz");
     run_keys(&mut e, "dW");
-    assert_eq!(e.buffer().lines()[0], "baz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "baz");
 }
 
 // ─── Insert-mode Ctrl shortcuts ──────────────────────────────────────
@@ -1588,7 +1782,7 @@ fn insert_ctrl_w_deletes_word_back() {
         hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     run_keys(&mut e, "<C-w>");
-    assert_eq!(e.buffer().lines()[0], "hello ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello ");
 }
 
 #[test]
@@ -1605,7 +1799,17 @@ fn insert_ctrl_w_at_col0_joins_with_prev_word() {
     );
     // "hello" was the only word on row 0; it gets deleted, leaving
     // "world" on a single line.
-    assert_eq!(e.buffer().lines(), vec!["world".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["world".to_string()]
+    );
     assert_eq!(e.cursor(), (0, 0));
 }
 
@@ -1619,7 +1823,17 @@ fn insert_ctrl_w_at_col0_keeps_prefix_words() {
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
     // Joins lines, then deletes the trailing "bar" of the prev line.
-    assert_eq!(e.buffer().lines(), vec!["foo baz".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        vec!["foo baz".to_string()]
+    );
     assert_eq!(e.cursor(), (0, 4));
 }
 
@@ -1631,7 +1845,7 @@ fn insert_ctrl_u_deletes_to_line_start() {
         hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     run_keys(&mut e, "<C-u>");
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -1647,7 +1861,7 @@ fn insert_ctrl_o_runs_one_normal_command() {
     run_keys(&mut e, "dw");
     // After the command completes, back in insert.
     assert_eq!(e.vim_mode(), VimMode::Insert);
-    assert_eq!(e.buffer().lines()[0], "world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "world");
 }
 
 // ─── Sticky column across vertical motion ────────────────────────────
@@ -1881,7 +2095,14 @@ fn visual_block_delete_removes_column_range() {
     run_keys(&mut e, "d");
     // Deletes cols 1-3 on every row — "ell" / "orl" / "app".
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["ho".to_string(), "wd".to_string(), "hy".to_string()]
     );
 }
@@ -1904,7 +2125,14 @@ fn visual_block_replace_fills_block() {
     run_keys(&mut e, "ll");
     run_keys(&mut e, "rx");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &[
             "xxxlo".to_string(),
             "xxxld".to_string(),
@@ -1921,7 +2149,14 @@ fn visual_block_insert_repeats_across_rows() {
     run_keys(&mut e, "I");
     run_keys(&mut e, "# <Esc>");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &[
             "# hello".to_string(),
             "# world".to_string(),
@@ -1963,7 +2198,14 @@ fn visual_block_delete_handles_short_lines() {
     //        gets removed → "h".
     // Row 2: delete cols 1-3 ("orl") → "wd".
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["ho".to_string(), "h".to_string(), "wd".to_string()]
     );
 }
@@ -1992,7 +2234,14 @@ fn visual_block_replace_skips_past_eol() {
     // Every row had only col 0..=1; block covers col 1..=7 → only
     // col 1 is in range on each row, so just that cell changes.
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["aX".to_string(), "cX".to_string(), "eX".to_string()]
     );
 }
@@ -2006,7 +2255,14 @@ fn visual_block_with_empty_line_in_middle() {
     // Row 0 cols 0-2 removed → "d". Row 1 empty → untouched.
     // Row 2 cols 0-2 removed → "h".
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["d".to_string(), "".to_string(), "h".to_string()]
     );
 }
@@ -2022,7 +2278,14 @@ fn block_insert_pads_empty_lines_to_block_column() {
     run_keys(&mut e, "I");
     run_keys(&mut e, "XX<Esc>");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &[
             "thiXXs is a line".to_string(),
             "   XX".to_string(),
@@ -2041,7 +2304,14 @@ fn block_insert_pads_short_lines_to_block_column() {
     run_keys(&mut e, "Y<Esc>");
     // Row 1 "bb" is shorter than col 3 — pad with one space then Y.
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &[
             "aaaYaa".to_string(),
             "bb Y".to_string(),
@@ -2060,7 +2330,14 @@ fn visual_block_append_repeats_across_rows() {
     run_keys(&mut e, "A");
     run_keys(&mut e, "!<Esc>");
     assert_eq!(
-        e.buffer().lines(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         &["f!oo".to_string(), "b!ar".to_string(), "b!az".to_string()]
     );
 }
@@ -2293,14 +2570,34 @@ fn gj_joins_without_inserting_space() {
     let mut e = editor_with("hello\n    world");
     run_keys(&mut e, "gJ");
     // No space inserted, leading whitespace preserved.
-    assert_eq!(e.buffer().lines(), &["hello    world".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["hello    world".to_string()]
+    );
 }
 
 #[test]
 fn gj_noop_on_last_line() {
     let mut e = editor_with("only");
     run_keys(&mut e, "gJ");
-    assert_eq!(e.buffer().lines(), &["only".to_string()]);
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &["only".to_string()]
+    );
 }
 
 #[test]
@@ -2346,7 +2643,10 @@ fn dge_deletes_to_end_of_previous_word() {
     // d + ge from 'b' of "baz": range is ge → col 6 ('r' of bar),
     // inclusive, so cols 6-8 ("r b") are cut.
     run_keys(&mut e, "dge");
-    assert_eq!(e.buffer().lines()[0], "foo baaz");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo baaz"
+    );
 }
 
 #[test]
@@ -2363,7 +2663,7 @@ fn ctrl_scroll_keys_do_not_panic() {
     run_keys(&mut e, "<C-f>");
     run_keys(&mut e, "<C-b>");
     // No explicit assert beyond "didn't panic".
-    assert!(!e.buffer().lines().is_empty());
+    assert!(e.buffer().row_count() > 0);
 }
 
 /// Regression: arrow-navigation during a count-insert session must
@@ -2383,17 +2683,17 @@ fn count_insert_with_arrow_nav_does_not_leak_rows() {
     // `3i`, type X, arrow down, Esc.
     run_keys(&mut e, "3iX<Down><Esc>");
     // Row 0 keeps the originally-typed X.
-    assert!(e.buffer().lines()[0].contains('X'));
+    assert!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0).contains('X'));
     // Row 1 must not contain a fragment of row 0 ("row0") — that
     // was the buggy leak from the before-diff window.
     assert!(
-        !e.buffer().lines()[1].contains("row0"),
+        !hjkl_buffer::rope_line_str(&e.buffer().rope(), 1).contains("row0"),
         "row1 leaked row0 contents: {:?}",
-        e.buffer().lines()[1]
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1)
     );
     // Buffer stays the same number of rows — no extra lines
     // injected by a multi-line "inserted" replay.
-    assert_eq!(e.buffer().lines().len(), 3);
+    assert_eq!(e.buffer().row_count(), 3);
 }
 
 // ─── Viewport scroll / jump tests ─────────────────────────────────
@@ -2934,7 +3234,7 @@ fn mark_below_delete_shifts_up() {
     e.jump_cursor(0, 0);
     run_keys(&mut e, "'a");
     assert_eq!(e.cursor().0, 2);
-    assert_eq!(e.buffer().line(2).unwrap(), "d");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "d");
 }
 
 #[test]
@@ -2981,7 +3281,7 @@ fn mark_shifts_down_after_insert() {
     e.jump_cursor(0, 0);
     run_keys(&mut e, "'a");
     assert_eq!(e.cursor().0, 3);
-    assert_eq!(e.buffer().line(3).unwrap(), "c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 3), "c");
 }
 
 // ─── Search / jumplist interaction ───────────────────────────────
@@ -3066,7 +3366,12 @@ fn editor_sticky_col_tracks_horizontal_motion() {
 fn buffer_content_mirrors_textarea_after_insert() {
     let mut e = editor_with("hello");
     run_keys(&mut e, "iXYZ<Esc>");
-    let text = e.buffer().lines().join("\n");
+    let text = e
+        .buffer()
+        .rope()
+        .to_string()
+        .trim_end_matches('\n')
+        .to_string();
     assert_eq!(e.buffer().as_string(), text);
 }
 
@@ -3074,7 +3379,12 @@ fn buffer_content_mirrors_textarea_after_insert() {
 fn buffer_content_mirrors_textarea_after_delete() {
     let mut e = editor_with("alpha bravo charlie");
     run_keys(&mut e, "dw");
-    let text = e.buffer().lines().join("\n");
+    let text = e
+        .buffer()
+        .rope()
+        .to_string()
+        .trim_end_matches('\n')
+        .to_string();
     assert_eq!(e.buffer().as_string(), text);
 }
 
@@ -3082,7 +3392,12 @@ fn buffer_content_mirrors_textarea_after_delete() {
 fn buffer_content_mirrors_textarea_after_dd() {
     let mut e = editor_with("a\nb\nc\nd");
     run_keys(&mut e, "jdd");
-    let text = e.buffer().lines().join("\n");
+    let text = e
+        .buffer()
+        .rope()
+        .to_string()
+        .trim_end_matches('\n')
+        .to_string();
     assert_eq!(e.buffer().as_string(), text);
 }
 
@@ -3090,7 +3405,12 @@ fn buffer_content_mirrors_textarea_after_dd() {
 fn buffer_content_mirrors_textarea_after_open_line() {
     let mut e = editor_with("foo\nbar");
     run_keys(&mut e, "oNEW<Esc>");
-    let text = e.buffer().lines().join("\n");
+    let text = e
+        .buffer()
+        .rope()
+        .to_string()
+        .trim_end_matches('\n')
+        .to_string();
     assert_eq!(e.buffer().as_string(), text);
 }
 
@@ -3099,7 +3419,12 @@ fn buffer_content_mirrors_textarea_after_paste() {
     let mut e = editor_with("hello");
     run_keys(&mut e, "yy");
     run_keys(&mut e, "p");
-    let text = e.buffer().lines().join("\n");
+    let text = e
+        .buffer()
+        .rope()
+        .to_string()
+        .trim_end_matches('\n')
+        .to_string();
     assert_eq!(e.buffer().as_string(), text);
 }
 
@@ -3185,7 +3510,7 @@ fn enter_with_autoindent_copies_leading_whitespace() {
     let mut e = editor_with("    foo");
     e.jump_cursor(0, 7);
     run_keys(&mut e, "i<CR>");
-    assert_eq!(e.buffer().line(1).unwrap(), "    ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "    ");
 }
 
 #[test]
@@ -3194,7 +3519,7 @@ fn enter_without_autoindent_inserts_bare_newline() {
     e.settings_mut().autoindent = false;
     e.jump_cursor(0, 7);
     run_keys(&mut e, "i<CR>");
-    assert_eq!(e.buffer().line(1).unwrap(), "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "");
 }
 
 #[test]
@@ -3281,7 +3606,7 @@ fn undobreak_on_breaks_group_at_arrow_motion() {
     run_keys(&mut e, "iaaa<Left>bbb<Esc>u");
     // Default settings.undo_break_on_motion = true, so `u` only
     // reverses the `bbb` run; `aaa` remains.
-    let line = e.buffer().line(0).unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     assert!(line.contains("aaa"), "after undobreak: {line:?}");
     assert!(!line.contains("bbb"), "bbb should be undone: {line:?}");
 }
@@ -3293,7 +3618,7 @@ fn undobreak_off_keeps_full_run_in_one_group() {
     run_keys(&mut e, "iaaa<Left>bbb<Esc>u");
     // With undobreak off, the whole insert (aaa<Left>bbb) is one
     // group — `u` reverts back to empty.
-    assert_eq!(e.buffer().line(0).unwrap_or_default(), "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -3329,7 +3654,7 @@ fn tab_inserts_literal_tab_when_noexpandtab() {
     e.settings_mut().softtabstop = 0;
     run_keys(&mut e, "i");
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(e.buffer().line(0).unwrap(), "\t");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "\t");
 }
 
 #[test]
@@ -3339,7 +3664,7 @@ fn tab_inserts_spaces_when_expandtab() {
     e.settings_mut().tabstop = 4;
     run_keys(&mut e, "i");
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(e.buffer().line(0).unwrap(), "    ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    ");
 }
 
 #[test]
@@ -3351,7 +3676,7 @@ fn tab_with_softtabstop_fills_to_next_boundary() {
     e.settings_mut().softtabstop = 4;
     run_keys(&mut e, "A"); // append at end (col 2)
     hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    assert_eq!(e.buffer().line(0).unwrap(), "ab  ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ab  ");
 }
 
 #[test]
@@ -3366,7 +3691,7 @@ fn backspace_deletes_softtab_run() {
         &mut e,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().line(0).unwrap(), "x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x");
 }
 
 #[test]
@@ -3380,7 +3705,7 @@ fn backspace_falls_back_to_single_char_when_run_not_aligned() {
         &mut e,
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().line(0).unwrap(), "    x");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    x");
 }
 
 #[test]
@@ -3388,7 +3713,7 @@ fn readonly_blocks_insert_mutation() {
     let mut e = editor_with("hello");
     e.settings_mut().readonly = true;
     run_keys(&mut e, "iX<Esc>");
-    assert_eq!(e.buffer().line(0).unwrap(), "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 // Tests for `intern_ratatui_style` and `install_ratatui_syntax_spans` moved to
@@ -3404,7 +3729,10 @@ fn named_register_yank_into_a_then_paste_from_a() {
     assert_eq!(e.registers().read('a').unwrap().text, "hello ");
     // Move to second line then paste from "a.
     run_keys(&mut e, "j0\"aP");
-    assert_eq!(e.buffer().lines()[1], "hello second");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
+        "hello second"
+    );
 }
 
 #[test]
@@ -3413,7 +3741,7 @@ fn capital_r_overstrikes_chars() {
     e.jump_cursor(0, 0);
     run_keys(&mut e, "RXY<Esc>");
     // 'h' and 'e' replaced; 'llo' kept.
-    assert_eq!(e.buffer().lines()[0], "XYllo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "XYllo");
 }
 
 #[test]
@@ -3422,7 +3750,7 @@ fn capital_r_at_eol_appends() {
     e.jump_cursor(0, 1);
     // Cursor on the final 'i'; replace it then keep typing past EOL.
     run_keys(&mut e, "RXYZ<Esc>");
-    assert_eq!(e.buffer().lines()[0], "hXYZ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hXYZ");
 }
 
 #[test]
@@ -3433,7 +3761,7 @@ fn capital_r_count_does_not_repeat_overstrike_char_by_char() {
     let mut e = editor_with("abc");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "RX<Esc>");
-    assert_eq!(e.buffer().lines()[0], "Xbc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xbc");
 }
 
 #[test]
@@ -3453,7 +3781,7 @@ fn ctrl_r_in_insert_pastes_named_register() {
         &mut e,
         KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().lines()[1], "hello ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "hello ");
     // Cursor sits at end of inserted payload (col 6).
     assert_eq!(e.cursor(), (1, 6));
     // Stayed in insert mode; next char appends.
@@ -3462,7 +3790,7 @@ fn ctrl_r_in_insert_pastes_named_register() {
         &mut e,
         KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().lines()[1], "hello X");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "hello X");
 }
 
 #[test]
@@ -3479,7 +3807,7 @@ fn ctrl_r_with_unnamed_register() {
         &mut e,
         KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().lines()[0], "foo foo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo foo");
 }
 
 #[test]
@@ -3500,7 +3828,7 @@ fn ctrl_r_unknown_selector_is_no_op() {
         &mut e,
         KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE),
     );
-    assert_eq!(e.buffer().lines()[0], "abcZ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "abcZ");
 }
 
 #[test]
@@ -3526,7 +3854,7 @@ fn ctrl_r_multiline_register_pastes_with_newlines() {
     );
     // The buffer should now contain the original 3 lines plus the
     // pasted 2-line payload (with its own newline) on its own line.
-    let total_lines = e.buffer().lines().len();
+    let total_lines = e.buffer().row_count();
     assert!(total_lines >= 5);
 }
 
@@ -3868,13 +4196,13 @@ fn macro_record_and_replay_basic() {
     let mut e = editor_with("foo\nbar\nbaz");
     // Record into "a": insert "X" at line start, exit insert.
     run_keys(&mut e, "qaIX<Esc>jq");
-    assert_eq!(e.buffer().lines()[0], "Xfoo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xfoo");
     // Replay on the next two lines.
     run_keys(&mut e, "@a");
-    assert_eq!(e.buffer().lines()[1], "Xbar");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "Xbar");
     // @@ replays the last-played macro.
     run_keys(&mut e, "j@@");
-    assert_eq!(e.buffer().lines()[2], "Xbaz");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "Xbaz");
 }
 
 #[test]
@@ -3943,7 +4271,7 @@ fn nested_macro_chord_records_literal_keys() {
     // `@a` re-runs the captured key sequence on a different line.
     e.jump_cursor(1, 0);
     run_keys(&mut e, "@a");
-    assert_eq!(e.buffer().lines()[1], "Xbeta");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "Xbeta");
 }
 
 #[test]
@@ -3953,7 +4281,10 @@ fn shift_gt_motion_indents_one_line() {
     // pipeline like `dw` / `cw`.
     let mut e = editor_with("hello world");
     run_keys(&mut e, ">w");
-    assert_eq!(e.buffer().lines()[0], "  hello world");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "  hello world"
+    );
 }
 
 #[test]
@@ -3961,7 +4292,10 @@ fn shift_lt_motion_outdents_one_line() {
     let mut e = editor_with("    hello world");
     run_keys(&mut e, "<lt>w");
     // Outdent strips up to one shiftwidth (default 2).
-    assert_eq!(e.buffer().lines()[0], "  hello world");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "  hello world"
+    );
 }
 
 #[test]
@@ -3969,11 +4303,11 @@ fn shift_gt_text_object_indents_paragraph() {
     let mut e = editor_with("alpha\nbeta\ngamma\n\nrest");
     e.jump_cursor(0, 0);
     run_keys(&mut e, ">ip");
-    assert_eq!(e.buffer().lines()[0], "  alpha");
-    assert_eq!(e.buffer().lines()[1], "  beta");
-    assert_eq!(e.buffer().lines()[2], "  gamma");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "  alpha");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "  beta");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 2), "  gamma");
     // Blank separator + the next paragraph stay untouched.
-    assert_eq!(e.buffer().lines()[4], "rest");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 4), "rest");
 }
 
 #[test]
@@ -3992,7 +4326,10 @@ fn ctrl_o_runs_exactly_one_normal_command() {
     assert_eq!(e.vim_mode(), VimMode::Insert);
     // Typing a char now inserts.
     run_keys(&mut e, "X");
-    assert_eq!(e.buffer().lines()[0], "Xbeta gamma");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "Xbeta gamma"
+    );
 }
 
 #[test]
@@ -4008,7 +4345,7 @@ fn macro_replay_respects_mode_switching() {
     run_keys(&mut e, "@a");
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert_eq!(e.cursor().1, 0);
-    assert_eq!(e.buffer().lines()[0], "Xyo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xyo");
 }
 
 #[test]
@@ -4022,7 +4359,7 @@ fn macro_recorded_text_round_trips_through_register() {
     assert!(text.starts_with("iX"));
     // Replay inserts another X at the cursor.
     run_keys(&mut e, "@a");
-    assert_eq!(e.buffer().lines()[0], "XX");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "XX");
 }
 
 #[test]
@@ -4033,14 +4370,14 @@ fn dot_after_macro_replays_macros_last_change() {
     // Record: insert 'X' at line start, then move down. The last
     // mutation is the insert — `.` should re-apply just that.
     run_keys(&mut e, "qaIX<Esc>jq");
-    assert_eq!(e.buffer().lines()[0], "Xab");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xab");
     run_keys(&mut e, "@a");
-    assert_eq!(e.buffer().lines()[1], "Xcd");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "Xcd");
     // `.` from the new cursor row repeats the last edit (the
     // insert `X`), not the whole macro (which would also `j`).
     let row_before_dot = e.cursor().0;
     run_keys(&mut e, ".");
-    assert!(e.buffer().lines()[row_before_dot].starts_with('X'));
+    assert!(hjkl_buffer::rope_line_str(&e.buffer().rope(), row_before_dot).starts_with('X'));
 }
 
 // ── smartindent tests ────────────────────────────────────────────────
@@ -4073,7 +4410,7 @@ fn smartindent_bumps_indent_after_open_brace() {
     e.jump_cursor(0, 10); // after the `{`
     run_keys(&mut e, "i<CR>");
     assert_eq!(
-        e.buffer().lines()[1],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "    ",
         "smartindent should bump one shiftwidth after {{"
     );
@@ -4088,7 +4425,7 @@ fn smartindent_no_bump_when_off() {
     e.jump_cursor(0, 10);
     run_keys(&mut e, "i<CR>");
     assert_eq!(
-        e.buffer().lines()[1],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "",
         "without smartindent, no bump: new line copies empty leading ws"
     );
@@ -4114,7 +4451,7 @@ fn smartindent_uses_tab_when_noexpandtab() {
     e.jump_cursor(0, 10);
     run_keys(&mut e, "i<CR>");
     assert_eq!(
-        e.buffer().lines()[1],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "\t",
         "noexpandtab: smartindent bump inserts a literal tab"
     );
@@ -4130,7 +4467,7 @@ fn smartindent_dedent_on_close_brace() {
     e.jump_cursor(1, 4); // end of "    "
     run_keys(&mut e, "i}");
     assert_eq!(
-        e.buffer().lines()[1],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "}",
         "close brace on whitespace-only line should dedent"
     );
@@ -4145,7 +4482,7 @@ fn smartindent_no_dedent_when_off() {
     e.jump_cursor(1, 4);
     run_keys(&mut e, "i}");
     assert_eq!(
-        e.buffer().lines()[1],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 1),
         "    }",
         "without smartindent, `}}` just appends at cursor"
     );
@@ -4159,7 +4496,7 @@ fn smartindent_no_dedent_mid_line() {
     e.jump_cursor(0, 13); // after `1`
     run_keys(&mut e, "i}");
     assert_eq!(
-        e.buffer().lines()[0],
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
         "    let x = 1}",
         "mid-line `}}` should not dedent"
     );
@@ -4173,7 +4510,7 @@ fn count_5x_fills_unnamed_register() {
     let mut e = editor_with("hello world\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "5x");
-    assert_eq!(e.buffer().lines()[0], " world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " world");
     assert_eq!(e.cursor(), (0, 0));
     assert_eq!(e.yank(), "hello");
 }
@@ -4183,7 +4520,7 @@ fn x_fills_unnamed_register_single_char() {
     let mut e = editor_with("abc\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "x");
-    assert_eq!(e.buffer().lines()[0], "bc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "bc");
     assert_eq!(e.yank(), "a");
 }
 
@@ -4192,7 +4529,7 @@ fn big_x_fills_unnamed_register() {
     let mut e = editor_with("hello\n");
     e.jump_cursor(0, 3);
     run_keys(&mut e, "X");
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
     assert_eq!(e.yank(), "l");
 }
 
@@ -4216,7 +4553,7 @@ fn dd_last_line_clamps_cursor_to_new_last_row() {
     let mut e = editor_with("foo\nbar\n");
     e.jump_cursor(1, 0);
     run_keys(&mut e, "dd");
-    assert_eq!(e.buffer().lines()[0], "foo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo");
     assert_eq!(
         e.cursor(),
         (0, 0),
@@ -4230,7 +4567,7 @@ fn d_dollar_cursor_on_last_char() {
     let mut e = editor_with("hello world\n");
     e.jump_cursor(0, 5);
     run_keys(&mut e, "d$");
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
     assert_eq!(
         e.cursor(),
         (0, 4),
@@ -4244,7 +4581,7 @@ fn undo_insert_clamps_cursor_to_last_valid_col() {
     let mut e = editor_with("hello\n");
     e.jump_cursor(0, 5); // one-past-last, as in oracle initial_cursor
     run_keys(&mut e, "a world<Esc>u");
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
     assert_eq!(
         e.cursor(),
         (0, 4),
@@ -4258,7 +4595,10 @@ fn da_doublequote_eats_trailing_whitespace() {
     let mut e = editor_with("say \"hello\" there\n");
     e.jump_cursor(0, 6);
     run_keys(&mut e, "da\"");
-    assert_eq!(e.buffer().lines()[0], "say there");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "say there"
+    );
     assert_eq!(e.cursor().1, 4, "cursor should be at col 4 after da\"");
 }
 
@@ -4268,7 +4608,7 @@ fn dab_cursor_col_clamped_after_delete() {
     let mut e = editor_with("fn x() {\n    body\n}\n");
     e.jump_cursor(1, 4);
     run_keys(&mut e, "daB");
-    assert_eq!(e.buffer().lines()[0], "fn x() ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "fn x() ");
     assert_eq!(
         e.cursor(),
         (0, 6),
@@ -4282,8 +4622,8 @@ fn dib_preserves_surrounding_newlines() {
     let mut e = editor_with("{\n    body\n}\n");
     e.jump_cursor(1, 4);
     run_keys(&mut e, "diB");
-    assert_eq!(e.buffer().lines()[0], "{");
-    assert_eq!(e.buffer().lines()[1], "}");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "{");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "}");
     assert_eq!(e.cursor().0, 1, "cursor should be on the '}}' line");
 }
 
@@ -4520,7 +4860,15 @@ fn visual_block_change_cursor_on_last_inserted_char() {
     let mut e = editor_with("foo\nbar\nbaz\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "<C-v>jlcZZ<Esc>");
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "ZZo", "row 0 should be 'ZZo'");
     assert_eq!(lines[1], "ZZr", "row 1 should be 'ZZr'");
     assert_eq!(
@@ -4545,7 +4893,15 @@ fn register_blackhole_delete_preserves_unnamed_register() {
     let mut e = editor_with("foo bar baz\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "yiww\"_dwbp");
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines[0], "ffoooo baz",
         "black-hole delete must not corrupt unnamed register"
@@ -4626,7 +4982,15 @@ fn apply_op_motion_dw_deletes_word() {
     let mut e = editor_with("hello world");
     e.apply_op_motion(hjkl_engine::Operator::Delete, 'w', 1);
     assert_eq!(
-        e.buffer().lines().first().cloned().unwrap_or_default(),
+        e.buffer()
+            .rope()
+            .lines()
+            .next()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .unwrap_or_default(),
         "world"
     );
 }
@@ -4638,7 +5002,16 @@ fn apply_op_motion_cw_quirk_leaves_trailing_space() {
     e.apply_op_motion(hjkl_engine::Operator::Change, 'w', 1);
     // After ce, cursor is at 0; mode enters Insert. Line should be " world"
     // (trailing space from original gap preserved).
-    let line = e.buffer().lines().first().cloned().unwrap_or_default();
+    let line = e
+        .buffer()
+        .rope()
+        .lines()
+        .next()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .unwrap_or_default();
     assert!(
         line.starts_with(' ') || line == " world",
         "cw quirk: got {line:?}"
@@ -4651,7 +5024,15 @@ fn apply_op_double_dd_deletes_line() {
     let mut e = editor_with("line1\nline2\nline3");
     // dd on first line.
     e.apply_op_double(hjkl_engine::Operator::Delete, 1);
-    let lines: Vec<_> = e.buffer().lines().to_vec();
+    let lines: Vec<_> = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["line2", "line3"], "dd should delete line1");
 }
 
@@ -4660,7 +5041,15 @@ fn apply_op_double_yy_does_not_modify_buffer() {
     let mut e = editor_with("hello");
     e.apply_op_double(hjkl_engine::Operator::Yank, 1);
     assert_eq!(
-        e.buffer().lines().first().cloned().unwrap_or_default(),
+        e.buffer()
+            .rope()
+            .lines()
+            .next()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .unwrap_or_default(),
         "hello"
     );
 }
@@ -4669,7 +5058,15 @@ fn apply_op_double_yy_does_not_modify_buffer() {
 fn apply_op_double_dd_count2_deletes_two_lines() {
     let mut e = editor_with("line1\nline2\nline3");
     e.apply_op_double(hjkl_engine::Operator::Delete, 2);
-    let lines: Vec<_> = e.buffer().lines().to_vec();
+    let lines: Vec<_> = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["line3"], "2dd should delete two lines");
 }
 
@@ -4681,7 +5078,15 @@ fn apply_op_motion_unknown_key_is_noop() {
     e.apply_op_motion(hjkl_engine::Operator::Delete, 'X', 1); // 'X' is not a motion
     assert_eq!(e.cursor(), before);
     assert_eq!(
-        e.buffer().lines().first().cloned().unwrap_or_default(),
+        e.buffer()
+            .rope()
+            .lines()
+            .next()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .unwrap_or_default(),
         "hello"
     );
 }
@@ -4694,7 +5099,15 @@ fn apply_op_find_dfx_deletes_to_x() {
     let mut e = editor_with("hello x world");
     e.apply_op_find(hjkl_engine::Operator::Delete, 'x', true, false, 1);
     assert_eq!(
-        e.buffer().lines().first().cloned().unwrap_or_default(),
+        e.buffer()
+            .rope()
+            .lines()
+            .next()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .unwrap_or_default(),
         " world",
         "dfx must delete 'hello x'"
     );
@@ -4706,7 +5119,15 @@ fn apply_op_find_dtx_deletes_up_to_x() {
     let mut e = editor_with("hello x world");
     e.apply_op_find(hjkl_engine::Operator::Delete, 'x', true, true, 1);
     assert_eq!(
-        e.buffer().lines().first().cloned().unwrap_or_default(),
+        e.buffer()
+            .rope()
+            .lines()
+            .next()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .unwrap_or_default(),
         "x world",
         "dtx must delete 'hello ' leaving 'x world'"
     );
@@ -4732,7 +5153,16 @@ fn apply_op_text_obj_diw_deletes_word() {
     // `diw` in "hello world" with cursor on 'h' (col 0) → deletes "hello".
     let mut e = editor_with("hello world");
     e.apply_op_text_obj(hjkl_engine::Operator::Delete, 'w', true, 1);
-    let line = e.buffer().lines().first().cloned().unwrap_or_default();
+    let line = e
+        .buffer()
+        .rope()
+        .lines()
+        .next()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .unwrap_or_default();
     // `diw` on "hello" leaves " world" or "world" depending on whitespace handling.
     // The engine's word text-object for 'inner' removes the word itself; the
     // surrounding space behaviour is covered by the engine's text-object logic.
@@ -4748,7 +5178,16 @@ fn apply_op_text_obj_daw_deletes_around_word() {
     // `daw` in "hello world" with cursor on 'h' (col 0) → deletes "hello " (with space).
     let mut e = editor_with("hello world");
     e.apply_op_text_obj(hjkl_engine::Operator::Delete, 'w', false, 1);
-    let line = e.buffer().lines().first().cloned().unwrap_or_default();
+    let line = e
+        .buffer()
+        .rope()
+        .lines()
+        .next()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .unwrap_or_default();
     assert!(
         !line.contains("hello"),
         "daw must delete 'hello' and surrounding space, remaining: {line:?}"
@@ -4790,7 +5229,15 @@ fn apply_op_g_dgg_deletes_to_top() {
     // dgg: Delete from current row to FileTop (row 0). Motion is Linewise,
     // so rows 0..=1 are deleted. "line3" remains.
     e.apply_op_g(hjkl_engine::Operator::Delete, 'g', 1);
-    let lines: Vec<_> = e.buffer().lines().to_vec();
+    let lines: Vec<_> = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["line3"], "dgg must delete to file top");
 }
 
@@ -4828,7 +5275,15 @@ fn apply_op_g_dgj_deletes_screen_down() {
     // screen line (which is the same as buffer line in non-wrapped content).
     let mut e = editor_with("line1\nline2\nline3");
     e.apply_op_g(hjkl_engine::Operator::Delete, 'j', 1);
-    let lines: Vec<_> = e.buffer().lines().to_vec();
+    let lines: Vec<_> = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // dgj deletes current line plus the line below it.
     assert_eq!(lines, vec!["line3"], "dgj must delete current+next line");
 }
@@ -4910,7 +5365,15 @@ fn equal_then_motion_emits_auto_indent_via_fsm() {
     let mut e = indent_editor_vim("{\nbody\n}");
     // Start on row 0; `=j` covers rows 0..=1.
     run_keys(&mut e, "=j");
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // Row 0 (`{`) — depth 0 at start, no indent.
     assert_eq!(lines[0], "{");
     // Row 1 (`body`) — depth 1 after `{`, should be indented 4 spaces.
@@ -4923,7 +5386,15 @@ fn double_equal_reindents_current_line() {
     let mut e = indent_editor_vim("{\nbody\n}");
     // Move to row 1 then `==`.
     run_keys(&mut e, "j==");
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // Row 1 is now properly indented under the `{`.
     assert_eq!(lines[1], "    body");
     // Row 0 and 2 should be unchanged.

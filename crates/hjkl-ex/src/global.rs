@@ -96,7 +96,7 @@ pub(crate) fn global_handler<H: Host>(
     let bot = scope_end.min(row_count.saturating_sub(1));
     let mut targets: Vec<usize> = Vec::new();
     for row in scope_start..=bot {
-        let line = editor.buffer().line(row).unwrap_or_default();
+        let line = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row);
         let matches = regex.is_match(&line);
         if matches != negate {
             targets.push(row);
@@ -113,11 +113,9 @@ pub(crate) fn global_handler<H: Host>(
     for row in targets.iter().rev() {
         let row = *row;
         if editor.buffer().row_count() == 1 {
-            let line_chars = editor
-                .buffer()
-                .line(0)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
+            let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), 0)
+                .chars()
+                .count();
             if line_chars > 0 {
                 editor.mutate_edit(Edit::DeleteRange {
                     start: Position::new(0, 0),
@@ -184,7 +182,7 @@ mod tests {
             matches!(result, Some(ExEffect::Substituted { count: 2, .. })),
             "got: {result:?}"
         );
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(!lines.contains(&"foo".to_string()), "lines: {lines:?}");
         assert!(lines.contains(&"bar".to_string()));
     }
@@ -197,7 +195,7 @@ mod tests {
             matches!(result, Some(ExEffect::Substituted { .. })),
             "got: {result:?}"
         );
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         // non-foo lines (bar, baz) deleted; only foo remains
         assert!(!lines.contains(&"bar".to_string()), "lines: {lines:?}");
         assert!(!lines.contains(&"baz".to_string()), "lines: {lines:?}");
@@ -242,7 +240,7 @@ mod tests {
         let mut editor = make_editor_with_lines(&["foo", "foo", "foo"]);
         let range = LineRange::new(1, 2);
         let _result = global_match_handler(&mut editor, "/foo/d", Some(range));
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         // 2 deleted, 1 remaining foo
         assert_eq!(lines.len(), 1, "lines: {lines:?}");
     }
@@ -253,7 +251,14 @@ mod tests {
         let mut editor = make_editor_with_lines(&["foo", "bar", "baz"]);
         let result = global_match_handler(&mut editor, "!/foo/d", None);
         assert!(matches!(result, Some(ExEffect::Substituted { .. })));
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(lines.iter().all(|l| l == "foo"), "lines: {lines:?}");
+    }
+
+    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+        let rope = editor.buffer().rope();
+        (0..rope.len_lines())
+            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+            .collect()
     }
 }

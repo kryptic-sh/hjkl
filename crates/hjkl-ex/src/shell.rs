@@ -56,7 +56,11 @@ pub(crate) fn shell_filter_handler<H: Host>(
 
     // Range supplied — pipe the rows through the command.
     let r = range.unwrap();
-    let mut all_lines: Vec<String> = editor.buffer().lines().to_vec();
+    let rope = editor.buffer().rope();
+    let mut all_lines: Vec<String> = (0..rope.len_lines())
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
+    drop(rope);
     let total = all_lines.len();
     if total == 0 {
         return ExEffect::Ok;
@@ -174,9 +178,9 @@ mod tests {
         let range = LineRange::new(1, 3);
         let result = shell_filter_handler(&mut editor, "sort", Some(range));
         assert_eq!(result, ExEffect::Ok, "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
-        assert_eq!(lines[0], "apple");
-        assert_eq!(lines[1], "banana");
-        assert_eq!(lines[2], "cherry");
+        let rope = editor.buffer().rope();
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 0), "apple");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 1), "banana");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 2), "cherry");
     }
 }

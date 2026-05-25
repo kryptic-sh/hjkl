@@ -210,6 +210,17 @@ mod tests {
         Editor::new(buf, host, Options::default())
     }
 
+    fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {
+        hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
+    }
+
+    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+        let rope = editor.buffer().rope();
+        (0..rope.len_lines())
+            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+            .collect()
+    }
+
     // ---- Phase 1 tests (kept) ----------------------------------------------
 
     #[test]
@@ -634,7 +645,7 @@ mod tests {
         let path = tmp.path().to_string_lossy().to_string();
         let result = try_dispatch(&reg, &mut editor, &format!("r {path}"));
         assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(lines.contains(&"hello".to_string()), "lines: {lines:?}");
     }
 
@@ -647,7 +658,7 @@ mod tests {
         let path = tmp.path().to_string_lossy().to_string();
         let result = try_dispatch(&reg, &mut editor, &format!("read {path}"));
         assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(lines.contains(&"world".to_string()), "lines: {lines:?}");
     }
 
@@ -938,8 +949,8 @@ mod tests {
         let result = try_dispatch(&reg, &mut editor, "d");
         assert_eq!(result, Some(ExEffect::Ok));
         // "first" gone; remaining lines start with "second".
-        assert_eq!(editor.buffer().lines()[0], "second");
-        assert_eq!(editor.buffer().lines().len(), 2);
+        assert_eq!(buf_line(&editor, 0), "second");
+        assert_eq!(editor.buffer().row_count(), 2);
     }
 
     #[test]
@@ -949,8 +960,8 @@ mod tests {
         let mut editor = make_editor_with_lines(&["first", "second", "third"]);
         let result = try_dispatch(&reg, &mut editor, "1d");
         assert_eq!(result, Some(ExEffect::Ok));
-        assert_eq!(editor.buffer().lines()[0], "second");
-        assert_eq!(editor.buffer().lines().len(), 2);
+        assert_eq!(buf_line(&editor, 0), "second");
+        assert_eq!(editor.buffer().row_count(), 2);
     }
 
     #[test]
@@ -960,8 +971,8 @@ mod tests {
         let mut editor = make_editor_with_lines(&["first", "second", "third"]);
         let result = try_dispatch(&reg, &mut editor, "1,2d");
         assert_eq!(result, Some(ExEffect::Ok));
-        assert_eq!(editor.buffer().lines()[0], "third");
-        assert_eq!(editor.buffer().lines().len(), 1);
+        assert_eq!(buf_line(&editor, 0), "third");
+        assert_eq!(editor.buffer().row_count(), 1);
     }
 
     // ---- Phase 2d: :sort ---------------------------------------------------
@@ -972,7 +983,7 @@ mod tests {
         let mut editor = make_editor_with_lines(&["banana", "apple", "cherry"]);
         let result = try_dispatch(&reg, &mut editor, "sort");
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert_eq!(lines, vec!["apple", "banana", "cherry"]);
     }
 
@@ -983,7 +994,7 @@ mod tests {
         let mut editor = make_editor_with_lines(&["cherry", "apple", "banana", "zebra", "mango"]);
         let result = try_dispatch(&reg, &mut editor, "1,3sort");
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert_eq!(lines[0], "apple");
         assert_eq!(lines[1], "banana");
         assert_eq!(lines[2], "cherry");
@@ -1006,7 +1017,7 @@ mod tests {
                 lines_changed: 1
             })
         );
-        assert_eq!(editor.buffer().lines()[0], "bar");
+        assert_eq!(buf_line(&editor, 0), "bar");
     }
 
     #[test]
@@ -1022,7 +1033,7 @@ mod tests {
                 lines_changed: 1
             })
         );
-        assert_eq!(editor.buffer().lines()[0], "bar bar bar");
+        assert_eq!(buf_line(&editor, 0), "bar bar bar");
     }
 
     #[test]
@@ -1038,9 +1049,9 @@ mod tests {
                 lines_changed: 2
             })
         );
-        assert_eq!(editor.buffer().lines()[0], "bar");
-        assert_eq!(editor.buffer().lines()[1], "bar bar");
-        assert_eq!(editor.buffer().lines()[2], "baz");
+        assert_eq!(buf_line(&editor, 0), "bar");
+        assert_eq!(buf_line(&editor, 1), "bar bar");
+        assert_eq!(buf_line(&editor, 2), "baz");
     }
 
     #[test]
@@ -1056,9 +1067,9 @@ mod tests {
                 lines_changed: 2
             })
         );
-        assert_eq!(editor.buffer().lines()[0], "y");
-        assert_eq!(editor.buffer().lines()[1], "y");
-        assert_eq!(editor.buffer().lines()[2], "x"); // untouched
+        assert_eq!(buf_line(&editor, 0), "y");
+        assert_eq!(buf_line(&editor, 1), "y");
+        assert_eq!(buf_line(&editor, 2), "x"); // untouched
     }
 
     #[test]
@@ -1361,7 +1372,7 @@ mod tests {
         let path = tmp.path().to_string_lossy().to_string();
         let result = try_dispatch(&reg, &mut editor, &format!("r {path}"));
         assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(lines.contains(&"inserted".to_string()), "lines: {lines:?}");
     }
 
@@ -1372,7 +1383,7 @@ mod tests {
         let mut editor = make_editor_with_lines(&["line1"]);
         let result = try_dispatch(&reg, &mut editor, "r !echo hello");
         assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(lines.contains(&"hello".to_string()), "lines: {lines:?}");
     }
 
@@ -1419,7 +1430,7 @@ mod tests {
         let mut editor = make_editor_with_lines(&["banana", "apple", "cherry"]);
         let result = try_dispatch(&reg, &mut editor, "1,3!sort");
         assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert_eq!(lines[0], "apple");
         assert_eq!(lines[1], "banana");
         assert_eq!(lines[2], "cherry");
@@ -1436,7 +1447,7 @@ mod tests {
             matches!(result, Some(ExEffect::Substituted { count: 2, .. })),
             "got: {result:?}"
         );
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(!lines.contains(&"foo".to_string()), "lines: {lines:?}");
     }
 
@@ -1449,7 +1460,7 @@ mod tests {
             matches!(result, Some(ExEffect::Substituted { .. })),
             "got: {result:?}"
         );
-        let lines = editor.buffer().lines().to_vec();
+        let lines = buf_lines(&editor);
         assert!(!lines.contains(&"bar".to_string()));
         assert!(!lines.contains(&"baz".to_string()));
     }
@@ -1536,14 +1547,14 @@ mod tests {
             matches!(r1, Some(ExEffect::Substituted { count: 1, .. })),
             "got: {r1:?}"
         );
-        assert_eq!(editor.buffer().lines()[0], "bar");
+        assert_eq!(buf_line(&editor, 0), "bar");
         editor.goto_line(2);
         let r2 = try_dispatch(&reg, &mut editor, "&");
         assert!(
             matches!(r2, Some(ExEffect::Substituted { count: 1, .. })),
             "expected Substituted(1), got {r2:?}"
         );
-        assert_eq!(editor.buffer().lines()[1], "bar");
+        assert_eq!(buf_line(&editor, 1), "bar");
     }
 
     #[test]
@@ -1551,14 +1562,14 @@ mod tests {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor_with_lines(&["x x x", "x x x"]);
         try_dispatch(&reg, &mut editor, "s/x/y/g").unwrap();
-        assert_eq!(editor.buffer().lines()[0], "y y y");
+        assert_eq!(buf_line(&editor, 0), "y y y");
         editor.goto_line(2);
         let result = try_dispatch(&reg, &mut editor, "&&");
         assert!(
             matches!(result, Some(ExEffect::Substituted { count: 3, .. })),
             "expected Substituted(3), got {result:?}"
         );
-        assert_eq!(editor.buffer().lines()[1], "y y y");
+        assert_eq!(buf_line(&editor, 1), "y y y");
     }
 
     #[test]
@@ -1566,14 +1577,14 @@ mod tests {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor_with_lines(&["x x x", "x x x"]);
         try_dispatch(&reg, &mut editor, "s/x/y/g").unwrap();
-        assert_eq!(editor.buffer().lines()[0], "y y y");
+        assert_eq!(buf_line(&editor, 0), "y y y");
         editor.goto_line(2);
         let result = try_dispatch(&reg, &mut editor, "&");
         assert!(
             matches!(result, Some(ExEffect::Substituted { count: 1, .. })),
             "expected Substituted(1) (first only), got {result:?}"
         );
-        assert_eq!(editor.buffer().lines()[1], "y x x");
+        assert_eq!(buf_line(&editor, 1), "y x x");
     }
 
     #[test]
@@ -1581,13 +1592,13 @@ mod tests {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor_with_lines(&["foo", "foo", "bar"]);
         try_dispatch(&reg, &mut editor, "s/foo/baz/").unwrap();
-        assert_eq!(editor.buffer().lines()[0], "baz");
+        assert_eq!(buf_line(&editor, 0), "baz");
         let result = try_dispatch(&reg, &mut editor, "%&");
         assert!(
             matches!(result, Some(ExEffect::Substituted { count: 1, .. })),
             "expected Substituted(1), got {result:?}"
         );
-        assert_eq!(editor.buffer().lines()[1], "baz");
-        assert_eq!(editor.buffer().lines()[2], "bar");
+        assert_eq!(buf_line(&editor, 1), "baz");
+        assert_eq!(buf_line(&editor, 2), "bar");
     }
 }

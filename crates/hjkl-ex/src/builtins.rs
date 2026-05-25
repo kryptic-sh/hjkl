@@ -144,11 +144,9 @@ fn read_handler<H: Host>(
         Some(r) => r.end_one_based().saturating_sub(1),
         None => editor.cursor().0,
     };
-    let line_chars = editor
-        .buffer()
-        .line(row)
-        .map(|l| l.chars().count())
-        .unwrap_or(0);
+    let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
+        .chars()
+        .count();
     let insert_text = format!("\n{trimmed}");
     editor.mutate_edit(Edit::InsertStr {
         at: Position::new(row, line_chars),
@@ -494,11 +492,9 @@ fn delete_handler<H: Host>(
     for row in (start_row..=end_row).rev() {
         if editor.buffer().row_count() == 1 {
             // Last remaining row: clear content rather than deleting the row.
-            let line_chars = editor
-                .buffer()
-                .line(0)
-                .map(|l| l.chars().count())
-                .unwrap_or(0);
+            let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), 0)
+                .chars()
+                .count();
             if line_chars > 0 {
                 editor.mutate_edit(Edit::DeleteRange {
                     start: Position::new(0, 0),
@@ -544,7 +540,11 @@ fn sort_handler<H: Host>(
         }
     }
 
-    let mut all_lines: Vec<String> = editor.buffer().lines().to_vec();
+    let rope = editor.buffer().rope();
+    let mut all_lines: Vec<String> = (0..rope.len_lines())
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
+    drop(rope);
     let total = all_lines.len();
     if total == 0 {
         return Some(ExEffect::Ok);
@@ -1215,13 +1215,14 @@ fn uncomment_handler<H: Host>(
         }
     };
 
-    // Collect lines using the public buffer API.
+    // Collect lines using the rope API.
     let row_count = editor.buffer().row_count();
     let top_c = top.min(row_count.saturating_sub(1));
     let bot_c = bot.min(row_count.saturating_sub(1));
 
+    let rope = editor.buffer().rope();
     let lines: Vec<String> = (top_c..=bot_c)
-        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .map(|r| hjkl_buffer::rope_line_str(&rope, r))
         .collect();
 
     let mut new_lines: Vec<String> = Vec::with_capacity(lines.len());
@@ -1255,10 +1256,10 @@ fn uncomment_handler<H: Host>(
     editor.push_undo();
     let total_rows = editor.buffer().row_count();
     let all_before: Vec<String> = (0..top_c)
-        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .map(|r| hjkl_buffer::rope_line_str(&rope, r))
         .collect();
     let all_after: Vec<String> = ((bot_c + 1)..total_rows)
-        .map(|r| editor.buffer().line(r).unwrap_or_default())
+        .map(|r| hjkl_buffer::rope_line_str(&rope, r))
         .collect();
     let mut all: Vec<String> = all_before;
     all.extend(new_lines);
@@ -1308,6 +1309,17 @@ mod tests {
         let buf = hjkl_buffer::Buffer::from_str(&content);
         let host = DefaultHost::new();
         Editor::new(buf, host, Options::default())
+    }
+
+    fn buf_line(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>, row: usize) -> String {
+        hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
+    }
+
+    fn buf_lines(editor: &Editor<hjkl_buffer::Buffer, DefaultHost>) -> Vec<String> {
+        let rope = editor.buffer().rope();
+        (0..rope.len_lines())
+            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+            .collect()
     }
 
     // ── quit_handler ─────────────────────────────────────────────────────────
@@ -1668,7 +1680,7 @@ mod tests {
         // Cursor at row 0 (default). Deletes line 1 (1-based).
         let result = delete_handler(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert!(
             !lines.contains(&"aaa".to_string()),
             "first line should be deleted: {lines:?}"
@@ -1682,7 +1694,7 @@ mod tests {
         let range = LineRange::new(2, 3);
         let result = delete_handler(&mut ed, "", Some(range));
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert_eq!(lines.len(), 2, "expected 2 remaining lines: {lines:?}");
         assert!(lines.contains(&"l1".to_string()));
         assert!(lines.contains(&"l4".to_string()));
@@ -1695,7 +1707,7 @@ mod tests {
         assert_eq!(result, Some(ExEffect::Ok));
         // Buffer keeps one empty line rather than zero rows.
         assert_eq!(ed.buffer().row_count(), 1);
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "");
+        assert_eq!(buf_line(&ed, 0), "");
     }
 
     #[test]
@@ -1712,7 +1724,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["banana", "apple", "cherry"]);
         let result = sort_handler(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert_eq!(lines, vec!["apple", "banana", "cherry"]);
     }
 
@@ -1721,7 +1733,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["banana", "apple", "cherry"]);
         let result = sort_handler(&mut ed, "!", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert_eq!(lines, vec!["cherry", "banana", "apple"]);
     }
 
@@ -1730,7 +1742,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["b", "a", "b", "c", "a"]);
         let result = sort_handler(&mut ed, "u", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         // sorted + unique: a, b, c
         assert_eq!(lines, vec!["a", "b", "c"]);
     }
@@ -1740,7 +1752,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["Banana", "apple", "Cherry"]);
         let result = sort_handler(&mut ed, "i", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         // case-insensitive: apple < Banana < Cherry
         let lower: Vec<String> = lines.iter().map(|s| s.to_lowercase()).collect();
         assert_eq!(lower, vec!["apple", "banana", "cherry"]);
@@ -1751,7 +1763,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["10 items", "2 things", "20 stuff"]);
         let result = sort_handler(&mut ed, "n", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert_eq!(lines[0], "2 things");
         assert_eq!(lines[1], "10 items");
         assert_eq!(lines[2], "20 stuff");
@@ -1774,7 +1786,7 @@ mod tests {
         let range = LineRange::new(2, 3);
         let result = sort_handler(&mut ed, "", Some(range));
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert_eq!(lines[0], "zzz", "line 1 untouched");
         assert_eq!(lines[1], "apple");
         assert_eq!(lines[2], "banana");
@@ -1816,7 +1828,7 @@ mod tests {
             }
             other => panic!("expected Substituted, got {other:?}"),
         }
-        let line = ed.buffer().line(0).unwrap_or_default();
+        let line = buf_line(&ed, 0);
         assert!(line.contains("goodbye"), "line: {line}");
     }
 
@@ -1830,7 +1842,7 @@ mod tests {
             }
             other => panic!("expected Substituted, got {other:?}"),
         }
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "aYbYcY");
+        assert_eq!(buf_line(&ed, 0), "aYbYcY");
     }
 
     #[test]
@@ -1879,21 +1891,9 @@ mod tests {
             Some(ExEffect::Substituted { count, .. }) => assert_eq!(count, 1),
             other => panic!("expected Substituted, got {other:?}"),
         }
-        assert_eq!(
-            ed.buffer().line(0).unwrap_or_default(),
-            "foo",
-            "line 1 untouched"
-        );
-        assert_eq!(
-            ed.buffer().line(1).unwrap_or_default(),
-            "bar",
-            "line 2 changed"
-        );
-        assert_eq!(
-            ed.buffer().line(2).unwrap_or_default(),
-            "foo",
-            "line 3 untouched"
-        );
+        assert_eq!(buf_line(&ed, 0), "foo", "line 1 untouched");
+        assert_eq!(buf_line(&ed, 1), "bar", "line 2 changed");
+        assert_eq!(buf_line(&ed, 2), "foo", "line 3 untouched");
     }
 
     // ── read_handler ─────────────────────────────────────────────────────────
@@ -1928,7 +1928,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["first"]);
         let result = read_handler(&mut ed, &path, None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert!(
             lines.contains(&"inserted line".to_string()),
             "lines: {lines:?}"
@@ -1940,7 +1940,7 @@ mod tests {
         let mut ed = make_editor_with_lines(&["first"]);
         let result = read_handler(&mut ed, "!echo hello", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        let lines = ed.buffer().lines().to_vec();
+        let lines = buf_lines(&ed);
         assert!(lines.contains(&"hello".to_string()), "lines: {lines:?}");
     }
 
@@ -2174,42 +2174,42 @@ mod tests {
     fn repeat_substitute_repeats_on_current_line() {
         let mut ed = make_editor_with_lines(&["foo", "foo"]);
         substitute_handler(&mut ed, "/foo/bar", None);
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "bar");
+        assert_eq!(buf_line(&ed, 0), "bar");
         ed.goto_line(2);
         let result = repeat_substitute_handler(&mut ed, false, None);
         assert!(
             matches!(result, ExEffect::Substituted { count: 1, .. }),
             "expected Substituted(1), got {result:?}"
         );
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "bar");
+        assert_eq!(buf_line(&ed, 1), "bar");
     }
 
     #[test]
     fn repeat_substitute_amp_amp_keeps_global_flag() {
         let mut ed = make_editor_with_lines(&["x x x", "x x x"]);
         substitute_handler(&mut ed, "/x/y/g", None);
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "y y y");
+        assert_eq!(buf_line(&ed, 0), "y y y");
         ed.goto_line(2);
         let result = repeat_substitute_handler(&mut ed, true, None);
         assert!(
             matches!(result, ExEffect::Substituted { count: 3, .. }),
             "expected Substituted(3), got {result:?}"
         );
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "y y y");
+        assert_eq!(buf_line(&ed, 1), "y y y");
     }
 
     #[test]
     fn repeat_substitute_amp_drops_global_flag() {
         let mut ed = make_editor_with_lines(&["x x x", "x x x"]);
         substitute_handler(&mut ed, "/x/y/g", None);
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "y y y");
+        assert_eq!(buf_line(&ed, 0), "y y y");
         ed.goto_line(2);
         let result = repeat_substitute_handler(&mut ed, false, None);
         assert!(
             matches!(result, ExEffect::Substituted { count: 1, .. }),
             "expected Substituted(1) (first only), got {result:?}"
         );
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "y x x");
+        assert_eq!(buf_line(&ed, 1), "y x x");
     }
 
     // ── comment_handler / uncomment_handler (#187) ────────────────────────────
@@ -2230,8 +2230,8 @@ mod tests {
         // No range → cursor line (row 0).
         let result = comment_handler(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Ok));
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "// let a = 1;");
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "let b = 2;");
+        assert_eq!(buf_line(&ed, 0), "// let a = 1;");
+        assert_eq!(buf_line(&ed, 1), "let b = 2;");
     }
 
     #[test]
@@ -2240,9 +2240,9 @@ mod tests {
         let range = LineRange::new(1, 3); // 1-based: lines 1–3
         let result = comment_handler(&mut ed, "", Some(range));
         assert_eq!(result, Some(ExEffect::Ok));
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "// let a = 1;");
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "// let b = 2;");
-        assert_eq!(ed.buffer().line(2).unwrap_or_default(), "// let c = 3;");
+        assert_eq!(buf_line(&ed, 0), "// let a = 1;");
+        assert_eq!(buf_line(&ed, 1), "// let b = 2;");
+        assert_eq!(buf_line(&ed, 2), "// let c = 3;");
     }
 
     #[test]
@@ -2252,12 +2252,12 @@ mod tests {
         let range = LineRange::new(1, 3);
         comment_handler(&mut ed, "", Some(range));
         // All should be commented now.
-        assert!(ed.buffer().line(0).unwrap_or_default().starts_with("//"));
-        assert!(ed.buffer().line(1).unwrap_or_default().starts_with("//"));
+        assert!(buf_line(&ed, 0).starts_with("//"));
+        assert!(buf_line(&ed, 1).starts_with("//"));
         // Toggle again → all uncommented.
         comment_handler(&mut ed, "", Some(range));
-        assert!(!ed.buffer().line(0).unwrap_or_default().starts_with("//"));
-        assert!(!ed.buffer().line(1).unwrap_or_default().starts_with("//"));
+        assert!(!buf_line(&ed, 0).starts_with("//"));
+        assert!(!buf_line(&ed, 1).starts_with("//"));
     }
 
     #[test]
@@ -2273,9 +2273,9 @@ mod tests {
         let result = uncomment_handler(&mut ed, "", Some(range));
         assert_eq!(result, Some(ExEffect::Ok));
         // Line 0: comment stripped.
-        assert_eq!(ed.buffer().line(0).unwrap_or_default(), "let a = 1;");
+        assert_eq!(buf_line(&ed, 0), "let a = 1;");
         // Line 1: already uncommented — unchanged.
-        assert_eq!(ed.buffer().line(1).unwrap_or_default(), "let b = 2;");
+        assert_eq!(buf_line(&ed, 1), "let b = 2;");
     }
 
     #[test]
@@ -2293,7 +2293,7 @@ mod tests {
         let range = LineRange::new(1, 5);
         comment_handler(&mut ed, "", Some(range));
         for row in 0..5 {
-            let l = ed.buffer().line(row).unwrap_or_default();
+            let l = buf_line(&ed, row);
             assert!(
                 l.trim_start().starts_with("//"),
                 "row {row} should be commented; got {l:?}"

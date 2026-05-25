@@ -78,8 +78,9 @@ fn bench_search_next(c: &mut Criterion) {
             // walk rows from cursor onward and stop at the first row
             // with a match. The regex compile lives outside the loop;
             // the work measured is the per-row find_iter scan.
+            let rope = buf.rope();
             for row_idx in 0..buf.row_count() {
-                let line = buf.line(row_idx).unwrap_or_default();
+                let line = hjkl_buffer::rope_line_str(&rope, row_idx);
                 if black_box(re.find(&line)).is_some() {
                     break;
                 }

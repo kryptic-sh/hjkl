@@ -66,7 +66,14 @@ fn feed_insert(ed: &mut Editor<Buffer, DefaultHost>, keys: &str) {
 }
 
 fn lines(ed: &Editor<Buffer, DefaultHost>) -> Vec<String> {
-    ed.buffer().lines().to_vec()
+    ed.buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>()
 }
 
 #[test]

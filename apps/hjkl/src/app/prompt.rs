@@ -828,7 +828,14 @@ impl App {
         let line_text = {
             let slot = &self.slots[cw.slot_idx];
             let (row, _) = slot.editor.cursor();
-            slot.editor.buffer().line(row).unwrap_or_default()
+            {
+                let rope = slot.editor.buffer().rope();
+                if row < rope.len_lines() {
+                    hjkl_buffer::rope_line_str(&rope, row)
+                } else {
+                    String::new()
+                }
+            }
         };
         self.close_cmdline_window();
 

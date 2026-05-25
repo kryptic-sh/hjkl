@@ -767,7 +767,16 @@ fn tabnew_no_arg_uses_empty_buffer() {
         app.slots[slot_idx].filename.is_none(),
         "tabnew with no arg must use an unnamed buffer"
     );
-    let lines = app.slots[slot_idx].editor.buffer().lines();
+    let lines = app.slots[slot_idx]
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         lines.is_empty() || (lines.len() == 1 && lines[0].is_empty()),
         "tabnew buffer must be empty"

@@ -604,12 +604,12 @@ impl App {
                             let new_prefix = {
                                 // `.line(cur_row)` is O(log N) on rope storage
                                 // and clones a single row, not the whole doc.
-                                let line = self
-                                    .active()
-                                    .editor
-                                    .buffer()
-                                    .line(cur_row)
-                                    .unwrap_or_default();
+                                let rope = self.active().editor.buffer().rope();
+                                let line = if cur_row < rope.len_lines() {
+                                    hjkl_buffer::rope_line_str(&rope, cur_row)
+                                } else {
+                                    String::new()
+                                };
                                 line[anchor_col.min(line.len())..cur_col.min(line.len())]
                                     .to_string()
                             };
@@ -661,12 +661,12 @@ impl App {
                             self.dismiss_completion();
                         } else {
                             let new_prefix = {
-                                let line = self
-                                    .active()
-                                    .editor
-                                    .buffer()
-                                    .line(cur_row)
-                                    .unwrap_or_default();
+                                let rope = self.active().editor.buffer().rope();
+                                let line = if cur_row < rope.len_lines() {
+                                    hjkl_buffer::rope_line_str(&rope, cur_row)
+                                } else {
+                                    String::new()
+                                };
                                 line[anchor_col.min(line.len())..cur_col.min(line.len())]
                                     .to_string()
                             };
@@ -964,12 +964,14 @@ impl App {
                             2 => {
                                 // Double-click: select word.
                                 self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
-                                let line = self
-                                    .active()
-                                    .editor
-                                    .buffer()
-                                    .line(doc_row)
-                                    .unwrap_or_default();
+                                let line = {
+                                    let rope = self.active().editor.buffer().rope();
+                                    if doc_row < rope.len_lines() {
+                                        hjkl_buffer::rope_line_str(&rope, doc_row)
+                                    } else {
+                                        String::new()
+                                    }
+                                };
                                 let (ws, we) = mouse::word_bounds(&line, doc_col);
                                 // Anchor at word start, cursor at word end - 1.
                                 self.active_mut().editor.enter_visual_char();

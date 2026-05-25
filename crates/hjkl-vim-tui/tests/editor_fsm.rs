@@ -398,8 +398,18 @@ fn count_o_repeats_insert_on_esc() {
     }
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
-    assert_eq!(e.buffer().lines().len(), 4);
-    assert!(e.buffer().lines().iter().skip(1).all(|l| l == "world"));
+    assert_eq!(e.buffer().row_count(), 4);
+    assert!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .skip(1)
+            .all(|l| l == "world")
+    );
 }
 
 #[test]
@@ -419,7 +429,7 @@ fn count_i_repeats_text_on_esc() {
     }
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
-    assert_eq!(e.buffer().lines()[0], "ababab");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ababab");
 }
 
 #[test]
@@ -433,7 +443,7 @@ fn vim_shift_o_opens_line_above() {
     hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('O')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
     assert_eq!(e.cursor(), (0, 0));
-    assert_eq!(e.buffer().lines().len(), 2);
+    assert_eq!(e.buffer().row_count(), 2);
 }
 
 #[test]
@@ -472,8 +482,8 @@ fn vim_dd_deletes_line() {
     e.set_content("first\nsecond");
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "second");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "second");
 }
 
 #[test]
@@ -487,7 +497,7 @@ fn vim_dw_deletes_word() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('w')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
-    assert!(!e.buffer().lines()[0].starts_with("hello"));
+    assert!(!hjkl_buffer::rope_line_str(&e.buffer().rope(), 0).starts_with("hello"));
 }
 
 #[test]
@@ -558,10 +568,10 @@ fn vim_u_undoes_insert_session_as_chunk() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Enter));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Enter));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
-    assert_eq!(e.buffer().lines().len(), 3);
+    assert_eq!(e.buffer().row_count(), 3);
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -577,11 +587,11 @@ fn vim_undo_redo_roundtrip() {
         hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(c)));
     }
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
-    let after = e.buffer().lines()[0].clone();
+    let after = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('r')));
-    assert_eq!(e.buffer().lines()[0], after);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), after);
 }
 
 #[test]
@@ -594,10 +604,10 @@ fn vim_u_undoes_dd() {
     e.set_content("first\nsecond");
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
-    assert_eq!(e.buffer().lines().len(), 1);
+    assert_eq!(e.buffer().row_count(), 1);
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
-    assert_eq!(e.buffer().lines().len(), 2);
-    assert_eq!(e.buffer().lines()[0], "first");
+    assert_eq!(e.buffer().row_count(), 2);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "first");
 }
 
 #[test]
@@ -621,7 +631,12 @@ fn vim_r_replaces_char() {
     e.set_content("hello");
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('r')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('x')));
-    assert_eq!(e.buffer().lines()[0].chars().next(), Some('x'));
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0)
+            .chars()
+            .next(),
+        Some('x')
+    );
 }
 
 #[test]
@@ -633,7 +648,12 @@ fn vim_tilde_toggles_case() {
     );
     e.set_content("hello");
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('~')));
-    assert_eq!(e.buffer().lines()[0].chars().next(), Some('H'));
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0)
+            .chars()
+            .next(),
+        Some('H')
+    );
 }
 
 #[test]
@@ -733,7 +753,7 @@ fn ctrl_a_increments_number_at_cursor() {
     );
     e.set_content("x = 41");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
-    assert_eq!(e.buffer().lines()[0], "x = 42");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x = 42");
     assert_eq!(e.cursor(), (0, 5));
 }
 
@@ -746,7 +766,10 @@ fn ctrl_a_finds_number_to_right_of_cursor() {
     );
     e.set_content("foo 99 bar");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
-    assert_eq!(e.buffer().lines()[0], "foo 100 bar");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "foo 100 bar"
+    );
     assert_eq!(e.cursor(), (0, 6));
 }
 
@@ -762,7 +785,7 @@ fn ctrl_a_with_count_adds_count() {
         hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(d)));
     }
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
-    assert_eq!(e.buffer().lines()[0], "x = 15");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x = 15");
 }
 
 #[test]
@@ -774,7 +797,7 @@ fn ctrl_x_decrements_number() {
     );
     e.set_content("n=5");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('x')));
-    assert_eq!(e.buffer().lines()[0], "n=4");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "n=4");
 }
 
 #[test]
@@ -786,7 +809,7 @@ fn ctrl_x_crosses_zero_into_negative() {
     );
     e.set_content("v=0");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('x')));
-    assert_eq!(e.buffer().lines()[0], "v=-1");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "v=-1");
 }
 
 #[test]
@@ -798,7 +821,7 @@ fn ctrl_a_on_negative_number_increments_toward_zero() {
     );
     e.set_content("a = -5");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
-    assert_eq!(e.buffer().lines()[0], "a = -4");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a = -4");
 }
 
 #[test]
@@ -810,7 +833,10 @@ fn ctrl_a_noop_when_no_digit_on_line() {
     );
     e.set_content("no digits here");
     hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
-    assert_eq!(e.buffer().lines()[0], "no digits here");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "no digits here"
+    );
 }
 
 #[test]
@@ -882,7 +908,7 @@ fn mouse_click_breaks_insert_undo_group_when_undobreak_on() {
     // Leave insert and undo once.
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
-    let line = e.buffer().line(0).unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     assert!(
         line.contains("AAA"),
         "AAA must survive undo (separate group): {line:?}"
@@ -910,7 +936,7 @@ fn mouse_click_keeps_one_undo_group_when_undobreak_off() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
-    let line = e.buffer().line(0).unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     assert!(
         !line.contains("AA") && !line.contains("BB"),
         "with undobreak off, single `u` must reverse whole insert: {line:?}"
@@ -1088,10 +1114,10 @@ fn insert_char_appends_in_replace_mode() {
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
     e.insert_char('X');
     // 'a' (col 0) overwritten by 'X': "Xbc"
-    assert_eq!(e.buffer().lines()[0], "Xbc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xbc");
     e.insert_char('Y');
     // 'b' (col 1) overwritten by 'Y': "XYc"
-    assert_eq!(e.buffer().lines()[0], "XYc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "XYc");
 }
 
 #[test]
@@ -1133,7 +1159,7 @@ fn paste_after_charwise_inserts_after_cursor() {
     e2.jump_cursor(0, 1); // on 'a'
     e2.paste_after(1);
     // "bac" → paste "b" after col 1 ('a') → "babc"
-    assert_eq!(e2.buffer().lines()[0], "babc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e2.buffer().rope(), 0), "babc");
 }
 
 #[test]
@@ -1146,7 +1172,7 @@ fn paste_before_charwise_inserts_before_cursor() {
     e.jump_cursor(0, 2);
     e.paste_before(1);
     // "bac" → paste "b" before col 2 → "babc"
-    assert_eq!(e.buffer().lines()[0], "babc");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "babc");
 }
 
 #[test]
@@ -1157,7 +1183,7 @@ fn paste_after_count_3_repeats() {
     hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
     e.paste_after(3);
     // "x" + 3 pastes of "x" = "xxxx".
-    assert_eq!(e.buffer().lines()[0], "xxxx");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "xxxx");
 }
 
 #[test]

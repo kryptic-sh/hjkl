@@ -124,7 +124,14 @@ fn cursor(ed: &Editor<Buffer, DefaultHost>) -> (usize, usize) {
 
 /// Helper: content without the trailing newline that `ed.content()` always adds.
 fn buf_lines(ed: &Editor<Buffer, DefaultHost>) -> Vec<String> {
-    ed.buffer().lines().to_vec()
+    ed.buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>()
 }
 
 /// Typing `(` in insert mode inserts `()` and leaves cursor between them.

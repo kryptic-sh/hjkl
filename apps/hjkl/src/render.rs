@@ -1259,15 +1259,18 @@ pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
 
     // `cursor_col` is a char index; regex match offsets are bytes.
     // Convert cursor's column to a byte offset within its own line.
-    let cursor_byte_in_row = buf
-        .line(cursor_row)
-        .map(|line| {
+    let cursor_byte_in_row = {
+        let rope = buf.rope();
+        if cursor_row < rope.len_lines() {
+            let line = hjkl_buffer::rope_line_str(&rope, cursor_row);
             line.char_indices()
                 .nth(cursor_col)
                 .map(|(b, _)| b)
                 .unwrap_or(line.len())
-        })
-        .unwrap_or(0);
+        } else {
+            0
+        }
+    };
 
     // Single shared `Arc<String>` of the whole document — cached against
     // `dirty_gen`, so calling content_joined here costs an `Arc::clone`.

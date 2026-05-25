@@ -823,14 +823,7 @@ fn diw_deletes_word_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         "diw must delete 'hello', remaining: {line:?}"
@@ -866,14 +859,7 @@ fn daw_deletes_around_word_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         "daw must delete 'hello' and surrounding space, remaining: {line:?}"
@@ -891,14 +877,7 @@ fn di_quote_deletes_quoted_string() {
     drive_chars(&mut app, r#"di""#);
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         !line.contains("hello"),
         r#"di" must delete text inside quotes, remaining: {line:?}"#
@@ -920,7 +899,17 @@ fn dap_deletes_paragraph_via_reducer() {
     drive_chars(&mut app, "dap");
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         !lines.contains(&"hello world".to_string()),
         "dap must delete first paragraph, got {lines:?}"
@@ -989,14 +978,7 @@ fn guiw_uppercases_word_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after gUiw");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "HELLO world",
         "gUiw must uppercase inner word 'hello', got {line:?}"
@@ -1806,14 +1788,7 @@ fn dw_deletes_word_via_reducer() {
         "pending must clear after commit"
     );
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "world", "dw must delete 'hello ', got {line:?}");
 }
 
@@ -1827,7 +1802,17 @@ fn dd_deletes_line_via_reducer() {
     drive_chars(&mut app, "dd");
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["line2", "line3"], "dd must delete line1");
 }
 
@@ -1852,14 +1837,7 @@ fn d3w_deletes_three_words_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "four",
         "d3w must delete 'one two three ', got {line:?}"
@@ -1887,7 +1865,17 @@ fn two_dd_deletes_two_lines_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["line3"],
@@ -1914,14 +1902,7 @@ fn cw_changes_to_word_end() {
         "cw must enter Insert mode"
     );
     // The space before "world" should still be present as the first char.
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with(' ') || line == " world",
         "cw quirk: trailing space must be preserved, got {line:?}"
@@ -1966,7 +1947,17 @@ fn dip_text_object_via_reducer() {
     assert!(!app.active().editor.is_chord_pending());
 
     // First paragraph (lines 0..0) should be deleted; remaining: empty line + "foo bar".
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         !lines.contains(&"hello world".to_string()),
         "dip must delete first paragraph, got {lines:?}"
@@ -2019,7 +2010,17 @@ fn dgg_deletes_to_top() {
         "pending must clear after ApplyOpG commit"
     );
     // dgg should delete lines 0..=2 (all three lines).
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         lines.is_empty() || lines == vec![""],
         "dgg from line3 must delete all lines, got {lines:?}"
@@ -2076,14 +2077,7 @@ fn dfx_deletes_to_x_via_reducer() {
     assert!(!app.active().editor.is_chord_pending());
 
     // "hello x" (inclusive) should be deleted.
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, " world", "dfx must delete 'hello x', got {line:?}");
 }
 
@@ -2100,14 +2094,7 @@ fn dtx_stops_before_x_via_reducer() {
     drive_chars(&mut app, "dtx");
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "x world",
         "dtx must delete 'hello ' leaving 'x world', got {line:?}"
@@ -2162,14 +2149,7 @@ fn two_d_3fx_total_count_6() {
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert!(app.pending_state.is_none());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "f", "2d3fx must delete through 6th 'x', got {line:?}");
 }
 
@@ -2198,14 +2178,7 @@ fn df_then_esc_cancels_via_reducer() {
     );
 
     // Buffer unchanged.
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello x world",
         "buffer must be unchanged after df<Esc>"
@@ -2230,14 +2203,7 @@ fn cfx_changes_to_x_via_reducer() {
         "cfx must enter Insert mode"
     );
     // "hello x" was deleted; buffer should have " world" remaining.
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, " world", "cfx must delete 'hello x', got {line:?}");
 }
 
@@ -2303,14 +2269,7 @@ fn gufx_uppercases_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after gUfx");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "HELLO X world",
         "gUfx must uppercase 'hello x', got {line:?}"
@@ -2329,14 +2288,7 @@ fn d_then_esc_cancels() {
     drive_key(&mut app, key(KeyCode::Esc));
     assert!(app.pending_state.is_none(), "Esc must cancel pending");
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hello", "buffer must be unchanged after cancel");
 }
 
@@ -2362,14 +2314,7 @@ fn y_dollar_yanks_to_eol() {
     assert!(app.pending_state.is_none(), "pending must clear after y$");
 
     // Buffer unchanged (yank is non-destructive).
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hello world", "y$ must not modify buffer");
 }
 
@@ -2414,14 +2359,7 @@ fn g_uw_uppercases_word_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after gUw");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "HELLO world",
         "gUw must uppercase first word, got {line:?}"
@@ -2442,7 +2380,17 @@ fn dgg_deletes_to_top_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after dgg");
     assert!(!app.active().editor.is_chord_pending());
 
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         lines.is_empty() || lines == vec![""],
         "dgg from last line must delete all content, got {lines:?}"
@@ -2485,7 +2433,17 @@ fn dgj_deletes_screen_down_via_reducer() {
     drive_chars(&mut app, "dgj");
     assert!(app.pending_state.is_none(), "pending clears after dgj");
 
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // dgj deletes current line + screen-line below (same as next line here).
     assert_eq!(
         lines,
@@ -2511,14 +2469,7 @@ fn dg_then_esc_cancels_via_reducer() {
     drive_key(&mut app, key(KeyCode::Esc));
     assert!(app.pending_state.is_none(), "Esc must cancel OpG");
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "unchanged",
         "buffer must be unchanged after cancel, got {line:?}"
@@ -2589,7 +2540,17 @@ fn g_ugg_uppercases_to_top_via_reducer() {
     );
 
     // All three lines should be uppercased.
-    let lines: Vec<_> = app.active().editor.buffer().lines().to_vec();
+    let lines: Vec<_> = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert!(
         lines.iter().all(|l| l.chars().all(|c| !c.is_lowercase())),
         "gUgg must uppercase all lines to top, got {lines:?}"
@@ -2611,14 +2572,7 @@ fn g_uu_uppercases_line_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after gUU");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "HELLO WORLD",
         "gUU must uppercase entire line, got {line:?}"
@@ -2638,14 +2592,7 @@ fn guu_lowercases_line_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after guu");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello world",
         "guu must lowercase entire line, got {line:?}"
@@ -2665,14 +2612,7 @@ fn g_tilde_tilde_toggles_line_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after g~~");
     assert!(!app.active().editor.is_chord_pending());
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hELLO wORLD",
         "g~~ must toggle case of entire line, got {line:?}"
@@ -2693,14 +2633,7 @@ fn gqq_reflows_line_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after gqq");
     assert!(!app.active().editor.is_chord_pending());
     // Line should still exist and not be empty.
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         !line.is_empty(),
         "gqq must not delete short line, got {line:?}"
@@ -2740,14 +2673,7 @@ fn two_g_uw_uppercases_two_words_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('w')));
     assert!(app.pending_state.is_none(), "pending must clear after 2gUw");
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     // 2gUw should uppercase 2 words from cursor: "HELLO WORLD foo".
     assert!(
         line.starts_with("HELLO WORLD"),
@@ -2827,14 +2753,7 @@ fn visual_g_u_uppercases_selection() {
         "gU in visual must return to Normal mode"
     );
 
-    let line = app
-        .active()
-        .editor
-        .buffer()
-        .lines()
-        .first()
-        .cloned()
-        .unwrap_or_default();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with("HELLO"),
         "visual gU must uppercase selection 'hello', got {line:?}"
@@ -3669,7 +3588,7 @@ fn p64_x_deletes_char_forward() {
 
     let consumed = app.route_chord_key(ck('x'));
     assert!(consumed, "x must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "ello", "x must delete 'h'; got {line:?}");
 }
 
@@ -3683,7 +3602,7 @@ fn p64_x_with_count_5_deletes_5_chars() {
     app.pending_count.try_accumulate('5');
     let consumed = app.route_chord_key(ck('x'));
     assert!(consumed, "x must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, " world", "5x must delete 5 chars; got {line:?}");
 }
 
@@ -3696,7 +3615,7 @@ fn p64_big_x_deletes_char_backward() {
 
     let consumed = app.route_chord_key(ck('X'));
     assert!(consumed, "X must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hllo", "X at col 2 must delete 'e'; got {line:?}");
 }
 
@@ -3715,7 +3634,7 @@ fn p64_s_substitutes_char_enters_insert() {
         "s must enter Insert mode"
     );
     // 'h' must be deleted.
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "ello", "s must delete first char; got {line:?}");
 }
 
@@ -3734,7 +3653,7 @@ fn p64_big_s_substitutes_line_enters_insert() {
         "S must enter Insert mode"
     );
     // Line content must be wiped.
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "", "S must clear line contents; got {line:?}");
 }
 
@@ -3747,7 +3666,7 @@ fn p64_big_d_deletes_to_eol() {
 
     let consumed = app.route_chord_key(ck('D'));
     assert!(consumed, "D must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "D at col 5 must delete ' world'; got {line:?}"
@@ -3768,7 +3687,7 @@ fn p64_big_c_changes_to_eol() {
 
     let consumed = app.route_chord_key(ck('C'));
     assert!(consumed, "C must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "C at col 5 must delete ' world'; got {line:?}"
@@ -3790,7 +3709,7 @@ fn p64_big_y_yanks_to_eol() {
     let consumed = app.route_chord_key(ck('Y'));
     assert!(consumed, "Y must be consumed by keymap");
     // Buffer must be unchanged.
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello world",
         "Y must not modify buffer; got {line:?}"
@@ -3817,7 +3736,7 @@ fn p64_big_j_joins_lines() {
 
     let consumed = app.route_chord_key(ck('J'));
     assert!(consumed, "J must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.contains("line1") && line.contains("line2"),
         "J must join line1 and line2; got {line:?}"
@@ -3836,7 +3755,17 @@ fn p64_big_j_with_count_10_joins_10_lines() {
     let consumed = app.route_chord_key(ck('J'));
     assert!(consumed, "J must be consumed by keymap");
     // 10 lines joined into index 0; second line is now "line11".
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // The engine joins `count` lines total (current + count-1 following).
     // With count=10: lines 1-10 merged → 10 lines → 1 merged line.
     // Next remaining line is "line11".
@@ -3868,7 +3797,7 @@ fn p64_tilde_toggles_case() {
 
     let consumed = app.route_chord_key(ck('~'));
     assert!(consumed, "~ must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with('H'),
         "~ must toggle 'h' to 'H'; got {line:?}"
@@ -3889,7 +3818,7 @@ fn p64_p_pastes_after_cursor() {
     // Paste after cursor (at col 0, which is 'e').
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "ehllo", "p must paste 'h' after 'e'; got {line:?}");
 }
 
@@ -3906,7 +3835,7 @@ fn p64_big_p_pastes_before_cursor() {
     // Buffer now "helo", cursor at col 2 ('l'). Paste before cursor.
     let consumed = app.route_chord_key(ck('P'));
     assert!(consumed, "P must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "hello",
         "P must paste 'l' before cursor; got {line:?}"
@@ -3927,7 +3856,7 @@ fn p64_p_with_count_3_pastes_three_times() {
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed by keymap");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "baaac", "3p must paste 'a' 3 times; got {line:?}");
 }
 
@@ -3943,12 +3872,12 @@ fn p64_u_undoes_last_change() {
     // Delete 'h' to create an undo-able change.
     app.active_mut().editor.delete_char_forward(1);
     app.sync_after_engine_mutation();
-    let line_after_del = app.active().editor.buffer().lines()[0].clone();
+    let line_after_del = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line_after_del, "ello");
 
     let consumed = app.route_chord_key(ck('u'));
     assert!(consumed, "u must be consumed by keymap");
-    let line_after_undo = app.active().editor.buffer().lines()[0].clone();
+    let line_after_undo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line_after_undo, "hello",
         "u must undo the delete; got {line_after_undo:?}"
@@ -3968,14 +3897,14 @@ fn p64_ctrl_r_redoes_after_undo() {
     app.sync_after_engine_mutation();
     app.active_mut().editor.undo();
     app.sync_after_engine_mutation();
-    let line_after_undo = app.active().editor.buffer().lines()[0].clone();
+    let line_after_undo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line_after_undo, "hello");
 
     // Redo via keymap.
     let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
     let consumed = app.route_chord_key(ctrl_r);
     assert!(consumed, "<C-r> must be consumed by keymap");
-    let line_after_redo = app.active().editor.buffer().lines()[0].clone();
+    let line_after_redo = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line_after_redo, "ello",
         "<C-r> must redo the delete; got {line_after_redo:?}"
@@ -4323,7 +4252,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     rck(&mut app, &['@', 'a']);
 
     // Buffer must contain "Hello" prepended again.
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with("Hello"),
         "@a replay must prepend 'Hello'; got {line:?}"
@@ -4346,7 +4275,7 @@ fn p64_count_3p_pastes_three_times() {
     app.pending_count.try_accumulate('3');
     let consumed = app.route_chord_key(ck('p'));
     assert!(consumed, "p must be consumed");
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "baaac", "3p must paste 'a' 3 times; got {line:?}");
 }
 
@@ -4359,7 +4288,17 @@ fn p64_count_2dd_still_works_after_64_additions() {
     app.pending_count.try_accumulate('2');
     rck(&mut app, &['d', 'd']);
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines.first().map(String::as_str),
         Some("line3"),
@@ -4387,7 +4326,7 @@ fn p65_insert_char_types_literal() {
     }
 
     assert_eq!(
-        app.active().editor.buffer().lines()[0],
+        hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0),
         "Hello",
         "insert_char must type 'Hello'"
     );
@@ -4428,7 +4367,7 @@ fn p65_backspace_deletes_previous_char() {
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hell", "Backspace must delete 'o'; got {line:?}");
 }
 
@@ -4445,7 +4384,17 @@ fn p65_backspace_at_col0_joins_lines() {
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines.len(),
         1,
@@ -4463,7 +4412,17 @@ fn p65_enter_inserts_newline() {
 
     dik(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "Enter must split line; got {lines:?}");
     assert_eq!(lines[0], "he");
     assert_eq!(lines[1], "llo");
@@ -4478,7 +4437,7 @@ fn p65_delete_removes_char_under_cursor() {
 
     dik(&mut app, KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hllo", "Delete must remove 'e'; got {line:?}");
 }
 
@@ -4620,7 +4579,7 @@ fn p65_ctrl_w_deletes_word_backwards() {
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hello ", "Ctrl-W must delete 'world'; got {line:?}");
 }
 
@@ -4636,7 +4595,7 @@ fn p65_ctrl_u_deletes_to_line_start() {
         KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "", "Ctrl-U must delete to line start; got {line:?}");
 }
 
@@ -4652,7 +4611,7 @@ fn p65_ctrl_h_is_alias_for_backspace() {
         KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hell", "Ctrl-H must delete 'o'; got {line:?}");
 }
 
@@ -4668,7 +4627,7 @@ fn p65_ctrl_t_indents_line() {
         KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.starts_with(' ') || line.starts_with('\t'),
         "Ctrl-T must indent line; got {line:?}"
@@ -4687,7 +4646,7 @@ fn p65_ctrl_d_outdents_indented_line() {
         KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     // Must have fewer leading spaces than before.
     let leading = line.chars().take_while(|c| *c == ' ').count();
     assert!(
@@ -4711,7 +4670,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
             KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
         );
     }
-    let line_before = app.active().editor.buffer().lines()[0].clone();
+    let line_before = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line_before, "hello ", "setup: line must be 'hello '");
 
     // <C-o> — should flip mode to Normal.
@@ -4752,7 +4711,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
     dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert!(
         line.contains("hello") && line.contains("world"),
         "<C-o>w round-trip: line must contain 'hello' and 'world'; got {line:?}"
@@ -4813,7 +4772,7 @@ fn p65_ctrl_r_register_paste() {
     );
 
     // Line 1 should now contain pasted text from register 'a'.
-    let line = app.active().editor.buffer().lines()[1].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 1);
     assert!(
         line.contains("hello"),
         "<C-r>a must paste 'hello'; got {line:?}"
@@ -4835,7 +4794,7 @@ fn p65_unrecognised_key_silently_dropped() {
         VimMode::Insert,
         "F5 must be silently dropped; mode must remain Insert"
     );
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "hello", "buffer must be unchanged after F5");
 }
 
@@ -4852,7 +4811,7 @@ fn p65_shift_char_types_uppercase() {
         KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(line, "A", "SHIFT+Char('A') must type 'A'; got {line:?}");
 }
 
@@ -4872,7 +4831,7 @@ fn p65_i_hello_esc_types_literal() {
     dik(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
     assert_eq!(app.active().editor.vim_mode(), VimMode::Normal);
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "Hello",
         "iHello<Esc> must leave 'Hello' in buffer; got {line:?}"
@@ -4905,7 +4864,7 @@ fn p65_replace_mode_overstrike() {
         KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
     );
 
-    let line = app.active().editor.buffer().lines()[0].clone();
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
     assert_eq!(
         line, "Xello world",
         "Replace-mode overstrike must replace 'h' with 'X'; got {line:?}"

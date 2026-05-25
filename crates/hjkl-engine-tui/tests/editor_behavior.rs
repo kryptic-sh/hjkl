@@ -168,7 +168,7 @@ fn snapshot_roundtrips_through_restore() {
     );
     other.restore_snapshot(snap).expect("restore");
     assert_eq!(other.cursor(), (2, 3));
-    assert_eq!(other.buffer().lines().len(), 3);
+    assert_eq!(other.buffer().row_count(), 3);
 }
 
 #[test]
@@ -1514,7 +1514,7 @@ fn insert_char_basic() {
     let mut e = fresh_editor("hello");
     enter_insert(&mut e);
     e.insert_char('X');
-    assert_eq!(e.buffer().lines()[0], "Xhello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xhello");
     assert!(e.take_dirty());
 }
 
@@ -1525,7 +1525,15 @@ fn insert_newline_splits_line() {
     e.jump_cursor(0, 3);
     enter_insert(&mut e);
     e.insert_newline();
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "hel");
     assert_eq!(lines[1], "lo");
 }
@@ -1537,7 +1545,7 @@ fn insert_tab_expandtab_inserts_spaces() {
     enter_insert(&mut e);
     e.insert_tab();
     // At col 0 with sts=4: 4 spaces inserted.
-    assert_eq!(e.buffer().lines()[0], "    ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    ");
 }
 
 #[test]
@@ -1554,7 +1562,7 @@ fn insert_tab_real_tab_when_noexpandtab() {
     e.set_content("");
     enter_insert(&mut e);
     e.insert_tab();
-    assert_eq!(e.buffer().lines()[0], "\t");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "\t");
 }
 
 #[test]
@@ -1564,7 +1572,7 @@ fn insert_backspace_single_char() {
     e.jump_cursor(0, 3);
     enter_insert(&mut e);
     e.insert_backspace();
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
 }
 
 #[test]
@@ -1574,7 +1582,7 @@ fn insert_backspace_softtabstop() {
     e.jump_cursor(0, 4);
     enter_insert(&mut e);
     e.insert_backspace();
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1585,8 +1593,8 @@ fn insert_backspace_join_up() {
     enter_insert(&mut e);
     e.insert_backspace();
     // Two rows merged into one.
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "foobar");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foobar");
 }
 
 #[test]
@@ -1615,7 +1623,7 @@ fn insert_ctrl_w_word_back() {
     enter_insert(&mut e);
     e.insert_ctrl_w();
     // "world" (5 chars) deleted, leaving "hello ".
-    assert_eq!(e.buffer().lines()[0], "hello ");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello ");
 }
 
 #[test]
@@ -1624,7 +1632,7 @@ fn insert_ctrl_u_deletes_to_line_start() {
     e.jump_cursor(0, 5);
     enter_insert(&mut e);
     e.insert_ctrl_u();
-    assert_eq!(e.buffer().lines()[0], " world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " world");
 }
 
 #[test]
@@ -1634,7 +1642,7 @@ fn insert_ctrl_h_single_backspace() {
     e.jump_cursor(0, 3);
     enter_insert(&mut e);
     e.insert_ctrl_h();
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
 }
 
 #[test]
@@ -1643,8 +1651,8 @@ fn insert_ctrl_h_join_up() {
     e.jump_cursor(1, 0);
     enter_insert(&mut e);
     e.insert_ctrl_h();
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "foobar");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foobar");
 }
 
 #[test]
@@ -1660,7 +1668,10 @@ fn insert_ctrl_t_indents_current_line() {
     e.set_content("hello");
     enter_insert(&mut e);
     e.insert_ctrl_t();
-    assert_eq!(e.buffer().lines()[0], "    hello");
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "    hello"
+    );
 }
 
 #[test]
@@ -1676,7 +1687,7 @@ fn insert_ctrl_d_outdents_current_line() {
     e.set_content("    hello");
     enter_insert(&mut e);
     e.insert_ctrl_d();
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1704,7 +1715,7 @@ fn insert_delete_removes_char_under_cursor() {
     e.jump_cursor(0, 2);
     enter_insert(&mut e);
     e.insert_delete();
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
 }
 
 #[test]
@@ -1714,8 +1725,8 @@ fn insert_delete_joins_lines_at_eol() {
     e.jump_cursor(0, 3);
     enter_insert(&mut e);
     e.insert_delete();
-    assert_eq!(e.buffer().lines().len(), 1);
-    assert_eq!(e.buffer().lines()[0], "foobar");
+    assert_eq!(e.buffer().row_count(), 1);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foobar");
 }
 
 #[test]
@@ -1805,7 +1816,7 @@ fn insert_backspace_at_buffer_start_is_noop() {
     enter_insert(&mut e);
     // No previous char and no previous row — should not panic.
     e.insert_backspace();
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1816,7 +1827,7 @@ fn insert_delete_at_buffer_end_is_noop() {
     enter_insert(&mut e);
     // col 5 >= line_chars (5), no next row → no-op.
     e.insert_delete();
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 // ── Phase 6.2: normal-mode primitive tests (kryptic-sh/hjkl#88) ─────────
@@ -1872,7 +1883,7 @@ fn open_line_below_creates_new_line_and_insert() {
     let mut e = normal_editor("hello\nworld");
     e.open_line_below(1);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
-    assert_eq!(e.buffer().lines().len(), 3);
+    assert_eq!(e.buffer().row_count(), 3);
 }
 
 #[test]
@@ -1881,7 +1892,7 @@ fn open_line_above_creates_line_before_cursor() {
     e.jump_cursor(1, 0);
     e.open_line_above(1);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
-    assert_eq!(e.buffer().lines().len(), 3);
+    assert_eq!(e.buffer().row_count(), 3);
     assert_eq!(e.cursor().0, 1);
 }
 
@@ -1892,7 +1903,7 @@ fn open_line_above_at_row_0_creates_blank_first_line() {
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
     // New blank line is row 0; old "hello" is row 1.
     assert_eq!(e.cursor().0, 0);
-    assert_eq!(e.buffer().lines()[1], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "hello");
 }
 
 #[test]
@@ -1909,14 +1920,14 @@ fn delete_char_forward_removes_one_char() {
     let mut e = normal_editor("hello");
     e.jump_cursor(0, 1);
     e.delete_char_forward(1);
-    assert_eq!(e.buffer().lines()[0], "hllo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hllo");
 }
 
 #[test]
 fn delete_char_forward_count_5_removes_five() {
     let mut e = normal_editor("hello world");
     e.delete_char_forward(5);
-    assert_eq!(e.buffer().lines()[0], " world");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), " world");
 }
 
 #[test]
@@ -1933,7 +1944,7 @@ fn delete_char_backward_removes_char_before_cursor() {
     let mut e = normal_editor("hello");
     e.jump_cursor(0, 3);
     e.delete_char_backward(1);
-    assert_eq!(e.buffer().lines()[0], "helo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "helo");
 }
 
 #[test]
@@ -1941,7 +1952,7 @@ fn delete_char_backward_noop_at_col_0() {
     let mut e = normal_editor("hello");
     e.jump_cursor(0, 0);
     e.delete_char_backward(1);
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1950,7 +1961,7 @@ fn substitute_char_deletes_and_enters_insert() {
     e.jump_cursor(0, 0);
     e.substitute_char(1);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
-    assert_eq!(e.buffer().lines()[0], "ello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ello");
 }
 
 #[test]
@@ -1958,7 +1969,7 @@ fn substitute_char_count_3_deletes_three() {
     let mut e = normal_editor("hello");
     e.substitute_char(3);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
-    assert_eq!(e.buffer().lines()[0], "lo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "lo");
 }
 
 #[test]
@@ -1966,7 +1977,7 @@ fn substitute_line_clears_content_and_enters_insert() {
     let mut e = normal_editor("hello world");
     e.substitute_line(1);
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -1975,7 +1986,7 @@ fn delete_to_eol_removes_from_cursor_to_end() {
     e.jump_cursor(0, 5);
     e.delete_to_eol();
     // col 5 is ' ' — deletes " world", leaving "hello".
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -1983,7 +1994,7 @@ fn delete_to_eol_noop_when_cursor_past_end() {
     let mut e = normal_editor("hi");
     e.jump_cursor(0, 2);
     e.delete_to_eol();
-    assert_eq!(e.buffer().lines()[0], "hi");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hi");
 }
 
 #[test]
@@ -1993,7 +2004,7 @@ fn change_to_eol_enters_insert() {
     e.change_to_eol();
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
     // col 5 is ' ' — deletes " world", leaving "hello".
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
 
 #[test]
@@ -2014,7 +2025,7 @@ fn yank_to_eol_fills_register() {
 fn join_line_merges_next_line_with_space() {
     let mut e = normal_editor("foo\nbar");
     e.join_line(1);
-    assert_eq!(e.buffer().lines()[0], "foo bar");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo bar");
 }
 
 #[test]
@@ -2023,28 +2034,28 @@ fn join_line_count_2_merges_three_lines() {
     e.join_line(2);
     // Our bridge calls join_line() `count` times, each joining the
     // current line with the next → 2 iterations: "a b c".
-    assert_eq!(e.buffer().lines()[0], "a b c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b c");
 }
 
 #[test]
 fn join_line_noop_on_last_line() {
     let mut e = normal_editor("only");
     e.join_line(1);
-    assert_eq!(e.buffer().lines()[0], "only");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "only");
 }
 
 #[test]
 fn toggle_case_at_cursor_flips_letter() {
     let mut e = normal_editor("hello");
     e.toggle_case_at_cursor(1);
-    assert_eq!(e.buffer().lines()[0], "Hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Hello");
 }
 
 #[test]
 fn toggle_case_at_cursor_count_3_flips_three() {
     let mut e = normal_editor("hello");
     e.toggle_case_at_cursor(3);
-    assert_eq!(e.buffer().lines()[0], "HELlo");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "HELlo");
 }
 
 // ── Undo / redo round-trip ───────────────────────────────────────────────
@@ -2053,11 +2064,11 @@ fn toggle_case_at_cursor_count_3_flips_three() {
 fn undo_redo_roundtrip_via_public_methods() {
     let mut e = normal_editor("hello");
     e.delete_char_forward(1);
-    assert_eq!(e.buffer().lines()[0], "ello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ello");
     e.undo();
-    assert_eq!(e.buffer().lines()[0], "hello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
     e.redo();
-    assert_eq!(e.buffer().lines()[0], "ello");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ello");
 }
 
 // ── Jump / scroll ────────────────────────────────────────────────────────
@@ -2238,7 +2249,7 @@ fn search_repeat_advances_to_next_match() {
     // Repeating forward wraps and finds the first "foo" again at col 0.
     e.search_repeat(true, 1);
     // Just ensure no panic and search state is valid.
-    assert!(e.cursor().0 < e.buffer().lines().len());
+    assert!(e.cursor().0 < e.buffer().row_count());
 }
 
 #[test]
@@ -2288,7 +2299,7 @@ fn word_search_backward_finds_previous_match() {
 fn delete_char_forward_on_single_char_line() {
     let mut e = normal_editor("x");
     e.delete_char_forward(1);
-    assert_eq!(e.buffer().lines()[0], "");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
 }
 
 #[test]
@@ -2305,7 +2316,7 @@ fn join_line_10_iterations_clamps_gracefully() {
     // Joining 10 times on a 2-line buffer should not panic.
     e.join_line(10);
     // After the first join succeeds, the rest are no-ops.
-    assert_eq!(e.buffer().lines()[0], "a b");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b");
 }
 
 #[test]
@@ -2314,7 +2325,7 @@ fn toggle_case_past_line_end_is_noop() {
     e.jump_cursor(0, 5); // way past end
     e.toggle_case_at_cursor(1);
     // Should not panic.
-    assert_eq!(e.buffer().lines()[0], "ab");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ab");
 }
 
 // ── Phase 6.3: visual-mode primitive tests (kryptic-sh/hjkl#89) ──────────
@@ -2845,7 +2856,15 @@ fn auto_indent_single_line_under_open_brace() {
     let mut e = indent_editor("{\nfoo\n}", 4, true);
     // auto-indent only row 1 ("foo").
     e.auto_indent_range((1, 0), (1, 0));
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[1], "    foo", "foo should be indented by 4 spaces");
 }
 
@@ -2855,7 +2874,15 @@ fn auto_indent_close_brace_outdents() {
     // bracket so effective_depth = 0.
     let mut e = indent_editor("{\n    inner\n}", 4, true);
     e.auto_indent_range((2, 0), (2, 0));
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[2], "}", "`}}` should have zero indent");
 }
 
@@ -2865,9 +2892,17 @@ fn auto_indent_whole_buffer_normalizes_mixed_indent() {
     // indented body, third line un-indented `}`.
     let src = "{\n\tbody\n}";
     let mut e = indent_editor(src, 4, true);
-    let total = e.buffer().lines().len();
+    let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     // `{` — depth 0 at start.
     assert_eq!(lines[0], "{");
     // `body` — depth 1 after `{`.
@@ -2881,9 +2916,17 @@ fn auto_indent_respects_expandtab_false_uses_tabs() {
     // Same buffer, but expandtab=false → indent unit is `\t`.
     let src = "{\nbody\n}";
     let mut e = indent_editor(src, 4, false);
-    let total = e.buffer().lines().len();
+    let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "{");
     assert_eq!(lines[1], "\tbody");
     assert_eq!(lines[2], "}");
@@ -2894,9 +2937,17 @@ fn auto_indent_empty_line_stays_empty() {
     // `{\n\nfoo\n}` — blank line in the middle should stay blank.
     let src = "{\n\nfoo\n}";
     let mut e = indent_editor(src, 4, true);
-    let total = e.buffer().lines().len();
+    let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e.buffer().lines();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[1], "", "blank line should stay blank");
     assert_eq!(lines[2], "    foo");
 }
@@ -2920,7 +2971,7 @@ fn auto_indent_sets_last_indent_range() {
     // After `auto_indent_range` the engine must store the touched row span.
     let src = "{\nfoo\nbar\n}";
     let mut e = indent_editor(src, 4, true);
-    let total = e.buffer().lines().len();
+    let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
     assert_eq!(
         e.take_last_indent_range(),
@@ -2976,10 +3027,18 @@ fn auto_indent_vs_cargo_fmt_motions_diagnostic() {
     );
     e.set_content(original);
 
-    let row_count = e.buffer().lines().len();
+    let row_count = e.buffer().row_count();
     e.auto_indent_range((0, 0), (row_count.saturating_sub(1), 0));
 
-    let after_lines: Vec<String> = e.buffer().lines().to_vec();
+    let after_lines: Vec<String> = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     let original_lines: Vec<&str> = original.lines().collect();
 
     let leading_ws = |s: &str| s.chars().take_while(|c| c.is_whitespace()).count();
@@ -3040,7 +3099,15 @@ fn filter_range_cat_is_identity() {
     let mut e = make_editor("alpha\nbeta\ngamma");
     let result = e.filter_range(0, 2, "cat", None);
     assert!(result.is_ok(), "cat must succeed: {result:?}");
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
 }
 
@@ -3048,11 +3115,11 @@ fn filter_range_cat_is_identity() {
 #[test]
 fn filter_range_nonexistent_command_returns_err() {
     let mut e = make_editor("line1\nline2");
-    let count_before = e.buffer().lines().len();
+    let count_before = e.buffer().row_count();
     let result = e.filter_range(0, 1, "__hjkl_no_such_cmd_xyz__", None);
     assert!(result.is_err(), "non-existent command must return Err");
     // Buffer must still have same line count — no mutation on error.
-    assert_eq!(e.buffer().lines().len(), count_before);
+    assert_eq!(e.buffer().row_count(), count_before);
 }
 
 /// `sort` reorders lines within the filtered range.
@@ -3061,7 +3128,15 @@ fn filter_range_sort_reorders_lines() {
     let mut e = make_editor("banana\napple\ncherry");
     let result = e.filter_range(0, 2, "sort", None);
     assert!(result.is_ok(), "sort must succeed: {result:?}");
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines, vec!["apple", "banana", "cherry"]);
 }
 
@@ -3072,7 +3147,15 @@ fn filter_range_partial_range() {
     let mut e = make_editor("alpha\nbanana\napple");
     let result = e.filter_range(1, 2, "sort", None);
     assert!(result.is_ok(), "sort must succeed: {result:?}");
-    let lines = e.buffer().lines().to_vec();
+    let lines = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(lines[0], "alpha", "row 0 must be untouched");
     assert_eq!(&lines[1..], &["apple", "banana"]);
 }
@@ -3083,7 +3166,15 @@ fn filter_range_partial_range() {
 #[cfg(not(windows))]
 fn filter_range_timeout_kills_slow_command() {
     let mut e = make_editor("line1\nline2");
-    let before = e.buffer().lines().to_vec();
+    let before = e
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     let start = std::time::Instant::now();
     let result = e.filter_range(0, 1, "sleep 30", Some(1));
     let elapsed = start.elapsed();
@@ -3093,7 +3184,14 @@ fn filter_range_timeout_kills_slow_command() {
         "should return within ~1s timeout + slack, got {elapsed:?}"
     );
     assert_eq!(
-        e.buffer().lines().to_vec(),
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
         before,
         "buffer must be unchanged"
     );

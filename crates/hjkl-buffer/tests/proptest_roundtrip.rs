@@ -2,22 +2,30 @@
 //!
 //! Every [`hjkl_buffer::Edit`] passed to [`Buffer::apply_edit`] yields
 //! an inverse `Edit`. Applying the inverse must restore the buffer's
-//! `lines()` to its prior state. This file proves the property over
+//! content to its prior state. This file proves the property over
 //! randomized text + edit shapes.
 
-use hjkl_buffer::{Buffer, Edit, MotionKind, Position};
+use hjkl_buffer::{Buffer, Edit, MotionKind, Position, rope_line_str};
 use proptest::prelude::*;
+
+fn buf_lines(buf: &Buffer) -> Vec<String> {
+    let rope = buf.rope();
+    let n = rope.len_lines();
+    (0..n).map(|i| rope_line_str(&rope, i)).collect()
+}
 
 /// Resolve normalized fractions [0.0, 1.0] to a valid `Position` inside
 /// `buf`. Keeps the strategy tree primitive-only — proptest shrinks
 /// floats deterministically.
 fn pos_from_fractions(buf: &Buffer, row_frac: f64, col_frac: f64) -> Position {
-    let lines = buf.lines();
-    if lines.is_empty() {
+    let rope = buf.rope();
+    let n = rope.len_lines();
+    if n == 0 {
         return Position::new(0, 0);
     }
-    let row = ((row_frac.clamp(0.0, 1.0)) * (lines.len() as f64 - 1.0)).round() as usize;
-    let line_len = lines[row].len();
+    let row = ((row_frac.clamp(0.0, 1.0)) * (n as f64 - 1.0)).round() as usize;
+    let line = rope_line_str(&rope, row);
+    let line_len = line.len();
     let col = (col_frac.clamp(0.0, 1.0) * line_len as f64).round() as usize;
     Position::new(row, col.min(line_len))
 }
@@ -29,7 +37,7 @@ proptest! {
     })]
 
     /// Round-trip: applying any valid edit and then its inverse leaves
-    /// `lines()` pointwise-equal to the prior state.
+    /// content pointwise-equal to the prior state.
     #[test]
     fn insert_char_roundtrip(
         text in prop::collection::vec("[a-zA-Z0-9 ]{0,20}", 1..=5)
@@ -40,10 +48,10 @@ proptest! {
     ) {
         let mut buf = Buffer::from_str(&text);
         let at = pos_from_fractions(&buf, row_f, col_f);
-        let lines_before: Vec<String> = buf.lines().to_vec();
+        let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::InsertChar { at, ch });
         buf.apply_edit(inv);
-        prop_assert_eq!(lines_before, buf.lines().to_vec());
+        prop_assert_eq!(lines_before, buf_lines(&buf));
     }
 
     #[test]
@@ -56,10 +64,10 @@ proptest! {
     ) {
         let mut buf = Buffer::from_str(&text);
         let at = pos_from_fractions(&buf, row_f, col_f);
-        let lines_before: Vec<String> = buf.lines().to_vec();
+        let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::InsertStr { at, text: ins });
         buf.apply_edit(inv);
-        prop_assert_eq!(lines_before, buf.lines().to_vec());
+        prop_assert_eq!(lines_before, buf_lines(&buf));
     }
 
     #[test]
@@ -75,25 +83,25 @@ proptest! {
         let a = pos_from_fractions(&buf, a_row_f, a_col_f);
         let b = pos_from_fractions(&buf, b_row_f, b_col_f);
         let (start, end) = if (a.row, a.col) <= (b.row, b.col) { (a, b) } else { (b, a) };
-        let lines_before: Vec<String> = buf.lines().to_vec();
+        let lines_before = buf_lines(&buf);
         let inv = buf.apply_edit(Edit::DeleteRange {
             start,
             end,
             kind: MotionKind::Char,
         });
         buf.apply_edit(inv);
-        prop_assert_eq!(lines_before, buf.lines().to_vec());
+        prop_assert_eq!(lines_before, buf_lines(&buf));
     }
 }
 
 #[test]
 fn empty_buffer_insert_then_delete_roundtrip() {
     let mut buf = Buffer::new();
-    let lines_before = buf.lines().to_vec();
+    let lines_before = buf_lines(&buf);
     let inv = buf.apply_edit(Edit::InsertStr {
         at: Position::new(0, 0),
         text: "hello".to_string(),
     });
     buf.apply_edit(inv);
-    assert_eq!(lines_before, buf.lines().to_vec());
+    assert_eq!(lines_before, buf_lines(&buf));
 }

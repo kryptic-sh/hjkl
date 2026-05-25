@@ -236,14 +236,17 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // falls back to `Buffer::line(row)`.
         let total_rows = self.buffer.row_count();
         let prefetch_end = top_row.saturating_add(area.height as usize).min(total_rows);
-        let lines_prefetch = self.buffer.lines_range(top_row..prefetch_end);
+        let rope = self.buffer.rope();
+        let lines_prefetch: Vec<String> = (top_row..prefetch_end)
+            .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+            .collect();
         let prefetch_base = top_row;
         let prefetch_end_idx = prefetch_end;
         let line_at = |row: usize| -> String {
             if row >= prefetch_base && row < prefetch_end_idx {
                 lines_prefetch[row - prefetch_base].clone()
             } else {
-                self.buffer.line(row).unwrap_or_default()
+                hjkl_buffer::rope_line_str(&rope, row)
             }
         };
 

@@ -27,11 +27,11 @@ fn snapshot_buffer_window(buf: &hjkl_buffer::Buffer) -> (String, usize, usize) {
     let start = cursor_row.saturating_sub(BUFFER_PREVIEW_WINDOW_RADIUS);
     let end = (cursor_row + BUFFER_PREVIEW_WINDOW_RADIUS).min(total);
     let mut content = String::with_capacity((end - start).saturating_mul(80));
+    let preview_rope = buf.rope();
     for r in start..end {
-        if let Some(line) = buf.line(r) {
-            content.push_str(&line);
-            content.push('\n');
-        }
+        let line = hjkl_buffer::rope_line_str(&preview_rope, r);
+        content.push_str(&line);
+        content.push('\n');
     }
     (content, cursor_row - start, start)
 }

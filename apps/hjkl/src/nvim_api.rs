@@ -174,11 +174,11 @@ fn mode_code(editor: &Editor<Buffer, DefaultHost>) -> &'static str {
 /// line) into a concrete Rust range over the buffer's lines. Both `start` and
 /// `end` are 0-based. Returns an error string if out of bounds.
 fn resolve_line_range(
-    lines: &[String],
+    line_count: usize,
     start: i64,
     end: i64,
 ) -> std::result::Result<(usize, usize), String> {
-    let n = lines.len() as i64;
+    let n = line_count as i64;
     let s = if start < 0 {
         (n + start).max(0) as usize
     } else {
@@ -189,7 +189,7 @@ fn resolve_line_range(
     } else {
         end as usize
     };
-    let e = e.min(lines.len());
+    let e = e.min(line_count);
     if s > e {
         return Err(format!(
             "line range out of order: start={start} end={end} (resolved {s}..{e})"
@@ -239,17 +239,22 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
 
-            let current_lines = editor.buffer().lines().to_vec();
-            let (s, e) = match resolve_line_range(&current_lines, start, end) {
+            let rope = editor.buffer().rope();
+            let line_count = rope.len_lines();
+            let (s, e) = match resolve_line_range(line_count, start, end) {
                 Ok(r) => r,
                 Err(msg) => return err(stdout, msgid, &msg),
             };
 
             // Build new full content: prefix[0..s] + new_lines + suffix[e..]
             let mut result: Vec<String> = Vec::new();
-            result.extend_from_slice(&current_lines[..s]);
+            for i in 0..s {
+                result.push(hjkl_buffer::rope_line_str(&rope, i));
+            }
             result.extend(new_lines);
-            result.extend_from_slice(&current_lines[e..]);
+            for i in e..line_count {
+                result.push(hjkl_buffer::rope_line_str(&rope, i));
+            }
 
             // Join WITHOUT a trailing newline. BufferEdit::replace_all uses
             // split('\n') internally, so "hello\n" → ["hello", ""] (two rows)
@@ -275,14 +280,14 @@ fn dispatch(
             };
             let _strict = param_bool(p, 3).unwrap_or(false);
 
-            let lines = editor.buffer().lines();
-            let (s, e) = match resolve_line_range(&lines, start, end) {
+            let rope = editor.buffer().rope();
+            let line_count = rope.len_lines();
+            let (s, e) = match resolve_line_range(line_count, start, end) {
                 Ok(r) => r,
                 Err(msg) => return err(stdout, msgid, &msg),
             };
-            let result: Vec<Value> = lines[s..e]
-                .iter()
-                .map(|l| Value::from(l.as_str()))
+            let result: Vec<Value> = (s..e)
+                .map(|i| Value::from(hjkl_buffer::rope_line_str(&rope, i)))
                 .collect();
             ok(stdout, msgid, Value::Array(result))
         }
@@ -319,7 +324,9 @@ fn dispatch(
             let row = (row_1based - 1).max(0) as usize;
             // For byte-col → char-col: walk the line's chars (ASCII = identity).
             let char_col = {
-                if let Some(line) = editor.buffer().line(row) {
+                let rope = editor.buffer().rope();
+                if row < rope.len_lines() {
+                    let line = hjkl_buffer::rope_line_str(&rope, row);
                     let byte_offset = (col as usize).min(line.len());
                     line[..byte_offset].chars().count()
                 } else {
@@ -335,7 +342,9 @@ fn dispatch(
             let (row, char_col) = editor.cursor();
             // Convert char-col to byte-col.
             let byte_col = {
-                if let Some(line) = editor.buffer().line(row) {
+                let rope = editor.buffer().rope();
+                if row < rope.len_lines() {
+                    let line = hjkl_buffer::rope_line_str(&rope, row);
                     line.chars()
                         .take(char_col)
                         .map(|c| c.len_utf8())

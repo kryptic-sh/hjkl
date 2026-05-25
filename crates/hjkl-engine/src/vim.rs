@@ -2897,11 +2897,12 @@ pub(crate) fn exit_visual_to_normal_bridge<H: crate::types::Host>(
             Mode::VisualLine => {
                 let r_lo = snap.anchor.0.min(snap.cursor.0);
                 let r_hi = snap.anchor.0.max(snap.cursor.0);
-                let last_col = ed
-                    .buffer()
-                    .line(r_hi)
-                    .map(|l| l.chars().count().saturating_sub(1))
-                    .unwrap_or(0);
+                let vl_rope = ed.buffer().rope();
+                let r_hi_clamped = r_hi.min(vl_rope.len_lines().saturating_sub(1));
+                let last_col = hjkl_buffer::rope_line_str(&vl_rope, r_hi_clamped)
+                    .chars()
+                    .count()
+                    .saturating_sub(1);
                 ((r_lo, 0), (r_hi, last_col))
             }
             Mode::VisualBlock => {

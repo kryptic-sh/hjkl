@@ -193,14 +193,9 @@ fn dispatch(
         }
 
         "hjkl_get_buffer" => {
-            // `into_iter()` consumes the `Vec<String>` returned by `lines()`
-            // and moves each row into the `Value::String` without an extra
-            // per-row clone.
-            let lines: Vec<Value> = editor
-                .buffer()
-                .lines()
-                .into_iter()
-                .map(Value::String)
+            let rope = editor.buffer().rope();
+            let lines: Vec<Value> = (0..rope.len_lines())
+                .map(|i| Value::String(hjkl_buffer::rope_line_str(&rope, i)))
                 .collect();
             success(id, Value::Array(lines))
         }

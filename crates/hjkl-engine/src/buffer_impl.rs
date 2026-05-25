@@ -76,22 +76,25 @@ impl Cursor for RopeBuffer {
 
     fn byte_offset(&self, pos: Pos) -> usize {
         let p = pos_to_position(pos);
+        let rope = self.rope();
         // Sum byte lengths of every line strictly above `p.row` plus
         // the trailing `\n`, then the col-byte-offset on `p.row`.
         let mut byte = 0usize;
         for r in 0..p.row.min(self.row_count()) {
-            byte += self.line(r).map(|s| s.len()).unwrap_or(0) + 1; // +1 for '\n'
+            byte += hjkl_buffer::rope_line_bytes(&rope, r) + 1; // +1 for '\n'
         }
-        if let Some(line) = self.line(p.row) {
+        if p.row < rope.len_lines() {
+            let line = hjkl_buffer::rope_line_str(&rope, p.row);
             byte += p.byte_offset(&line);
         }
         byte
     }
 
     fn pos_at_byte(&self, byte: usize) -> Pos {
+        let rope = self.rope();
         let mut remaining = byte;
         for r in 0..self.row_count() {
-            let line = self.line(r).unwrap_or_default();
+            let line = hjkl_buffer::rope_line_str(&rope, r);
             let line_bytes = line.len();
             // Each row contributes its bytes plus the trailing `\n`.
             // `byte` indexing the trailing `\n` itself maps to the
@@ -114,7 +117,7 @@ impl Cursor for RopeBuffer {
         }
         // Past end → clamp to end of last line.
         let last = self.row_count().saturating_sub(1);
-        let line = self.line(last).unwrap_or_default();
+        let line = hjkl_buffer::rope_line_str(&rope, last);
         Pos {
             line: last as u32,
             col: line.chars().count() as u32,
@@ -130,26 +133,21 @@ impl Query for RopeBuffer {
     }
 
     fn line(&self, idx: u32) -> String {
+        let row = idx as usize;
+        let rope = self.rope();
         // SPEC: panic on OOB rather than silently return empty.
-        match RopeBuffer::line(self, idx as usize) {
-            Some(s) => s,
-            None => panic!(
+        if row >= rope.len_lines() {
+            panic!(
                 "Query::line: index {idx} out of bounds (line_count = {})",
                 self.row_count()
-            ),
+            );
         }
+        hjkl_buffer::rope_line_str(&rope, row)
     }
 
     fn len_bytes(&self) -> usize {
-        // Sum of every line's bytes + a `\n` between them. Matches
-        // `as_string().len()` without allocating the join.
-        let n = self.row_count();
-        let mut total = 0usize;
-        for r in 0..n {
-            total += RopeBuffer::line(self, r).map(|s| s.len()).unwrap_or(0);
-        }
-        // n-1 separators between n lines (no trailing newline).
-        total + n.saturating_sub(1)
+        // Use cached byte_len — O(1), no allocation.
+        RopeBuffer::byte_len(self)
     }
 
     fn dirty_gen(&self) -> u64 {
@@ -161,8 +159,9 @@ impl Query for RopeBuffer {
     }
 
     fn line_bytes(&self, row: usize) -> usize {
-        // One lock, zero allocations. Default impl clones the row.
-        RopeBuffer::line_bytes(self, row)
+        // One lock, zero allocations via rope API.
+        let rope = self.rope();
+        hjkl_buffer::rope_line_bytes(&rope, row)
     }
 
     fn rope(&self) -> ropey::Rope {
@@ -176,9 +175,12 @@ impl Query for RopeBuffer {
         if start >= end {
             return Cow::Borrowed("");
         }
-        // Single-line slice — allocate since Buffer::line() returns owned String.
+        let rope = self.rope();
+        let n = rope.len_lines();
+        // Single-line slice — allocate since Buffer::rope_line_str returns owned String.
         if start.row == end.row {
-            if let Some(line) = RopeBuffer::line(self, start.row) {
+            if start.row < n {
+                let line = hjkl_buffer::rope_line_str(&rope, start.row);
                 let lo = start.byte_offset(&line).min(line.len());
                 let hi = end.byte_offset(&line).min(line.len());
                 return Cow::Owned(line[lo..hi].to_owned());
@@ -188,7 +190,11 @@ impl Query for RopeBuffer {
         // Multi-line: allocate.
         let mut out = String::new();
         for r in start.row..=end.row.min(self.row_count().saturating_sub(1)) {
-            let line = RopeBuffer::line(self, r).unwrap_or_default();
+            let line = if r < n {
+                hjkl_buffer::rope_line_str(&rope, r)
+            } else {
+                String::new()
+            };
             if r == start.row {
                 let lo = start.byte_offset(&line).min(line.len());
                 out.push_str(&line[lo..]);
@@ -277,7 +283,8 @@ impl Search for RopeBuffer {
         // functions are responsible for honouring `wrapscan` by
         // wrapping or not invoking the trait at all.
         let wrap = true;
-        let from_line = RopeBuffer::line(self, start.row).unwrap_or_default();
+        let rope = self.rope();
+        let from_line = hjkl_buffer::rope_line_str(&rope, start.row);
         let from_byte = start.byte_offset(&from_line).min(from_line.len());
         if let Some(m) = pat.find_at(&from_line, from_byte) {
             return Some(byte_range_to_pos_range(
@@ -297,7 +304,7 @@ impl Search for RopeBuffer {
             if !wrap && row <= start.row {
                 break;
             }
-            let line = RopeBuffer::line(self, row).unwrap_or_default();
+            let line = hjkl_buffer::rope_line_str(&rope, row);
             if let Some(m) = pat.find(&line) {
                 return Some(byte_range_to_pos_range(row, m.start(), row, m.end(), &line));
             }
@@ -320,7 +327,8 @@ impl Search for RopeBuffer {
         // backwards, so iterate matches and pick the last one with
         // start <= from-byte on the from-row, then walk previous rows
         // taking the last match per row.
-        let from_line = RopeBuffer::line(self, start.row).unwrap_or_default();
+        let rope = self.rope();
+        let from_line = hjkl_buffer::rope_line_str(&rope, start.row);
         let from_byte = start.byte_offset(&from_line).min(from_line.len());
         let mut best: Option<(usize, usize)> = None;
         for m in pat.find_iter(&from_line) {
@@ -348,7 +356,7 @@ impl Search for RopeBuffer {
             if !wrap && row >= start.row {
                 break;
             }
-            let line = RopeBuffer::line(self, row).unwrap_or_default();
+            let line = hjkl_buffer::rope_line_str(&rope, row);
             let last = pat.find_iter(&line).last();
             if let Some(m) = last {
                 return Some(byte_range_to_pos_range(row, m.start(), row, m.end(), &line));

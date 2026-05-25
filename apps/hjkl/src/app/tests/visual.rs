@@ -36,7 +36,17 @@ fn visual_d_deletes_selection_via_keymap() {
     );
 
     // Buffer should have " world" (the chars after the deleted selection).
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec![" world"],
@@ -75,7 +85,17 @@ fn visual_y_yanks_selection_via_keymap() {
     );
 
     // Buffer must be unchanged.
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["hello world"],
@@ -125,7 +145,17 @@ fn visual_line_d_deletes_line_via_keymap() {
     );
 
     // First line should be gone.
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["second line"],
@@ -171,7 +201,17 @@ fn visual_c_enters_insert_mode_via_keymap() {
     );
 
     // Buffer should have "hello" deleted, leaving " world".
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec![" world"],
@@ -257,7 +297,17 @@ fn visual_d_with_named_register_writes_to_register() {
     let consumed = app.route_chord_key(ck('d'));
     assert!(consumed, "d in Visual must be consumed");
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec![" world"],
@@ -300,7 +350,17 @@ fn visual_line_d_deletes_single_line_via_range_mutation() {
     let consumed = app.route_chord_key(ck('d'));
     assert!(consumed, "d in VisualLine must be consumed");
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["second line"],
@@ -341,7 +401,17 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
     let consumed = app.route_chord_key(ck('d'));
     assert!(consumed, "d in VisualBlock must be consumed");
 
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["de", "ij", "no"],
@@ -378,7 +448,17 @@ fn visual_block_y_yanks_rectangle_to_register() {
     assert!(consumed, "y in VisualBlock must be consumed");
 
     // Buffer must be unchanged.
-    let lines = app.active().editor.buffer().lines().to_vec();
+    let lines = app
+        .active()
+        .editor
+        .buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
         lines,
         vec!["abcde", "fghij", "klmno"],

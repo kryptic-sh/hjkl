@@ -69,7 +69,7 @@ fn resolve_address<H: hjkl_engine::Host>(
     addr: Address,
     editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
 ) -> Result<usize, String> {
-    let line_count = editor.buffer().lines().len();
+    let line_count = editor.buffer().row_count();
     // 1-based last line (at least 1 so single-line buffers work)
     let last = line_count.max(1);
     match addr {
@@ -100,7 +100,7 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
 ) -> Result<(Option<LineRange>, &'a str), String> {
     // `%` — whole buffer
     if let Some(rest) = cmd.strip_prefix('%') {
-        let line_count = editor.buffer().lines().len().max(1);
+        let line_count = editor.buffer().row_count().max(1);
         return Ok((Some(LineRange::new(1, line_count)), rest));
     }
 

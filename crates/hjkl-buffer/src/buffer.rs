@@ -111,69 +111,6 @@ impl Buffer {
 
     // ── Read-only accessors (delegate to Content) ─────────────────
 
-    /// Returns a snapshot of every line as an owned `Vec<String>`.
-    ///
-    /// Owned rather than `&[String]` because a `Buffer` is a per-window
-    /// view onto a shared `Content`; another view could mutate the rope
-    /// between when this returns and when the caller reads the slice,
-    /// invalidating any borrowed reference.
-    ///
-    /// # Hot-path note
-    ///
-    /// The engine and ex-command hot paths no longer call this — they
-    /// use `Buffer::rope()` and the `rope_to_lines_vec` / `rope_line_to_str`
-    /// helpers in `hjkl-engine` to avoid materializing the full Vec on
-    /// every operation. This method is retained for tests and secondary
-    /// callers; migrate those before deleting.
-    pub fn lines(&self) -> Vec<String> {
-        let c = self.content_lock();
-        let n = c.text.len_lines();
-        (0..n).map(|i| rope_line_str(&c.text, i)).collect()
-    }
-
-    /// Returns a clone of the line at `row`, or `None` if out of bounds.
-    ///
-    /// Owned rather than `Option<&str>` for the same reason as [`Buffer::lines`]:
-    /// another view sharing the same `Content` could reallocate the backing
-    /// between the lock release and the caller's use of the reference.
-    pub fn line(&self, row: usize) -> Option<String> {
-        let c = self.content_lock();
-        let n = c.text.len_lines();
-        if row < n {
-            Some(rope_line_str(&c.text, row))
-        } else {
-            None
-        }
-    }
-
-    /// Byte length of row `row`, or 0 if out of bounds. One lock, no
-    /// String clone — `Buffer::line(row).map(|s| s.len()).unwrap_or(0)`
-    /// pays a full clone of the row's contents just to read its length.
-    pub fn line_bytes(&self, row: usize) -> usize {
-        let c = self.content_lock();
-        let n = c.text.len_lines();
-        if row < n {
-            rope_line_bytes(&c.text, row)
-        } else {
-            0
-        }
-    }
-
-    /// Clone only `range` rows under a single lock. Out-of-bounds end is
-    /// clamped to `row_count()`; if the start exceeds the row count the
-    /// result is empty.
-    ///
-    /// Hot-path replacement for [`Buffer::lines`] in the TUI renderer:
-    /// cloning the whole `Vec<String>` per frame is O(N) in document size,
-    /// but only the visible viewport is ever painted.
-    pub fn lines_range(&self, range: std::ops::Range<usize>) -> Vec<String> {
-        let c = self.content_lock();
-        let n = c.text.len_lines();
-        let end = range.end.min(n);
-        let start = range.start.min(end);
-        (start..end).map(|i| rope_line_str(&c.text, i)).collect()
-    }
-
     pub fn cursor(&self) -> Position {
         self.cursor
     }
@@ -451,19 +388,17 @@ impl Buffer {
 
 /// Return logical line `row` as a `String`, stripping the trailing `\n`
 /// that ropey includes for non-final lines.
-pub(crate) fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
-    let slice = rope.line(row);
-    let s = slice.to_string();
+pub fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
+    let mut s = rope.line(row).to_string();
     // ropey includes the trailing '\n' for non-final lines; strip it.
     if s.ends_with('\n') {
-        s[..s.len() - 1].to_string()
-    } else {
-        s
+        s.pop();
     }
+    s
 }
 
 /// Byte length of logical line `row` (excluding the trailing `\n`).
-pub(crate) fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
+pub fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
     let slice = rope.line(row);
     let bytes = slice.len_bytes();
     // ropey includes the '\n' byte for non-final lines; subtract it.
@@ -501,7 +436,7 @@ mod tests {
     fn new_has_one_empty_row() {
         let b = Buffer::new();
         assert_eq!(b.row_count(), 1);
-        assert_eq!(b.line(0).as_deref(), Some(""));
+        assert_eq!(rope_line_str(&b.rope(), 0), "");
         assert_eq!(b.cursor(), Position::default());
     }
 
@@ -509,22 +444,22 @@ mod tests {
     fn from_str_splits_on_newline() {
         let b = Buffer::from_str("foo\nbar\nbaz");
         assert_eq!(b.row_count(), 3);
-        assert_eq!(b.line(0).as_deref(), Some("foo"));
-        assert_eq!(b.line(2).as_deref(), Some("baz"));
+        assert_eq!(rope_line_str(&b.rope(), 0), "foo");
+        assert_eq!(rope_line_str(&b.rope(), 2), "baz");
     }
 
     #[test]
     fn from_str_trailing_newline_keeps_empty_row() {
         let b = Buffer::from_str("foo\n");
         assert_eq!(b.row_count(), 2);
-        assert_eq!(b.line(1).as_deref(), Some(""));
+        assert_eq!(rope_line_str(&b.rope(), 1), "");
     }
 
     #[test]
     fn from_str_empty_input_keeps_one_row() {
         let b = Buffer::from_str("");
         assert_eq!(b.row_count(), 1);
-        assert_eq!(b.line(0).as_deref(), Some(""));
+        assert_eq!(rope_line_str(&b.rope(), 0), "");
     }
 
     #[test]
@@ -672,7 +607,7 @@ mod tests {
             text: "bar".into(),
         });
 
-        assert_eq!(view_a.line(0).as_deref(), Some("foobar"));
-        assert_eq!(view_b.line(0).as_deref(), Some("foobar"));
+        assert_eq!(rope_line_str(&view_a.rope(), 0), "foobar");
+        assert_eq!(rope_line_str(&view_b.rope(), 0), "foobar");
     }
 }
