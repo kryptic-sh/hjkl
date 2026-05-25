@@ -274,6 +274,12 @@ impl App {
             })
             .collect();
 
+        tracing::debug!(
+            slot = slot_idx,
+            n_diags = lsp_diags.len(),
+            n_signs = diag_signs_lsp.len(),
+            "lsp publishDiagnostics applied"
+        );
         let slot = &mut self.slots[slot_idx];
         slot.lsp_diags = lsp_diags;
         slot.diag_signs_lsp = diag_signs_lsp;
@@ -319,12 +325,25 @@ impl App {
             // huge files. `Buffer::rope()` is an O(1) Arc-clone.
             let rope = slot.editor.buffer().rope();
             let changes = build_text_changes(&rope, edits);
+            tracing::debug!(
+                buffer_id,
+                dg,
+                n_changes = changes.len(),
+                "lsp didChange incremental"
+            );
             mgr.notify_change_incremental(buffer_id, changes);
         } else {
             // Full-sync fallback (server doesn't support incremental,
             // or `:e!` / formatter wiped the edit log): we still need
             // the whole document, so pay for `content_joined` here.
             let text = slot.editor.buffer().content_joined();
+            tracing::debug!(
+                buffer_id,
+                dg,
+                n_edits = edits.len(),
+                text_len = text.len(),
+                "lsp didChange full"
+            );
             mgr.notify_change(buffer_id, text);
         }
     }
