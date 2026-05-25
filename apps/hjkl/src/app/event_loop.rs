@@ -1226,6 +1226,16 @@ impl App {
                 self.last_cursor_shape = current_shape;
             }
 
+            // Flush any deferred syntax recompute before drawing so the
+            // frame sees the latest spans. Insert-mode arms `return
+            // KeyOutcome::Continue` and skip the end-of-drain flush, so
+            // without this the highlights would only catch up when the
+            // user pressed a non-insert-arm key (e.g. ESC).
+            if self.pending_recompute {
+                self.pending_recompute = false;
+                self.recompute_and_install();
+            }
+
             // ── Draw ──────────────────────────────────────────────
             let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
