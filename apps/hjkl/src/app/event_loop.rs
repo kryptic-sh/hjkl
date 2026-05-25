@@ -602,13 +602,13 @@ impl App {
                             self.dismiss_completion();
                         } else {
                             let new_prefix = {
+                                // `.line(cur_row)` is O(log N) on rope storage
+                                // and clones a single row, not the whole doc.
                                 let line = self
                                     .active()
                                     .editor
                                     .buffer()
-                                    .lines()
-                                    .get(cur_row)
-                                    .cloned()
+                                    .line(cur_row)
                                     .unwrap_or_default();
                                 line[anchor_col.min(line.len())..cur_col.min(line.len())]
                                     .to_string()
@@ -665,9 +665,7 @@ impl App {
                                     .active()
                                     .editor
                                     .buffer()
-                                    .lines()
-                                    .get(cur_row)
-                                    .cloned()
+                                    .line(cur_row)
                                     .unwrap_or_default();
                                 line[anchor_col.min(line.len())..cur_col.min(line.len())]
                                     .to_string()

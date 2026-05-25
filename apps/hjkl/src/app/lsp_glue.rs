@@ -491,12 +491,10 @@ impl App {
             return;
         }
 
-        let text = self.slots[slot_idx]
-            .editor
-            .buffer()
-            .lines()
-            .to_vec()
-            .join("\n");
+        // `content_joined()` returns a `dirty_gen`-cached `Arc<String>`,
+        // shared with any other per-tick consumer. Beats `lines().join`,
+        // which clones every row out of the rope.
+        let text = self.slots[slot_idx].editor.buffer().content_joined();
 
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
         mgr.attach_buffer(buffer_id, &path, language_id, &text);

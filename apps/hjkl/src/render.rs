@@ -1272,24 +1272,14 @@ pub(crate) fn search_count(app: &App) -> Option<(usize, usize)> {
     // Single shared `Arc<String>` of the whole document — cached against
     // `dirty_gen`, so calling content_joined here costs an `Arc::clone`.
     let content = buf.content_joined();
-    let bytes = content.as_bytes();
 
-    // Compute cursor's global byte position in `content`. We walk newlines
-    // until we hit row `cursor_row` — capped by the row index, not file size.
-    let mut cursor_global_byte = 0usize;
-    if cursor_row > 0 {
-        let mut seen = 0usize;
-        for (i, &b) in bytes.iter().enumerate() {
-            if b == b'\n' {
-                seen += 1;
-                if seen == cursor_row {
-                    cursor_global_byte = i + 1;
-                    break;
-                }
-            }
-        }
-    }
-    cursor_global_byte += cursor_byte_in_row;
+    // O(log N) rope lookup beats the prior linear newline scan that ran
+    // up to ~3 MB per keystroke on huge files when search was active.
+    let cursor_global_byte = {
+        let rope = buf.rope();
+        let row = cursor_row.min(rope.len_lines());
+        rope.line_to_byte(row) + cursor_byte_in_row
+    };
 
     let mut total = 0usize;
     let mut current_idx = 0usize;
