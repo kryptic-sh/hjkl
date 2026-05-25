@@ -29,6 +29,10 @@ pub fn all_setting_names() -> Vec<String> {
         "nuw".into(),
         "foldcolumn".into(),
         "fdc".into(),
+        "scrolloff".into(),
+        "so".into(),
+        "sidescrolloff".into(),
+        "siso".into(),
         // string
         "iskeyword".into(),
         "isk".into(),
@@ -101,7 +105,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -131,6 +135,8 @@ pub(crate) fn apply_set<H: Host>(
             s.commentstring,
             if s.autopair { "on" } else { "off" },
             if s.autoclose_tag { "on" } else { "off" },
+            s.scrolloff,
+            s.sidescrolloff,
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -173,6 +179,8 @@ fn query_option_value<H: Host>(
         "timeoutlen" | "tm" => s.timeout_len.as_millis().to_string(),
         "numberwidth" | "nuw" => s.numberwidth.to_string(),
         "foldcolumn" | "fdc" => s.foldcolumn.to_string(),
+        "scrolloff" | "so" => s.scrolloff.to_string(),
+        "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
         "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
         "colorcolumn" | "cc" => format!("\"{}\"", s.colorcolumn),
         "formatoptions" | "fo" => format!("\"{}\"", s.formatoptions),
@@ -312,6 +320,12 @@ fn apply_set_token<H: Host>(
                     return Err(format!("foldcolumn must be in range 0..=12, got {parsed}"));
                 }
                 editor.settings_mut().foldcolumn = parsed as u32;
+            }
+            "scrolloff" | "so" => {
+                editor.settings_mut().scrolloff = parsed;
+            }
+            "sidescrolloff" | "siso" => {
+                editor.settings_mut().sidescrolloff = parsed;
             }
             other => return Err(format!("unknown :set option `{other}`")),
         }
@@ -479,11 +493,58 @@ mod tests {
     // ---- numeric options ----------------------------------------------------
 
     #[test]
-    fn set_scrolloff_eq_5() {
+    fn set_tabstop_eq_5() {
         let mut editor = make_editor();
-        // scrolloff is not in legacy apply_set; confirm tabstop=5 instead
         assert_eq!(apply_set(&mut editor, "tabstop=5"), ExEffect::Ok);
         assert_eq!(editor.settings().tabstop, 5);
+    }
+
+    #[test]
+    fn set_scrolloff_eq_0() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "scrolloff=0"), ExEffect::Ok);
+        assert_eq!(editor.settings().scrolloff, 0);
+    }
+
+    #[test]
+    fn set_so_alias_sets_scrolloff() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "so=3"), ExEffect::Ok);
+        assert_eq!(editor.settings().scrolloff, 3);
+    }
+
+    #[test]
+    fn set_sidescrolloff_eq_5() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "sidescrolloff=5"), ExEffect::Ok);
+        assert_eq!(editor.settings().sidescrolloff, 5);
+    }
+
+    #[test]
+    fn set_siso_alias_sets_sidescrolloff() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "siso=2"), ExEffect::Ok);
+        assert_eq!(editor.settings().sidescrolloff, 2);
+    }
+
+    #[test]
+    fn set_scrolloff_query_returns_value() {
+        let mut editor = make_editor();
+        editor.settings_mut().scrolloff = 7;
+        match apply_set(&mut editor, "so?") {
+            ExEffect::Info(s) => assert_eq!(s, "so=7"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_sidescrolloff_query_returns_value() {
+        let mut editor = make_editor();
+        editor.settings_mut().sidescrolloff = 4;
+        match apply_set(&mut editor, "siso?") {
+            ExEffect::Info(s) => assert_eq!(s, "siso=4"),
+            other => panic!("expected Info(_), got {other:?}"),
+        }
     }
 
     #[test]
@@ -601,7 +662,7 @@ mod tests {
         }
     }
 
-    // ---- softtabstop / so alias for scrolloff (not in legacy, verify tw) ---
+    // ---- textwidth / tw alias ------------------------------------------------
 
     #[test]
     fn set_textwidth_and_tw_alias() {

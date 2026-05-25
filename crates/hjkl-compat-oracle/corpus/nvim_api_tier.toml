@@ -95,3 +95,21 @@ initial_cursor = [0, 0]
 keys = ":redraw!<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
+
+# :set scrolloff=3 on a small buffer — accepted without error, no content change
+[[cases]]
+name = "set_scrolloff_noop_on_short_buffer"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set scrolloff=3<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :set sidescrolloff=5 — accepted without error, no content change
+[[cases]]
+name = "set_sidescrolloff_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set sidescrolloff=5<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]

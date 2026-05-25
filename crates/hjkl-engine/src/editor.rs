@@ -844,6 +844,14 @@ pub struct Settings {
     /// those filetypes (the caller gates on filetype), `true` stored here so
     /// `:set noautoclose-tag` can disable it globally.
     pub autoclose_tag: bool,
+    /// Minimum context rows kept visible above/below the cursor when scrolling.
+    /// Capped at (height - 1) / 2 for tiny viewports. `0` = no margin.
+    /// Matches vim's `:set scrolloff` / `:set so`. Default `5`.
+    pub scrolloff: usize,
+    /// Minimum context columns kept visible left/right of the cursor (no-wrap
+    /// mode only). `0` = no margin (vim default). Matches `:set sidescrolloff`.
+    /// Default `0`.
+    pub sidescrolloff: usize,
 }
 
 impl Default for Settings {
@@ -878,6 +886,8 @@ impl Default for Settings {
             commentstring: String::new(),
             autopair: true,
             autoclose_tag: true,
+            scrolloff: 5,
+            sidescrolloff: 0,
         }
     }
 }
@@ -924,6 +934,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         commentstring: String::new(),
         autopair: true,
         autoclose_tag: true,
+        scrolloff: o.scrolloff,
+        sidescrolloff: o.sidescrolloff,
     }
 }
 
@@ -2362,6 +2374,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.signcolumn = opts.signcolumn;
         self.settings.foldcolumn = opts.foldcolumn;
         self.settings.colorcolumn = opts.colorcolumn.clone();
+        self.settings.scrolloff = opts.scrolloff;
+        self.settings.sidescrolloff = opts.sidescrolloff;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
@@ -2655,12 +2669,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.scroll_right(-cols);
     }
 
-    /// Vim's `scrolloff` default — keep the cursor at least this many
-    /// rows away from the top / bottom edge of the viewport while
-    /// scrolling. Collapses to `height / 2` for tiny viewports.
-    const SCROLLOFF: usize = 5;
-
-    /// Scroll the viewport so the cursor stays at least `SCROLLOFF`
+    /// Scroll the viewport so the cursor stays at least `scrolloff`
     /// rows from each edge. Replaces the bare
     /// `Buffer::ensure_cursor_visible` call at end-of-step so motions
     /// don't park the cursor on the very last visible row.
@@ -2684,7 +2693,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // Cap margin at (height - 1) / 2 so the upper + lower bands
         // can't overlap on tiny windows (margin=5 + height=10 would
         // otherwise produce contradictory clamp ranges).
-        let margin = Self::SCROLLOFF.min(height.saturating_sub(1) / 2);
+        let margin = self.settings.scrolloff.min(height.saturating_sub(1) / 2);
         // Soft-wrap path: scrolloff math runs in *screen rows*, not
         // doc rows, since a wrapped doc row spans many visual lines.
         if !matches!(self.host.viewport().wrap, hjkl_buffer::Wrap::None) {
@@ -2817,10 +2826,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         if height == 0 {
             return;
         }
-        // Apply scrolloff: keep the cursor at least SCROLLOFF rows
+        // Apply scrolloff: keep the cursor at least scrolloff rows
         // from the visible viewport edges.
         let (cursor_row, cursor_col) = buf_cursor_rc(&self.buffer);
-        let margin = Self::SCROLLOFF.min(height / 2);
+        let margin = self.settings.scrolloff.min(height / 2);
         let min_row = new_top + margin;
         let max_row = new_top + height.saturating_sub(1).saturating_sub(margin);
         let target_row = cursor_row.clamp(min_row, max_row.max(min_row));
@@ -2859,7 +2868,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // (top + height - 1 - margin). Match the cap used by
         // `ensure_cursor_in_scrolloff` so contradictory bounds are
         // impossible on tiny viewports.
-        let margin = Self::SCROLLOFF.min(height.saturating_sub(1) / 2);
+        let margin = self.settings.scrolloff.min(height.saturating_sub(1) / 2);
         let new_top = match pos {
             CursorScrollTarget::Center => cur_row.saturating_sub(height / 2),
             CursorScrollTarget::Top => cur_row.saturating_sub(margin),
@@ -6016,7 +6025,7 @@ mod insert_mode_scrolloff_tests {
     /// `dispatch_insert_key`) bypasses the FSM `step` that runs
     /// `ensure_cursor_in_scrolloff`. The post-mutation helper now runs
     /// scrolloff for every insert primitive — the cursor must stay
-    /// within `SCROLLOFF` rows of the bottom edge.
+    /// within `scrolloff` rows of the bottom edge.
     #[test]
     fn insert_newline_keeps_cursor_in_scrolloff() {
         let mut e = ed_with_lines(200);
@@ -6031,7 +6040,8 @@ mod insert_mode_scrolloff_tests {
         let (cursor_row, _) = e.cursor();
         let vp = e.host().viewport();
         let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
-        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
+        let scrolloff = e.settings().scrolloff;
+        let margin = scrolloff.min(vp.height as usize - 1) / 2;
         let max_screen_row = vp.height as usize - 1 - margin;
         assert!(
             cursor_screen_row <= max_screen_row,
@@ -6054,7 +6064,8 @@ mod insert_mode_scrolloff_tests {
         let (cursor_row, _) = e.cursor();
         let vp = e.host().viewport();
         let cursor_screen_row = cursor_row.saturating_sub(vp.top_row);
-        let margin = Editor::<Buffer, DefaultHost>::SCROLLOFF.min(vp.height as usize - 1) / 2;
+        let scrolloff = e.settings().scrolloff;
+        let margin = scrolloff.min(vp.height as usize - 1) / 2;
         let max_screen_row = vp.height as usize - 1 - margin;
         assert!(
             cursor_screen_row <= max_screen_row,

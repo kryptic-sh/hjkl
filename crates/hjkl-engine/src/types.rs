@@ -318,6 +318,15 @@ pub struct Options {
     /// Active filetype for the current buffer (e.g. `"rust"`, `"python"`).
     /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
     pub filetype: String,
+    /// Minimum number of context rows kept visible above and below the cursor
+    /// when scrolling. `999` (or any value ≥ half the viewport height) keeps
+    /// the cursor centred. `0` disables the margin. Matches vim's
+    /// `:set scrolloff` / `:set so`. Default `5`.
+    pub scrolloff: usize,
+    /// Minimum number of context columns kept visible left and right of the
+    /// cursor when scrolling horizontally (no-wrap mode only). `0` disables.
+    /// Matches vim's `:set sidescrolloff` / `:set siso`. Default `0`.
+    pub sidescrolloff: usize,
 }
 
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
@@ -396,6 +405,8 @@ impl Default for Options {
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
+            scrolloff: 5,
+            sidescrolloff: 0,
         }
     }
 }
@@ -574,6 +585,38 @@ impl Options {
             "colorcolumn" | "cc" => set_string!(colorcolumn),
             "formatoptions" | "fo" => set_string!(formatoptions),
             "filetype" | "ft" => set_string!(filetype),
+            "scrolloff" | "so" => {
+                self.scrolloff = match val {
+                    OptionValue::Int(n) if n >= 0 => n as usize,
+                    OptionValue::Int(n) => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` must be >= 0, got {n}"
+                        )));
+                    }
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects int, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
+            "sidescrolloff" | "siso" => {
+                self.sidescrolloff = match val {
+                    OptionValue::Int(n) if n >= 0 => n as usize,
+                    OptionValue::Int(n) => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` must be >= 0, got {n}"
+                        )));
+                    }
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects int, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -617,6 +660,8 @@ impl Options {
             "colorcolumn" | "cc" => OptionValue::String(self.colorcolumn.clone()),
             "formatoptions" | "fo" => OptionValue::String(self.formatoptions.clone()),
             "filetype" | "ft" => OptionValue::String(self.filetype.clone()),
+            "scrolloff" | "so" => OptionValue::Int(self.scrolloff as i64),
+            "sidescrolloff" | "siso" => OptionValue::Int(self.sidescrolloff as i64),
             _ => return None,
         })
     }
@@ -1667,5 +1712,38 @@ mod tests {
     #[test]
     fn sign_column_mode_default_is_auto() {
         assert_eq!(SignColumnMode::default(), SignColumnMode::Auto);
+    }
+
+    #[test]
+    fn options_scrolloff_default_and_set() {
+        let mut o = Options::default();
+        assert_eq!(o.scrolloff, 5, "scrolloff defaults to 5");
+        o.set_by_name("scrolloff", OptionValue::Int(0)).unwrap();
+        assert_eq!(o.scrolloff, 0);
+        o.set_by_name("scrolloff", OptionValue::Int(999)).unwrap();
+        assert_eq!(o.scrolloff, 999);
+        assert_eq!(o.get_by_name("scrolloff"), Some(OptionValue::Int(999)));
+    }
+
+    #[test]
+    fn options_sidescrolloff_default_and_set() {
+        let mut o = Options::default();
+        assert_eq!(o.sidescrolloff, 0, "sidescrolloff defaults to 0");
+        o.set_by_name("sidescrolloff", OptionValue::Int(5)).unwrap();
+        assert_eq!(o.sidescrolloff, 5);
+        assert_eq!(o.get_by_name("sidescrolloff"), Some(OptionValue::Int(5)));
+    }
+
+    #[test]
+    fn options_alias_so_siso() {
+        let mut o = Options::default();
+        // `so` sets scrolloff
+        o.set_by_name("so", OptionValue::Int(3)).unwrap();
+        assert_eq!(o.scrolloff, 3);
+        assert_eq!(o.get_by_name("so"), Some(OptionValue::Int(3)));
+        // `siso` sets sidescrolloff
+        o.set_by_name("siso", OptionValue::Int(2)).unwrap();
+        assert_eq!(o.sidescrolloff, 2);
+        assert_eq!(o.get_by_name("siso"), Some(OptionValue::Int(2)));
     }
 }
