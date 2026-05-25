@@ -1131,7 +1131,9 @@ impl App {
             preview_highlighters: std::sync::Mutex::new(std::collections::HashMap::new()),
             syntax_enabled: true,
             search_count_cache: std::cell::RefCell::new(None),
-            pending_recompute: false,
+            // Seed the first-frame recompute via the event-loop's drain
+            // flush so render::frame doesn't need a redundant sync parse.
+            pending_recompute: true,
             last_signature_us: 0,
             config: hjkl_app::config::Config::default(),
             start_screen,

@@ -934,12 +934,12 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Refresh syntax spans against the now-current viewport. On the first
-    // frame, App::new ran the initial parse with `viewport.height = 0`
-    // (the atomic's init value) so only row 0 had spans installed. With
-    // the source/tree cache + parse-skip on unchanged buffers, this call
-    // is ~140µs even on 100k-line files.
-    app.recompute_and_install();
+    // Spans are kept current by the event loop's end-of-drain flush
+    // (`pending_recompute` → `recompute_and_install`). App::new seeds
+    // `pending_recompute = true` so the first frame's flush handles the
+    // initial parse. Calling recompute here every frame meant TWO sync
+    // tree-sitter parses per draw — visible as ~half of per-keystroke
+    // CPU on huge files.
 
     if let Some(tb) = top_bar_area {
         top_bar(frame, app, tb);
