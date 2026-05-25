@@ -833,6 +833,24 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         run: wqall_handler::<H>,
     });
 
+    // `:xall` / `:xa` — alias for `:wqall` / `:wqa`
+    reg.add(ExCommand {
+        name: "xall",
+        aliases: &["xa"],
+        arg_kind: ArgKind::None,
+        min_prefix: 2,
+        run: wqall_handler::<H>,
+    });
+
+    // `:xall!` / `:xa!`
+    reg.add(ExCommand {
+        name: "xall!",
+        aliases: &["xa!"],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: wqall_handler::<H>,
+    });
+
     // `:qall` / `:qa`
     reg.add(ExCommand {
         name: "qall",
@@ -1533,6 +1551,85 @@ mod tests {
                 save: true,
             })
         );
+    }
+
+    // ── xa / xall dispatch ───────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_xa_returns_write_quit_all() {
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let cmd = reg.resolve("xa").expect(":xa must resolve");
+        let result = (cmd.run)(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::Quit {
+                force: false,
+                save: true,
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_xall_returns_write_quit_all() {
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let cmd = reg.resolve("xall").expect(":xall must resolve");
+        let result = (cmd.run)(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::Quit {
+                force: false,
+                save: true,
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_xa_force_returns_write_quit_all_force() {
+        // :xa! mirrors :wqa! — the registry maps both to wqall_handler which
+        // returns force=false (same as :wqa! by design; the ! means "force
+        // write errors", not the Quit::force flag which controls unsaved-buffer
+        // checking).
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let cmd = reg.resolve("xa!").expect(":xa! must resolve");
+        let result = (cmd.run)(&mut ed, "", None);
+        assert_eq!(
+            result,
+            Some(ExEffect::Quit {
+                force: false,
+                save: true,
+            })
+        );
+    }
+
+    #[test]
+    fn dispatch_xa_matches_wqa_effect() {
+        // Verify :xa and :wqa resolve to handlers that return identical ExEffect.
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let xa_cmd = reg.resolve("xa").expect(":xa must resolve");
+        let wqa_cmd = reg.resolve("wqa").expect(":wqa must resolve");
+        let xa_result = (xa_cmd.run)(&mut ed, "", None);
+        let wqa_result = (wqa_cmd.run)(&mut ed, "", None);
+        assert_eq!(xa_result, wqa_result);
+    }
+
+    #[test]
+    fn dispatch_xa_force_matches_wqa_force_effect() {
+        let mut reg = crate::registry::Registry::<hjkl_engine::DefaultHost>::new();
+        register_builtins(&mut reg);
+        let mut ed = make_editor();
+        let xa_cmd = reg.resolve("xa!").expect(":xa! must resolve");
+        let wqa_cmd = reg.resolve("wqa!").expect(":wqa! must resolve");
+        let xa_result = (xa_cmd.run)(&mut ed, "", None);
+        let wqa_result = (wqa_cmd.run)(&mut ed, "", None);
+        assert_eq!(xa_result, wqa_result);
     }
 
     #[test]
