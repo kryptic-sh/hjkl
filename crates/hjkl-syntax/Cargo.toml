@@ -20,6 +20,7 @@ hjkl-engine.workspace = true
 hjkl-lang.workspace = true
 tracing = "0.1"
 memchr = "2"
+ropey = "1.6"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -88,6 +88,52 @@ impl HexColorPass {
             spans.push(span);
         }
     }
+
+    /// Like [`apply_range`] but reads source from a `ropey::Rope`. Only the
+    /// requested `range` plus one boundary byte on each side are materialised.
+    pub fn apply_range_rope(
+        &self,
+        spans: &mut Vec<HighlightSpan>,
+        rope: &ropey::Rope,
+        range: Range<usize>,
+    ) {
+        let rope_len = rope.len_bytes();
+        // Include one byte on each side so left/right boundary checks work.
+        let win_start = range.start.saturating_sub(1);
+        let win_end = (range.end + 1).min(rope_len);
+        if win_start >= win_end {
+            return;
+        }
+        let window_str: String = rope.byte_slice(win_start..win_end).to_string();
+        let window: &[u8] = window_str.as_bytes();
+        // The scan range within the window, clamped to the window.
+        let scan_start = range.start - win_start;
+        let scan_end = (range.end - win_start).min(window.len());
+        let scan_slice = &window[..scan_end]; // scan_hex_colors scans from 0 up to end
+
+        for hit in scan_hex_colors(scan_slice) {
+            // Only emit hits that fall within the requested range (i.e. start
+            // at or after scan_start — left-boundary hits from the leading byte
+            // are still checked but the # must be at scan_start or later).
+            if hit.start < scan_start {
+                continue;
+            }
+            let abs_start = win_start + hit.start;
+            let abs_end = win_start + hit.end;
+            let lit_str = std::str::from_utf8(&window[hit]).unwrap_or("");
+            let fg_hex = contrasting_fg(lit_str);
+            let mut span = HighlightSpan {
+                byte_range: abs_start..abs_end,
+                capture: HEX_COLOR_CAPTURE.to_string(),
+                metadata: std::collections::HashMap::new(),
+            };
+            span.metadata
+                .insert(HEX_BG_KEY.to_string(), MetaValue::Str(lit_str.to_string()));
+            span.metadata
+                .insert(HEX_FG_KEY.to_string(), MetaValue::Str(fg_hex.to_string()));
+            spans.push(span);
+        }
+    }
 }
 
 /// Scan `bytes` for hex color literals. Returns byte ranges that
@@ -306,5 +352,36 @@ mod tests {
             s.metadata.get(HEX_FG_KEY),
             Some(&MetaValue::Str("#ffffff".into())),
         );
+    }
+
+    /// Smoke: `apply_range_rope` produces identical spans to `apply_range`
+    /// on a small input — no grammar required.
+    #[test]
+    fn apply_range_rope_matches_bytes_variant() {
+        let src = "--accent: #bb9af7; --bg: #0b0d10;";
+        let bytes = src.as_bytes();
+        let rope = ropey::Rope::from_str(src);
+        let range = 0..bytes.len();
+
+        let mut spans_bytes: Vec<HighlightSpan> = Vec::new();
+        HexColorPass::new().apply_range(&mut spans_bytes, bytes, range.clone());
+
+        let mut spans_rope: Vec<HighlightSpan> = Vec::new();
+        HexColorPass::new().apply_range_rope(&mut spans_rope, &rope, range);
+
+        assert_eq!(
+            spans_bytes.len(),
+            spans_rope.len(),
+            "rope and bytes variants must emit same number of spans"
+        );
+        for (b, r) in spans_bytes.iter().zip(spans_rope.iter()) {
+            assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
+            assert_eq!(b.capture, r.capture, "capture mismatch");
+            assert_eq!(
+                b.metadata.get(HEX_BG_KEY),
+                r.metadata.get(HEX_BG_KEY),
+                "HEX_BG_KEY mismatch"
+            );
+        }
     }
 }

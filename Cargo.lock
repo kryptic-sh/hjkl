@@ -2666,6 +2666,7 @@ dependencies = [
  "hjkl-lang",
  "hjkl-theme",
  "memchr",
+ "ropey",
  "tracing",
 ]
 

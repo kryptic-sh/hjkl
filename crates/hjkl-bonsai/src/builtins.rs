@@ -356,7 +356,7 @@ impl crate::predicate::Predicate for LuaMatchPredicate {
             }
         };
         let matched = match re_opt {
-            Some(re) => re.is_match(text),
+            Some(re) => re.is_match(&text),
             // Translation or compile failure — permissive: don't veto.
             None => return !self.negate,
         };
@@ -561,6 +561,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -580,6 +581,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -606,6 +608,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -633,6 +636,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -654,6 +658,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -679,6 +684,7 @@ mod tests {
             pattern_index: 0,
             captures: &[],
             source: b"",
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -730,6 +736,7 @@ mod tests {
             pattern_index: 0,
             captures: &captures,
             source,
+            src: None,
             args: &args,
             capture_names: &["string.special.url".to_string()],
         };
@@ -770,6 +777,7 @@ mod tests {
             pattern_index: 0,
             captures: &captures,
             source,
+            src: None,
             args: &args,
             capture_names: &["string.special.url".to_string()],
         };
@@ -813,6 +821,7 @@ mod tests {
             pattern_index: 0,
             captures: &captures,
             source,
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -856,6 +865,7 @@ mod tests {
             pattern_index: 0,
             captures: &captures,
             source,
+            src: None,
             args: &args,
             capture_names: &[],
         };
@@ -897,6 +907,7 @@ mod tests {
             pattern_index: 0,
             captures: &captures,
             source,
+            src: None,
             args: &args,
             capture_names: &[],
         };

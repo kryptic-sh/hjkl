@@ -15,7 +15,9 @@ use tree_sitter::{
     ParseOptions, Parser, Query, QueryCursor, QueryPredicateArg, StreamingIterator as _,
 };
 
-use crate::predicate::{MatchContext, MatchMetadata, MetaValue, PredicateArg, PredicateRegistry};
+use crate::predicate::{
+    MatchContext, MatchMetadata, MetaValue, PredicateArg, PredicateRegistry, Source,
+};
 use crate::query_sanitize::{
     CaptureSetDirective, extract_capture_set_directives, sanitize_highlights,
 };
@@ -703,6 +705,7 @@ impl Highlighter {
                         pattern_index: pattern_idx,
                         captures: &cap_pairs,
                         source,
+                        src: None,
                         args: &args,
                         capture_names,
                     };
@@ -758,6 +761,7 @@ impl Highlighter {
                             pattern_index: pattern_idx,
                             captures: &cap_pairs,
                             source,
+                            src: None,
                             args: &args,
                             capture_names,
                         };
@@ -1305,6 +1309,418 @@ impl Highlighter {
         merged
     }
 
+    /// Like [`Highlighter::highlight_range`] but reads source text from a
+    /// `ropey::Rope` instead of a contiguous `&[u8]`.
+    ///
+    /// Tree-sitter's `TextProvider` closure receives per-node byte slices
+    /// directly from the rope's B-tree chunks — no full-document `String`
+    /// materialised. The retained parse tree (built via
+    /// [`Highlighter::parse_initial_rope`] / [`Highlighter::parse_incremental_rope`])
+    /// must already reflect `rope` before this is called.
+    ///
+    /// Predicate/directive evaluation goes through `Source::Rope` so
+    /// `capture_text` reads per-capture slices on demand rather than
+    /// indexing into a monolithic buffer.
+    pub fn highlight_range_rope(
+        &mut self,
+        rope: &ropey::Rope,
+        byte_range: Range<usize>,
+    ) -> Vec<HighlightSpan> {
+        let Some(tree) = self.tree.as_ref() else {
+            return Vec::new();
+        };
+
+        let source_len = rope.len_bytes();
+        let total_bytes = source_len;
+        let mut cursor = QueryCursor::new();
+        cursor.set_byte_range(byte_range.clone());
+
+        // Rope-backed text-provider: tree-sitter calls the closure with each
+        // matched node to extract its text for predicate evaluation.
+        // `rope_node_chunks` materialises only the node's byte range — no
+        // full-document copy.
+        let src = Source::Rope(rope);
+        let mut matches =
+            cursor.matches(&self.query, tree.root_node(), |node: tree_sitter::Node| {
+                let s = node.start_byte();
+                let e = node.end_byte().min(total_bytes);
+                if s >= e {
+                    rope_node_chunks(rope, 0, 0)
+                } else {
+                    rope_node_chunks(rope, s, e)
+                }
+            });
+
+        let registry = Arc::clone(&self.registry);
+        let capture_names = &self.capture_names;
+        let pre_extracted = &self.pre_extracted;
+        let pattern_info = &self.pattern_info;
+
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+
+        while let Some(m) = matches.next() {
+            let pattern_idx = m.pattern_index;
+            let info = pattern_info.get(pattern_idx).copied().unwrap_or_default();
+
+            let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> = if info.needs_cap_pairs() {
+                m.captures.iter().map(|c| (c.index, c.node)).collect()
+            } else {
+                Vec::new()
+            };
+
+            if info.has_predicate {
+                let mut skip_match = false;
+                for pred in self.query.general_predicates(pattern_idx) {
+                    let op = pred.operator.as_ref();
+                    if !op.ends_with('?') {
+                        continue;
+                    }
+                    let args: Vec<PredicateArg<'_>> = pred
+                        .args
+                        .iter()
+                        .map(|a| match a {
+                            QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
+                            QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
+                        })
+                        .collect();
+                    let ctx = MatchContext {
+                        pattern_index: pattern_idx,
+                        captures: &cap_pairs,
+                        source: b"",
+                        src: Some(&src),
+                        args: &args,
+                        capture_names,
+                    };
+                    match registry.get_predicate(op) {
+                        Some(p) => {
+                            if !p.eval(&ctx) {
+                                skip_match = true;
+                                break;
+                            }
+                        }
+                        None => warn_unknown_predicate_once(op),
+                    }
+                }
+                if skip_match {
+                    continue;
+                }
+            }
+
+            let meta = if info.needs_meta() {
+                let mut meta = MatchMetadata::default();
+                if info.has_property_setting {
+                    for prop in self.query.property_settings(pattern_idx) {
+                        let key = prop.key.as_ref();
+                        let val = prop.value.as_deref();
+                        let value = match val {
+                            Some(v) => MetaValue::Str(v.to_string()),
+                            None => MetaValue::Bool(true),
+                        };
+                        if let Some(cap_id) = prop.capture_id {
+                            meta.capture_mut(cap_id as u32)
+                                .insert(key.to_string(), value);
+                        } else {
+                            meta.pattern.insert(key.to_string(), value);
+                        }
+                    }
+                }
+                if info.has_directive {
+                    for pred in self.query.general_predicates(pattern_idx) {
+                        let op = pred.operator.as_ref();
+                        if !op.ends_with('!') {
+                            continue;
+                        }
+                        let args: Vec<PredicateArg<'_>> = pred
+                            .args
+                            .iter()
+                            .map(|a| match a {
+                                QueryPredicateArg::Capture(idx) => PredicateArg::Capture(*idx),
+                                QueryPredicateArg::String(s) => PredicateArg::Str(s.as_ref()),
+                            })
+                            .collect();
+                        let ctx = MatchContext {
+                            pattern_index: pattern_idx,
+                            captures: &cap_pairs,
+                            source: b"",
+                            src: Some(&src),
+                            args: &args,
+                            capture_names,
+                        };
+                        if let Some(d) = registry.get_directive(op) {
+                            d.apply(&ctx, &mut meta);
+                        } else {
+                            warn_unknown_predicate_once(op);
+                        }
+                    }
+                }
+                if info.has_pre_extracted {
+                    for pe in pre_extracted
+                        .iter()
+                        .filter(|d| d.pattern_index == pattern_idx)
+                    {
+                        let cap_idx = capture_names
+                            .iter()
+                            .position(|n| n == &pe.capture_name)
+                            .map(|i| i as u32);
+                        if let Some(cap_idx) = cap_idx {
+                            let value = match &pe.value {
+                                Some(v) => MetaValue::Str(v.clone()),
+                                None => MetaValue::Bool(true),
+                            };
+                            meta.capture_mut(cap_idx).insert(pe.key.clone(), value);
+                        }
+                    }
+                }
+                Some(meta)
+            } else {
+                None
+            };
+
+            for capture in m.captures {
+                let node = capture.node;
+                let start = node.start_byte();
+                let end = node.end_byte();
+                if start >= end || end > source_len {
+                    continue;
+                }
+                let capture_name = capture_names[capture.index as usize].clone();
+
+                let span_meta: HashMap<String, MetaValue> = match meta.as_ref() {
+                    Some(meta)
+                        if !meta.pattern.is_empty()
+                            || meta.per_capture.contains_key(&capture.index) =>
+                    {
+                        let mut m = meta.pattern.clone();
+                        if let Some(cap_meta) = meta.per_capture.get(&capture.index) {
+                            for (k, v) in cap_meta {
+                                m.insert(k.clone(), v.clone());
+                            }
+                        }
+                        m
+                    }
+                    _ => HashMap::new(),
+                };
+
+                spans.push(HighlightSpan {
+                    byte_range: start..end,
+                    capture: capture_name,
+                    metadata: span_meta,
+                });
+            }
+        }
+
+        sort_by_start_then_depth(&mut spans);
+        spans
+    }
+
+    /// Like [`Highlighter::highlight_range_with_injections`] but reads source
+    /// text from a `ropey::Rope`. No full-document `String` is allocated for
+    /// the parent language; injected language slices are materialised
+    /// per-injection (typically ≪ 100 KB each).
+    ///
+    /// The caller must drive `parse_initial_rope` / `parse_incremental_rope`
+    /// before calling this method.
+    pub fn highlight_range_with_injections_rope<F>(
+        &mut self,
+        rope: &ropey::Rope,
+        byte_range: Range<usize>,
+        mut resolve: F,
+    ) -> Vec<HighlightSpan>
+    where
+        F: FnMut(&str) -> Option<Arc<Grammar>>,
+    {
+        let t_parent = std::time::Instant::now();
+        let parent_spans = self.highlight_range_rope(rope, byte_range.clone());
+        let parent_us = t_parent.elapsed().as_micros();
+        let parent_count = parent_spans.len();
+        let t_inj = std::time::Instant::now();
+
+        let Some(inj_query) = self.injection_query.as_ref() else {
+            return parent_spans;
+        };
+
+        let lang_idx = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_LANG_CAPTURE)
+            .map(|i| i as u32);
+        let Some(content_idx) = inj_query
+            .capture_names()
+            .iter()
+            .position(|n| *n == INJ_CONTENT_CAPTURE)
+        else {
+            return parent_spans;
+        };
+        let content_idx = content_idx as u32;
+
+        let Some(tree) = self.tree.as_ref() else {
+            return parent_spans;
+        };
+
+        let source_len = rope.len_bytes();
+
+        // Walk injection matches restricted to the viewport byte range.
+        // Tree-sitter needs source text to evaluate injection predicates;
+        // materialise the full rope as bytes only when injections exist and
+        // only once per call. For most files (no injections in viewport) we
+        // return parent_spans early without allocating.
+        let mut injections: Vec<(String, Range<usize>)> = Vec::new();
+        {
+            let mut cursor = QueryCursor::new();
+            cursor.set_byte_range(byte_range.clone());
+            let total_bytes = source_len;
+            let mut matches =
+                cursor.matches(inj_query, tree.root_node(), |node: tree_sitter::Node| {
+                    let s = node.start_byte();
+                    let e = node.end_byte().min(total_bytes);
+                    if s >= e {
+                        rope_node_chunks(rope, 0, 0)
+                    } else {
+                        rope_node_chunks(rope, s, e)
+                    }
+                });
+
+            while let Some(m) = matches.next() {
+                let mut lang_name: Option<String> = None;
+                let mut content_range: Option<Range<usize>> = None;
+
+                for cap in m.captures {
+                    if Some(cap.index) == lang_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source_len {
+                            // Language name is always short (≤ 64 bytes per spec).
+                            let name = rope.byte_slice(s..e).to_string();
+                            let name = name.trim().to_string();
+                            lang_name = Some(name);
+                        }
+                    } else if cap.index == content_idx {
+                        let s = cap.node.start_byte();
+                        let e = cap.node.end_byte();
+                        if s < e && e <= source_len {
+                            content_range = Some(s..e);
+                        }
+                    }
+                }
+
+                if lang_name.is_none() {
+                    for prop in inj_query.property_settings(m.pattern_index) {
+                        if prop.key.as_ref() == INJ_LANG_CAPTURE
+                            && let Some(v) = prop.value.as_deref()
+                        {
+                            lang_name = Some(v.trim().to_string());
+                            break;
+                        }
+                    }
+                }
+
+                if let (Some(name), Some(range)) = (lang_name, content_range) {
+                    if range.start >= byte_range.end || range.end <= byte_range.start {
+                        continue;
+                    }
+                    if !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    {
+                        injections.push((name, range));
+                    }
+                }
+            }
+        }
+
+        if injections.is_empty() {
+            return parent_spans;
+        }
+
+        let cache_langs: Vec<String> = injections.iter().map(|(lang, _)| lang.clone()).collect();
+        let mut cache_hashes: Vec<u64> = Vec::with_capacity(injections.len());
+
+        let mut child_spans: Vec<HighlightSpan> = Vec::new();
+        let mut injected_ranges: Vec<Range<usize>> = Vec::new();
+
+        for (lang_name, content_range) in &injections {
+            // Materialise the injection slice. Injections are small (≤ one
+            // function body), so per-injection Vec<u8> is cheap.
+            let slice: Vec<u8> = rope
+                .byte_slice(content_range.clone())
+                .chunks()
+                .flat_map(|c| c.as_bytes().iter().copied())
+                .collect();
+            let content_hash = hash_bytes(&slice);
+            let offset = content_range.start;
+            cache_hashes.push(content_hash);
+
+            let cached_spans_opt: Option<Vec<HighlightSpan>> =
+                self.child_cache.get_spans(content_hash).cloned();
+            let spans = if let Some(s) = cached_spans_opt {
+                s
+            } else if let Some(cached) = self.child_cache.get_highlighter(lang_name) {
+                cached.highlighter.parse_initial(&slice);
+                cached.source_hash = content_hash;
+                let s = cached.highlighter.highlight_range(&slice, 0..slice.len());
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
+            } else {
+                let Some(child_grammar) = resolve(lang_name) else {
+                    continue;
+                };
+                let Ok(mut new_hl) = Highlighter::new(child_grammar) else {
+                    continue;
+                };
+                new_hl.parse_initial(&slice);
+                let s = new_hl.highlight_range(&slice, 0..slice.len());
+                self.child_cache
+                    .insert_highlighter(lang_name.clone(), new_hl, content_hash);
+                self.child_cache.insert_spans(content_hash, s.clone());
+                s
+            };
+
+            for span in spans {
+                let abs_start = span.byte_range.start + offset;
+                let abs_end = span.byte_range.end + offset;
+                let clipped_start = abs_start.max(byte_range.start);
+                let clipped_end = abs_end.min(byte_range.end);
+                if clipped_start >= clipped_end {
+                    continue;
+                }
+                child_spans.push(HighlightSpan {
+                    byte_range: clipped_start..clipped_end,
+                    capture: span.capture,
+                    metadata: span.metadata,
+                });
+            }
+            injected_ranges.push(content_range.clone());
+        }
+
+        self.child_cache.evict_stale(&cache_langs, &cache_hashes);
+
+        let mut merged: Vec<HighlightSpan> = parent_spans
+            .into_iter()
+            .filter(|span| {
+                !injected_ranges
+                    .iter()
+                    .any(|ir| span.byte_range.start >= ir.start && span.byte_range.end <= ir.end)
+            })
+            .collect();
+
+        let child_count = child_spans.len();
+        merged.extend(child_spans);
+        sort_by_start_then_depth(&mut merged);
+        let inj_us = t_inj.elapsed().as_micros();
+        tracing::debug!(
+            target: "hjkl::profile",
+            parent_us,
+            inj_us,
+            parent_count,
+            inj_count = injections.len(),
+            child_count,
+            "highlight_range_with_injections_rope"
+        );
+        merged
+    }
+
     /// Parse `source` and harvest ERROR / MISSING nodes as `ParseError`s.
     pub fn parse_errors(&mut self, source: &[u8]) -> Vec<ParseError> {
         if self.tree.is_none() {
@@ -1313,6 +1729,31 @@ impl Highlighter {
             return Vec::new();
         }
         self.parse_errors_range(source, 0..source.len())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rope text-provider helper
+// ---------------------------------------------------------------------------
+
+/// Build a byte-slice iterator for a node's range from a `ropey::Rope`.
+///
+/// Called inside the `QueryCursor::matches` closure for rope-based highlight
+/// methods. Returns a `Vec<u8>` iterator for the node bytes. Allocating a
+/// small Vec per node is fine — nodes are typically identifiers / keywords
+/// (a few to a few hundred bytes), and the query cursor calls this at most
+/// once per captured node per match.
+fn rope_node_chunks(rope: &ropey::Rope, start: usize, end: usize) -> impl Iterator<Item = Vec<u8>> {
+    if start >= end {
+        // Empty range — return an empty iterator. We box it to unify the type.
+        Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Vec<u8>>>
+    } else {
+        let bytes: Vec<u8> = rope
+            .byte_slice(start..end)
+            .chunks()
+            .flat_map(|c| c.as_bytes().iter().copied())
+            .collect();
+        Box::new(std::iter::once(bytes))
     }
 }
 
@@ -1778,6 +2219,7 @@ mod tests {
                     pattern_index: m.pattern_index,
                     captures: &cap_pairs,
                     source,
+                    src: None,
                     args: &args,
                     capture_names: &capture_names,
                 };
@@ -1866,6 +2308,7 @@ mod tests {
                     pattern_index: m.pattern_index,
                     captures: &cap_pairs,
                     source,
+                    src: None,
                     args: &args,
                     capture_names: &capture_names,
                 };
@@ -1888,6 +2331,56 @@ mod tests {
         assert!(
             !found_tag,
             "all matches should be dropped by always-false predicate"
+        );
+    }
+
+    // ── Rope highlight variants ───────────────────────────────────────────────
+
+    /// Smoke: `highlight_range_rope` produces identical spans to the bytes
+    /// variant on a small C snippet.
+    #[test]
+    #[ignore = "network + compiler"]
+    fn highlight_range_rope_matches_bytes_variant() {
+        let (g, _tmp) = c_grammar_loader();
+        let source = b"int main() { return 0; }";
+        let rope = ropey::Rope::from_str(std::str::from_utf8(source).unwrap());
+
+        let mut h_bytes = Highlighter::new(g.clone()).unwrap();
+        h_bytes.parse_initial(source);
+        let spans_bytes = h_bytes.highlight_range(source, 0..source.len());
+
+        let mut h_rope = Highlighter::new(g).unwrap();
+        h_rope.parse_initial_rope(&rope);
+        let spans_rope = h_rope.highlight_range_rope(&rope, 0..rope.len_bytes());
+
+        assert_eq!(
+            spans_bytes, spans_rope,
+            "rope variant must produce identical spans to bytes variant"
+        );
+    }
+
+    /// Smoke: `highlight_range_with_injections_rope` produces identical spans
+    /// to the bytes variant on a small C snippet (no injections in C).
+    #[test]
+    #[ignore = "network + compiler"]
+    fn highlight_range_with_injections_rope_matches_bytes_variant() {
+        let (g, _tmp) = c_grammar_loader();
+        let source = b"int x = 42; /* TODO: fix */";
+        let rope = ropey::Rope::from_str(std::str::from_utf8(source).unwrap());
+
+        let mut h_bytes = Highlighter::new(g.clone()).unwrap();
+        h_bytes.parse_initial(source);
+        let spans_bytes =
+            h_bytes.highlight_range_with_injections(source, 0..source.len(), |_| None);
+
+        let mut h_rope = Highlighter::new(g).unwrap();
+        h_rope.parse_initial_rope(&rope);
+        let spans_rope =
+            h_rope.highlight_range_with_injections_rope(&rope, 0..rope.len_bytes(), |_| None);
+
+        assert_eq!(
+            spans_bytes, spans_rope,
+            "rope injection variant must produce identical spans to bytes variant"
         );
     }
 }

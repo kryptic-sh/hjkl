@@ -7,7 +7,73 @@
 //!
 //! [`Highlighter`]: crate::Highlighter
 
+use std::borrow::Cow;
 use std::collections::HashMap;
+
+// ---------------------------------------------------------------------------
+// Source — rope-or-bytes text provider
+// ---------------------------------------------------------------------------
+
+/// Polymorphic source for a query match. Callers that already hold the full
+/// document as a contiguous byte slice use `Bytes`; callers that hold a
+/// `ropey::Rope` (the viewport renderer) use `Rope` and avoid materialising
+/// the whole document as a `String`.
+pub enum Source<'a> {
+    /// Contiguous byte slice — zero-copy borrow path.
+    Bytes(&'a [u8]),
+    /// Rope snapshot — per-capture-slice allocation path (small, bounded by
+    /// capture node size, typically a few hundred bytes).
+    Rope(&'a ropey::Rope),
+}
+
+impl<'a> Source<'a> {
+    /// Total byte length of the source.
+    pub fn len_bytes(&self) -> usize {
+        match self {
+            Source::Bytes(b) => b.len(),
+            Source::Rope(r) => r.len_bytes(),
+        }
+    }
+
+    /// Extract the UTF-8 text at `start..end`. Returns `None` when the range
+    /// is out-of-bounds or the bytes are not valid UTF-8.
+    pub fn text_slice(&self, start: usize, end: usize) -> Option<Cow<'a, str>> {
+        match self {
+            Source::Bytes(b) => {
+                if end > b.len() || start > end {
+                    return None;
+                }
+                std::str::from_utf8(&b[start..end]).ok().map(Cow::Borrowed)
+            }
+            Source::Rope(r) => {
+                if end > r.len_bytes() || start > end {
+                    return None;
+                }
+                Some(Cow::Owned(r.byte_slice(start..end).to_string()))
+            }
+        }
+    }
+
+    /// Extract the raw bytes at `start..end`. Returns `None` when
+    /// out-of-bounds.
+    pub fn bytes_slice(&self, start: usize, end: usize) -> Option<Cow<'a, [u8]>> {
+        match self {
+            Source::Bytes(b) => {
+                if end > b.len() || start > end {
+                    return None;
+                }
+                Some(Cow::Borrowed(&b[start..end]))
+            }
+            Source::Rope(r) => {
+                if end > r.len_bytes() || start > end {
+                    return None;
+                }
+                let s = r.byte_slice(start..end).to_string();
+                Some(Cow::Owned(s.into_bytes()))
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Value types
@@ -66,8 +132,15 @@ pub struct MatchContext<'a> {
     pub pattern_index: usize,
     /// All captures in this match: `(capture_index, Node)` pairs.
     pub captures: &'a [(u32, tree_sitter::Node<'a>)],
-    /// Raw source bytes.
+    /// Raw source bytes — kept for API compatibility with existing predicate
+    /// impls and tests that construct `MatchContext` directly with `source`.
+    /// New code should access text via [`MatchContext::capture_text`] which
+    /// reads from `src` when available, falling back to `source`.
     pub source: &'a [u8],
+    /// Polymorphic source. When `None` the legacy `source: &[u8]` field is
+    /// used instead, keeping all existing tests and call sites working without
+    /// changes.
+    pub src: Option<&'a Source<'a>>,
     /// Arguments from the predicate/directive step (excluding the operator name).
     pub args: &'a [PredicateArg<'a>],
     /// All capture names from the compiled query (indexed by capture index).
@@ -75,16 +148,27 @@ pub struct MatchContext<'a> {
 }
 
 impl<'a> MatchContext<'a> {
-    /// Return the UTF-8 text of the first node that has the given capture index,
-    /// or `None` if the capture is absent or the slice is not valid UTF-8.
-    pub fn capture_text(&self, capture_idx: u32) -> Option<&'a str> {
+    /// Return the UTF-8 text of the first node that has the given capture
+    /// index, or `None` if the capture is absent or the slice is not valid
+    /// UTF-8.
+    ///
+    /// When the context was built with a `Source::Rope`, this returns
+    /// `Cow::Owned`; otherwise `Cow::Borrowed` (zero-copy from the `&[u8]`
+    /// slice).
+    pub fn capture_text(&self, capture_idx: u32) -> Option<Cow<'_, str>> {
         let node = self.first_capture(capture_idx)?;
         let start = node.start_byte();
         let end = node.end_byte();
-        if end > self.source.len() || start > end {
-            return None;
+        if let Some(src) = self.src {
+            src.text_slice(start, end)
+        } else {
+            if end > self.source.len() || start > end {
+                return None;
+            }
+            std::str::from_utf8(&self.source[start..end])
+                .ok()
+                .map(Cow::Borrowed)
         }
-        std::str::from_utf8(&self.source[start..end]).ok()
     }
 
     /// Return the first [`tree_sitter::Node`] that has the given capture index.

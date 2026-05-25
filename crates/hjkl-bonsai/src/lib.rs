@@ -45,7 +45,7 @@ pub use highlighter::parse_counter;
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use predicate::{
     Directive, MatchContext, MatchMetadata, MetaValue, Predicate, PredicateArg, PredicateRegistry,
-    directive_fn, predicate_fn,
+    Source, directive_fn, predicate_fn,
 };
 pub use theme::{DotFallbackTheme, StyleSpec, Theme};
 pub use tree_sitter::{InputEdit, Point};

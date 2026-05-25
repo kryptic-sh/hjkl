@@ -598,21 +598,14 @@ impl SyntaxLayer {
             client.invalidate_cache();
         }
 
-        // Get a rope snapshot for streaming parse (O(1) Arc-clone from
-        // hjkl_buffer::Buffer; falls back to building from content_joined
-        // for non-rope backends). Used by parse_initial_rope /
-        // parse_incremental_rope so tree-sitter reads bytes chunk-by-chunk
-        // without materializing the whole document as a contiguous String.
+        // Get a rope snapshot — O(1) Arc-clone from hjkl_buffer::Buffer.
+        // All downstream consumers (parse, highlight, row_starts, diag signs)
+        // now read directly from the rope: no full-document String allocation.
         let rope = buffer.rope();
 
-        // Build source bytes — still needed for highlight_range_with_injections
-        // (tree-sitter's QueryCursor reads node byte ranges from &[u8]).
-        // content_joined() is cached per dirty_gen so multiple per-tick
-        // consumers share one Arc<String> allocation.
-        let source = buffer.content_joined();
-        let bytes = source.as_bytes();
-
         // Get or build row_starts, cached per dirty_gen.
+        // Scan newlines chunk-by-chunk from the rope so we never materialise
+        // the full document as a contiguous byte slice.
         let row_starts: Arc<Vec<usize>> = if client
             .cache_row_starts
             .as_ref()
@@ -620,15 +613,16 @@ impl SyntaxLayer {
         {
             Arc::clone(&client.cache_row_starts.as_ref().unwrap().1)
         } else {
-            // SIMD-vectorised newline scan via memchr — measurably
-            // faster than a per-byte branch loop on multi-MB buffers,
-            // which is what this is on huge files (3 MB at 1.86 M
-            // rows). Pre-sized to row_count + 1 to avoid Vec realloc
-            // churn as we push each newline position.
+            // SIMD-vectorised newline scan via memchr — measurably faster than
+            // a per-byte loop. Pre-sized to row_count + 1 to avoid realloc churn.
             let mut rs: Vec<usize> = Vec::with_capacity(row_count + 1);
             rs.push(0);
-            for nl_pos in memchr::memchr_iter(b'\n', bytes) {
-                rs.push(nl_pos + 1);
+            let mut chunk_pos = 0usize;
+            for chunk in rope.chunks() {
+                for nl in memchr::memchr_iter(b'\n', chunk.as_bytes()) {
+                    rs.push(chunk_pos + nl + 1);
+                }
+                chunk_pos += chunk.len();
             }
             let arc = Arc::new(rs);
             client.cache_row_starts = Some((dg, Arc::clone(&arc)));
@@ -674,7 +668,7 @@ impl SyntaxLayer {
             // Case A: empty cache — walk full range.
             client.cache_spans = walk_rows(
                 highlighter,
-                bytes,
+                &rope,
                 &row_starts,
                 row_count,
                 vp_top,
@@ -691,7 +685,7 @@ impl SyntaxLayer {
                 // Disjoint — just rebuild the whole viewport.
                 client.cache_spans = walk_rows(
                     highlighter,
-                    bytes,
+                    &rope,
                     &row_starts,
                     row_count,
                     vp_top,
@@ -705,7 +699,7 @@ impl SyntaxLayer {
                 if vp_top < client.cache_rows.start {
                     let new_rows = walk_rows(
                         highlighter,
-                        bytes,
+                        &rope,
                         &row_starts,
                         row_count,
                         vp_top,
@@ -722,7 +716,7 @@ impl SyntaxLayer {
                 if vp_end > client.cache_rows.end {
                     let new_rows = walk_rows(
                         highlighter,
-                        bytes,
+                        &rope,
                         &row_starts,
                         row_count,
                         client.cache_rows.end,
@@ -751,7 +745,7 @@ impl SyntaxLayer {
         {
             client.cache_signs.as_ref().unwrap().3.clone()
         } else {
-            let s = collect_diag_signs_range(highlighter, bytes, &row_starts, vp_top, vp_end);
+            let s = collect_diag_signs_range(highlighter, &rope, &row_starts, vp_top, vp_end);
             client.cache_signs = Some((dg, vp_top, vp_end, s.clone()));
             s
         };
@@ -825,7 +819,7 @@ impl SyntaxLayer {
 #[allow(clippy::too_many_arguments)]
 fn walk_rows(
     highlighter: &mut Highlighter,
-    bytes: &[u8],
+    rope: &ropey::Rope,
     row_starts: &[usize],
     row_count: usize,
     seg_start: usize,
@@ -833,24 +827,24 @@ fn walk_rows(
     theme: &dyn Theme,
     directory: &Arc<LanguageDirectory>,
 ) -> Vec<Vec<(usize, usize, StyleSpec)>> {
-    let bytes_len = bytes.len();
-    let byte_start = row_starts.get(seg_start).copied().unwrap_or(bytes_len);
+    let rope_len = rope.len_bytes();
+    let byte_start = row_starts.get(seg_start).copied().unwrap_or(rope_len);
     let byte_end = row_starts
         .get(seg_end)
         .copied()
-        .unwrap_or(bytes_len)
-        .min(bytes_len)
+        .unwrap_or(rope_len)
+        .min(rope_len)
         .max(byte_start);
 
     let mut flat_spans =
-        highlighter.highlight_range_with_injections(bytes, byte_start..byte_end, |name| {
+        highlighter.highlight_range_with_injections_rope(rope, byte_start..byte_end, |name| {
             directory.by_name(name)
         });
 
     let marker_pass = CommentMarkerPass::new();
-    marker_pass.apply(&mut flat_spans, bytes);
+    marker_pass.apply_rope(&mut flat_spans, rope);
     let hex_color_pass = HexColorPass::new();
-    hex_color_pass.apply_range(&mut flat_spans, bytes, byte_start..byte_end);
+    hex_color_pass.apply_range_rope(&mut flat_spans, rope, byte_start..byte_end);
 
     // Bucket spans into ONLY the viewport row range. The prior version
     // called `build_by_row(..., row_count, ...)` and sliced the result,
@@ -858,7 +852,7 @@ fn walk_rows(
     // file) just to throw away all but ~50 of them — that single line
     // was ~24 % of per-keystroke CPU during a paste burst.
     let _ = row_count; // kept in signature for the public build_by_row tests
-    build_by_row_range(&flat_spans, bytes, row_starts, seg_start..seg_end, theme)
+    build_by_row_range(&flat_spans, rope_len, row_starts, seg_start..seg_end, theme)
 }
 
 /// Viewport-bounded variant of [`build_by_row`]. Allocates exactly
@@ -868,7 +862,7 @@ fn walk_rows(
 /// to the viewport (so row `row_range.start` lands at index 0).
 fn build_by_row_range(
     flat_spans: &[hjkl_bonsai::HighlightSpan],
-    bytes: &[u8],
+    source_len: usize,
     row_starts: &[usize],
     row_range: Range<usize>,
     theme: &dyn Theme,
@@ -921,7 +915,7 @@ fn build_by_row_range(
             let row_byte_end = row_starts
                 .get(row + 1)
                 .map(|&s| s.saturating_sub(1))
-                .unwrap_or(bytes.len());
+                .unwrap_or(source_len);
 
             if row_byte_start >= span_end {
                 break;
@@ -1023,20 +1017,31 @@ pub fn build_by_row(
 
 fn collect_diag_signs_range(
     h: &mut Highlighter,
-    bytes: &[u8],
+    rope: &ropey::Rope,
     row_starts: &[usize],
     vp_top: usize,
     vp_end: usize,
 ) -> Vec<DiagSign> {
-    let bytes_len = bytes.len();
-    let byte_start = row_starts.get(vp_top).copied().unwrap_or(bytes_len);
-    let byte_end = row_starts.get(vp_end).copied().unwrap_or(bytes_len);
-    let errors = h.parse_errors_range(bytes, byte_start..byte_end);
+    let rope_len = rope.len_bytes();
+    let byte_start = row_starts.get(vp_top).copied().unwrap_or(rope_len);
+    let byte_end = row_starts.get(vp_end).copied().unwrap_or(rope_len);
+    // parse_errors_range only needs the source bytes for harvesting error
+    // node snippets in the message string. Materialise just the viewport
+    // window (typically ≪ 100 KB) rather than the whole document.
+    let window: String = if byte_start < byte_end && byte_end <= rope_len {
+        rope.byte_slice(byte_start..byte_end).to_string()
+    } else {
+        String::new()
+    };
+    // Translate byte range into window-relative for parse_errors_range.
+    let errors = h.parse_errors_range(window.as_bytes(), 0..(byte_end - byte_start));
     let mut signs: Vec<DiagSign> = Vec::new();
     let mut last_row: Option<usize> = None;
     for err in &errors {
+        // Translate window-relative back to absolute.
+        let abs_start = err.byte_range.start + byte_start;
         let r = row_starts
-            .partition_point(|&rs| rs <= err.byte_range.start)
+            .partition_point(|&rs| rs <= abs_start)
             .saturating_sub(1);
         if last_row == Some(r) {
             continue;

@@ -321,6 +321,182 @@ impl CommentMarkerPass {
         }
         active
     }
+
+    /// Like [`apply`](CommentMarkerPass::apply) but reads source text from a
+    /// `ropey::Rope`. Only the bytes required (a window around the comments)
+    /// are materialised — no full-document `String` allocation.
+    ///
+    /// The algorithm is identical to `apply`; the `bytes` parameter is replaced
+    /// by a window slice extracted from the rope, with absolute byte offsets
+    /// translated into window-relative ones.
+    pub fn apply_rope(&self, spans: &mut Vec<HighlightSpan>, rope: &ropey::Rope) {
+        // Collect and deduplicate comment spans (same logic as `apply`).
+        let mut comments: Vec<Range<usize>> = spans
+            .iter()
+            .filter(|s| s.capture() == "comment" || s.capture().starts_with("comment."))
+            .map(|s| s.byte_range.clone())
+            .collect();
+        comments.sort_by_key(|r| r.start);
+        comments.dedup_by(|b, a| {
+            if b.start < a.end {
+                a.end = a.end.max(b.end);
+                true
+            } else {
+                false
+            }
+        });
+
+        if comments.is_empty() {
+            return;
+        }
+
+        const CAP: usize = 500;
+        let first_start = comments[0].start;
+        let last_end = comments[comments.len() - 1].end;
+        let rope_len = rope.len_bytes();
+
+        // Materialise a window: from up to CAP lines before the first comment
+        // (for the seed scan) through the last comment's end byte.
+        // We use a fixed byte cap of CAP * 200 (≈ 100 KB) as a safe upper bound
+        // instead of scanning newlines from the rope, which avoids a second pass.
+        let window_start = first_start.saturating_sub(CAP * 200).min(first_start);
+        let window_end = last_end.min(rope_len);
+
+        let window_str: String = rope.byte_slice(window_start..window_end).to_string();
+        let window: &[u8] = window_str.as_bytes();
+
+        // Translate an absolute byte index into a window-relative index.
+        // Returns `None` when the index falls outside the window.
+        let to_win = |abs: usize| -> Option<usize> {
+            if abs < window_start || abs > window_end {
+                None
+            } else {
+                Some(abs - window_start)
+            }
+        };
+
+        // Seed the inherited capture by scanning backward from the first comment.
+        let win_first = to_win(first_start).unwrap_or(0);
+        let mut active: Option<&MarkerWord> = if self.inheritance && win_first > 0 {
+            self.seed_active(window, win_first)
+        } else {
+            None
+        };
+
+        let mut extra: Vec<HighlightSpan> = Vec::new();
+        let mut prev_end: Option<usize> = None;
+
+        for comment_range in &comments {
+            let consecutive = if let Some(pe) = prev_end {
+                if self.inheritance {
+                    // is_consecutive reads the gap bytes — translate to window.
+                    let win_pe = to_win(pe).unwrap_or(0);
+                    let win_ns = to_win(comment_range.start).unwrap_or(0);
+                    if win_pe <= win_ns {
+                        is_consecutive(window, win_pe, win_ns)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !consecutive {
+                active = None;
+            }
+
+            let win_cr_start = match to_win(comment_range.start) {
+                Some(w) => w,
+                None => {
+                    prev_end = Some(comment_range.end);
+                    continue;
+                }
+            };
+            let win_cr_end = to_win(comment_range.end)
+                .unwrap_or(window.len())
+                .min(window.len());
+
+            let body_win_start = delimiter_skip(window, win_cr_start);
+            let body_win_end = win_cr_end;
+
+            if body_win_start >= body_win_end {
+                prev_end = Some(comment_range.end);
+                continue;
+            }
+
+            // scan_markers works in window-relative coords; translate back.
+            let found = scan_markers(window, body_win_start, body_win_end, &self.markers);
+
+            let body_start = comment_range.start + (body_win_start - win_cr_start);
+            let body_end = comment_range.end;
+
+            if found.is_empty() {
+                if let Some(mw) = active {
+                    extra.push(HighlightSpan {
+                        byte_range: body_start..body_end,
+                        capture: mw.tail_capture.to_string(),
+                        metadata: Default::default(),
+                    });
+                }
+                prev_end = Some(comment_range.end);
+                continue;
+            }
+
+            let mut cursor = body_win_start;
+            for m in &found {
+                // Translate window-relative marker positions to absolute.
+                let abs_word_start = window_start + m.word_start;
+                let abs_word_end = window_start + m.word_end;
+                let label_start = abs_word_start.saturating_sub(1).max(body_start);
+                let win_cursor_abs = window_start + cursor;
+                if let Some(mw) = active
+                    && win_cursor_abs < label_start
+                {
+                    extra.push(HighlightSpan {
+                        byte_range: win_cursor_abs..label_start,
+                        capture: mw.tail_capture.to_string(),
+                        metadata: Default::default(),
+                    });
+                }
+                extra.push(HighlightSpan {
+                    byte_range: label_start..abs_word_end,
+                    capture: m.marker.label_capture.to_string(),
+                    metadata: Default::default(),
+                });
+                let trail_end = if abs_word_end < body_end {
+                    abs_word_end + 1
+                } else {
+                    abs_word_end
+                };
+                if trail_end > abs_word_end {
+                    extra.push(HighlightSpan {
+                        byte_range: abs_word_end..trail_end,
+                        capture: m.marker.label_capture.to_string(),
+                        metadata: Default::default(),
+                    });
+                }
+                cursor = m.word_end + (trail_end - abs_word_end);
+                active = Some(m.marker);
+            }
+            let win_cursor_abs = window_start + cursor;
+            if let Some(mw) = active
+                && win_cursor_abs < body_end
+            {
+                extra.push(HighlightSpan {
+                    byte_range: win_cursor_abs..body_end,
+                    capture: mw.tail_capture.to_string(),
+                    metadata: Default::default(),
+                });
+            }
+
+            prev_end = Some(comment_range.end);
+        }
+
+        spans.extend(extra);
+    }
 }
 
 impl Default for CommentMarkerPass {
@@ -741,5 +917,53 @@ mod tests {
     fn is_consecutive_non_whitespace_between() {
         let bytes = b"// a\nlet x=1;\n// b";
         assert!(!is_consecutive(bytes, 4, 14));
+    }
+
+    /// Smoke: `apply_rope` produces at least the same number of marker spans
+    /// as `apply` on a small TODO comment — no grammar required (we fabricate
+    /// the comment span directly).
+    #[test]
+    fn apply_rope_todo_emits_marker_spans() {
+        let src = "// TODO: refactor";
+        let bytes = src.as_bytes();
+        let rope = ropey::Rope::from_str(src);
+
+        // Fabricate a comment span covering the full string.
+        let comment_span = HighlightSpan {
+            byte_range: 0..bytes.len(),
+            capture: "comment".to_string(),
+            metadata: Default::default(),
+        };
+
+        let pass = CommentMarkerPass::new();
+
+        let mut spans_bytes = vec![comment_span.clone()];
+        pass.apply(&mut spans_bytes, bytes);
+
+        let mut spans_rope = vec![comment_span];
+        pass.apply_rope(&mut spans_rope, &rope);
+
+        let marker_bytes: Vec<_> = spans_bytes
+            .iter()
+            .filter(|s| s.capture().starts_with("comment.marker"))
+            .collect();
+        let marker_rope: Vec<_> = spans_rope
+            .iter()
+            .filter(|s| s.capture().starts_with("comment.marker"))
+            .collect();
+
+        assert!(
+            !marker_bytes.is_empty(),
+            "bytes variant should find markers: {spans_bytes:#?}"
+        );
+        assert_eq!(
+            marker_bytes.len(),
+            marker_rope.len(),
+            "rope and bytes variants must emit same number of marker spans"
+        );
+        for (b, r) in marker_bytes.iter().zip(marker_rope.iter()) {
+            assert_eq!(b.capture, r.capture, "capture name mismatch");
+            assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
+        }
     }
 }
