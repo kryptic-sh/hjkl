@@ -319,9 +319,7 @@ fn dispatch(
             let row = (row_1based - 1).max(0) as usize;
             // For byte-col → char-col: walk the line's chars (ASCII = identity).
             let char_col = {
-                let lines = editor.buffer().lines();
-                if let Some(line) = lines.get(row) {
-                    // Count chars up to the byte offset.
+                if let Some(line) = editor.buffer().line(row) {
                     let byte_offset = (col as usize).min(line.len());
                     line[..byte_offset].chars().count()
                 } else {
@@ -337,8 +335,7 @@ fn dispatch(
             let (row, char_col) = editor.cursor();
             // Convert char-col to byte-col.
             let byte_col = {
-                let lines = editor.buffer().lines();
-                if let Some(line) = lines.get(row) {
+                if let Some(line) = editor.buffer().line(row) {
                     line.chars()
                         .take(char_col)
                         .map(|c| c.len_utf8())
@@ -517,14 +514,14 @@ fn write_buffer(
     match path {
         None => Err("E32: No file name".to_string()),
         Some(p) => {
-            let lines = editor.buffer().lines();
-            let content = if lines.is_empty() {
-                String::new()
-            } else {
-                let mut s = lines.join("\n");
-                s.push('\n');
-                s
-            };
+            // `content_joined()` is a per-`dirty_gen` cached `Arc<String>`
+            // shared with the syntax/LSP/dirty-check paths.
+            let joined = editor.buffer().content_joined();
+            let mut content = String::with_capacity(joined.len() + 1);
+            content.push_str(&joined);
+            if !joined.is_empty() {
+                content.push('\n');
+            }
             std::fs::write(p, &content).map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
     }

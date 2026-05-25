@@ -159,10 +159,15 @@ impl TextFieldEditor {
         self.editor = Editor::new(buffer, host, Options::default());
         // Land cursor at end-of-text so `enter_insert_at_end` puts the
         // caret right after the last character.
-        let lines = self.editor.buffer().lines();
-        if let Some(last) = lines.last() {
-            let row = lines.len().saturating_sub(1);
-            let col = last.chars().count();
+        let n = self.editor.buffer().row_count();
+        if n > 0 {
+            let row = n - 1;
+            let col = self
+                .editor
+                .buffer()
+                .line(row)
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
             self.editor
                 .buffer_mut()
                 .set_cursor(hjkl_buffer::Position::new(row, col));
@@ -185,9 +190,14 @@ impl TextFieldEditor {
     /// typing immediately.
     pub fn enter_insert_at_end(&mut self) {
         // Move cursor to end of last line.
-        let lines = self.editor.buffer().lines().to_vec();
-        let row = lines.len().saturating_sub(1);
-        let col = lines.last().map(|s| s.chars().count()).unwrap_or(0);
+        let n = self.editor.buffer().row_count();
+        let row = n.saturating_sub(1);
+        let col = self
+            .editor
+            .buffer()
+            .line(row)
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
         self.editor
             .buffer_mut()
             .set_cursor(hjkl_buffer::Position::new(row, col));

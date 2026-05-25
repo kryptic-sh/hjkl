@@ -193,11 +193,14 @@ fn dispatch(
         }
 
         "hjkl_get_buffer" => {
+            // `into_iter()` consumes the `Vec<String>` returned by `lines()`
+            // and moves each row into the `Value::String` without an extra
+            // per-row clone.
             let lines: Vec<Value> = editor
                 .buffer()
                 .lines()
-                .iter()
-                .map(|l| Value::String(l.clone()))
+                .into_iter()
+                .map(Value::String)
                 .collect();
             success(id, Value::Array(lines))
         }
@@ -354,14 +357,12 @@ fn write_buffer(
     match path {
         None => Err("E32: No file name".to_string()),
         Some(p) => {
-            let lines = editor.buffer().lines();
-            let content = if lines.is_empty() {
-                String::new()
-            } else {
-                let mut s = lines.join("\n");
-                s.push('\n');
-                s
-            };
+            let joined = editor.buffer().content_joined();
+            let mut content = String::with_capacity(joined.len() + 1);
+            content.push_str(&joined);
+            if !joined.is_empty() {
+                content.push('\n');
+            }
             std::fs::write(p, &content).map_err(|e| format!("hjkl: {}: {e}", p.display()))
         }
     }

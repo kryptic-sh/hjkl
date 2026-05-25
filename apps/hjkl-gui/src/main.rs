@@ -231,7 +231,7 @@ mod tests {
     fn gui_editor_constructs_from_str() {
         let buf = Buffer::from_str("hello\nworld\n");
         let editor = Editor::new(buf, DefaultHost::new(), Options::default());
-        assert!(!editor.buffer().lines().is_empty());
+        assert!(editor.buffer().row_count() > 0);
     }
 
     /// Smoke test: `CmdState` default is `Idle` (compile-time check that the

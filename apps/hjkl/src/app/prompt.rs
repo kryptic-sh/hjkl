@@ -828,12 +828,7 @@ impl App {
         let line_text = {
             let slot = &self.slots[cw.slot_idx];
             let (row, _) = slot.editor.cursor();
-            slot.editor
-                .buffer()
-                .lines()
-                .get(row)
-                .cloned()
-                .unwrap_or_default()
+            slot.editor.buffer().line(row).unwrap_or_default()
         };
         self.close_cmdline_window();
 
