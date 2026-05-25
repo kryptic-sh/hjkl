@@ -19,6 +19,7 @@ hjkl-theme.workspace = true
 hjkl-engine.workspace = true
 hjkl-lang.workspace = true
 tracing = "0.1"
+memchr = "2"
 
 [package.metadata.docs.rs]
 all-features = true

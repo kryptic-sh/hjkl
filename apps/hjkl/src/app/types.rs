@@ -375,7 +375,12 @@ impl BufferSlot {
     /// per-keystroke main-thread CPU.
     pub(super) fn refresh_dirty_against_saved(&mut self) -> u128 {
         let t = std::time::Instant::now();
-        let current_len = self.editor.buffer().content_joined().len();
+        // `Buffer::byte_len()` is cached against dirty_gen and computes
+        // the length by summing per-row `.len()` under one lock — no
+        // join, no allocation. `content_joined().len()` was forcing the
+        // full ~3 MB joined `String` build on huge files just to read
+        // a single integer.
+        let current_len = self.editor.buffer().byte_len();
         if current_len != self.saved_len {
             self.dirty = true;
             return t.elapsed().as_micros();

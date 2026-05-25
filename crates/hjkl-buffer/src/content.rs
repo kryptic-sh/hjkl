@@ -49,6 +49,11 @@ pub struct Content {
     /// per consumer was ~4× the line-clone + alloc cost per keystroke
     /// on a 400-line file (visible as insert-mode lag).
     pub(crate) cached_joined: Option<(u64, std::sync::Arc<String>)>,
+    /// Cached canonical byte length (sum of `lines[i].len()` + n-1
+    /// separators) keyed by `dirty_gen` at compute time. Used by the
+    /// dirty-flag check so it doesn't force a full `cached_joined`
+    /// build just to read `.len()` on a multi-MB buffer.
+    pub(crate) cached_byte_len: Option<(u64, usize)>,
 }
 
 impl Default for Content {
@@ -65,6 +70,7 @@ impl Content {
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,
+            cached_byte_len: None,
         }
     }
 
@@ -81,6 +87,7 @@ impl Content {
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,
+            cached_byte_len: None,
         }
     }
 }

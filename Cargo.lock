@@ -2658,6 +2658,7 @@ dependencies = [
  "hjkl-engine",
  "hjkl-lang",
  "hjkl-theme",
+ "memchr",
  "tracing",
 ]
 

@@ -320,6 +320,7 @@ impl Buffer {
             let col = self.cursor.col.min(line_chars);
             c.dirty_gen = c.dirty_gen.wrapping_add(1);
             c.cached_joined = None;
+            c.cached_byte_len = None;
             Position::new(row, col)
         };
         self.cursor = new_cursor;
@@ -332,6 +333,32 @@ impl Buffer {
         let mut c = self.content.lock().unwrap();
         c.dirty_gen = c.dirty_gen.wrapping_add(1);
         c.cached_joined = None;
+        c.cached_byte_len = None;
+    }
+
+    /// Canonical byte length of the document (sum of every row's bytes
+    /// plus n-1 separator newlines — same shape as `content_joined().len()`
+    /// but without allocating the joined `String`). Cached against
+    /// `dirty_gen` so repeated callers in the same tick pay O(1) after
+    /// the first compute.
+    ///
+    /// Use this instead of `content_joined().len()` for code paths that
+    /// only need the length — the dirty-flag check is the canonical
+    /// example. On a 1.86 M-line file `content_joined` allocates ~3 MB
+    /// of `String` per dirty_gen; this method walks `lines.iter().map(|l| l.len()).sum()`
+    /// under the same lock with zero allocations.
+    pub fn byte_len(&self) -> usize {
+        let mut c = self.content.lock().unwrap();
+        let dg = c.dirty_gen;
+        if let Some((cached_dg, len)) = c.cached_byte_len
+            && cached_dg == dg
+        {
+            return len;
+        }
+        let n = c.lines.len();
+        let total: usize = c.lines.iter().map(|l| l.len()).sum::<usize>() + n.saturating_sub(1);
+        c.cached_byte_len = Some((dg, total));
+        total
     }
 
     /// Return an `Arc<String>` of the full document joined by `\n`,

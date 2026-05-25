@@ -610,11 +610,15 @@ impl SyntaxLayer {
         {
             Arc::clone(&client.cache_row_starts.as_ref().unwrap().1)
         } else {
-            let mut rs: Vec<usize> = vec![0];
-            for (i, &b) in bytes.iter().enumerate() {
-                if b == b'\n' {
-                    rs.push(i + 1);
-                }
+            // SIMD-vectorised newline scan via memchr — measurably
+            // faster than a per-byte branch loop on multi-MB buffers,
+            // which is what this is on huge files (3 MB at 1.86 M
+            // rows). Pre-sized to row_count + 1 to avoid Vec realloc
+            // churn as we push each newline position.
+            let mut rs: Vec<usize> = Vec::with_capacity(row_count + 1);
+            rs.push(0);
+            for nl_pos in memchr::memchr_iter(b'\n', bytes) {
+                rs.push(nl_pos + 1);
             }
             let arc = Arc::new(rs);
             client.cache_row_starts = Some((dg, Arc::clone(&arc)));
