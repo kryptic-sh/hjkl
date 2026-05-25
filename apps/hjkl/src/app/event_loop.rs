@@ -585,7 +585,10 @@ impl App {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
                         self.lsp_notify_change_active(&edits);
-                        self.recompute_and_install();
+                        // Defer TS reparse to the end-of-drain flush so a
+                        // burst of insert-mode keys folds into one parse
+                        // instead of paying per-keystroke sync cost.
+                        self.pending_recompute = true;
 
                         // Update popup prefix.
                         let anchor_col =
@@ -646,7 +649,10 @@ impl App {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
                         self.lsp_notify_change_active(&edits);
-                        self.recompute_and_install();
+                        // Defer TS reparse to the end-of-drain flush so a
+                        // burst of insert-mode keys folds into one parse
+                        // instead of paying per-keystroke sync cost.
+                        self.pending_recompute = true;
 
                         let anchor_col =
                             self.completion.as_ref().map(|p| p.anchor_col).unwrap_or(0);
@@ -715,7 +721,7 @@ impl App {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
                     self.lsp_notify_change_active(&edits);
-                    self.recompute_and_install();
+                    self.pending_recompute = true;
                     self.maybe_auto_trigger_completion(c);
                     return KeyOutcome::Continue;
                 }
@@ -1318,7 +1324,7 @@ impl App {
                             .shift_syntax_spans_for_edits(&edits);
                     }
                     self.lsp_notify_change_active(&edits);
-                    self.recompute_and_install();
+                    self.pending_recompute = true;
                 }
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);
