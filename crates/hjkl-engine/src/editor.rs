@@ -183,53 +183,46 @@ fn byte_to_row_col(bytes: &[u8], end: usize) -> (u32, u32) {
     (row, (end - row_start) as u32)
 }
 
-/// Compute the smallest `ContentEdit` describing the diff between
-/// `old_text` and `new_text`. Used by undo/redo: instead of telling
-/// tree-sitter the whole document changed (which forces a cold reparse),
-/// we shrink the edit to the contiguous byte range that actually
-/// differs. Common prefix + common suffix are skipped; the result is a
-/// single replace covering only the changed middle.
+/// Rope-backed minimal content-edit diff for the undo/redo
+/// `restore_text` path. Walks `old_rope` chunk-by-chunk for the
+/// common-prefix / common-suffix scan instead of forcing a full
+/// `content_joined()` materialization (~3 MB per undo on huge files).
 ///
-/// Byte ranges are aligned to UTF-8 codepoint boundaries — the buffer
-/// never stores invalid UTF-8, and we walk back to the previous
-/// codepoint start if a prefix/suffix scan would split a multi-byte
-/// sequence. Position values follow the (row, byte-column) convention
-/// the rest of the engine uses.
-fn minimal_content_edit(old_text: &str, new_text: &str) -> crate::types::ContentEdit {
-    let old_bytes = old_text.as_bytes();
+/// `ropey::Rope::bytes()` and `bytes_at(n).reversed()` give O(log N)
+/// seek + O(1)-per-byte step, so the scan cost matches the contiguous
+/// `&[u8]` version without the materialization alloc.
+fn minimal_content_edit_rope(old_rope: &ropey::Rope, new_text: &str) -> crate::types::ContentEdit {
     let new_bytes = new_text.as_bytes();
-    let old_len = old_bytes.len();
+    let old_len = old_rope.len_bytes();
     let new_len = new_bytes.len();
     let common = old_len.min(new_len);
 
-    // Common prefix length.
+    // Common prefix length — forward walk through rope bytes.
     let mut prefix = 0;
-    while prefix < common && old_bytes[prefix] == new_bytes[prefix] {
-        prefix += 1;
+    let mut fwd = old_rope.bytes();
+    while prefix < common {
+        match fwd.next() {
+            Some(b) if b == new_bytes[prefix] => prefix += 1,
+            _ => break,
+        }
     }
-    // Pull prefix back to the start of any partially-consumed UTF-8
-    // codepoint. Continuation bytes have the high bits `10xxxxxx`. If
-    // `prefix == old_len`, both strings shared everything compared and
-    // the boundary already lands either at end-of-string (safe) or at
-    // a codepoint start — nothing to back up.
-    while prefix > 0 && prefix < old_len && (old_bytes[prefix] & 0b1100_0000) == 0b1000_0000 {
+    while prefix > 0 && prefix < old_len && (old_rope.byte(prefix) & 0b1100_0000) == 0b1000_0000 {
         prefix -= 1;
     }
 
-    // Common suffix length, bounded so it doesn't overlap the prefix
-    // in either string.
+    // Common suffix length — backward walk through rope bytes.
     let mut suffix = 0;
     let max_suffix = (old_len - prefix).min(new_len - prefix);
-    while suffix < max_suffix && old_bytes[old_len - 1 - suffix] == new_bytes[new_len - 1 - suffix]
-    {
-        suffix += 1;
+    let mut rev = old_rope.bytes_at(old_len).reversed();
+    while suffix < max_suffix {
+        match rev.next() {
+            Some(b) if b == new_bytes[new_len - 1 - suffix] => suffix += 1,
+            _ => break,
+        }
     }
-    // Same UTF-8 alignment dance from the other end: a continuation
-    // byte at the boundary means we split a codepoint and have to keep
-    // shrinking the suffix until we land on a leading byte.
     while suffix > 0
         && suffix < old_len
-        && (old_bytes[old_len - suffix] & 0b1100_0000) == 0b1000_0000
+        && (old_rope.byte(old_len - suffix) & 0b1100_0000) == 0b1000_0000
     {
         suffix -= 1;
     }
@@ -242,10 +235,18 @@ fn minimal_content_edit(old_text: &str, new_text: &str) -> crate::types::Content
         start_byte,
         old_end_byte,
         new_end_byte,
-        start_position: byte_to_row_col(old_bytes, start_byte),
-        old_end_position: byte_to_row_col(old_bytes, old_end_byte),
+        start_position: rope_byte_to_row_col(old_rope, start_byte),
+        old_end_position: rope_byte_to_row_col(old_rope, old_end_byte),
         new_end_position: byte_to_row_col(new_bytes, new_end_byte),
     }
+}
+
+#[inline]
+fn rope_byte_to_row_col(rope: &ropey::Rope, byte_idx: usize) -> (u32, u32) {
+    let byte_idx = byte_idx.min(rope.len_bytes());
+    let line = rope.byte_to_line(byte_idx);
+    let line_start = rope.line_to_byte(line);
+    (line as u32, (byte_idx - line_start) as u32)
 }
 
 /// Compute the byte position after inserting `text` starting at
@@ -3083,18 +3084,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn restore_text(&mut self, text: &str, cursor: (usize, usize)) {
-        // Snapshot the old buffer text BEFORE replace_all so we can diff
-        // against `text` and emit a minimal ContentEdit. Without this
-        // tight range, the syntax layer's tree.edit() marks the entire
-        // document as changed, which forces tree-sitter's incremental
-        // parser to discard every subtree and effectively cold-parse on
-        // every undo — ~seconds of lag for a one-line undo on a huge
-        // file. `content_joined` is per-`dirty_gen` Arc-cached, so this
-        // grab is cheap when something else (LSP, syntax) already paid
-        // for the join this tick.
-        let old_arc = self.buffer.content_joined();
-        let old_text = old_arc.as_str();
-        let edit = minimal_content_edit(old_text, text);
+        // Diff the old rope (O(1) Arc-clone) against the incoming text
+        // to emit a minimal ContentEdit — without it the syntax layer's
+        // tree.edit() marks the whole document changed and tree-sitter
+        // cold-parses on every undo.
+        let old_rope = self.buffer.rope();
+        let edit = minimal_content_edit_rope(&old_rope, text);
 
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);

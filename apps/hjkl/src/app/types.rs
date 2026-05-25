@@ -243,12 +243,17 @@ pub enum LspPendingRequest {
 /// ~10 % of per-keystroke self time inside `SipHasher::write`; ahash
 /// brings that to ~1–2 %.
 fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
-    // Reuse the per-dirty_gen cached `Arc<String>` so we hash a single
-    // allocation instead of re-cloning every row per keystroke.
-    let text = editor.buffer().content_joined();
+    // Stream the rope chunks straight into ahash — no full-document
+    // `Arc<String>` materialization. `Buffer::rope()` is an O(1) Arc-clone.
+    let rope = editor.buffer().rope();
     let mut hasher = ahash::AHasher::default();
-    hasher.write(text.as_bytes());
-    (hasher.finish(), text.len())
+    let mut len = 0usize;
+    for chunk in rope.chunks() {
+        let bytes = chunk.as_bytes();
+        hasher.write(bytes);
+        len += bytes.len();
+    }
+    (hasher.finish(), len)
 }
 
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
