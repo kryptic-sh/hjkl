@@ -211,10 +211,7 @@ fn minimal_content_edit(old_text: &str, new_text: &str) -> crate::types::Content
     // `prefix == old_len`, both strings shared everything compared and
     // the boundary already lands either at end-of-string (safe) or at
     // a codepoint start — nothing to back up.
-    while prefix > 0
-        && prefix < old_len
-        && (old_bytes[prefix] & 0b1100_0000) == 0b1000_0000
-    {
+    while prefix > 0 && prefix < old_len && (old_bytes[prefix] & 0b1100_0000) == 0b1000_0000 {
         prefix -= 1;
     }
 

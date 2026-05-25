@@ -4,6 +4,9 @@
 //! Register them via [`register_builtins`] (called by
 //! [`PredicateRegistry::with_builtins`]).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use crate::predicate::{
     Directive, MatchContext, MatchMetadata, MetaValue, PredicateArg, PredicateRegistry,
 };
@@ -294,11 +297,24 @@ impl crate::predicate::Predicate for HasParentPredicate {
 pub struct LuaMatchPredicate {
     /// Whether to negate the match (for `not-lua-match?`).
     negate: bool,
+    /// Compiled-regex cache keyed by the raw Lua pattern string. `None`
+    /// records a translation or compilation failure so we don't keep
+    /// retrying — `eval` returns `!negate` (permissive) for those.
+    ///
+    /// Tree-sitter calls this predicate once per match per render frame.
+    /// Without this cache, `regex::Regex::new` rebuilt the NFA + DFA on
+    /// every call — ~43 % of per-keystroke main-thread CPU in profiling
+    /// on a moderately-sized file. Patterns are static (drawn from the
+    /// grammar's `highlights.scm`), so the cache is small and bounded.
+    cache: Mutex<HashMap<String, Option<regex::Regex>>>,
 }
 
 impl LuaMatchPredicate {
     pub fn new(negate: bool) -> Self {
-        Self { negate }
+        Self {
+            negate,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -322,14 +338,28 @@ impl crate::predicate::Predicate for LuaMatchPredicate {
             Some(t) => t,
             None => return false,
         };
-        let regex_src = match lua_pattern_to_regex(pattern) {
-            Ok(r) => r,
-            // Unsupported Lua pattern construct — be permissive.
-            Err(_) => return !self.negate,
+
+        // Resolve the regex through the cache. `Regex::clone` is cheap
+        // (internal `Arc`); we release the lock before running the
+        // potentially-expensive `is_match`.
+        let pattern: &str = pattern;
+        let re_opt: Option<regex::Regex> = {
+            let mut cache = self.cache.lock().unwrap();
+            if let Some(opt) = cache.get(pattern) {
+                opt.clone()
+            } else {
+                let built = lua_pattern_to_regex(pattern)
+                    .ok()
+                    .and_then(|src| regex::Regex::new(&src).ok());
+                cache.insert(pattern.to_string(), built.clone());
+                built
+            }
         };
-        let matched = regex::Regex::new(&regex_src)
-            .ok()
-            .is_some_and(|re| re.is_match(text));
+        let matched = match re_opt {
+            Some(re) => re.is_match(text),
+            // Translation or compile failure — permissive: don't veto.
+            None => return !self.negate,
+        };
         if self.negate { !matched } else { matched }
     }
 }

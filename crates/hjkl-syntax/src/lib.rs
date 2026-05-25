@@ -836,9 +836,93 @@ fn walk_rows(
     let hex_color_pass = HexColorPass::new();
     hex_color_pass.apply_range(&mut flat_spans, bytes, byte_start..byte_end);
 
-    // build_by_row on the full row_count, then slice out the segment.
-    let full = build_by_row(&flat_spans, bytes, row_starts, row_count, theme);
-    full[seg_start..seg_end.min(full.len())].to_vec()
+    // Bucket spans into ONLY the viewport row range. The prior version
+    // called `build_by_row(..., row_count, ...)` and sliced the result,
+    // which allocated `row_count` empty inner Vecs (8.58 M on a huge
+    // file) just to throw away all but ~50 of them — that single line
+    // was ~24 % of per-keystroke CPU during a paste burst.
+    let _ = row_count; // kept in signature for the public build_by_row tests
+    build_by_row_range(&flat_spans, bytes, row_starts, seg_start..seg_end, theme)
+}
+
+/// Viewport-bounded variant of [`build_by_row`]. Allocates exactly
+/// `row_range.len()` inner Vecs instead of one per document row. Spans
+/// whose byte range falls entirely outside `row_range` are skipped; spans
+/// that overlap have their per-row slices recorded with positions local
+/// to the viewport (so row `row_range.start` lands at index 0).
+fn build_by_row_range(
+    flat_spans: &[hjkl_bonsai::HighlightSpan],
+    bytes: &[u8],
+    row_starts: &[usize],
+    row_range: Range<usize>,
+    theme: &dyn Theme,
+) -> Vec<Vec<(usize, usize, StyleSpec)>> {
+    let seg_start = row_range.start;
+    let seg_end = row_range.end.min(row_starts.len());
+    if seg_end <= seg_start {
+        return Vec::new();
+    }
+    let mut by_row: Vec<Vec<(usize, usize, StyleSpec)>> = vec![Vec::new(); seg_end - seg_start];
+
+    for span in flat_spans {
+        let hex_style: Option<StyleSpec> = if span.capture() == HEX_COLOR_CAPTURE {
+            let bg = match span.metadata.get(HEX_BG_KEY) {
+                Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
+                _ => None,
+            };
+            let fg = match span.metadata.get(HEX_FG_KEY) {
+                Some(MetaValue::Str(s)) => hjkl_theme::Color::from_hex_str(s).ok(),
+                _ => None,
+            };
+            bg.map(|bg| StyleSpec {
+                fg,
+                bg: Some(bg),
+                modifiers: hjkl_theme::Modifiers::default(),
+            })
+        } else {
+            None
+        };
+
+        let style: StyleSpec = if let Some(s) = hex_style {
+            s
+        } else {
+            match theme.style(span.capture()) {
+                Some(s) => *s,
+                None => continue,
+            }
+        };
+
+        let span_start = span.byte_range.start;
+        let span_end = span.byte_range.end;
+
+        let start_row = row_starts
+            .partition_point(|&rs| rs <= span_start)
+            .saturating_sub(1);
+
+        let mut row = start_row.max(seg_start);
+        while row < seg_end {
+            let row_byte_start = row_starts[row];
+            let row_byte_end = row_starts
+                .get(row + 1)
+                .map(|&s| s.saturating_sub(1))
+                .unwrap_or(bytes.len());
+
+            if row_byte_start >= span_end {
+                break;
+            }
+
+            let local_start = span_start.saturating_sub(row_byte_start);
+            let local_end = span_end.min(row_byte_end) - row_byte_start;
+
+            if local_end > local_start {
+                by_row[row - seg_start].push((local_start, local_end, style));
+            }
+
+            row += 1;
+        }
+    }
+
+    by_row
 }
 
 // ---------------------------------------------------------------------------
