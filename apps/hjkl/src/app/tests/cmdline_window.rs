@@ -248,7 +248,7 @@ fn c_f_from_ex_prompt_opens_q_colon_with_inprogress_text() {
     );
     // Last line must be the in-progress text.
     let last_row = buffer.row_count() - 1;
-    let last_line = buffer.lines().get(last_row).cloned().unwrap_or_default();
+    let last_line = buffer.line(last_row).unwrap_or_default();
     assert_eq!(
         last_line, "s/foo/b",
         "trailing line must hold the in-progress text"
@@ -289,7 +289,7 @@ fn c_f_from_search_forward_prompt_opens_q_slash() {
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
     let buffer = app.slots()[slot_idx].editor.buffer();
     let last_row = buffer.row_count() - 1;
-    let last_line = buffer.lines().get(last_row).cloned().unwrap_or_default();
+    let last_line = buffer.line(last_row).unwrap_or_default();
     assert_eq!(last_line, "foo", "trailing line must be the search text");
 }
 
@@ -317,7 +317,7 @@ fn c_f_from_search_backward_prompt_opens_q_question() {
     let slot_idx = app.cmdline_win.as_ref().unwrap().slot_idx;
     let buffer = app.slots()[slot_idx].editor.buffer();
     let last_row = buffer.row_count() - 1;
-    let last_line = buffer.lines().get(last_row).cloned().unwrap_or_default();
+    let last_line = buffer.line(last_row).unwrap_or_default();
     assert_eq!(last_line, "bar", "trailing line must be the search text");
 }
 
@@ -344,7 +344,7 @@ fn c_f_empty_ex_prompt_opens_q_colon_with_empty_trailing_line() {
         "empty prefill still adds a trailing line"
     );
     let last_row = buffer.row_count() - 1;
-    let last_line = buffer.lines().get(last_row).cloned().unwrap_or_default();
+    let last_line = buffer.line(last_row).unwrap_or_default();
     assert_eq!(last_line, "", "trailing line is empty for empty prompt");
 }
 

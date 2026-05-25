@@ -6,6 +6,7 @@
 //! does: insertions land the cursor at the end of the inserted
 //! text; deletions clamp the cursor to the deletion start.
 
+use crate::buffer::{pos_to_char_idx, rope_line_char_count};
 use crate::{Buffer, Position};
 
 /// Granularity of a delete; preserved through undo so a linewise
@@ -144,23 +145,30 @@ impl Buffer {
         let mut widths: Vec<usize> = Vec::with_capacity(chunks.len());
         for (i, chunk) in chunks.into_iter().enumerate() {
             let row = at.row + i;
-            // Pad short rows with spaces so the column position
-            // exists before splicing.
-            let (line_chars, needs_pad) = {
-                let c = self.content.lock().unwrap();
-                let lc = c.lines[row].chars().count();
-                (lc, lc < at.col)
-            };
-            if needs_pad {
-                let pad = at.col - line_chars;
-                self.content.lock().unwrap().lines[row].push_str(&" ".repeat(pad));
+            // Pad short rows with spaces so the column position exists
+            // before splicing — same semantics as the old Vec<String> impl.
+            {
+                let mut c = self.content.lock().unwrap();
+                let n = c.text.len_lines();
+                if row < n {
+                    let lc = rope_line_char_count(&c.text, row);
+                    if lc < at.col {
+                        let pad = at.col - lc;
+                        let insert_char_idx = pos_to_char_idx(&c.text, row, lc);
+                        c.text.insert(insert_char_idx, &" ".repeat(pad));
+                    }
+                }
             }
             widths.push(chunk.chars().count());
-            splice_at(
-                &mut self.content.lock().unwrap().lines,
-                Position::new(row, at.col),
-                &chunk,
-            );
+            // Insert chunk at (row, at.col).
+            {
+                let mut c = self.content.lock().unwrap();
+                let n = c.text.len_lines();
+                if row < n {
+                    let char_idx = pos_to_char_idx(&c.text, row, at.col);
+                    c.text.insert(char_idx, &chunk);
+                }
+            }
         }
         self.dirty_gen_bump();
         self.set_cursor(at);
@@ -171,11 +179,26 @@ impl Buffer {
         let mut chunks: Vec<String> = Vec::with_capacity(widths.len());
         for (i, w) in widths.into_iter().enumerate() {
             let row = at.row + i;
-            let removed = cut_chars(
-                &mut self.content.lock().unwrap().lines,
-                Position::new(row, at.col),
-                Position::new(row, at.col + w),
-            );
+            let removed = {
+                let mut c = self.content.lock().unwrap();
+                let n = c.text.len_lines();
+                if row >= n {
+                    String::new()
+                } else {
+                    let lc = rope_line_char_count(&c.text, row);
+                    let col_start = at.col.min(lc);
+                    let col_end = (at.col + w).min(lc);
+                    if col_start >= col_end {
+                        String::new()
+                    } else {
+                        let char_start = pos_to_char_idx(&c.text, row, col_start);
+                        let char_end = pos_to_char_idx(&c.text, row, col_end);
+                        let removed: String = c.text.slice(char_start..char_end).to_string();
+                        c.text.remove(char_start..char_end);
+                        removed
+                    }
+                }
+            };
             chunks.push(removed);
         }
         self.dirty_gen_bump();
@@ -193,7 +216,11 @@ impl Buffer {
         } else {
             Position::new(normalised.row, normalised.col + inserted_chars)
         };
-        splice_at(&mut self.content.lock().unwrap().lines, normalised, &text);
+        {
+            let mut c = self.content.lock().unwrap();
+            let char_idx = pos_to_char_idx(&c.text, normalised.row, normalised.col);
+            c.text.insert(char_idx, &text);
+        }
         self.dirty_gen_bump();
         self.set_cursor(end);
         Edit::DeleteRange {
@@ -207,7 +234,10 @@ impl Buffer {
         let (start, end) = order(start, end);
         match kind {
             MotionKind::Char => {
-                let removed = cut_chars(&mut self.content.lock().unwrap().lines, start, end);
+                let removed = {
+                    let mut c = self.content.lock().unwrap();
+                    rope_cut_chars(&mut c.text, start, end)
+                };
                 self.dirty_gen_bump();
                 self.set_cursor(start);
                 Edit::InsertStr {
@@ -217,43 +247,75 @@ impl Buffer {
             }
             MotionKind::Line => {
                 let lo = start.row;
-                let (removed_lines, new_cursor) = {
+                let (removed_text, new_cursor) = {
                     let mut c = self.content.lock().unwrap();
-                    let hi = end.row.min(c.lines.len().saturating_sub(1));
-                    let removed: Vec<String> = c.lines.drain(lo..=hi).collect();
-                    if c.lines.is_empty() {
-                        c.lines.push(String::new());
+                    let n = c.text.len_lines();
+                    let hi = end.row.min(n.saturating_sub(1));
+
+                    // Collect the removed rows as a joined string (needed for inverse).
+                    let mut removed_lines: Vec<String> = Vec::with_capacity(hi - lo + 1);
+                    for r in lo..=hi {
+                        removed_lines.push(rope_line_str_locked(&c.text, r));
                     }
-                    let target_row = lo.min(c.lines.len().saturating_sub(1));
-                    (removed, Position::new(target_row, 0))
+
+                    // Compute char range to remove.
+                    // When hi is not the last row, we take [line_to_char(lo), line_to_char(hi+1)).
+                    // When hi IS the last row and lo>0, we also remove the '\n' that ends
+                    // row lo-1 so we don't leave a trailing newline orphan.
+                    // When removing everything (lo==0, hi==last), take [0, len_chars()).
+                    let (remove_start, remove_end) = if hi + 1 < n {
+                        // Normal case: rows lo..=hi followed by more rows.
+                        // char range = [line_to_char(lo), line_to_char(hi+1))
+                        (c.text.line_to_char(lo), c.text.line_to_char(hi + 1))
+                    } else if lo > 0 {
+                        // hi is the last row AND there are rows before lo.
+                        // Remove the '\n' that ended row lo-1 as well.
+                        (c.text.line_to_char(lo) - 1, c.text.len_chars())
+                    } else {
+                        // Removing everything (lo==0, hi==last).
+                        (0, c.text.len_chars())
+                    };
+
+                    c.text.remove(remove_start..remove_end);
+                    // ropey guarantees len_lines() >= 1 (empty rope = 1 line).
+
+                    let n2 = c.text.len_lines();
+                    let target_row = lo.min(n2.saturating_sub(1));
+                    let removed_joined = {
+                        let mut s = removed_lines.join("\n");
+                        // Add trailing '\n' so the inverse InsertStr re-inserts
+                        // correctly (pushes surviving rows down).
+                        s.push('\n');
+                        s
+                    };
+                    (removed_joined, Position::new(target_row, 0))
                 };
                 self.dirty_gen_bump();
                 self.set_cursor(new_cursor);
-                let mut text = removed_lines.join("\n");
-                // Trailing `\n` so the inverse insert pushes the
-                // surviving row(s) down rather than concatenating
-                // onto whatever currently sits at `lo`.
-                text.push('\n');
                 Edit::InsertStr {
                     at: Position::new(lo, 0),
-                    text,
+                    text: removed_text,
                 }
             }
             MotionKind::Block => {
                 let (left, right) = (start.col.min(end.col), start.col.max(end.col));
                 let mut chunks: Vec<String> = Vec::with_capacity(end.row - start.row + 1);
                 for row in start.row..=end.row {
-                    let row_left = Position::new(row, left);
-                    let row_right = Position::new(row, right + 1);
-                    let removed =
-                        cut_chars(&mut self.content.lock().unwrap().lines, row_left, row_right);
+                    let removed = {
+                        let mut c = self.content.lock().unwrap();
+                        let n = c.text.len_lines();
+                        if row >= n {
+                            String::new()
+                        } else {
+                            let row_start_pos = Position::new(row, left);
+                            let row_end_pos = Position::new(row, right + 1);
+                            rope_cut_chars(&mut c.text, row_start_pos, row_end_pos)
+                        }
+                    };
                     chunks.push(removed);
                 }
                 self.dirty_gen_bump();
                 self.set_cursor(Position::new(start.row, left));
-                // Inverse paired with [`Edit::InsertBlock`]: each
-                // chunk lands back at its original column on its
-                // row, preserving ragged-row content exactly.
                 Edit::InsertBlock {
                     at: Position::new(start.row, left),
                     chunks,
@@ -264,63 +326,99 @@ impl Buffer {
 
     fn do_join_lines(&mut self, row: usize, count: usize, with_space: bool) -> Edit {
         let count = count.max(1);
-        let (row, split_cols) = {
+        let (actual_row, split_cols) = {
             let mut c = self.content.lock().unwrap();
-            let row = row.min(c.lines.len().saturating_sub(1));
+            let n = c.text.len_lines();
+            let row = row.min(n.saturating_sub(1));
             let mut split_cols: Vec<usize> = Vec::with_capacity(count);
-            let mut joined = std::mem::take(&mut c.lines[row]);
+
             for _ in 0..count {
-                if row + 1 >= c.lines.len() {
+                let n2 = c.text.len_lines();
+                if row + 1 >= n2 {
                     break;
                 }
-                let next = c.lines.remove(row + 1);
-                let join_col = joined.chars().count();
+                // Current length of row (in chars, sans '\n').
+                let join_col = rope_line_char_count(&c.text, row);
                 split_cols.push(join_col);
-                if with_space && !joined.is_empty() && !next.is_empty() {
-                    joined.push(' ');
+
+                // The '\n' that ends row is at char index line_to_char(row) + join_col.
+                let newline_char = c.text.line_to_char(row) + join_col;
+                // Remove the '\n'.
+                c.text.remove(newline_char..newline_char + 1);
+
+                // Now row and (what was row+1) are merged. Insert space if needed.
+                if with_space {
+                    // After removing '\n', the join_col chars of original row are
+                    // followed immediately by the next row's content.
+                    // Insert space only if both sides are non-empty.
+                    let n3 = c.text.len_lines();
+                    let merged_len = rope_line_char_count(&c.text, row);
+                    let prefix_empty = join_col == 0;
+                    let suffix_empty = join_col >= merged_len;
+                    if !prefix_empty && !suffix_empty {
+                        // Insert space at newline_char (now the join point).
+                        c.text.insert_char(newline_char, ' ');
+                        // Adjust future split_cols: the space shifts subsequent
+                        // join points by 1, but split_cols[i] is the char count
+                        // of the original row *before* this join, which doesn't
+                        // need adjustment — the SplitLines inverse uses it to
+                        // split the joined line at the right position.
+                    }
+                    let _ = n3;
                 }
-                joined.push_str(&next);
             }
-            c.lines[row] = joined;
             (row, split_cols)
         };
         self.dirty_gen_bump();
-        self.set_cursor(Position::new(row, 0));
+        self.set_cursor(Position::new(actual_row, 0));
         Edit::SplitLines {
-            row,
+            row: actual_row,
             cols: split_cols,
             inserted_space: with_space,
         }
     }
 
     fn do_split_lines(&mut self, row: usize, cols: Vec<usize>, inserted_space: bool) -> Edit {
-        let row = {
+        let actual_row = {
             let mut c = self.content.lock().unwrap();
-            let row = row.min(c.lines.len().saturating_sub(1));
-            let mut working = std::mem::take(&mut c.lines[row]);
-            // Split right-to-left so each `cols[i]` still indexes into
-            // the original char positions on the surviving prefix.
-            let mut tails: Vec<String> = Vec::with_capacity(cols.len());
+            let n = c.text.len_lines();
+            let row = row.min(n.saturating_sub(1));
+
+            // Split right-to-left so each col still indexes into the
+            // original char positions on the surviving prefix.
             for &col in cols.iter().rev() {
-                let byte = Position::new(0, col).byte_offset(&working);
-                let mut tail = working.split_off(byte);
-                if inserted_space && tail.starts_with(' ') {
-                    tail.remove(0);
+                let mut split_col = col;
+                if inserted_space {
+                    // The original join inserted a space at `col`, so the
+                    // current content has a space at position `col` which
+                    // we need to remove before inserting the '\n'.
+                    let lc = rope_line_char_count(&c.text, row);
+                    if split_col < lc {
+                        let space_char_idx = c.text.line_to_char(row) + split_col;
+                        // Check if char at split_col is a space.
+                        let ch = c.text.char(space_char_idx);
+                        if ch == ' ' {
+                            c.text.remove(space_char_idx..space_char_idx + 1);
+                        }
+                    }
+                    // split_col stays the same — the '\n' goes at the same
+                    // position (we removed the space, so col is still correct).
+                } else {
+                    let lc = rope_line_char_count(&c.text, row);
+                    split_col = split_col.min(lc);
                 }
-                tails.push(tail);
+
+                // Insert '\n' at (row, split_col).
+                let char_idx = c.text.line_to_char(row) + split_col;
+                c.text.insert_char(char_idx, '\n');
             }
-            // Re-insert head + tails in document order via splice (O(len + n)
-            // vs O(n × (len - row)) for the prior per-row insert loop).
-            c.lines[row] = working;
-            let insert_at = row + 1;
-            c.lines
-                .splice(insert_at..insert_at, tails.into_iter().rev());
+
             row
         };
         self.dirty_gen_bump();
-        self.set_cursor(Position::new(row, 0));
+        self.set_cursor(Position::new(actual_row, 0));
         Edit::JoinLines {
-            row,
+            row: actual_row,
             count: cols.len(),
             with_space: inserted_space,
         }
@@ -328,7 +426,10 @@ impl Buffer {
 
     fn do_replace(&mut self, start: Position, end: Position, with: String) -> Edit {
         let (start, end) = order(start, end);
-        let removed = cut_chars(&mut self.content.lock().unwrap().lines, start, end);
+        let removed = {
+            let mut c = self.content.lock().unwrap();
+            rope_cut_chars(&mut c.text, start, end)
+        };
         let normalised = self.clamp_position(start);
         let inserted_chars = with.chars().count();
         let inserted_lines = with.split('\n').count();
@@ -338,7 +439,11 @@ impl Buffer {
         } else {
             Position::new(normalised.row, normalised.col + inserted_chars)
         };
-        splice_at(&mut self.content.lock().unwrap().lines, normalised, &with);
+        {
+            let mut c = self.content.lock().unwrap();
+            let char_idx = pos_to_char_idx(&c.text, normalised.row, normalised.col);
+            c.text.insert(char_idx, &with);
+        }
         self.dirty_gen_bump();
         self.set_cursor(new_end);
         Edit::Replace {
@@ -349,77 +454,53 @@ impl Buffer {
     }
 }
 
-// ── Internals — char surgery (free functions over &mut Vec<String>) ──
+// ── Internals — char surgery (free functions over &mut ropey::Rope) ──
 
-/// Splice multi-line `text` at `at`. The first piece appends to
-/// the prefix of the row; intermediate pieces become new rows;
-/// the last piece prepends to the suffix.
-fn splice_at(lines: &mut Vec<String>, at: Position, text: &str) {
-    let pieces: Vec<&str> = text.split('\n').collect();
-    let row = at.row;
-    let byte = at.byte_offset(&lines[row]);
-    let suffix = lines[row].split_off(byte);
-    if pieces.len() == 1 {
-        lines[row].push_str(pieces[0]);
-        lines[row].push_str(&suffix);
-        return;
+/// Get logical line `row` as a `String`, stripping trailing `\n`.
+/// Identical to `rope_line_str` but takes a lock guard's rope by ref
+/// (avoids re-importing the pub(crate) helper from buffer.rs inside this module).
+fn rope_line_str_locked(rope: &ropey::Rope, row: usize) -> String {
+    let slice = rope.line(row);
+    let s = slice.to_string();
+    if s.ends_with('\n') {
+        s[..s.len() - 1].to_string()
+    } else {
+        s
     }
-    lines[row].push_str(pieces[0]);
-    let mut new_rows: Vec<String> = pieces[1..pieces.len() - 1]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    let mut last = pieces.last().copied().unwrap_or("").to_string();
-    last.push_str(&suffix);
-    new_rows.push(last);
-    // O(len + n) via splice; the prior per-row `insert(insert_at + i, ...)`
-    // loop was O(n × (len - insert_at)) — samply attributed 74 % of CPU on a
-    // 60 k-row paste to this single function (~3.6 G memmove ops).
-    let insert_at = row + 1;
-    lines.splice(insert_at..insert_at, new_rows);
 }
 
-/// Remove `[start, end)` (charwise) and return what was removed
-/// with `\n` between rows.
-fn cut_chars(lines: &mut Vec<String>, start: Position, end: Position) -> String {
+/// Remove `[start, end)` (charwise) from the rope and return the
+/// removed text as a `String` (with `\n` between rows).
+///
+/// `start` and `end` carry `(row, col)` where `col` is a char index
+/// within the line. The function converts them to absolute char indices,
+/// removes the range, and returns the removed text.
+fn rope_cut_chars(rope: &mut ropey::Rope, start: Position, end: Position) -> String {
     let (start, end) = order(start, end);
-    if start.row == end.row {
-        let line = &mut lines[start.row];
-        let lo = start.byte_offset(line).min(line.len());
-        let hi = end.byte_offset(line).min(line.len());
-        return line.drain(lo..hi).collect();
+    let n = rope.len_lines();
+
+    // Clamp to rope bounds.
+    let start_row = start.row.min(n.saturating_sub(1));
+    let start_col = {
+        let lc = crate::buffer::rope_line_char_count(rope, start_row);
+        start.col.min(lc)
+    };
+    let end_row = end.row.min(n.saturating_sub(1));
+    let end_col = {
+        let lc = crate::buffer::rope_line_char_count(rope, end_row);
+        end.col.min(lc)
+    };
+
+    let char_start = rope.line_to_char(start_row) + start_col;
+    let char_end = rope.line_to_char(end_row) + end_col;
+
+    if char_start >= char_end {
+        return String::new();
     }
-    let mut out = String::new();
-    // Suffix of start row.
-    {
-        let line = &mut lines[start.row];
-        let byte = start.byte_offset(line).min(line.len());
-        let suffix: String = line.drain(byte..).collect();
-        out.push_str(&suffix);
-    }
-    out.push('\n');
-    // Drain rows strictly between start.row and end.row.
-    let mid_lo = start.row + 1;
-    let mid_hi = end.row.saturating_sub(1);
-    if mid_hi >= mid_lo {
-        let drained: Vec<String> = lines.drain(mid_lo..=mid_hi).collect();
-        for l in drained {
-            out.push_str(&l);
-            out.push('\n');
-        }
-    }
-    // Prefix of (now-shifted) end row.
-    let end_line_idx = start.row + 1;
-    {
-        let line = &mut lines[end_line_idx];
-        let byte = end.byte_offset(line).min(line.len());
-        let prefix: String = line.drain(..byte).collect();
-        out.push_str(&prefix);
-    }
-    // Glue start row + remainder of end row.
-    let merged = lines.remove(end_line_idx);
-    lines[start.row].push_str(&merged);
-    out
+
+    let removed: String = rope.slice(char_start..char_end).to_string();
+    rope.remove(char_start..char_end);
+    removed
 }
 
 fn order(a: Position, b: Position) -> (Position, Position) {
@@ -601,12 +682,8 @@ mod tests {
 
     /// Regression: a 60 k-row multi-line `InsertStr` into a 60 k-row buffer
     /// used to call `Vec::insert(insert_at + i, …)` per row → O(N²) memmove.
-    /// samply attributed 74 % of CPU on a release-mode big-paste session
-    /// to this single function (~3.6 G memmove ops). The splice rewrite
-    /// is O(N + n).
-    ///
-    /// 200 ms ceiling on debug build catches reintroduction of the loop
-    /// (the old code took multiple seconds even on release).
+    /// With ropey, InsertStr is O(log N + edit_size) — this test confirms it
+    /// stays comfortably under the 200 ms budget.
     #[test]
     fn splice_at_60k_paste_at_row_zero_is_under_200ms() {
         // Buffer with 60 k rows of empty content.
@@ -622,8 +699,7 @@ mod tests {
         let elapsed = t.elapsed();
         assert!(
             elapsed.as_millis() < 200,
-            "60k-row InsertStr took {elapsed:?}; budget 200 ms (catches \
-             reintroduction of the O(N²) per-row insert loop)"
+            "60k-row InsertStr took {elapsed:?}; budget 200 ms"
         );
     }
 }

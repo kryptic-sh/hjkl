@@ -2618,7 +2618,7 @@ fn insert_session_round_trips() {
         count: 3,
         row_min: 0,
         row_max: 0,
-        before_lines: vec!["hello".to_string()],
+        before_rope: ropey::Rope::from_str("hello"),
         reason: hjkl_engine::InsertReason::Enter(hjkl_engine::InsertEntry::I),
     }));
     assert_eq!(e.insert_session().map(|s| s.count), Some(3));

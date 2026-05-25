@@ -135,20 +135,21 @@ fn edit_to_editops(edit: &hjkl_buffer::Edit) -> Vec<crate::types::Edit> {
 }
 
 /// Sum of bytes from the start of the buffer to the start of `row`.
-/// Walks lines + their separating `\n` bytes — matches the canonical
-/// `lines().join("\n")` byte rendering used by syntax tooling.
+/// Byte offset of the first byte of `row` within the canonical
+/// `lines().join("\n")` byte rendering. Pre-rope this walked every row
+/// from 0 to `row` allocating a `String` per row to read its `.len()` —
+/// O(row) allocations per call, fired from `position_to_byte_coords` on
+/// every `insert_char`. At the bottom of a 1.86 M-line buffer that was
+/// 1.86 M String allocations per keystroke (the dominant cost of the
+/// "edits at the bottom of the file are slow" symptom).
+///
+/// Now O(log N): ropey's `line_to_byte` walks the B-tree's per-node
+/// byte counts. No String materialization.
 #[inline]
 fn buffer_byte_of_row(buf: &hjkl_buffer::Buffer, row: usize) -> usize {
-    let n = buf.row_count();
-    let row = row.min(n);
-    let mut acc = 0usize;
-    for r in 0..row {
-        acc += buf.line(r).map(|s| s.len()).unwrap_or(0);
-        if r + 1 < n {
-            acc += 1; // separator '\n'
-        }
-    }
-    acc
+    let rope = buf.rope();
+    let row = row.min(rope.len_lines());
+    rope.line_to_byte(row)
 }
 
 /// Convert an `hjkl_buffer::Position` (char-indexed col) into byte
@@ -520,7 +521,7 @@ pub(super) enum CursorScrollTarget {
 
 use crate::buf_helpers::{
     apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_chars,
-    buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
+    buf_row_count, buf_set_cursor_rc,
 };
 
 /// Return value from the engine's `try_goto_mark_*` methods. Tells the
@@ -557,13 +558,15 @@ pub struct Editor<
     pub(crate) vim: VimState,
     /// Undo history: each entry is `(joined_document, cursor)` before the
     /// edit. Stored as `Arc<String>` so it shares the
-    /// `Buffer::content_joined` cache — push_undo is an `Arc::clone`
-    /// (one ptr bump) when LSP / git / syntax already joined this
-    /// generation. Previously this held `Vec<String>` and paid 162 k
-    /// per-line allocations on a 162 k-row buffer per snapshot.
-    pub(crate) undo_stack: Vec<(std::sync::Arc<String>, (usize, usize))>,
+    /// Undo history: snapshots taken via `Buffer::rope()` — `ropey::Rope::clone`
+    /// is O(1) (Arc-clone of the B-tree root). Previously stored
+    /// `Arc<String>` from `content_joined()`, which on the rope storage
+    /// builds the entire document `String` via `rope.to_string()` — that
+    /// turned every `i` / `o` keystroke into a ~3 MB allocation on a
+    /// 1.86 M-line file.
+    pub(crate) undo_stack: Vec<(ropey::Rope, (usize, usize))>,
     /// Redo history: entries pushed when undoing.
-    pub(super) redo_stack: Vec<(std::sync::Arc<String>, (usize, usize))>,
+    pub(super) redo_stack: Vec<(ropey::Rope, (usize, usize))>,
     /// Set whenever the buffer content changes; cleared by `take_dirty`.
     pub(super) content_dirty: bool,
     /// Cached snapshot of `lines().join("\n") + "\n"` wrapped in an Arc
@@ -2539,7 +2542,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         };
         let cursor = self.cursor();
         let cursor = (cursor.0 as u32, cursor.1 as u32);
-        let lines: Vec<String> = buf_lines_to_vec(&self.buffer);
+        let rope = crate::types::Query::rope(&self.buffer);
+        let lines: Vec<String> = (0..rope.len_lines())
+            .map(|r| {
+                let s = rope.line(r).to_string();
+                if s.ends_with('\n') {
+                    s[..s.len() - 1].to_string()
+                } else {
+                    s
+                }
+            })
+            .collect();
         let viewport_top = self.host.viewport().top_row as u32;
         let marks = self
             .marks
@@ -2988,10 +3001,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// `Vec<String>` (162 k allocations on a 162 k-row buffer) and the
     /// matching `restore` re-joined them — samply showed it at ~9 % of
     /// CPU on a big-paste session.
-    pub(super) fn snapshot(&self) -> (std::sync::Arc<String>, (usize, usize)) {
+    pub(super) fn snapshot(&self) -> (ropey::Rope, (usize, usize)) {
         use crate::types::Query;
         let rc = buf_cursor_rc(&self.buffer);
-        (Query::content_joined(&self.buffer), rc)
+        (Query::rope(&self.buffer), rc)
     }
 
     /// Walk one step back through the undo history. Equivalent to the
@@ -3054,11 +3067,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.restore_text(&text, cursor);
     }
 
-    /// Variant of [`Self::restore`] that takes the already-joined
-    /// document text. Used by undo / redo because the snapshot is held
-    /// as `Arc<String>` (shared with `Buffer::content_joined`) — passing
-    /// it through avoids a `Vec<String>` round-trip and a re-join.
-    pub fn restore_arc(&mut self, text: std::sync::Arc<String>, cursor: (usize, usize)) {
+    /// Restore the buffer from a `ropey::Rope` snapshot. Used by undo /
+    /// redo: snapshots are stored as `Rope` (O(1) Arc-clone via
+    /// `Buffer::rope()`), so this avoids the full-document `to_string`
+    /// materialization that the old `Arc<String>` snapshot path forced
+    /// on every undo group boundary.
+    ///
+    /// Internally materializes the rope to a `String` for `restore_text`
+    /// — paying the cost on the restore side instead of the snapshot
+    /// side trades one ~3 MB build per undo for none-per-snapshot. Undo
+    /// is user-initiated and rare; snapshots fire on every `i` / `o`.
+    pub fn restore_rope(&mut self, rope: ropey::Rope, cursor: (usize, usize)) {
+        let text = rope.to_string();
         self.restore_text(&text, cursor);
     }
 
@@ -3579,12 +3599,14 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         use std::time::Instant;
 
         let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(10));
-        let lines = self.buffer().lines();
-        let line_count = lines.len();
+        let rope = crate::types::Query::rope(self.buffer());
+        let line_count = rope.len_lines();
         let top = top_row.min(line_count.saturating_sub(1));
         let bot = bot_row.min(line_count.saturating_sub(1));
         let (top, bot) = (top.min(bot), top.max(bot));
-        let input_text = lines[top..=bot].join("\n");
+        let input_text = crate::vim::rope_row_range_str(&rope, top, bot);
+        // Materialized for the splice-back after the command succeeds.
+        let lines = crate::vim::rope_to_lines_vec(&rope);
 
         tracing::debug!(
             top_row = top,
@@ -5461,8 +5483,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
                     let r_hi = snap.anchor.0.max(snap.cursor.0);
                     let last_col = self
                         .buffer()
-                        .lines()
-                        .get(r_hi)
+                        .line(r_hi)
                         .map(|l| l.chars().count().saturating_sub(1))
                         .unwrap_or(0);
                     ((r_lo, 0), (r_hi, last_col))

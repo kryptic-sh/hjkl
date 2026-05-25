@@ -3,7 +3,7 @@
 //!
 //! [`Content`] owns everything that belongs to the document itself:
 //!
-//! - The `lines` rope (text content).
+//! - The `text` rope (text content).
 //! - The `dirty_gen` render-cache generation counter.
 //! - Manual folds (`folds`).
 //!
@@ -28,14 +28,25 @@ use crate::folds::Fold;
 /// [`crate::Buffer::new_view`] to create an additional window onto the
 /// same content.
 ///
-/// Fields intentionally parallel [`crate::Buffer`]'s pre-0.8 layout so
-/// the diff stays mechanical: `lines`, `dirty_gen`, and `folds` moved
-/// here; `cursor` stayed on `Buffer`.
+/// Uses a `ropey::Rope` for O(log N) edits and O(1) byte-length queries.
+/// The rope always contains at least one logical line: a freshly constructed
+/// `Content` holds an empty rope (which `ropey` reports as 1 line) so
+/// cursor positions never need an "is the buffer empty?" branch.
+///
+/// ## Line semantics
+///
+/// `ropey::Rope::len_lines()` and `split('\n').count()` agree for all inputs:
+/// - `""` → 1 line
+/// - `"foo\n"` → 2 lines (trailing empty line)
+/// - `"a\nb\n"` → 3 lines
+///
+/// `Rope::line(i)` returns a `RopeSlice` that includes the trailing `\n`
+/// for non-final lines. Public accessors strip it before returning `String`.
 pub struct Content {
-    /// One entry per logical row. Always non-empty: a freshly
-    /// constructed `Content` holds a single empty `String` so cursor
-    /// positions never need an "is the buffer empty?" branch.
-    pub(crate) lines: Vec<String>,
+    /// Rope-backed document text. Always non-empty: `ropey::Rope::new()`
+    /// (an empty rope) reports `len_lines() == 1`, satisfying the "at least
+    /// one row" invariant without a separate sentinel.
+    pub(crate) text: ropey::Rope,
     /// Bumps on every mutation; render cache keys against this so a
     /// per-row `Line` gets recomputed when its source row changes.
     pub(crate) dirty_gen: u64,
@@ -43,16 +54,15 @@ pub struct Content {
     /// `pub(crate)` so the [`crate::folds`] module can read/write
     /// directly (same visibility as before the split).
     pub(crate) folds: Vec<Fold>,
-    /// Cached `lines.join("\n")` keyed by the `dirty_gen` at build time.
+    /// Cached `rope.to_string()` keyed by the `dirty_gen` at build time.
     /// Multiple per-tick consumers (syntax submit, LSP notify, git
     /// signature, dirty hash) all need the joined document; rebuilding
     /// per consumer was ~4× the line-clone + alloc cost per keystroke
     /// on a 400-line file (visible as insert-mode lag).
     pub(crate) cached_joined: Option<(u64, std::sync::Arc<String>)>,
-    /// Cached canonical byte length (sum of `lines[i].len()` + n-1
-    /// separators) keyed by `dirty_gen` at compute time. Used by the
-    /// dirty-flag check so it doesn't force a full `cached_joined`
-    /// build just to read `.len()` on a multi-MB buffer.
+    /// Cached canonical byte length keyed by `dirty_gen` at compute time.
+    /// `Rope::len_bytes()` is O(1) but holding the cache avoids even that
+    /// small overhead on repeated callers within the same tick.
     pub(crate) cached_byte_len: Option<(u64, usize)>,
 }
 
@@ -66,7 +76,7 @@ impl Content {
     /// New empty content with one empty row.
     pub fn new() -> Self {
         Self {
-            lines: vec![String::new()],
+            text: ropey::Rope::new(),
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,
@@ -75,15 +85,11 @@ impl Content {
     }
 
     /// Build content from a flat string. Splits on `\n`; a trailing
-    /// `\n` produces a trailing empty line.
+    /// `\n` produces a trailing empty line (matches ropey's own convention).
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(text: &str) -> Self {
-        let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
         Self {
-            lines,
+            text: ropey::Rope::from_str(text),
             dirty_gen: 0,
             folds: Vec::new(),
             cached_joined: None,

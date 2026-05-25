@@ -554,6 +554,95 @@ impl Highlighter {
         }
     }
 
+    /// Parse `rope` from scratch without building a contiguous `String`.
+    ///
+    /// Tree-sitter's `parse_with_options` callback receives a byte offset and
+    /// returns a chunk starting there. `ropey::Rope::chunk_at_byte` is O(log N)
+    /// and returns a reference into the rope's internal B-tree node — no full
+    /// document copy required.
+    ///
+    /// Equivalent to `parse_initial(rope.to_string().as_bytes())` but avoids
+    /// the O(N) allocation. On a 1.86 M-line / 3 MB document this saves ~3 MB
+    /// per dirty_gen tick.
+    pub fn parse_initial_rope(&mut self, rope: &ropey::Rope) {
+        parse_counter::increment();
+        let total_bytes = rope.len_bytes();
+        let result = self.parser.parse_with_options(
+            &mut |byte_offset: usize, _position: tree_sitter::Point| -> &[u8] {
+                if byte_offset >= total_bytes {
+                    return &[];
+                }
+                let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte_offset);
+                let offset_within_chunk = byte_offset - chunk_start;
+                &chunk.as_bytes()[offset_within_chunk..]
+            },
+            None,
+            None,
+        );
+        if let Some(t) = result {
+            self.tree = Some(t);
+        }
+    }
+
+    /// Reparse `rope` against the retained tree (if any). Returns `true` on
+    /// success. Streaming — no contiguous `String` allocation.
+    ///
+    /// Same semantics as `parse_incremental(&[u8])` but reads bytes chunk-by-
+    /// chunk from the rope's internal B-tree nodes via `chunk_at_byte`.
+    pub fn parse_incremental_rope(&mut self, rope: &ropey::Rope) -> bool {
+        let total_bytes = rope.len_bytes();
+        if self.parse_timeout_micros == 0 {
+            let result = self.parser.parse_with_options(
+                &mut |byte_offset: usize, _position: tree_sitter::Point| -> &[u8] {
+                    if byte_offset >= total_bytes {
+                        return &[];
+                    }
+                    let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte_offset);
+                    let offset_within_chunk = byte_offset - chunk_start;
+                    &chunk.as_bytes()[offset_within_chunk..]
+                },
+                self.tree.as_ref(),
+                None,
+            );
+            match result {
+                Some(t) => {
+                    self.tree = Some(t);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            let deadline =
+                Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros);
+            let mut progress = move |_state: &tree_sitter::ParseState| {
+                if Instant::now() >= deadline {
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::Continue(())
+            };
+            let mut opts = ParseOptions::new().progress_callback(&mut progress);
+            let result = self.parser.parse_with_options(
+                &mut |byte_offset: usize, _position: tree_sitter::Point| -> &[u8] {
+                    if byte_offset >= total_bytes {
+                        return &[];
+                    }
+                    let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte_offset);
+                    let offset_within_chunk = byte_offset - chunk_start;
+                    &chunk.as_bytes()[offset_within_chunk..]
+                },
+                self.tree.as_ref(),
+                Some(opts.reborrow()),
+            );
+            match result {
+                Some(t) => {
+                    self.tree = Some(t);
+                    true
+                }
+                None => false,
+            }
+        }
+    }
+
     /// Run the highlights query against the retained tree, scoped to
     /// `byte_range`. Returns spans whose byte range overlaps `byte_range`,
     /// sorted by start byte. Empty when there's no retained tree.

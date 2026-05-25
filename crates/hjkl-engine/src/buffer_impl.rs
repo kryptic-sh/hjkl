@@ -160,16 +160,14 @@ impl Query for RopeBuffer {
         RopeBuffer::content_joined(self)
     }
 
-    fn lines_to_vec(&self) -> Vec<String> {
-        // Bulk clone under one mutex acquisition (vs N locks from the
-        // default per-row walk). Hot path: vim text-object helpers
-        // (`daw`/`ciw`/etc.) snapshot the whole buffer on every op.
-        RopeBuffer::lines(self)
-    }
-
     fn line_bytes(&self, row: usize) -> usize {
         // One lock, zero allocations. Default impl clones the row.
         RopeBuffer::line_bytes(self, row)
+    }
+
+    fn rope(&self) -> ropey::Rope {
+        // O(1): Arc-clone of the rope root — no byte copying.
+        RopeBuffer::rope(self)
     }
 
     fn slice(&self, range: core::ops::Range<Pos>) -> Cow<'_, str> {

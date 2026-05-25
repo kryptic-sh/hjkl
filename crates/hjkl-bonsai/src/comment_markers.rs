@@ -256,24 +256,39 @@ impl CommentMarkerPass {
         if first_comment_start == 0 {
             return None;
         }
-        // Collect the starts of up to CAP lines before first_comment_start.
+        // Walk backward from the first viewport comment via memchr's SIMD
+        // reverse newline iterator and stop after CAP+1 hits. Previously
+        // this was a per-byte linear scan of `bytes[..first_comment_start]`
+        // — on a 1.86 M-line buffer with the cursor near the bottom,
+        // that meant a ~3 MB scan per render (visible as paste lag).
+        // Bounded backward scan touches ~CAP × avg_row_len bytes
+        // regardless of where in the buffer the viewport sits.
         let prefix = &bytes[..first_comment_start];
-        let newline_positions: Vec<usize> = prefix
-            .iter()
-            .enumerate()
-            .filter(|&(_, b)| *b == b'\n')
-            .map(|(i, _)| i)
-            .collect();
-        let start_nl = newline_positions.len().saturating_sub(CAP);
+        let mut newline_positions: Vec<usize> =
+            memchr::memrchr_iter(b'\n', prefix).take(CAP + 1).collect();
+        // We collected from the end going back; restore forward order.
+        newline_positions.reverse();
 
         let line_starts: Vec<usize> = {
-            let mut v = vec![if start_nl == 0 {
-                0usize
+            // If we hit the CAP and there's earlier content we didn't
+            // scan, the very first line_start sits at the byte after the
+            // oldest newline we kept; otherwise the buffer's true start.
+            let start_at_buffer_head = newline_positions.len() <= CAP;
+            let mut v: Vec<usize> = Vec::with_capacity(newline_positions.len() + 1);
+            if start_at_buffer_head {
+                v.push(0);
+                for &nl in &newline_positions {
+                    v.push(nl + 1);
+                }
             } else {
-                newline_positions[start_nl - 1] + 1
-            }];
-            for &nl in &newline_positions[start_nl..] {
-                v.push(nl + 1);
+                // Drop the oldest newline; its line_start would precede
+                // our scan window.
+                for &nl in &newline_positions[1..] {
+                    v.push(nl + 1);
+                }
+                // First line_start in the window is the byte after that
+                // dropped newline.
+                v.insert(0, newline_positions[0] + 1);
             }
             v
         };

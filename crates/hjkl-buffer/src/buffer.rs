@@ -11,7 +11,7 @@ use crate::{Position, Viewport};
 ///
 /// - `cursor` — the charwise caret for this window.
 ///
-/// All document-level state (text rows, dirty generation, folds) lives on
+/// All document-level state (text rope, dirty generation, folds) lives on
 /// the inner [`Content`] and is accessed via `Arc<Mutex<Content>>`.
 /// Two `Buffer` instances that share the same `Arc` share text + folds
 /// but carry independent cursors — the Helix Document+View model.
@@ -34,16 +34,17 @@ use crate::{Position, Viewport};
 ///
 /// ## Viewport
 ///
-/// The `lines` invariant — at least one entry, never empty — is
-/// preserved by every mutation. The viewport itself (top_row, top_col,
-/// width, height, wrap, text_width) lives on the engine `Host` adapter;
-/// methods that need it take a `&Viewport` / `&mut Viewport` parameter
-/// so the rope-walking math stays here while runtime state lives there.
+/// The rope invariant — at least one line, never empty — is preserved by
+/// every mutation (ropey's empty rope already reports `len_lines() == 1`).
+/// The viewport itself (top_row, top_col, width, height, wrap, text_width)
+/// lives on the engine `Host` adapter; methods that need it take a
+/// `&Viewport` / `&mut Viewport` parameter so the rope-walking math stays
+/// here while runtime state lives there.
 pub struct Buffer {
-    /// Shared per-document state (text, dirty gen, folds).
+    /// Shared per-document state (text rope, dirty gen, folds).
     pub(crate) content: Arc<Mutex<Content>>,
-    /// Charwise cursor. `col` is bound by `lines[row].chars().count()`
-    /// in normal mode, one past it in operator-pending / insert.
+    /// Charwise cursor. `col` is bound by the char count of `row` in
+    /// normal mode, one past it in operator-pending / insert.
     cursor: Position,
 }
 
@@ -116,28 +117,46 @@ impl Buffer {
     /// view onto a shared `Content`; another view could mutate the rope
     /// between when this returns and when the caller reads the slice,
     /// invalidating any borrowed reference.
+    ///
+    /// # Hot-path note
+    ///
+    /// The engine and ex-command hot paths no longer call this — they
+    /// use `Buffer::rope()` and the `rope_to_lines_vec` / `rope_line_to_str`
+    /// helpers in `hjkl-engine` to avoid materializing the full Vec on
+    /// every operation. This method is retained for tests and secondary
+    /// callers; migrate those before deleting.
     pub fn lines(&self) -> Vec<String> {
-        self.content_lock().lines.clone()
+        let c = self.content_lock();
+        let n = c.text.len_lines();
+        (0..n).map(|i| rope_line_str(&c.text, i)).collect()
     }
 
     /// Returns a clone of the line at `row`, or `None` if out of bounds.
     ///
     /// Owned rather than `Option<&str>` for the same reason as [`Buffer::lines`]:
-    /// another view sharing the same `Content` could reallocate the backing `Vec`
+    /// another view sharing the same `Content` could reallocate the backing
     /// between the lock release and the caller's use of the reference.
     pub fn line(&self, row: usize) -> Option<String> {
-        self.content_lock().lines.get(row).cloned()
+        let c = self.content_lock();
+        let n = c.text.len_lines();
+        if row < n {
+            Some(rope_line_str(&c.text, row))
+        } else {
+            None
+        }
     }
 
     /// Byte length of row `row`, or 0 if out of bounds. One lock, no
     /// String clone — `Buffer::line(row).map(|s| s.len()).unwrap_or(0)`
     /// pays a full clone of the row's contents just to read its length.
     pub fn line_bytes(&self, row: usize) -> usize {
-        self.content_lock()
-            .lines
-            .get(row)
-            .map(|s| s.len())
-            .unwrap_or(0)
+        let c = self.content_lock();
+        let n = c.text.len_lines();
+        if row < n {
+            rope_line_bytes(&c.text, row)
+        } else {
+            0
+        }
     }
 
     /// Clone only `range` rows under a single lock. Out-of-bounds end is
@@ -149,9 +168,10 @@ impl Buffer {
     /// but only the visible viewport is ever painted.
     pub fn lines_range(&self, range: std::ops::Range<usize>) -> Vec<String> {
         let c = self.content_lock();
-        let end = range.end.min(c.lines.len());
+        let n = c.text.len_lines();
+        let end = range.end.min(n);
         let start = range.start.min(end);
-        c.lines[start..end].to_vec()
+        (start..end).map(|i| rope_line_str(&c.text, i)).collect()
     }
 
     pub fn cursor(&self) -> Position {
@@ -164,12 +184,15 @@ impl Buffer {
 
     /// Number of rows in the buffer. Always `>= 1`.
     pub fn row_count(&self) -> usize {
-        self.content.lock().unwrap().lines.len()
+        self.content.lock().unwrap().text.len_lines()
     }
 
     /// Concatenate the rows into a single `String` joined by `\n`.
+    ///
+    /// Equivalent to `rope.to_string()` — ropey's rope-to-string already
+    /// produces `\n`-joined content matching `split('\n').join("\n")`.
     pub fn as_string(&self) -> String {
-        self.content.lock().unwrap().lines.join("\n")
+        self.content.lock().unwrap().text.to_string()
     }
 
     // ── Cursor ops ────────────────────────────────────────────────
@@ -180,9 +203,10 @@ impl Buffer {
     /// by this call — it survives `set_cursor` intentionally.
     pub fn set_cursor(&mut self, pos: Position) {
         let c = self.content.lock().unwrap();
-        let last_row = c.lines.len().saturating_sub(1);
+        let n = c.text.len_lines();
+        let last_row = n.saturating_sub(1);
         let row = pos.row.min(last_row);
-        let line_chars = c.lines[row].chars().count();
+        let line_chars = rope_line_char_count(&c.text, row);
         let col = pos.col.min(line_chars);
         drop(c);
         self.cursor = Position::new(row, col);
@@ -246,7 +270,8 @@ impl Buffer {
             return 0;
         }
         let c = self.content.lock().unwrap();
-        let last = c.lines.len().saturating_sub(1);
+        let n = c.text.len_lines();
+        let last = n.saturating_sub(1);
         let end = end.min(last);
         let v = *viewport;
         let mut total = 0usize;
@@ -257,8 +282,8 @@ impl Buffer {
             if matches!(v.wrap, crate::Wrap::None) || v.text_width == 0 {
                 total += 1;
             } else {
-                let line = c.lines.get(r).map(String::as_str).unwrap_or("");
-                total += crate::wrap::wrap_segments(line, v.text_width, v.wrap).len();
+                let line = rope_line_str(&c.text, r);
+                total += crate::wrap::wrap_segments(&line, v.text_width, v.wrap).len();
             }
         }
         total
@@ -271,7 +296,8 @@ impl Buffer {
             return 0;
         }
         let c = self.content.lock().unwrap();
-        let last = c.lines.len().saturating_sub(1);
+        let n = c.text.len_lines();
+        let last = n.saturating_sub(1);
         let mut total = 0usize;
         let mut row = last;
         loop {
@@ -280,8 +306,8 @@ impl Buffer {
                 total += if matches!(v.wrap, crate::Wrap::None) || v.text_width == 0 {
                     1
                 } else {
-                    let line = c.lines.get(row).map(String::as_str).unwrap_or("");
-                    crate::wrap::wrap_segments(line, v.text_width, v.wrap).len()
+                    let line = rope_line_str(&c.text, row);
+                    crate::wrap::wrap_segments(&line, v.text_width, v.wrap).len()
                 };
             }
             if total >= height {
@@ -297,9 +323,10 @@ impl Buffer {
     /// Clamp `pos` to the buffer's content.
     pub fn clamp_position(&self, pos: Position) -> Position {
         let c = self.content.lock().unwrap();
-        let last_row = c.lines.len().saturating_sub(1);
+        let n = c.text.len_lines();
+        let last_row = n.saturating_sub(1);
         let row = pos.row.min(last_row);
-        let line_chars = c.lines[row].chars().count();
+        let line_chars = rope_line_char_count(&c.text, row);
         let col = pos.col.min(line_chars);
         Position::new(row, col)
     }
@@ -309,14 +336,11 @@ impl Buffer {
     pub fn replace_all(&mut self, text: &str) {
         let new_cursor = {
             let mut c = self.content.lock().unwrap();
-            let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-            if lines.is_empty() {
-                lines.push(String::new());
-            }
-            c.lines = lines;
-            let last_row = c.lines.len().saturating_sub(1);
+            c.text = ropey::Rope::from_str(text);
+            let n = c.text.len_lines();
+            let last_row = n.saturating_sub(1);
             let row = self.cursor.row.min(last_row);
-            let line_chars = c.lines[row].chars().count();
+            let line_chars = rope_line_char_count(&c.text, row);
             let col = self.cursor.col.min(line_chars);
             c.dirty_gen = c.dirty_gen.wrapping_add(1);
             c.cached_joined = None;
@@ -336,17 +360,11 @@ impl Buffer {
         c.cached_byte_len = None;
     }
 
-    /// Canonical byte length of the document (sum of every row's bytes
-    /// plus n-1 separator newlines — same shape as `content_joined().len()`
-    /// but without allocating the joined `String`). Cached against
-    /// `dirty_gen` so repeated callers in the same tick pay O(1) after
-    /// the first compute.
-    ///
-    /// Use this instead of `content_joined().len()` for code paths that
-    /// only need the length — the dirty-flag check is the canonical
-    /// example. On a 1.86 M-line file `content_joined` allocates ~3 MB
-    /// of `String` per dirty_gen; this method walks `lines.iter().map(|l| l.len()).sum()`
-    /// under the same lock with zero allocations.
+    /// Canonical byte length of the document. `Rope::len_bytes()` is O(1)
+    /// and returns the same value as `to_string().len()` (i.e.
+    /// `sum(line_bytes) + (n_lines-1)` separators). Cached against
+    /// `dirty_gen` for API compatibility; the O(1) rope call makes the
+    /// cache essentially free but keeps the invalidation contract identical.
     pub fn byte_len(&self) -> usize {
         let mut c = self.content.lock().unwrap();
         let dg = c.dirty_gen;
@@ -355,20 +373,19 @@ impl Buffer {
         {
             return len;
         }
-        let n = c.lines.len();
-        let total: usize = c.lines.iter().map(|l| l.len()).sum::<usize>() + n.saturating_sub(1);
+        let total = c.text.len_bytes();
         c.cached_byte_len = Some((dg, total));
         total
     }
 
-    /// Return an `Arc<String>` of the full document joined by `\n`,
-    /// cached against `dirty_gen`. Multiple per-tick consumers (syntax
-    /// pipeline, LSP notify, git signature, dirty hash) share the
-    /// same `Arc` for the same generation — first caller pays the join
-    /// cost (one alloc + one lock), the rest are O(1).
+    /// Return an `Arc<String>` of the full document, cached against
+    /// `dirty_gen`. Multiple per-tick consumers (syntax pipeline, LSP
+    /// notify, git signature, dirty hash) share the same `Arc` for the
+    /// same generation — first caller pays the `rope.to_string()` cost
+    /// (one alloc + one lock), the rest are O(1).
     ///
     /// Cache invalidates automatically on every `dirty_gen_bump` and on
-    /// `set_content`, so callers never need to manage invalidation.
+    /// `replace_all`, so callers never need to manage invalidation.
     pub fn content_joined(&self) -> std::sync::Arc<String> {
         let mut c = self.content.lock().unwrap();
         let dg = c.dirty_gen;
@@ -377,12 +394,24 @@ impl Buffer {
         {
             return std::sync::Arc::clone(s);
         }
-        let joined = std::sync::Arc::new(c.lines.join("\n"));
+        let joined = std::sync::Arc::new(c.text.to_string());
         c.cached_joined = Some((dg, std::sync::Arc::clone(&joined)));
         joined
     }
 
-    /// Shared access to the folds vec. Crate-internal.
+    /// Borrow the underlying rope. Hot-path consumers (tree-sitter
+    /// streaming parse, byte-range slicing) should use this instead of
+    /// `content_joined()` to avoid materializing the whole document as
+    /// a `String`.
+    ///
+    /// `ropey::Rope::clone` is O(1) — it Arc-clones the root node.
+    /// The clone gives the caller a snapshot they can read without
+    /// holding the content mutex.
+    pub fn rope(&self) -> ropey::Rope {
+        self.content.lock().unwrap().text.clone()
+    }
+
+    /// Shared access to the content guard. Crate-internal.
     pub(crate) fn content_lock(&self) -> MutexGuard<'_, Content> {
         self.content.lock().unwrap()
     }
@@ -406,8 +435,8 @@ impl Buffer {
             if c.folds.iter().any(|f| f.hides(r)) {
                 continue;
             }
-            let line = c.lines.get(r).map(String::as_str).unwrap_or("");
-            let segs = crate::wrap::wrap_segments(line, v.text_width, v.wrap);
+            let line = rope_line_str(&c.text, r);
+            let segs = crate::wrap::wrap_segments(&line, v.text_width, v.wrap);
             if r == cursor.row {
                 let seg_idx = crate::wrap::segment_for_col(&segs, cursor.col);
                 return Some(screen + seg_idx);
@@ -416,6 +445,52 @@ impl Buffer {
         }
         None
     }
+}
+
+// ── Rope line helpers (free functions over &ropey::Rope) ─────────────
+
+/// Return logical line `row` as a `String`, stripping the trailing `\n`
+/// that ropey includes for non-final lines.
+pub(crate) fn rope_line_str(rope: &ropey::Rope, row: usize) -> String {
+    let slice = rope.line(row);
+    let s = slice.to_string();
+    // ropey includes the trailing '\n' for non-final lines; strip it.
+    if s.ends_with('\n') {
+        s[..s.len() - 1].to_string()
+    } else {
+        s
+    }
+}
+
+/// Byte length of logical line `row` (excluding the trailing `\n`).
+pub(crate) fn rope_line_bytes(rope: &ropey::Rope, row: usize) -> usize {
+    let slice = rope.line(row);
+    let bytes = slice.len_bytes();
+    // ropey includes the '\n' byte for non-final lines; subtract it.
+    if row + 1 < rope.len_lines() && bytes > 0 {
+        bytes - 1
+    } else {
+        bytes
+    }
+}
+
+/// Char count of logical line `row` (excluding the trailing `\n`).
+pub(crate) fn rope_line_char_count(rope: &ropey::Rope, row: usize) -> usize {
+    let slice = rope.line(row);
+    let chars = slice.len_chars();
+    // ropey includes the '\n' char for non-final lines; subtract it.
+    if row + 1 < rope.len_lines() && chars > 0 {
+        chars - 1
+    } else {
+        chars
+    }
+}
+
+/// Char index from `(row, col)` where `col` is a char index within the line.
+pub(crate) fn pos_to_char_idx(rope: &ropey::Rope, row: usize, col: usize) -> usize {
+    let line_start = rope.line_to_char(row);
+    let line_char_count = rope_line_char_count(rope, row);
+    line_start + col.min(line_char_count)
 }
 
 #[cfg(test)]

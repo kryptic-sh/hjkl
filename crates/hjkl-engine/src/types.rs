@@ -1176,22 +1176,16 @@ pub trait Query: Send {
         self.line(row as u32).len()
     }
 
-    /// Clone every row into an owned `Vec<String>`. Vim text-object
-    /// helpers (word/sentence/quote/bracket) need a full snapshot to
-    /// walk byte-by-byte, and per-row `line(r)` calls on a
-    /// mutex-backed backend pay one lock per row — a 100K-row buffer
-    /// pays 100K locks per `daw`/`ciw`. Backends with a contiguous
-    /// row store should override this with a single-lock bulk clone.
+    /// Return a cheaply-cloned rope snapshot of the buffer. O(1) for the
+    /// canonical `hjkl_buffer::Buffer` (Arc-backed B-tree clone). Used by
+    /// the syntax pipeline's `parse_initial_rope` / `parse_incremental_rope`
+    /// to stream bytes into tree-sitter without materializing a contiguous
+    /// `String`.
     ///
-    /// Default impl preserves the per-row walk so non-canonical
-    /// backends keep working.
-    fn lines_to_vec(&self) -> Vec<String> {
-        let n = self.line_count() as usize;
-        let mut out = Vec::with_capacity(n);
-        for r in 0..n {
-            out.push(self.line(r as u32));
-        }
-        out
+    /// Default impl builds a rope from `content_joined()` — correct but
+    /// O(N). Backends that own a rope internally should override.
+    fn rope(&self) -> ropey::Rope {
+        ropey::Rope::from_str(&self.content_joined())
     }
 }
 

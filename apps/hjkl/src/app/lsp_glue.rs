@@ -34,29 +34,26 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
 /// each change is applied (and *after* every preceding change in the same
 /// array). Our `ContentEdit`s were recorded against the buffer's evolving
 /// state during the edit run, so they already satisfy this contract — we
-/// just need the replacement text. Slice it out of the post-edit
-/// `content_joined()` cache: `new_text = &source[start_byte..new_end_byte]`.
+/// just need the replacement text. Slice it directly from the rope via
+/// `byte_slice(start..end).to_string()`: ropey returns a `RopeSlice` in
+/// O(log N) and converts only the slice's bytes to a `String` — no
+/// document-wide allocation. Replaces the prior path which forced a
+/// full `content_joined()` build (~3 MB on a 1.86 M-line file, ~15 % of
+/// per-keystroke CPU when LSP was attached).
 ///
 /// Caller MUST verify the server uses UTF-8 `positionEncoding`; this
 /// function passes byte columns straight through.
 fn build_text_changes(
-    source: &str,
+    rope: &ropey::Rope,
     edits: &[hjkl_engine::ContentEdit],
 ) -> Vec<hjkl_lsp::TextChange> {
-    let bytes = source.as_bytes();
+    let len_bytes = rope.len_bytes();
     edits
         .iter()
         .map(|e| {
-            let start = e.start_byte.min(bytes.len());
-            let end = e.new_end_byte.min(bytes.len()).max(start);
-            // SAFETY: ContentEdit byte ranges are produced by the engine
-            // and land on UTF-8 boundaries (the buffer never splits a
-            // codepoint). `from_utf8_unchecked` would be valid; we use the
-            // checked path so a future engine bug surfaces as a panic in
-            // dev rather than UB.
-            let text = std::str::from_utf8(&bytes[start..end])
-                .unwrap_or("")
-                .to_string();
+            let start = e.start_byte.min(len_bytes);
+            let end = e.new_end_byte.min(len_bytes).max(start);
+            let text = rope.byte_slice(start..end).to_string();
             hjkl_lsp::TextChange {
                 start_line: e.start_position.0,
                 start_col: e.start_position.1,
@@ -296,11 +293,14 @@ impl App {
     /// (`:e!` / formatter), the server uses a non-UTF-8 position
     /// encoding, or no edits are tracked.
     pub(crate) fn lsp_notify_change_active(&mut self, edits: &[hjkl_engine::ContentEdit]) {
-        let mgr = match self.lsp.as_ref() {
-            Some(m) => m,
-            None => return,
-        };
+        if self.lsp.as_ref().is_none() {
+            return;
+        }
+        // Compute sync-mode decision before taking the mutable slot
+        // borrow — `lsp_supports_incremental_utf8` walks `self.lsp_state`.
+        let use_incremental = !edits.is_empty() && self.lsp_supports_incremental_utf8();
 
+        let mgr = self.lsp.as_ref().unwrap();
         let slot_idx = self.focused_slot_idx();
         let slot = &mut self.slots[slot_idx];
         let dg = slot.editor.buffer().dirty_gen();
@@ -312,18 +312,19 @@ impl App {
         slot.last_lsp_dirty_gen = Some(dg);
 
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        let text = slot.editor.buffer().content_joined();
 
-        // Decide sync mode. Incremental requires:
-        //   - non-empty `edits` (content_reset paths can't express a delta)
-        //   - server advertises incremental sync support
-        //   - server uses UTF-8 position encoding (we track byte columns
-        //     natively; UTF-16 conversion is per-line work we skip for now)
-        let use_incremental = !edits.is_empty() && self.lsp_supports_incremental_utf8();
         if use_incremental {
-            let changes = build_text_changes(&text, edits);
+            // Slice per-edit text directly from the rope — avoids the
+            // ~3 MB content_joined build that dominated the LSP path on
+            // huge files. `Buffer::rope()` is an O(1) Arc-clone.
+            let rope = slot.editor.buffer().rope();
+            let changes = build_text_changes(&rope, edits);
             mgr.notify_change_incremental(buffer_id, changes);
         } else {
+            // Full-sync fallback (server doesn't support incremental,
+            // or `:e!` / formatter wiped the edit log): we still need
+            // the whole document, so pay for `content_joined` here.
+            let text = slot.editor.buffer().content_joined();
             mgr.notify_change(buffer_id, text);
         }
     }

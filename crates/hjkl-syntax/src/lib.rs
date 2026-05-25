@@ -598,7 +598,17 @@ impl SyntaxLayer {
             client.invalidate_cache();
         }
 
-        // Build source. We always need it for parse + highlight.
+        // Get a rope snapshot for streaming parse (O(1) Arc-clone from
+        // hjkl_buffer::Buffer; falls back to building from content_joined
+        // for non-rope backends). Used by parse_initial_rope /
+        // parse_incremental_rope so tree-sitter reads bytes chunk-by-chunk
+        // without materializing the whole document as a contiguous String.
+        let rope = buffer.rope();
+
+        // Build source bytes — still needed for highlight_range_with_injections
+        // (tree-sitter's QueryCursor reads node byte ranges from &[u8]).
+        // content_joined() is cached per dirty_gen so multiple per-tick
+        // consumers share one Arc<String> allocation.
         let source = buffer.content_joined();
         let bytes = source.as_bytes();
 
@@ -625,12 +635,14 @@ impl SyntaxLayer {
             arc
         };
 
-        // Reparse only when needed.
+        // Reparse only when needed. Use rope-streaming parse to avoid passing
+        // the full bytes slice into the parser (tree-sitter reads chunk-by-chunk
+        // via the closure; no contiguous copy required for the parse step).
         let needs_reparse = client.parsed_dirty_gen != Some(dg);
         {
             let highlighter = client.highlighter.as_mut()?;
             if highlighter.tree().is_none() {
-                highlighter.parse_initial(bytes);
+                highlighter.parse_initial_rope(&rope);
                 if highlighter.tree().is_some() {
                     client.parsed_dirty_gen = Some(dg);
                 }
@@ -640,7 +652,7 @@ impl SyntaxLayer {
                 // ranges). Computing `old.changed_ranges(&new)` walks both
                 // trees and was ~54 % of per-keystroke CPU on a 1.86 M-line
                 // file.
-                let ok = highlighter.parse_incremental(bytes);
+                let ok = highlighter.parse_incremental_rope(&rope);
                 if ok && highlighter.tree().is_some() {
                     client.parsed_dirty_gen = Some(dg);
                 }

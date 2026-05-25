@@ -75,8 +75,8 @@ use crate::VimMode;
 use crate::input::{Input, Key};
 
 use crate::buf_helpers::{
-    buf_cursor_pos, buf_line, buf_line_bytes, buf_line_chars, buf_lines_to_vec, buf_row_count,
-    buf_set_cursor_pos, buf_set_cursor_rc,
+    buf_cursor_pos, buf_line, buf_line_bytes, buf_line_chars, buf_row_count, buf_set_cursor_pos,
+    buf_set_cursor_rc,
 };
 use crate::editor::Editor;
 
@@ -544,10 +544,11 @@ pub struct InsertSession {
     /// Min/max row visited during this session. Widens on every key.
     pub row_min: usize,
     pub row_max: usize,
-    /// Snapshot of the full buffer at session entry. Used to diff the
-    /// affected row window at finish without being fooled by cursor
-    /// navigation through rows the user never edited.
-    pub before_lines: Vec<String>,
+    /// O(1) rope snapshot of the full buffer at session entry. Used to
+    /// diff the affected row window at finish without being fooled by
+    /// cursor navigation through rows the user never edited.
+    /// `ropey::Rope::clone` is Arc-clone — no byte copying.
+    pub before_rope: ropey::Rope,
     pub reason: InsertReason,
 }
 
@@ -1015,21 +1016,21 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     let Some(session) = ed.vim.insert_session.take() else {
         return;
     };
-    let lines = buf_lines_to_vec(&ed.buffer);
+    let after_rope = crate::types::Query::rope(&ed.buffer);
     // Clamp both slices to their respective bounds — the buffer may have
     // grown (Enter splits rows) or shrunk (Backspace joins rows) during
     // the session, so row_max can overshoot either side.
-    let after_end = session.row_max.min(lines.len().saturating_sub(1));
-    let before_end = session
-        .row_max
-        .min(session.before_lines.len().saturating_sub(1));
-    let before = if before_end >= session.row_min && session.row_min < session.before_lines.len() {
-        session.before_lines[session.row_min..=before_end].join("\n")
+    let before_n = session.before_rope.len_lines();
+    let after_n = after_rope.len_lines();
+    let after_end = session.row_max.min(after_n.saturating_sub(1));
+    let before_end = session.row_max.min(before_n.saturating_sub(1));
+    let before = if before_end >= session.row_min && session.row_min < before_n {
+        rope_row_range_str(&session.before_rope, session.row_min, before_end)
     } else {
         String::new()
     };
-    let after = if after_end >= session.row_min && session.row_min < lines.len() {
-        lines[session.row_min..=after_end].join("\n")
+    let after = if after_end >= session.row_min && session.row_min < after_n {
+        rope_row_range_str(&after_rope, session.row_min, after_end)
     } else {
         String::new()
     };
@@ -1168,7 +1169,7 @@ pub(crate) fn begin_insert<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_lines: buf_lines_to_vec(&ed.buffer),
+        before_rope: crate::types::Query::rope(&ed.buffer),
         reason,
     });
     ed.vim.mode = Mode::Insert;
@@ -1203,14 +1204,10 @@ pub(crate) fn break_undo_group_in_insert<H: crate::types::Host>(
         return;
     }
     ed.push_undo();
-    let n = crate::types::Query::line_count(&ed.buffer) as usize;
-    let mut lines: Vec<String> = Vec::with_capacity(n);
-    for r in 0..n {
-        lines.push(crate::types::Query::line(&ed.buffer, r as u32).to_string());
-    }
+    let before_rope = crate::types::Query::rope(&ed.buffer);
     let row = crate::types::Cursor::cursor(&ed.buffer).line as usize;
     if let Some(ref mut session) = ed.vim.insert_session {
-        session.before_lines = lines;
+        session.before_rope = before_rope;
         session.row_min = row;
         session.row_max = row;
     }
@@ -2902,8 +2899,7 @@ pub(crate) fn exit_visual_to_normal_bridge<H: crate::types::Host>(
                 let r_hi = snap.anchor.0.max(snap.cursor.0);
                 let last_col = ed
                     .buffer()
-                    .lines()
-                    .get(r_hi)
+                    .line(r_hi)
                     .map(|l| l.chars().count().saturating_sub(1))
                     .unwrap_or(0);
                 ((r_lo, 0), (r_hi, last_col))
@@ -4421,7 +4417,7 @@ fn begin_insert_noundo<H: crate::types::Host>(
         count,
         row_min: row,
         row_max: row,
-        before_lines: buf_lines_to_vec(&ed.buffer),
+        before_rope: crate::types::Query::rope(&ed.buffer),
         reason,
     });
     ed.vim.mode = Mode::Insert;
@@ -5007,6 +5003,51 @@ pub(crate) fn text_object_around_tag_bridge<H: crate::types::Host>(
     tag_text_object(ed, false)
 }
 
+// ─── Rope utility helpers ──────────────────────────────────────────────────
+
+/// Return row `r` from a rope as an owned `String`, stripping the
+/// trailing `\n` that ropey includes on non-final lines.
+pub(crate) fn rope_line_to_str(rope: &ropey::Rope, r: usize) -> String {
+    let s = rope.line(r).to_string();
+    // ropey includes the newline; strip it so callers see bare content.
+    if s.ends_with('\n') {
+        s[..s.len() - 1].to_string()
+    } else {
+        s
+    }
+}
+
+/// Join rows `lo..=hi` from a rope into a single `String` separated by
+/// `\n`. Callers must ensure `lo <= hi < rope.len_lines()`.
+pub(crate) fn rope_row_range_str(rope: &ropey::Rope, lo: usize, hi: usize) -> String {
+    let n = rope.len_lines();
+    let lo = lo.min(n.saturating_sub(1));
+    let hi = hi.min(n.saturating_sub(1));
+    if lo > hi {
+        return String::new();
+    }
+    // Use byte-slice to grab the full range in one rope walk.
+    let start_byte = rope.line_to_byte(lo);
+    // End byte: start of line hi+1, minus the newline separator, or
+    // len_bytes() when hi is the last line.
+    let end_byte = if hi + 1 < n {
+        // line_to_byte(hi+1) points at the \n-terminated start of
+        // the next line; step back one byte to drop that trailing \n.
+        rope.line_to_byte(hi + 1).saturating_sub(1)
+    } else {
+        rope.len_bytes()
+    };
+    rope.byte_slice(start_byte..end_byte).to_string()
+}
+
+/// Snapshot all rows from a rope as `Vec<String>` (no trailing `\n`).
+/// Use only when the caller truly needs mutable per-row access; prefer
+/// rope iterators otherwise.
+pub(crate) fn rope_to_lines_vec(rope: &ropey::Rope) -> Vec<String> {
+    let n = rope.len_lines();
+    (0..n).map(|r| rope_line_to_str(rope, r)).collect()
+}
+
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
 /// Splits on blank-line boundaries so paragraph structure is
 /// preserved. Each paragraph's words are joined with single spaces
@@ -5017,7 +5058,7 @@ fn reflow_rows<H: crate::types::Host>(
     bot: usize,
 ) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let bot = bot.min(lines.len().saturating_sub(1));
     if top > bot {
         return;
@@ -5121,7 +5162,7 @@ fn indent_rows<H: crate::types::Host>(
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth * count.max(1);
     let pad: String = " ".repeat(width);
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         if !line.is_empty() {
@@ -5145,7 +5186,7 @@ fn outdent_rows<H: crate::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth * count.max(1);
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let bot = bot.min(lines.len().saturating_sub(1));
     for line in lines.iter_mut().take(bot + 1).skip(top) {
         let strip: usize = line
@@ -5272,7 +5313,7 @@ fn auto_indent_rows<H: crate::types::Host>(
         "\t".to_string()
     };
 
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let bot = bot.min(lines.len().saturating_sub(1));
 
     // Accumulate bracket depth from row 0 up to `top - 1` so we start with
@@ -5842,7 +5883,7 @@ fn transform_block_case<H: crate::types::Host>(
     left: usize,
     right: usize,
 ) {
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -5874,13 +5915,14 @@ fn block_yank<H: crate::types::Host>(
     left: usize,
     right: usize,
 ) -> String {
-    let lines = buf_lines_to_vec(&ed.buffer);
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n = rope.len_lines();
     let mut rows: Vec<String> = Vec::new();
     for r in top..=bot {
-        let line = match lines.get(r) {
-            Some(l) => l,
-            None => break,
-        };
+        if r >= n {
+            break;
+        }
+        let line = rope_line_to_str(&rope, r);
         let chars: Vec<char> = line.chars().collect();
         let end = (right + 1).min(chars.len());
         if left >= chars.len() {
@@ -5921,7 +5963,7 @@ pub(crate) fn block_replace<H: crate::types::Host>(
     let (top, bot, left, right) = block_bounds(ed);
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> = buf_lines_to_vec(&ed.buffer);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     for r in top..=bot.min(lines.len().saturating_sub(1)) {
         let chars: Vec<char> = lines[r].chars().collect();
         if left >= chars.len() {
@@ -5991,34 +6033,35 @@ fn sentence_boundary<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     forward: bool,
 ) -> Option<(usize, usize)> {
-    let lines = buf_lines_to_vec(&ed.buffer);
-    if lines.is_empty() {
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n_lines = rope.len_lines();
+    if n_lines == 0 {
         return None;
     }
+    // Per-line char counts (excluding trailing \n) for pos↔idx conversion.
+    let line_lens: Vec<usize> = (0..n_lines)
+        .map(|r| rope_line_to_str(&rope, r).chars().count())
+        .collect();
     let pos_to_idx = |pos: (usize, usize)| -> usize {
-        let mut idx = 0;
-        for line in lines.iter().take(pos.0) {
-            idx += line.chars().count() + 1;
-        }
+        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
         idx + pos.1
     };
     let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (r, line) in lines.iter().enumerate() {
-            let len = line.chars().count();
+        for (r, &len) in line_lens.iter().enumerate() {
             if idx <= len {
                 return (r, idx);
             }
             idx -= len + 1;
         }
-        let last = lines.len().saturating_sub(1);
-        (last, lines[last].chars().count())
+        let last = n_lines.saturating_sub(1);
+        (last, line_lens[last])
     };
-    let mut chars: Vec<char> = Vec::new();
-    for (r, line) in lines.iter().enumerate() {
-        chars.extend(line.chars());
-        if r + 1 < lines.len() {
-            chars.push('\n');
-        }
+    // Build flat char vector: rope chars already include \n between lines.
+    // ropey's last line has no trailing \n; intermediate ones do.
+    let mut chars: Vec<char> = rope.chars().collect();
+    // Strip a trailing \n if ropey emitted one on the final line.
+    if chars.last() == Some(&'\n') {
+        chars.pop();
     }
     if chars.is_empty() {
         return None;
@@ -6104,36 +6147,33 @@ fn sentence_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let lines = buf_lines_to_vec(&ed.buffer);
-    if lines.is_empty() {
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n_lines = rope.len_lines();
+    if n_lines == 0 {
         return None;
     }
     // Flatten the buffer so a sentence can span lines (vim's behaviour).
     // Newlines count as whitespace for boundary detection.
+    let line_lens: Vec<usize> = (0..n_lines)
+        .map(|r| rope_line_to_str(&rope, r).chars().count())
+        .collect();
     let pos_to_idx = |pos: (usize, usize)| -> usize {
-        let mut idx = 0;
-        for line in lines.iter().take(pos.0) {
-            idx += line.chars().count() + 1;
-        }
+        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
         idx + pos.1
     };
     let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (r, line) in lines.iter().enumerate() {
-            let len = line.chars().count();
+        for (r, &len) in line_lens.iter().enumerate() {
             if idx <= len {
                 return (r, idx);
             }
             idx -= len + 1;
         }
-        let last = lines.len().saturating_sub(1);
-        (last, lines[last].chars().count())
+        let last = n_lines.saturating_sub(1);
+        (last, line_lens[last])
     };
-    let mut chars: Vec<char> = Vec::new();
-    for (r, line) in lines.iter().enumerate() {
-        chars.extend(line.chars());
-        if r + 1 < lines.len() {
-            chars.push('\n');
-        }
+    let mut chars: Vec<char> = rope.chars().collect();
+    if chars.last() == Some(&'\n') {
+        chars.pop();
     }
     if chars.is_empty() {
         return None;
@@ -6214,37 +6254,34 @@ fn tag_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let lines = buf_lines_to_vec(&ed.buffer);
-    if lines.is_empty() {
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n_lines = rope.len_lines();
+    if n_lines == 0 {
         return None;
     }
     // Flatten char positions so we can compare cursor against tag
     // ranges without per-row arithmetic. `\n` between lines counts as
     // a single char.
+    let line_lens: Vec<usize> = (0..n_lines)
+        .map(|r| rope_line_to_str(&rope, r).chars().count())
+        .collect();
     let pos_to_idx = |pos: (usize, usize)| -> usize {
-        let mut idx = 0;
-        for line in lines.iter().take(pos.0) {
-            idx += line.chars().count() + 1;
-        }
+        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
         idx + pos.1
     };
     let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (r, line) in lines.iter().enumerate() {
-            let len = line.chars().count();
+        for (r, &len) in line_lens.iter().enumerate() {
             if idx <= len {
                 return (r, idx);
             }
             idx -= len + 1;
         }
-        let last = lines.len().saturating_sub(1);
-        (last, lines[last].chars().count())
+        let last = n_lines.saturating_sub(1);
+        (last, line_lens[last])
     };
-    let mut chars: Vec<char> = Vec::new();
-    for (r, line) in lines.iter().enumerate() {
-        chars.extend(line.chars());
-        if r + 1 < lines.len() {
-            chars.push('\n');
-        }
+    let mut chars: Vec<char> = rope.chars().collect();
+    if chars.last() == Some(&'\n') {
+        chars.pop();
     }
     let cursor_idx = pos_to_idx(ed.cursor());
 
@@ -6474,7 +6511,7 @@ fn bracket_text_object<H: crate::types::Host>(
         _ => return None,
     };
     let (row, col) = ed.cursor();
-    let lines = buf_lines_to_vec(&ed.buffer);
+    let lines = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let lines = lines.as_slice();
     // Walk backward from cursor to find unbalanced opening. When the
     // cursor isn't inside any pair, fall back to scanning forward for
@@ -6629,12 +6666,18 @@ fn paragraph_text_object<H: crate::types::Host>(
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
     let (row, _) = ed.cursor();
-    let lines = buf_lines_to_vec(&ed.buffer);
-    if lines.is_empty() {
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n_lines = rope.len_lines();
+    if n_lines == 0 {
         return None;
     }
     // A paragraph is a run of non-blank lines.
-    let is_blank = |r: usize| lines.get(r).map(|s| s.trim().is_empty()).unwrap_or(true);
+    let is_blank = |r: usize| -> bool {
+        if r >= n_lines {
+            return true;
+        }
+        rope_line_to_str(&rope, r).trim().is_empty()
+    };
     if is_blank(row) {
         return None;
     }
@@ -6643,14 +6686,14 @@ fn paragraph_text_object<H: crate::types::Host>(
         top -= 1;
     }
     let mut bot = row;
-    while bot + 1 < lines.len() && !is_blank(bot + 1) {
+    while bot + 1 < n_lines && !is_blank(bot + 1) {
         bot += 1;
     }
     // For `ap`, include one trailing blank line if present.
-    if !inner && bot + 1 < lines.len() && is_blank(bot + 1) {
+    if !inner && bot + 1 < n_lines && is_blank(bot + 1) {
         bot += 1;
     }
-    let end_col = lines[bot].chars().count();
+    let end_col = rope_line_to_str(&rope, bot).chars().count();
     Some(((top, 0), (bot, end_col)))
 }
 
@@ -6667,12 +6710,13 @@ fn read_vim_range<H: crate::types::Host>(
 ) -> String {
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
-    let lines = buf_lines_to_vec(&ed.buffer);
+    let rope = crate::types::Query::rope(&ed.buffer);
+    let n_lines = rope.len_lines();
     match kind {
         RangeKind::Linewise => {
             let lo = top.0;
-            let hi = bot.0.min(lines.len().saturating_sub(1));
-            let mut text = lines[lo..=hi].join("\n");
+            let hi = bot.0.min(n_lines.saturating_sub(1));
+            let mut text = rope_row_range_str(&rope, lo, hi);
             text.push('\n');
             text
         }
@@ -6681,7 +6725,10 @@ fn read_vim_range<H: crate::types::Host>(
             // Walk row-by-row collecting chars in `[top, end_exclusive)`.
             let mut out = String::new();
             for row in top.0..=bot.0 {
-                let line = lines.get(row).map(String::as_str).unwrap_or("");
+                if row >= n_lines {
+                    break;
+                }
+                let line = rope_line_to_str(&rope, row);
                 let lo = if row == top.0 { top.1 } else { 0 };
                 let hi_unclamped = if row == bot.0 {
                     if inclusive { bot.1 + 1 } else { bot.1 }
@@ -7111,10 +7158,10 @@ fn do_paste<H: crate::types::Host>(
 }
 
 pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some((text, cursor)) = ed.undo_stack.pop() {
+    if let Some((rope, cursor)) = ed.undo_stack.pop() {
         let current = ed.snapshot();
         ed.redo_stack.push(current);
-        ed.restore_arc(text, cursor);
+        ed.restore_rope(rope, cursor);
     }
     ed.vim.mode = Mode::Normal;
     // The restored cursor came from a snapshot taken in insert mode
@@ -7124,11 +7171,11 @@ pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer
 }
 
 pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some((text, cursor)) = ed.redo_stack.pop() {
+    if let Some((rope, cursor)) = ed.redo_stack.pop() {
         let current = ed.snapshot();
         ed.undo_stack.push(current);
         ed.cap_undo();
-        ed.restore_arc(text, cursor);
+        ed.restore_rope(rope, cursor);
     }
     ed.vim.mode = Mode::Normal;
 }

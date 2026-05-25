@@ -77,18 +77,6 @@ pub(crate) fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
     Some(Query::line(b, row as u32))
 }
 
-/// Snapshot every line into a `Vec<String>`. Allocates — call sites
-/// that previously borrowed `lines() -> &[String]` and immediately
-/// `.to_vec()`'d / `.iter().map(...)`'d collapse cleanly onto this.
-///
-/// Delegates to [`Query::lines_to_vec`] so backends that can clone in
-/// bulk under a single lock (e.g. the canonical `hjkl_buffer::Buffer`)
-/// avoid the per-row mutex acquire that the default walk would pay.
-#[inline]
-pub(crate) fn buf_lines_to_vec<B: Query + ?Sized>(b: &B) -> Vec<String> {
-    Query::lines_to_vec(b)
-}
-
 /// Length (chars) of `row`. Returns 0 for out-of-bounds rows so call
 /// sites that previously did
 /// `buf.line(r).map(|l| l.chars().count()).unwrap_or(0)` collapse to

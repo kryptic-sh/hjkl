@@ -15,6 +15,7 @@ readme = "README.md"
 [dependencies]
 regex = "1"
 unicode-width = "0.2"
+ropey = "1.6"
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = [

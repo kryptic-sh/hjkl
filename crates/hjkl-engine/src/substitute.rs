@@ -202,10 +202,11 @@ pub fn apply_substitute<H: crate::types::Host>(
 
     let start = *line_range.start() as usize;
     let end = *line_range.end() as usize;
-    let total = ed.buffer().lines().len();
+    let rope = crate::types::Query::rope(ed.buffer());
+    let total = rope.len_lines();
 
     let clamp_end = end.min(total.saturating_sub(1));
-    let mut new_lines: Vec<String> = ed.buffer().lines().to_vec();
+    let mut new_lines: Vec<String> = crate::vim::rope_to_lines_vec(&rope);
     let mut replacements = 0usize;
     let mut lines_changed = 0usize;
     let mut last_changed_row = 0usize;
