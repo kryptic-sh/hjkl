@@ -1296,45 +1296,52 @@ impl App {
             // ── Dispatch event ────────────────────────────────────
             match event::read()? {
                 Event::Key(key) => {
-                    match self.handle_keypress(key) {
+                    let consumed_inline = match self.handle_keypress(key) {
                         KeyOutcome::Break => break,
-                        KeyOutcome::Continue => continue,
-                        KeyOutcome::FallThrough => {}
-                    }
+                        // Insert-mode arms handle the keystroke fully and
+                        // set `pending_recompute = true` themselves. Skip
+                        // the FallThrough cleanup but still hit the drain
+                        // loop below so a burst of inline-consumed keys
+                        // folds into one recompute + draw.
+                        KeyOutcome::Continue => true,
+                        KeyOutcome::FallThrough => false,
+                    };
 
-                    // ── Normal editor key handling ────────────────
-                    // Insert mode uses the inline dispatcher which calls
-                    // Editor::insert_* primitives directly. Normal / Visual
-                    // modes route through the FSM via hjkl_vim_tui::handle_key.
-                    let mode_was_insert = self.active().editor.vim_mode() == VimMode::Insert;
-                    if mode_was_insert {
-                        self.dispatch_insert_key(key);
-                        self.active_mut().editor.emit_cursor_shape_if_changed();
-                    } else {
-                        hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
-                    }
-
-                    self.sync_viewport_from_editor();
-                    if self.active_mut().editor.take_dirty() {
-                        let elapsed = self.active_mut().refresh_dirty_against_saved();
-                        self.last_signature_us = elapsed;
-                        if self.active().dirty {
-                            self.active_mut().is_new_file = false;
+                    if !consumed_inline {
+                        // ── Normal editor key handling ────────────────
+                        // Insert mode uses the inline dispatcher which calls
+                        // Editor::insert_* primitives directly. Normal / Visual
+                        // modes route through the FSM via hjkl_vim_tui::handle_key.
+                        let mode_was_insert = self.active().editor.vim_mode() == VimMode::Insert;
+                        if mode_was_insert {
+                            self.dispatch_insert_key(key);
+                            self.active_mut().editor.emit_cursor_shape_if_changed();
+                        } else {
+                            hjkl_vim_tui::handle_key(&mut self.active_mut().editor, key);
                         }
+
+                        self.sync_viewport_from_editor();
+                        if self.active_mut().editor.take_dirty() {
+                            let elapsed = self.active_mut().refresh_dirty_against_saved();
+                            self.last_signature_us = elapsed;
+                            if self.active().dirty {
+                                self.active_mut().is_new_file = false;
+                            }
+                        }
+                        let buffer_id = self.active().buffer_id;
+                        if self.active_mut().editor.take_content_reset() {
+                            self.handle_active_content_reset(buffer_id);
+                        }
+                        let edits = self.active_mut().editor.take_content_edits();
+                        if !edits.is_empty() {
+                            self.syntax.apply_edits(buffer_id, &edits);
+                            self.active_mut()
+                                .editor
+                                .shift_syntax_spans_for_edits(&edits);
+                        }
+                        self.lsp_notify_change_active(&edits);
+                        self.pending_recompute = true;
                     }
-                    let buffer_id = self.active().buffer_id;
-                    if self.active_mut().editor.take_content_reset() {
-                        self.handle_active_content_reset(buffer_id);
-                    }
-                    let edits = self.active_mut().editor.take_content_edits();
-                    if !edits.is_empty() {
-                        self.syntax.apply_edits(buffer_id, &edits);
-                        self.active_mut()
-                            .editor
-                            .shift_syntax_spans_for_edits(&edits);
-                    }
-                    self.lsp_notify_change_active(&edits);
-                    self.pending_recompute = true;
                 }
                 Event::Mouse(me) => {
                     let _ = self.handle_mouse(me);
