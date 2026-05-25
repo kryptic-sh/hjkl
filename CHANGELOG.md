@@ -8,6 +8,102 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-05-25
+
+### Breaking
+
+- **`hjkl_buffer::Buffer` rope-only access.** Removed
+  `Buffer::lines() -> Vec<String>`, `Buffer::line(row) -> Option<String>`,
+  `Buffer::lines_range`, and `Buffer::line_bytes`. Callers go through
+  `Buffer::rope() -> ropey::Rope` (O(1) Arc-clone) plus the new free helpers
+  `hjkl_buffer::{rope_line_str, rope_line_bytes}`. Test asserts can use
+  `RopeSlice: PartialEq<str>` for zero-alloc compares.
+
+### Added
+
+- `hjkl_buffer::rope_line_str` / `rope_line_bytes` free helpers exported from
+  the crate root.
+- Rope-native bonsai API:
+  `Highlighter::{parse_initial_rope, parse_incremental_rope, highlight_range_rope, highlight_range_with_injections_rope}` +
+  `Source<'a>` enum on `MatchContext` so predicates resolve capture text from
+  either `&[u8]` or `&Rope` backends without materializing the full document.
+- Inline hex-color preview overlay — `#rgb` / `#rrggbb` literals render with the
+  actual colour as background and a contrast-matched foreground (#224).
+- HTML/XML auto-rename matching tag pair on Esc (#182).
+- `:set <opt>?` query form prints the current value (#227).
+- HTML opening-tag smartindent — Enter inside `<div>|</div>` bumps indent and
+  drops the closing tag onto its own dedented line (#225).
+- Markdown / doc-comment code-fence expansion — ` ```lang⏎ ` expands to a full
+  fence pair (#222).
+- Autopair brackets/quotes + auto-close HTML/XML tags (#181).
+- Comment continuation on Enter / `o` / `O` (#180).
+- `gc{motion}` / `gcc` comment toggle operator (#187).
+- `:syntax on|off` ex command toggles bonsai highlighting app-wide (#112).
+
+### Changed
+
+- Tree-sitter parses now stream from the rope via `Parser::parse_with_options`'s
+  chunk callback — no contiguous-bytes materialization for incremental parse.
+- LSP `textDocument/didChange` uses incremental UTF-8 sync (negotiated in
+  `initialize`); replacement text slices directly from the rope per edit instead
+  of rebuilding the full document.
+- Undo / redo snapshots are O(1) `Rope` clones (was `Arc<String>` requiring a
+  full `to_string` build on every undo group boundary). `restore_text` diffs the
+  old rope against the new text via `minimal_content_edit_rope`
+  (`bytes_at(n).reversed()` + `bytes()`).
+- Event loop batches sync tree-sitter reparse: every keystroke arm sets
+  `App::pending_recompute = true` instead of calling `recompute_and_install()`
+  inline; a single flush fires at the top of the next iteration before
+  `terminal.draw`. Bursts of typing fold N queued keys into one parse + draw.
+- Git diff worker takes `Rope` (O(1) Arc-clone) and materializes bytes on the
+  worker thread instead of on the UI thread.
+- `mimalloc` wired as the global allocator and routed into tree-sitter via
+  `ts_set_allocator` so TS-internal C allocations also hit mimalloc.
+
+### Performance
+
+- Per-keystroke CPU on multi-MB files cut roughly in half on typing and
+  substantially more on burst typing vs. v0.27.0.
+- `render_viewport` dropped `Buffer::content_joined()` — rope-native marker and
+  hex-color passes materialize only the window they scan, and the highlight
+  query uses tree-sitter's `TextProvider` closure form against rope chunks.
+- `buffer_signature` streams `rope.chunks()` into `AHasher::write` — no
+  full-document materialization for the dirty-check.
+- `buffer_signature` length pre-compare + ahash cached against `dirty_gen`;
+  `Buffer::byte_len` cached against `dirty_gen`.
+- Search count uses `rope.line_to_byte(row)` (O(log N)) for cursor's global byte
+  position instead of a linear newline scan.
+- Completion-popup prefix recompute uses `buffer.line(cur_row)` (O(log N))
+  instead of cloning the entire document.
+- Cached compiled regex in `LuaMatchPredicate` (was 43 % CPU on hot files).
+- Viewport-bounded `build_by_row` and `Buffer::lines_range` for the TUI
+  renderer.
+- `Highlighter::edit` no longer clears the child span cache (cache is
+  content-hash-keyed and self-validating).
+- `render::frame` no longer calls `recompute_and_install()` — the event loop's
+  pre-draw flush handles it. Was a redundant per-frame sync TS parse on every
+  draw.
+- `Engine::byte_offset` / `pos_at_byte` use `rope.line_to_byte` /
+  `rope.byte_to_line` (O(log N)) instead of per-row String materialization.
+
+### Fixed
+
+- `VisualLine` `r_hi` could exceed `rope.len_lines()` in `editor::end_step` and
+  the vim FSM — added clamp. Proptest seed captured.
+- `ctrl_scroll_keys_do_not_panic` had `!e.buffer().row_count() == 0` (precedence
+  bug: `!x == 0` ≠ `!(x == 0)`); fixed to `> 0`.
+- Stale syntax spans on row-count change (#231).
+- Push-parse dropping queued edits on replace (#232).
+- Macro recording: insert-mode keys recorded at the correct dispatch hook;
+  replay falls through to the engine; pending-state reducer wires through insert
+  dispatch (#216 / #217 / #218 / #220).
+- `gcc` silently no-ops on file open — filetype now auto-detected (#221).
+- Triple-backtick produced 4 backticks (#229).
+- Autopair pair-on-third-of-triple-quote suppression (#230).
+- bonsai `injections.scm` with directive-only injection language (#223).
+- `:e!` and formatter paths reset syntax client and clear pending edits.
+- `web/404.html` closing tag was `</test>` instead of `</head>`.
+
 ## [0.27.0] - 2026-05-20
 
 ### Added
@@ -3647,7 +3743,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.25.1
