@@ -64,18 +64,16 @@ impl App {
             return;
         }
 
-        let text = self.active().editor.buffer().content_joined();
-        let mut bytes = text.as_bytes().to_vec();
-        if !bytes.is_empty() {
-            bytes.push(b'\n');
-        }
+        // O(1) rope clone — Arc-clone of the root node. Worker thread
+        // materializes the byte buffer; main thread pays nothing here.
+        let rope = self.active().editor.buffer().rope();
         let buffer_id = self.active().buffer_id;
         self.active_mut().last_git_refresh_at = now;
 
         self.git_worker.submit(GitJob {
             buffer_id,
             path,
-            bytes,
+            rope,
             dirty_gen: dg,
         });
     }

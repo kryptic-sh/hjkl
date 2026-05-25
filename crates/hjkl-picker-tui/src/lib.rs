@@ -121,11 +121,15 @@ pub fn preview_pane(
     }
 
     let buf = picker.preview_buffer();
-    let line_count = buf.lines().len();
+    let line_count = buf.row_count();
 
     let preview_spans: PreviewSpans = match picker.preview_path() {
         Some(path) => {
-            let mut bytes = buf.lines().join("\n").into_bytes();
+            // Preview is cold path; content_joined is cached by dirty_gen
+            // so we get the shared Arc<String> if anything else fetched it.
+            let joined = buf.content_joined();
+            let mut bytes = Vec::with_capacity(joined.len() + 1);
+            bytes.extend_from_slice(joined.as_bytes());
             if !bytes.is_empty() {
                 bytes.push(b'\n');
             }

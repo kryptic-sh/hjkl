@@ -24,6 +24,7 @@ hjkl-keymap.workspace = true
 hjkl-lsp.workspace = true
 hjkl-picker.workspace = true
 hjkl-vim.workspace = true
+ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 

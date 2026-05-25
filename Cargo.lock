@@ -2249,6 +2249,7 @@ dependencies = [
  "hjkl-lsp",
  "hjkl-picker",
  "hjkl-vim",
+ "ropey",
  "serde",
  "tempfile",
  "toml",

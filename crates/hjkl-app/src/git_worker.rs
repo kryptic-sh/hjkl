@@ -14,15 +14,19 @@ use std::path::PathBuf;
 use std::thread;
 
 use crossbeam_channel::{Receiver, Sender};
+use ropey::Rope;
 
 use crate::git::GitChange;
 use hjkl_buffer::BufferId;
 
 /// A git diff job submitted to the worker.
+///
+/// `rope` is O(1) `Clone` (Arc-cloned root), so submission stays cheap
+/// on the UI thread. The worker materializes the byte buffer itself.
 pub struct GitJob {
     pub buffer_id: BufferId,
     pub path: PathBuf,
-    pub bytes: Vec<u8>,
+    pub rope: Rope,
     pub dirty_gen: u64,
 }
 
@@ -156,7 +160,18 @@ fn worker_loop(job_rx: Receiver<GitJob>, res_tx: Sender<GitResult>) {
                 None => continue, // already consumed by a duplicate entry
             };
 
-            let changes = crate::git::changes_for_bytes(&job.path, &job.bytes);
+            // Materialize the byte buffer here on the worker thread so
+            // the main thread doesn't pay the allocation cost. Trailing
+            // newline mirrors the prior call-site behavior (matches `:w`).
+            let mut bytes: Vec<u8> = Vec::with_capacity(job.rope.len_bytes() + 1);
+            for chunk in job.rope.chunks() {
+                bytes.extend_from_slice(chunk.as_bytes());
+            }
+            if !bytes.is_empty() {
+                bytes.push(b'\n');
+            }
+
+            let changes = crate::git::changes_for_bytes(&job.path, &bytes);
             let is_untracked = crate::git::is_untracked(&job.path);
 
             let result = GitResult {
@@ -189,7 +204,7 @@ mod tests {
         let job = GitJob {
             buffer_id: 42,
             path: PathBuf::from("/tmp/nonexistent_hjkl_git_test_path_12345/file.txt"),
-            bytes: Vec::new(),
+            rope: Rope::new(),
             dirty_gen: 7,
         };
         worker.submit(job);
@@ -233,7 +248,7 @@ mod tests {
             worker.submit(GitJob {
                 buffer_id: 1,
                 path: PathBuf::from("/tmp/nonexistent_hjkl_coalesce_test/f.txt"),
-                bytes: Vec::new(),
+                rope: Rope::new(),
                 dirty_gen: dg,
             });
         }
