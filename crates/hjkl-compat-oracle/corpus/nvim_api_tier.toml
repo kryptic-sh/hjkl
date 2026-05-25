@@ -113,3 +113,30 @@ initial_cursor = [0, 0]
 keys = ":set sidescrolloff=5<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
+
+# :retab — leading tab → 4 spaces when expandtab is set (#207)
+[[cases]]
+name = "retab_leading_tabs_to_spaces"
+initial_buffer = "\thello\n"
+initial_cursor = [0, 0]
+keys = ":set expandtab tabstop=4<CR>:retab<CR>"
+expected_buffer = "    hello\n"
+expected_cursor = [0, 0]
+
+# :retab! — internal tab converted too when bang is given (#207)
+[[cases]]
+name = "retab_bang_internal_whitespace"
+initial_buffer = "a\tb\n"
+initial_cursor = [0, 0]
+keys = ":set expandtab tabstop=4<CR>:retab!<CR>"
+expected_buffer = "a   b\n"
+expected_cursor = [0, 0]
+
+# :retab — noexpandtab, 8 leading spaces → two tabs (#207)
+[[cases]]
+name = "retab_noexpandtab_spaces_to_tabs"
+initial_buffer = "        hello\n"
+initial_cursor = [0, 0]
+keys = ":set noexpandtab tabstop=4<CR>:retab<CR>"
+expected_buffer = "\t\thello\n"
+expected_cursor = [0, 0]

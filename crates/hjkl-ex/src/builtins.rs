@@ -1176,6 +1176,26 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 7,
         run: redraw_clear_handler::<H>,
     });
+
+    // ---- Phase #207 ----------------------------------------------------------
+
+    // `:retab [N]` — convert leading whitespace per expandtab/tabstop (min_prefix=3).
+    reg.add(ExCommand {
+        name: "retab",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: retab_handler::<H>,
+    });
+
+    // `:retab! [N]` — also convert internal whitespace runs (min_prefix=4).
+    reg.add(ExCommand {
+        name: "retab!",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 4,
+        run: retab_bang_handler::<H>,
+    });
 }
 
 // ---- :redraw ---------------------------------------------------------------
@@ -1342,6 +1362,233 @@ fn resolve_comment_range<H: Host>(
             (row, row)
         }
     }
+}
+
+// ---- retab (#207) ----------------------------------------------------------
+
+/// Convert a single whitespace character sequence.
+///
+/// When `expandtab=true`: replace tabs with spaces (column-aware tab stops).
+/// When `expandtab=false`: replace runs of `tabstop` consecutive spaces with a tab.
+///
+/// `col` is the starting visual column (0-based) of `ws`. Returns the converted
+/// string and the visual column after the whitespace.
+fn convert_whitespace(ws: &str, col: usize, tabstop: usize, expandtab: bool) -> (String, usize) {
+    let mut out = String::with_capacity(ws.len() * 2);
+    let mut vcol = col;
+    if expandtab {
+        // Tabs → spaces, column-aware
+        for ch in ws.chars() {
+            match ch {
+                '\t' => {
+                    let advance = tabstop - (vcol % tabstop);
+                    for _ in 0..advance {
+                        out.push(' ');
+                    }
+                    vcol += advance;
+                }
+                ' ' => {
+                    out.push(' ');
+                    vcol += 1;
+                }
+                other => {
+                    out.push(other);
+                    vcol += 1;
+                }
+            }
+        }
+    } else {
+        // Spaces → tabs: greedy replacement of space-runs that align to tabstop.
+        // First, expand any existing tabs so we can reason in columns.
+        let mut expanded = String::with_capacity(ws.len());
+        let mut evcol = col;
+        for ch in ws.chars() {
+            match ch {
+                '\t' => {
+                    let advance = tabstop - (evcol % tabstop);
+                    for _ in 0..advance {
+                        expanded.push(' ');
+                    }
+                    evcol += advance;
+                }
+                ' ' => {
+                    expanded.push(' ');
+                    evcol += 1;
+                }
+                other => {
+                    expanded.push(other);
+                    evcol += 1;
+                }
+            }
+        }
+        // Now re-encode the expanded spaces as tabs where possible.
+        let mut space_count = 0usize;
+        let mut cur_col = col;
+        for ch in expanded.chars() {
+            if ch == ' ' {
+                space_count += 1;
+                cur_col += 1;
+                // Emit a tab whenever we hit a tabstop boundary.
+                if cur_col.is_multiple_of(tabstop) {
+                    out.push('\t');
+                    space_count = 0;
+                }
+            } else {
+                // Flush any trailing spaces that didn't hit a boundary.
+                for _ in 0..space_count {
+                    out.push(' ');
+                }
+                space_count = 0;
+                out.push(ch);
+                cur_col += 1;
+            }
+        }
+        // Flush remaining spaces.
+        for _ in 0..space_count {
+            out.push(' ');
+        }
+        vcol = cur_col;
+    }
+    (out, vcol)
+}
+
+/// Retab a single line.
+///
+/// `bang=false`: only convert the leading whitespace.
+/// `bang=true`: also convert internal whitespace runs.
+fn retab_line(line: &str, tabstop: usize, expandtab: bool, bang: bool) -> String {
+    if line.is_empty() {
+        return String::new();
+    }
+
+    if !bang {
+        // Leading whitespace only.
+        let leading_end = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+        let leading: &str = &line[..leading_end];
+        let rest: &str = &line[leading_end..];
+        let (converted, _) = convert_whitespace(leading, 0, tabstop, expandtab);
+        format!("{converted}{rest}")
+    } else {
+        // Walk the entire line, converting every whitespace run.
+        let mut out = String::with_capacity(line.len());
+        let mut vcol = 0usize;
+        let mut iter = line.char_indices().peekable();
+        while let Some((byte_idx, ch)) = iter.next() {
+            if ch == ' ' || ch == '\t' {
+                // Collect the full whitespace run.
+                let ws_start = byte_idx;
+                let mut ws_end = byte_idx + ch.len_utf8();
+                while let Some(&(_, nc)) = iter.peek() {
+                    if nc == ' ' || nc == '\t' {
+                        iter.next();
+                        ws_end += nc.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                let ws = &line[ws_start..ws_end];
+                let (converted, new_col) = convert_whitespace(ws, vcol, tabstop, expandtab);
+                out.push_str(&converted);
+                vcol = new_col;
+            } else {
+                out.push(ch);
+                vcol += 1;
+            }
+        }
+        out
+    }
+}
+
+/// `:[range]retab [N]` — convert leading whitespace per expandtab/tabstop.
+fn retab_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    retab_impl(editor, args, range, false)
+}
+
+/// `:[range]retab! [N]` — also convert internal whitespace runs.
+fn retab_bang_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    retab_impl(editor, args, range, true)
+}
+
+fn retab_impl<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+    bang: bool,
+) -> Option<ExEffect> {
+    let trimmed = args.trim();
+
+    // Parse optional explicit tabstop argument.
+    let explicit_tabstop: Option<usize> = if trimmed.is_empty() {
+        None
+    } else {
+        match trimmed.parse::<usize>() {
+            Ok(n) if n > 0 => Some(n),
+            Ok(_) => {
+                return Some(ExEffect::Error("tabstop must be > 0".into()));
+            }
+            Err(_) => {
+                return Some(ExEffect::Error(format!("invalid tabstop: {trimmed}")));
+            }
+        }
+    };
+
+    let tabstop = explicit_tabstop.unwrap_or(editor.settings().tabstop);
+    let expandtab = editor.settings().expandtab;
+
+    let rope = editor.buffer().rope();
+    let total = rope.len_lines();
+    if total == 0 {
+        return Some(ExEffect::Ok);
+    }
+
+    // Collect all lines.
+    let all_lines: Vec<String> = (0..total)
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
+    drop(rope);
+
+    // Resolve the range (default: whole buffer).
+    let (start_row, end_row) = match range {
+        Some(r) => {
+            let s = r.start_one_based().saturating_sub(1);
+            let e = (r.end_one_based().saturating_sub(1)).min(total - 1);
+            (s, e)
+        }
+        None => (0, total - 1),
+    };
+
+    if start_row > end_row {
+        return Some(ExEffect::Ok);
+    }
+
+    // Convert lines in range.
+    let mut new_lines: Vec<String> = all_lines.clone();
+    let mut changed = false;
+    for row in start_row..=end_row {
+        let original = &all_lines[row];
+        let converted = retab_line(original, tabstop, expandtab, bang);
+        if converted != *original {
+            new_lines[row] = converted;
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return Some(ExEffect::Ok);
+    }
+
+    editor.push_undo();
+    editor.restore(new_lines, (start_row, 0));
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
 }
 
 // ---- unit tests ------------------------------------------------------------
@@ -2456,5 +2703,85 @@ mod tests {
         let cmd = reg.resolve("redraw!").expect(":redraw! must resolve");
         let result = (cmd.run)(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Redraw { clear: true }));
+    }
+
+    // ── retab_handler (#207) ─────────────────────────────────────────────────
+
+    fn make_editor_with_opts(
+        content: &str,
+        expandtab: bool,
+        tabstop: usize,
+    ) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+        let buf = hjkl_buffer::Buffer::from_str(content);
+        let host = DefaultHost::new();
+        let opts = Options {
+            expandtab,
+            tabstop: tabstop as u32,
+            ..Options::default()
+        };
+        Editor::new(buf, host, opts)
+    }
+
+    #[test]
+    fn retab_leading_spaces_to_tabs_when_noexpandtab() {
+        // expandtab=false, tabstop=4, leading 8 spaces → "\t\t"
+        let mut ed = make_editor_with_opts("        hello", false, 4);
+        let result = retab_handler(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_line(&ed, 0), "\t\thello");
+    }
+
+    #[test]
+    fn retab_leading_tabs_to_spaces_when_expandtab() {
+        // expandtab=true, tabstop=4, leading "\t\t" → 8 spaces
+        let mut ed = make_editor_with_opts("\t\thello", true, 4);
+        let result = retab_handler(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_line(&ed, 0), "        hello");
+    }
+
+    #[test]
+    fn retab_bang_converts_internal_whitespace() {
+        // expandtab=true, tabstop=4, "a\tb" → "a   b" (col 1 + tab → col 4 = 3 spaces)
+        let mut ed = make_editor_with_opts("a\tb", true, 4);
+        let result = retab_bang_handler(&mut ed, "", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_line(&ed, 0), "a   b");
+    }
+
+    #[test]
+    fn retab_with_explicit_tabstop_arg() {
+        // ":retab 2" — leading "\t" → 2 spaces (tabstop 2, expandtab on)
+        let mut ed = make_editor_with_opts("\thello", true, 4); // editor default is 4
+        let result = retab_handler(&mut ed, "2", None);
+        assert_eq!(result, Some(ExEffect::Ok));
+        // With tabstop=2, one tab → 2 spaces.
+        assert_eq!(buf_line(&ed, 0), "  hello");
+        // Editor's tabstop setting should NOT be persisted.
+        assert_eq!(ed.settings().tabstop, 4);
+    }
+
+    #[test]
+    fn retab_respects_range() {
+        // 1,2retab on 3-line buffer only converts first two lines
+        let content = "\thello\n\tworld\n\tfoo";
+        let mut ed = make_editor_with_opts(content, true, 4);
+        let range = LineRange::new(1, 2); // 1-based lines 1–2
+        let result = retab_handler(&mut ed, "", Some(range));
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_line(&ed, 0), "    hello");
+        assert_eq!(buf_line(&ed, 1), "    world");
+        // Line 3 untouched.
+        assert_eq!(buf_line(&ed, 2), "\tfoo");
+    }
+
+    #[test]
+    fn retab_dispatch_resolves_min_prefix_3() {
+        // ":ret" resolves to retab (min_prefix=3)
+        let reg = crate::default_registry::<hjkl_engine::DefaultHost>();
+        assert!(reg.resolve("ret").is_some(), ":ret must resolve to :retab");
+        assert_eq!(reg.resolve("ret").unwrap().name, "retab");
+        assert!(reg.resolve("retab").is_some(), ":retab must resolve");
+        assert!(reg.resolve("retab!").is_some(), ":retab! must resolve");
     }
 }

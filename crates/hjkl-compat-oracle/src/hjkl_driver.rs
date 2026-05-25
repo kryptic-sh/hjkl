@@ -163,13 +163,36 @@ async fn run_case_via_nvim_api_inner(
     // uses this driver (`nvim_api_tier.toml`) is curated for ex-command
     // exercises; non-`:` key sequences fall through to `nvim_input` for any
     // future normal-mode cases.
+    //
+    // Multiple chained ex commands — e.g. `:set foo<CR>:retab<CR>` — are
+    // split on `<CR>` and each segment dispatched as a separate nvim_command
+    // call so that the individual ex commands reach `ex::run` independently.
     if !case.keys.is_empty() {
         let keys = &case.keys;
-        if let Some(cmd) = keys
-            .strip_prefix(':')
-            .and_then(|s| s.strip_suffix("<CR>").or_else(|| s.strip_suffix("<cr>")))
-        {
-            nvim.command(cmd).await?;
+        // Split on `<CR>` / `<cr>` to support chained ex-command sequences.
+        // A sequence is treated as all-ex-commands when every non-empty
+        // segment starts with `:`.  Otherwise fall through to nvim_input.
+        let segments: Vec<&str> = keys
+            .split_inclusive("<CR>")
+            .flat_map(|s| s.split_inclusive("<cr>"))
+            .collect();
+        let all_ex = segments.iter().all(|seg| {
+            let trimmed = seg.trim_end_matches("<CR>").trim_end_matches("<cr>").trim();
+            trimmed.is_empty() || trimmed.starts_with(':')
+        });
+        if all_ex && segments.iter().any(|s| s.starts_with(':')) {
+            for seg in segments {
+                let cmd = seg
+                    .trim_end_matches("<CR>")
+                    .trim_end_matches("<cr>")
+                    .trim()
+                    .strip_prefix(':')
+                    .unwrap_or("")
+                    .trim();
+                if !cmd.is_empty() {
+                    nvim.command(cmd).await?;
+                }
+            }
         } else {
             nvim.input(keys).await?;
         }
