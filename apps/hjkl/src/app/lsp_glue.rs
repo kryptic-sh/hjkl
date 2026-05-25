@@ -27,6 +27,47 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
     }
 }
 
+/// Build the `TextChange[]` array for `textDocument/didChange` incremental
+/// sync from the engine's `ContentEdit` batch.
+///
+/// LSP positions are interpreted relative to the document state *before*
+/// each change is applied (and *after* every preceding change in the same
+/// array). Our `ContentEdit`s were recorded against the buffer's evolving
+/// state during the edit run, so they already satisfy this contract — we
+/// just need the replacement text. Slice it out of the post-edit
+/// `content_joined()` cache: `new_text = &source[start_byte..new_end_byte]`.
+///
+/// Caller MUST verify the server uses UTF-8 `positionEncoding`; this
+/// function passes byte columns straight through.
+fn build_text_changes(
+    source: &str,
+    edits: &[hjkl_engine::ContentEdit],
+) -> Vec<hjkl_lsp::TextChange> {
+    let bytes = source.as_bytes();
+    edits
+        .iter()
+        .map(|e| {
+            let start = e.start_byte.min(bytes.len());
+            let end = e.new_end_byte.min(bytes.len()).max(start);
+            // SAFETY: ContentEdit byte ranges are produced by the engine
+            // and land on UTF-8 boundaries (the buffer never splits a
+            // codepoint). `from_utf8_unchecked` would be valid; we use the
+            // checked path so a future engine bug surfaces as a panic in
+            // dev rather than UB.
+            let text = std::str::from_utf8(&bytes[start..end])
+                .unwrap_or("")
+                .to_string();
+            hjkl_lsp::TextChange {
+                start_line: e.start_position.0,
+                start_col: e.start_position.1,
+                end_line: e.old_end_position.0,
+                end_col: e.old_end_position.1,
+                text,
+            }
+        })
+        .collect()
+}
+
 /// Small inline map: file extension → LSP language id.
 pub(super) fn language_id_for_ext(ext: &str) -> Option<&'static str> {
     match ext {
@@ -244,7 +285,17 @@ impl App {
     /// Send a `textDocument/didChange` notification for the active buffer,
     /// but only when the buffer's `dirty_gen` has advanced since the last
     /// send. This naturally batches rapid keystroke edits.
-    pub(crate) fn lsp_notify_change_active(&mut self) {
+    ///
+    /// `edits` is the batch of [`hjkl_engine::ContentEdit`]s that produced
+    /// the new buffer state — same list passed to `syntax.apply_edits`. When
+    /// non-empty and the active server supports incremental sync over
+    /// UTF-8 positions, sends an incremental `contentChanges` array (one
+    /// element per edit, with replacement text sliced from the post-edit
+    /// `content_joined()` cache). Otherwise falls back to full-document
+    /// sync — the only choice when the buffer was wholesale-replaced
+    /// (`:e!` / formatter), the server uses a non-UTF-8 position
+    /// encoding, or no edits are tracked.
+    pub(crate) fn lsp_notify_change_active(&mut self, edits: &[hjkl_engine::ContentEdit]) {
         let mgr = match self.lsp.as_ref() {
             Some(m) => m,
             None => return,
@@ -261,12 +312,64 @@ impl App {
         slot.last_lsp_dirty_gen = Some(dg);
 
         let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
-        // Reuse the buffer's per-dirty_gen cached joined `Arc<String>`
-        // so this doesn't re-clone every row + re-join per keystroke
-        // (was ~1ms / char on a 400-line file, multiplied across all
-        // per-tick callers).
         let text = slot.editor.buffer().content_joined();
-        mgr.notify_change(buffer_id, text.as_str());
+
+        // Decide sync mode. Incremental requires:
+        //   - non-empty `edits` (content_reset paths can't express a delta)
+        //   - server advertises incremental sync support
+        //   - server uses UTF-8 position encoding (we track byte columns
+        //     natively; UTF-16 conversion is per-line work we skip for now)
+        let use_incremental = !edits.is_empty() && self.lsp_supports_incremental_utf8();
+        if use_incremental {
+            let changes = build_text_changes(&text, edits);
+            mgr.notify_change_incremental(buffer_id, changes);
+        } else {
+            mgr.notify_change(buffer_id, text);
+        }
+    }
+
+    /// True when the active buffer's LSP server announced both incremental
+    /// sync (`textDocumentSync.change == 2`) and UTF-8 `positionEncoding`.
+    /// Falls back conservatively when capabilities are missing.
+    fn lsp_supports_incremental_utf8(&self) -> bool {
+        // Find the server attached to the active buffer's language.
+        let lang = match self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext)
+        {
+            Some(l) => l,
+            None => return false,
+        };
+        let info = match self.lsp_state.iter().find(|(k, _)| k.language == lang) {
+            Some((_, info)) => info,
+            None => return false,
+        };
+        let caps = &info.capabilities;
+
+        // positionEncoding default per spec is "utf-16" — require explicit utf-8.
+        let pos_enc = caps
+            .get("positionEncoding")
+            .and_then(|v| v.as_str())
+            .unwrap_or("utf-16");
+        if pos_enc != "utf-8" {
+            return false;
+        }
+
+        // textDocumentSync.change == 2 = Incremental.
+        // The field can be either an integer (legacy shape) or a
+        // `TextDocumentSyncOptions` object with a `change` integer.
+        let sync = caps.get("textDocumentSync");
+        let change_kind = sync
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.get("change").and_then(|c| c.as_i64()))
+            })
+            .unwrap_or(0);
+        change_kind == 2
     }
 
     /// File-type label for the active buffer — the language id string when

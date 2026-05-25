@@ -8,9 +8,11 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 use url::Url;
 
+use std::sync::Arc;
+
 use crate::BufferId;
 use crate::config::LspConfig;
-use crate::event::{LspCommand, LspEvent, ServerKey};
+use crate::event::{LspCommand, LspEvent, ServerKey, TextChange};
 use crate::server::Server;
 use crate::workspace;
 
@@ -56,6 +58,9 @@ pub(crate) async fn dispatch(
             }
             LspCommand::NotifyChange { id, full_text } => {
                 handle_notify_change(id, full_text, &mut servers, &mut buffers);
+            }
+            LspCommand::NotifyChangeIncremental { id, changes } => {
+                handle_notify_change_incremental(id, changes, &mut servers, &mut buffers);
             }
             LspCommand::Cancel { request_id } => {
                 // Phase 4 will cancel in-flight requests. For now just log.
@@ -223,7 +228,7 @@ fn handle_request(
 
 fn handle_notify_change(
     id: BufferId,
-    full_text: String,
+    full_text: Arc<String>,
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
 ) {
@@ -243,7 +248,50 @@ fn handle_notify_change(
             "textDocument/didChange",
             json!({
                 "textDocument": { "uri": uri, "version": version },
-                "contentChanges": [{ "text": full_text }],
+                "contentChanges": [{ "text": full_text.as_str() }],
+            }),
+        );
+    }
+}
+
+fn handle_notify_change_incremental(
+    id: BufferId,
+    changes: Vec<TextChange>,
+    servers: &mut HashMap<ServerKey, Server>,
+    buffers: &mut HashMap<BufferId, AttachedBuffer>,
+) {
+    if changes.is_empty() {
+        return;
+    }
+    let buf = match buffers.get_mut(&id) {
+        Some(b) => b,
+        None => {
+            tracing::debug!(id, "NotifyChangeIncremental: buffer not attached");
+            return;
+        }
+    };
+    buf.version += 1;
+    let version = buf.version;
+    let uri = buf.uri.as_str().to_string();
+
+    if let Some(server) = servers.get_mut(&buf.server_key) {
+        let content_changes: Vec<serde_json::Value> = changes
+            .into_iter()
+            .map(|c| {
+                json!({
+                    "range": {
+                        "start": { "line": c.start_line, "character": c.start_col },
+                        "end":   { "line": c.end_line,   "character": c.end_col },
+                    },
+                    "text": c.text,
+                })
+            })
+            .collect();
+        server.send_notification(
+            "textDocument/didChange",
+            json!({
+                "textDocument": { "uri": uri, "version": version },
+                "contentChanges": content_changes,
             }),
         );
     }

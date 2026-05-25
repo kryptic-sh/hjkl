@@ -165,6 +165,91 @@ fn position_to_byte_coords(
     (byte, (row as u32, col_byte as u32))
 }
 
+/// Walk `bytes[..end]` counting newlines and return the (row, col_byte)
+/// position at byte offset `end`. `col_byte` is the byte distance from
+/// the most recent `\n` (or buffer start). Used to translate a byte
+/// offset into a tree-sitter `Point`.
+fn byte_to_row_col(bytes: &[u8], end: usize) -> (u32, u32) {
+    let end = end.min(bytes.len());
+    let mut row: u32 = 0;
+    let mut row_start: usize = 0;
+    for (i, &b) in bytes[..end].iter().enumerate() {
+        if b == b'\n' {
+            row += 1;
+            row_start = i + 1;
+        }
+    }
+    (row, (end - row_start) as u32)
+}
+
+/// Compute the smallest `ContentEdit` describing the diff between
+/// `old_text` and `new_text`. Used by undo/redo: instead of telling
+/// tree-sitter the whole document changed (which forces a cold reparse),
+/// we shrink the edit to the contiguous byte range that actually
+/// differs. Common prefix + common suffix are skipped; the result is a
+/// single replace covering only the changed middle.
+///
+/// Byte ranges are aligned to UTF-8 codepoint boundaries — the buffer
+/// never stores invalid UTF-8, and we walk back to the previous
+/// codepoint start if a prefix/suffix scan would split a multi-byte
+/// sequence. Position values follow the (row, byte-column) convention
+/// the rest of the engine uses.
+fn minimal_content_edit(old_text: &str, new_text: &str) -> crate::types::ContentEdit {
+    let old_bytes = old_text.as_bytes();
+    let new_bytes = new_text.as_bytes();
+    let old_len = old_bytes.len();
+    let new_len = new_bytes.len();
+    let common = old_len.min(new_len);
+
+    // Common prefix length.
+    let mut prefix = 0;
+    while prefix < common && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+    // Pull prefix back to the start of any partially-consumed UTF-8
+    // codepoint. Continuation bytes have the high bits `10xxxxxx`. If
+    // `prefix == old_len`, both strings shared everything compared and
+    // the boundary already lands either at end-of-string (safe) or at
+    // a codepoint start — nothing to back up.
+    while prefix > 0
+        && prefix < old_len
+        && (old_bytes[prefix] & 0b1100_0000) == 0b1000_0000
+    {
+        prefix -= 1;
+    }
+
+    // Common suffix length, bounded so it doesn't overlap the prefix
+    // in either string.
+    let mut suffix = 0;
+    let max_suffix = (old_len - prefix).min(new_len - prefix);
+    while suffix < max_suffix && old_bytes[old_len - 1 - suffix] == new_bytes[new_len - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    // Same UTF-8 alignment dance from the other end: a continuation
+    // byte at the boundary means we split a codepoint and have to keep
+    // shrinking the suffix until we land on a leading byte.
+    while suffix > 0
+        && suffix < old_len
+        && (old_bytes[old_len - suffix] & 0b1100_0000) == 0b1000_0000
+    {
+        suffix -= 1;
+    }
+
+    let start_byte = prefix;
+    let old_end_byte = old_len - suffix;
+    let new_end_byte = new_len - suffix;
+
+    crate::types::ContentEdit {
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+        start_position: byte_to_row_col(old_bytes, start_byte),
+        old_end_position: byte_to_row_col(old_bytes, old_end_byte),
+        new_end_position: byte_to_row_col(new_bytes, new_end_byte),
+    }
+}
+
 /// Compute the byte position after inserting `text` starting at
 /// `start_byte` / `start_pos`. Returns `(end_byte, end_position)`.
 fn advance_by_text(text: &str, start_byte: usize, start_pos: (u32, u32)) -> (usize, (u32, u32)) {
@@ -437,8 +522,8 @@ pub(super) enum CursorScrollTarget {
 // `use` so the editor body keeps its terse call shape.
 
 use crate::buf_helpers::{
-    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_bytes,
-    buf_line_chars, buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
+    apply_buffer_edit, buf_cursor_pos, buf_cursor_rc, buf_cursor_row, buf_line, buf_line_chars,
+    buf_lines_to_vec, buf_row_count, buf_set_cursor_rc,
 };
 
 /// Return value from the engine's `try_goto_mark_*` methods. Tells the
@@ -2981,29 +3066,25 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     }
 
     fn restore_text(&mut self, text: &str, cursor: (usize, usize)) {
-        use crate::types::Query as _;
-        let old_len_bytes = self.buffer.len_bytes();
-        let old_row_count = buf_row_count(&self.buffer);
-        let old_last_row = old_row_count.saturating_sub(1);
-        let old_last_col = buf_line_bytes(&self.buffer, old_last_row);
+        // Snapshot the old buffer text BEFORE replace_all so we can diff
+        // against `text` and emit a minimal ContentEdit. Without this
+        // tight range, the syntax layer's tree.edit() marks the entire
+        // document as changed, which forces tree-sitter's incremental
+        // parser to discard every subtree and effectively cold-parse on
+        // every undo — ~seconds of lag for a one-line undo on a huge
+        // file. `content_joined` is per-`dirty_gen` Arc-cached, so this
+        // grab is cheap when something else (LSP, syntax) already paid
+        // for the join this tick.
+        let old_arc = self.buffer.content_joined();
+        let old_text = old_arc.as_str();
+        let edit = minimal_content_edit(old_text, text);
+
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         buf_set_cursor_rc(&mut self.buffer, cursor.0, cursor.1);
-        let new_len_bytes = self.buffer.len_bytes();
-        let new_row_count = buf_row_count(&self.buffer);
-        let new_last_row = new_row_count.saturating_sub(1);
-        let new_last_col = buf_line_bytes(&self.buffer, new_last_row);
-        // Bulk replace — supersedes any prior queued edits, then push a
-        // single whole-buffer edit so the syntax pipeline can run
-        // incremental.
+
+        // Bulk replace supersedes any prior queued edits.
         self.pending_content_edits.clear();
-        self.pending_content_edits.push(crate::types::ContentEdit {
-            start_byte: 0,
-            old_end_byte: old_len_bytes,
-            new_end_byte: new_len_bytes,
-            start_position: (0, 0),
-            old_end_position: (old_last_row as u32, old_last_col as u32),
-            new_end_position: (new_last_row as u32, new_last_col as u32),
-        });
+        self.pending_content_edits.push(edit);
         self.mark_content_dirty();
     }
 

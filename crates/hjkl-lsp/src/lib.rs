@@ -10,7 +10,7 @@ pub mod uri;
 pub mod workspace;
 
 pub use config::{LspConfig, ServerConfig};
-pub use event::{LspCommand, LspEvent, RpcError, ServerKey};
+pub use event::{LspCommand, LspEvent, RpcError, ServerKey, TextChange};
 pub use manager::LspManager;
 pub use server::Server;
 

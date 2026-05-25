@@ -834,7 +834,7 @@ fn notify_change_skipped_when_dirty_gen_unchanged() {
     app.active_mut().last_lsp_dirty_gen = Some(dg);
 
     // Call again — must not panic and must not reset the guard.
-    app.lsp_notify_change_active();
+    app.lsp_notify_change_active(&[]);
     assert_eq!(
         app.active().last_lsp_dirty_gen,
         Some(dg),

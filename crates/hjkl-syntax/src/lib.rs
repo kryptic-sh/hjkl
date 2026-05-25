@@ -631,8 +631,13 @@ impl SyntaxLayer {
                     client.parsed_dirty_gen = Some(dg);
                 }
             } else if needs_reparse {
-                let _ = highlighter.parse_incremental_with_changes(bytes);
-                if highlighter.tree().is_some() {
+                // No-diff incremental: we discard the changed-byte ranges
+                // (cache is keyed by dirty_gen + viewport, not by edit
+                // ranges). Computing `old.changed_ranges(&new)` walks both
+                // trees and was ~54 % of per-keystroke CPU on a 1.86 M-line
+                // file.
+                let ok = highlighter.parse_incremental(bytes);
+                if ok && highlighter.tree().is_some() {
                     client.parsed_dirty_gen = Some(dg);
                 }
             }

@@ -170,6 +170,12 @@ async fn initialize_handshake(
             "clientInfo": { "name": "hjkl", "version": env!("CARGO_PKG_VERSION") },
             "rootUri": root_uri.as_str(),
             "capabilities": {
+                // Request UTF-8 byte positions; fall back to UTF-16 if the
+                // server doesn't support it. Asking lets servers (like
+                // rust-analyzer) skip per-line UTF-16 column conversion.
+                "general": {
+                    "positionEncodings": ["utf-8", "utf-16"],
+                },
                 "textDocument": {
                     "synchronization": {
                         "dynamicRegistration": false,

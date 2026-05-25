@@ -415,15 +415,14 @@ impl Highlighter {
     ///
     /// The parent-spans cache was removed (bonsai cache redesign). The tree
     /// is the only cache — `highlight_range` walks the tree on every call.
-    /// Child caches are keyed by content hash on the OLD source; after an
-    /// edit those hashes no longer match so we clear them.
+    /// Child caches stay intact: `spans_by_hash` is keyed by content hash,
+    /// so unchanged injection blocks survive the edit; changed blocks miss
+    /// naturally because their bytes hash differently, and `evict_stale`
+    /// prunes entries whose hashes no longer appear in the current render.
     pub fn edit(&mut self, edit: &tree_sitter::InputEdit) {
         if let Some(tree) = self.tree.as_mut() {
             tree.edit(edit);
         }
-        // Child span caches were keyed by content hash on the OLD source.
-        // After an edit those slices no longer match for the edited block.
-        self.child_cache.spans_by_hash.clear();
     }
 
     /// Reparse `source` against the retained tree (if any) under the
@@ -440,7 +439,44 @@ impl Highlighter {
     /// `highlight_range` walks the tree (via `QueryCursor::set_byte_range`)
     /// on every call; no post-parse cache update is needed here.
     pub fn parse_incremental(&mut self, source: &[u8]) -> bool {
-        self.parse_incremental_with_changes(source).is_some()
+        if self.parse_timeout_micros == 0 {
+            match self.parser.parse(source, self.tree.as_ref()) {
+                Some(t) => {
+                    self.tree = Some(t);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            let deadline =
+                Instant::now() + std::time::Duration::from_micros(self.parse_timeout_micros);
+            let mut progress = move |_state: &tree_sitter::ParseState| {
+                if Instant::now() >= deadline {
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::Continue(())
+            };
+            let mut opts = ParseOptions::new().progress_callback(&mut progress);
+            let bytes = source;
+            let len = bytes.len();
+            match self.parser.parse_with_options(
+                &mut |i, _| {
+                    if i < len {
+                        &bytes[i..]
+                    } else {
+                        Default::default()
+                    }
+                },
+                self.tree.as_ref(),
+                Some(opts.reborrow()),
+            ) {
+                Some(t) => {
+                    self.tree = Some(t);
+                    true
+                }
+                None => false,
+            }
+        }
     }
 
     /// Like `parse_incremental` but on success returns the byte ranges

@@ -795,7 +795,7 @@ impl App {
                 .editor
                 .shift_syntax_spans_for_edits(&edits);
         }
-        self.lsp_notify_change_active();
+        self.lsp_notify_change_active(&edits);
         self.recompute_and_install();
     }
 

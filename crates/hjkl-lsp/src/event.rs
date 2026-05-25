@@ -1,8 +1,25 @@
 //! Cross-thread message types for the LSP subsystem.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::BufferId;
+
+/// One element of a `textDocument/didChange` `contentChanges` array when the
+/// client is using incremental sync. `start_*` / `end_*` are positions in
+/// the document state immediately *before* this change is applied (and after
+/// every earlier change in the same array has been applied). Position units
+/// match the negotiated `positionEncoding` for the server — UTF-8 byte
+/// offsets when negotiated, UTF-16 code units otherwise.
+#[derive(Debug, Clone)]
+pub struct TextChange {
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+    /// Replacement text inserted at `[start, end)`.
+    pub text: String,
+}
 
 /// Unique key identifying an LSP server instance: one per (language, workspace root).
 #[derive(Clone, Eq, Hash, PartialEq, Debug)]
@@ -23,8 +40,22 @@ pub enum LspCommand {
     },
     /// Remove a buffer from the LSP server.
     DetachBuffer { id: BufferId },
-    /// Notify the server that a buffer's full text changed.
-    NotifyChange { id: BufferId, full_text: String },
+    /// Notify the server that a buffer's full text changed (full-doc sync).
+    /// Used when the server announced Full sync or when the client cannot
+    /// build incremental changes (e.g. server uses an unsupported
+    /// `positionEncoding`).
+    NotifyChange {
+        id: BufferId,
+        full_text: Arc<String>,
+    },
+    /// Notify the server of an incremental edit batch. `changes` are applied
+    /// in order; each position is interpreted relative to the document state
+    /// after every preceding change has been applied. No-op when `changes`
+    /// is empty.
+    NotifyChangeIncremental {
+        id: BufferId,
+        changes: Vec<TextChange>,
+    },
     /// Cancel an in-flight request by id. Reserved for Phase 4.
     Cancel { request_id: i64 },
     /// Send a JSON-RPC request to the server attached to `buffer_id`.

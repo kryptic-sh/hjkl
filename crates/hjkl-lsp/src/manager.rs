@@ -1,13 +1,14 @@
 //! `LspManager` — the sync-side handle to the async LSP runtime thread.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crossbeam_channel::Receiver;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::BufferId;
 use crate::config::LspConfig;
-use crate::event::{LspCommand, LspEvent};
+use crate::event::{LspCommand, LspEvent, TextChange};
 use crate::runtime;
 
 /// Owned handle to the background LSP thread and its channels.
@@ -77,11 +78,24 @@ impl LspManager {
     }
 
     /// Notify the server that a buffer's full text changed.
-    pub fn notify_change(&self, id: BufferId, full_text: &str) {
-        let _ = self.cmd_tx.send(LspCommand::NotifyChange {
-            id,
-            full_text: full_text.to_string(),
-        });
+    ///
+    /// Takes an `Arc<String>` so the caller can hand off the shared
+    /// `Buffer::content_joined()` cache without a `to_string()` clone of the
+    /// entire buffer per keystroke (on a 1.86 M-line file the clone was
+    /// ~22 % of per-keystroke CPU in profiling).
+    pub fn notify_change(&self, id: BufferId, full_text: Arc<String>) {
+        let _ = self.cmd_tx.send(LspCommand::NotifyChange { id, full_text });
+    }
+
+    /// Notify the server of an incremental edit batch. Each `TextChange` is
+    /// a `{range, text}` LSP `TextDocumentContentChangeEvent`. Positions
+    /// must already match the server's negotiated `positionEncoding` —
+    /// the caller is responsible for converting from UTF-8 byte columns to
+    /// UTF-16 code units when the server didn't negotiate UTF-8.
+    pub fn notify_change_incremental(&self, id: BufferId, changes: Vec<TextChange>) {
+        let _ = self
+            .cmd_tx
+            .send(LspCommand::NotifyChangeIncremental { id, changes });
     }
 
     /// Send a JSON-RPC request to the server attached to `buffer_id`.

@@ -584,7 +584,7 @@ impl App {
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
-                        self.lsp_notify_change_active();
+                        self.lsp_notify_change_active(&edits);
                         self.recompute_and_install();
 
                         // Update popup prefix.
@@ -645,7 +645,7 @@ impl App {
                         if !edits.is_empty() {
                             self.syntax.apply_edits(buffer_id, &edits);
                         }
-                        self.lsp_notify_change_active();
+                        self.lsp_notify_change_active(&edits);
                         self.recompute_and_install();
 
                         let anchor_col =
@@ -716,7 +716,7 @@ impl App {
                     if !edits.is_empty() {
                         self.syntax.apply_edits(buffer_id, &edits);
                     }
-                    self.lsp_notify_change_active();
+                    self.lsp_notify_change_active(&edits);
                     self.recompute_and_install();
                     self.maybe_auto_trigger_completion(c);
                     return KeyOutcome::Continue;
@@ -1317,7 +1317,7 @@ impl App {
                             .editor
                             .shift_syntax_spans_for_edits(&edits);
                     }
-                    self.lsp_notify_change_active();
+                    self.lsp_notify_change_active(&edits);
                     self.recompute_and_install();
                 }
                 Event::Mouse(me) => {
@@ -1379,7 +1379,7 @@ impl App {
                                         .editor
                                         .shift_syntax_spans_for_edits(&edits);
                                 }
-                                self.lsp_notify_change_active();
+                                self.lsp_notify_change_active(&edits);
                                 self.pending_recompute = true;
                             }
                         },
