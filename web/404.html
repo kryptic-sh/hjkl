@@ -16,11 +16,23 @@
         --fg-dim: #8b95a7;
         --accent: #bb9af7;
         --border: #2a3240;
-        --mono: "Hack", "JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", monospace;
-        --sans: "Hack", "JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", monospace;
+        --mono:
+          'Hack', 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono',
+          monospace;
+        --sans:
+          'Hack', 'JetBrains Mono', 'DejaVu Sans Mono', 'Liberation Mono',
+          monospace;
       }
-      *, *::before, *::after { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
       body {
         background: var(--bg);
         color: var(--fg);
@@ -30,7 +42,10 @@
         place-items: center;
         padding: 2rem;
       }
-      main { text-align: center; max-width: 520px; }
+      main {
+        text-align: center;
+        max-width: 520px;
+      }
       .code {
         font-family: var(--mono);
         font-size: clamp(4rem, 18vw, 9rem);
@@ -40,8 +55,16 @@
         letter-spacing: -0.04em;
         margin: 0;
       }
-      h1 { font-size: 1.5rem; font-weight: 600; margin: 1rem 0 0.5rem; }
-      p { color: var(--fg-dim); margin: 0 0 2rem; line-height: 1.5; }
+      h1 {
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin: 1rem 0 0.5rem;
+      }
+      p {
+        color: var(--fg-dim);
+        margin: 0 0 2rem;
+        line-height: 1.5;
+      }
       a.home {
         display: inline-block;
         font-family: var(--mono);
@@ -51,12 +74,20 @@
         border-radius: 6px;
         color: var(--fg);
         text-decoration: none;
-        transition: border-color 120ms, color 120ms;
+        transition:
+          border-color 120ms,
+          color 120ms;
       }
-      a.home:hover { border-color: var(--accent); color: var(--accent); }
-      a.home::before { content: "← "; color: var(--accent); }
+      a.home:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      a.home::before {
+        content: '← ';
+        color: var(--accent);
+      }
     </style>
-  </test>
+  </head>
   <body>
     <main>
       <p class="code">404</p>
