@@ -79,6 +79,7 @@ lsp-types = "0.97"
 url = "2"
 rmpv = { version = "1", features = ["with-serde"] }
 mimalloc = { version = "0.1", default-features = false }
+ahash = { version = "0.8", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

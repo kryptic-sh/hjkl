@@ -2141,6 +2141,7 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 name = "hjkl"
 version = "0.27.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "async-trait",
  "clap",
