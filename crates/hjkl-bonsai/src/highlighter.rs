@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock, RwLock};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -306,29 +306,120 @@ impl PatternInfo {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Compiled artifacts cache
+// ---------------------------------------------------------------------------
+
+/// Immutable per-grammar artifacts produced by query compilation. Shared
+/// across all `Highlighter` instances that use the same grammar (identified
+/// by a content hash of its name + highlights.scm + injections.scm).
+///
+/// `tree_sitter::Query` is `Send + Sync` (unsafe impls upstream), so
+/// `Arc<CompiledArtifacts>` is safe to share across threads.
+pub(crate) struct CompiledArtifacts {
+    query: Query,
+    injection_query: Option<Query>,
+    capture_names: Vec<String>,
+    pattern_info: Vec<PatternInfo>,
+    pre_extracted: Vec<CaptureSetDirective>,
+}
+
+// SAFETY: tree_sitter::Query has unsafe Send+Sync impls (see tree-sitter
+// lib.rs:3902-3903). The remaining fields (Vec<String>, Vec<PatternInfo>,
+// Vec<CaptureSetDirective>, Option<Query>) are all Send+Sync.
+unsafe impl Send for CompiledArtifacts {}
+unsafe impl Sync for CompiledArtifacts {}
+
+/// Process-global cache: grammar content-hash → compiled artifacts Arc.
+///
+/// Grows with the number of distinct grammars seen; eviction is intentionally
+/// omitted — N grammars is bounded by the installed grammar set (~50 typical).
+static COMPILED_CACHE: LazyLock<RwLock<ahash::AHashMap<u64, Arc<CompiledArtifacts>>>> =
+    LazyLock::new(|| RwLock::new(ahash::AHashMap::new()));
+
+/// Derive a stable u64 key for `grammar`'s compiled artifacts.
+///
+/// Hashes: grammar name + highlights_scm content + injections_scm content
+/// (if present). A grammar reload with an edited .scm gets a fresh entry.
+fn artifact_cache_key(grammar: &Grammar) -> u64 {
+    use ahash::AHasher;
+    use std::hash::BuildHasher;
+    let build = ahash::RandomState::with_seeds(1, 2, 3, 4);
+    let mut h: AHasher = build.build_hasher();
+    grammar.name().hash(&mut h);
+    grammar.highlights_scm().hash(&mut h);
+    grammar.injections_scm().hash(&mut h);
+    h.finish()
+}
+
+/// Build [`CompiledArtifacts`] for `grammar` by running the full query
+/// compilation pipeline. Called at most once per distinct grammar per process
+/// (subsequent calls get the cached Arc).
+fn compile_artifacts(grammar: &Grammar) -> Result<CompiledArtifacts> {
+    let (query, pre_extracted) =
+        compile_query(grammar.language(), grammar.highlights_scm(), grammar.name())?;
+
+    let capture_names: Vec<String> = query
+        .capture_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let pattern_count = query.pattern_count();
+    let mut pattern_info: Vec<PatternInfo> = vec![PatternInfo::default(); pattern_count];
+    for (idx, info) in pattern_info.iter_mut().enumerate() {
+        let preds = query.general_predicates(idx);
+        info.has_predicate = preds.iter().any(|p| p.operator.as_ref().ends_with('?'));
+        info.has_directive = preds.iter().any(|p| p.operator.as_ref().ends_with('!'));
+        info.has_property_setting = !query.property_settings(idx).is_empty();
+    }
+    for pe in &pre_extracted {
+        if let Some(info) = pattern_info.get_mut(pe.pattern_index) {
+            info.has_pre_extracted = true;
+        }
+    }
+
+    let injection_query =
+        grammar
+            .injections_scm()
+            .and_then(|inj| match Query::new(grammar.language(), inj) {
+                Ok(q) => Some(q),
+                Err(e) => {
+                    tracing::warn!(
+                        grammar = grammar.name(),
+                        error = %e,
+                        "injections.scm failed to compile — injection highlighting disabled"
+                    );
+                    None
+                }
+            });
+
+    Ok(CompiledArtifacts {
+        query,
+        injection_query,
+        capture_names,
+        pattern_info,
+        pre_extracted,
+    })
+}
+
 pub struct Highlighter {
     parser: Parser,
-    query: Query,
-    capture_names: Vec<String>,
-    /// Per-pattern fast-path flags. Indexed by `pattern_index`.
-    pattern_info: Vec<PatternInfo>,
-    /// Compiled injection query from `injections.scm`, if the grammar ships
-    /// one. `None` = this grammar has no injection rules.
-    injection_query: Option<Query>,
+    /// Shared, immutable compilation artifacts. Cloned (Arc) from the global
+    /// cache on construction — zero re-compilation when another `Highlighter`
+    /// for the same grammar already exists.
+    compiled: Arc<CompiledArtifacts>,
     tree: Option<tree_sitter::Tree>,
     parse_timeout_micros: u64,
     /// Predicate/directive registry used during match iteration.
     registry: Arc<PredicateRegistry>,
-    /// `(#set! @cap key val)` directives pre-extracted before query compilation
-    /// (stock tree-sitter rejects them at compile time).  Keyed by pattern index.
-    pre_extracted: Vec<CaptureSetDirective>,
     /// Cached child highlighters used by `highlight_range_with_injections` /
     /// `highlight_with_injections`. Avoids rebuilding a parser + re-parsing every
     /// injected code block on every render frame. See [`ChildCache`].
     child_cache: ChildCache,
     /// Held to keep the dlopen-ed shared library alive. Field order matters
     /// (parse trees reference data inside `_grammar`'s `Library`); placing
-    /// `_grammar` last guarantees it drops after `tree` and `query`.
+    /// `_grammar` last guarantees it drops after `tree` and `compiled`.
     _grammar: Arc<Grammar>,
 }
 
@@ -352,64 +443,38 @@ impl Highlighter {
             .set_language(grammar.language())
             .context("failed to set tree-sitter language")?;
 
-        let (query, pre_extracted) =
-            compile_query(grammar.language(), grammar.highlights_scm(), grammar.name())?;
-
-        let capture_names: Vec<String> = query
-            .capture_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-
-        // Precompute per-pattern fast-path flags so the hot loop in
-        // `highlight_range` can skip predicate/directive iteration +
-        // associated allocations for patterns that have none of them
-        // (the common case).
-        let pattern_count = query.pattern_count();
-        let mut pattern_info: Vec<PatternInfo> = vec![PatternInfo::default(); pattern_count];
-        for (idx, info) in pattern_info.iter_mut().enumerate() {
-            let preds = query.general_predicates(idx);
-            info.has_predicate = preds.iter().any(|p| p.operator.as_ref().ends_with('?'));
-            info.has_directive = preds.iter().any(|p| p.operator.as_ref().ends_with('!'));
-            info.has_property_setting = !query.property_settings(idx).is_empty();
-        }
-        for pe in &pre_extracted {
-            if let Some(info) = pattern_info.get_mut(pe.pattern_index) {
-                info.has_pre_extracted = true;
+        // Consult the global cache first; compile only on a miss.
+        let key = artifact_cache_key(&grammar);
+        let compiled = {
+            let r = COMPILED_CACHE.read().unwrap();
+            r.get(&key).cloned()
+        };
+        let compiled = match compiled {
+            Some(c) => c,
+            None => {
+                let c = Arc::new(compile_artifacts(&grammar)?);
+                COMPILED_CACHE.write().unwrap().insert(key, Arc::clone(&c));
+                c
             }
-        }
-
-        // Compile the injection query if present. Failure is non-fatal: a
-        // grammar whose injections.scm uses unsupported predicates will still
-        // highlight normally, just without injection support.
-        let injection_query =
-            grammar
-                .injections_scm()
-                .and_then(|inj| match Query::new(grammar.language(), inj) {
-                    Ok(q) => Some(q),
-                    Err(e) => {
-                        tracing::warn!(
-                            grammar = grammar.name(),
-                            error = %e,
-                            "injections.scm failed to compile — injection highlighting disabled"
-                        );
-                        None
-                    }
-                });
+        };
 
         Ok(Self {
             parser,
-            query,
-            capture_names,
-            pattern_info,
-            injection_query,
+            compiled,
             tree: None,
             parse_timeout_micros: DEFAULT_PARSE_TIMEOUT_MICROS,
             registry,
-            pre_extracted,
             child_cache: ChildCache::default(),
             _grammar: grammar,
         })
+    }
+
+    /// Access the shared compiled artifacts. Used by tests to assert cache
+    /// sharing via `Arc::ptr_eq`.
+    #[doc(hidden)]
+    #[cfg(test)]
+    pub(crate) fn compiled(&self) -> &Arc<CompiledArtifacts> {
+        &self.compiled
     }
 
     /// Apply an `InputEdit` to the retained tree, if any. No-op when the
@@ -664,14 +729,14 @@ impl Highlighter {
 
         let mut cursor = QueryCursor::new();
         cursor.set_byte_range(byte_range.clone());
-        let mut matches = cursor.matches(&self.query, tree.root_node(), source);
+        let mut matches = cursor.matches(&self.compiled.query, tree.root_node(), source);
 
         let registry = Arc::clone(&self.registry);
-        let capture_names = &self.capture_names;
-        let pre_extracted = &self.pre_extracted;
+        let capture_names = &self.compiled.capture_names;
+        let pre_extracted = &self.compiled.pre_extracted;
 
         let mut spans: Vec<HighlightSpan> = Vec::new();
-        let pattern_info = &self.pattern_info;
+        let pattern_info = &self.compiled.pattern_info;
         while let Some(m) = matches.next() {
             let pattern_idx = m.pattern_index;
             let info = pattern_info.get(pattern_idx).copied().unwrap_or_default();
@@ -688,7 +753,7 @@ impl Highlighter {
 
             if info.has_predicate {
                 let mut skip_match = false;
-                for pred in self.query.general_predicates(pattern_idx) {
+                for pred in self.compiled.query.general_predicates(pattern_idx) {
                     let op = pred.operator.as_ref();
                     if !op.ends_with('?') {
                         continue;
@@ -728,7 +793,7 @@ impl Highlighter {
             let meta = if info.needs_meta() {
                 let mut meta = MatchMetadata::default();
                 if info.has_property_setting {
-                    for prop in self.query.property_settings(pattern_idx) {
+                    for prop in self.compiled.query.property_settings(pattern_idx) {
                         let key = prop.key.as_ref();
                         let val = prop.value.as_deref();
                         let value = match val {
@@ -744,7 +809,7 @@ impl Highlighter {
                     }
                 }
                 if info.has_directive {
-                    for pred in self.query.general_predicates(pattern_idx) {
+                    for pred in self.compiled.query.general_predicates(pattern_idx) {
                         let op = pred.operator.as_ref();
                         if !op.ends_with('!') {
                             continue;
@@ -927,7 +992,7 @@ impl Highlighter {
 
         let parent_spans = self.highlight_range(source, 0..source.len());
 
-        let Some(inj_query) = self.injection_query.as_ref() else {
+        let Some(inj_query) = self.compiled.injection_query.as_ref() else {
             return parent_spans;
         };
 
@@ -1134,7 +1199,7 @@ impl Highlighter {
         let parent_count = parent_spans.len();
         let t_inj = std::time::Instant::now();
 
-        let Some(inj_query) = self.injection_query.as_ref() else {
+        let Some(inj_query) = self.compiled.injection_query.as_ref() else {
             return parent_spans;
         };
 
@@ -1340,8 +1405,10 @@ impl Highlighter {
         // `rope_node_chunks` materialises only the node's byte range — no
         // full-document copy.
         let src = Source::Rope(rope);
-        let mut matches =
-            cursor.matches(&self.query, tree.root_node(), |node: tree_sitter::Node| {
+        let mut matches = cursor.matches(
+            &self.compiled.query,
+            tree.root_node(),
+            |node: tree_sitter::Node| {
                 let s = node.start_byte();
                 let e = node.end_byte().min(total_bytes);
                 if s >= e {
@@ -1349,12 +1416,13 @@ impl Highlighter {
                 } else {
                     rope_node_chunks(rope, s, e)
                 }
-            });
+            },
+        );
 
         let registry = Arc::clone(&self.registry);
-        let capture_names = &self.capture_names;
-        let pre_extracted = &self.pre_extracted;
-        let pattern_info = &self.pattern_info;
+        let capture_names = &self.compiled.capture_names;
+        let pre_extracted = &self.compiled.pre_extracted;
+        let pattern_info = &self.compiled.pattern_info;
 
         let mut spans: Vec<HighlightSpan> = Vec::new();
 
@@ -1370,7 +1438,7 @@ impl Highlighter {
 
             if info.has_predicate {
                 let mut skip_match = false;
-                for pred in self.query.general_predicates(pattern_idx) {
+                for pred in self.compiled.query.general_predicates(pattern_idx) {
                     let op = pred.operator.as_ref();
                     if !op.ends_with('?') {
                         continue;
@@ -1409,7 +1477,7 @@ impl Highlighter {
             let meta = if info.needs_meta() {
                 let mut meta = MatchMetadata::default();
                 if info.has_property_setting {
-                    for prop in self.query.property_settings(pattern_idx) {
+                    for prop in self.compiled.query.property_settings(pattern_idx) {
                         let key = prop.key.as_ref();
                         let val = prop.value.as_deref();
                         let value = match val {
@@ -1425,7 +1493,7 @@ impl Highlighter {
                     }
                 }
                 if info.has_directive {
-                    for pred in self.query.general_predicates(pattern_idx) {
+                    for pred in self.compiled.query.general_predicates(pattern_idx) {
                         let op = pred.operator.as_ref();
                         if !op.ends_with('!') {
                             continue;
@@ -1535,7 +1603,7 @@ impl Highlighter {
         let parent_count = parent_spans.len();
         let t_inj = std::time::Instant::now();
 
-        let Some(inj_query) = self.injection_query.as_ref() else {
+        let Some(inj_query) = self.compiled.injection_query.as_ref() else {
             return parent_spans;
         };
 
@@ -2331,6 +2399,23 @@ mod tests {
         assert!(
             !found_tag,
             "all matches should be dropped by always-false predicate"
+        );
+    }
+
+    // ── Compiled artifacts cache sharing ─────────────────────────────────────
+
+    /// Two `Highlighter` instances built from the same `Arc<Grammar>` must
+    /// share the same `Arc<CompiledArtifacts>` — no second `Query::new_raw` /
+    /// `ts_query__analyze_patterns` call.
+    #[test]
+    #[ignore = "network + compiler: needs a real grammar"]
+    fn compiled_artifacts_shared_across_instances() {
+        let (g, _tmp) = c_grammar_loader();
+        let h1 = Highlighter::new(g.clone()).unwrap();
+        let h2 = Highlighter::new(g).unwrap();
+        assert!(
+            Arc::ptr_eq(h1.compiled(), h2.compiled()),
+            "both Highlighter instances must share the same Arc<CompiledArtifacts>"
         );
     }
 

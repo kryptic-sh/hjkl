@@ -2259,6 +2259,7 @@ dependencies = [
 name = "hjkl-bonsai"
 version = "0.28.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "dirs",
  "hjkl-theme",
