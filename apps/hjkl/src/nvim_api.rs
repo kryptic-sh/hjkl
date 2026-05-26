@@ -261,6 +261,18 @@ fn dispatch(
             // whereas "hello" → ["hello"] (one row, matching nvim semantics).
             let content = result.join("\n");
             editor.set_content(&content);
+            // Apply modeline overrides so oracle cases that embed a `vim:`
+            // marker see the same options that a real file-open would apply.
+            {
+                let mut opts = editor.current_options();
+                if opts.modeline {
+                    let scan_depth = opts.modelines as usize;
+                    hjkl_app::modeline::overlay_modeline_for_content(
+                        &mut opts, &content, scan_depth,
+                    );
+                    editor.apply_options(&opts);
+                }
+            }
             ok(stdout, msgid, Value::Nil)
         }
 

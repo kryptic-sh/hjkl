@@ -425,6 +425,8 @@ pub(super) fn build_slot(
     let mut is_new_file = false;
     let mut disk_mtime: Option<SystemTime> = None;
     let mut disk_len: Option<u64> = None;
+    // Retained for modeline scanning after the buffer is seeded.
+    let mut file_content: Option<String> = None;
     if let Some(ref p) = path {
         match std::fs::read_to_string(p) {
             Ok(content) => {
@@ -433,8 +435,9 @@ pub(super) fn build_slot(
                     disk_mtime = meta.modified().ok();
                     disk_len = Some(meta.len());
                 }
-                let content = content.strip_suffix('\n').unwrap_or(&content);
-                BufferEdit::replace_all(&mut buffer, content);
+                let stripped = content.strip_suffix('\n').unwrap_or(&content);
+                BufferEdit::replace_all(&mut buffer, stripped);
+                file_content = Some(content);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 is_new_file = true;
@@ -455,6 +458,14 @@ pub(super) fn build_slot(
     };
     if let Some(ref p) = path {
         hjkl_app::editorconfig::overlay_for_path(&mut ec_opts, p);
+    }
+    // Modeline overlay — applied after editorconfig so per-file modelines win.
+    // Only runs when `modeline` is enabled (default true).
+    if ec_opts.modeline
+        && let Some(ref content) = file_content
+    {
+        let scan_depth = ec_opts.modelines as usize;
+        hjkl_app::modeline::overlay_modeline_for_content(&mut ec_opts, content, scan_depth);
     }
     let mut editor = Editor::new(buffer, host, ec_opts);
     // Tag the editor with its stable buffer_id so `mA`–`mZ` global marks

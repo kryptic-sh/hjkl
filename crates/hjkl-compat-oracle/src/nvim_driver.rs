@@ -52,8 +52,17 @@ pub async fn run_case(case: &OracleCase) -> anyhow::Result<NvimOutcome> {
     use tokio::process::Command;
 
     // 1. Spawn nvim in headless embedded mode.
+    // --cmd "set modeline modelines=5": nvim --clean disables modeline by
+    // default; re-enable so modeline oracle cases match vim's behaviour.
     let mut cmd = Command::new("nvim");
-    cmd.args(["--headless", "--embed", "--clean", "-n"]);
+    cmd.args([
+        "--headless",
+        "--embed",
+        "--clean",
+        "-n",
+        "--cmd",
+        "set modeline modelines=5",
+    ]);
     let (nvim, _io_handle, mut child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
 
     let result = run_case_inner(&nvim, case).await;

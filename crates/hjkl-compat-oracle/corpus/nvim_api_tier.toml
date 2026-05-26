@@ -271,3 +271,52 @@ initial_cursor = [0, 20]
 keys = ":set tw=8<CR>gw$"
 expected_buffer = "abcdefgh\nijklmnopqrstuvwxyz\n"
 expected_cursor = [1, 11]
+
+# ─── vim modeline integration (#205) ─────────────────────────────────────────
+#
+# These cases verify that vim modelines embedded in buffer content are picked
+# up and applied before :retab runs. nvim_driver spawns nvim with
+# `--cmd "set modeline modelines=5"` so modeline is active during the test.
+#
+# hjkl parses modelines in build_slot at file-open time; the oracle exercises
+# the same parse→apply path by seeding the initial_buffer with a modeline and
+# then running :retab to observe the tabstop/expandtab effect.
+
+# modeline ts=2 et: tab on line 2 becomes 2 spaces after :retab.
+# Modeline "# vim: ts=2 et:" sets ts=2 + expandtab.
+# "\thello" → "  hello" (2 spaces).
+# Cursor at [0,0]; :retab does not move cursor.
+# Verified against nvim v0.12.2 with modeline+modelines=5 active: [0,0].
+[[cases]]
+name = "modeline_ts2_affects_retab"
+initial_buffer = "# vim: set ts=2 et:\n\thello\n"
+initial_cursor = [0, 0]
+keys = ":retab<CR>"
+expected_buffer = "# vim: set ts=2 et:\n  hello\n"
+expected_cursor = [0, 0]
+
+# modeline noet: expandtab=false — 4 spaces → \t after :retab.
+# "# vim: ts=4 noet:" → tabstop=4, expandtab=false.
+# "    hello" (4 spaces) → "\thello".
+# Cursor at [0,0].
+# Verified against nvim v0.12.2 with modeline+modelines=5 active: [0,0].
+[[cases]]
+name = "modeline_noet_disables_expandtab"
+initial_buffer = "# vim: ts=4 noet:\n    hello\n"
+initial_cursor = [0, 0]
+keys = ":retab<CR>"
+expected_buffer = "# vim: ts=4 noet:\n\thello\n"
+expected_cursor = [0, 0]
+
+# modeline in last line: modeline at the bottom of the file is also scanned.
+# Buffer has tab-indented content on line 1 and modeline on line 3 (the last).
+# ts=2 et from the last-line modeline → "\thello" → "  hello" after :retab.
+# Cursor at [0,0].
+# Verified against nvim v0.12.2 with modeline+modelines=5 active: [0,0].
+[[cases]]
+name = "modeline_in_last_line"
+initial_buffer = "\thello\nfoo\n# vim: set ts=2 et:\n"
+initial_cursor = [0, 0]
+keys = ":retab<CR>"
+expected_buffer = "  hello\nfoo\n# vim: set ts=2 et:\n"
+expected_cursor = [0, 0]

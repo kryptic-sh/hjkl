@@ -327,6 +327,14 @@ pub struct Options {
     /// cursor when scrolling horizontally (no-wrap mode only). `0` disables.
     /// Matches vim's `:set sidescrolloff` / `:set siso`. Default `0`.
     pub sidescrolloff: usize,
+    /// Enable vim modeline parsing on file open. When `true`, hjkl scans
+    /// the first/last `modelines` lines for `vim:` / `ex:` / `vi:` markers
+    /// and applies per-buffer option overrides. Matches vim's `:set modeline`.
+    /// Default `true`.
+    pub modeline: bool,
+    /// Number of lines from each end to scan for vim modelines.
+    /// Matches vim's `:set modelines`. Default `5`.
+    pub modelines: u32,
 }
 
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
@@ -407,6 +415,8 @@ impl Default for Options {
             filetype: String::new(),
             scrolloff: 5,
             sidescrolloff: 0,
+            modeline: true,
+            modelines: 5,
         }
     }
 }
@@ -617,6 +627,8 @@ impl Options {
                 };
                 Ok(())
             }
+            "modeline" | "ml" => set_bool!(modeline),
+            "modelines" | "mls" => set_u32!(modelines),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -662,6 +674,8 @@ impl Options {
             "filetype" | "ft" => OptionValue::String(self.filetype.clone()),
             "scrolloff" | "so" => OptionValue::Int(self.scrolloff as i64),
             "sidescrolloff" | "siso" => OptionValue::Int(self.sidescrolloff as i64),
+            "modeline" | "ml" => OptionValue::Bool(self.modeline),
+            "modelines" | "mls" => OptionValue::Int(self.modelines as i64),
             _ => return None,
         })
     }
