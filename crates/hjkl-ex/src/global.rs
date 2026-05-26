@@ -71,7 +71,16 @@ pub(crate) fn global_handler<H: Host>(
             ":g supports only `d` today, got `{cmd}`"
         )));
     }
-    let regex = match regex::Regex::new(&pattern) {
+    use hjkl_engine::search::{CaseMode, resolve_case_mode};
+    let s = editor.settings();
+    let base = CaseMode::from_options(s.ignore_case, s.smartcase);
+    let (stripped, mode) = resolve_case_mode(&pattern, base);
+    let compile_src = if mode == CaseMode::Insensitive {
+        format!("(?i){stripped}")
+    } else {
+        stripped
+    };
+    let regex = match regex::Regex::new(&compile_src) {
         Ok(r) => r,
         Err(e) => return Some(ExEffect::Error(format!("bad pattern: {e}"))),
     };

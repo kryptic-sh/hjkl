@@ -113,12 +113,13 @@ fn handle_search_address<H: hjkl_engine::Host>(
         s => s.to_string(),
     };
     let s = editor.settings();
-    let case_insensitive =
-        s.ignore_case && !(s.smartcase && pat_str.chars().any(|c| c.is_uppercase()));
-    let compile_src: std::borrow::Cow<'_, str> = if case_insensitive {
-        std::borrow::Cow::Owned(format!("(?i){pat_str}"))
+    use hjkl_engine::search::{CaseMode, resolve_case_mode};
+    let base = CaseMode::from_options(s.ignore_case, s.smartcase);
+    let (stripped, mode) = resolve_case_mode(&pat_str, base);
+    let compile_src = if mode == CaseMode::Insensitive {
+        format!("(?i){stripped}")
     } else {
-        std::borrow::Cow::Borrowed(pat_str.as_str())
+        stripped
     };
     match regex::Regex::new(&compile_src) {
         Ok(re) => {

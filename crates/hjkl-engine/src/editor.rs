@@ -860,8 +860,8 @@ impl Default for Settings {
             shiftwidth: 4,
             tabstop: 4,
             softtabstop: 4,
-            ignore_case: false,
-            smartcase: false,
+            ignore_case: true,
+            smartcase: true,
             wrapscan: true,
             textwidth: 79,
             expandtab: true,
@@ -2465,8 +2465,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             if prompt.text.is_empty() {
                 return Vec::new();
             }
-            let translated = crate::search::vim_to_rust_regex(&prompt.text);
-            let Ok(re) = regex::Regex::new(&translated) else {
+            use crate::search::{CaseMode, resolve_case_mode};
+            let base =
+                CaseMode::from_options(self.settings().ignore_case, self.settings().smartcase);
+            let (stripped, mode) = resolve_case_mode(&prompt.text, base);
+            let src = if mode == CaseMode::Insensitive {
+                format!("(?i){stripped}")
+            } else {
+                stripped
+            };
+            let Ok(re) = regex::Regex::new(&src) else {
                 return Vec::new();
             };
             let Some(haystack) = buf_line(&self.buffer, row) else {
@@ -5280,21 +5288,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     // search-prompt and normal-mode FSM can call them via the public API.
 
     /// Compile `pattern` into a regex and install it as the active search
-    /// pattern. Respects `:set ignorecase` / `:set smartcase`. An empty or
-    /// invalid pattern clears the highlight without raising an error.
+    /// pattern. Respects `:set ignorecase` / `:set smartcase` and inline
+    /// `\c`/`\C` overrides. An empty or invalid pattern clears the highlight
+    /// without raising an error.
     pub fn push_search_pattern(&mut self, pattern: &str) {
         let compiled = if pattern.is_empty() {
             None
         } else {
-            let case_insensitive = self.settings().ignore_case
-                && !(self.settings().smartcase && pattern.chars().any(|c| c.is_uppercase()));
-            let translated = crate::search::vim_to_rust_regex(pattern);
-            let effective: std::borrow::Cow<'_, str> = if case_insensitive {
-                std::borrow::Cow::Owned(format!("(?i){translated}"))
+            use crate::search::{CaseMode, resolve_case_mode};
+            let base =
+                CaseMode::from_options(self.settings().ignore_case, self.settings().smartcase);
+            let (stripped, mode) = resolve_case_mode(pattern, base);
+            let src = if mode == CaseMode::Insensitive {
+                format!("(?i){stripped}")
             } else {
-                std::borrow::Cow::Owned(translated)
+                stripped
             };
-            regex::Regex::new(&effective).ok()
+            regex::Regex::new(&src).ok()
         };
         let wrap = self.settings().wrapscan;
         self.set_search_pattern(compiled);

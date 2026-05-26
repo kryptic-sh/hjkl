@@ -24,26 +24,79 @@ use regex::Regex;
 
 use crate::types::{Cursor, Query, Search};
 
-/// Rewrite vim-style word-boundary escapes to Rust `regex`-compatible form.
+/// Case-sensitivity policy derived from `:set ignorecase` / `:set smartcase`.
 ///
-/// The `regex` crate supports `\b` (symmetric word boundary) but not the
-/// vim/PCRE `\<` (word-boundary start) or `\>` (word-boundary end) variants.
-/// This function performs a single-pass rewrite:
+/// Use [`CaseMode::from_options`] to build from two booleans, then pass to
+/// [`resolve_case_mode`] together with the raw pattern string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseMode {
+    /// Always case-sensitive regardless of the pattern.
+    Sensitive,
+    /// Always case-insensitive regardless of the pattern.
+    Insensitive,
+    /// Case-insensitive unless the pattern contains an uppercase rune
+    /// (vim's `smartcase` behaviour).
+    Smart,
+}
+
+impl CaseMode {
+    /// Build a `CaseMode` from the two option booleans.
+    ///
+    /// | `ignorecase` | `smartcase` | Result        |
+    /// |---|---|---|
+    /// | `false` | `*`   | `Sensitive`   |
+    /// | `true`  | `false` | `Insensitive` |
+    /// | `true`  | `true`  | `Smart`       |
+    pub fn from_options(ignorecase: bool, smartcase: bool) -> Self {
+        if !ignorecase {
+            CaseMode::Sensitive
+        } else if smartcase {
+            CaseMode::Smart
+        } else {
+            CaseMode::Insensitive
+        }
+    }
+}
+
+/// Strip `\c` / `\C` overrides from `pat`, resolve the effective
+/// [`CaseMode`], and return the cleaned pattern together with the
+/// resolved mode.
 ///
-/// - `\<` → `\b`
-/// - `\>` → `\b`
-/// - `\\<` / `\\>` (literal double-backslash followed by `<`/`>`) are left
-///   untouched — only the unescaped form transforms.
-/// - All other syntax (`\b`, `\B`, `\d`, anchors, …) passes through unchanged.
+/// ### Override rules (mirrors vim)
 ///
-/// Call this on the raw user-typed pattern string **before** passing to
-/// `regex::Regex::new`. Keep the original string for display / history.
-pub fn vim_to_rust_regex(pat: &str) -> String {
+/// - `\c` anywhere in `pat` forces case-insensitive.
+/// - `\C` anywhere in `pat` forces case-sensitive.
+/// - When both appear the **last** one wins.
+/// - Both are stripped from the returned pattern.
+///
+/// ### Smart-case detection
+///
+/// When `base` is [`CaseMode::Smart`] and no `\c`/`\C` override was
+/// found, the pattern is scanned for uppercase Unicode letters. Any
+/// uppercase letter → `Sensitive`; otherwise → `Insensitive`.
+///
+/// ### Per-substitute flag interaction
+///
+/// The `:s/…/…/i` and `:s/…/…/I` flags are handled in
+/// `apply_substitute` **before** calling this function (they
+/// short-circuit entirely). This function is not involved.
+pub fn resolve_case_mode(pat: &str, base: CaseMode) -> (String, CaseMode) {
     let mut out = String::with_capacity(pat.len());
     let mut chars = pat.chars().peekable();
+    // None = no override seen yet; Some(true) = \c (insensitive); Some(false) = \C (sensitive).
+    let mut override_mode: Option<bool> = None;
+
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.peek() {
+                Some('c') => {
+                    chars.next();
+                    override_mode = Some(true); // \c → insensitive
+                }
+                Some('C') => {
+                    chars.next();
+                    override_mode = Some(false); // \C → sensitive
+                }
                 Some('<') => {
                     chars.next();
                     out.push_str(r"\b");
@@ -63,7 +116,47 @@ pub fn vim_to_rust_regex(pat: &str) -> String {
             out.push(ch);
         }
     }
-    out
+
+    let resolved = match override_mode {
+        Some(true) => CaseMode::Insensitive,
+        Some(false) => CaseMode::Sensitive,
+        None => match base {
+            CaseMode::Smart => {
+                // Any uppercase rune → sensitive.
+                if out.chars().any(|c| c.is_uppercase()) {
+                    CaseMode::Sensitive
+                } else {
+                    CaseMode::Insensitive
+                }
+            }
+            other => other,
+        },
+    };
+
+    (out, resolved)
+}
+
+/// Rewrite vim-style word-boundary escapes to Rust `regex`-compatible form
+/// **and** strip `\c`/`\C` case overrides.
+///
+/// The `regex` crate supports `\b` (symmetric word boundary) but not the
+/// vim/PCRE `\<` (word-boundary start) or `\>` (word-boundary end) variants.
+/// This function performs a single-pass rewrite:
+///
+/// - `\<` → `\b`
+/// - `\>` → `\b`
+/// - `\c` / `\C` stripped (case override — handled by [`resolve_case_mode`])
+/// - `\\<` / `\\>` (literal double-backslash followed by `<`/`>`) are left
+///   untouched — only the unescaped form transforms.
+/// - All other syntax (`\b`, `\B`, `\d`, anchors, …) passes through unchanged.
+///
+/// Call this on the raw user-typed pattern string **before** passing to
+/// `regex::Regex::new`. Keep the original string for display / history.
+///
+/// Prefer [`resolve_case_mode`] when you also need to apply case semantics;
+/// that function performs the same boundary rewrite internally.
+pub fn vim_to_rust_regex(pat: &str) -> String {
+    resolve_case_mode(pat, CaseMode::Sensitive).0
 }
 
 /// Per-row match cache keyed against the buffer's `dirty_gen`. Live
@@ -398,5 +491,125 @@ mod tests {
         let dgen = b.dirty_gen();
         let initial = search_matches(&b, &mut s, dgen, 0);
         assert_eq!(initial, vec![(4, 7)]);
+    }
+
+    // ── CaseMode::from_options matrix ────────────────────────────────────────
+
+    #[test]
+    fn case_mode_from_options_matrix() {
+        // ic=false, smart=* → Sensitive
+        assert_eq!(CaseMode::from_options(false, false), CaseMode::Sensitive);
+        assert_eq!(CaseMode::from_options(false, true), CaseMode::Sensitive);
+        // ic=true, smart=false → Insensitive
+        assert_eq!(CaseMode::from_options(true, false), CaseMode::Insensitive);
+        // ic=true, smart=true → Smart
+        assert_eq!(CaseMode::from_options(true, true), CaseMode::Smart);
+    }
+
+    // ── resolve_case_mode unit tests ─────────────────────────────────────────
+
+    #[test]
+    fn resolve_case_mode_no_override_smart_lowercase() {
+        let (stripped, mode) = resolve_case_mode("foo", CaseMode::Smart);
+        assert_eq!(stripped, "foo");
+        assert_eq!(mode, CaseMode::Insensitive);
+    }
+
+    #[test]
+    fn resolve_case_mode_no_override_smart_uppercase() {
+        let (stripped, mode) = resolve_case_mode("Foo", CaseMode::Smart);
+        assert_eq!(stripped, "Foo");
+        assert_eq!(mode, CaseMode::Sensitive);
+    }
+
+    #[test]
+    fn resolve_case_mode_lower_c_override() {
+        // \c overrides Sensitive → Insensitive; stripped pattern is "Foo"
+        let (stripped, mode) = resolve_case_mode(r"\cFoo", CaseMode::Sensitive);
+        assert_eq!(stripped, "Foo");
+        assert_eq!(mode, CaseMode::Insensitive);
+    }
+
+    #[test]
+    fn resolve_case_mode_upper_c_override() {
+        // \C overrides Smart → Sensitive; stripped pattern is "foo"
+        let (stripped, mode) = resolve_case_mode(r"foo\C", CaseMode::Smart);
+        assert_eq!(stripped, "foo");
+        assert_eq!(mode, CaseMode::Sensitive);
+    }
+
+    #[test]
+    fn resolve_case_mode_last_wins() {
+        // \c then \C → last-wins → Sensitive; stripped "foo"
+        let (stripped, mode) = resolve_case_mode(r"\cfoo\C", CaseMode::Smart);
+        assert_eq!(stripped, "foo");
+        assert_eq!(mode, CaseMode::Sensitive);
+    }
+
+    // ── Integration: search with smartcase / \c / \C ─────────────────────────
+
+    fn build_regex_from(pat: &str, ic: bool, smart: bool) -> Regex {
+        let base = CaseMode::from_options(ic, smart);
+        let (stripped, mode) = resolve_case_mode(pat, base);
+        let src = if mode == CaseMode::Insensitive {
+            format!("(?i){stripped}")
+        } else {
+            stripped
+        };
+        Regex::new(&src).unwrap()
+    }
+
+    #[test]
+    fn search_finds_capital_with_smartcase_lowercase_pattern() {
+        // ic=true, smart=true, pattern "foo" → Insensitive → matches "FOO"
+        let re = build_regex_from("foo", true, true);
+        assert!(re.is_match("FOO"), "expected match on 'FOO'");
+        assert!(re.is_match("foo"), "expected match on 'foo'");
+    }
+
+    #[test]
+    fn search_skips_capital_with_smartcase_mixed_pattern() {
+        // ic=true, smart=true, pattern "Foo" → Sensitive → does NOT match "FOO"
+        let re = build_regex_from("Foo", true, true);
+        assert!(!re.is_match("FOO"), "must not match 'FOO' (case-sensitive)");
+        assert!(re.is_match("Foo"), "must match exact 'Foo'");
+    }
+
+    #[test]
+    fn search_lower_c_override_finds_capital() {
+        // \cFoo + Sensitive base → Insensitive override → matches "FOO"
+        let re = build_regex_from(r"\cFoo", false, false);
+        assert!(re.is_match("FOO"), "\\c override must match 'FOO'");
+        assert!(re.is_match("foo"), "\\c override must match 'foo'");
+    }
+
+    #[test]
+    fn vim_to_rust_regex_strips_case_overrides() {
+        // vim_to_rust_regex is now a thin wrapper; \c and \C are stripped
+        assert_eq!(vim_to_rust_regex(r"\cfoo"), "foo");
+        assert_eq!(vim_to_rust_regex(r"foo\C"), "foo");
+        assert_eq!(vim_to_rust_regex(r"\<bar\>"), r"\bbar\b");
+    }
+
+    /// `*` on word "foo" emits the pattern `\bfoo\b` (all lowercase). Under
+    /// smartcase that resolves to Insensitive → should match "FOO". This test
+    /// simulates the word_at_cursor_search pattern-build path.
+    #[test]
+    fn star_search_finds_lowercase_when_smartcase_lower_word() {
+        // word_at_cursor_search escapes the word then wraps \b..\b.
+        // "foo" is all-lowercase after word-extraction → Smart → Insensitive.
+        let pat = r"\bfoo\b";
+        let re = build_regex_from(pat, true, true);
+        // Case-insensitive → matches "FOO foo Foo".
+        let text = "FOO foo Foo";
+        let hits: Vec<_> = re.find_iter(text).map(|m| m.as_str()).collect();
+        assert!(
+            hits.contains(&"FOO"),
+            "smartcase lower-word * must match FOO: {hits:?}"
+        );
+        assert!(
+            hits.contains(&"foo"),
+            "smartcase lower-word * must match foo: {hits:?}"
+        );
     }
 }

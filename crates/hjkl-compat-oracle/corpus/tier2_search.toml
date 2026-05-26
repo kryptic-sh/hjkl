@@ -86,3 +86,8 @@ initial_cursor = [0, 0]
 keys = "/\\<bar\\><CR>"
 expected_buffer = "foobar bar baz\n"
 expected_cursor = [0, 7]
+
+# Note: smartcase / \c / \C cases live in nvim_api_tier.toml because they
+# exercise hjkl-only default settings (ignorecase=true, smartcase=true) that
+# differ from nvim's out-of-the-box defaults and therefore cannot be compared
+# against nvim with --clean. The nvim_api_tier.toml driver runs hjkl alone.

@@ -181,19 +181,30 @@ pub fn apply_substitute<H: crate::types::Host>(
     };
 
     // Case-sensitivity.
-    let case_insensitive = if cmd.flags.case_sensitive {
-        false
+    // Per-substitute `/I` (case-sensitive) and `/i` (case-insensitive) flags
+    // short-circuit all other resolution — they win over `\c`/`\C` in the
+    // pattern (matching vim's documented precedence: flag > inline override).
+    let effective_pattern = if cmd.flags.case_sensitive {
+        // /I flag: force case-sensitive — run vim_to_rust_regex to strip \c/\C
+        // but do NOT add (?i).
+        use crate::search::{CaseMode, resolve_case_mode};
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        stripped
     } else if cmd.flags.ignore_case {
-        true
+        // /i flag: force case-insensitive — strip \c/\C and prepend (?i).
+        use crate::search::{CaseMode, resolve_case_mode};
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        format!("(?i){stripped}")
     } else {
-        ed.settings().ignore_case
-    };
-
-    let translated = crate::search::vim_to_rust_regex(&pattern_str);
-    let effective_pattern = if case_insensitive {
-        format!("(?i){translated}")
-    } else {
-        translated
+        // No explicit flag: honour ignorecase + smartcase + inline \c/\C.
+        use crate::search::{CaseMode, resolve_case_mode};
+        let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
+        let (stripped, mode) = resolve_case_mode(&pattern_str, base);
+        if mode == CaseMode::Insensitive {
+            format!("(?i){stripped}")
+        } else {
+            stripped
+        }
     };
 
     let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
@@ -608,5 +619,43 @@ mod tests {
         let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
         apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
+    }
+
+    // ── smartcase + \c/\C tests ───────────────────────────────────────────────
+
+    /// `:s/foo/bar/` on `"Foo"` — ignorecase+smartcase on by default, all-
+    /// lowercase pattern → Insensitive → matches `Foo` → becomes `bar`.
+    #[test]
+    fn substitute_respects_smartcase() {
+        let mut e = editor_with("Foo");
+        // Default Options has ignorecase=true, smartcase=true.
+        let cmd = parse_substitute("/foo/bar/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(buf_line(&e, 0), "bar");
+    }
+
+    /// `:s/Foo/bar/i` — `/i` flag overrides smartcase (mixed pattern would
+    /// normally be Sensitive) → case-insensitive → matches `"foo"`.
+    #[test]
+    fn substitute_i_flag_overrides_c() {
+        let mut e = editor_with("foo");
+        // /i forces insensitive regardless of pattern case or smartcase.
+        let cmd = parse_substitute("/Foo/bar/i").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1, "expected match on 'foo' with /i flag");
+        assert_eq!(buf_line(&e, 0), "bar");
+    }
+
+    /// `\c` inline override in a pattern with no `/i`/`/I` flag — forces
+    /// insensitive even though `Foo` has uppercase (smartcase trip).
+    #[test]
+    fn substitute_lower_c_inline_overrides_smartcase() {
+        let mut e = editor_with("FOO");
+        // \cFoo — override wins, Insensitive → matches "FOO"
+        let cmd = parse_substitute("/\\cFoo/bar/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(buf_line(&e, 0), "bar");
     }
 }

@@ -382,8 +382,8 @@ impl Default for Options {
             expandtab: true,
             softtabstop: 4,
             iskeyword: "@,48-57,_,192-255".to_string(),
-            ignorecase: false,
-            smartcase: false,
+            ignorecase: true,
+            smartcase: true,
             hlsearch: true,
             incsearch: true,
             wrapscan: true,
@@ -1483,6 +1483,15 @@ mod tests {
             o.set_by_name("iskeyword", OptionValue::Int(7)),
             Err(EngineError::Ex(_))
         ));
+    }
+
+    /// Verify that `Options::default()` ships with the recommended vim
+    /// settings: `ignorecase=true` and `smartcase=true`.
+    #[test]
+    fn default_options_ignorecase_and_smartcase_are_true() {
+        let o = Options::default();
+        assert!(o.ignorecase, "ignorecase must default to true");
+        assert!(o.smartcase, "smartcase must default to true");
     }
 
     #[test]

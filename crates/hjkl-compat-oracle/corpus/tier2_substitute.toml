@@ -49,3 +49,15 @@ initial_cursor = [0, 0]
 keys = ":s/xyz/bar/<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
+
+# `:s/foo/bar/i` on "Foo" — /i flag explicitly forces case-insensitive;
+# default ic+smart would also match (all-lower "foo" → Insensitive), but this
+# tests that /i flag path works regardless.
+# Verified against nvim v0.12.2: buffer becomes "bar\n", cursor [0,0].
+[[cases]]
+name = "substitute_i_flag_overrides_pattern_case"
+initial_buffer = "Foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/i<CR>"
+expected_buffer = "bar\n"
+expected_cursor = [0, 0]

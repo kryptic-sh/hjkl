@@ -163,3 +163,71 @@ initial_cursor = [0, 0]
 keys = ":s/foo/X/g<CR>g&"
 expected_buffer = "X X\nX\n"
 expected_cursor = [1, 0]
+
+# ── smartcase + \c/\C case logic (#186) ──────────────────────────────────────
+#
+# These cases verify hjkl-only default settings (ignorecase=true,
+# smartcase=true). They cannot be compared against nvim --clean (which
+# defaults to noignorecase) so they live here in the nvim_api_tier corpus,
+# which exercises only hjkl.
+
+# smartcase lowercase pattern matches uppercase (#186).
+# ic+smart=true (default). "/foo<CR>" from [0,0] on "foo\nFOO\nbar".
+# "foo" all-lowercase → Insensitive → matches FOO. vim skips "foo" at cursor,
+# finds "FOO" at [1,0]. Verified against nvim v0.12.2 with :set ic smart: [1,0].
+[[cases]]
+name = "smartcase_lowercase_pattern_matches_uppercase"
+initial_buffer = "foo\nFOO\nbar\n"
+initial_cursor = [0, 0]
+keys = ":set ignorecase smartcase<CR>/foo<CR>"
+expected_buffer = "foo\nFOO\nbar\n"
+expected_cursor = [1, 0]
+
+# smartcase uppercase pattern — sensitive, no match on lower or upper (#186).
+# ic+smart=true. "/Foo<CR>" from [0,0] — uppercase → Sensitive.
+# Neither "foo" nor "FOO" is exactly "Foo"; cursor stays at [0,0].
+# Verified against nvim v0.12.2 with :set ic smart: [0,0].
+[[cases]]
+name = "smartcase_uppercase_pattern_no_match_on_lower_or_upper"
+initial_buffer = "foo\nFOO\nbar\n"
+initial_cursor = [0, 0]
+keys = ":set ignorecase smartcase<CR>/Foo<CR>"
+expected_buffer = "foo\nFOO\nbar\n"
+expected_cursor = [0, 0]
+
+# \c inline override forces insensitive even though pattern has uppercase (#186).
+# ic+smart=true. "/\cFoo<CR>" from [0,0] on "bar\nFOO\nbaz".
+# \c overrides Sensitive (which "Foo" would trigger) → Insensitive → matches FOO.
+# From [0,0] ("bar") finds "FOO" at [1,0].
+# Verified against nvim v0.12.2 with :set ic smart: [1,0].
+[[cases]]
+name = "lower_c_override_finds_uppercase"
+initial_buffer = "bar\nFOO\nbaz\n"
+initial_cursor = [0, 0]
+keys = ":set ignorecase smartcase<CR>/\\cFoo<CR>"
+expected_buffer = "bar\nFOO\nbaz\n"
+expected_cursor = [1, 0]
+
+# \C inline override forces sensitive even with ignorecase+smartcase on (#186).
+# ic+smart=true. "/foo\C<CR>" — \C forces Sensitive → only exact "foo" matches.
+# Buffer "FOO\nbar" has no lowercase "foo" → cursor stays at [0,0].
+# Verified against nvim v0.12.2 with :set ic smart: [0,0].
+[[cases]]
+name = "upper_c_override_skips_case_insensitive_match"
+initial_buffer = "FOO\nbar\n"
+initial_cursor = [0, 0]
+keys = ":set ignorecase smartcase<CR>/foo\\C<CR>"
+expected_buffer = "FOO\nbar\n"
+expected_cursor = [0, 0]
+
+# :s/foo/bar/i on "Foo" — /i flag forces case-insensitive override (#186).
+# With ic+smart=true, all-lower "foo" → Insensitive anyway, but /i flag
+# also explicitly forces it. Buffer "Foo" → replaced with "bar".
+# Verified against nvim v0.12.2 with :set ic smart + :s/foo/bar/i: "bar", [0,0].
+[[cases]]
+name = "substitute_i_flag_overrides_pattern_case"
+initial_buffer = "Foo\n"
+initial_cursor = [0, 0]
+keys = ":set ignorecase smartcase<CR>:s/foo/bar/i<CR>"
+expected_buffer = "bar\n"
+expected_cursor = [0, 0]
