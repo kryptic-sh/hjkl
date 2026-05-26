@@ -1566,7 +1566,25 @@ impl App {
     /// is empty, so callers see an empty `Vec` and suppress the popup.  See
     /// the comment in `render.rs::which_key_popup` for the full rationale.
     pub fn active_which_key_prefix(&self) -> Vec<hjkl_keymap::KeyEvent> {
-        self.app_keymap.pending(keymap::HjklMode::Normal).to_vec()
+        let trie = self.app_keymap.pending(keymap::HjklMode::Normal);
+        if !trie.is_empty() {
+            return trie.to_vec();
+        }
+        // Engine-FSM chords (g/z/op-pending) don't surface through app_keymap
+        // — synthesize a prefix so descriptors::children_for can list entries.
+        if let Some(state) = self.pending_state {
+            use hjkl_vim::PendingState;
+            let ch = match state {
+                PendingState::AfterG { .. } => Some('g'),
+                PendingState::AfterZ { .. } => Some('z'),
+                PendingState::AfterOp { op, .. } => Some(op.double_char()),
+                _ => None,
+            };
+            if let Some(c) = ch {
+                return vec![hjkl_keymap::KeyEvent::char(c)];
+            }
+        }
+        Vec::new()
     }
 
     // km_to_crossterm, replay_to_engine, route_chord_key, route_chord_key_inner moved to chord_routing.rs

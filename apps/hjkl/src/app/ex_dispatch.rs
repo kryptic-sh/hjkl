@@ -1038,13 +1038,19 @@ impl App {
         let trimmed = content.strip_suffix('\n').unwrap_or(&content);
         let line_count = trimmed.lines().count();
         let byte_count = content.len();
+        // Preserve cursor across reload (vim/nvim :e behaviour). Clamp the
+        // saved (row, col) to the new buffer size; reload_current is only
+        // called for the active slot so the pre-reload cursor is the user's
+        // current position.
+        let (prev_row, prev_col) = self.active().editor.cursor();
         self.active_mut().editor.set_content(trimmed);
-        self.active_mut().editor.goto_line(1);
-        {
-            let vp = self.active_mut().editor.host_mut().viewport_mut();
-            vp.top_row = 0;
-            vp.top_col = 0;
-        }
+        let new_rows = self.active().editor.buffer().line_count() as usize;
+        let target_row = prev_row.min(new_rows.saturating_sub(1));
+        self.active_mut().editor.jump_cursor(target_row, prev_col);
+        // Reposition viewport so the restored cursor is visible (with scrolloff).
+        // Without this the viewport stays at its pre-reload top_row and the
+        // cursor can land offscreen if the file shrank or grew.
+        self.active_mut().editor.ensure_cursor_in_scrolloff();
         self.active_mut().is_new_file = false;
         // Record fresh disk metadata and clear the disk-change flag.
         if let Ok(meta) = std::fs::metadata(&path) {

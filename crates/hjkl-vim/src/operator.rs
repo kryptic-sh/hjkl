@@ -44,7 +44,9 @@ impl OperatorKind {
     ///
     /// Used by the `AfterOp` reducer arm to detect the line-op doubled form:
     /// `dd`, `yy`, `cc`, `>>`, `<<`, `gUU`, `guu`, `g~~`, `gqq`, `gcc`.
-    pub(crate) fn double_char(self) -> char {
+    /// Also used by the app's which-key popup to synthesise the prefix
+    /// shown when an operator is pending its motion.
+    pub fn double_char(self) -> char {
         match self {
             OperatorKind::Delete => 'd',
             OperatorKind::Yank => 'y',

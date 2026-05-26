@@ -782,7 +782,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         diag_overlays: &diag_overlays,
         colorcolumn_cols: &cc_cols,
         colorcolumn_style: cc_style,
-        listchars: if list_active { Some(&listchars_owned) } else { None },
+        listchars: if list_active {
+            Some(&listchars_owned)
+        } else {
+            None
+        },
     };
     frame.render_widget(view, area);
 

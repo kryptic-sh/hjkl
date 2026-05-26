@@ -118,7 +118,12 @@ impl App {
             }
 
             // Any non-pending-state action routed here is a logic error — ignore silently.
-            _ => {}
+            _ => return,
         }
+        // Arm the which-key idle timer so the popup can fire after
+        // `which_key_delay` while the user contemplates the second key
+        // of an engine-FSM chord (g/z/d/y/c/etc.). Without this the
+        // popup only ever fires for app_keymap trie prefixes.
+        self.note_prefix_set();
     }
 }
