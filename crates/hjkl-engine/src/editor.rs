@@ -852,6 +852,13 @@ pub struct Settings {
     /// mode only). `0` = no margin (vim default). Matches `:set sidescrolloff`.
     /// Default `0`.
     pub sidescrolloff: usize,
+    /// Enable vim-sneak style two-char digraph jump via `s` (forward) and
+    /// `S` (backward). When `true` (default), `s`/`S` no longer behave as
+    /// vim's built-in substitute-char / substitute-line; `;`/`,` smart-fall-
+    /// back to sneak-repeat when the last horizontal motion was a sneak.
+    /// Set `:set nomotion_sneak` to revert `s`/`S` to stock vim behavior.
+    /// Default `true` — **BREAKING** for users relying on `s` = substitute-char.
+    pub motion_sneak: bool,
 }
 
 impl Default for Settings {
@@ -888,6 +895,7 @@ impl Default for Settings {
             autoclose_tag: true,
             scrolloff: 5,
             sidescrolloff: 0,
+            motion_sneak: true,
         }
     }
 }
@@ -936,6 +944,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         autoclose_tag: true,
         scrolloff: o.scrolloff,
         sidescrolloff: o.sidescrolloff,
+        motion_sneak: o.motion_sneak,
     }
 }
 
@@ -4935,6 +4944,37 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Overwrite the stored last-find target.
     pub fn set_last_find(&mut self, target: Option<(char, bool, bool)>) {
         self.vim.last_find = target;
+    }
+
+    // ── Sneak motion ──────────────────────────────────────────────────────────
+
+    /// Perform a vim-sneak style two-char digraph jump. Scans the buffer
+    /// from the current cursor for the `count`-th occurrence of `c1+c2`.
+    /// `forward=true` searches ahead; `forward=false` searches backward.
+    /// Respects `Settings::motion_sneak` — callers (hjkl-vim FSM) should
+    /// already gate on the setting; this method always executes the sneak.
+    pub fn sneak(&mut self, c1: char, c2: char, forward: bool, count: usize) {
+        vim::apply_sneak(self, c1, c2, forward, count.max(1));
+    }
+
+    /// Apply an operator over a sneak digraph range. Charwise exclusive —
+    /// deletes from cursor up to (not including) the first char of the match.
+    pub fn apply_op_sneak(
+        &mut self,
+        op: vim::Operator,
+        c1: char,
+        c2: char,
+        forward: bool,
+        total_count: usize,
+    ) {
+        vim::apply_op_sneak(self, op, c1, c2, forward, total_count);
+    }
+
+    /// Return the last sneak digraph and direction stored after a sneak motion.
+    /// `Some(((c1, c2), forward))` when a sneak has been performed this session;
+    /// `None` before any sneak. Used by `;`/`,` repeat and tests.
+    pub fn last_sneak(&self) -> Option<((char, char), bool)> {
+        self.vim.last_sneak
     }
 
     // ── Last change (dot-repeat payload) ─────────────────────────────────────

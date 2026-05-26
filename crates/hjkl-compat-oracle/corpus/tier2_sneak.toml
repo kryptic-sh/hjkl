@@ -1,0 +1,34 @@
+# Tier 2 sneak corpus — tests for vim-sneak `s`/`S` behavior and the
+# `:set nomotion_sneak` fallback to stock vim behavior.
+#
+# Sneak-ON behavior (`s{c1}{c2}` digraph jump) is NOT tested here because
+# it is vim-sneak plugin behavior, not nvim core. Nvim's default `s` is
+# substitute-char, which diverges from sneak-ON mode by design.
+#
+# This corpus uses the nvim-api subprocess driver (tier2_substitute pattern)
+# because `:set` ex commands need that path.
+#
+# All buffers are ASCII-only.
+
+# `s` with sneak disabled reverts to substitute-char: deletes current char
+# and enters insert mode. Buffer "foo\n", keys ":set nomotion_sneak<CR>sx<Esc>"
+# → "xoo\n", cursor [0,0].
+# Verified against nvim v0.12.2: sx<Esc> on "foo" col 0 → "xoo", col 0.
+[[cases]]
+name = "sneak_disabled_s_substitutes_char"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = ":set nomotion_sneak<CR>sx<Esc>"
+expected_buffer = "xoo\n"
+expected_cursor = [0, 0]
+
+# `S` with sneak disabled substitutes the whole line (like `cc`).
+# Buffer "foo bar\n", keys ":set nomotion_sneak<CR>Snew<Esc>" → "new\n", cursor [0,2].
+# Verified against nvim v0.12.2: Snew<Esc> on "foo bar" col 0 → "new", col 2.
+[[cases]]
+name = "sneak_disabled_uppercase_s_substitutes_line"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = ":set nomotion_sneak<CR>Snew<Esc>"
+expected_buffer = "new\n"
+expected_cursor = [0, 2]

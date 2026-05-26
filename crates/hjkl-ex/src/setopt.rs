@@ -400,6 +400,7 @@ fn apply_set_token<H: Host>(
         // reaches this path.
         "autopair" | "ap" => editor.settings_mut().autopair = value,
         "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
+        "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }

@@ -335,6 +335,12 @@ pub struct Options {
     /// Number of lines from each end to scan for vim modelines.
     /// Matches vim's `:set modelines`. Default `5`.
     pub modelines: u32,
+    /// Enable vim-sneak style two-char digraph jump on `s` / `S` in normal
+    /// mode. When `true` (default), `s`/`S` operate as sneak jumps rather
+    /// than vim's built-in substitute-char / substitute-line.
+    /// `:set nomotion_sneak` reverts to standard vim behavior.
+    /// Default `true` — **BREAKING** for users relying on `s` = substitute-char.
+    pub motion_sneak: bool,
 }
 
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
@@ -417,6 +423,7 @@ impl Default for Options {
             sidescrolloff: 0,
             modeline: true,
             modelines: 5,
+            motion_sneak: true,
         }
     }
 }
@@ -629,6 +636,7 @@ impl Options {
             }
             "modeline" | "ml" => set_bool!(modeline),
             "modelines" | "mls" => set_u32!(modelines),
+            "motion_sneak" | "snk" => set_bool!(motion_sneak),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -676,6 +684,7 @@ impl Options {
             "sidescrolloff" | "siso" => OptionValue::Int(self.sidescrolloff as i64),
             "modeline" | "ml" => OptionValue::Bool(self.modeline),
             "modelines" | "mls" => OptionValue::Int(self.modelines as i64),
+            "motion_sneak" | "snk" => OptionValue::Bool(self.motion_sneak),
             _ => return None,
         })
     }

@@ -11,6 +11,9 @@ use hjkl_engine::{
     op_is_change, parse_motion,
 };
 
+// Re-export sneak variants for shorter usage in this module.
+use hjkl_engine::Pending::{OpSneakFirst, OpSneakSecond, SneakFirst, SneakSecond};
+
 // ─── Public entry point ────────────────────────────────────────────────────
 
 /// Drive the normal / visual / operator-pending FSM for one keystroke.
@@ -31,6 +34,10 @@ pub fn step_normal<H: Host>(
                 | Pending::Find { .. }
                 | Pending::OpFind { .. }
                 | Pending::VisualTextObj { .. }
+                | SneakFirst { .. }
+                | SneakSecond { .. }
+                | OpSneakFirst { .. }
+                | OpSneakSecond { .. }
         )
         && (d != '0' || ed.count() > 0)
     {
@@ -77,6 +84,27 @@ pub fn step_normal<H: Host>(
         }
         Pending::OpSquareBracketClose { op, count1 } => {
             return handle_op_after_square_bracket_close(ed, input, op, count1);
+        }
+        SneakFirst { forward, count } => {
+            return handle_sneak_first(ed, input, forward, count);
+        }
+        SneakSecond { c1, forward, count } => {
+            return handle_sneak_second(ed, input, c1, forward, count);
+        }
+        OpSneakFirst {
+            op,
+            count1,
+            forward,
+        } => {
+            return handle_op_sneak_first(ed, input, op, count1, forward);
+        }
+        OpSneakSecond {
+            op,
+            count1,
+            c1,
+            forward,
+        } => {
+            return handle_op_sneak_second(ed, input, op, count1, c1, forward);
         }
         Pending::None => {}
     }
@@ -468,11 +496,29 @@ fn handle_normal_only<H: Host>(
             true
         }
         Key::Char('s') => {
-            ed.substitute_char(count);
+            if ed.settings().motion_sneak {
+                // vim-sneak: `s` enters SneakFirst (forward).
+                ed.set_count(count);
+                ed.set_pending(SneakFirst {
+                    forward: true,
+                    count,
+                });
+            } else {
+                ed.substitute_char(count);
+            }
             true
         }
         Key::Char('S') => {
-            ed.substitute_line(count);
+            if ed.settings().motion_sneak {
+                // vim-sneak: `S` enters SneakFirst (backward).
+                ed.set_count(count);
+                ed.set_pending(SneakFirst {
+                    forward: false,
+                    count,
+                });
+            } else {
+                ed.substitute_line(count);
+            }
             true
         }
         Key::Char('p') => {
@@ -703,6 +749,21 @@ fn handle_after_op<H: Host>(
             count1,
             forward,
             till,
+        });
+        return true;
+    }
+
+    // `s`/`S` sneak with operator pending (e.g. `dsab`).
+    if ed.settings().motion_sneak
+        && let Key::Char(sc) = input.key
+        && !input.ctrl
+        && matches!(sc, 's' | 'S')
+    {
+        let forward = sc == 's';
+        ed.set_pending(OpSneakFirst {
+            op,
+            count1,
+            forward,
         });
         return true;
     }
@@ -982,5 +1043,99 @@ fn find_entry(input: &Input) -> Option<(bool, bool)> {
         Key::Char('t') => Some((true, true)),
         Key::Char('T') => Some((false, true)),
         _ => None,
+    }
+}
+
+// ─── Sneak chord handlers ──────────────────────────────────────────────────
+
+/// Handle the first char of a bare sneak (no operator).
+/// Transitions to `SneakSecond` so the second char can be captured.
+///
+/// State machine: `SneakFirst` → char1 → `SneakSecond { c1 }`
+///                `SneakSecond` → char2 → `apply_sneak(c1, c2)`
+///                Either state + Esc/non-char → cancel.
+fn handle_sneak_first<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    forward: bool,
+    count: usize,
+) -> bool {
+    match input.key {
+        Key::Esc => {
+            // Cancel silently.
+            true
+        }
+        Key::Char(c1) => {
+            // Store char1, wait for char2 via SneakSecond.
+            ed.set_pending(hjkl_engine::Pending::SneakSecond { c1, forward, count });
+            true
+        }
+        _ => {
+            // Non-char key (other than Esc) cancels.
+            true
+        }
+    }
+}
+
+/// Handle the second char of a bare sneak: we have char1, this is char2.
+/// Execute the jump.
+fn handle_sneak_second<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    c1: char,
+    forward: bool,
+    count: usize,
+) -> bool {
+    match input.key {
+        Key::Esc => true, // Cancel.
+        Key::Char(c2) => {
+            ed.sneak(c1, c2, forward, count.max(1));
+            true
+        }
+        _ => true, // Cancel on non-char.
+    }
+}
+
+/// Handle the first char of an op+sneak (`dsXY` — this is `X`).
+fn handle_op_sneak_first<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    op: Operator,
+    count1: usize,
+    forward: bool,
+) -> bool {
+    match input.key {
+        Key::Esc => true,
+        Key::Char(c1) => {
+            ed.set_pending(hjkl_engine::Pending::OpSneakSecond {
+                op,
+                count1,
+                c1,
+                forward,
+            });
+            true
+        }
+        _ => true,
+    }
+}
+
+/// Handle the second char of an op+sneak (`dsXY` — this is `Y`).
+fn handle_op_sneak_second<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    input: Input,
+    op: Operator,
+    count1: usize,
+    c1: char,
+    forward: bool,
+) -> bool {
+    match input.key {
+        Key::Esc => true,
+        Key::Char(c2) => {
+            let count2 = ed.take_count();
+            let total = count1.max(1) * count2.max(1);
+            ed.apply_op_sneak(op, c1, c2, forward, total);
+            true
+        }
+        _ => true,
     }
 }

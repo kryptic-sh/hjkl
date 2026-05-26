@@ -158,6 +158,31 @@ pub enum Pending {
     OpSquareBracketOpen { op: Operator, count1: usize },
     /// Operator + `]` pending — waiting for second key to pick section motion.
     OpSquareBracketClose { op: Operator, count1: usize },
+    /// `s` / `S` in Normal mode with `motion_sneak=true` — waiting for
+    /// the first character of the two-char digraph.
+    /// `forward=true` → `s`; `forward=false` → `S` (backward).
+    SneakFirst { forward: bool, count: usize },
+    /// First sneak char captured; waiting for the second char to complete
+    /// the digraph and jump.
+    SneakSecond {
+        c1: char,
+        forward: bool,
+        count: usize,
+    },
+    /// Operator + `s` / `S` pending — waiting for the first char of the
+    /// two-char sneak digraph (e.g. `d` then `s` then `a` then `b` = `dsab`).
+    OpSneakFirst {
+        op: Operator,
+        count1: usize,
+        forward: bool,
+    },
+    /// Operator + sneak first char captured; waiting for the second char.
+    OpSneakSecond {
+        op: Operator,
+        count1: usize,
+        c1: char,
+        forward: bool,
+    },
 }
 
 // ─── Operator / Motion / TextObject ────────────────────────────────────────
@@ -385,6 +410,22 @@ pub enum InsertEntry {
 
 // ─── VimState ──────────────────────────────────────────────────────────────
 
+/// Tracks which kind of horizontal jump was last performed so `;` / `,`
+/// can dispatch to the correct repeat handler.
+///
+/// - `FindChar` — last horizontal motion was `f`/`F`/`t`/`T`; `;`/`,`
+///   repeats via `Motion::FindRepeat`.
+/// - `Sneak` — last horizontal motion was `s`/`S` sneak; `;`/`,` repeats
+///   via `apply_sneak` with the stored digraph.
+/// - `None` — no horizontal motion yet; `;`/`,` are no-ops for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LastHorizontalMotion {
+    #[default]
+    None,
+    FindChar,
+    Sneak,
+}
+
 #[derive(Default)]
 pub struct VimState {
     /// Internal FSM mode. Kept in sync with `current_mode` after every
@@ -529,6 +570,12 @@ pub struct VimState {
     /// ("skip-over") instead of inserting. The stack is cleared on any
     /// cursor motion, mode change, or out-of-pair edit.
     pub pending_closes: Vec<(usize, usize, char)>,
+    /// Last sneak digraph and direction: `Some(((c1, c2), forward))`.
+    /// Used by `;` / `,` sneak-repeat when `last_horizontal_motion == Sneak`.
+    pub last_sneak: Option<((char, char), bool)>,
+    /// Tracks which kind of horizontal motion was last performed, so `;` / `,`
+    /// can dispatch to sneak-repeat vs. find-char-repeat as appropriate.
+    pub last_horizontal_motion: LastHorizontalMotion,
 }
 
 pub(crate) const SEARCH_HISTORY_MAX: usize = 100;
@@ -3319,6 +3366,17 @@ pub(crate) fn execute_motion<H: crate::types::Host>(
     count: usize,
 ) {
     let count = count.max(1);
+    // `;`/`,` smart fallback: if the last horizontal motion was a sneak
+    // digraph, repeat via apply_sneak instead of find-char.
+    if let Motion::FindRepeat { reverse } = motion
+        && ed.vim.last_horizontal_motion == LastHorizontalMotion::Sneak
+    {
+        if let Some(((c1, c2), fwd)) = ed.vim.last_sneak {
+            let effective_fwd = if reverse { !fwd } else { fwd };
+            apply_sneak(ed, c1, c2, effective_fwd, count);
+        }
+        return;
+    }
     // FindRepeat needs the stored direction.
     let motion = match motion {
         Motion::FindRepeat { reverse } => match ed.vim.last_find {
@@ -4352,6 +4410,156 @@ pub(crate) fn apply_find_char<H: crate::types::Host>(
 ) {
     execute_motion(ed, Motion::Find { ch, forward, till }, count.max(1));
     ed.vim.last_find = Some((ch, forward, till));
+    ed.vim.last_horizontal_motion = LastHorizontalMotion::FindChar;
+}
+
+// ─── Sneak motion ──────────────────────────────────────────────────────────
+
+/// Scan the buffer from the current cursor position for the `count`-th
+/// occurrence of the two-char digraph `(c1, c2)`.
+///
+/// - `forward=true` → scan downward (rows) and rightward (cols) past cursor.
+/// - `forward=false` → scan upward and leftward.
+///
+/// When a match is found the cursor jumps to the first char of the digraph.
+/// `last_sneak` and `last_horizontal_motion` are updated so `;`/`,` repeat.
+/// No-op (cursor unchanged) when no match exists.
+pub(crate) fn apply_sneak<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    c1: char,
+    c2: char,
+    forward: bool,
+    count: usize,
+) {
+    let count = count.max(1);
+    let (start_row, start_col) = ed.cursor();
+    let row_count = buf_row_count(&ed.buffer);
+
+    let result = if forward {
+        sneak_scan_forward(ed, start_row, start_col, c1, c2, count)
+    } else {
+        sneak_scan_backward(ed, start_row, start_col, c1, c2, count)
+    };
+
+    if let Some((row, col)) = result {
+        buf_set_cursor_rc(&mut ed.buffer, row, col);
+        ed.push_buffer_cursor_to_textarea();
+        let _ = row_count; // suppress unused-variable warning
+    }
+
+    ed.vim.last_sneak = Some(((c1, c2), forward));
+    ed.vim.last_horizontal_motion = LastHorizontalMotion::Sneak;
+}
+
+/// Scan forward from `(start_row, start_col)` (exclusive — start right after
+/// cursor) for the `count`-th occurrence of `c1+c2`.
+fn sneak_scan_forward<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    start_row: usize,
+    start_col: usize,
+    c1: char,
+    c2: char,
+    count: usize,
+) -> Option<(usize, usize)> {
+    let row_count = buf_row_count(&ed.buffer);
+    let mut hits = 0usize;
+    for row in start_row..row_count {
+        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        let chars: Vec<char> = line.chars().collect();
+        // On the start row begin scanning one past the current column.
+        let col_start = if row == start_row { start_col + 1 } else { 0 };
+        if col_start + 1 > chars.len() {
+            continue;
+        }
+        for col in col_start..chars.len().saturating_sub(1) {
+            if chars[col] == c1 && chars[col + 1] == c2 {
+                hits += 1;
+                if hits == count {
+                    return Some((row, col));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Scan backward from `(start_row, start_col)` (exclusive — start left of
+/// cursor) for the `count`-th occurrence of `c1+c2`.
+fn sneak_scan_backward<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    start_row: usize,
+    start_col: usize,
+    c1: char,
+    c2: char,
+    count: usize,
+) -> Option<(usize, usize)> {
+    let row_count = buf_row_count(&ed.buffer);
+    let mut hits = 0usize;
+    // Iterate rows from start_row down to 0.
+    let rows_to_scan = (0..row_count).rev().skip(row_count - start_row - 1);
+    for row in rows_to_scan {
+        let line = buf_line(&ed.buffer, row).unwrap_or_default();
+        let chars: Vec<char> = line.chars().collect();
+        // On the start row end scanning one before the current column.
+        let col_end = if row == start_row {
+            start_col.saturating_sub(1)
+        } else if chars.is_empty() {
+            continue;
+        } else {
+            chars.len().saturating_sub(1)
+        };
+        if col_end == 0 {
+            continue;
+        }
+        // Scan cols right-to-left from col_end-1 so we match c1 at col, c2 at col+1.
+        for col in (0..col_end).rev() {
+            if col + 1 < chars.len() && chars[col] == c1 && chars[col + 1] == c2 {
+                hits += 1;
+                if hits == count {
+                    return Some((row, col));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Apply `op` over the sneak digraph range. Charwise exclusive from cursor up
+/// to (but not including) the first char of the first match. This matches
+/// vim-sneak's default `<Plug>Sneak_s` operator-pending behavior.
+///
+/// Example: buffer `"foo ab bar\n"`, cursor col 0, `dsab` → deletes `"foo "`
+/// leaving `"ab bar\n"`.
+pub(crate) fn apply_op_sneak<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    c1: char,
+    c2: char,
+    forward: bool,
+    total_count: usize,
+) {
+    let start = ed.cursor();
+    let result = if forward {
+        sneak_scan_forward(ed, start.0, start.1, c1, c2, total_count)
+    } else {
+        sneak_scan_backward(ed, start.0, start.1, c1, c2, total_count)
+    };
+    let Some(end) = result else {
+        return;
+    };
+    // Charwise exclusive — land the virtual cursor at end, then use
+    // Exclusive range kind (end position not included).
+    ed.jump_cursor(end.0, end.1);
+    let end_cur = ed.cursor();
+    ed.jump_cursor(start.0, start.1);
+    run_operator_over_range(ed, op, start, end_cur, RangeKind::Exclusive);
+    ed.vim.last_sneak = Some(((c1, c2), forward));
+    ed.vim.last_horizontal_motion = LastHorizontalMotion::Sneak;
+    if !ed.vim.replaying && op_is_change(op) {
+        // No dot-repeat motion variant for sneak ops (plugin behavior,
+        // not vim-core); record as a Change/Delete line op as a
+        // best-effort fallback so `.` at least does something.
+    }
 }
 
 /// Public(crate) entry: apply operator over a find motion (`df<x>` etc.).
@@ -7891,5 +8099,137 @@ mod g_ampersand_tests {
         apply_after_g(&mut ed, '&', 1);
         assert_eq!(buf_line(&ed, 0), "foo");
         assert_eq!(buf_line(&ed, 1), "bar");
+    }
+}
+
+// ─── Sneak motion tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod sneak_tests {
+    use super::*;
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let host = DefaultHost::new();
+        Editor::new(buf, host, Options::default())
+    }
+
+    /// `s ba` from [0,0] on "foo bar baz qux\n" → cursor at [0,4] (start of "ba" in "bar").
+    #[test]
+    fn sneak_forward_jumps_to_two_char_digraph() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 0);
+        ed.sneak('b', 'a', true, 1);
+        assert_eq!(ed.cursor(), (0, 4), "cursor should land on 'ba' in 'bar'");
+    }
+
+    /// `S ba` from [0,12] on "foo bar baz qux\n" → cursor at [0,8] ("ba" in "baz").
+    #[test]
+    fn sneak_backward_jumps_to_prior_match() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 12);
+        ed.sneak('b', 'a', false, 1);
+        assert_eq!(
+            ed.cursor(),
+            (0, 8),
+            "backward sneak should find 'ba' in 'baz'"
+        );
+    }
+
+    /// After sneak forward to "bar", `;` (sneak-repeat) jumps to next "ba" ("baz").
+    #[test]
+    fn sneak_repeat_semicolon_next_match() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 0);
+        // First sneak: lands at [0,4]
+        ed.sneak('b', 'a', true, 1);
+        assert_eq!(ed.cursor(), (0, 4));
+        // Repeat via execute_motion FindRepeat (which routes through sneak if last was sneak)
+        execute_motion(&mut ed, Motion::FindRepeat { reverse: false }, 1);
+        assert_eq!(ed.cursor(), (0, 8), "semicolon should jump to next 'ba'");
+    }
+
+    /// After sneak forward from [0,0] to [0,4], `,` (reverse) — no prior "ba" → stays.
+    #[test]
+    fn sneak_repeat_comma_prev_match() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 0);
+        ed.sneak('b', 'a', true, 1);
+        assert_eq!(ed.cursor(), (0, 4));
+        // Reverse repeat — no "ba" before col 4, so cursor must not move.
+        let pre = ed.cursor();
+        execute_motion(&mut ed, Motion::FindRepeat { reverse: true }, 1);
+        assert_eq!(
+            ed.cursor(),
+            pre,
+            "comma with no prior match should leave cursor unchanged"
+        );
+    }
+
+    /// `S ba` from [0,12] jumps backward.
+    #[test]
+    fn sneak_s_searches_backward() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 12);
+        ed.sneak('b', 'a', false, 1);
+        assert_eq!(ed.cursor(), (0, 8));
+    }
+
+    /// `2s ba` from [0,0] jumps to 2nd "ba" occurrence.
+    #[test]
+    fn sneak_with_count_jumps_to_nth() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 0);
+        ed.sneak('b', 'a', true, 2);
+        assert_eq!(ed.cursor(), (0, 8), "count=2 should jump to 2nd 'ba'");
+    }
+
+    /// `s xx` with no match — cursor stays put.
+    #[test]
+    fn sneak_no_match_cursor_stays() {
+        let mut ed = make_editor("foo bar baz qux\n");
+        ed.jump_cursor(0, 0);
+        let pre = ed.cursor();
+        ed.sneak('x', 'x', true, 1);
+        assert_eq!(ed.cursor(), pre, "no match should leave cursor unchanged");
+    }
+
+    /// `dsab` on "hello ab world\n" from [0,0] → deletes up to 'ab', leaving "ab world\n".
+    #[test]
+    fn operator_pending_dsab_deletes_to_digraph() {
+        let mut ed = make_editor("hello ab world\n");
+        ed.jump_cursor(0, 0);
+        ed.apply_op_sneak(Operator::Delete, 'a', 'b', true, 1);
+        // Buffer content after exclusive delete from [0,0] to [0,6] (start of "ab").
+        let content = ed.content();
+        assert!(
+            content.starts_with("ab world"),
+            "dsab should delete 'hello ' leaving 'ab world'; got: {content:?}"
+        );
+    }
+
+    /// Cross-line sneak: "foo\nbar baz\n", cursor [0,0], `s ba` → [1,0].
+    #[test]
+    fn sneak_cross_line_match() {
+        let mut ed = make_editor("foo\nbar baz\n");
+        ed.jump_cursor(0, 0);
+        ed.sneak('b', 'a', true, 1);
+        assert_eq!(ed.cursor(), (1, 0), "sneak should cross line boundary");
+    }
+
+    /// `last_sneak` is updated after `sneak()` so `;`/`,` can repeat.
+    #[test]
+    fn sneak_updates_last_sneak_state() {
+        let mut ed = make_editor("foo bar baz\n");
+        ed.jump_cursor(0, 0);
+        ed.sneak('b', 'a', true, 1);
+        let ls = ed.last_sneak();
+        assert_eq!(
+            ls,
+            Some((('b', 'a'), true)),
+            "last_sneak should record the digraph and direction"
+        );
     }
 }

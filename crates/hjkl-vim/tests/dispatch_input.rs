@@ -174,3 +174,77 @@ fn search_backspace_trims_pattern() {
     // "bet" still matches start of "beta" at col 6.
     assert_eq!(e.cursor(), (0, 6));
 }
+
+// ── vim-sneak FSM tests ───────────────────────────────────────────────────────
+
+/// `sba` from [0,0] on "foo bar baz qux\n" → cursor [0,4] (start of "ba" in "bar").
+#[test]
+fn sneak_forward_fsm_jumps_to_digraph() {
+    let mut e = editor_with("foo bar baz qux");
+    dispatch_keys(&mut e, "sba");
+    assert_eq!(e.cursor(), (0, 4), "s+ba should land on 'ba' in 'bar'");
+}
+
+/// `Sba` from [0,12] → cursor [0,8] (backward to "baz").
+#[test]
+fn sneak_backward_fsm_s_uppercase() {
+    let mut e = editor_with("foo bar baz qux");
+    e.jump_cursor(0, 12);
+    dispatch_keys(&mut e, "Sba");
+    assert_eq!(e.cursor(), (0, 8), "S+ba backward should land on 'baz'");
+}
+
+/// After `sba`, `;` should repeat forward (sneak-repeat, not f-repeat).
+#[test]
+fn sneak_fsm_semicolon_repeats_forward() {
+    let mut e = editor_with("foo bar baz qux");
+    dispatch_keys(&mut e, "sba");
+    assert_eq!(e.cursor(), (0, 4));
+    dispatch_keys(&mut e, ";");
+    assert_eq!(
+        e.cursor(),
+        (0, 8),
+        "semicolon after sneak should jump to next 'ba'"
+    );
+}
+
+/// After `sba` from [0,0], `,` (reverse) — no prior "ba" → stays at [0,4].
+#[test]
+fn sneak_fsm_comma_reverse_no_prior_match() {
+    let mut e = editor_with("foo bar baz qux");
+    dispatch_keys(&mut e, "sba");
+    assert_eq!(e.cursor(), (0, 4));
+    let pre = e.cursor();
+    dispatch_keys(&mut e, ",");
+    assert_eq!(e.cursor(), pre, "comma with no prior 'ba' should not move");
+}
+
+/// `dsab` on "hello ab world" from [0,0] → "ab world".
+#[test]
+fn sneak_fsm_operator_pending_delete() {
+    let mut e = editor_with("hello ab world");
+    dispatch_keys(&mut e, "dsab");
+    let content = e.content();
+    assert!(
+        content.starts_with("ab world"),
+        "dsab should delete up to 'ab' leaving 'ab world'; got: {content:?}"
+    );
+}
+
+/// `sneak_disabled_falls_through_to_substitute_char`:
+/// `:set nomotion_sneak` (via settings_mut) then `sx<Esc>` → substitute char.
+#[test]
+fn sneak_disabled_falls_through_to_substitute_char() {
+    let mut e = editor_with("foo");
+    e.settings_mut().motion_sneak = false;
+    // `s` with sneak disabled should substitute char (enter insert, delete 'f', type 'x').
+    dispatch_keys(&mut e, "sx<Esc>");
+    // Buffer starts with 'x' (substitute-char path was taken).
+    let content = e.content();
+    assert!(
+        content.starts_with('x'),
+        "with motion_sneak=false, s should substitute char; got: {content:?}"
+    );
+    // Cursor should be at col 0 after Esc.
+    assert_eq!(e.cursor().1, 0, "cursor should be col 0 after s+char+Esc");
+}
