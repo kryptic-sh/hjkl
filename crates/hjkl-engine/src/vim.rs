@@ -193,6 +193,11 @@ pub enum Operator {
     /// run) into space-separated words, then re-emits lines whose
     /// width stays under `textwidth`. Always linewise, like indent.
     Reflow,
+    /// `gw{motion}` — same reflow as `gq` but cursor stays at the
+    /// pre-reflow `(row, col)`. If the reflow shrinks the line so the
+    /// original col is past the new EOL, the col is clamped to the last
+    /// char of the line (vim's behaviour). Always linewise.
+    ReflowKeepCursor,
     /// `={motion}` — auto-indent the line range using shiftwidth-based
     /// bracket depth counting (v1 dumb reindent). Always linewise.
     /// See `auto_indent_range` for the algorithm and its limitations.
@@ -696,6 +701,7 @@ impl VimState {
             Operator::Outdent => '<',
             Operator::Fold => 'z',
             Operator::Reflow => 'q',
+            Operator::ReflowKeepCursor => 'w',
             Operator::AutoIndent => '=',
             Operator::Filter => '!',
             // `gc` prefix — doubled as `gcc`.
@@ -4151,6 +4157,14 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
                 count1: count,
             };
         }
+        'w' => {
+            // `gw{motion}` — same reflow as `gq` but cursor stays at
+            // its pre-reflow position (clamped to new EOL if shorter).
+            ed.vim.pending = Pending::Op {
+                op: Operator::ReflowKeepCursor,
+                count1: count,
+            };
+        }
         'J' => {
             // `gJ` — join line below without inserting a space.
             for _ in 0..count.max(1) {
@@ -4619,6 +4633,18 @@ fn run_operator_over_range<H: crate::types::Host>(
             reflow_rows(ed, top.0, bot.0);
             ed.vim.mode = Mode::Normal;
         }
+        Operator::ReflowKeepCursor => {
+            // `gw{motion}` — reflow like `gq` but restore the cursor to the
+            // character it was on before the reflow (vim's gw behaviour).
+            let saved = ed.cursor();
+            ed.push_undo();
+            let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
+            let (new_row, new_col) = reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
+            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            ed.push_buffer_cursor_to_textarea();
+            ed.sticky_col = Some(new_col);
+            ed.vim.mode = Mode::Normal;
+        }
         Operator::AutoIndent => {
             // Always linewise — like Indent/Outdent.
             ed.push_undo();
@@ -5071,22 +5097,10 @@ pub(crate) fn rope_to_lines_vec(rope: &ropey::Rope) -> Vec<String> {
     (0..n).map(|r| rope_line_to_str(rope, r)).collect()
 }
 
-/// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
-/// Splits on blank-line boundaries so paragraph structure is
-/// preserved. Each paragraph's words are joined with single spaces
-/// before re-wrapping.
-fn reflow_rows<H: crate::types::Host>(
-    ed: &mut Editor<hjkl_buffer::Buffer, H>,
-    top: usize,
-    bot: usize,
-) {
-    let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
-    let bot = bot.min(lines.len().saturating_sub(1));
-    if top > bot {
-        return;
-    }
-    let original = lines[top..=bot].to_vec();
+/// Pure greedy word-wrap of a slice of lines to `width` chars.
+/// Returns `(original_slice, wrapped_lines)`.
+/// Blank lines are preserved as paragraph separators.
+fn greedy_wrap(original: &[String], width: usize) -> Vec<String> {
     let mut wrapped: Vec<String> = Vec::new();
     let mut paragraph: Vec<String> = Vec::new();
     let flush = |para: &mut Vec<String>, out: &mut Vec<String>, width: usize| {
@@ -5116,7 +5130,7 @@ fn reflow_rows<H: crate::types::Host>(
         }
         para.clear();
     };
-    for line in &original {
+    for line in original {
         if line.trim().is_empty() {
             flush(&mut paragraph, &mut wrapped, width);
             wrapped.push(String::new());
@@ -5125,6 +5139,27 @@ fn reflow_rows<H: crate::types::Host>(
         }
     }
     flush(&mut paragraph, &mut wrapped, width);
+    wrapped
+}
+
+/// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
+/// Splits on blank-line boundaries so paragraph structure is
+/// preserved. Each paragraph's words are joined with single spaces
+/// before re-wrapping. Cursor lands at `(top, 0)` after the call
+/// (via `ed.restore`).
+fn reflow_rows<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top: usize,
+    bot: usize,
+) {
+    let width = ed.settings().textwidth.max(1);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let bot = bot.min(lines.len().saturating_sub(1));
+    if top > bot {
+        return;
+    }
+    let original = lines[top..=bot].to_vec();
+    let wrapped = greedy_wrap(&original, width);
 
     // Splice back. push_undo above means `u` reverses.
     let after: Vec<String> = lines.split_off(bot + 1);
@@ -5133,6 +5168,105 @@ fn reflow_rows<H: crate::types::Host>(
     lines.extend(after);
     ed.restore(lines, (top, 0));
     ed.mark_content_dirty();
+}
+
+/// Same reflow as `reflow_rows` but also returns the pre-reflow slice
+/// and the wrapped lines so the caller can compute a character-preserving
+/// cursor position via [`reflow_keep_cursor`].
+fn reflow_rows_keep_cursor<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top: usize,
+    bot: usize,
+) -> (Vec<String>, Vec<String>) {
+    let width = ed.settings().textwidth.max(1);
+    let mut lines: Vec<String> = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
+    let bot = bot.min(lines.len().saturating_sub(1));
+    if top > bot {
+        return (Vec::new(), Vec::new());
+    }
+    let original = lines[top..=bot].to_vec();
+    let wrapped = greedy_wrap(&original, width);
+
+    let after: Vec<String> = lines.split_off(bot + 1);
+    lines.truncate(top);
+    lines.extend(wrapped.clone());
+    lines.extend(after);
+    ed.restore(lines, (top, 0));
+    ed.mark_content_dirty();
+    (original, wrapped)
+}
+
+/// Compute the new `(row, col)` that preserves the character the cursor
+/// was on after `reflow_rows` has been applied to `[top, bot]`.
+///
+/// Algorithm (mirrors nvim's `gw` behaviour):
+/// 1. Count the char-index of `(cursor_row, cursor_col)` relative to the
+///    start of line `top` in `before_lines` (the pre-reflow snapshot).
+/// 2. Walk the `after_lines` (the wrapped output) to find the row/col
+///    that has the same char index.
+///
+/// If the cursor was past the end of the reflowed content (e.g. beyond
+/// the last char), we clamp to the last char of the last reflowed line.
+fn reflow_keep_cursor(
+    top: usize,
+    cursor_row: usize,
+    cursor_col: usize,
+    before_lines: &[String],
+    after_lines: &[String],
+) -> (usize, usize) {
+    // Char offset of cursor within the before_lines range.
+    // Each line contributes its chars; lines are separated by a single
+    // space in the collapsed paragraph — but since reflow joins everything
+    // and re-wraps with spaces, counting by chars-per-line (plus the
+    // conceptual space separator between lines) mirrors the join.
+    //
+    // The simpler approach (which nvim appears to use): the cursor offset
+    // within the range is the sum of chars in lines before cursor_row
+    // (each + 1 for the space/newline separator) plus cursor_col, then
+    // find that position in the wrapped text.
+    //
+    // Actually, since reflow collapses whitespace (split_whitespace),
+    // the simplest approach is to track the cursor's char in the ORIGINAL
+    // concatenated text and find it in the reflowed text.
+
+    // Build the original range text as it appears when joined for wrapping:
+    // same as what reflow does internally — join with spaces.
+    // But we want raw character index, so we accumulate char counts per line
+    // (without the trailing newline).
+    let relative_row = cursor_row.saturating_sub(top);
+    let mut char_offset: usize = 0;
+    for (i, line) in before_lines.iter().enumerate() {
+        if i == relative_row {
+            // Add clamped col within this line.
+            let line_len = line.chars().count();
+            char_offset += cursor_col.min(line_len);
+            break;
+        }
+        // Each line contributes its chars plus a newline (or space boundary).
+        char_offset += line.chars().count() + 1;
+    }
+
+    // Now find char_offset in after_lines.
+    let mut remaining = char_offset;
+    for (i, line) in after_lines.iter().enumerate() {
+        let len = line.chars().count();
+        if remaining <= len {
+            // The col is clamped to line_len - 1 in Normal mode.
+            let col = remaining.min(if len == 0 { 0 } else { len.saturating_sub(1) });
+            return (top + i, col);
+        }
+        // Not on this line; subtract line len + 1 (newline separator).
+        remaining = remaining.saturating_sub(len + 1);
+    }
+
+    // Cursor was beyond the end of the reflowed content — clamp to last line.
+    let last = after_lines.len().saturating_sub(1);
+    let last_len = after_lines
+        .get(last)
+        .map(|l| l.chars().count())
+        .unwrap_or(0);
+    let col = if last_len == 0 { 0 } else { last_len - 1 };
+    (top + last, col)
 }
 
 /// Transform the range `[top, bot]` (vim `RangeKind`) in place with
@@ -5565,6 +5699,18 @@ fn execute_line_op<H: crate::types::Host>(
             ed.sticky_col = Some(ed.cursor().1);
             ed.vim.mode = Mode::Normal;
         }
+        Operator::ReflowKeepCursor => {
+            // `gww` / `Ngww` — reflow `count` rows starting at the cursor,
+            // but leave the cursor at the character it was on before reflow.
+            let saved = ed.cursor();
+            ed.push_undo();
+            let (before, after) = reflow_rows_keep_cursor(ed, row, end_row);
+            let (new_row, new_col) = reflow_keep_cursor(row, saved.0, saved.1, &before, &after);
+            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            ed.push_buffer_cursor_to_textarea();
+            ed.sticky_col = Some(new_col);
+            ed.vim.mode = Mode::Normal;
+        }
         Operator::AutoIndent => {
             // `==` / `N==` — auto-indent `count` rows starting at cursor.
             ed.push_undo();
@@ -5667,6 +5813,18 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     reflow_rows(ed, top, bot);
                     ed.vim.mode = Mode::Normal;
                 }
+                Operator::ReflowKeepCursor => {
+                    let saved = ed.cursor();
+                    ed.push_undo();
+                    let (cursor_row, _) = ed.cursor();
+                    let bot = cursor_row.max(ed.vim.visual_line_anchor);
+                    let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
+                    let (new_row, new_col) =
+                        reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
+                    buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+                    ed.push_buffer_cursor_to_textarea();
+                    ed.vim.mode = Mode::Normal;
+                }
                 Operator::AutoIndent => {
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
@@ -5734,6 +5892,19 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     reflow_rows(ed, top.0, bot.0);
+                    ed.vim.mode = Mode::Normal;
+                }
+                Operator::ReflowKeepCursor => {
+                    let saved = ed.cursor();
+                    ed.push_undo();
+                    let anchor = ed.vim.visual_anchor;
+                    let cursor = ed.cursor();
+                    let (top, bot) = order(anchor, cursor);
+                    let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
+                    let (new_row, new_col) =
+                        reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
+                    buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+                    ed.push_buffer_cursor_to_textarea();
                     ed.vim.mode = Mode::Normal;
                 }
                 Operator::AutoIndent => {
@@ -5879,6 +6050,16 @@ fn apply_block_operator<H: crate::types::Host>(
             // sense.
             ed.push_undo();
             reflow_rows(ed, top, bot);
+            ed.vim.mode = Mode::Normal;
+        }
+        Operator::ReflowKeepCursor => {
+            // `gw` over a block: same fallback as `gq` but restore cursor.
+            let saved = ed.cursor();
+            ed.push_undo();
+            let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
+            let (new_row, new_col) = reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
+            buf_set_cursor_rc(&mut ed.buffer, new_row, new_col);
+            ed.push_buffer_cursor_to_textarea();
             ed.vim.mode = Mode::Normal;
         }
         Operator::AutoIndent => {

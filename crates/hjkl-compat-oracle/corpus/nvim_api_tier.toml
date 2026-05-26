@@ -231,3 +231,43 @@ initial_cursor = [0, 0]
 keys = ":set ignorecase smartcase<CR>:s/foo/bar/i<CR>"
 expected_buffer = "bar\n"
 expected_cursor = [0, 0]
+
+# ─── gw reflow (cursor-stable) ───────────────────────────────────────────────
+
+# `gw$` — reflow single long line to textwidth=20, cursor stays at original col.
+# Initial: "aaa bbb ccc ddd eee fff ggg hhh", cursor at [0,5].
+# After `gw$` with tw=20: "aaa bbb ccc ddd eee" / "fff ggg hhh".
+# Cursor must stay at [0,5] (the 'b' in "bbb" — character-preserving).
+# Verified against nvim v0.12.2: cursor [0,5].
+[[cases]]
+name = "gw_dollar_reflows_keeps_cursor_at_original_col"
+initial_buffer = "aaa bbb ccc ddd eee fff ggg hhh\n"
+initial_cursor = [0, 5]
+keys = ":set tw=20<CR>gw$"
+expected_buffer = "aaa bbb ccc ddd eee\nfff ggg hhh\n"
+expected_cursor = [0, 5]
+
+# `gww` — doubled form reflows current line to textwidth=20, cursor stable.
+# Same buffer and tw as above; cursor at [0,5]. `gww` reflows only the
+# current line (like `gqq` but cursor-preserving).
+# Verified against nvim v0.12.2: cursor [0,5].
+[[cases]]
+name = "gww_reflows_current_line_cursor_stable"
+initial_buffer = "aaa bbb ccc ddd eee fff ggg hhh\n"
+initial_cursor = [0, 5]
+keys = ":set tw=20<CR>gww"
+expected_buffer = "aaa bbb ccc ddd eee\nfff ggg hhh\n"
+expected_cursor = [0, 5]
+
+# `gw$` — cursor follows character across wrapped line boundary.
+# "abcdefgh ijklmnopqrstuvwxyz", tw=8, cursor at col 20 ('t').
+# After reflow: "abcdefgh" / "ijklmnopqrstuvwxyz".
+# 't' is at col 11 in line 1 (i=0..t=11).
+# Verified against nvim v0.12.2: cursor [1,11].
+[[cases]]
+name = "gw_dollar_follows_character_across_wrap_boundary"
+initial_buffer = "abcdefgh ijklmnopqrstuvwxyz\n"
+initial_cursor = [0, 20]
+keys = ":set tw=8<CR>gw$"
+expected_buffer = "abcdefgh\nijklmnopqrstuvwxyz\n"
+expected_cursor = [1, 11]

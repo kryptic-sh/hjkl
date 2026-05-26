@@ -2641,6 +2641,119 @@ fn gqq_reflows_line_via_reducer() {
 }
 
 #[test]
+fn gw_reflows_long_line_to_textwidth_cursor_stable() {
+    // `gw$` — reflow line to textwidth but cursor stays at (0, 3).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "aaa bbb ccc ddd eee fff\n");
+    app.active_mut().editor.settings_mut().textwidth = 10;
+    app.active_mut().editor.jump_cursor(0, 3);
+
+    drive_chars(&mut app, "gw$");
+
+    assert!(app.pending_state.is_none(), "pending must clear after gw$");
+    // Line reflowed — should now be multiple lines.
+    let rope = app.active().editor.buffer().rope().clone();
+    let line_count = rope.len_lines();
+    assert!(
+        line_count > 1,
+        "gw$ must reflow long line into multiple lines; got {line_count} lines"
+    );
+    // Cursor must stay at original row 0, col 3.
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "gw$ must keep cursor on row 0; got row {row}");
+    assert_eq!(col, 3, "gw$ must keep cursor at col 3; got col {col}");
+}
+
+#[test]
+fn gw_preserves_cursor_when_gq_would_move_it() {
+    // Run `gq$` and `gw$` from cursor col 5; assert gw keeps col while gq
+    // resets it to 0 (reflow_rows restores cursor to top-of-range col 0).
+    let buf = "aaa bbb ccc ddd eee fff\n";
+    let tw = 10usize;
+    let initial_col = 5usize;
+
+    // --- gq run ---
+    let mut app_gq = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app_gq, buf);
+    app_gq.active_mut().editor.settings_mut().textwidth = tw;
+    app_gq.active_mut().editor.jump_cursor(0, initial_col);
+    drive_chars(&mut app_gq, "gq$");
+    let (_gq_row, gq_col) = app_gq.active().editor.cursor();
+
+    // --- gw run ---
+    let mut app_gw = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app_gw, buf);
+    app_gw.active_mut().editor.settings_mut().textwidth = tw;
+    app_gw.active_mut().editor.jump_cursor(0, initial_col);
+    drive_chars(&mut app_gw, "gw$");
+    let (gw_row, gw_col) = app_gw.active().editor.cursor();
+
+    // After gq$ reflow_rows restores cursor to (top, 0) — col 0.
+    // After gw$ the cursor stays at original col 5.
+    assert_eq!(
+        gq_col, 0,
+        "gq$ must leave cursor at col 0 (reflow_rows restores to top); got col {gq_col}"
+    );
+    assert_eq!(gw_row, 0, "gw$ must keep cursor on row 0; got row {gw_row}");
+    assert_eq!(
+        gw_col, initial_col,
+        "gw$ must keep cursor at col {initial_col}; got col {gw_col}"
+    );
+    // The critical invariant: gw and gq produce different cursor columns.
+    assert_ne!(
+        gw_col, gq_col,
+        "gw$ and gq$ must produce different cursor positions (gw keeps original col)"
+    );
+}
+
+#[test]
+fn gw_follows_character_when_line_wraps() {
+    // Cursor at col 20 in "abcdefgh ijklmnopqrstuvwxyz", tw=8.
+    // After reflow: line 0 = "abcdefgh", line 1 = "ijklmnopqrstuvwxyz".
+    // The char at col 20 was 't'. In line 1: i=0..t=11.
+    // gw must move cursor to row 1, col 11 (character-preserving like nvim).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdefgh ijklmnopqrstuvwxyz\n");
+    app.active_mut().editor.settings_mut().textwidth = 8;
+    app.active_mut().editor.jump_cursor(0, 20);
+
+    drive_chars(&mut app, "gw$");
+
+    let (row, col) = app.active().editor.cursor();
+    // Character 't' moves to row 1, col 11 after the wrap.
+    assert_eq!(
+        row, 1,
+        "gw$ must follow 't' to row 1 after wrap; got row {row}"
+    );
+    assert_eq!(
+        col, 11,
+        "gw$ must place cursor at col 11 (position of 't' in row 1); got col {col}"
+    );
+}
+
+#[test]
+fn gww_reflows_current_line_cursor_stable() {
+    // `gww` — doubled form: reflows current line but keeps cursor in place.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "aaa bbb ccc ddd eee fff\n");
+    app.active_mut().editor.settings_mut().textwidth = 10;
+    app.active_mut().editor.jump_cursor(0, 3);
+
+    drive_chars(&mut app, "gww");
+
+    assert!(app.pending_state.is_none(), "pending must clear after gww");
+    let rope = app.active().editor.buffer().rope().clone();
+    let line_count = rope.len_lines();
+    assert!(
+        line_count > 1,
+        "gww must reflow long line into multiple lines; got {line_count} lines"
+    );
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(row, 0, "gww must keep cursor on row 0; got {row}");
+    assert_eq!(col, 3, "gww must keep cursor at col 3; got {col}");
+}
+
+#[test]
 fn two_g_uw_uppercases_two_words_via_reducer() {
     // `2gUw` — count carry: 2 is the count_prefix passed into AfterG, then
     // AfterOp(Uppercase, count1:2), then w → ApplyOpMotion(Uppercase,'w', total:2).

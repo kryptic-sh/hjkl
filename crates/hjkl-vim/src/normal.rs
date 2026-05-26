@@ -652,6 +652,8 @@ fn handle_after_op<H: Host>(
         // `gqq` reflows the current line — vim's doubled form for the
         // reflow operator is the second `q` after `gq`.
         Operator::Reflow => Some('q'),
+        // `gww` reflows the current line keeping the cursor — second `w` after `gw`.
+        Operator::ReflowKeepCursor => Some('w'),
         // `==` auto-indents the current line.
         Operator::AutoIndent => Some('='),
         // `!!` filters the current line — vim's doubled form.

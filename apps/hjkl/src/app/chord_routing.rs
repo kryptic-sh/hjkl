@@ -282,10 +282,10 @@ impl App {
                             }
                             _ => {}
                         }
-                        // Chord-init g-prefixed operators: intercept u/U/~/q/c.
+                        // Chord-init g-prefixed operators: intercept u/U/~/q/w/c.
                         //
                         // - In Normal mode: set the App-level AfterOp reducer
-                        //   (gives gU/gu/g~/gq/gc/gcc the same timeout-safe
+                        //   (gives gU/gu/g~/gq/gw/gc/gcc the same timeout-safe
                         //   pending path as d/y/c — fixes intermittent gcc
                         //   no-ops caused by the 1000ms engine chord-timeout
                         //   firing between keystrokes when the chord went
@@ -293,12 +293,13 @@ impl App {
                         // - In Visual modes: fire the operator immediately on
                         //   the active selection (no additional keystroke
                         //   needed — that's the vim semantics for visual gc /
-                        //   gu / gU / g~ / gq).
+                        //   gu / gU / g~ / gq / gw).
                         let case_op_kind = match ch {
                             'u' => Some(hjkl_vim::OperatorKind::Lowercase),
                             'U' => Some(hjkl_vim::OperatorKind::Uppercase),
                             '~' => Some(hjkl_vim::OperatorKind::ToggleCase),
                             'q' => Some(hjkl_vim::OperatorKind::Reflow),
+                            'w' => Some(hjkl_vim::OperatorKind::ReflowKeepCursor),
                             'c' => Some(hjkl_vim::OperatorKind::Comment),
                             _ => None,
                         };

@@ -2,8 +2,8 @@
 /// `hjkl-engine` so `hjkl-vim` has no upstream dependency.
 ///
 /// The five operators that can be entered directly from Normal mode via bare
-/// `d` / `y` / `c` / `>` / `<`, plus the four g-prefix case/reflow operators
-/// (`gU` / `gu` / `g~` / `gq`) bridged through the reducer in chunk 2c-v.
+/// `d` / `y` / `c` / `>` / `<`, plus the g-prefix case/reflow operators
+/// (`gU` / `gu` / `g~` / `gq` / `gw`) bridged through the reducer in chunk 2c-v.
 /// Fold (`zf`) does not enter bare op-pending so it is omitted entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorKind {
@@ -23,8 +23,10 @@ pub enum OperatorKind {
     Lowercase,
     /// `g~` — toggle case.
     ToggleCase,
-    /// `gq` — reflow / format text.
+    /// `gq` — reflow / format text. Cursor moves to end of reflowed range.
     Reflow,
+    /// `gw` — reflow like `gq` but cursor stays at its pre-reflow position.
+    ReflowKeepCursor,
     /// `=` — auto-indent (v1 dumb shiftwidth bracket counting).
     AutoIndent,
     /// `!` — filter through external shell command. After the motion fixes the
@@ -53,6 +55,8 @@ impl OperatorKind {
             OperatorKind::Lowercase => 'u',
             OperatorKind::ToggleCase => '~',
             OperatorKind::Reflow => 'q',
+            // `gww` — doubled 'w' after `gw` enters the keep-cursor reflow.
+            OperatorKind::ReflowKeepCursor => 'w',
             OperatorKind::AutoIndent => '=',
             OperatorKind::Filter => '!',
             // `gcc` — doubled 'c' after `gc` enters the comment operator.

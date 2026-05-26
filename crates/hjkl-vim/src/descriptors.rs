@@ -80,7 +80,7 @@ pub fn children_for(mode: Mode, prefix: &[KeyEvent]) -> Vec<VimDescriptor> {
 /// Expected count of root Normal-mode descriptors.
 pub const COUNT_NORMAL_ROOT: usize = 84;
 /// Expected count of g-prefix descriptors.
-pub const COUNT_G_PREFIX: usize = 20;
+pub const COUNT_G_PREFIX: usize = 21;
 /// Expected count of z-prefix descriptors.
 pub const COUNT_Z_PREFIX: usize = 11;
 /// Expected count of operator-pending root descriptors (d/c/y prefix children).
@@ -305,6 +305,7 @@ fn g_prefix() -> Vec<VimDescriptor> {
         VimDescriptor::char('u', "lowercase operator"),
         VimDescriptor::char('~', "toggle case operator"),
         VimDescriptor::char('q', "reflow operator"),
+        VimDescriptor::char('w', "reflow operator (keep cursor)"),
         VimDescriptor::char('J', "join without space"),
         VimDescriptor::char('d', "goto definition"),
         VimDescriptor::char('i', "goto last insert position"),
