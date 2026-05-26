@@ -129,6 +129,10 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// Background style applied to cells at a `colorcolumn` position.
     /// Ignored when `colorcolumn_cols` is empty.
     pub colorcolumn_style: Style,
+    /// When `Some`, invisibles rendering is active. The [`hjkl_buffer::ListChars`]
+    /// value controls which glyphs substitute whitespace characters.
+    /// Matches vim's `:set list` + `:set listchars`. Pass `None` to disable.
+    pub listchars: Option<&'a hjkl_buffer::ListChars>,
 }
 
 /// Controls what numbers are rendered in the gutter.
@@ -714,6 +718,16 @@ impl<R: StyleResolver> BufferView<'_, R> {
         // `Viewport::tab_width` (driven by engine's `:set tabstop`).
         // `effective_tab_width` falls back to 4 when unset.
         let tab_width = self.viewport.effective_tab_width();
+
+        // Precompute trailing-whitespace boundary for `:set list` trail rendering.
+        // `trail_byte_start` is the byte index of the first trailing space/tab
+        // at the end of the line. Bytes at or past this index are "trailing".
+        let trail_byte_start: usize = if self.listchars.is_some() {
+            line.trim_end_matches([' ', '\t']).len()
+        } else {
+            line.len()
+        };
+
         let mut byte_offset: usize = 0;
         let mut line_col: usize = 0;
         let mut chars_iter = line.chars().enumerate().peekable();
@@ -814,14 +828,51 @@ impl<R: StyleResolver> BufferView<'_, R> {
             }
 
             if ch == '\t' {
-                // Paint tab as `visible_width` space cells carrying the
-                // resolved style — tab/text bg/cursor-line bg all paint
-                // through the expansion.
-                for k in 0..width {
-                    if let Some(cell) = term_buf.cell_mut((screen_x + k, y)) {
-                        cell.set_char(' ');
+                // Paint tab expansion. When `:set list` is on, substitute
+                // the leading cell with `tab_lead` and fill cells with
+                // `tab_fill` (or spaces when tab_fill is None).
+                if let Some(lc) = self.listchars {
+                    // tab_lead occupies the first cell
+                    if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
+                        cell.set_char(lc.tab_lead);
                         cell.set_style(style);
                     }
+                    let fill_ch = lc.tab_fill.unwrap_or(' ');
+                    for k in 1..width {
+                        if let Some(cell) = term_buf.cell_mut((screen_x + k, y)) {
+                            cell.set_char(fill_ch);
+                            cell.set_style(style);
+                        }
+                    }
+                } else {
+                    // Default: paint tab as `visible_width` space cells carrying
+                    // the resolved style — tab/text bg/cursor-line bg all paint
+                    // through the expansion.
+                    for k in 0..width {
+                        if let Some(cell) = term_buf.cell_mut((screen_x + k, y)) {
+                            cell.set_char(' ');
+                            cell.set_style(style);
+                        }
+                    }
+                }
+            } else if let Some(lc) = self.listchars {
+                // Listchars substitutions for non-tab characters.
+                let display_ch = if ch == '\u{00a0}' {
+                    // Non-breaking space
+                    lc.nbsp.unwrap_or(ch)
+                } else if ch == ' ' {
+                    let is_trailing = byte_offset >= trail_byte_start;
+                    if is_trailing {
+                        lc.trail.or(lc.space).unwrap_or(ch)
+                    } else {
+                        lc.space.unwrap_or(ch)
+                    }
+                } else {
+                    ch
+                };
+                if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
+                    cell.set_char(display_ch);
+                    cell.set_style(style);
                 }
             } else if let Some(cell) = term_buf.cell_mut((screen_x, y)) {
                 cell.set_char(ch);
@@ -831,6 +882,20 @@ impl<R: StyleResolver> BufferView<'_, R> {
             line_col += visible_width;
             byte_offset += ch_byte_len;
         }
+
+        // When `:set list` is on and `eol` is configured, paint the EOL marker
+        // immediately after the last character on the last segment.
+        if is_last_segment
+            && let Some(lc) = self.listchars
+            && let Some(eol_ch) = lc.eol
+            && screen_x < row_end_x
+            && let Some(cell) = term_buf.cell_mut((screen_x, y))
+        {
+            cell.set_char(eol_ch);
+            cell.set_style(Style::default());
+            screen_x += 1;
+        }
+        let _ = screen_x; // consumed by eol branch above; not used further
 
         // Empty-line selection placeholder. Without this, an empty row
         // covered by a v/V/Ctrl-V selection paints zero cells — the user
@@ -975,6 +1040,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -1007,6 +1073,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1040,6 +1107,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1078,6 +1146,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1111,6 +1180,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1147,6 +1217,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -1197,6 +1268,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -1251,6 +1323,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -1310,6 +1383,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -1358,6 +1432,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -1393,6 +1468,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -1435,6 +1511,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -1482,6 +1559,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1521,6 +1599,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1562,6 +1641,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1604,6 +1684,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1655,6 +1736,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -1695,6 +1777,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -1730,6 +1813,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -1765,6 +1849,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -1796,6 +1881,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -1827,6 +1913,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         }
     }
 
@@ -2022,6 +2109,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         }
     }
 
@@ -2193,6 +2281,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -2255,6 +2344,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -2310,6 +2400,7 @@ mod tests {
             diag_overlays: &[overlay],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 2);
 
@@ -2367,6 +2458,7 @@ mod tests {
             diag_overlays: &[overlay],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -2420,6 +2512,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -2486,6 +2579,7 @@ mod tests {
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
+            listchars: None,
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.

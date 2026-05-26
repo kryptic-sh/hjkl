@@ -859,6 +859,12 @@ pub struct Settings {
     /// Set `:set nomotion_sneak` to revert `s`/`S` to stock vim behavior.
     /// Default `true` — **BREAKING** for users relying on `s` = substitute-char.
     pub motion_sneak: bool,
+    /// Render invisible characters (tabs, trailing spaces, EOL markers).
+    /// Matches vim's `:set list` / `:set nolist`. Default `false`.
+    pub list: bool,
+    /// Characters used to represent invisibles when `list` is on.
+    /// Matches vim's `:set listchars` / `:set lcs`.
+    pub listchars: crate::types::ListChars,
 }
 
 impl Default for Settings {
@@ -896,6 +902,8 @@ impl Default for Settings {
             scrolloff: 5,
             sidescrolloff: 0,
             motion_sneak: true,
+            list: false,
+            listchars: crate::types::ListChars::default(),
         }
     }
 }
@@ -945,6 +953,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         scrolloff: o.scrolloff,
         sidescrolloff: o.sidescrolloff,
         motion_sneak: o.motion_sneak,
+        list: o.list,
+        listchars: o.listchars.clone(),
     }
 }
 
@@ -2385,6 +2395,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.colorcolumn = opts.colorcolumn.clone();
         self.settings.scrolloff = opts.scrolloff;
         self.settings.sidescrolloff = opts.sidescrolloff;
+        self.settings.list = opts.list;
+        self.settings.listchars = opts.listchars.clone();
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]

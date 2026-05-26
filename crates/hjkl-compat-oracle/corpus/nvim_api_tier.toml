@@ -114,6 +114,42 @@ keys = ":set sidescrolloff=5<CR>"
 expected_buffer = "hello world\n"
 expected_cursor = [0, 0]
 
+# :set list — accepted without error, buffer and cursor unchanged (#204)
+[[cases]]
+name = "set_list_noop_on_buffer"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set list<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :set nolist — accepted without error, no content change (#204)
+[[cases]]
+name = "set_nolist_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set nolist<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :set listchars=... — accepted without error, buffer unchanged (#204)
+[[cases]]
+name = "set_listchars_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set listchars=tab:>-,eol:$<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
+# :set listchars? — info-only query, no content change (#204)
+[[cases]]
+name = "set_listchars_bare_query_noop"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = ":set listchars?<CR>"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 0]
+
 # :retab — leading tab → 4 spaces when expandtab is set (#207)
 [[cases]]
 name = "retab_leading_tabs_to_spaces"

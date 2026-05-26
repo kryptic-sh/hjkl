@@ -608,6 +608,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let (scl, fdc) = (s.signcolumn, s.foldcolumn);
     let (cul, cuc) = (s.cursorline, s.cursorcolumn);
     let colorcolumn = s.colorcolumn.clone();
+    let list_active = s.list;
+    let listchars_owned = s.listchars.clone();
 
     // We need visible signs before computing gutter width for signcolumn=auto.
     // Pre-compute a lightweight "has any visible sign" check using the last
@@ -780,6 +782,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         diag_overlays: &diag_overlays,
         colorcolumn_cols: &cc_cols,
         colorcolumn_style: cc_style,
+        listchars: if list_active { Some(&listchars_owned) } else { None },
     };
     frame.render_widget(view, area);
 

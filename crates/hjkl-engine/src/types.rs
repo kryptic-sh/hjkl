@@ -341,7 +341,20 @@ pub struct Options {
     /// `:set nomotion_sneak` reverts to standard vim behavior.
     /// Default `true` — **BREAKING** for users relying on `s` = substitute-char.
     pub motion_sneak: bool,
+    /// Render invisible characters (tabs, trailing spaces, EOL markers).
+    /// Matches vim's `:set list` / `:set nolist`. Default `false`.
+    pub list: bool,
+    /// Characters used to represent invisibles when `list` is on.
+    /// Matches vim's `:set listchars` / `:set lcs`.
+    /// Default matches vim: `tab:^I,eol:$`.
+    pub listchars: ListChars,
 }
+
+/// Invisibles rendering configuration for `:set list` / `:set listchars`.
+///
+/// Re-exported from [`hjkl_buffer::ListChars`] so callers programming to
+/// the engine surface don't need to import `hjkl-buffer` directly.
+pub use hjkl_buffer::ListChars;
 
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
 /// for diagnostic and git signs. Matches vim's `:set signcolumn`.
@@ -424,6 +437,8 @@ impl Default for Options {
             modeline: true,
             modelines: 5,
             motion_sneak: true,
+            list: false,
+            listchars: ListChars::default(),
         }
     }
 }
@@ -637,6 +652,19 @@ impl Options {
             "modeline" | "ml" => set_bool!(modeline),
             "modelines" | "mls" => set_u32!(modelines),
             "motion_sneak" | "snk" => set_bool!(motion_sneak),
+            "list" => set_bool!(list),
+            "listchars" | "lcs" => {
+                let s = match val {
+                    OptionValue::String(s) => s,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects string, got {other:?}"
+                        )));
+                    }
+                };
+                self.listchars = ListChars::parse(&s).map_err(EngineError::Ex)?;
+                Ok(())
+            }
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -685,6 +713,8 @@ impl Options {
             "modeline" | "ml" => OptionValue::Bool(self.modeline),
             "modelines" | "mls" => OptionValue::Int(self.modelines as i64),
             "motion_sneak" | "snk" => OptionValue::Bool(self.motion_sneak),
+            "list" => OptionValue::Bool(self.list),
+            "listchars" | "lcs" => OptionValue::String(self.listchars.to_canonical_string()),
             _ => return None,
         })
     }
@@ -1777,5 +1807,69 @@ mod tests {
         o.set_by_name("siso", OptionValue::Int(2)).unwrap();
         assert_eq!(o.sidescrolloff, 2);
         assert_eq!(o.get_by_name("siso"), Some(OptionValue::Int(2)));
+    }
+
+    // ---- list / listchars options -----------------------------------------------
+
+    #[test]
+    fn options_list_default_false_and_set() {
+        let mut o = Options::default();
+        assert!(!o.list, "list default is false");
+        o.set_by_name("list", OptionValue::Bool(true)).unwrap();
+        assert!(o.list);
+        assert_eq!(o.get_by_name("list"), Some(OptionValue::Bool(true)));
+        o.set_by_name("list", OptionValue::Bool(false)).unwrap();
+        assert!(!o.list);
+    }
+
+    #[test]
+    fn options_listchars_default_matches_vim() {
+        let o = Options::default();
+        let lc = &o.listchars;
+        assert_eq!(lc.tab_lead, '^');
+        assert_eq!(lc.tab_fill, Some('I'));
+        assert_eq!(lc.eol, Some('$'));
+        assert_eq!(lc.space, None);
+        assert_eq!(lc.trail, None);
+        assert_eq!(lc.nbsp, None);
+    }
+
+    #[test]
+    fn options_listchars_set_and_get() {
+        let mut o = Options::default();
+        o.set_by_name("listchars", OptionValue::String("tab:>-,eol:$".to_string()))
+            .unwrap();
+        assert_eq!(o.listchars.tab_lead, '>');
+        assert_eq!(o.listchars.tab_fill, Some('-'));
+        assert_eq!(o.listchars.eol, Some('$'));
+    }
+
+    #[test]
+    fn options_lcs_alias_sets_listchars() {
+        let mut o = Options::default();
+        o.set_by_name("lcs", OptionValue::String("tab:>-,trail:~".to_string()))
+            .unwrap();
+        assert_eq!(o.listchars.tab_lead, '>');
+        assert_eq!(o.listchars.trail, Some('~'));
+    }
+
+    #[test]
+    fn options_listchars_get_by_name_returns_string() {
+        let o = Options::default();
+        match o.get_by_name("listchars") {
+            Some(OptionValue::String(s)) => {
+                assert!(s.contains("tab:"), "canonical string should contain tab:");
+            }
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn options_listchars_invalid_value_returns_err() {
+        let mut o = Options::default();
+        assert!(
+            o.set_by_name("listchars", OptionValue::String("bogus:x".to_string()))
+                .is_err()
+        );
     }
 }

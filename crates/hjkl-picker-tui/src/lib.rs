@@ -192,6 +192,7 @@ pub fn preview_pane(
         diag_overlays: &[],
         colorcolumn_cols: &[],
         colorcolumn_style: Style::default(),
+        listchars: None,
     };
     frame.render_widget(view, inner);
 }

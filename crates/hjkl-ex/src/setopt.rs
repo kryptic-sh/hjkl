@@ -34,6 +34,8 @@ pub fn all_setting_names() -> Vec<String> {
         "sidescrolloff".into(),
         "siso".into(),
         // string
+        "listchars".into(),
+        "lcs".into(),
         "iskeyword".into(),
         "isk".into(),
         "signcolumn".into(),
@@ -49,6 +51,7 @@ pub fn all_setting_names() -> Vec<String> {
         // completion-only (handled by host in ex_dispatch.rs)
         "background".into(),
         "bg".into(),
+        "list".into(),
         // boolean
         "ignorecase".into(),
         "ic".into(),
@@ -105,7 +108,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -137,6 +140,8 @@ pub(crate) fn apply_set<H: Host>(
             if s.autoclose_tag { "on" } else { "off" },
             s.scrolloff,
             s.sidescrolloff,
+            if s.list { "on" } else { "off" },
+            s.listchars.to_canonical_string(),
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -210,6 +215,8 @@ fn query_option_value<H: Host>(
         "cursorcolumn" | "cuc" => on_off(s.cursorcolumn),
         "autopair" | "ap" => on_off(s.autopair),
         "autoclose-tag" | "act" => on_off(s.autoclose_tag),
+        "list" => on_off(s.list),
+        "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
         _ => return None,
     })
 }
@@ -249,6 +256,11 @@ fn apply_set_token<H: Host>(
         // String-valued options short-circuit the numeric parse.
         if matches!(name, "iskeyword" | "isk") {
             editor.set_iskeyword(value);
+            return Ok(());
+        }
+        if matches!(name, "listchars" | "lcs") {
+            let lc = hjkl_buffer::ListChars::parse(value)?;
+            editor.settings_mut().listchars = lc;
             return Ok(());
         }
         if matches!(name, "signcolumn" | "scl") {
@@ -401,6 +413,7 @@ fn apply_set_token<H: Host>(
         "autopair" | "ap" => editor.settings_mut().autopair = value,
         "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
         "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
+        "list" => editor.settings_mut().list = value,
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }
@@ -891,6 +904,92 @@ mod tests {
             ExEffect::Info(s) => {
                 assert_eq!(s, "filetype=\"rust\"");
                 assert!(editor.settings().number, "number must be applied alongside");
+            }
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    // ---- list / listchars ---------------------------------------------------
+
+    #[test]
+    fn set_list_enables() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "list"), ExEffect::Ok);
+        assert!(editor.settings().list);
+    }
+
+    #[test]
+    fn set_nolist_disables() {
+        let mut editor = make_editor();
+        editor.settings_mut().list = true;
+        assert_eq!(apply_set(&mut editor, "nolist"), ExEffect::Ok);
+        assert!(!editor.settings().list);
+    }
+
+    #[test]
+    fn set_listchars_equals_stores_value() {
+        let mut editor = make_editor();
+        assert_eq!(
+            apply_set(&mut editor, "listchars=tab:>-,eol:$"),
+            ExEffect::Ok
+        );
+        let lc = &editor.settings().listchars;
+        assert_eq!(lc.tab_lead, '>');
+        assert_eq!(lc.tab_fill, Some('-'));
+        assert_eq!(lc.eol, Some('$'));
+    }
+
+    #[test]
+    fn set_lcs_alias_stores_listchars() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "lcs=tab:>-,trail:~"), ExEffect::Ok);
+        assert_eq!(editor.settings().listchars.trail, Some('~'));
+    }
+
+    #[test]
+    fn set_listchars_query_returns_value() {
+        let mut editor = make_editor();
+        assert_eq!(
+            apply_set(&mut editor, "listchars=tab:>-,eol:$"),
+            ExEffect::Ok
+        );
+        match apply_set(&mut editor, "listchars?") {
+            ExEffect::Info(s) => {
+                assert!(s.contains("tab:>-"), "query output must contain tab:>-");
+                assert!(s.contains("eol:$"), "query output must contain eol:$");
+            }
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_listchars_invalid_value_returns_error() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "listchars=bogus:x") {
+            ExEffect::Error(_) => {}
+            other => panic!("expected Error(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_list_default_is_false() {
+        let editor = make_editor();
+        assert!(!editor.settings().list, "list default must be false");
+    }
+
+    #[test]
+    fn bare_set_output_contains_list() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "") {
+            ExEffect::Info(s) => {
+                assert!(
+                    s.contains("list="),
+                    "bare :set output must include list=, got: {s}"
+                );
+                assert!(
+                    s.contains("listchars="),
+                    "bare :set output must include listchars=, got: {s}"
+                );
             }
             other => panic!("expected Info(_), got {other:?}"),
         }
