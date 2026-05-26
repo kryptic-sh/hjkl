@@ -205,10 +205,11 @@ impl App {
                 let deadline = prefix_at + self.which_key_delay;
                 t = t.min(deadline.saturating_duration_since(now));
             }
-            if !self
-                .app_keymap
-                .pending(crate::app::keymap::HjklMode::Normal)
-                .is_empty()
+            if !self.which_key_active
+                && !self
+                    .app_keymap
+                    .pending(crate::app::keymap::HjklMode::Normal)
+                    .is_empty()
             {
                 let deadline = prefix_at + self.app_keymap.timeout_duration();
                 t = t.min(deadline.saturating_duration_since(now));
@@ -1291,7 +1292,14 @@ impl App {
                 {
                     self.which_key_active = true;
                 }
-                if let Some(prefix_at) = self.pending_prefix_at
+                // Chord timeout: only resolves an ambiguous prefix when the
+                // which-key popup is NOT visible. Once the popup shows, the
+                // user has seen the menu and should pick a key (or Esc to
+                // cancel) — letting the timeout fire here would yank the
+                // popup away mid-decision. Matches which-key.nvim default
+                // and vim-which-key behaviour.
+                if !self.which_key_active
+                    && let Some(prefix_at) = self.pending_prefix_at
                     && !self
                         .app_keymap
                         .pending(crate::app::keymap::HjklMode::Normal)
@@ -1299,12 +1307,10 @@ impl App {
                     && now >= prefix_at + self.app_keymap.timeout_duration()
                     && let Some(replay) =
                         self.resolve_chord_timeout(crate::app::keymap::HjklMode::Normal)
+                    && !replay.is_empty()
                 {
-                    self.which_key_active = false;
-                    if !replay.is_empty() {
-                        replay_to_engine(self, &replay);
-                        self.sync_after_engine_mutation();
-                    }
+                    replay_to_engine(self, &replay);
+                    self.sync_after_engine_mutation();
                 }
                 self.tick_hover_timer();
                 if self
