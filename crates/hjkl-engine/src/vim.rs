@@ -7570,10 +7570,14 @@ fn do_paste<H: crate::types::Host>(
 }
 
 pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some((rope, cursor)) = ed.undo_stack.pop() {
-        let current = ed.snapshot();
-        ed.redo_stack.push(current);
-        ed.restore_rope(rope, cursor);
+    if let Some(entry) = ed.undo_stack.pop() {
+        let (cur_rope, cur_cursor) = ed.snapshot();
+        ed.redo_stack.push(crate::editor::UndoEntry {
+            rope: cur_rope,
+            cursor: cur_cursor,
+            timestamp: entry.timestamp,
+        });
+        ed.restore_rope(entry.rope, entry.cursor);
     }
     ed.vim.mode = Mode::Normal;
     // The restored cursor came from a snapshot taken in insert mode
@@ -7583,11 +7587,15 @@ pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer
 }
 
 pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
-    if let Some((rope, cursor)) = ed.redo_stack.pop() {
-        let current = ed.snapshot();
-        ed.undo_stack.push(current);
+    if let Some(entry) = ed.redo_stack.pop() {
+        let (cur_rope, cur_cursor) = ed.snapshot();
+        ed.undo_stack.push(crate::editor::UndoEntry {
+            rope: cur_rope,
+            cursor: cur_cursor,
+            timestamp: entry.timestamp,
+        });
         ed.cap_undo();
-        ed.restore_rope(rope, cursor);
+        ed.restore_rope(entry.rope, entry.cursor);
     }
     ed.vim.mode = Mode::Normal;
 }

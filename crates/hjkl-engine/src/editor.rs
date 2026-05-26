@@ -10,6 +10,19 @@ use crate::input::Input;
 use crate::vim::{self, VimState};
 use crate::{KeybindingMode, VimMode};
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::SystemTime;
+
+/// A single entry in the undo or redo stack.
+///
+/// The `timestamp` records the wall-clock time at which the snapshot was
+/// taken (i.e. when `push_undo` was called), enabling the `:earlier` /
+/// `:later` time-travel ex commands to walk the stack by duration rather
+/// than by step count.
+pub(crate) struct UndoEntry {
+    pub(crate) rope: ropey::Rope,
+    pub(crate) cursor: (usize, usize),
+    pub(crate) timestamp: SystemTime,
+}
 
 /// Map a [`hjkl_buffer::Edit`] to one or more SPEC
 /// [`crate::types::Edit`] (`EditOp`) records.
@@ -564,9 +577,9 @@ pub struct Editor<
     /// builds the entire document `String` via `rope.to_string()` — that
     /// turned every `i` / `o` keystroke into a ~3 MB allocation on a
     /// 1.86 M-line file.
-    pub(crate) undo_stack: Vec<(ropey::Rope, (usize, usize))>,
+    pub(crate) undo_stack: Vec<UndoEntry>,
     /// Redo history: entries pushed when undoing.
-    pub(super) redo_stack: Vec<(ropey::Rope, (usize, usize))>,
+    pub(super) redo_stack: Vec<UndoEntry>,
     /// Set whenever the buffer content changes; cleared by `take_dirty`.
     pub(super) content_dirty: bool,
     /// Cached snapshot of `lines().join("\n") + "\n"` wrapped in an Arc
@@ -3060,13 +3073,95 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         crate::vim::do_redo(self);
     }
 
+    /// Undo `n` steps. Returns the number of steps actually applied
+    /// (bounded by undo stack size).
+    pub fn earlier_by_steps(&mut self, n: usize) -> usize {
+        let mut count = 0;
+        for _ in 0..n {
+            if self.undo_stack.is_empty() {
+                break;
+            }
+            crate::vim::do_undo(self);
+            count += 1;
+        }
+        count
+    }
+
+    /// Redo `n` steps. Returns the number of steps actually applied
+    /// (bounded by redo stack size).
+    pub fn later_by_steps(&mut self, n: usize) -> usize {
+        let mut count = 0;
+        for _ in 0..n {
+            if self.redo_stack.is_empty() {
+                break;
+            }
+            crate::vim::do_redo(self);
+            count += 1;
+        }
+        count
+    }
+
+    /// Undo back until the next-to-pop entry's timestamp is at or before
+    /// `target`. Entries whose timestamp is strictly greater than `target`
+    /// are popped (undone). Returns the number of steps applied.
+    ///
+    /// Vim `:earlier Ns` semantics: `target = SystemTime::now() - N seconds`.
+    pub fn earlier_by_time(&mut self, target: SystemTime) -> usize {
+        let mut count = 0;
+        loop {
+            match self.undo_stack.last() {
+                None => break,
+                Some(entry) => {
+                    if entry.timestamp <= target {
+                        break;
+                    }
+                }
+            }
+            crate::vim::do_undo(self);
+            count += 1;
+        }
+        count
+    }
+
+    /// Redo forward while the next-to-pop redo entry's timestamp is at
+    /// or before `target`. Returns the number of steps applied.
+    ///
+    /// Vim `:later Ns` semantics: `target = current_state_time + N seconds`.
+    pub fn later_by_time(&mut self, target: SystemTime) -> usize {
+        let mut count = 0;
+        loop {
+            match self.redo_stack.last() {
+                None => break,
+                Some(entry) => {
+                    if entry.timestamp > target {
+                        break;
+                    }
+                }
+            }
+            crate::vim::do_redo(self);
+            count += 1;
+        }
+        count
+    }
+
     /// Snapshot current buffer state onto the undo stack and clear
     /// the redo stack. Bounded by `settings.undo_levels` — older
     /// entries pruned. Call before any group of buffer mutations the
     /// user might want to undo as a single step.
     pub fn push_undo(&mut self) {
-        let snap = self.snapshot();
-        self.undo_stack.push(snap);
+        self.push_undo_at(SystemTime::now());
+    }
+
+    /// Like [`push_undo`] but uses a caller-supplied timestamp. Used by
+    /// tests that need deterministic time values without `sleep`.
+    #[doc(hidden)]
+    pub fn push_undo_at(&mut self, timestamp: SystemTime) {
+        let (rope, cursor) = self.snapshot();
+        self.undo_stack.push(UndoEntry {
+            rope,
+            cursor,
+            timestamp,
+        });
         self.cap_undo();
         self.redo_stack.clear();
     }
@@ -6054,6 +6149,108 @@ mod shift_syntax_spans_tests {
             "100 snapshots of a 60k-row buffer took {elapsed:?}; budget \
              100 ms. Likely regressed to per-line cloning."
         );
+    }
+}
+
+#[cfg(test)]
+mod earlier_later_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+    use std::time::{Duration, SystemTime};
+
+    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        Editor::new(buf, DefaultHost::default(), Options::default())
+    }
+
+    // ── step-based ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn earlier_by_steps_n_undoes_n_changes() {
+        let mut ed = make_ed("hello");
+        ed.push_undo(); // snap 1
+        ed.push_undo(); // snap 2
+        ed.push_undo(); // snap 3
+        assert_eq!(ed.undo_stack_len(), 3);
+        let applied = ed.earlier_by_steps(2);
+        assert_eq!(applied, 2);
+        assert_eq!(ed.undo_stack_len(), 1);
+    }
+
+    #[test]
+    fn earlier_by_steps_caps_at_stack_size() {
+        let mut ed = make_ed("hello");
+        ed.push_undo(); // snap 1
+        // Ask for 10 but only 1 available.
+        let applied = ed.earlier_by_steps(10);
+        assert_eq!(applied, 1);
+        assert_eq!(ed.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn later_by_steps_n_redoes_n_changes() {
+        let mut ed = make_ed("hello");
+        ed.push_undo(); // snap 1
+        ed.push_undo(); // snap 2
+        ed.push_undo(); // snap 3
+        // Undo all 3 so they're on redo stack.
+        ed.earlier_by_steps(3);
+        assert_eq!(ed.undo_stack_len(), 0);
+        let applied = ed.later_by_steps(2);
+        assert_eq!(applied, 2);
+        assert_eq!(ed.undo_stack_len(), 2);
+    }
+
+    #[test]
+    fn later_by_steps_caps_at_redo_stack_size() {
+        let mut ed = make_ed("hello");
+        ed.push_undo(); // snap 1
+        ed.earlier_by_steps(1); // moves to redo
+        let applied = ed.later_by_steps(99);
+        assert_eq!(applied, 1);
+    }
+
+    // ── time-based ───────────────────────────────────────────────────────────
+
+    fn epoch_plus(secs: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn earlier_by_time_stops_at_target_boundary() {
+        let mut ed = make_ed("hello");
+        // Push 3 entries at t-30s, t-20s, t-10s (relative to epoch).
+        ed.push_undo_at(epoch_plus(30));
+        ed.push_undo_at(epoch_plus(40));
+        ed.push_undo_at(epoch_plus(50));
+        // Redo stack is empty; undo has 3 entries.
+        // target = epoch+35 → should undo entries at t=50 and t=40, stop at t=30
+        let target = epoch_plus(35);
+        let applied = ed.earlier_by_time(target);
+        assert_eq!(applied, 2, "should undo t=50 and t=40; stop at t=30");
+        assert_eq!(ed.undo_stack_len(), 1, "t=30 entry remains");
+    }
+
+    #[test]
+    fn earlier_by_time_empty_stack_returns_zero() {
+        let mut ed = make_ed("hello");
+        let applied = ed.earlier_by_time(epoch_plus(999));
+        assert_eq!(applied, 0);
+        assert_eq!(ed.undo_stack_len(), 0);
+    }
+
+    #[test]
+    fn later_by_time_target_in_future_redoes_all() {
+        let mut ed = make_ed("hello");
+        ed.push_undo_at(epoch_plus(10));
+        ed.push_undo_at(epoch_plus(20));
+        // Undo both → they move to redo stack with their timestamps preserved.
+        ed.earlier_by_steps(2);
+        // target far in future: should redo all.
+        let applied = ed.later_by_time(epoch_plus(9999));
+        assert_eq!(applied, 2);
+        assert_eq!(ed.undo_stack_len(), 2);
     }
 }
 

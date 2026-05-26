@@ -356,3 +356,47 @@ initial_cursor = [0, 0]
 keys = ":retab<CR>"
 expected_buffer = "  hello\nfoo\n# vim: set ts=2 et:\n"
 expected_cursor = [0, 0]
+
+# ── :earlier / :later time-travel undo (#212) ────────────────────────────────
+#
+# These cases create undo history via :s/…/…/ (pure ex-command path) so that
+# the driver's nvim_command routing handles everything without needing the FSM
+# insert-mode → ex-mode transition (which isn't supported in nvim_input replay).
+#
+# Cursor values verified against nvim v0.12.2:
+#   vim.cmd('s/foo/bar/') vim.cmd('earlier 1') → cursor [1,0] → 0-based (0,0)
+#   vim.cmd('s/foo/bar/') vim.cmd('earlier 1') vim.cmd('later 1') → cursor [1,0] → (0,0)
+#   vim.cmd('s/hello/world/') vim.cmd('earlier 5') → cursor [1,0] → (0,0)
+
+# :earlier 1 — undo the most recent change via ex-command step count.
+# :s/foo/bar/ creates one undo entry; :earlier 1 restores "foo".
+# Cursor at (0, 0) — verified against nvim v0.12.2.
+[[cases]]
+name = "earlier_1_undoes_one_step"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/<CR>:earlier 1<CR>"
+expected_buffer = "foo\n"
+expected_cursor = [0, 0]
+
+# :later 1 — redo the undone change.
+# After :earlier 1 restores "foo", :later 1 returns to "bar".
+# Cursor at (0, 0) — verified against nvim v0.12.2.
+[[cases]]
+name = "later_1_redoes_one_step"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/<CR>:earlier 1<CR>:later 1<CR>"
+expected_buffer = "bar\n"
+expected_cursor = [0, 0]
+
+# :earlier 5 with only 1 available change — caps at history depth, no error.
+# Only one undo entry from :s/hello/world/; :earlier 5 undoes that one step.
+# Cursor at (0, 0) — verified against nvim v0.12.2.
+[[cases]]
+name = "earlier_5_caps_at_history"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = ":s/hello/world/<CR>:earlier 5<CR>"
+expected_buffer = "hello\n"
+expected_cursor = [0, 0]

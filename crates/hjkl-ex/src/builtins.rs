@@ -310,6 +310,105 @@ fn redo_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+// ---- earlier / later (time-travel undo) ------------------------------------
+
+/// Parsed form of a `:earlier` / `:later` argument.
+enum EarlierLaterArg {
+    Steps(usize),
+    Duration(std::time::Duration),
+}
+
+/// Parse a `:earlier` / `:later` argument string.
+///
+/// Accepted forms:
+/// - `""` or `"N"` (no suffix) → `Steps(N)`, default N=1 when empty.
+/// - `"Ns"` → `Duration(N seconds)`
+/// - `"Nm"` → `Duration(N*60 seconds)`
+/// - `"Nh"` → `Duration(N*3600 seconds)`
+///
+/// Returns `Err(msg)` on a parse failure.
+fn parse_earlier_later_arg(arg: &str) -> Result<EarlierLaterArg, String> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return Ok(EarlierLaterArg::Steps(1));
+    }
+    if let Some(rest) = arg.strip_suffix('s') {
+        let n: u64 = rest
+            .parse()
+            .map_err(|_| format!("invalid count before 's': {rest:?}"))?;
+        return Ok(EarlierLaterArg::Duration(std::time::Duration::from_secs(n)));
+    }
+    if let Some(rest) = arg.strip_suffix('m') {
+        let n: u64 = rest
+            .parse()
+            .map_err(|_| format!("invalid count before 'm': {rest:?}"))?;
+        return Ok(EarlierLaterArg::Duration(std::time::Duration::from_secs(
+            n * 60,
+        )));
+    }
+    if let Some(rest) = arg.strip_suffix('h') {
+        let n: u64 = rest
+            .parse()
+            .map_err(|_| format!("invalid count before 'h': {rest:?}"))?;
+        return Ok(EarlierLaterArg::Duration(std::time::Duration::from_secs(
+            n * 3600,
+        )));
+    }
+    let n: usize = arg
+        .parse()
+        .map_err(|_| format!("invalid argument: {arg:?}"))?;
+    Ok(EarlierLaterArg::Steps(n))
+}
+
+fn earlier_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    match parse_earlier_later_arg(args) {
+        Err(msg) => Some(ExEffect::Error(msg)),
+        Ok(EarlierLaterArg::Steps(n)) => {
+            let applied = editor.earlier_by_steps(n);
+            let s = if applied == 1 { "" } else { "s" };
+            Some(ExEffect::Info(format!("{applied} change{s} earlier")))
+        }
+        Ok(EarlierLaterArg::Duration(duration)) => {
+            let target = std::time::SystemTime::now()
+                .checked_sub(duration)
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let applied = editor.earlier_by_time(target);
+            let s = if applied == 1 { "" } else { "s" };
+            Some(ExEffect::Info(format!("{applied} change{s} earlier")))
+        }
+    }
+}
+
+fn later_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    match parse_earlier_later_arg(args) {
+        Err(msg) => Some(ExEffect::Error(msg)),
+        Ok(EarlierLaterArg::Steps(n)) => {
+            let applied = editor.later_by_steps(n);
+            let s = if applied == 1 { "" } else { "s" };
+            Some(ExEffect::Info(format!("{applied} change{s} later")))
+        }
+        Ok(EarlierLaterArg::Duration(duration)) => {
+            // "later by duration" = advance from now toward the future.
+            // The redo stack holds entries timestamped at their original edit
+            // time; restore all entries whose timestamp ≤ (now + duration).
+            let target = std::time::SystemTime::now()
+                .checked_add(duration)
+                .unwrap_or(std::time::SystemTime::now());
+            let applied = editor.later_by_time(target);
+            let s = if applied == 1 { "" } else { "s" };
+            Some(ExEffect::Info(format!("{applied} change{s} later")))
+        }
+    }
+}
+
 // ---- saveas / file ---------------------------------------------------------
 
 /// `:saveas {path}` / `:sav {path}` — write buffer to `path` AND rename the
@@ -894,6 +993,24 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::None,
         min_prefix: 3,
         run: redo_handler::<H>,
+    });
+
+    // `:earlier` (min_prefix=2; vim compat: `:ea`)
+    reg.add(ExCommand {
+        name: "earlier",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: earlier_handler::<H>,
+    });
+
+    // `:later` (min_prefix=3; `:lat` — avoids collision with any prefix of `:last*`)
+    reg.add(ExCommand {
+        name: "later",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: later_handler::<H>,
     });
 
     // `:edit` / `:e` (min_prefix=1; no other registered command starts with `e`)
@@ -1985,6 +2102,141 @@ mod tests {
         let mut ed = make_editor();
         let result = redo_handler(&mut ed, "", None);
         assert_eq!(result, Some(ExEffect::Ok));
+    }
+
+    // ── earlier / later ──────────────────────────────────────────────────────
+
+    #[test]
+    fn earlier_no_arg_undoes_one_step() {
+        let mut ed = make_editor();
+        ed.push_undo();
+        ed.push_undo();
+        let before = ed.undo_stack_len();
+        let result = earlier_handler(&mut ed, "", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+        assert_eq!(ed.undo_stack_len(), before - 1);
+    }
+
+    #[test]
+    fn earlier_numeric_arg_undoes_n_steps() {
+        let mut ed = make_editor();
+        ed.push_undo();
+        ed.push_undo();
+        ed.push_undo();
+        let result = earlier_handler(&mut ed, "2", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+        assert_eq!(ed.undo_stack_len(), 1);
+    }
+
+    #[test]
+    fn earlier_5s_passes_5_second_duration() {
+        // Parses without error; no undo entries present so 0 steps applied.
+        let mut ed = make_editor();
+        let result = earlier_handler(&mut ed, "5s", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn earlier_2m_passes_120_seconds() {
+        let mut ed = make_editor();
+        let result = earlier_handler(&mut ed, "2m", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn earlier_3h_passes_3_hours() {
+        let mut ed = make_editor();
+        let result = earlier_handler(&mut ed, "3h", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn earlier_bad_arg_returns_error() {
+        let mut ed = make_editor();
+        let result = earlier_handler(&mut ed, "xyz", None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn later_no_arg_redoes_one_step() {
+        let mut ed = make_editor();
+        ed.push_undo();
+        // Undo so there's something to redo.
+        ed.undo();
+        let result = later_handler(&mut ed, "", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn later_numeric_arg_redoes_n_steps() {
+        let mut ed = make_editor();
+        ed.push_undo();
+        ed.push_undo();
+        ed.push_undo();
+        ed.earlier_by_steps(3);
+        let result = later_handler(&mut ed, "2", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+        assert_eq!(ed.undo_stack_len(), 2);
+    }
+
+    #[test]
+    fn later_5s_passes_5_second_duration() {
+        let mut ed = make_editor();
+        let result = later_handler(&mut ed, "5s", None);
+        assert!(
+            matches!(result, Some(ExEffect::Info(_))),
+            "expected Info, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn later_bad_arg_returns_error() {
+        let mut ed = make_editor();
+        let result = later_handler(&mut ed, "abc", None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "expected Error, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn earlier_dispatch_resolves_min_prefix_2() {
+        let reg = crate::default_registry::<hjkl_engine::DefaultHost>();
+        assert!(reg.resolve("ea").is_some(), ":ea must resolve to :earlier");
+        assert_eq!(reg.resolve("ea").unwrap().name, "earlier");
+        assert!(reg.resolve("earlier").is_some(), ":earlier must resolve");
+    }
+
+    #[test]
+    fn later_dispatch_resolves_min_prefix_3() {
+        let reg = crate::default_registry::<hjkl_engine::DefaultHost>();
+        assert!(reg.resolve("lat").is_some(), ":lat must resolve to :later");
+        assert_eq!(reg.resolve("lat").unwrap().name, "later");
+        assert!(reg.resolve("later").is_some(), ":later must resolve");
     }
 
     // ── registers / marks / jumps / changes ──────────────────────────────────
