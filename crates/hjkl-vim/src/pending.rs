@@ -431,6 +431,17 @@ mod tests {
         assert_eq!(step(state, Key::Enter), Outcome::Cancel);
     }
 
+    #[test]
+    fn g_ampersand_dispatches_via_g_chord() {
+        // `g&` must emit AfterGChord { ch: '&', count: 1 }, not be treated as
+        // the standalone `&` substitute-char.
+        let state = PendingState::AfterG { count: 1 };
+        assert_eq!(
+            step(state, Key::Char('&')),
+            Outcome::Commit(EngineCmd::AfterGChord { ch: '&', count: 1 })
+        );
+    }
+
     // ── AfterZ reducer unit tests ────────────────────────────────────────────
 
     #[test]

@@ -140,3 +140,26 @@ initial_cursor = [0, 0]
 keys = ":set noexpandtab tabstop=4<CR>:retab<CR>"
 expected_buffer = "\t\thello\n"
 expected_cursor = [0, 0]
+
+# g& — repeat last :s over whole buffer (#211)
+# :s/foo/X/ substitutes line 0 only; g& repeats s/foo/X/ over all three lines.
+# No /g flag → first match per line. Cursor lands on last substituted line (2).
+[[cases]]
+name = "g_ampersand_repeats_substitute_on_all_lines"
+initial_buffer = "foo\nfoo bar\nfoo baz\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/<CR>g&"
+expected_buffer = "X\nX bar\nX baz\n"
+expected_cursor = [2, 0]
+
+# g& with /g flag — all matches per line replaced on re-apply (#211)
+# :s/foo/X/g turns line 0 into "X X"; g& re-applies s/foo/X/g over all lines.
+# Line 0 already has no "foo"; line 1 ("foo") becomes "X".
+# Cursor lands on last substituted line (1).
+[[cases]]
+name = "g_ampersand_with_g_flag"
+initial_buffer = "foo foo\nfoo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/X/g<CR>g&"
+expected_buffer = "X X\nX\n"
+expected_cursor = [1, 0]

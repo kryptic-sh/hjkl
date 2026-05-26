@@ -4213,6 +4213,28 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
             },
             count,
         ),
+        // `g&` — repeat last `:s` over the whole buffer (1,$), keeping all
+        // original flags. Equivalent to `:%s//~/&` in vim.
+        '&' => {
+            let cmd = match ed.vim.last_substitute.clone() {
+                Some(c) => c,
+                None => {
+                    // No prior substitute — mirror the `:&` error path; do
+                    // nothing to the buffer (the host's status line will show
+                    // the pending error if wired; for headless / test hosts
+                    // we simply return silently).
+                    return;
+                }
+            };
+            let last_row = buf_row_count(&ed.buffer).saturating_sub(1) as u32;
+            let r = 0u32..=last_row;
+            // apply_substitute moves cursor to last changed line and pushes
+            // one undo snapshot — same semantics as `:&&` / `:%s//~/&`.
+            let _ = crate::substitute::apply_substitute(ed, &cmd, r);
+            // Update stored substitute so subsequent `g&` sees the same cmd.
+            // (apply_substitute doesn't call set_last_substitute itself.)
+            ed.vim.last_substitute = Some(cmd);
+        }
         _ => {}
     }
 }
@@ -7631,5 +7653,62 @@ mod comment_toggle_tests {
         ed.toggle_comment_range(0, 0);
         // Should be unchanged — no comment string for "".
         assert_eq!(line(&ed, 0), "hello");
+    }
+}
+
+// ─── g& tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod g_ampersand_tests {
+    use super::*;
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::{Buffer, rope_line_str};
+
+    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let host = DefaultHost::new();
+        Editor::new(buf, host, Options::default())
+    }
+
+    fn buf_line(ed: &Editor<Buffer, DefaultHost>, row: usize) -> String {
+        let rope = ed.buffer().rope();
+        rope_line_str(&rope, row).trim_end_matches('\n').to_string()
+    }
+
+    /// `g&` repeats last `:s/foo/bar/` over every line (no /g flag → first
+    /// match per line only).
+    #[test]
+    fn g_ampersand_repeats_last_substitute_on_whole_buffer() {
+        let mut ed = make_editor("foo\nfoo bar foo\nbaz");
+        // Simulate a prior `:s/foo/bar/` by setting last_substitute directly.
+        let cmd = crate::substitute::parse_substitute("/foo/bar/").unwrap();
+        ed.set_last_substitute(cmd);
+        // Cursor on line 0 (to confirm g& operates on ALL lines, not just current).
+        apply_after_g(&mut ed, '&', 1);
+        assert_eq!(buf_line(&ed, 0), "bar");
+        // No /g flag — only first match per line.
+        assert_eq!(buf_line(&ed, 1), "bar bar foo");
+        assert_eq!(buf_line(&ed, 2), "baz");
+    }
+
+    /// `g&` with /g flag replaces all matches per line.
+    #[test]
+    fn g_ampersand_with_g_flag_replaces_all_per_line() {
+        let mut ed = make_editor("foo foo\nfoo");
+        let cmd = crate::substitute::parse_substitute("/foo/bar/g").unwrap();
+        ed.set_last_substitute(cmd);
+        apply_after_g(&mut ed, '&', 1);
+        assert_eq!(buf_line(&ed, 0), "bar bar");
+        assert_eq!(buf_line(&ed, 1), "bar");
+    }
+
+    /// `g&` with no prior substitute is a no-op.
+    #[test]
+    fn g_ampersand_noop_when_no_prior_substitute() {
+        let mut ed = make_editor("foo\nbar");
+        // No last_substitute set — must not panic, must not change buffer.
+        apply_after_g(&mut ed, '&', 1);
+        assert_eq!(buf_line(&ed, 0), "foo");
+        assert_eq!(buf_line(&ed, 1), "bar");
     }
 }

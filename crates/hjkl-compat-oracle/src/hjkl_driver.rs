@@ -167,30 +167,46 @@ async fn run_case_via_nvim_api_inner(
     // Multiple chained ex commands — e.g. `:set foo<CR>:retab<CR>` — are
     // split on `<CR>` and each segment dispatched as a separate nvim_command
     // call so that the individual ex commands reach `ex::run` independently.
+    //
+    // Mixed sequences — e.g. `:s/foo/bar/<CR>g&` — are dispatched per-segment:
+    // ex-command segments go through `nvim_command`, normal-mode key segments
+    // go through `nvim_input`. This lets oracle cases exercise normal-mode
+    // commands that depend on prior ex-command state (like `g&` after `:s`).
     if !case.keys.is_empty() {
         let keys = &case.keys;
-        // Split on `<CR>` / `<cr>` to support chained ex-command sequences.
-        // A sequence is treated as all-ex-commands when every non-empty
-        // segment starts with `:`.  Otherwise fall through to nvim_input.
+        // Split on `<CR>` / `<cr>` to support chained sequences.
         let segments: Vec<&str> = keys
             .split_inclusive("<CR>")
             .flat_map(|s| s.split_inclusive("<cr>"))
             .collect();
-        let all_ex = segments.iter().all(|seg| {
+        let has_ex = segments.iter().any(|seg| {
             let trimmed = seg.trim_end_matches("<CR>").trim_end_matches("<cr>").trim();
-            trimmed.is_empty() || trimmed.starts_with(':')
+            trimmed.starts_with(':')
         });
-        if all_ex && segments.iter().any(|s| s.starts_with(':')) {
-            for seg in segments {
-                let cmd = seg
-                    .trim_end_matches("<CR>")
-                    .trim_end_matches("<cr>")
-                    .trim()
-                    .strip_prefix(':')
-                    .unwrap_or("")
-                    .trim();
-                if !cmd.is_empty() {
-                    nvim.command(cmd).await?;
+        if has_ex {
+            // Dispatch each segment individually: ex-commands via nvim_command,
+            // non-empty non-ex segments via nvim_input.
+            for seg in &segments {
+                let body = seg.trim_end_matches("<CR>").trim_end_matches("<cr>").trim();
+                if body.is_empty() {
+                    continue;
+                }
+                if let Some(cmd) = body.strip_prefix(':') {
+                    let cmd = cmd.trim();
+                    if !cmd.is_empty() {
+                        nvim.command(cmd).await?;
+                    }
+                } else {
+                    // Normal-mode keys (no leading `:`). Append <CR> back if
+                    // the original segment had one; for bare normal-mode tails
+                    // (no trailing `<CR>`) just send the keys as-is.
+                    let had_cr = seg.ends_with("<CR>") || seg.ends_with("<cr>");
+                    let input = if had_cr {
+                        format!("{body}<CR>")
+                    } else {
+                        body.to_owned()
+                    };
+                    nvim.input(&input).await?;
                 }
             }
         } else {
