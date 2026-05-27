@@ -193,6 +193,12 @@ pub fn preview_pane(
         colorcolumn_cols: &[],
         colorcolumn_style: Style::default(),
         listchars: None,
+        indent_guides_enabled: false,
+        indent_guide_char: '│',
+        indent_guide_shiftwidth: 4,
+        indent_guide_fg: ratatui::style::Color::Reset,
+        indent_guide_active_fg: ratatui::style::Color::Reset,
+        indent_guide_active_col: None,
     };
     frame.render_widget(view, inner);
 }

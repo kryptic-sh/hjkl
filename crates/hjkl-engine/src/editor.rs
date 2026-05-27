@@ -878,6 +878,11 @@ pub struct Settings {
     /// Characters used to represent invisibles when `list` is on.
     /// Matches vim's `:set listchars` / `:set lcs`.
     pub listchars: crate::types::ListChars,
+    /// Render thin vertical indent guides at every `shiftwidth`-aligned
+    /// column. hjkl-specific. Default `true`.
+    pub indent_guides: bool,
+    /// Character used to draw indent guides. Default `'│'`.
+    pub indent_guide_char: char,
 }
 
 impl Default for Settings {
@@ -917,6 +922,8 @@ impl Default for Settings {
             motion_sneak: true,
             list: false,
             listchars: crate::types::ListChars::default(),
+            indent_guides: true,
+            indent_guide_char: '│',
         }
     }
 }
@@ -968,6 +975,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         motion_sneak: o.motion_sneak,
         list: o.list,
         listchars: o.listchars.clone(),
+        indent_guides: o.indent_guides,
+        indent_guide_char: o.indent_guide_char,
     }
 }
 

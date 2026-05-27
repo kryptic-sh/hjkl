@@ -133,6 +133,24 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// value controls which glyphs substitute whitespace characters.
     /// Matches vim's `:set list` + `:set listchars`. Pass `None` to disable.
     pub listchars: Option<&'a hjkl_buffer::ListChars>,
+    /// When `true`, paint thin vertical indent guide characters at every
+    /// `shiftwidth`-aligned leading-whitespace column on each row. Only active
+    /// in `Wrap::None` mode. Pass `false` to disable.
+    pub indent_guides_enabled: bool,
+    /// Character to paint as the indent guide. Typically `'│'`.
+    pub indent_guide_char: char,
+    /// Number of leading visual columns that qualify as "shiftwidth" per level.
+    /// Derived from `Settings::shiftwidth` / `Settings::tabstop`. The renderer
+    /// uses this to locate guide columns on each row.
+    pub indent_guide_shiftwidth: usize,
+    /// Fg color for inactive indent guide cells.
+    pub indent_guide_fg: ratatui::style::Color,
+    /// Fg color for the active (cursor's indent level) guide cell.
+    pub indent_guide_active_fg: ratatui::style::Color,
+    /// Visual column of the active indent guide, if any. Computed from the
+    /// cursor row's leading whitespace and `indent_guide_shiftwidth`.
+    /// `None` when the cursor sits on a non-indented or empty row.
+    pub indent_guide_active_col: Option<usize>,
 }
 
 /// Controls what numbers are rendered in the gutter.
@@ -430,6 +448,81 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                         cell.set_style(cell.style().patch(self.colorcolumn_style));
                     }
                 }
+            }
+        }
+
+        // Indent guides pass: paint guide characters at shiftwidth-aligned
+        // columns on every visible row that has sufficient leading whitespace.
+        // Only active in Wrap::None mode. Computes leading visual width per
+        // screen row from the pre-fetched line strings.
+        if matches!(wrap_mode, Wrap::None)
+            && self.indent_guides_enabled
+            && self.indent_guide_shiftwidth > 0
+        {
+            let sw = self.indent_guide_shiftwidth;
+            let tab_width = self.viewport.effective_tab_width();
+            // Walk the same doc_row range as the first pass.
+            let mut ig_doc_row = top_row;
+            let mut ig_screen_row: u16 = 0;
+            while ig_doc_row < total_rows && ig_screen_row < area.height {
+                if folds.iter().any(|f| f.hides(ig_doc_row)) {
+                    ig_doc_row += 1;
+                    continue;
+                }
+                // Skip closed fold markers — they collapse to a single marker row.
+                if let Some(fold) = folds
+                    .iter()
+                    .find(|f| f.closed && f.start_row == ig_doc_row)
+                    .copied()
+                {
+                    ig_screen_row += 1;
+                    ig_doc_row = fold.end_row + 1;
+                    continue;
+                }
+                let line_owned = line_at(ig_doc_row);
+                let line: &str = line_owned.as_str();
+                // Compute leading visual column count: walk until non-whitespace.
+                let mut leading_vcols: usize = 0;
+                for ch in line.chars() {
+                    match ch {
+                        ' ' => leading_vcols += 1,
+                        '\t' => {
+                            leading_vcols += tab_width - (leading_vcols % tab_width);
+                        }
+                        _ => break,
+                    }
+                }
+                // Paint guides at sw, 2*sw, 3*sw, ... while < leading_vcols.
+                let y = text_area.y + ig_screen_row;
+                let mut guide_col = sw;
+                while guide_col < leading_vcols {
+                    // Convert visual column to screen x, accounting for top_col scroll.
+                    if guide_col >= top_col {
+                        let screen_col = guide_col - top_col;
+                        if screen_col < text_area.width as usize {
+                            let x = text_area.x + screen_col as u16;
+                            let is_active = Some(guide_col) == self.indent_guide_active_col;
+                            let fg = if is_active {
+                                self.indent_guide_active_fg
+                            } else {
+                                self.indent_guide_fg
+                            };
+                            if let Some(cell) = term_buf.cell_mut((x, y)) {
+                                // Only paint guide if the cell currently holds a space
+                                // (i.e., leading whitespace was painted there).
+                                if cell.symbol() == " " {
+                                    cell.set_char(self.indent_guide_char);
+                                    // Preserve bg; only set fg.
+                                    let existing = cell.style();
+                                    cell.set_style(existing.fg(fg));
+                                }
+                            }
+                        }
+                    }
+                    guide_col += sw;
+                }
+                ig_screen_row += 1;
+                ig_doc_row += 1;
             }
         }
 
@@ -1041,6 +1134,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -1074,6 +1173,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1108,6 +1213,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1147,6 +1258,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1181,6 +1298,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1218,6 +1341,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -1269,6 +1398,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -1324,6 +1459,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -1384,6 +1525,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -1433,6 +1580,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -1469,6 +1622,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -1512,6 +1671,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -1560,6 +1725,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1600,6 +1771,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1642,6 +1819,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1685,6 +1868,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1737,6 +1926,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -1778,6 +1973,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -1814,6 +2015,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a"
@@ -1850,6 +2057,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -1882,6 +2095,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -1914,6 +2133,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         }
     }
 
@@ -2110,6 +2335,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         }
     }
 
@@ -2282,6 +2513,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -2345,6 +2582,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -2401,6 +2644,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 2);
 
@@ -2459,6 +2708,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -2513,6 +2768,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -2580,6 +2841,12 @@ mod tests {
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
             listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.
@@ -2593,6 +2860,222 @@ mod tests {
             term.cell((3, 0)).unwrap().symbol(),
             "a",
             "text must start at x=gutter.width when sign_column_width=0"
+        );
+    }
+
+    // ── Indent guide tests ──────────────────────────────────────────────────
+
+    /// Helper to build a BufferView with indent guides configured.
+    fn indent_guide_view<'a>(
+        b: &'a Buffer,
+        viewport: &'a Viewport,
+        shiftwidth: usize,
+        guide_char: char,
+        guide_fg: Color,
+        active_fg: Color,
+        active_col: Option<usize>,
+    ) -> BufferView<'a, impl StyleResolver + 'a> {
+        BufferView {
+            buffer: b,
+            viewport,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default(),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: true,
+            indent_guide_char: guide_char,
+            indent_guide_shiftwidth: shiftwidth,
+            indent_guide_fg: guide_fg,
+            indent_guide_active_fg: active_fg,
+            indent_guide_active_col: active_col,
+        }
+    }
+
+    #[test]
+    fn indent_guides_disabled_paints_nothing() {
+        // Even with indented content, flag=false → no guide chars.
+        let b = Buffer::from_str("    foo\n        bar");
+        let v = vp(20, 2);
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default(),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::DarkGray,
+            indent_guide_active_fg: Color::Gray,
+            indent_guide_active_col: None,
+        };
+        let term = run_render(view, 20, 2);
+        // No cell should contain '│' anywhere.
+        for y in 0..2u16 {
+            for x in 0..20u16 {
+                assert_ne!(
+                    term.cell((x, y)).unwrap().symbol(),
+                    "│",
+                    "no guide expected at ({x}, {y}) when disabled"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn indent_guides_basic_two_levels() {
+        // fn() {\n    if foo {\n        bar();\n    }
+        // shiftwidth=4: guides at col 4 on rows 1+2+3, col 8 on row 2.
+        let b = Buffer::from_str("fn() {\n    if foo {\n        bar();\n    }");
+        let v = vp(20, 4);
+        // Active col: None (just test inactive guides).
+        let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
+        let term = run_render(view, 20, 4);
+        // Row 0 "fn() {" — no indent, no guides.
+        assert_ne!(term.cell((4, 0)).unwrap().symbol(), "│");
+        // Row 1 "    if foo {" — leading 4 spaces → guide at col 4 NOT painted
+        // (col 4 is first non-space). Actually guide is only at col 4 when
+        // leading_vcols > 4. Here leading_vcols = 4, and guide_col = 4 which is
+        // NOT < 4, so no guide on row 1... wait.
+        // Per spec: paint at sw, 2*sw, 3*sw, ... while col < leading_vcols.
+        // leading_vcols = 4 → guide_col = 4 → 4 < 4 is false → no guide on row 1.
+        // Actually row 1 has 4 leading spaces. sw=4. First guide col = 4.
+        // 4 < 4 = false → no guide at col 4 on row 1.
+        // Row 2 "        bar();" — 8 leading spaces → guides at 4 and 8? 4 < 8 yes, 8 < 8 no.
+        // So guide at col 4 only on row 2.
+        // Row 3 "    }" — 4 spaces → same as row 1: no guide (4 < 4 = false).
+        //
+        // This test verifies the actual behavior: guide at col 4 on row 2 only.
+        assert_ne!(
+            term.cell((4, 1)).unwrap().symbol(),
+            "│",
+            "row1: no guide (leading_vcols=4, sw=4, 4<4=false)"
+        );
+        assert_eq!(
+            term.cell((4, 2)).unwrap().symbol(),
+            "│",
+            "row2: guide at col 4 (leading_vcols=8)"
+        );
+        assert_ne!(
+            term.cell((8, 2)).unwrap().symbol(),
+            "│",
+            "row2: no guide at col 8 (8<8=false)"
+        );
+        assert_ne!(
+            term.cell((4, 3)).unwrap().symbol(),
+            "│",
+            "row3: no guide (leading_vcols=4, 4<4=false)"
+        );
+    }
+
+    #[test]
+    fn indent_guides_skip_when_no_indent() {
+        let b = Buffer::from_str("no_indent\nstill_none");
+        let v = vp(20, 2);
+        let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
+        let term = run_render(view, 20, 2);
+        for y in 0..2u16 {
+            for x in 0..20u16 {
+                assert_ne!(
+                    term.cell((x, y)).unwrap().symbol(),
+                    "│",
+                    "no guide expected on non-indented rows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn indent_guides_respects_tabs() {
+        // shiftwidth=4 tabstop=4 line "\t\tfoo": visual cols 0..3=tab, 4..7=tab, 8='f'.
+        // leading_vcols = 8 (two tabs each expanding to 4 cells).
+        // Guide at sw=4 only (4 < 8 = true; 8 < 8 = false).
+        let b = Buffer::from_str("\t\tfoo");
+        let mut v = vp(20, 1);
+        v.tab_width = 4;
+        let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, None);
+        let term = run_render(view, 20, 1);
+        // Col 4 should have '│' (tab expansion: first tab = cells 0-3, second tab = cells 4-7).
+        // Cell at screen x=4 is inside the second tab expansion → space → guide painted.
+        assert_eq!(
+            term.cell((4, 0)).unwrap().symbol(),
+            "│",
+            "guide at visual col 4 inside second tab"
+        );
+        // Col 8 is 'f' — not a space, no guide (and 8 < 8 is false anyway).
+        assert_eq!(term.cell((8, 0)).unwrap().symbol(), "f");
+    }
+
+    #[test]
+    fn indent_guides_active_col_uses_active_fg() {
+        // 8 leading spaces, shiftwidth=4 → guide at col 4.
+        // active_col = 4 → that guide gets active_fg (Gray), not inactive (DarkGray).
+        let b = Buffer::from_str("        code");
+        let v = vp(20, 1);
+        let active_col = Some(4usize);
+        let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, active_col);
+        let term = run_render(view, 20, 1);
+        let cell = term.cell((4, 0)).unwrap();
+        assert_eq!(cell.symbol(), "│", "guide painted at col 4");
+        assert_eq!(cell.fg, Color::Gray, "active col uses active_fg (Gray)");
+    }
+
+    #[test]
+    fn indent_guides_inactive_col_uses_inactive_fg() {
+        // 12 leading spaces, shiftwidth=4 → guides at col 4 and col 8.
+        // active_col = 8 → col 4 is inactive (DarkGray), col 8 is active (Gray).
+        let b = Buffer::from_str("            code");
+        let v = vp(20, 1);
+        let view = indent_guide_view(&b, &v, 4, '│', Color::DarkGray, Color::Gray, Some(8));
+        let term = run_render(view, 20, 1);
+        // Col 4 inactive.
+        let cell4 = term.cell((4, 0)).unwrap();
+        assert_eq!(cell4.symbol(), "│", "guide at col 4");
+        assert_eq!(cell4.fg, Color::DarkGray, "col 4 uses inactive fg");
+        // Col 8 active.
+        let cell8 = term.cell((8, 0)).unwrap();
+        assert_eq!(cell8.symbol(), "│", "guide at col 8");
+        assert_eq!(cell8.fg, Color::Gray, "col 8 uses active fg");
+    }
+
+    #[test]
+    fn indent_guides_custom_char_paints_that_char() {
+        // Use ':' as guide character.
+        let b = Buffer::from_str("        code");
+        let v = vp(20, 1);
+        let view = indent_guide_view(&b, &v, 4, ':', Color::DarkGray, Color::Gray, None);
+        let term = run_render(view, 20, 1);
+        assert_eq!(
+            term.cell((4, 0)).unwrap().symbol(),
+            ":",
+            "custom guide char ':' at col 4"
         );
     }
 }

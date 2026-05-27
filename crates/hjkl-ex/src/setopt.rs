@@ -85,6 +85,10 @@ pub fn all_setting_names() -> Vec<String> {
         "ap".into(),
         "autoclose-tag".into(),
         "act".into(),
+        "indent_guides".into(),
+        "ig".into(),
+        "indent_guide_char".into(),
+        "igc".into(),
     ]
 }
 
@@ -108,7 +112,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -142,6 +146,8 @@ pub(crate) fn apply_set<H: Host>(
             s.sidescrolloff,
             if s.list { "on" } else { "off" },
             s.listchars.to_canonical_string(),
+            if s.indent_guides { "on" } else { "off" },
+            s.indent_guide_char,
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -217,6 +223,8 @@ fn query_option_value<H: Host>(
         "autoclose-tag" | "act" => on_off(s.autoclose_tag),
         "list" => on_off(s.list),
         "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
+        "indent_guides" | "ig" => on_off(s.indent_guides),
+        "indent_guide_char" | "igc" => s.indent_guide_char.to_string(),
         _ => return None,
     })
 }
@@ -290,6 +298,19 @@ fn apply_set_token<H: Host>(
         }
         if matches!(name, "commentstring" | "cms") {
             editor.settings_mut().commentstring = value.to_string();
+            return Ok(());
+        }
+        if matches!(name, "indent_guide_char" | "igc") {
+            let mut chars = value.chars();
+            let ch = match (chars.next(), chars.next()) {
+                (Some(c), None) => c,
+                _ => {
+                    return Err(format!(
+                        "indent_guide_char expects exactly one character, got {value:?}"
+                    ));
+                }
+            };
+            editor.settings_mut().indent_guide_char = ch;
             return Ok(());
         }
         let parsed: usize = value
@@ -414,6 +435,7 @@ fn apply_set_token<H: Host>(
         "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
         "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
         "list" => editor.settings_mut().list = value,
+        "indent_guides" | "ig" => editor.settings_mut().indent_guides = value,
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }

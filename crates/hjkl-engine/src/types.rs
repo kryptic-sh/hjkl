@@ -348,6 +348,13 @@ pub struct Options {
     /// Matches vim's `:set listchars` / `:set lcs`.
     /// Default matches vim: `tab:^I,eol:$`.
     pub listchars: ListChars,
+    /// Render thin vertical indent guides at every `shiftwidth`-aligned
+    /// column in the viewport. hjkl-specific option. Default `true`.
+    /// `:set noindent_guides` / `:set noig` disables.
+    pub indent_guides: bool,
+    /// Character painted as the indent guide. Default `'│'`.
+    /// `:set indent_guide_char=<char>` / `:set igc=<char>` to customize.
+    pub indent_guide_char: char,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -439,6 +446,8 @@ impl Default for Options {
             motion_sneak: true,
             list: false,
             listchars: ListChars::default(),
+            indent_guides: true,
+            indent_guide_char: '│',
         }
     }
 }
@@ -665,6 +674,28 @@ impl Options {
                 self.listchars = ListChars::parse(&s).map_err(EngineError::Ex)?;
                 Ok(())
             }
+            "indent_guides" | "ig" => set_bool!(indent_guides),
+            "indent_guide_char" | "igc" => {
+                let s = match val {
+                    OptionValue::String(s) => s,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects a single-char string, got {other:?}"
+                        )));
+                    }
+                };
+                let mut chars = s.chars();
+                let ch = match (chars.next(), chars.next()) {
+                    (Some(c), None) => c,
+                    _ => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects exactly one character, got {s:?}"
+                        )));
+                    }
+                };
+                self.indent_guide_char = ch;
+                Ok(())
+            }
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -715,6 +746,8 @@ impl Options {
             "motion_sneak" | "snk" => OptionValue::Bool(self.motion_sneak),
             "list" => OptionValue::Bool(self.list),
             "listchars" | "lcs" => OptionValue::String(self.listchars.to_canonical_string()),
+            "indent_guides" | "ig" => OptionValue::Bool(self.indent_guides),
+            "indent_guide_char" | "igc" => OptionValue::String(self.indent_guide_char.to_string()),
             _ => return None,
         })
     }
@@ -1870,6 +1903,75 @@ mod tests {
         assert!(
             o.set_by_name("listchars", OptionValue::String("bogus:x".to_string()))
                 .is_err()
+        );
+    }
+
+    // ── indent_guides / indent_guide_char option tests ──────────────────────
+
+    #[test]
+    fn indent_guides_default_true() {
+        assert!(
+            Options::default().indent_guides,
+            "indent_guides must default to true"
+        );
+    }
+
+    #[test]
+    fn options_indent_guides_set_and_get() {
+        let mut opts = Options::default();
+        // Disable via full name.
+        opts.set_by_name("indent_guides", OptionValue::Bool(false))
+            .unwrap();
+        assert!(!opts.indent_guides);
+        // Re-enable via alias.
+        opts.set_by_name("ig", OptionValue::Bool(true)).unwrap();
+        assert!(opts.indent_guides);
+        // Read back via both names.
+        assert_eq!(opts.get_by_name("ig"), Some(OptionValue::Bool(true)));
+        assert_eq!(
+            opts.get_by_name("indent_guides"),
+            Some(OptionValue::Bool(true))
+        );
+    }
+
+    #[test]
+    fn options_indent_guide_char_set_and_get() {
+        let mut opts = Options::default();
+        opts.set_by_name("indent_guide_char", OptionValue::String(":".to_string()))
+            .unwrap();
+        assert_eq!(opts.indent_guide_char, ':');
+        // Alias.
+        opts.set_by_name("igc", OptionValue::String("┊".to_string()))
+            .unwrap();
+        assert_eq!(opts.indent_guide_char, '┊');
+        // Read back via alias.
+        assert_eq!(
+            opts.get_by_name("igc"),
+            Some(OptionValue::String("┊".to_string()))
+        );
+        assert_eq!(
+            opts.get_by_name("indent_guide_char"),
+            Some(OptionValue::String("┊".to_string()))
+        );
+    }
+
+    #[test]
+    fn options_indent_guide_char_rejects_multi_char() {
+        let mut opts = Options::default();
+        assert!(
+            opts.set_by_name("indent_guide_char", OptionValue::String("ab".to_string()))
+                .is_err(),
+            "multi-char value must be rejected"
+        );
+    }
+
+    #[test]
+    fn options_indent_guide_char_rejects_empty() {
+        let mut opts = Options::default();
+        assert!(
+            opts.set_by_name("indent_guide_char", OptionValue::String(String::new()))
+                .is_err(),
+            "empty string must be rejected"
         );
     }
 }

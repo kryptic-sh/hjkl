@@ -53,3 +53,7 @@ fg            = "#0b0d10"  # badge fg
 
 [indent_flash]
 bg            = "#2e2810"  # auto-indent (=) flash row highlight — muted amber, 150 ms
+
+[indent_guide]
+fg            = "#3c3c3c"  # inactive indent guide fg — very dark gray, low contrast
+active_fg     = "#787878"  # active (cursor-level) indent guide fg — medium gray

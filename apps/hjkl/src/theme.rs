@@ -111,6 +111,14 @@ pub struct UiTheme {
     /// off — no fade. Defaults to a muted amber tint so it's distinct from the
     /// search highlight without being jarring.
     pub indent_flash_bg: Color,
+
+    // [indent_guide]
+    /// Fg color for inactive indent guide lines. Muted so guides don't compete
+    /// with code. Default: very dark gray (#3c3c3c).
+    pub indent_guide_fg: Color,
+    /// Fg color for the active (cursor's indent level) guide line.
+    /// Slightly brighter than inactive. Default: medium gray (#787878).
+    pub indent_guide_active_fg: Color,
 }
 
 impl UiTheme {
@@ -146,6 +154,8 @@ impl UiTheme {
             recording_bg: parse_hex(&raw.recording.bg)?,
             recording_fg: parse_hex(&raw.recording.fg)?,
             indent_flash_bg: parse_hex(&raw.indent_flash.bg)?,
+            indent_guide_fg: parse_hex(&raw.indent_guide.fg)?,
+            indent_guide_active_fg: parse_hex(&raw.indent_guide.active_fg)?,
         })
     }
 }
@@ -162,6 +172,7 @@ struct RawUiTheme {
     status: RawStatus,
     recording: RawRecording,
     indent_flash: RawIndentFlash,
+    indent_guide: RawIndentGuide,
 }
 
 #[derive(Deserialize)]
@@ -228,6 +239,12 @@ struct RawRecording {
 #[derive(Deserialize)]
 struct RawIndentFlash {
     bg: String,
+}
+
+#[derive(Deserialize)]
+struct RawIndentGuide {
+    fg: String,
+    active_fg: String,
 }
 
 fn parse_hex(s: &str) -> Result<Color> {

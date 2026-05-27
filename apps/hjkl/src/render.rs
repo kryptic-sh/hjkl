@@ -610,6 +610,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let colorcolumn = s.colorcolumn.clone();
     let list_active = s.list;
     let listchars_owned = s.listchars.clone();
+    let indent_guides_enabled = s.indent_guides;
+    let indent_guide_char = s.indent_guide_char;
+    let indent_guide_shiftwidth = s.shiftwidth;
+    let indent_guide_tabstop = s.tabstop;
 
     // We need visible signs before computing gutter width for signcolumn=auto.
     // Pre-compute a lightweight "has any visible sign" check using the last
@@ -762,6 +766,39 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let cc_cols = parse_colorcolumn(&colorcolumn);
     let cc_style = Style::default().bg(app.theme.ui.colorcolumn_bg);
 
+    // Compute indent guide active column from the cursor row's leading whitespace.
+    // The active column is the deepest guide column at the cursor's indent level:
+    //   active_col = floor((leading_vcols - 1) / sw) * sw
+    // Returns None when sw == 0 or the cursor row has no leading whitespace.
+    let indent_guide_active_col: Option<usize> =
+        if indent_guides_enabled && indent_guide_shiftwidth > 0 {
+            let cursor_row = app.slots()[slot_idx].editor.buffer().cursor().row;
+            let rope = app.slots()[slot_idx].editor.buffer().rope();
+            let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor_row);
+            let tab_width = indent_guide_tabstop.max(1);
+            let mut leading_vcols: usize = 0;
+            for ch in cursor_line.chars() {
+                match ch {
+                    ' ' => leading_vcols += 1,
+                    '\t' => {
+                        leading_vcols += tab_width - (leading_vcols % tab_width);
+                    }
+                    _ => break,
+                }
+            }
+            if leading_vcols >= indent_guide_shiftwidth {
+                // paint_row paints guides at sw, 2*sw, ... while
+                // `guide_col < leading_vcols`. Deepest painted is
+                // ((L - 1) / sw) * sw.
+                let level = (leading_vcols - 1) / indent_guide_shiftwidth;
+                Some(level * indent_guide_shiftwidth)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
     let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
@@ -787,6 +824,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         } else {
             None
         },
+        indent_guides_enabled,
+        indent_guide_char,
+        indent_guide_shiftwidth,
+        indent_guide_fg: app.theme.ui.indent_guide_fg,
+        indent_guide_active_fg: app.theme.ui.indent_guide_active_fg,
+        indent_guide_active_col,
     };
     frame.render_widget(view, area);
 
