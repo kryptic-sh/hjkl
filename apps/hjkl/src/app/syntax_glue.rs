@@ -229,6 +229,14 @@ impl App {
         };
 
         let active_idx = self.focused_slot_idx();
+        // Push colorizer option state from the active editor's settings before
+        // rendering — Options own the source of truth, SyntaxLayer mirrors so
+        // walk_rows can gate without a re-borrow into the editor.
+        let (clz, clz_ft) = {
+            let s = self.slots[active_idx].editor.settings();
+            (s.colorizer, s.colorizer_filetypes.clone())
+        };
+        self.syntax.set_colorizer(clz, clz_ft);
         let buf = self.slots[active_idx].editor.buffer();
 
         let out = self.syntax.render_viewport(buffer_id, buf, top, height);

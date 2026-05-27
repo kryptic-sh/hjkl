@@ -345,6 +345,10 @@ pub struct SyntaxLayer {
     theme: Arc<dyn Theme + Send + Sync>,
     clients: HashMap<BufferId, BufferClient>,
     pending_loads: Vec<PendingLoad>,
+    /// When `false`, `HexColorPass` is skipped for all buffers.
+    colorizer: bool,
+    /// Filetype allowlist for the colorizer. Empty = allow all.
+    colorizer_filetypes: Vec<String>,
 }
 
 impl SyntaxLayer {
@@ -368,6 +372,38 @@ impl SyntaxLayer {
             theme,
             clients: HashMap::new(),
             pending_loads: Vec::new(),
+            colorizer: true,
+            colorizer_filetypes: vec![
+                "css".to_string(),
+                "scss".to_string(),
+                "sass".to_string(),
+                "less".to_string(),
+                "html".to_string(),
+                "vue".to_string(),
+                "svelte".to_string(),
+                "tailwindcss".to_string(),
+                "toml".to_string(),
+                "lua".to_string(),
+                "vim".to_string(),
+            ],
+        }
+    }
+
+    /// Update colorizer settings. Pass `enabled = false` to disable
+    /// the color-literal overlay globally. `filetypes` is the allowlist
+    /// of language names (e.g. `"css"`, `"toml"`); an empty slice means
+    /// no filetype is allowed (same effect as `enabled = false`).
+    ///
+    /// No-op when the values are unchanged so per-frame pushes from the
+    /// app stay cheap. Caches invalidate only on actual change.
+    pub fn set_colorizer(&mut self, enabled: bool, filetypes: Vec<String>) {
+        if self.colorizer == enabled && self.colorizer_filetypes == filetypes {
+            return;
+        }
+        self.colorizer = enabled;
+        self.colorizer_filetypes = filetypes;
+        for client in self.clients.values_mut() {
+            client.invalidate_cache();
         }
     }
 
@@ -653,6 +689,16 @@ impl SyntaxLayer {
             }
         }
 
+        // Compute colorizer gate before re-borrowing client mutably.
+        // Effective = global flag AND current language is in the allowlist.
+        let colorizer_enabled = {
+            let c = self.clients.get(&id)?;
+            let lang_name = c.current_lang.as_ref().map(|g| g.name()).unwrap_or("");
+            self.colorizer
+                && (self.colorizer_filetypes.is_empty()
+                    || self.colorizer_filetypes.iter().any(|ft| ft == lang_name))
+        };
+
         // Re-borrow after parse.
         let client = self.clients.get_mut(&id)?;
         let highlighter = client.highlighter.as_mut()?;
@@ -675,6 +721,7 @@ impl SyntaxLayer {
                 vp_end,
                 theme,
                 &directory,
+                colorizer_enabled,
             );
             client.cache_rows = vp_top..vp_end;
             client.cache_dirty_gen = Some(dg);
@@ -692,6 +739,7 @@ impl SyntaxLayer {
                     vp_end,
                     theme,
                     &directory,
+                    colorizer_enabled,
                 );
                 client.cache_rows = vp_top..vp_end;
             } else {
@@ -706,6 +754,7 @@ impl SyntaxLayer {
                         client.cache_rows.start,
                         theme,
                         &directory,
+                        colorizer_enabled,
                     );
                     let mut combined = new_rows;
                     combined.append(&mut client.cache_spans);
@@ -723,6 +772,7 @@ impl SyntaxLayer {
                         vp_end,
                         theme,
                         &directory,
+                        colorizer_enabled,
                     );
                     client.cache_spans.extend(new_rows);
                     client.cache_rows.end = vp_end;
@@ -826,6 +876,7 @@ fn walk_rows(
     seg_end: usize,
     theme: &dyn Theme,
     directory: &Arc<LanguageDirectory>,
+    colorizer: bool,
 ) -> Vec<Vec<(usize, usize, StyleSpec)>> {
     let rope_len = rope.len_bytes();
     let byte_start = row_starts.get(seg_start).copied().unwrap_or(rope_len);
@@ -843,8 +894,10 @@ fn walk_rows(
 
     let marker_pass = CommentMarkerPass::new();
     marker_pass.apply_rope(&mut flat_spans, rope);
-    let hex_color_pass = HexColorPass::new();
-    hex_color_pass.apply_range_rope(&mut flat_spans, rope, byte_start..byte_end);
+    if colorizer {
+        let hex_color_pass = HexColorPass::new();
+        hex_color_pass.apply_range_rope(&mut flat_spans, rope, byte_start..byte_end);
+    }
 
     // Bucket spans into ONLY the viewport row range. The prior version
     // called `build_by_row(..., row_count, ...)` and sliced the result,

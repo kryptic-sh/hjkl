@@ -99,6 +99,12 @@ impl SyntaxLayer {
         self.inner.set_theme(theme);
     }
 
+    /// Push colorizer state from the app's active editor settings.
+    /// No-op when the values are unchanged so per-frame pushes are cheap.
+    pub fn set_colorizer(&mut self, enabled: bool, filetypes: Vec<String>) {
+        self.inner.set_colorizer(enabled, filetypes);
+    }
+
     /// Drop the buffer's retained tree. Next render_viewport reparses from scratch.
     pub fn reset(&mut self, id: BufferId) {
         self.inner.reset(id);

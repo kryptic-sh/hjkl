@@ -355,6 +355,14 @@ pub struct Options {
     /// Character painted as the indent guide. Default `'│'`.
     /// `:set indent_guide_char=<char>` / `:set igc=<char>` to customize.
     pub indent_guide_char: char,
+    /// Enable inline color-literal preview (hex, rgb, hsl, named CSS colors).
+    /// hjkl-specific. Default `true`.
+    /// `:set nocolorizer` disables globally regardless of filetype.
+    pub colorizer: bool,
+    /// Allowlist of filetypes for which the colorizer runs.
+    /// Comma-separated in `:set colorizer_filetypes=css,scss,toml`.
+    /// Default: `["css","scss","sass","less","html","vue","svelte","tailwindcss","toml","lua","vim"]`.
+    pub colorizer_filetypes: Vec<String>,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -448,6 +456,20 @@ impl Default for Options {
             listchars: ListChars::default(),
             indent_guides: true,
             indent_guide_char: '│',
+            colorizer: true,
+            colorizer_filetypes: vec![
+                "css".to_string(),
+                "scss".to_string(),
+                "sass".to_string(),
+                "less".to_string(),
+                "html".to_string(),
+                "vue".to_string(),
+                "svelte".to_string(),
+                "tailwindcss".to_string(),
+                "toml".to_string(),
+                "lua".to_string(),
+                "vim".to_string(),
+            ],
         }
     }
 }
@@ -675,6 +697,23 @@ impl Options {
                 Ok(())
             }
             "indent_guides" | "ig" => set_bool!(indent_guides),
+            "colorizer" | "clz" => set_bool!(colorizer),
+            "colorizer_filetypes" | "clzft" => {
+                let s = match val {
+                    OptionValue::String(s) => s,
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects string, got {other:?}"
+                        )));
+                    }
+                };
+                self.colorizer_filetypes = s
+                    .split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect();
+                Ok(())
+            }
             "indent_guide_char" | "igc" => {
                 let s = match val {
                     OptionValue::String(s) => s,
@@ -748,6 +787,10 @@ impl Options {
             "listchars" | "lcs" => OptionValue::String(self.listchars.to_canonical_string()),
             "indent_guides" | "ig" => OptionValue::Bool(self.indent_guides),
             "indent_guide_char" | "igc" => OptionValue::String(self.indent_guide_char.to_string()),
+            "colorizer" | "clz" => OptionValue::Bool(self.colorizer),
+            "colorizer_filetypes" | "clzft" => {
+                OptionValue::String(self.colorizer_filetypes.join(","))
+            }
             _ => return None,
         })
     }
@@ -1972,6 +2015,50 @@ mod tests {
             opts.set_by_name("indent_guide_char", OptionValue::String(String::new()))
                 .is_err(),
             "empty string must be rejected"
+        );
+    }
+
+    // ── colorizer option tests ───────────────────────────────────────────────
+
+    #[test]
+    fn colorizer_default_true() {
+        assert!(
+            Options::default().colorizer,
+            "colorizer must default to true"
+        );
+    }
+
+    #[test]
+    fn colorizer_filetypes_includes_css() {
+        let o = Options::default();
+        assert!(
+            o.colorizer_filetypes.iter().any(|f| f == "css"),
+            "default colorizer_filetypes must include 'css'"
+        );
+    }
+
+    #[test]
+    fn options_colorizer_set_and_get() {
+        let mut o = Options::default();
+        o.set_by_name("colorizer", OptionValue::Bool(false))
+            .unwrap();
+        assert_eq!(o.get_by_name("colorizer"), Some(OptionValue::Bool(false)));
+        o.set_by_name("clz", OptionValue::Bool(true)).unwrap();
+        assert_eq!(o.get_by_name("clz"), Some(OptionValue::Bool(true)));
+    }
+
+    #[test]
+    fn options_colorizer_filetypes_set_and_get() {
+        let mut o = Options::default();
+        o.set_by_name(
+            "colorizer_filetypes",
+            OptionValue::String("css,scss,toml".into()),
+        )
+        .unwrap();
+        assert_eq!(o.colorizer_filetypes, vec!["css", "scss", "toml"]);
+        assert_eq!(
+            o.get_by_name("clzft"),
+            Some(OptionValue::String("css,scss,toml".into()))
         );
     }
 }

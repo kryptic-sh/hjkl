@@ -883,6 +883,10 @@ pub struct Settings {
     pub indent_guides: bool,
     /// Character used to draw indent guides. Default `'│'`.
     pub indent_guide_char: char,
+    /// Enable inline color-literal preview. hjkl-specific. Default `true`.
+    pub colorizer: bool,
+    /// Filetype allowlist for the colorizer. Default CSS/template languages.
+    pub colorizer_filetypes: Vec<String>,
 }
 
 impl Default for Settings {
@@ -924,6 +928,20 @@ impl Default for Settings {
             listchars: crate::types::ListChars::default(),
             indent_guides: true,
             indent_guide_char: '│',
+            colorizer: true,
+            colorizer_filetypes: vec![
+                "css".to_string(),
+                "scss".to_string(),
+                "sass".to_string(),
+                "less".to_string(),
+                "html".to_string(),
+                "vue".to_string(),
+                "svelte".to_string(),
+                "tailwindcss".to_string(),
+                "toml".to_string(),
+                "lua".to_string(),
+                "vim".to_string(),
+            ],
         }
     }
 }
@@ -977,6 +995,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         listchars: o.listchars.clone(),
         indent_guides: o.indent_guides,
         indent_guide_char: o.indent_guide_char,
+        colorizer: o.colorizer,
+        colorizer_filetypes: o.colorizer_filetypes.clone(),
     }
 }
 
@@ -2419,6 +2439,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.sidescrolloff = opts.sidescrolloff;
         self.settings.list = opts.list;
         self.settings.listchars = opts.listchars.clone();
+        self.settings.colorizer = opts.colorizer;
+        self.settings.colorizer_filetypes = opts.colorizer_filetypes.clone();
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]
