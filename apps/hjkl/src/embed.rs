@@ -193,6 +193,15 @@ fn dispatch(
                     // No terminal to clear in embed mode — treat as no-op.
                     success(id, Value::Null)
                 }
+                ExEffect::SubstituteConfirm { matches } => {
+                    // Embed mode has no interactive TUI; apply all matches immediately.
+                    let count = matches.len();
+                    if count > 0 {
+                        let accepted = vec![true; count];
+                        hjkl_engine::apply_collected_matches(editor, &matches, &accepted);
+                    }
+                    success(id, Value::Null)
+                }
             }
         }
 

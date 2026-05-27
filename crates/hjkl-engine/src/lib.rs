@@ -40,7 +40,8 @@ pub use registers::{Registers, Slot};
 pub use buffer_impl::{BufferFoldProvider, BufferFoldProviderMut};
 pub use keymap_motion::MotionKind;
 pub use substitute::{
-    SubstError, SubstFlags, SubstituteCmd, SubstituteOutcome, apply_substitute, parse_substitute,
+    SubstError, SubstFlags, SubstituteCmd, SubstituteMatch, SubstituteOutcome,
+    apply_collected_matches, apply_substitute, collect_substitute_matches, parse_substitute,
 };
 pub use types::{
     Attrs, Buffer, BufferEdit, BufferId, Color, ContentEdit, Cursor, CursorShape, DefaultHost,

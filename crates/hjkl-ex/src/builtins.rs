@@ -738,7 +738,7 @@ fn substitute_handler<H: Host>(
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
-    use hjkl_engine::substitute::{apply_substitute, parse_substitute};
+    use hjkl_engine::substitute::{apply_substitute, collect_substitute_matches, parse_substitute};
 
     // args already starts with `/` (the delimiter); pass straight to engine.
     let cmd = match parse_substitute(args) {
@@ -759,6 +759,16 @@ fn substitute_handler<H: Host>(
             row..=row
         }
     };
+
+    // `/c` flag: collect matches without mutating buffer; let the host prompt.
+    if cmd.flags.confirm {
+        // Store so `:&` / `:&&` can repeat this substitution.
+        editor.set_last_substitute(cmd.clone());
+        return match collect_substitute_matches(editor, &cmd, r) {
+            Ok(matches) => Some(ExEffect::SubstituteConfirm { matches }),
+            Err(e) => Some(ExEffect::Error(e.to_string())),
+        };
+    }
 
     match apply_substitute(editor, &cmd, r) {
         Ok(out) => {

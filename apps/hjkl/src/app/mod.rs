@@ -21,6 +21,7 @@ use std::collections::HashSet;
 
 mod buffer_ops;
 pub(crate) mod chord_routing;
+mod confirm_substitute;
 pub(crate) mod count_prefix;
 mod dispatch;
 mod engine_actions;
@@ -344,6 +345,24 @@ pub struct App {
     /// draw normally. `:redraw` (no `!`) leaves this `false` — ratatui's
     /// diff-based renderer already issues a repaint on the next tick.
     pub(crate) force_clear_screen: bool,
+    /// Active interactive substitute confirm session (`:s/pat/rep/c`).
+    /// While `Some`, keypresses are routed to the confirm-substitute handler
+    /// rather than the editor engine. Cleared when the session finishes
+    /// (all matches processed, or the user pressed `q`/`Esc`).
+    pub(crate) confirming_substitute: Option<ConfirmingSubstitute>,
+}
+
+/// State for an interactive `:s/pat/rep/c` confirm session.
+///
+/// The event loop routes `y`/`n`/`a`/`q`/`l`/`Esc` to
+/// [`App::handle_confirm_substitute_key`] while this is `Some`.
+pub(crate) struct ConfirmingSubstitute {
+    /// All candidate matches in document order.
+    pub matches: Vec<hjkl_engine::SubstituteMatch>,
+    /// Which matches the user has accepted so far. Parallel to `matches`.
+    pub accepted: Vec<bool>,
+    /// Index of the match currently being prompted.
+    pub idx: usize,
 }
 
 /// Memoised result of [`crate::render::search_count`]. Stored in a
@@ -1203,6 +1222,7 @@ impl App {
             border_drag: None,
             indent_flash: None,
             force_clear_screen: false,
+            confirming_substitute: None,
         })
     }
 

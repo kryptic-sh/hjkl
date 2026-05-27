@@ -6,6 +6,9 @@ use hjkl_info_popup::InfoPopup;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// Used when handling SubstituteConfirm to compute char-column from byte offset.
+use hjkl_buffer::rope_line_str;
+
 use crate::host::TuiHost;
 
 use super::{App, DiskState, ex_host_cmds};
@@ -459,6 +462,29 @@ impl App {
                 }
                 // `:redraw` (no `!`) — ratatui's diff-based renderer will
                 // repaint on the next event-loop tick without a full clear.
+            }
+            ExEffect::SubstituteConfirm { matches } => {
+                if matches.is_empty() {
+                    self.bus.warn("Pattern not found");
+                    return;
+                }
+                let len = matches.len();
+                // Jump cursor to the first match so it is visible.
+                let first_row = matches[0].row as usize;
+                let first_col = {
+                    let rope = hjkl_engine::Query::rope(self.active().editor.buffer());
+                    let line = rope_line_str(&rope, first_row);
+                    line[..matches[0].byte_start as usize].chars().count()
+                };
+                self.active_mut().editor.jump_cursor(first_row, first_col);
+                self.sync_after_engine_mutation();
+
+                self.confirming_substitute = Some(crate::app::ConfirmingSubstitute {
+                    matches,
+                    accepted: vec![false; len],
+                    idx: 0,
+                });
+                // Status line renders the prompt by reading confirming_substitute directly.
             }
         }
     }

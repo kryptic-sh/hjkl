@@ -277,6 +277,14 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── Confirm-substitute prompt (:s/pat/rep/c) ──────────────
+        // Intercept BEFORE normal engine routing so y/n/a/q/l reach
+        // the confirm handler rather than the vim FSM.
+        if self.confirming_substitute.is_some() {
+            self.handle_confirm_substitute_key(key);
+            return KeyOutcome::Continue;
+        }
+
         // ── Hover popup dismissal (Phase 5 mouse support) ─────────
         if self.hover_popup.is_some() {
             self.hover_popup = None;

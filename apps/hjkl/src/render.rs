@@ -874,6 +874,44 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── Confirm-substitute active-match highlight ─────────────────────────
+    // Paint inverse-video (search highlight) over the cell range of the
+    // match currently being prompted. Only for the focused window so
+    // inactive splits don't flash confusingly.
+    if is_focused
+        && let Some(cs) = app.confirming_substitute.as_ref()
+        && cs.idx < cs.matches.len()
+    {
+        let m = &cs.matches[cs.idx];
+        let match_row = m.row as usize;
+        // Only paint when the row is visible in this window.
+        let vp_bot = vp_top + area.height as usize;
+        if match_row >= vp_top && match_row < vp_bot {
+            let screen_row = area.y + (match_row - vp_top) as u16;
+            // Convert byte offsets to char columns for rendering.
+            let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].editor.buffer());
+            let line = hjkl_buffer::rope_line_str(&rope, match_row);
+            let line_no_nl = line.trim_end_matches('\n');
+            let char_start = line_no_nl[..m.byte_start as usize].chars().count();
+            let char_end = line_no_nl[..m.byte_end as usize].chars().count();
+            let text_x = area.x + sign_w + num_gw;
+            let highlight_style = Style::default()
+                .bg(app.theme.ui.search_bg)
+                .fg(app.theme.ui.search_fg)
+                .add_modifier(Modifier::REVERSED);
+            let buf = frame.buffer_mut();
+            for ch_idx in char_start..char_end {
+                let screen_col = text_x + ch_idx as u16;
+                if screen_col >= area.x + area.width {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((screen_col, screen_row)) {
+                    cell.set_style(cell.style().patch(highlight_style));
+                }
+            }
+        }
+    }
+
     // Emit the terminal cursor only for the focused window.
     // extra_gutter_width = sign_w + fold_w (cells left of number column).
     if show_cursor
@@ -1416,6 +1454,29 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         return (
             build_prompt_line(&content, field.vim_mode(), &theme, width),
             Some(cursor_col),
+        );
+    }
+
+    // ── Interactive substitute confirm (:s/pat/rep/c) ──────────────────────
+    // While confirming_substitute is Some, show the per-match prompt instead
+    // of the normal status bar.
+    if let Some(cs) = app.confirming_substitute.as_ref() {
+        let rep = if cs.idx < cs.matches.len() {
+            cs.matches[cs.idx].replacement.as_str()
+        } else {
+            ""
+        };
+        let content = format!("replace with \"{rep}\"? (y/n/a/q/l)");
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.search_bg)
+                    .fg(app.theme.ui.search_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
         );
     }
 

@@ -476,6 +476,15 @@ fn dispatch(
                     // No terminal to clear in nvim-api mode — treat as no-op.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::SubstituteConfirm { matches } => {
+                    // nvim-api mode has no interactive TUI; apply all matches immediately.
+                    let count = matches.len();
+                    if count > 0 {
+                        let accepted = vec![true; count];
+                        hjkl_engine::apply_collected_matches(editor, &matches, &accepted);
+                    }
+                    ok(stdout, msgid, Value::Nil)
+                }
             }
         }
 

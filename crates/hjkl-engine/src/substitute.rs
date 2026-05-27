@@ -8,9 +8,9 @@
 //! - Delimiter is **always `/`**. Alternate delimiters (`s|x|y|`,
 //!   `s#x#y#`) are not supported. The parser returns an error when the
 //!   first character after the keyword is not `/`.
-//! - The `c` (confirm) flag is **parsed but silently ignored**. No
-//!   interactive replacement. See vim's `:help :s_c` for what a full
-//!   implementation looks like.
+//! - The `c` (confirm) flag triggers interactive replacement. Each match
+//!   is presented one-by-one; the user chooses y/n/a/q/l. See
+//!   [`collect_substitute_matches`] and [`apply_collected_matches`].
 //! - The `\v` very-magic mode is not supported. The regex crate uses
 //!   ERE syntax by default. Most ERE patterns work, but vim-specific
 //!   extensions (`\<`, `\>`, `\s`, `\+`) may not. Use POSIX ERE
@@ -51,9 +51,9 @@ pub struct SubstFlags {
     pub ignore_case: bool,
     /// `I` — case-sensitive (overrides editor `ignorecase`).
     pub case_sensitive: bool,
-    /// `c` — confirm mode. **Parsed but ignored in v1.** Behaves as if
-    /// not set; all matches are replaced without prompting. This is a
-    /// known divergence from vim. See vim's `:help :s_c`.
+    /// `c` — confirm mode. When set, [`apply_substitute`] skips all matches
+    /// and the caller must use [`collect_substitute_matches`] +
+    /// [`apply_collected_matches`] for interactive replacement.
     pub confirm: bool,
 }
 
@@ -258,6 +258,204 @@ pub fn apply_substitute<H: crate::types::Host>(
         replacements,
         lines_changed,
     })
+}
+
+/// A single candidate match discovered by [`collect_substitute_matches`].
+///
+/// Positions are 0-based byte offsets within their line. The `replacement`
+/// field already has all capture-group references expanded (e.g. `$1`) to
+/// their literal values so the caller can display it and apply without
+/// running the regex again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubstituteMatch {
+    /// 0-based row index in the buffer.
+    pub row: u32,
+    /// Byte offset of the first byte of the match within that row's text.
+    pub byte_start: u32,
+    /// Byte offset one past the last byte of the match (exclusive).
+    pub byte_end: u32,
+    /// The literal replacement string (captures expanded).
+    pub replacement: String,
+}
+
+/// Collect all candidate matches for a `:s/pat/rep/[gc]` command without
+/// mutating the buffer.
+///
+/// Uses the same pattern-resolution and case-sensitivity logic as
+/// [`apply_substitute`]. The returned vec is in document order (low row +
+/// low byte first). Each entry's `replacement` has capture groups already
+/// expanded so the caller can display it without re-running the regex.
+///
+/// # Errors
+///
+/// Returns an error when pattern resolution fails or the regex is invalid.
+pub fn collect_substitute_matches<H: crate::types::Host>(
+    ed: &crate::Editor<hjkl_buffer::Buffer, H>,
+    cmd: &SubstituteCmd,
+    line_range: std::ops::RangeInclusive<u32>,
+) -> Result<Vec<SubstituteMatch>, SubstError> {
+    // Resolve pattern — same logic as apply_substitute.
+    let pattern_str: String = match &cmd.pattern {
+        Some(p) => p.clone(),
+        None => ed
+            .last_search()
+            .map(str::to_owned)
+            .ok_or_else(|| "no previous regular expression".to_string())?,
+    };
+
+    let effective_pattern = if cmd.flags.case_sensitive {
+        use crate::search::{CaseMode, resolve_case_mode};
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        stripped
+    } else if cmd.flags.ignore_case {
+        use crate::search::{CaseMode, resolve_case_mode};
+        let (stripped, _) = resolve_case_mode(&pattern_str, CaseMode::Sensitive);
+        format!("(?i){stripped}")
+    } else {
+        use crate::search::{CaseMode, resolve_case_mode};
+        let base = CaseMode::from_options(ed.settings().ignore_case, ed.settings().smartcase);
+        let (stripped, mode) = resolve_case_mode(&pattern_str, base);
+        if mode == CaseMode::Insensitive {
+            format!("(?i){stripped}")
+        } else {
+            stripped
+        }
+    };
+
+    let regex = Regex::new(&effective_pattern).map_err(|e| format!("bad pattern: {e}"))?;
+
+    let start = *line_range.start() as usize;
+    let end = *line_range.end() as usize;
+    let rope = crate::types::Query::rope(ed.buffer());
+    let total = rope.len_lines();
+    let clamp_end = end.min(total.saturating_sub(1));
+
+    let mut matches: Vec<SubstituteMatch> = Vec::new();
+
+    if start <= clamp_end {
+        for row in start..=clamp_end {
+            let line = hjkl_buffer::rope_line_str(&rope, row);
+            // Strip trailing newline so byte offsets refer to printable content.
+            let line = line.trim_end_matches('\n');
+
+            if cmd.flags.all {
+                for m in regex.find_iter(line) {
+                    // Expand capture groups into the literal replacement text.
+                    let replacement = regex
+                        .captures(m.as_str())
+                        .map(|caps| {
+                            let mut rep = String::new();
+                            caps.expand(&cmd.replacement, &mut rep);
+                            rep
+                        })
+                        .unwrap_or_else(|| cmd.replacement.clone());
+
+                    matches.push(SubstituteMatch {
+                        row: row as u32,
+                        byte_start: m.start() as u32,
+                        byte_end: m.end() as u32,
+                        replacement,
+                    });
+                }
+            } else {
+                // First match per line only.
+                if let Some(m) = regex.find(line) {
+                    let replacement = regex
+                        .captures(m.as_str())
+                        .map(|caps| {
+                            let mut rep = String::new();
+                            caps.expand(&cmd.replacement, &mut rep);
+                            rep
+                        })
+                        .unwrap_or_else(|| cmd.replacement.clone());
+
+                    matches.push(SubstituteMatch {
+                        row: row as u32,
+                        byte_start: m.start() as u32,
+                        byte_end: m.end() as u32,
+                        replacement,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(matches)
+}
+
+/// Apply a subset of matches collected by [`collect_substitute_matches`].
+///
+/// Applies the matches in REVERSE document order (high row → low row, and
+/// within a row high byte → low byte) so earlier byte offsets remain valid
+/// after each replacement. Only matches for which the corresponding
+/// `accepted` entry is `true` are written; all others are skipped.
+///
+/// Returns the number of replacements actually applied.
+///
+/// # Panics
+///
+/// Panics when `accepted.len() != matches.len()`.
+pub fn apply_collected_matches<H: crate::types::Host>(
+    ed: &mut crate::Editor<hjkl_buffer::Buffer, H>,
+    matches: &[SubstituteMatch],
+    accepted: &[bool],
+) -> usize {
+    assert_eq!(
+        matches.len(),
+        accepted.len(),
+        "apply_collected_matches: accepted.len() must equal matches.len()"
+    );
+
+    // Collect accepted matches and sort reverse — high row first, high
+    // byte_start first within the same row.
+    let mut to_apply: Vec<&SubstituteMatch> = matches
+        .iter()
+        .zip(accepted.iter())
+        .filter_map(|(m, &ok)| if ok { Some(m) } else { None })
+        .collect();
+
+    if to_apply.is_empty() {
+        return 0;
+    }
+
+    to_apply.sort_unstable_by(|a, b| b.row.cmp(&a.row).then(b.byte_start.cmp(&a.byte_start)));
+
+    let rope = crate::types::Query::rope(ed.buffer());
+    let mut lines_vec: Vec<String> = crate::vim::rope_to_lines_vec(&rope);
+    let mut applied = 0usize;
+    let mut last_changed_row: Option<usize> = None;
+
+    for sm in &to_apply {
+        let row = sm.row as usize;
+        if row >= lines_vec.len() {
+            continue;
+        }
+        let line = &lines_vec[row];
+        let bs = sm.byte_start as usize;
+        let be = sm.byte_end as usize;
+        if be > line.len() || bs > be {
+            continue;
+        }
+        // Splice the replacement in.
+        let mut new_line = String::with_capacity(line.len() + sm.replacement.len());
+        new_line.push_str(&line[..bs]);
+        new_line.push_str(&sm.replacement);
+        new_line.push_str(&line[be..]);
+        lines_vec[row] = new_line;
+        applied += 1;
+        last_changed_row = Some(row);
+    }
+
+    if applied > 0 {
+        ed.buffer_mut().replace_all(&lines_vec.join("\n"));
+        if let Some(row) = last_changed_row {
+            ed.buffer_mut()
+                .set_cursor(hjkl_buffer::Position::new(row, 0));
+        }
+        ed.mark_content_dirty();
+    }
+
+    applied
 }
 
 /// Split `s` on unescaped `/`. Each `\/` in `s` becomes a literal `/`
@@ -657,5 +855,107 @@ mod tests {
         let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
         assert_eq!(out.replacements, 1);
         assert_eq!(buf_line(&e, 0), "bar");
+    }
+
+    // ── collect_substitute_matches tests ────────────────────────────────────
+
+    #[test]
+    fn collect_substitute_matches_finds_all_occurrences() {
+        let e = editor_with("foo bar foo");
+        let cmd = parse_substitute("/foo/baz/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        assert_eq!(matches.len(), 2, "expected 2 matches for /g flag");
+        assert_eq!(matches[0].byte_start, 0);
+        assert_eq!(matches[0].byte_end, 3);
+        assert_eq!(matches[1].byte_start, 8);
+        assert_eq!(matches[1].byte_end, 11);
+        assert_eq!(matches[0].replacement, "baz");
+        assert_eq!(matches[1].replacement, "baz");
+    }
+
+    #[test]
+    fn collect_substitute_matches_respects_g_flag() {
+        // Without /g only the first match per line.
+        let e = editor_with("foo foo foo");
+        let cmd = parse_substitute("/foo/baz/").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        assert_eq!(matches.len(), 1, "expected 1 match without /g");
+        assert_eq!(matches[0].byte_start, 0);
+    }
+
+    #[test]
+    fn collect_substitute_matches_respects_range() {
+        let e = editor_with("foo\nfoo\nfoo\nfoo\nfoo");
+        let cmd = parse_substitute("/foo/bar/g").unwrap();
+        // Only rows 1 and 2 (0-based) — should return 2 matches, not 5.
+        let matches = collect_substitute_matches(&e, &cmd, 1..=2).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].row, 1);
+        assert_eq!(matches[1].row, 2);
+    }
+
+    #[test]
+    fn collect_substitute_matches_expands_template() {
+        let e = editor_with("hello world");
+        // /(\\w+)/<<\\1>>/ — the replacement template has a capture group.
+        let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].replacement, "<<hello>>");
+        assert_eq!(matches[1].replacement, "<<world>>");
+    }
+
+    // ── apply_collected_matches tests ───────────────────────────────────────
+
+    #[test]
+    fn apply_collected_matches_reverse_order_preserves_offsets() {
+        // Three matches at byte offsets 0..3, 4..7, 8..11.
+        // Applying in forward order would shift byte offsets; reverse must
+        // keep the final buffer consistent.
+        let mut e = editor_with("foo bar baz");
+        let cmd = parse_substitute("/(foo|bar|baz)/X/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        assert_eq!(matches.len(), 3);
+        let accepted = vec![true; 3];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 3);
+        assert_eq!(buf_line(&e, 0), "X X X");
+    }
+
+    #[test]
+    fn apply_collected_matches_subset_only() {
+        // 3 matches; accept only first and third.
+        let mut e = editor_with("foo bar foo");
+        let cmd = parse_substitute("/foo/ZZZ/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        assert_eq!(matches.len(), 2, "expected 2 foo matches");
+        // Accept only the first (index 0), skip the second (index 1).
+        let accepted = vec![true, false];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 1);
+        // First "foo" replaced; second "foo" untouched.
+        assert_eq!(buf_line(&e, 0), "ZZZ bar foo");
+    }
+
+    #[test]
+    fn apply_collected_matches_zero_accepted() {
+        let mut e = editor_with("foo bar foo");
+        let cmd = parse_substitute("/foo/ZZZ/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        let accepted = vec![false; matches.len()];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 0);
+        assert_eq!(buf_line(&e, 0), "foo bar foo");
+    }
+
+    #[test]
+    fn apply_collected_matches_expands_template() {
+        let mut e = editor_with("hello world");
+        let cmd = parse_substitute("/(\\w+)/<<\\1>>/g").unwrap();
+        let matches = collect_substitute_matches(&e, &cmd, 0..=0).unwrap();
+        let accepted = vec![true; matches.len()];
+        let applied = apply_collected_matches(&mut e, &matches, &accepted);
+        assert_eq!(applied, 2);
+        assert_eq!(buf_line(&e, 0), "<<hello>> <<world>>");
     }
 }

@@ -202,6 +202,15 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                 ExEffect::Redraw { .. } => {
                     // No terminal to clear in headless mode — no-op.
                 }
+
+                ExEffect::SubstituteConfirm { matches } => {
+                    // Headless mode has no interactive prompt; apply all matches.
+                    let count = matches.len();
+                    if count > 0 {
+                        let accepted = vec![true; count];
+                        hjkl_engine::apply_collected_matches(&mut editor, &matches, &accepted);
+                    }
+                }
             }
         }
 

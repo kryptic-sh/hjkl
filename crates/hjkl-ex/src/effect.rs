@@ -5,6 +5,15 @@
 /// the host loop can act on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExEffect {
+    /// The `:s/pat/rep/c` (or `/gc`) flag triggered interactive confirm-mode.
+    ///
+    /// The caller should enter a per-match prompt loop: display each match,
+    /// ask `y/n/a/q/l`, then apply the accepted subset via
+    /// [`hjkl_engine::apply_collected_matches`].
+    SubstituteConfirm {
+        /// All candidate matches in document order (low row first).
+        matches: Vec<hjkl_engine::SubstituteMatch>,
+    },
     /// Nothing happened (empty input or no-op effect).
     None,
     /// Save the current buffer to the current filename.
