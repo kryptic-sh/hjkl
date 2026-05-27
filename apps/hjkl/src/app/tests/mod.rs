@@ -581,6 +581,7 @@ pub mod marks_registers;
 pub mod misc;
 pub mod mouse;
 pub mod pickers;
+pub mod pre_save_hooks;
 pub mod prompt;
 pub mod render_recording;
 pub mod splits_windows;

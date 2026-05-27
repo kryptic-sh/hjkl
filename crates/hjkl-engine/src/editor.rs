@@ -887,6 +887,10 @@ pub struct Settings {
     pub colorizer: bool,
     /// Filetype allowlist for the colorizer. Default CSS/template languages.
     pub colorizer_filetypes: Vec<String>,
+    /// Run hjkl-mangler formatter before each `:w` save. Default `false`.
+    pub format_on_save: bool,
+    /// Strip trailing whitespace before each `:w` save. Default `false`.
+    pub trim_trailing_whitespace: bool,
 }
 
 impl Default for Settings {
@@ -942,6 +946,8 @@ impl Default for Settings {
                 "lua".to_string(),
                 "vim".to_string(),
             ],
+            format_on_save: false,
+            trim_trailing_whitespace: false,
         }
     }
 }
@@ -997,6 +1003,8 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         indent_guide_char: o.indent_guide_char,
         colorizer: o.colorizer,
         colorizer_filetypes: o.colorizer_filetypes.clone(),
+        format_on_save: o.format_on_save,
+        trim_trailing_whitespace: o.trim_trailing_whitespace,
     }
 }
 
@@ -2441,6 +2449,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.listchars = opts.listchars.clone();
         self.settings.colorizer = opts.colorizer;
         self.settings.colorizer_filetypes = opts.colorizer_filetypes.clone();
+        self.settings.format_on_save = opts.format_on_save;
+        self.settings.trim_trailing_whitespace = opts.trim_trailing_whitespace;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]

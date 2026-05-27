@@ -363,6 +363,16 @@ pub struct Options {
     /// Comma-separated in `:set colorizer_filetypes=css,scss,toml`.
     /// Default: `["css","scss","sass","less","html","vue","svelte","tailwindcss","toml","lua","vim"]`.
     pub colorizer_filetypes: Vec<String>,
+    /// Run the registered hjkl-mangler formatter for the buffer's path before
+    /// each `:w` save. On formatter error the save is aborted. When no formatter
+    /// is registered for the file extension, or the tool is not installed, the
+    /// save proceeds without formatting (warn-and-fall-through for missing tool).
+    /// hjkl-specific. Alias `fos`. Default `false`.
+    pub format_on_save: bool,
+    /// Strip trailing `[ \t]` from every line in the buffer before each `:w`
+    /// save. Applied in-place so post-save `:e` reflects the trimmed content.
+    /// hjkl-specific. Alias `tts`. Default `false`.
+    pub trim_trailing_whitespace: bool,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -470,6 +480,8 @@ impl Default for Options {
                 "lua".to_string(),
                 "vim".to_string(),
             ],
+            format_on_save: false,
+            trim_trailing_whitespace: false,
         }
     }
 }
@@ -735,6 +747,8 @@ impl Options {
                 self.indent_guide_char = ch;
                 Ok(())
             }
+            "format_on_save" | "fos" => set_bool!(format_on_save),
+            "trim_trailing_whitespace" | "tts" => set_bool!(trim_trailing_whitespace),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -791,6 +805,8 @@ impl Options {
             "colorizer_filetypes" | "clzft" => {
                 OptionValue::String(self.colorizer_filetypes.join(","))
             }
+            "format_on_save" | "fos" => OptionValue::Bool(self.format_on_save),
+            "trim_trailing_whitespace" | "tts" => OptionValue::Bool(self.trim_trailing_whitespace),
             _ => return None,
         })
     }
@@ -2059,6 +2075,60 @@ mod tests {
         assert_eq!(
             o.get_by_name("clzft"),
             Some(OptionValue::String("css,scss,toml".into()))
+        );
+    }
+
+    // ── format_on_save / trim_trailing_whitespace ─────────────────────────────
+
+    #[test]
+    fn format_on_save_default_false() {
+        let o = Options::default();
+        assert!(!o.format_on_save, "format_on_save must default to false");
+    }
+
+    #[test]
+    fn trim_trailing_whitespace_default_false() {
+        let o = Options::default();
+        assert!(
+            !o.trim_trailing_whitespace,
+            "trim_trailing_whitespace must default to false"
+        );
+    }
+
+    #[test]
+    fn options_fos_alias_sets_format_on_save() {
+        let mut o = Options::default();
+        o.set_by_name("fos", OptionValue::Bool(true)).unwrap();
+        assert!(o.format_on_save, "fos alias must set format_on_save");
+        assert_eq!(
+            o.get_by_name("fos"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(fos) must reflect the new value"
+        );
+        assert_eq!(
+            o.get_by_name("format_on_save"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(format_on_save) must also reflect the new value"
+        );
+    }
+
+    #[test]
+    fn options_tts_alias_sets_trim_trailing_whitespace() {
+        let mut o = Options::default();
+        o.set_by_name("tts", OptionValue::Bool(true)).unwrap();
+        assert!(
+            o.trim_trailing_whitespace,
+            "tts alias must set trim_trailing_whitespace"
+        );
+        assert_eq!(
+            o.get_by_name("tts"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(tts) must reflect the new value"
+        );
+        assert_eq!(
+            o.get_by_name("trim_trailing_whitespace"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(trim_trailing_whitespace) must also reflect the new value"
         );
     }
 }

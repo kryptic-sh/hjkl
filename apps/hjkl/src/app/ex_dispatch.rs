@@ -13,6 +13,41 @@ use crate::host::TuiHost;
 
 use super::{App, DiskState, ex_host_cmds};
 
+/// Strip trailing `[ \t]` from every line in the buffer in-place.
+///
+/// Used by the `trim_trailing_whitespace` pre-save hook in [`App::save_slot`].
+/// Walks every line of the buffer; if any line has trailing whitespace the
+/// whole-buffer content is replaced via `set_content_undoable` so the
+/// operation is a single undoable step and the syntax / LSP pipelines see a
+/// clean `ContentReset` signal. When no line has trailing whitespace this is a
+/// no-op (no allocation, no dirty-gen bump).
+fn trim_trailing_whitespace_in_place<H: hjkl_engine::types::Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+) {
+    use hjkl_engine::Query;
+    let n = editor.buffer().line_count() as usize;
+    let mut changed = false;
+    let lines: Vec<String> = (0..n)
+        .map(|r| {
+            let line = editor.buffer().line(r as u32);
+            let trimmed = line.trim_end_matches([' ', '\t']);
+            if trimmed.len() != line.len() {
+                changed = true;
+                trimmed.to_string()
+            } else {
+                line
+            }
+        })
+        .collect();
+    if !changed {
+        return;
+    }
+    // Preserve line count — don't collapse trailing blank lines. The per-line
+    // trim above already stripped the whitespace; just rejoin and replace.
+    let new_content = lines.join("\n");
+    editor.set_content_undoable(&new_content);
+}
+
 impl App {
     /// Execute an ex command string (without the leading `:`).
     pub(crate) fn dispatch_ex(&mut self, cmd: &str) {
@@ -835,6 +870,48 @@ impl App {
                 false
             }
             Some(p) => {
+                // ── Pre-save hooks ──────────────────────────────────────────
+                //
+                // trim_trailing_whitespace runs first so that if format_on_save
+                // is also on, the formatter sees already-trimmed input (formatters
+                // like rustfmt/prettier normalise trailing whitespace themselves,
+                // but trimming first keeps the two hooks independent and correct
+                // on their own).
+                //
+                // Note: `:w!` is not distinguished from `:w` at the ExEffect
+                // level in v1 — both hooks always fire when their option is true.
+                {
+                    let s = self.slots[idx].editor.settings().clone();
+                    if s.trim_trailing_whitespace {
+                        trim_trailing_whitespace_in_place(&mut self.slots[idx].editor);
+                    }
+                    if s.format_on_save
+                        && let Some(formatter) = hjkl_mangler::formatter_for_path(&p)
+                    {
+                        if !hjkl_mangler::is_tool_installed(formatter.tool_name()) {
+                            self.bus.warn(format!(
+                                "format-on-save: {} not installed, skipping",
+                                formatter.tool_name()
+                            ));
+                        } else {
+                            let content = self.slots[idx].editor.buffer().content_joined();
+                            let project_root = p.parent().unwrap_or(std::path::Path::new("."));
+                            match formatter.format(&content, project_root, None) {
+                                Ok(formatted) => {
+                                    self.slots[idx].editor.set_content_undoable(&formatted);
+                                }
+                                Err(e) => {
+                                    self.bus.error(format!("format-on-save error: {e}"));
+                                    return false;
+                                }
+                            }
+                        }
+                        // No formatter registered for this extension → silent
+                        // fall-through (save proceeds unformatted).
+                    }
+                }
+                // ── End pre-save hooks ──────────────────────────────────────
+
                 // Reuse the per-dirty_gen Arc<String> from content_joined() so
                 // saves share the same allocation that LSP / git / syntax / dirty
                 // signature paths already paid for. Was Buffer::lines().join()

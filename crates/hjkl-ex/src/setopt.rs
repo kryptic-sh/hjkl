@@ -89,6 +89,10 @@ pub fn all_setting_names() -> Vec<String> {
         "ig".into(),
         "indent_guide_char".into(),
         "igc".into(),
+        "format_on_save".into(),
+        "fos".into(),
+        "trim_trailing_whitespace".into(),
+        "tts".into(),
     ]
 }
 
@@ -112,7 +116,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -148,6 +152,12 @@ pub(crate) fn apply_set<H: Host>(
             s.listchars.to_canonical_string(),
             if s.indent_guides { "on" } else { "off" },
             s.indent_guide_char,
+            if s.format_on_save { "on" } else { "off" },
+            if s.trim_trailing_whitespace {
+                "on"
+            } else {
+                "off"
+            },
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -225,6 +235,8 @@ fn query_option_value<H: Host>(
         "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
         "indent_guides" | "ig" => on_off(s.indent_guides),
         "indent_guide_char" | "igc" => s.indent_guide_char.to_string(),
+        "format_on_save" | "fos" => on_off(s.format_on_save),
+        "trim_trailing_whitespace" | "tts" => on_off(s.trim_trailing_whitespace),
         _ => return None,
     })
 }
@@ -436,6 +448,10 @@ fn apply_set_token<H: Host>(
         "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
         "list" => editor.settings_mut().list = value,
         "indent_guides" | "ig" => editor.settings_mut().indent_guides = value,
+        "format_on_save" | "fos" => editor.settings_mut().format_on_save = value,
+        "trim_trailing_whitespace" | "tts" => {
+            editor.settings_mut().trim_trailing_whitespace = value
+        }
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }
