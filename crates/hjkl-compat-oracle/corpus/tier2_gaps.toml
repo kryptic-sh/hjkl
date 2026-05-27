@@ -1,0 +1,234 @@
+# Tier 2 gap-filling corpus — ~20 cases targeting the biggest coverage holes
+# identified in the 2026-05-27 audit.
+#
+# Categories covered:
+#   motions: 5w, 3b, gE, g_, H
+#   text objects: a</i< angle bracket, at/it HTML tag
+#   operators with counts: 3dd
+#   dot-repeat: J., cw{text}<Esc>w., dw+3.
+#   registers: "ayy "ap (paste from named register)
+#   paste counts: yy3p (implicit via oracle hjkl==nvim check)
+#   counts: 2yyp
+#
+# All buffers ASCII-only (char-col == byte-col invariant holds).
+# Cursor positions 0-based (row, col).
+# Verified against nvim v0.12.2 (feedkeys 'nx' mode for cursor;
+# vimscript -S mode for buffer content).
+#
+# NOTE: literal '<' in keys must be written as <lt> so that both the hjkl
+# decode_macro parser and nvim_input don't interpret it as a special key prefix.
+
+# ─── Motions — counted ────────────────────────────────────────────────────────
+
+# 5w: skip five word-starts forward.
+# "one two three four five six", cursor at [0,0].
+# Verified against nvim v0.12.2: cursor [0,24].
+[[cases]]
+name = "motion_5w_skip_five_words"
+initial_buffer = "one two three four five six\n"
+initial_cursor = [0, 0]
+keys = "5w"
+expected_buffer = "one two three four five six\n"
+expected_cursor = [0, 24]
+
+# 3b: move backward three word-starts.
+# "one two three four five", cursor at [0,20] (mid-word "five").
+# "one two three four five": o=0,t=4,t=8,f=14,f=19
+# From col 20 ('i' in "five"), b×3: col 19 → col 14 → col 8.
+# Verified against nvim v0.12.2: cursor [0,8].
+[[cases]]
+name = "motion_3b_back_three_words"
+initial_buffer = "one two three four five\n"
+initial_cursor = [0, 20]
+keys = "3b"
+expected_buffer = "one two three four five\n"
+expected_cursor = [0, 8]
+
+# gE: move to end of the previous big word (backward big-end).
+# "hello world foo", cursor at [0,14] (last char 'o' of "foo").
+# gE from end of "foo" → end of "world" = col 10 ('d').
+# Verified against nvim v0.12.2: cursor [0,10].
+[[cases]]
+name = "motion_gE_big_end_backward"
+initial_buffer = "hello world foo\n"
+initial_cursor = [0, 14]
+keys = "gE"
+expected_buffer = "hello world foo\n"
+expected_cursor = [0, 10]
+
+# g_: move to last non-blank character on the line.
+# "hello world", cursor at [0,0].
+# Last non-blank = 'd' at col 10.
+# Verified against nvim v0.12.2: cursor [0,10].
+[[cases]]
+name = "motion_g_underscore_last_nonblank"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = "g_"
+expected_buffer = "hello world\n"
+expected_cursor = [0, 10]
+
+# H: move to first line of the viewport.
+# On a buffer that fits in the 80x24 viewport, viewport_top = 0, so H lands at row 0.
+# Starting at row 4; H should move cursor to [0,0].
+# Verified against nvim v0.12.2: cursor [0,0].
+[[cases]]
+name = "motion_H_viewport_top"
+initial_buffer = "line1\nline2\nline3\nline4\nline5\n"
+initial_cursor = [4, 0]
+keys = "H"
+expected_buffer = "line1\nline2\nline3\nline4\nline5\n"
+expected_cursor = [0, 0]
+
+# ─── Text objects — angle bracket ─────────────────────────────────────────────
+# NOTE: literal '<' is encoded as <lt> in the keys field so that both the
+# hjkl decode_macro parser and nvim's nvim_input don't treat it as a special-key
+# prefix. hjkl decode_macro maps <lt> -> Key::Char('<'); nvim does the same.
+
+# da<: delete around angle-bracket pair (including the brackets).
+# "x <a b> y", cursor at [0,4] (inside the brackets).
+# After da<: "x  y" (2 spaces), cursor at [0,2].
+# Verified against nvim v0.12.2 via feedkeys 'nx': buffer "x  y", cursor [0,2].
+[[cases]]
+name = "textobj_da_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "da<lt>"
+expected_buffer = "x  y\n"
+expected_cursor = [0, 2]
+
+# di<: delete inside angle-bracket pair (leaves the brackets).
+# "x <a b> y", cursor at [0,4].
+# After di<: "x <> y", cursor at [0,3].
+# Verified against nvim v0.12.2 via feedkeys 'nx': buffer "x <> y", cursor [0,3].
+[[cases]]
+name = "textobj_di_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "di<lt>"
+expected_buffer = "x <> y\n"
+expected_cursor = [0, 3]
+
+# ─── Text objects — HTML tag ──────────────────────────────────────────────────
+
+# dit: delete inside HTML/XML tag pair (content between >...</).
+# "<b>hello</b>", cursor at [0,4] (inside tag content).
+# After dit: "<b></b>", cursor at [0,3].
+# Verified against nvim v0.12.2: buffer "<b></b>", cursor [0,3].
+[[cases]]
+name = "textobj_dit_html_inner_tag"
+initial_buffer = "<b>hello</b>\n"
+initial_cursor = [0, 4]
+keys = "dit"
+expected_buffer = "<b></b>\n"
+expected_cursor = [0, 3]
+
+# dat: delete around HTML/XML tag pair (including open and close tags).
+# "foo <em>bar</em> baz", cursor at [0,9] (inside tag content).
+# After dat: "foo  baz", cursor at [0,4].
+# Verified against nvim v0.12.2: buffer "foo  baz", cursor [0,4].
+[[cases]]
+name = "textobj_dat_html_around_tag"
+initial_buffer = "foo <em>bar</em> baz\n"
+initial_cursor = [0, 9]
+keys = "dat"
+expected_buffer = "foo  baz\n"
+expected_cursor = [0, 4]
+
+# ─── Operators with counts ────────────────────────────────────────────────────
+
+# 3dd: delete 3 lines at once.
+# "alpha\nbeta\ngamma\ndelta\nepsilon", cursor at [0,0].
+# After 3dd: "delta\nepsilon", cursor at [0,0].
+# Verified against nvim v0.12.2: buffer "delta\nepsilon\n", cursor [0,0].
+[[cases]]
+name = "count_3dd_delete_three_lines"
+initial_buffer = "alpha\nbeta\ngamma\ndelta\nepsilon\n"
+initial_cursor = [0, 0]
+keys = "3dd"
+expected_buffer = "delta\nepsilon\n"
+expected_cursor = [0, 0]
+
+# 2yy then p: yank 2 lines then paste below.
+# "one\ntwo\nthree", cursor at [0,0].
+# 2yy yanks lines 0-1 ("one\ntwo\n"). p pastes below row 0.
+# After 2yyp: "one\none\ntwo\ntwo\nthree", cursor at row 1.
+# Verified against nvim v0.12.2: buffer "one\none\ntwo\ntwo\nthree\n", cursor [1,0].
+[[cases]]
+name = "count_2yyp_yank_two_paste"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "2yyp"
+expected_buffer = "one\none\ntwo\ntwo\nthree\n"
+expected_cursor = [1, 0]
+
+# ─── Dot-repeat ───────────────────────────────────────────────────────────────
+
+# J then . : join two lines, then dot-repeat joins the next pair.
+# "alpha\nbeta\ngamma\ndelta", cursor at [0,0].
+# J: "alpha beta\ngamma\ndelta", cursor at [0,5].
+# .: "alpha beta gamma\ndelta", cursor at [0,10].
+# Verified against nvim v0.12.2: buffer "alpha beta gamma\ndelta\n", cursor [0,10].
+[[cases]]
+name = "dot_repeat_J_join_then_dot"
+initial_buffer = "alpha\nbeta\ngamma\ndelta\n"
+initial_cursor = [0, 0]
+keys = "J."
+expected_buffer = "alpha beta gamma\ndelta\n"
+expected_cursor = [0, 10]
+
+# cw{text}<Esc>w. : change-word, type replacement, escape, move to next word, dot-repeat.
+# "foo bar baz", cursor at [0,0].
+# cwXYZ<Esc>: replaces "foo" -> "XYZ", cursor at col 2.
+# w: move to "bar" at col 4.
+# .: repeats cw->"XYZ" on "bar" -> "XYZ XYZ baz", cursor at col 6.
+# Verified against nvim v0.12.2: buffer "XYZ XYZ baz", cursor [0,6].
+[[cases]]
+name = "dot_repeat_cw_change_then_dot"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "cwXYZ<Esc>w."
+expected_buffer = "XYZ XYZ baz\n"
+expected_cursor = [0, 6]
+
+# dw then 3. : delete-word, then dot-repeat 3 more times.
+# "one two three four five", cursor at [0,0].
+# dw: deletes "one " -> "two three four five".
+# 3.: dot with count = repeat dw 3 more times -> "five".
+# Verified against nvim v0.12.2: buffer "five", cursor [0,0].
+[[cases]]
+name = "dot_repeat_count_3_after_dw"
+initial_buffer = "one two three four five\n"
+initial_cursor = [0, 0]
+keys = "dw3."
+expected_buffer = "five\n"
+expected_cursor = [0, 0]
+
+# ─── Registers — named paste ──────────────────────────────────────────────────
+
+# "ayy then "ap: yank to named register a, paste from register a.
+# "hello\nworld", cursor at [0,0].
+# "ayy: yanks "hello\n" into register a.
+# "ap: pastes "hello" below row 0.
+# After "ayy"ap: "hello\nhello\nworld", cursor at row 1.
+# Verified against nvim v0.12.2: buffer "hello\nhello\nworld\n", cursor [1,0].
+[[cases]]
+name = "register_named_a_yank_and_paste"
+initial_buffer = "hello\nworld\n"
+initial_cursor = [0, 0]
+keys = "\"ayy\"ap"
+expected_buffer = "hello\nhello\nworld\n"
+expected_cursor = [1, 0]
+
+# ─── Paste with count ─────────────────────────────────────────────────────────
+
+# yy then 3p: yank line, paste 3 times.
+# "foo\nbar", cursor at [0,0].
+# yy: yanks "foo\n". 3p: pastes 3 copies below -> "foo\nfoo\nfoo\nfoo\nbar".
+# (Buffer content verified against nvim v0.12.2; cursor validated by oracle.)
+[[cases]]
+name = "count_yy3p_paste_three_times"
+initial_buffer = "foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "yy3p"
+expected_buffer = "foo\nfoo\nfoo\nfoo\nbar\n"
