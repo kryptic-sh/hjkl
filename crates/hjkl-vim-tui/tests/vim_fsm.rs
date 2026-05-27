@@ -1576,7 +1576,10 @@ fn big_x_deletes_char_before_cursor() {
 
 #[test]
 fn s_substitutes_char_and_enters_insert() {
+    // Default is motion_sneak=true (#196) so `s` enters sneak. Disable
+    // it for this test to exercise vim's stock substitute-char behaviour.
     let mut e = editor_with("hello");
+    e.settings_mut().motion_sneak = false;
     run_keys(&mut e, "sX<Esc>");
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "Xello");
 }
