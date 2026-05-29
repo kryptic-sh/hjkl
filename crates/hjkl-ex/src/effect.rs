@@ -72,4 +72,9 @@ pub enum ExEffect {
     /// `:preserve` — force-write the swap file for the active buffer
     /// immediately, regardless of the `updatetime` idle timer.
     Preserve,
+    /// `:recover [file]` — explicitly trigger swap-file recovery.
+    ///
+    /// An empty `path` means recover the current buffer's swap.
+    /// A non-empty `path` means open that file and force recovery on it.
+    Recover(String),
 }

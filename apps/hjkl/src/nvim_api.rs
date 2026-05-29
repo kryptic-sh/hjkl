@@ -480,6 +480,10 @@ fn dispatch(
                     // No swap files in nvim-api mode — no-op.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::Recover(_) => {
+                    // No swap recovery in nvim-api mode — no-op.
+                    ok(stdout, msgid, Value::Nil)
+                }
                 ExEffect::SubstituteConfirm { matches } => {
                     // nvim-api mode has no interactive TUI; apply all matches immediately.
                     let count = matches.len();

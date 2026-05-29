@@ -503,6 +503,9 @@ impl App {
                 let idx = self.focused_slot_idx();
                 self.write_swap_for_slot(idx);
             }
+            ExEffect::Recover(path) => {
+                self.do_recover(&path);
+            }
             ExEffect::SubstituteConfirm { matches } => {
                 if matches.is_empty() {
                     self.bus.warn("Pattern not found");
@@ -1061,6 +1064,7 @@ impl App {
             file_mtime_unix_ms,
             write_time_unix_ms: swap::now_unix_ms(),
             cursor: (cursor_row as u32, cursor_col as u32),
+            writer_pid: std::process::id(),
         };
 
         let rope = self.slots[idx].editor.buffer().rope().clone();
@@ -1071,13 +1075,134 @@ impl App {
         self.slots[idx].last_swap_dirty_gen = Some(current_gen);
     }
 
+    /// `:recover [file]` — explicit swap-file recovery.
+    ///
+    /// Empty arg → force recovery on the current buffer's swap (bypasses the
+    /// mtime-newer gate).
+    /// Non-empty arg → open/switch to that file via `do_edit`, then force
+    /// recovery on the resulting slot.
+    /// No swap found → reports an info message to the user.
+    pub(crate) fn do_recover(&mut self, path: &str) {
+        use hjkl_app::swap;
+
+        if path.is_empty() {
+            // Recover the current buffer.
+            let slot_idx = self.focused_slot_idx();
+
+            // Guard: must have a filename and a swap path.
+            let swap_path = match self.slots[slot_idx].swap_path.as_ref() {
+                Some(p) => p.clone(),
+                None => {
+                    let name = self
+                        .active()
+                        .filename
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "[No Name]".into());
+                    self.bus.info(format!("No swap file found for {name}"));
+                    return;
+                }
+            };
+            if !swap_path.exists() {
+                let name = self
+                    .active()
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "[No Name]".into());
+                self.bus.info(format!("No swap file found for {name}"));
+                return;
+            }
+
+            // Try to read the swap — if unreadable, treat as no-swap.
+            if let Err(e) = swap::read_swap(&swap_path) {
+                tracing::debug!(%e, ":recover failed to read swap");
+                let name = self
+                    .active()
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "[No Name]".into());
+                self.bus.info(format!("No swap file found for {name}"));
+                return;
+            }
+
+            // Force recovery (skip stale-mtime gate).
+            let pending = self.force_recovery_on_open(slot_idx);
+            if !pending {
+                // force_recovery_on_open only returns false when the swap is
+                // absent or unreadable — covered above; shouldn't reach here.
+                let name = self
+                    .active()
+                    .filename
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "[No Name]".into());
+                self.bus.info(format!("No swap file found for {name}"));
+            }
+        } else {
+            // Open/switch to the specified file, then force recovery on it.
+            self.do_edit(path, false);
+            // After do_edit the focused slot is the newly opened (or switched-to)
+            // slot. Force recovery regardless of mtime.
+            let slot_idx = self.focused_slot_idx();
+            let swap_path_exists = self.slots[slot_idx]
+                .swap_path
+                .as_ref()
+                .map(|p| p.exists())
+                .unwrap_or(false);
+            if !swap_path_exists {
+                self.bus.info(format!("No swap file found for {path}"));
+                return;
+            }
+            let pending = self.force_recovery_on_open(slot_idx);
+            if !pending {
+                self.bus.info(format!("No swap file found for {path}"));
+            }
+        }
+    }
+
+    /// Remove a freshly-created slot (by index) on open-refusal or abort, then
+    /// fix all window pointers so no window references the removed index.
+    ///
+    /// Mirrors the logic in `handle_recovery_key`'s `q` branch.  Only operates
+    /// when there is more than one slot (we never drop the last slot).
+    pub(crate) fn remove_slot_on_refuse(&mut self, slot_idx: usize) {
+        if self.slots.len() <= 1 {
+            return;
+        }
+        let removed = self.slots.remove(slot_idx);
+        self.syntax.forget(removed.buffer_id);
+        let slot_count = self.slots.len();
+        for win in self.windows.iter_mut().flatten() {
+            if win.slot >= slot_idx && win.slot > 0 {
+                win.slot -= 1;
+            }
+            win.slot = win.slot.min(slot_count.saturating_sub(1));
+        }
+    }
+
     /// Check whether opening `slot_idx` (which has just been loaded) requires
     /// a recovery prompt.  If a swap file newer than the on-disk content exists,
     /// sets `self.pending_recovery` and returns `true` (caller should not show
     /// normal "N lines" message).  Returns `false` when no recovery is needed.
     ///
     /// Stale swaps (older than the on-disk file) are deleted silently.
+    ///
+    /// When `force` is `true` the stale-delete branch is skipped — the user
+    /// explicitly asked for recovery (`:recover`) regardless of mtime.
     pub(crate) fn check_recovery_on_open(&mut self, slot_idx: usize) -> bool {
+        self.check_recovery_on_open_inner(slot_idx, false)
+    }
+
+    /// Force-recovery variant of [`check_recovery_on_open`]: bypasses the
+    /// mtime-newer gate so the recovery prompt appears even when the on-disk
+    /// file looks newer than the swap (used by `:recover`).
+    pub(crate) fn force_recovery_on_open(&mut self, slot_idx: usize) -> bool {
+        self.check_recovery_on_open_inner(slot_idx, true)
+    }
+
+    fn check_recovery_on_open_inner(&mut self, slot_idx: usize, force: bool) -> bool {
         use hjkl_app::swap;
 
         let filename = match self.slots[slot_idx].filename.as_ref() {
@@ -1098,6 +1223,21 @@ impl App {
                 return false;
             }
         };
+
+        // PID-lock check: if another LIVE process wrote this swap, refuse the open.
+        let our_pid = std::process::id();
+        if header.writer_pid != our_pid && swap::pid_is_alive(header.writer_pid) {
+            let name = filename.display().to_string();
+            self.bus.error(format!(
+                "E325: \"{name}\" is already open in another hjkl (pid {})",
+                header.writer_pid
+            ));
+            // Remove the slot that was freshly created by open_new_slot so we
+            // don't leave a half-open buffer behind.
+            self.remove_slot_on_refuse(slot_idx);
+            return false;
+        }
+
         // Determine file mtime.
         let file_mtime_ms = std::fs::metadata(&filename)
             .ok()
@@ -1108,12 +1248,12 @@ impl App {
                     .map(|d| d.as_millis() as u64)
             })
             .unwrap_or(0);
-        if header.write_time_unix_ms <= file_mtime_ms {
+        if !force && header.write_time_unix_ms <= file_mtime_ms {
             // Swap is stale (on-disk is newer). Delete silently.
             let _ = swap::remove_swap(&swap_path);
             return false;
         }
-        // Swap is newer than disk → prompt for recovery.
+        // Swap is newer than disk (or forced) → prompt for recovery.
         let written_ago = format_swap_age(header.write_time_unix_ms);
         self.pending_recovery = Some(super::PendingRecovery {
             file_path: filename,

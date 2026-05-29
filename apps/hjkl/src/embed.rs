@@ -197,6 +197,10 @@ fn dispatch(
                     // No swap files in embed mode — no-op.
                     success(id, Value::Null)
                 }
+                ExEffect::Recover(_) => {
+                    // No swap recovery in embed mode — no-op.
+                    success(id, Value::Null)
+                }
                 ExEffect::SubstituteConfirm { matches } => {
                     // Embed mode has no interactive TUI; apply all matches immediately.
                     let count = matches.len();

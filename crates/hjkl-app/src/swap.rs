@@ -9,9 +9,10 @@
 //! - then the raw UTF-8 body (rope chunks streamed directly)
 //!
 //! TODOs deferred from issue #185:
-//! - TODO(#185): PID-lock file for multi-instance detection
-//! - TODO(#185): `:recover [file]` explicit recovery command
 //! - TODO(#185): scratch/never-saved-buffer swaps
+
+#[cfg(unix)]
+use libc;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -43,11 +44,19 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 ///
 /// Serialized with `postcard` (length-prefixed by a `u32` LE).  The rest of
 /// the file is the raw UTF-8 buffer body.
+///
+/// **Version history**
+/// - v1: original fields (no `writer_pid`)
+/// - v2: adds `writer_pid` for PID-lock multi-instance protection
+///
+/// postcard is not self-describing, so v1 bytes deserialize as `Err` when
+/// read with a v2 schema.  Callers treat a read error as "no usable swap"
+/// (stale / corrupt / wrong version); see [`read_swap`] doc.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SwapHeader {
     /// Magic identifier — always `b"HSWP"`.
     pub magic: [u8; 4],
-    /// Format version.  Currently `1`.
+    /// Format version.  Currently `2`.
     pub version: u16,
     /// Canonicalized filesystem path of the edited file.
     pub canonical_path: String,
@@ -58,13 +67,17 @@ pub struct SwapHeader {
     pub write_time_unix_ms: u64,
     /// Cursor position `(row, col)` — 0-based.
     pub cursor: (u32, u32),
+    /// PID of the process that last wrote this swap.  Used for multi-instance
+    /// protection: if this PID is still alive and is not the current process,
+    /// the file is locked by another hjkl instance.
+    pub writer_pid: u32,
 }
 
 impl SwapHeader {
     /// Magic bytes for the swap format.
     pub const MAGIC: [u8; 4] = *b"HSWP";
     /// Current format version.
-    pub const VERSION: u16 = 1;
+    pub const VERSION: u16 = 2;
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────
@@ -128,6 +141,10 @@ pub fn write_swap(path: &Path, header: &SwapHeader, rope: &Rope) -> std::io::Res
 /// Read a swap file.  Returns `(header, body_string)`.
 ///
 /// Validates the magic prefix; returns `Err` on bad magic or format errors.
+/// A version/format mismatch (e.g. v1 swap read with v2 schema) surfaces as
+/// `Err(InvalidData)` and is treated as "no usable swap" by all callers —
+/// the old swap is effectively ignored.  Swaps are transient cache; no
+/// migration is attempted.
 pub fn read_swap(path: &Path) -> std::io::Result<(SwapHeader, String)> {
     let mut f = std::fs::File::open(path)?;
 
@@ -187,6 +204,32 @@ pub fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
+// ── PID liveness ──────────────────────────────────────────────────────────────
+
+/// Is `pid` a currently-live process owned by anyone?  Best-effort,
+/// cross-platform.  Unix uses `kill(pid, 0)` (alive on `Ok` or `EPERM`).
+/// On non-unix we cannot cheaply check, so return `false` (no lock
+/// enforced) — recovery still works; only the multi-instance refusal
+/// is unix-only for now.
+pub fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // kill(pid, 0): 0 = alive & ours; EPERM = alive, not ours;
+        // ESRCH = dead.
+        let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if r == 0 {
+            return true;
+        }
+        // errno EPERM => process exists but we lack permission => alive.
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -202,6 +245,7 @@ mod tests {
             file_mtime_unix_ms: 1_700_000_000_000,
             write_time_unix_ms: 1_700_000_001_000,
             cursor: (3, 7),
+            writer_pid: std::process::id(),
         }
     }
 
@@ -286,5 +330,60 @@ mod tests {
 
         let (_, got_body) = read_swap(&swp).unwrap();
         assert_eq!(got_body, content);
+    }
+
+    // ── PID liveness tests ────────────────────────────────────────────────────
+
+    /// pid_is_alive returns true for the current process on unix.
+    #[test]
+    #[cfg(unix)]
+    fn pid_is_alive_true_for_self() {
+        assert!(
+            pid_is_alive(std::process::id()),
+            "current process must report as alive"
+        );
+    }
+
+    /// A very-high pid that is almost certainly not running returns false.
+    #[test]
+    #[cfg(unix)]
+    fn pid_is_alive_false_for_unused_pid() {
+        assert!(
+            !pid_is_alive(999_999_999),
+            "pid 999_999_999 should not be alive"
+        );
+    }
+
+    /// On non-unix, pid_is_alive always returns false (no enforcement).
+    #[test]
+    #[cfg(not(unix))]
+    fn pid_is_alive_false_on_non_unix() {
+        assert!(!pid_is_alive(std::process::id()));
+        assert!(!pid_is_alive(999_999_999));
+    }
+
+    // ── Header v2 roundtrip ───────────────────────────────────────────────────
+
+    /// Write a header with writer_pid=1234, read back, assert field matches.
+    #[test]
+    fn header_v2_roundtrips_writer_pid() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("v2.swp");
+
+        let header = SwapHeader {
+            magic: SwapHeader::MAGIC,
+            version: SwapHeader::VERSION,
+            canonical_path: "/tmp/v2test.rs".to_string(),
+            file_mtime_unix_ms: 1_000_000,
+            write_time_unix_ms: 1_000_001,
+            cursor: (0, 0),
+            writer_pid: 1234,
+        };
+        let rope = Rope::from_str("test body");
+        write_swap(&swp, &header, &rope).unwrap();
+
+        let (got, _body) = read_swap(&swp).unwrap();
+        assert_eq!(got.writer_pid, 1234, "writer_pid must roundtrip");
+        assert_eq!(got.version, SwapHeader::VERSION);
     }
 }

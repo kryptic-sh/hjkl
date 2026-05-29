@@ -1333,6 +1333,16 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 3,
         run: preserve_handler::<H>,
     });
+
+    // `:recover [file]` — explicit swap-file recovery (issue #185).
+    // min_prefix=3 so `:rec` resolves here.
+    reg.add(ExCommand {
+        name: "recover",
+        aliases: &[],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 3,
+        run: recover_handler::<H>,
+    });
 }
 
 // ---- :redraw ---------------------------------------------------------------
@@ -1664,6 +1674,20 @@ fn preserve_handler<H: Host>(
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
     Some(ExEffect::Preserve)
+}
+
+/// `:recover [file]` — explicit swap-file recovery (issue #185).
+///
+/// No arg → recover the current buffer's swap (force recovery prompt even if
+/// the swap appears stale).  With a path arg → open/switch to that file then
+/// force recovery on it.  The host (TUI app) handles the logic when it
+/// receives `ExEffect::Recover`.
+fn recover_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Recover(args.trim().to_string()))
 }
 
 fn retab_impl<H: Host>(

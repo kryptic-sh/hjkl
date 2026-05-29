@@ -207,6 +207,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                     // No swap files in headless mode — no-op.
                 }
 
+                ExEffect::Recover(_) => {
+                    // No swap recovery in headless mode — no-op.
+                }
+
                 ExEffect::SubstituteConfirm { matches } => {
                     // Headless mode has no interactive prompt; apply all matches.
                     let count = matches.len();

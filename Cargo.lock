@@ -2309,6 +2309,7 @@ dependencies = [
  "hjkl-picker",
  "hjkl-vim",
  "hjkl-xdg",
+ "libc",
  "postcard",
  "ropey",
  "serde",

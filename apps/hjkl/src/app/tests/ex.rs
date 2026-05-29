@@ -1836,6 +1836,7 @@ fn open_file_with_newer_swap_enters_recovery_state() {
         // Write time 10s after mtime → swap is "newer".
         write_time_unix_ms: file_mtime_ms + 10_000,
         cursor: (0, 0),
+        writer_pid: std::process::id(),
     };
     let rope = ropey::Rope::from_str("swap body content");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
@@ -1883,6 +1884,7 @@ fn recovery_y_loads_swap_body() {
         file_mtime_unix_ms: file_mtime_ms,
         write_time_unix_ms: file_mtime_ms + 10_000,
         cursor: (0, 0),
+        writer_pid: std::process::id(),
     };
     let rope = ropey::Rope::from_str("recovered content");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
@@ -1936,6 +1938,7 @@ fn recovery_y_resets_syntax_spans() {
         file_mtime_unix_ms: file_mtime_ms,
         write_time_unix_ms: file_mtime_ms + 10_000,
         cursor: (0, 0),
+        writer_pid: std::process::id(),
     };
     let rope = ropey::Rope::from_str("recovered body line one\nline two\n");
     hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
@@ -1963,5 +1966,202 @@ fn recovery_y_resets_syntax_spans() {
     assert!(
         content.contains("recovered body line one"),
         "buffer must hold the recovered body, got: {content:?}"
+    );
+}
+
+// ── PID-lock multi-instance tests (issue #185) ────────────────────────────────
+
+/// Opening a file whose swap was written by a LIVE process (pid 1 = init/launchd,
+/// always alive on unix, always != our pid) must be refused with E325.
+///
+/// Gated `#[cfg(unix)]` because the liveness check uses kill(2) which is
+/// unix-only; on non-unix pid_is_alive always returns false (no enforcement).
+#[test]
+#[cfg(unix)]
+fn open_locked_file_refused_when_pid_alive() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("locked_file.txt");
+    std::fs::write(&file_path, "on disk\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("locked_file.swp");
+    // Use pid=1 (init/launchd) — always alive and always != our pid.
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+        writer_pid: 1, // pid 1 = init/launchd, always alive, never our pid
+    };
+    let rope = ropey::Rope::from_str("locked content");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    let slot_count_before = app.slots.len();
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    let recovery = app.check_recovery_on_open(idx);
+
+    // Must be refused: check_recovery_on_open returns false AND removes the slot.
+    assert!(!recovery, "locked file must not enter recovery state");
+    assert!(
+        app.pending_recovery.is_none(),
+        "pending_recovery must remain None for a locked file"
+    );
+    // The error message must contain E325.
+    let msgs: Vec<&str> = app.bus.history().map(|h| h.body.as_str()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("E325")),
+        "E325 error must be reported; got: {msgs:?}"
+    );
+    // The slot count must have decreased (slot removed on refusal) or stayed
+    // the same if there was only one slot (we never drop the last slot).
+    if slot_count_before > 1 {
+        assert!(
+            app.slots.len() < slot_count_before,
+            "refused slot must be removed"
+        );
+    }
+}
+
+/// Opening a file whose swap was written by a DEAD process must proceed to
+/// the normal recovery prompt (not refused).
+///
+/// Gated `#[cfg(unix)]` because on non-unix pid_is_alive always returns false,
+/// which means liveness is never enforced — but that means the dead-pid path
+/// should also work correctly there (no lock; proceed to recovery).
+#[test]
+#[cfg(unix)]
+fn open_with_dead_pid_enters_recovery() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("dead_pid_file.txt");
+    std::fs::write(&file_path, "on disk\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("dead_pid_file.swp");
+    // Use a very high pid that is almost certainly not a live process.
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+        writer_pid: 999_999_999, // almost certainly dead
+    };
+    let rope = ropey::Rope::from_str("recovered from dead pid");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    let recovery = app.check_recovery_on_open(idx);
+
+    assert!(
+        recovery,
+        "stale (dead-pid) swap must enter recovery state, not be refused"
+    );
+    assert!(
+        app.pending_recovery.is_some(),
+        "pending_recovery must be set for a dead-pid swap"
+    );
+    // Must NOT have an E325 error.
+    let msgs: Vec<&str> = app.bus.history().map(|h| h.body.as_str()).collect();
+    assert!(
+        !msgs.iter().any(|m| m.contains("E325")),
+        "E325 must NOT fire for a dead-pid swap; got: {msgs:?}"
+    );
+}
+
+/// `:recover` with no arg forces the recovery prompt even when the swap's
+/// write_time is OLDER than the file on disk (which would normally cause the
+/// swap to be deleted as stale).
+#[test]
+fn colon_recover_forces_prompt_even_when_file_newer() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("force_recover.txt");
+    std::fs::write(&file_path, "on disk content\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("force_recover.swp");
+    // write_time OLDER than file mtime → normally stale-deleted; :recover must override.
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms.saturating_sub(5_000), // 5s BEFORE file mtime
+        cursor: (0, 0),
+        writer_pid: std::process::id(), // our own pid → not a lock
+    };
+    let rope = ropey::Rope::from_str("stale swap body");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+
+    // :recover (no arg) → must force recovery even though swap is "stale".
+    app.dispatch_ex("recover");
+
+    assert!(
+        app.pending_recovery.is_some(),
+        ":recover must enter recovery state even when swap is older than file"
+    );
+}
+
+/// `:recover` with no arg when no swap file exists reports a "not found" info
+/// message and does NOT enter recovery state.
+#[test]
+fn colon_recover_no_swap_reports_not_found() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("no_swap.txt");
+    std::fs::write(&file_path, "some content\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Point swap_path at a non-existent file.
+    let nonexistent_swap = td.path().join("no_swap.swp");
+    app.active_mut().swap_path = Some(nonexistent_swap);
+
+    app.dispatch_ex("recover");
+
+    assert!(
+        app.pending_recovery.is_none(),
+        ":recover with no swap must not enter recovery state"
+    );
+    let msgs: Vec<&str> = app.bus.history().map(|h| h.body.as_str()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("No swap file found")),
+        "must report 'No swap file found'; got: {msgs:?}"
     );
 }
