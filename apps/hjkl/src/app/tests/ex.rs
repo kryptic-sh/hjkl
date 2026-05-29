@@ -2165,3 +2165,137 @@ fn colon_recover_no_swap_reports_not_found() {
         "must report 'No swap file found'; got: {msgs:?}"
     );
 }
+
+// ── Write-on-open / graceful-exit swap tests (#185 multi-instance) ─────────────
+
+/// Opening a named file must write the swap immediately (arm the PID lock) so
+/// that a concurrent second instance opening the same unmodified file finds a
+/// swap and is refused.
+///
+/// Verifies via `arm_swap_on_open` called directly against an injected
+/// swap_path in a tempdir (avoids XDG env mutation, which is unsafe in the
+/// multi-threaded test harness).
+#[test]
+fn open_writes_swap_immediately() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("arm_on_open.txt");
+    std::fs::write(&file_path, "initial content\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Inject a swap path in the tempdir (controlled location).
+    let swap_path = td.path().join("arm_on_open.swp");
+    app.active_mut().swap_path = Some(swap_path.clone());
+    // Reset last_swap_dirty_gen so arm_swap_on_open actually writes.
+    app.active_mut().last_swap_dirty_gen = None;
+
+    // The swap must NOT exist yet (we just set the path, haven't written it).
+    assert!(
+        !swap_path.exists(),
+        "swap must not exist before arm_swap_on_open"
+    );
+
+    // Arm: simulates what App::new now does after a clean open.
+    let idx = app.focused_slot_idx();
+    app.arm_swap_on_open(idx);
+
+    assert!(
+        swap_path.exists(),
+        "swap file must exist on disk immediately after arm_swap_on_open (PID lock)"
+    );
+}
+
+/// `cleanup_swaps_on_exit` must delete swap files and clear swap_path on every
+/// slot. This simulates the graceful-exit path so clean sessions leave no swap.
+#[test]
+fn graceful_exit_removes_swap() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("cleanup_exit.txt");
+    std::fs::write(&file_path, "content\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Inject a swap path in the tempdir and write a real swap file.
+    let swap_path = td.path().join("cleanup_exit.swp");
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    // seed a dirty gen so write_swap_for_slot writes.
+    seed_buffer(&mut app, "dirty content");
+    app.write_swap_for_slot(idx);
+    assert!(swap_path.exists(), "swap must exist before cleanup");
+
+    // Simulate graceful exit.
+    app.cleanup_swaps_on_exit();
+
+    assert!(
+        !swap_path.exists(),
+        "swap file must be removed after cleanup_swaps_on_exit"
+    );
+    assert!(
+        app.active().swap_path.is_none(),
+        "swap_path must be None after cleanup_swaps_on_exit"
+    );
+}
+
+/// The second-instance lock works end-to-end when the first instance arms the
+/// swap at open. Mirrors `open_locked_file_refused_when_pid_alive` but asserts
+/// the comment that write-on-open is what makes this scenario real: the swap
+/// with writer_pid == our-own-pid simulates a live first instance that just
+/// opened (not edited) the file.
+///
+/// Gated `#[cfg(unix)]` because `pid_is_alive` uses kill(2).
+#[test]
+#[cfg(unix)]
+fn second_instance_refused_after_first_opens_unmodified() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("multi_instance.txt");
+    std::fs::write(&file_path, "shared content\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // Write a swap stamped with pid=1 (init/launchd — always alive, never our
+    // pid) to simulate the first instance having armed the lock at open.
+    let swap_path = td.path().join("multi_instance.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 1, // just after open, no edits
+        cursor: (0, 0),
+        writer_pid: 1, // pid 1 = init/launchd, always alive, never our pid
+    };
+    let rope = ropey::Rope::from_str("shared content");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    // Second instance opens the file and injects the pre-existing swap.
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    let recovery = app.check_recovery_on_open(idx);
+
+    // Must be refused with E325.
+    assert!(
+        !recovery,
+        "second instance must be refused when first holds PID lock"
+    );
+    assert!(
+        app.pending_recovery.is_none(),
+        "pending_recovery must remain None on refusal"
+    );
+    let msgs: Vec<&str> = app.bus.history().map(|h| h.body.as_str()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("E325")),
+        "E325 must be reported; got: {msgs:?}"
+    );
+}

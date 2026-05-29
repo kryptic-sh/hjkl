@@ -1281,8 +1281,15 @@ impl App {
             last_input_at: std::time::Instant::now(),
         };
         // Check for crash recovery on the initial file slot (#185).
+        // If no recovery prompt is needed, arm the PID-lock swap immediately so
+        // a concurrent second open of the same file sees it (even on unmodified
+        // buffers). Crashes/kills leave the swap behind for recovery; graceful
+        // exits remove it via cleanup_swaps_on_exit.
         if !no_file {
-            let _ = app.check_recovery_on_open(0);
+            let recovery = app.check_recovery_on_open(0);
+            if !recovery {
+                app.arm_swap_on_open(0);
+            }
         }
         Ok(app)
     }

@@ -1512,6 +1512,10 @@ impl App {
                 break;
             }
         }
+        // Graceful exit: remove all swap files so clean sessions leave no stale
+        // swap behind. Crashes / SIGKILL bypass this block and the swap survives
+        // for recovery — which is exactly the distinction we want.
+        self.cleanup_swaps_on_exit();
         Ok(())
     }
 

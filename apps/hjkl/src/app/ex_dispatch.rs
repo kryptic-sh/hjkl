@@ -1075,6 +1075,39 @@ impl App {
         self.slots[idx].last_swap_dirty_gen = Some(current_gen);
     }
 
+    /// Write the initial swap for a freshly-opened slot so the PID lock exists
+    /// immediately (matching vim). No-op when: slot has no filename/swap_path,
+    /// a recovery prompt is pending (don't clobber the swap the user is deciding
+    /// on), or the slot index is out of range (e.g. removed by a lock-refusal).
+    ///
+    /// `write_swap_for_slot` already skips the write when `last_swap_dirty_gen
+    /// == Some(current_gen)`; on a fresh open `last_swap_dirty_gen` is `None`,
+    /// so it always writes — even for an unmodified buffer. That is intentional:
+    /// the PID lock must exist immediately so a concurrent second open sees it.
+    pub(crate) fn arm_swap_on_open(&mut self, slot_idx: usize) {
+        if self.pending_recovery.is_some() {
+            return;
+        }
+        if slot_idx >= self.slots.len() {
+            return;
+        }
+        if self.slots[slot_idx].filename.is_none() || self.slots[slot_idx].swap_path.is_none() {
+            return;
+        }
+        self.write_swap_for_slot(slot_idx);
+    }
+
+    /// Remove all slots' swap files. Called on graceful shutdown so a clean
+    /// exit leaves no swap (no false recovery next open); a crash/kill bypasses
+    /// this and the swap survives for recovery.
+    pub(crate) fn cleanup_swaps_on_exit(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(p) = slot.swap_path.take() {
+                let _ = hjkl_app::swap::remove_swap(&p);
+            }
+        }
+    }
+
     /// `:recover [file]` — explicit swap-file recovery.
     ///
     /// Empty arg → force recovery on the current buffer's swap (bypasses the
@@ -1453,6 +1486,9 @@ impl App {
                 let current_slot_idx = self.focused_slot_idx();
                 let recovery_pending = self.check_recovery_on_open(current_slot_idx);
                 if !recovery_pending {
+                    // Arm the PID-lock swap immediately on successful open so a
+                    // concurrent second instance sees it before any edit is made.
+                    self.arm_swap_on_open(current_slot_idx);
                     let line_count = self.active().editor.buffer().line_count() as usize;
                     let path_display = self
                         .active()
