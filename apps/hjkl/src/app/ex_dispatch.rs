@@ -498,6 +498,11 @@ impl App {
                 // `:redraw` (no `!`) — ratatui's diff-based renderer will
                 // repaint on the next event-loop tick without a full clear.
             }
+            ExEffect::Preserve => {
+                // Force-write the swap for the active slot immediately.
+                let idx = self.focused_slot_idx();
+                self.write_swap_for_slot(idx);
+            }
             ExEffect::SubstituteConfirm { matches } => {
                 if matches.is_empty() {
                     self.bus.warn("Pattern not found");
@@ -710,6 +715,8 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
+                swap_path: None,
+                last_swap_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -787,6 +794,8 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
+                swap_path: None,
+                last_swap_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -965,6 +974,11 @@ impl App {
                             .set_filename(Some(p.to_string_lossy().into_owned()));
                         self.slots[idx].is_new_file = false;
                         self.slots[idx].snapshot_saved();
+                        // Delete the swap file on successful save (#185).
+                        if let Some(ref sp) = self.slots[idx].swap_path.clone() {
+                            let _ = hjkl_app::swap::remove_swap(sp);
+                            self.slots[idx].last_swap_dirty_gen = None;
+                        }
                         if idx == self.focused_slot_idx() {
                             self.refresh_git_signs_force();
                         }
@@ -996,6 +1010,184 @@ impl App {
         }
         self.bus
             .info(format!("{written} buffer(s) written, {skipped} skipped"));
+    }
+
+    // ── Swap file helpers (issue #185) ────────────────────────────────────────
+
+    /// Write the swap file for slot `idx`.
+    ///
+    /// Skips silently when:
+    /// - the slot has no filename (scratch buffer); TODO(#185): scratch swaps
+    /// - the buffer hasn't changed since the last swap write (`dirty_gen` match)
+    /// - building the swap path fails
+    ///
+    /// Errors during write are logged as debug (not shown to user — swap is
+    /// best-effort).
+    pub(crate) fn write_swap_for_slot(&mut self, idx: usize) {
+        use hjkl_app::swap::{self, SwapHeader};
+
+        let filename = match self.slots[idx].filename.as_ref() {
+            Some(p) => p.clone(),
+            None => return, // TODO(#185): scratch/never-saved-buffer swaps
+        };
+        let swap_path = match self.slots[idx].swap_path.as_ref() {
+            Some(p) => p.clone(),
+            None => return,
+        };
+        let current_gen = self.slots[idx].editor.buffer().dirty_gen();
+        if self.slots[idx].last_swap_dirty_gen == Some(current_gen) {
+            return; // Nothing changed since last swap.
+        }
+
+        // mtime of the file on disk.
+        let file_mtime_unix_ms = self.slots[idx]
+            .disk_mtime
+            .and_then(|t| {
+                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64)
+            })
+            .unwrap_or(0);
+
+        let (cursor_row, cursor_col) = self.slots[idx].editor.cursor();
+        let canonical_path = std::fs::canonicalize(&filename)
+            .unwrap_or_else(|_| filename.clone())
+            .to_string_lossy()
+            .into_owned();
+        let header = SwapHeader {
+            magic: SwapHeader::MAGIC,
+            version: SwapHeader::VERSION,
+            canonical_path,
+            file_mtime_unix_ms,
+            write_time_unix_ms: swap::now_unix_ms(),
+            cursor: (cursor_row as u32, cursor_col as u32),
+        };
+
+        let rope = self.slots[idx].editor.buffer().rope().clone();
+        if let Err(e) = swap::write_swap(&swap_path, &header, &rope) {
+            tracing::debug!(path = %swap_path.display(), err = %e, "swap write failed");
+            return;
+        }
+        self.slots[idx].last_swap_dirty_gen = Some(current_gen);
+    }
+
+    /// Check whether opening `slot_idx` (which has just been loaded) requires
+    /// a recovery prompt.  If a swap file newer than the on-disk content exists,
+    /// sets `self.pending_recovery` and returns `true` (caller should not show
+    /// normal "N lines" message).  Returns `false` when no recovery is needed.
+    ///
+    /// Stale swaps (older than the on-disk file) are deleted silently.
+    pub(crate) fn check_recovery_on_open(&mut self, slot_idx: usize) -> bool {
+        use hjkl_app::swap;
+
+        let filename = match self.slots[slot_idx].filename.as_ref() {
+            Some(p) => p.clone(),
+            None => return false,
+        };
+        let swap_path = match self.slots[slot_idx].swap_path.as_ref() {
+            Some(p) => p.clone(),
+            None => return false,
+        };
+        if !swap_path.exists() {
+            return false;
+        }
+        let (header, body) = match swap::read_swap(&swap_path) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(%e, "failed to read swap on open");
+                return false;
+            }
+        };
+        // Determine file mtime.
+        let file_mtime_ms = std::fs::metadata(&filename)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| {
+                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64)
+            })
+            .unwrap_or(0);
+        if header.write_time_unix_ms <= file_mtime_ms {
+            // Swap is stale (on-disk is newer). Delete silently.
+            let _ = swap::remove_swap(&swap_path);
+            return false;
+        }
+        // Swap is newer than disk → prompt for recovery.
+        let written_ago = format_swap_age(header.write_time_unix_ms);
+        self.pending_recovery = Some(super::PendingRecovery {
+            file_path: filename,
+            header,
+            body,
+            swap_path,
+            slot_idx,
+            written_ago,
+        });
+        true
+    }
+
+    /// Handle a keypress while the recovery prompt is active.
+    ///
+    /// - `y` → load the swap body into the buffer, mark dirty, keep swap.
+    /// - `N` / Esc → load the file fresh (already loaded in slot), dismiss prompt.
+    /// - `q` → clear the slot content entirely (abort open).
+    pub(crate) fn handle_recovery_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let pr = match self.pending_recovery.as_ref() {
+            Some(p) => p,
+            None => return false,
+        };
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let body = pr.body.clone();
+                let slot_idx = pr.slot_idx;
+                // Strip trailing newline as the engine's content format omits it.
+                let stripped = body.strip_suffix('\n').unwrap_or(&body).to_string();
+                let body_stripped = stripped.as_str();
+                hjkl_engine::BufferEdit::replace_all(
+                    self.slots[slot_idx].editor.buffer_mut(),
+                    body_stripped,
+                );
+                // Restore cursor from header.
+                let (row, col) = pr.header.cursor;
+                self.slots[slot_idx]
+                    .editor
+                    .jump_cursor(row as usize, col as usize);
+                self.slots[slot_idx].dirty = true;
+                self.pending_recovery = None;
+                self.bus.info("Recovered from swap file. Use :w to save.");
+                self.sync_after_engine_mutation();
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                // Abort: remove the slot we just added and switch back if possible.
+                let slot_idx = self.pending_recovery.as_ref().map(|p| p.slot_idx);
+                self.pending_recovery = None;
+                if let Some(idx) = slot_idx
+                    && self.slots.len() > 1
+                {
+                    let removed = self.slots.remove(idx);
+                    self.syntax.forget(removed.buffer_id);
+                    // Fix window pointers.
+                    let slot_count = self.slots.len();
+                    for win in self.windows.iter_mut().flatten() {
+                        if win.slot >= idx && win.slot > 0 {
+                            win.slot -= 1;
+                        }
+                        win.slot = win.slot.min(slot_count.saturating_sub(1));
+                    }
+                    self.bus.info("Aborted file open.");
+                }
+            }
+            // N, n, Esc → load file fresh (slot already loaded; just dismiss).
+            KeyCode::Char('N') | KeyCode::Char('n') | KeyCode::Esc => {
+                self.pending_recovery = None;
+                self.bus.info("Swap ignored; loaded from disk.");
+            }
+            _ => {
+                // Consume unknown keys — stay in prompt.
+            }
+        }
+        true
     }
 
     /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
@@ -1085,15 +1277,6 @@ impl App {
                 // Point the focused window at the new slot.
                 let fw = self.focused_window();
                 self.windows[fw].as_mut().expect("focused_window open").slot = new_slot_idx;
-                let line_count = self.active().editor.buffer().line_count() as usize;
-                let path_display = self
-                    .active()
-                    .filename
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                self.bus.info(format!("\"{path_display}\" {line_count}L"));
-                self.refresh_git_signs_force();
 
                 // Drop the pristine default buffer once a real file is open.
                 if prev_pristine && self.slots.len() > 1 {
@@ -1109,6 +1292,24 @@ impl App {
                     }
                     self.prev_active = None;
                 }
+
+                // Recovery check: if a swap file is newer than the on-disk
+                // content, enter the recovery prompt instead of reporting
+                // normal line count.  The slot is already loaded with the
+                // disk content; 'y' replaces it from the swap.
+                let current_slot_idx = self.focused_slot_idx();
+                let recovery_pending = self.check_recovery_on_open(current_slot_idx);
+                if !recovery_pending {
+                    let line_count = self.active().editor.buffer().line_count() as usize;
+                    let path_display = self
+                        .active()
+                        .filename
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    self.bus.info(format!("\"{path_display}\" {line_count}L"));
+                }
+                self.refresh_git_signs_force();
             }
             Err(msg) => {
                 self.bus.info(msg);
@@ -1473,6 +1674,8 @@ impl App {
                 disk_mtime: None,
                 disk_len: None,
                 disk_state: super::DiskState::Synced,
+                swap_path: None,
+                last_swap_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -1994,4 +2197,21 @@ fn summarize_capabilities(caps: &serde_json::Value) -> String {
         }
     }
     out.join(", ")
+}
+
+/// Format milliseconds-since-epoch delta as a human-readable relative time.
+fn format_swap_age(write_time_unix_ms: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(write_time_unix_ms);
+    let delta_secs = now_ms.saturating_sub(write_time_unix_ms) / 1000;
+    if delta_secs < 60 {
+        format!("{delta_secs}s ago")
+    } else if delta_secs < 3600 {
+        format!("{}m ago", delta_secs / 60)
+    } else {
+        format!("{}h ago", delta_secs / 3600)
+    }
 }

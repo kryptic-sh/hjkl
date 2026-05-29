@@ -1457,6 +1457,27 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
+    // ── Crash-recovery prompt (issue #185) ─────────────────────────────────
+    // While pending_recovery is Some, show the recovery prompt in the status
+    // line (mirrors the confirm-substitute pattern).
+    if let Some(pr) = app.pending_recovery.as_ref() {
+        let content = format!(
+            "E325: swap file found (written {} ago). Recover? [y/N/q]",
+            pr.written_ago
+        );
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.search_bg)
+                    .fg(app.theme.ui.search_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
+        );
+    }
+
     // ── Interactive substitute confirm (:s/pat/rep/c) ──────────────────────
     // While confirming_substitute is Some, show the per-match prompt instead
     // of the normal status bar.

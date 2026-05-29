@@ -14,3 +14,4 @@ pub mod modeline;
 pub mod picker_action;
 pub mod picker_git;
 pub mod picker_sources;
+pub mod swap;

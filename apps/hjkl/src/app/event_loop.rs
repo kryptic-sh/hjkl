@@ -218,6 +218,15 @@ impl App {
         if self.indent_flash.is_some() {
             t = t.min(Duration::from_millis(30));
         }
+        // Wake at `updatetime` after the last keystroke so the idle swap-write
+        // fires promptly. Gated on swap_pending (gen changed since last swap),
+        // NOT bare `dirty` — otherwise the deadline stays in the past after the
+        // swap is written and the poll timeout collapses to 0 (busy loop).
+        if self.active_swap_pending() {
+            let ut_ms = self.active().editor.settings().updatetime;
+            let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
+            t = t.min(deadline.saturating_duration_since(now));
+        }
         t
     }
 
@@ -274,6 +283,14 @@ impl App {
         // ── Info popup dismissal ──────────────────────────────────
         if self.info_popup.is_some() {
             self.info_popup = None;
+            return KeyOutcome::Continue;
+        }
+
+        // ── Crash-recovery prompt (issue #185) ───────────────────
+        // Intercept BEFORE normal engine routing so y/N/q reach the
+        // recovery handler.
+        if self.pending_recovery.is_some() {
+            self.handle_recovery_key(key);
             return KeyOutcome::Continue;
         }
 
@@ -1320,6 +1337,17 @@ impl App {
                     replay_to_engine(self, &replay);
                     self.sync_after_engine_mutation();
                 }
+                // ── Idle swap-write (issue #185) ──────────────────────
+                // Write the swap for the active slot when the buffer is dirty
+                // and `updatetime` ms have elapsed since the last keystroke.
+                {
+                    let ut_ms = self.active().editor.settings().updatetime;
+                    let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
+                    if self.active_swap_pending() && now >= deadline {
+                        let idx = self.focused_slot_idx();
+                        self.write_swap_for_slot(idx);
+                    }
+                }
                 self.tick_hover_timer();
                 if self
                     .hover_popup
@@ -1336,6 +1364,8 @@ impl App {
             // ── Dispatch event ────────────────────────────────────
             match event::read()? {
                 Event::Key(key) => {
+                    // Record keystroke time for the idle swap-write timer (#185).
+                    self.last_input_at = std::time::Instant::now();
                     let consumed_inline = match self.handle_keypress(key) {
                         KeyOutcome::Break => break,
                         // Insert-mode arms handle the keystroke fully and

@@ -203,6 +203,10 @@ pub fn run(files: Vec<PathBuf>, commands: Vec<String>) -> Result<i32> {
                     // No terminal to clear in headless mode — no-op.
                 }
 
+                ExEffect::Preserve => {
+                    // No swap files in headless mode — no-op.
+                }
+
                 ExEffect::SubstituteConfirm { matches } => {
                     // Headless mode has no interactive prompt; apply all matches.
                     let count = matches.len();

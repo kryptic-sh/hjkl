@@ -784,6 +784,8 @@ fn build_scratch_slot(
         disk_mtime: None,
         disk_len: None,
         disk_state: DiskState::Synced,
+        swap_path: None,
+        last_swap_dirty_gen: None,
     };
     slot.snapshot_saved();
     Ok(slot)

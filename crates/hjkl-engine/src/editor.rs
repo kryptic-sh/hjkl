@@ -893,6 +893,9 @@ pub struct Settings {
     pub trim_trailing_whitespace: bool,
     /// Enable helix-style rainbow bracket coloring. hjkl-specific. Default `true`.
     pub rainbow_brackets: bool,
+    /// Milliseconds of inactivity before swap-file write. Default `4000`.
+    /// Matches Vim's `updatetime`; alias `ut`.
+    pub updatetime: u32,
 }
 
 impl Default for Settings {
@@ -951,6 +954,7 @@ impl Default for Settings {
             format_on_save: false,
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
+            updatetime: 4000,
         }
     }
 }
@@ -1009,6 +1013,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         format_on_save: o.format_on_save,
         trim_trailing_whitespace: o.trim_trailing_whitespace,
         rainbow_brackets: o.rainbow_brackets,
+        updatetime: o.updatetime,
     }
 }
 

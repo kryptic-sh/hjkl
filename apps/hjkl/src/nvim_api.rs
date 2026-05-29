@@ -476,6 +476,10 @@ fn dispatch(
                     // No terminal to clear in nvim-api mode — treat as no-op.
                     ok(stdout, msgid, Value::Nil)
                 }
+                ExEffect::Preserve => {
+                    // No swap files in nvim-api mode — no-op.
+                    ok(stdout, msgid, Value::Nil)
+                }
                 ExEffect::SubstituteConfirm { matches } => {
                     // nvim-api mode has no interactive TUI; apply all matches immediately.
                     let count = matches.len();

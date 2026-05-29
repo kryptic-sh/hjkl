@@ -69,4 +69,7 @@ pub enum ExEffect {
     /// before repainting. `:redraw` (no `!`) requests a plain repaint without
     /// clearing.
     Redraw { clear: bool },
+    /// `:preserve` — force-write the swap file for the active buffer
+    /// immediately, regardless of the `updatetime` idle timer.
+    Preserve,
 }

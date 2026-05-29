@@ -328,6 +328,13 @@ pub struct BufferSlot {
     pub disk_len: Option<u64>,
     /// Whether the on-disk file is in sync, changed, or deleted.
     pub disk_state: DiskState,
+    /// Path to the swap file for this slot, if one has been computed.
+    /// `None` for scratch buffers (no filename) or before first write.
+    pub swap_path: Option<std::path::PathBuf>,
+    /// `dirty_gen` of the buffer the last time the swap file was written.
+    /// `None` = never written.  Used to skip redundant writes when the
+    /// buffer has not changed since the last swap flush.
+    pub last_swap_dirty_gen: Option<u64>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

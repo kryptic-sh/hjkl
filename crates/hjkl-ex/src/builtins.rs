@@ -1323,6 +1323,16 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         min_prefix: 4,
         run: retab_bang_handler::<H>,
     });
+
+    // `:preserve` — force-write the swap file immediately (issue #185).
+    // min_prefix=3 so `:pre` resolves here.
+    reg.add(ExCommand {
+        name: "preserve",
+        aliases: &[],
+        arg_kind: ArgKind::None,
+        min_prefix: 3,
+        run: preserve_handler::<H>,
+    });
 }
 
 // ---- :redraw ---------------------------------------------------------------
@@ -1642,6 +1652,18 @@ fn retab_bang_handler<H: Host>(
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
     retab_impl(editor, args, range, true)
+}
+
+/// `:preserve` — force-write the swap file for the active buffer immediately.
+///
+/// The engine side is a pure pass-through; the host (TUI app) handles the
+/// actual write when it receives `ExEffect::Preserve`. Issue #185.
+fn preserve_handler<H: Host>(
+    _editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    _args: &str,
+    _range: Option<LineRange>,
+) -> Option<ExEffect> {
+    Some(ExEffect::Preserve)
 }
 
 fn retab_impl<H: Host>(

@@ -350,6 +350,39 @@ pub struct App {
     /// rather than the editor engine. Cleared when the session finishes
     /// (all matches processed, or the user pressed `q`/`Esc`).
     pub(crate) confirming_substitute: Option<ConfirmingSubstitute>,
+    /// Pending crash-recovery prompt (issue #185).
+    /// Set when a file open finds a swap file newer than the on-disk content.
+    /// While `Some`, keypresses route to [`App::handle_recovery_key`] rather
+    /// than the engine.
+    pub(crate) pending_recovery: Option<PendingRecovery>,
+    /// Instant of the last keystroke / input event.  Used together with the
+    /// active slot's `dirty_gen` to decide when the `updatetime` idle deadline
+    /// has elapsed for swap-file writes.
+    pub(crate) last_input_at: std::time::Instant,
+}
+
+/// Pending crash-recovery prompt state (issue #185).
+///
+/// Set when a file is opened that has a swap file newer than the on-disk
+/// content.  Key presses route to [`App::handle_recovery_key`] while this
+/// is `Some`.
+pub(crate) struct PendingRecovery {
+    /// Path of the file being opened.
+    // Used for diagnostics / future `:recover [file]` TODO(#185).
+    #[allow(dead_code)]
+    pub file_path: std::path::PathBuf,
+    /// The loaded swap header.
+    pub header: hjkl_app::swap::SwapHeader,
+    /// The swap body text.
+    pub body: String,
+    /// Path to the swap file itself.
+    // Stored for future `:recover [file]` TODO(#185).
+    #[allow(dead_code)]
+    pub swap_path: std::path::PathBuf,
+    /// Index of the slot whose content should be replaced on `y`.
+    pub slot_idx: usize,
+    /// Human-readable relative time string for the prompt ("42s ago", "3m ago", …).
+    pub written_ago: String,
 }
 
 /// State for an interactive `:s/pat/rep/c` confirm session.
@@ -529,6 +562,15 @@ pub(super) fn build_slot(
     let _ = editor.take_content_edits();
     let _ = editor.take_content_reset();
 
+    // Compute swap path for named files (best-effort; ignore errors here —
+    // the write path handles errors per-write).
+    let swap_path = if let Some(ref p) = path {
+        let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+        hjkl_app::swap::swap_path_for(&canonical).ok()
+    } else {
+        None
+    };
+
     let mut slot = BufferSlot {
         buffer_id,
         editor,
@@ -549,6 +591,8 @@ pub(super) fn build_slot(
         disk_mtime,
         disk_len,
         disk_state: DiskState::Synced,
+        swap_path,
+        last_swap_dirty_gen: None,
     };
     slot.snapshot_saved();
     Ok(slot)
@@ -750,6 +794,16 @@ impl App {
     /// Return a shared reference to the active buffer slot.
     pub fn active(&self) -> &BufferSlot {
         &self.slots[self.focused_slot_idx()]
+    }
+
+    /// `true` when the active slot has buffer changes not yet written to its
+    /// swap file (`dirty_gen` advanced past the last-swapped gen) AND has a
+    /// swap path. Drives the idle swap-write timer; gating on this rather than
+    /// bare `dirty` prevents a busy-loop: once the swap is current, the
+    /// `updatetime` deadline stops shortening the poll timeout.
+    pub(crate) fn active_swap_pending(&self) -> bool {
+        let s = self.active();
+        s.swap_path.is_some() && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
     }
 
     /// Return a mutable reference to the active buffer slot.
@@ -1137,7 +1191,7 @@ impl App {
         let initial_window = window::Window::with_scroll(0, initial_top_row, initial_top_col, 0, 0);
 
         let default_leader = hjkl_app::config::Config::default().editor.leader;
-        Ok(Self {
+        let mut app = Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
@@ -1223,7 +1277,14 @@ impl App {
             indent_flash: None,
             force_clear_screen: false,
             confirming_substitute: None,
-        })
+            pending_recovery: None,
+            last_input_at: std::time::Instant::now(),
+        };
+        // Check for crash recovery on the initial file slot (#185).
+        if !no_file {
+            let _ = app.check_recovery_on_open(0);
+        }
+        Ok(app)
     }
 
     /// Replace the user config (typically loaded by `main` from the XDG

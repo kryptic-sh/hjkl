@@ -24,10 +24,12 @@ hjkl-keymap.workspace = true
 hjkl-lsp.workspace = true
 hjkl-picker.workspace = true
 hjkl-vim.workspace = true
+postcard = { version = "1", features = ["use-std"] }
 ropey = "1.6"
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 tracing = "0.1"
+hjkl-xdg.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

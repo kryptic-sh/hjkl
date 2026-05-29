@@ -376,6 +376,10 @@ pub struct Options {
     /// Enable helix-style rainbow bracket coloring via tree-sitter.
     /// hjkl-specific. Alias `rb`. Default `true`.
     pub rainbow_brackets: bool,
+    /// Milliseconds of inactivity after which the swap file is written.
+    /// Matches Vim's `:set updatetime` / `:set ut`. Default `4000`.
+    /// hjkl-specific swap-file write cadence; does NOT affect CursorHold.
+    pub updatetime: u32,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -486,6 +490,7 @@ impl Default for Options {
             format_on_save: false,
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
+            updatetime: 4000,
         }
     }
 }
@@ -754,6 +759,7 @@ impl Options {
             "format_on_save" | "fos" => set_bool!(format_on_save),
             "trim_trailing_whitespace" | "tts" => set_bool!(trim_trailing_whitespace),
             "rainbow_brackets" | "rb" => set_bool!(rainbow_brackets),
+            "updatetime" | "ut" => set_u32!(updatetime),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -813,6 +819,7 @@ impl Options {
             "format_on_save" | "fos" => OptionValue::Bool(self.format_on_save),
             "trim_trailing_whitespace" | "tts" => OptionValue::Bool(self.trim_trailing_whitespace),
             "rainbow_brackets" | "rb" => OptionValue::Bool(self.rainbow_brackets),
+            "updatetime" | "ut" => OptionValue::Int(self.updatetime as i64),
             _ => return None,
         })
     }
@@ -2163,6 +2170,36 @@ mod tests {
             o.get_by_name("rainbow_brackets"),
             Some(OptionValue::Bool(false)),
             "get_by_name(rainbow_brackets) must also reflect the new value"
+        );
+    }
+
+    // ── updatetime ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn updatetime_default_4000() {
+        let o = Options::default();
+        assert_eq!(o.updatetime, 4000, "updatetime must default to 4000 ms");
+        assert_eq!(
+            o.get_by_name("updatetime"),
+            Some(OptionValue::Int(4000)),
+            "get_by_name(updatetime) must return Int(4000)"
+        );
+    }
+
+    #[test]
+    fn options_ut_alias_sets_updatetime() {
+        let mut o = Options::default();
+        o.set_by_name("ut", OptionValue::Int(1000)).unwrap();
+        assert_eq!(o.updatetime, 1000, "ut alias must set updatetime");
+        assert_eq!(
+            o.get_by_name("ut"),
+            Some(OptionValue::Int(1000)),
+            "get_by_name(ut) must reflect the new value"
+        );
+        assert_eq!(
+            o.get_by_name("updatetime"),
+            Some(OptionValue::Int(1000)),
+            "get_by_name(updatetime) must also reflect the new value"
         );
     }
 }

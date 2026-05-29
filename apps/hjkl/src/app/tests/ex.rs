@@ -1745,3 +1745,164 @@ fn colon_vertical_resize_via_host_registry() {
         ":vertical resize +5 must grow focused window width ratio: before={ratio_before} after={ratio_after}"
     );
 }
+
+// ── Swap file / crash-recovery tests (issue #185) ─────────────────────────
+
+/// `:w` must delete the swap file after a successful save.
+/// Uses an injected swap_path to avoid mutating XDG env vars in parallel tests.
+#[test]
+fn colon_write_removes_swap_file() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("test_write_swap.txt");
+    std::fs::write(&file_path, "hello\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Inject a swap path directly into the slot.
+    let swap_path = td.path().join("test_write_swap.swp");
+    app.active_mut().swap_path = Some(swap_path.clone());
+
+    // Seed some dirty content so dirty_gen advances.
+    seed_buffer(&mut app, "changed content");
+    app.active_mut().dirty = true;
+
+    // Force-write swap.
+    let idx = app.focused_slot_idx();
+    app.write_swap_for_slot(idx);
+    assert!(
+        swap_path.exists(),
+        "swap file must exist after write_swap_for_slot"
+    );
+
+    // Now save the file — should delete the swap.
+    app.dispatch_ex("write");
+    assert!(!swap_path.exists(), "swap file must be deleted after :w");
+}
+
+/// `:preserve` must write the swap immediately.
+#[test]
+fn colon_preserve_writes_swap() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("test_preserve_swap.txt");
+    std::fs::write(&file_path, "initial\n").unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+
+    // Inject a swap path directly into the slot.
+    let swap_path = td.path().join("test_preserve_swap.swp");
+    app.active_mut().swap_path = Some(swap_path.clone());
+
+    seed_buffer(&mut app, "modified content");
+    app.active_mut().dirty = true;
+
+    // `:preserve` should write the swap.
+    app.dispatch_ex("preserve");
+
+    // Verify that the swap file was actually written.
+    assert!(swap_path.exists(), "swap file must exist after :preserve");
+}
+
+/// Opening a file whose swap is newer than the on-disk version enters
+/// recovery state (`pending_recovery.is_some()`).
+///
+/// This test writes the swap directly to a temp directory and injects the
+/// swap_path onto the slot to avoid racing with other tests that mutate
+/// XDG_CACHE_HOME.
+#[test]
+fn open_file_with_newer_swap_enters_recovery_state() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("test_recovery.txt");
+    std::fs::write(&file_path, "on disk content\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    // Write the swap file directly into the temp dir (bypasses XDG).
+    let swap_path = td.path().join("test_recovery.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        // Write time 10s after mtime → swap is "newer".
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+    };
+    let rope = ropey::Rope::from_str("swap body content");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    // Create app without a pre-existing swap so App::new doesn't interfere.
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    // Clear any pending_recovery from App::new, then inject our swap path
+    // directly and re-check.
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    let recovery_needed = app.check_recovery_on_open(idx);
+    assert!(
+        recovery_needed,
+        "check_recovery_on_open must return true when swap is newer"
+    );
+    assert!(
+        app.pending_recovery.is_some(),
+        "pending_recovery must be set when swap is newer than disk"
+    );
+}
+
+/// Choosing 'y' in the recovery prompt loads the swap body.
+#[test]
+fn recovery_y_loads_swap_body() {
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("test_recovery_y.txt");
+    std::fs::write(&file_path, "on disk\n").unwrap();
+
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("test_recovery_y.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+    };
+    let rope = ropey::Rope::from_str("recovered content");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+    let idx = app.focused_slot_idx();
+    app.check_recovery_on_open(idx);
+    assert!(app.pending_recovery.is_some(), "must be in recovery state");
+
+    // Simulate pressing 'y'.
+    app.handle_recovery_key(key(crossterm::event::KeyCode::Char('y')));
+    assert!(
+        app.pending_recovery.is_none(),
+        "pending_recovery must be cleared after 'y'"
+    );
+    let content = app.active().editor.buffer().content_joined();
+    assert!(
+        content.contains("recovered content"),
+        "buffer must contain swap body after 'y', got: {content:?}"
+    );
+}
