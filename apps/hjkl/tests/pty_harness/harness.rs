@@ -54,6 +54,13 @@ pub struct TerminalSession {
     rows: u16,
     /// Terminal width in columns.
     cols: u16,
+    /// Per-session XDG cache dir. Kept alive so swap files written by the
+    /// spawned hjkl land in an isolated, auto-cleaned dir — NOT the real
+    /// user cache. Without this, write-on-open swaps for the shared fixtures
+    /// survive the kill-on-drop (no graceful `:q`) and the next open hits the
+    /// crash-recovery prompt, swallowing the test's keystrokes (#185).
+    #[allow(dead_code)]
+    cache_dir: tempfile::TempDir,
 }
 
 impl TerminalSession {
@@ -97,6 +104,14 @@ impl TerminalSession {
             "XDG_CONFIG_HOME",
             std::env::temp_dir().join("hjkl-e2e-config"),
         );
+        // Isolated, UNIQUE-per-session cache dir so swap files (written on
+        // open since #185) never touch the real user cache and never collide
+        // across concurrent sessions opening the same fixture (which would
+        // trip the live-PID swap lock and open the file read-only). A shared
+        // cache dir would also leave fixture swaps behind across runs and
+        // surface the recovery prompt. Unique per spawn → fresh + clean.
+        let cache_dir = tempfile::tempdir().expect("e2e cache tempdir");
+        cmd.env("XDG_CACHE_HOME", cache_dir.path());
 
         if let Some(p) = file {
             cmd.arg(p);
@@ -131,6 +146,7 @@ impl TerminalSession {
             parser,
             rows,
             cols,
+            cache_dir,
         };
 
         // Wait for the first frame to appear.
