@@ -105,6 +105,12 @@ impl SyntaxLayer {
         self.inner.set_colorizer(enabled, filetypes);
     }
 
+    /// Push rainbow bracket state from the app's active editor settings.
+    /// No-op when the value is unchanged so per-frame pushes are cheap.
+    pub fn set_rainbow_brackets(&mut self, enabled: bool) {
+        self.inner.set_rainbow_brackets(enabled);
+    }
+
     /// Drop the buffer's retained tree. Next render_viewport reparses from scratch.
     pub fn reset(&mut self, id: BufferId) {
         self.inner.reset(id);

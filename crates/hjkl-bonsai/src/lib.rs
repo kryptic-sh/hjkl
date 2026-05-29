@@ -35,6 +35,7 @@ pub mod hex_color;
 pub mod highlighter;
 pub mod predicate;
 pub mod query_sanitize;
+pub mod rainbow;
 pub mod runtime;
 pub mod theme;
 
@@ -46,6 +47,9 @@ pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use predicate::{
     Directive, MatchContext, MatchMetadata, MetaValue, Predicate, PredicateArg, PredicateRegistry,
     Source, directive_fn, predicate_fn,
+};
+pub use rainbow::{
+    RAINBOW_BRACKET_CAPTURE, RAINBOW_DEPTH_KEY, builtin_rainbows, rainbow_spans, rainbow_spans_rope,
 };
 pub use theme::{DotFallbackTheme, StyleSpec, Theme};
 pub use tree_sitter::{InputEdit, Point};

@@ -924,6 +924,11 @@ impl Highlighter {
         self.tree.as_ref()
     }
 
+    /// Read accessor for the grammar used by this highlighter.
+    pub fn grammar(&self) -> Option<&Grammar> {
+        Some(&self._grammar)
+    }
+
     /// Override the parser timeout used by `parse_incremental`. `0` disables
     /// the timeout.
     pub fn set_parse_timeout_micros(&mut self, micros: u64) {

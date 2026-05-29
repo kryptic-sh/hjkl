@@ -373,6 +373,9 @@ pub struct Options {
     /// save. Applied in-place so post-save `:e` reflects the trimmed content.
     /// hjkl-specific. Alias `tts`. Default `false`.
     pub trim_trailing_whitespace: bool,
+    /// Enable helix-style rainbow bracket coloring via tree-sitter.
+    /// hjkl-specific. Alias `rb`. Default `true`.
+    pub rainbow_brackets: bool,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -482,6 +485,7 @@ impl Default for Options {
             ],
             format_on_save: false,
             trim_trailing_whitespace: false,
+            rainbow_brackets: true,
         }
     }
 }
@@ -749,6 +753,7 @@ impl Options {
             }
             "format_on_save" | "fos" => set_bool!(format_on_save),
             "trim_trailing_whitespace" | "tts" => set_bool!(trim_trailing_whitespace),
+            "rainbow_brackets" | "rb" => set_bool!(rainbow_brackets),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -807,6 +812,7 @@ impl Options {
             }
             "format_on_save" | "fos" => OptionValue::Bool(self.format_on_save),
             "trim_trailing_whitespace" | "tts" => OptionValue::Bool(self.trim_trailing_whitespace),
+            "rainbow_brackets" | "rb" => OptionValue::Bool(self.rainbow_brackets),
             _ => return None,
         })
     }
@@ -2129,6 +2135,34 @@ mod tests {
             o.get_by_name("trim_trailing_whitespace"),
             Some(OptionValue::Bool(true)),
             "get_by_name(trim_trailing_whitespace) must also reflect the new value"
+        );
+    }
+
+    // ── rainbow_brackets ──────────────────────────────────────────────────────
+
+    #[test]
+    fn rainbow_brackets_default_true() {
+        let o = Options::default();
+        assert!(o.rainbow_brackets, "rainbow_brackets must default to true");
+    }
+
+    #[test]
+    fn options_rb_alias_sets_rainbow_brackets() {
+        let mut o = Options::default();
+        o.set_by_name("rb", OptionValue::Bool(false)).unwrap();
+        assert!(
+            !o.rainbow_brackets,
+            "rb alias must set rainbow_brackets to false"
+        );
+        assert_eq!(
+            o.get_by_name("rb"),
+            Some(OptionValue::Bool(false)),
+            "get_by_name(rb) must reflect the new value"
+        );
+        assert_eq!(
+            o.get_by_name("rainbow_brackets"),
+            Some(OptionValue::Bool(false)),
+            "get_by_name(rainbow_brackets) must also reflect the new value"
         );
     }
 }

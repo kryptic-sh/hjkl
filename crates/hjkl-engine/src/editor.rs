@@ -891,6 +891,8 @@ pub struct Settings {
     pub format_on_save: bool,
     /// Strip trailing whitespace before each `:w` save. Default `false`.
     pub trim_trailing_whitespace: bool,
+    /// Enable helix-style rainbow bracket coloring. hjkl-specific. Default `true`.
+    pub rainbow_brackets: bool,
 }
 
 impl Default for Settings {
@@ -948,6 +950,7 @@ impl Default for Settings {
             ],
             format_on_save: false,
             trim_trailing_whitespace: false,
+            rainbow_brackets: true,
         }
     }
 }
@@ -1005,6 +1008,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         colorizer_filetypes: o.colorizer_filetypes.clone(),
         format_on_save: o.format_on_save,
         trim_trailing_whitespace: o.trim_trailing_whitespace,
+        rainbow_brackets: o.rainbow_brackets,
     }
 }
 
@@ -2451,6 +2455,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.colorizer_filetypes = opts.colorizer_filetypes.clone();
         self.settings.format_on_save = opts.format_on_save;
         self.settings.trim_trailing_whitespace = opts.trim_trailing_whitespace;
+        self.settings.rainbow_brackets = opts.rainbow_brackets;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]

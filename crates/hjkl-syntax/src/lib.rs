@@ -17,7 +17,8 @@ use std::sync::Arc;
 use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{
     CommentMarkerPass, DotFallbackTheme, HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass,
-    Highlighter, InputEdit, MetaValue, Point, Theme,
+    Highlighter, InputEdit, MetaValue, Point, RAINBOW_BRACKET_CAPTURE, RAINBOW_DEPTH_KEY, Theme,
+    rainbow_spans_rope,
 };
 use hjkl_engine::Query;
 use hjkl_lang::{GrammarRequest, LanguageDirectory};
@@ -349,6 +350,8 @@ pub struct SyntaxLayer {
     colorizer: bool,
     /// Filetype allowlist for the colorizer. Empty = allow all.
     colorizer_filetypes: Vec<String>,
+    /// When `true`, rainbow bracket overlay is applied. Default `true`.
+    rainbow_brackets: bool,
 }
 
 impl SyntaxLayer {
@@ -386,6 +389,20 @@ impl SyntaxLayer {
                 "lua".to_string(),
                 "vim".to_string(),
             ],
+            rainbow_brackets: true,
+        }
+    }
+
+    /// Update rainbow bracket settings. Pass `enabled = false` to disable the
+    /// rainbow overlay globally. No-op when the value is unchanged so per-frame
+    /// pushes from the app stay cheap. Caches invalidate only on actual change.
+    pub fn set_rainbow_brackets(&mut self, enabled: bool) {
+        if self.rainbow_brackets == enabled {
+            return;
+        }
+        self.rainbow_brackets = enabled;
+        for client in self.clients.values_mut() {
+            client.invalidate_cache();
         }
     }
 
@@ -698,6 +715,7 @@ impl SyntaxLayer {
                 && (self.colorizer_filetypes.is_empty()
                     || self.colorizer_filetypes.iter().any(|ft| ft == lang_name))
         };
+        let rainbow_brackets_enabled = self.rainbow_brackets;
 
         // Re-borrow after parse.
         let client = self.clients.get_mut(&id)?;
@@ -722,6 +740,7 @@ impl SyntaxLayer {
                 theme,
                 &directory,
                 colorizer_enabled,
+                rainbow_brackets_enabled,
             );
             client.cache_rows = vp_top..vp_end;
             client.cache_dirty_gen = Some(dg);
@@ -740,6 +759,7 @@ impl SyntaxLayer {
                     theme,
                     &directory,
                     colorizer_enabled,
+                    rainbow_brackets_enabled,
                 );
                 client.cache_rows = vp_top..vp_end;
             } else {
@@ -755,6 +775,7 @@ impl SyntaxLayer {
                         theme,
                         &directory,
                         colorizer_enabled,
+                        rainbow_brackets_enabled,
                     );
                     let mut combined = new_rows;
                     combined.append(&mut client.cache_spans);
@@ -773,6 +794,7 @@ impl SyntaxLayer {
                         theme,
                         &directory,
                         colorizer_enabled,
+                        rainbow_brackets_enabled,
                     );
                     client.cache_spans.extend(new_rows);
                     client.cache_rows.end = vp_end;
@@ -863,6 +885,22 @@ impl SyntaxLayer {
 }
 
 // ---------------------------------------------------------------------------
+// Rainbow palette
+// ---------------------------------------------------------------------------
+
+/// 7-colour rainbow palette for bracket depth coloring (dark-bg readable).
+/// Depth 0 → index 0, depth N → RAINBOW_PALETTE[N % RAINBOW_PALETTE.len()].
+const RAINBOW_PALETTE: [Color; 7] = [
+    Color::rgb(255, 100, 100), // red
+    Color::rgb(255, 175, 80),  // orange
+    Color::rgb(255, 230, 80),  // yellow
+    Color::rgb(100, 220, 100), // green
+    Color::rgb(80, 210, 220),  // cyan
+    Color::rgb(100, 140, 255), // blue
+    Color::rgb(190, 120, 255), // violet
+];
+
+// ---------------------------------------------------------------------------
 // Helper: walk a row range against the retained tree
 // ---------------------------------------------------------------------------
 
@@ -877,6 +915,7 @@ fn walk_rows(
     theme: &dyn Theme,
     directory: &Arc<LanguageDirectory>,
     colorizer: bool,
+    rainbow_brackets: bool,
 ) -> Vec<Vec<(usize, usize, StyleSpec)>> {
     let rope_len = rope.len_bytes();
     let byte_start = row_starts.get(seg_start).copied().unwrap_or(rope_len);
@@ -897,6 +936,12 @@ fn walk_rows(
     if colorizer {
         let hex_color_pass = HexColorPass::new();
         hex_color_pass.apply_range_rope(&mut flat_spans, rope, byte_start..byte_end);
+    }
+    if rainbow_brackets
+        && let (Some(tree), Some(grammar)) = (highlighter.tree(), highlighter.grammar())
+    {
+        let rb_spans = rainbow_spans_rope(tree, grammar, rope, byte_start..byte_end);
+        flat_spans.extend(rb_spans);
     }
 
     // Bucket spans into ONLY the viewport row range. The prior version
@@ -940,6 +985,17 @@ fn build_by_row_range(
             bg.map(|bg| StyleSpec {
                 fg,
                 bg: Some(bg),
+                modifiers: hjkl_theme::Modifiers::default(),
+            })
+        } else if span.capture() == RAINBOW_BRACKET_CAPTURE {
+            let depth = match span.metadata.get(RAINBOW_DEPTH_KEY) {
+                Some(MetaValue::Int(d)) => *d as usize,
+                _ => 0,
+            };
+            let fg = RAINBOW_PALETTE[depth % RAINBOW_PALETTE.len()];
+            Some(StyleSpec {
+                fg: Some(fg),
+                bg: None,
                 modifiers: hjkl_theme::Modifiers::default(),
             })
         } else {
@@ -1015,6 +1071,17 @@ pub fn build_by_row(
             bg.map(|bg| StyleSpec {
                 fg,
                 bg: Some(bg),
+                modifiers: hjkl_theme::Modifiers::default(),
+            })
+        } else if span.capture() == RAINBOW_BRACKET_CAPTURE {
+            let depth = match span.metadata.get(RAINBOW_DEPTH_KEY) {
+                Some(MetaValue::Int(d)) => *d as usize,
+                _ => 0,
+            };
+            let fg = RAINBOW_PALETTE[depth % RAINBOW_PALETTE.len()];
+            Some(StyleSpec {
+                fg: Some(fg),
+                bg: None,
                 modifiers: hjkl_theme::Modifiers::default(),
             })
         } else {
