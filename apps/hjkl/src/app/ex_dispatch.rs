@@ -1261,13 +1261,26 @@ impl App {
         let our_pid = std::process::id();
         if header.writer_pid != our_pid && swap::pid_is_alive(header.writer_pid) {
             let name = filename.display().to_string();
-            self.bus.error(format!(
-                "E325: \"{name}\" is already open in another hjkl (pid {})",
-                header.writer_pid
-            ));
-            // Remove the slot that was freshly created by open_new_slot so we
-            // don't leave a half-open buffer behind.
-            self.remove_slot_on_refuse(slot_idx);
+            let pid = header.writer_pid;
+            // When another buffer exists, drop the freshly-created slot and
+            // fall back to the previous one. When this is the SOLE buffer
+            // (e.g. `hjkl <lockedfile>` startup) we can't remove it without
+            // leaving the app bufferless, so open it READ-ONLY instead — the
+            // user can view the file but can't `:w` over the other instance.
+            // Crucially, the read-only slot's swap_path is cleared so this
+            // process never overwrites the owner's swap.
+            if self.slots.len() > 1 {
+                self.bus.error(format!(
+                    "E325: \"{name}\" is already open in another hjkl (pid {pid})"
+                ));
+                self.remove_slot_on_refuse(slot_idx);
+            } else {
+                self.slots[slot_idx].editor.settings_mut().readonly = true;
+                self.slots[slot_idx].swap_path = None;
+                self.bus.error(format!(
+                    "E325: \"{name}\" is already open in another hjkl (pid {pid}) — opened read-only"
+                ));
+            }
             return false;
         }
 

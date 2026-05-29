@@ -2299,3 +2299,70 @@ fn second_instance_refused_after_first_opens_unmodified() {
         "E325 must be reported; got: {msgs:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn open_locked_sole_buffer_is_readonly() {
+    // When the locked file is the ONLY buffer (e.g. `hjkl <file>` startup),
+    // we can't drop the sole slot — so it opens READ-ONLY with its swap_path
+    // cleared, so this process never clobbers the owner's swap or file.
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("locked_sole.txt");
+    std::fs::write(&file_path, "owned by another\n").unwrap();
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("locked_sole.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+        // pid 1 (init/launchd): always alive, never our pid → live lock.
+        writer_pid: 1,
+    };
+    hjkl_app::swap::write_swap(&swap_path, &header, &ropey::Rope::from_str("x")).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    let idx = app.focused_slot_idx();
+    assert_eq!(app.slots.len(), 1, "precondition: sole buffer");
+    app.active_mut().swap_path = Some(swap_path.clone());
+
+    let recovery = app.check_recovery_on_open(idx);
+    assert!(!recovery, "locked sole buffer must not enter recovery");
+    assert!(
+        app.active().editor.is_readonly(),
+        "locked sole buffer must open read-only"
+    );
+    assert!(
+        app.active().swap_path.is_none(),
+        "read-only viewer must not own a swap path"
+    );
+
+    // The danger the read-only fallback guards against: `:w` from the locked
+    // viewer must NOT overwrite the file the owning instance holds. Dirty the
+    // buffer and attempt a write — it must be refused (E45 readonly) and the
+    // on-disk content must be unchanged.
+    seed_buffer(&mut app, "clobbered by viewer\n");
+    app.dispatch_ex("write");
+    let on_disk = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(
+        on_disk, "owned by another\n",
+        "locked read-only viewer must not be able to :w over the owner's file"
+    );
+    let msgs: Vec<String> = app.bus.history().map(|h| h.body.clone()).collect();
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("E45") || m.contains("readonly")),
+        "write must be refused with a readonly error; got: {msgs:?}"
+    );
+}
