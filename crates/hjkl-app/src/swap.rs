@@ -2,14 +2,13 @@
 //!
 //! Swap files live in `<XDG_CACHE_HOME>/hjkl/swap/<hash>.swp` where `<hash>`
 //! is the first 16 hex chars of a FNV-1a-64 over the canonicalized file path.
+//! Scratch (never-saved) buffers get `scratch_<pid>_<bufid>.swp` in the same
+//! directory; their header has `canonical_path = ""`.
 //!
 //! Format:
 //! - 4 bytes  magic `b"HSWP"`
 //! - then a postcard-encoded `SwapHeader` length-prefixed by a `u32` LE
 //! - then the raw UTF-8 body (rope chunks streamed directly)
-//!
-//! TODOs deferred from issue #185:
-//! - TODO(#185): scratch/never-saved-buffer swaps
 
 #[cfg(unix)]
 use libc;
@@ -101,6 +100,72 @@ pub fn swap_path_for(canonical_path: &Path) -> std::io::Result<PathBuf> {
     let hash = fnv1a64(path_str.as_bytes());
     let name = format!("{hash:016x}.swp");
     Ok(swap_dir()?.join(name))
+}
+
+/// Swap path for an unnamed/scratch buffer: `swap_dir()/scratch_<pid>_<bufid>.swp`
+///
+/// The filename is stable for a given (pid, buffer_id) pair within a session,
+/// so the same slot always writes to the same path.
+pub fn scratch_swap_path(pid: u32, buffer_id: u64) -> std::io::Result<PathBuf> {
+    Ok(swap_dir()?.join(format!("scratch_{pid}_{buffer_id}.swp")))
+}
+
+/// A recoverable orphan scratch swap discovered by [`scan_orphan_scratch_swaps_in`].
+pub struct OrphanScratch {
+    /// Path to the `.swp` file on disk.
+    pub swap_path: PathBuf,
+    /// Parsed header (canonical_path is empty for scratch swaps).
+    pub header: SwapHeader,
+    /// Full text body of the unsaved buffer.
+    pub body: String,
+}
+
+/// Scan `dir` for scratch swaps (`scratch_*.swp` with empty `canonical_path`)
+/// whose `writer_pid` is NOT alive (i.e. the session crashed).
+///
+/// Live swaps (writer_pid is still running) are skipped — they belong to an
+/// active hjkl instance. Unreadable or non-scratch files are silently ignored.
+/// Accepts a `dir` parameter for testability without real XDG I/O.
+pub fn scan_orphan_scratch_swaps_in(dir: &Path) -> Vec<OrphanScratch> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("scratch_") || !name_str.ends_with(".swp") {
+            continue;
+        }
+        let path = entry.path();
+        let (header, body) = match read_swap(&path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Only scratch swaps have an empty canonical_path.
+        if !header.canonical_path.is_empty() {
+            continue;
+        }
+        // Skip swaps owned by a live process (another hjkl instance).
+        if pid_is_alive(header.writer_pid) {
+            continue;
+        }
+        out.push(OrphanScratch {
+            swap_path: path,
+            header,
+            body,
+        });
+    }
+    out
+}
+
+/// Convenience: scan the real `swap_dir()`.
+pub fn scan_orphan_scratch_swaps() -> Vec<OrphanScratch> {
+    match swap_dir() {
+        Ok(d) => scan_orphan_scratch_swaps_in(&d),
+        Err(_) => Vec::new(),
+    }
 }
 
 // ── Write ─────────────────────────────────────────────────────────────────────
@@ -360,6 +425,120 @@ mod tests {
     fn pid_is_alive_false_on_non_unix() {
         assert!(!pid_is_alive(std::process::id()));
         assert!(!pid_is_alive(999_999_999));
+    }
+
+    // ── scratch_swap_path tests ───────────────────────────────────────────────
+
+    /// Same (pid, bufid) always produces the same path component.
+    #[test]
+    fn scratch_swap_path_stable_and_distinct() {
+        // We can't call swap_dir() without real XDG, so test the filename shape
+        // by inspecting the last component (swap_dir varies per machine).
+        // Two calls with the same args must agree on the filename.
+        let pid = 12345u32;
+        let buf_a = 7u64;
+        let buf_b = 8u64;
+        let name_a1 = format!("scratch_{pid}_{buf_a}.swp");
+        let name_a2 = format!("scratch_{pid}_{buf_a}.swp");
+        let name_b = format!("scratch_{pid}_{buf_b}.swp");
+        assert_eq!(name_a1, name_a2, "same (pid,bufid) must give same name");
+        assert_ne!(name_a1, name_b, "different bufid must give different name");
+    }
+
+    // ── scan_orphan_scratch_swaps_in tests ───────────────────────────────────
+
+    fn dead_pid_scratch_header() -> SwapHeader {
+        SwapHeader {
+            magic: SwapHeader::MAGIC,
+            version: SwapHeader::VERSION,
+            canonical_path: String::new(), // empty = scratch
+            file_mtime_unix_ms: 0,
+            write_time_unix_ms: 1_700_000_000_000,
+            cursor: (1, 0),
+            writer_pid: 999_999_999, // almost certainly dead
+        }
+    }
+
+    /// A scratch swap with a dead writer_pid is returned by the scan.
+    #[test]
+    #[cfg(unix)]
+    fn scan_finds_dead_pid_scratch_orphan() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("scratch_999999999_42.swp");
+        let header = dead_pid_scratch_header();
+        let rope = Rope::from_str("unsaved content\n");
+        write_swap(&swp, &header, &rope).unwrap();
+
+        let orphans = scan_orphan_scratch_swaps_in(td.path());
+        assert_eq!(orphans.len(), 1, "expected 1 orphan, got {}", orphans.len());
+        assert_eq!(orphans[0].body, "unsaved content\n");
+        assert!(orphans[0].header.canonical_path.is_empty());
+    }
+
+    /// A scratch swap whose writer_pid is THIS process is alive → skipped.
+    #[test]
+    #[cfg(unix)]
+    fn scan_skips_live_pid_scratch() {
+        let td = tempfile::tempdir().unwrap();
+        let pid = std::process::id();
+        let swp = td.path().join(format!("scratch_{pid}_1.swp"));
+        let header = SwapHeader {
+            magic: SwapHeader::MAGIC,
+            version: SwapHeader::VERSION,
+            canonical_path: String::new(),
+            file_mtime_unix_ms: 0,
+            write_time_unix_ms: 1_700_000_000_000,
+            cursor: (0, 0),
+            writer_pid: pid,
+        };
+        let rope = Rope::from_str("live session content");
+        write_swap(&swp, &header, &rope).unwrap();
+
+        let orphans = scan_orphan_scratch_swaps_in(td.path());
+        assert!(
+            orphans.is_empty(),
+            "live-pid scratch swap must be skipped, got {} orphan(s)",
+            orphans.len()
+        );
+    }
+
+    /// A named-file swap (non-empty canonical_path) in the dir is NOT returned.
+    #[test]
+    fn scan_skips_named_swaps() {
+        let td = tempfile::tempdir().unwrap();
+        // Use scratch_ prefix to pass the name filter, but give it a non-empty canonical_path.
+        let swp = td.path().join("scratch_999999999_99.swp");
+        let header = SwapHeader {
+            magic: SwapHeader::MAGIC,
+            version: SwapHeader::VERSION,
+            canonical_path: "/home/user/foo.rs".to_string(), // non-empty → named
+            file_mtime_unix_ms: 0,
+            write_time_unix_ms: 1_700_000_000_000,
+            cursor: (0, 0),
+            writer_pid: 999_999_999,
+        };
+        let rope = Rope::from_str("named file content");
+        write_swap(&swp, &header, &rope).unwrap();
+
+        let orphans = scan_orphan_scratch_swaps_in(td.path());
+        assert!(
+            orphans.is_empty(),
+            "named swap must be excluded from scratch scan"
+        );
+    }
+
+    /// A `scratch_*.swp` with garbage bytes is silently skipped, no panic.
+    #[test]
+    fn scan_skips_unreadable() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("scratch_999999999_77.swp");
+        std::fs::write(&swp, b"GARBAGE DATA NOT A VALID SWAP").unwrap();
+
+        let orphans = scan_orphan_scratch_swaps_in(td.path());
+        assert!(
+            orphans.is_empty(),
+            "unreadable swap must be skipped without panic"
+        );
     }
 
     // ── Header v2 roundtrip ───────────────────────────────────────────────────

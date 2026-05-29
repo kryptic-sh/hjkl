@@ -803,7 +803,16 @@ impl App {
     /// `updatetime` deadline stops shortening the poll timeout.
     pub(crate) fn active_swap_pending(&self) -> bool {
         let s = self.active();
-        s.swap_path.is_some() && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
+        // A swap write is due when the buffer changed since the last swap AND
+        // there is something to protect: either a named buffer with a swap path
+        // already assigned, OR an unnamed (scratch) buffer that now holds
+        // content. Scratch slots start with `swap_path = None` and have it
+        // assigned lazily by `write_swap_for_slot` on the first non-empty
+        // write — so the scratch arm must NOT require `swap_path.is_some()`,
+        // else the idle writer would never fire for a scratch buffer.
+        let has_target =
+            s.swap_path.is_some() || (s.filename.is_none() && s.editor.buffer().byte_len() > 0);
+        has_target && s.last_swap_dirty_gen != Some(s.editor.buffer().dirty_gen())
     }
 
     /// Return a mutable reference to the active buffer slot.

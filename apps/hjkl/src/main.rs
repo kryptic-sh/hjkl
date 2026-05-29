@@ -343,6 +343,11 @@ fn main() -> Result<()> {
     if args.picker {
         app.open_picker();
     }
+    // Recover any orphan scratch swaps from a previous crashed session.
+    // This runs after all CLI files are open so recovered unnamed buffers
+    // come last in the slot list; it does NOT run inside App::new so that
+    // tests and headless/embed modes are free of real-XDG scanning.
+    app.recover_orphan_scratch_buffers();
     // Run any +cmd / -c CMD tokens before entering raw mode. Errors surface
     // as toasts on the notification bus and become visible on the first frame.
     // Matches vim/nvim: `nvim +vsp file.txt` opens the file then runs `:vsp`.

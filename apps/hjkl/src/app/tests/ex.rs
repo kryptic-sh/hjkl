@@ -2423,3 +2423,126 @@ fn locked_secondary_slot_is_readonly_not_removed() {
         "locked read-only slot must not own a swap path"
     );
 }
+
+// ── Scratch-buffer swap tests (issue #185) ────────────────────────────────────
+
+/// A scratch buffer with content gets a swap file written lazily.
+///
+/// No `XDG_CACHE_HOME` env mutation — that's a process-global var and other
+/// parallel tests inherit it, racing on the swap dir. Instead we let the
+/// writer pick the real swap_dir path (unique per pid+buffer_id) and clean up.
+#[test]
+fn scratch_buffer_writes_swap_when_dirty() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "unsaved work");
+
+    app.write_swap_for_slot(0);
+
+    let swap_path = app.slots[0]
+        .swap_path
+        .clone()
+        .expect("swap_path must be Some after write for non-empty scratch");
+    assert!(swap_path.exists(), "swap file must exist at {swap_path:?}");
+
+    let (header, body) = hjkl_app::swap::read_swap(&swap_path).unwrap();
+    assert!(
+        header.canonical_path.is_empty(),
+        "scratch swap must have empty canonical_path, got {:?}",
+        header.canonical_path
+    );
+    assert_eq!(body, "unsaved work", "swap body must match buffer content");
+
+    // Clean up the swap we wrote into the real swap dir.
+    let _ = hjkl_app::swap::remove_swap(&swap_path);
+}
+
+/// An empty scratch buffer produces no swap file. `swap_path` staying `None`
+/// is the proof — `write_swap_for_slot` returns before choosing a path when
+/// the buffer is empty, so nothing is written (no env / filesystem scan
+/// needed, hence no cross-test races).
+#[test]
+fn empty_scratch_buffer_writes_no_swap() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Buffer is empty by default — do not seed any content.
+
+    app.write_swap_for_slot(0);
+
+    assert!(
+        app.slots[0].swap_path.is_none(),
+        "empty scratch buffer must not get a swap_path (so nothing was written)"
+    );
+}
+
+/// A dead-pid orphan scratch swap is loaded into a recovered unnamed buffer.
+#[test]
+fn recover_orphan_scratch_loads_buffer() {
+    let td = tempfile::tempdir().unwrap();
+
+    // Write a scratch swap with a dead pid into the tempdir.
+    let orphan_path = td.path().join("scratch_999999999_42.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: String::new(),
+        file_mtime_unix_ms: 0,
+        write_time_unix_ms: 1_700_000_000_000,
+        cursor: (0, 0),
+        writer_pid: 999_999_999,
+    };
+    let rope = ropey::Rope::from_str("unsaved work\n");
+    hjkl_app::swap::write_swap(&orphan_path, &header, &rope).unwrap();
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    let initial_slot_count = app.slots.len();
+
+    // Use dir-injected variant — no XDG mutation needed.
+    let recovered = app.recover_orphan_scratch_buffers_from(td.path());
+
+    assert_eq!(recovered, 1, "must recover exactly 1 buffer");
+    assert_eq!(
+        app.slots.len(),
+        initial_slot_count + 1,
+        "a new slot must have been added"
+    );
+
+    let new_slot = &app.slots[app.slots.len() - 1];
+    assert!(
+        new_slot.filename.is_none(),
+        "recovered slot must be unnamed"
+    );
+    assert!(new_slot.dirty, "recovered slot must be dirty");
+
+    // Check content contains the recovered text.
+    let content = new_slot.editor.buffer().rope().to_string();
+    assert!(
+        content.contains("unsaved work"),
+        "recovered buffer content must contain 'unsaved work', got {content:?}"
+    );
+
+    // Orphan swap must be deleted.
+    assert!(
+        !orphan_path.exists(),
+        "orphan swap must be deleted after recovery"
+    );
+}
+
+#[test]
+fn active_swap_pending_true_for_dirty_scratch_buffer() {
+    // Regression: scratch slots start with swap_path = None, so the idle
+    // writer's active_swap_pending() gate must still fire for a non-empty
+    // unnamed buffer — otherwise the scratch swap is never written at runtime.
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert!(
+        app.active().filename.is_none(),
+        "precondition: scratch buffer"
+    );
+    assert!(
+        !app.active_swap_pending(),
+        "empty scratch buffer has nothing to protect yet"
+    );
+    seed_buffer(&mut app, "unsaved scratch work\n");
+    assert!(
+        app.active_swap_pending(),
+        "dirty non-empty scratch buffer must arm the idle swap writer"
+    );
+}

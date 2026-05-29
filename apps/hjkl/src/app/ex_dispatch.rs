@@ -1019,44 +1019,77 @@ impl App {
 
     /// Write the swap file for slot `idx`.
     ///
-    /// Skips silently when:
-    /// - the slot has no filename (scratch buffer); TODO(#185): scratch swaps
-    /// - the buffer hasn't changed since the last swap write (`dirty_gen` match)
-    /// - building the swap path fails
+    /// Named buffers (with a filename): skip when the slot has no `swap_path`
+    /// or the buffer hasn't changed since the last write.
+    ///
+    /// Scratch buffers (no filename): skip when the buffer is empty (nothing
+    /// worth recovering). Otherwise assign a `scratch_<pid>_<bufid>.swp` path
+    /// lazily on the first write (leaving `swap_path = None` for pristine
+    /// empties avoids littering the swap dir on every `:new`/`:vnew`).
     ///
     /// Errors during write are logged as debug (not shown to user — swap is
     /// best-effort).
     pub(crate) fn write_swap_for_slot(&mut self, idx: usize) {
         use hjkl_app::swap::{self, SwapHeader};
 
-        let filename = match self.slots[idx].filename.as_ref() {
-            Some(p) => p.clone(),
-            None => return, // TODO(#185): scratch/never-saved-buffer swaps
-        };
-        let swap_path = match self.slots[idx].swap_path.as_ref() {
-            Some(p) => p.clone(),
-            None => return,
-        };
+        let is_scratch = self.slots[idx].filename.is_none();
+
+        if is_scratch {
+            // Skip if the buffer is empty — no content worth recovering.
+            // byte_len() == 0 means the rope is empty.
+            let byte_len = self.slots[idx].editor.buffer().byte_len();
+            if byte_len == 0 {
+                return;
+            }
+
+            // Lazily assign a scratch swap path on the first non-empty write.
+            if self.slots[idx].swap_path.is_none() {
+                let pid = std::process::id();
+                let buffer_id = self.slots[idx].buffer_id;
+                match swap::scratch_swap_path(pid, buffer_id) {
+                    Ok(p) => self.slots[idx].swap_path = Some(p),
+                    Err(e) => {
+                        tracing::debug!(err = %e, "scratch_swap_path failed");
+                        return;
+                    }
+                }
+            }
+        } else {
+            // Named buffer: must already have a swap_path (set by build_slot /
+            // arm_swap_on_open). No-op if missing.
+            if self.slots[idx].swap_path.is_none() {
+                return;
+            }
+        }
+
+        let swap_path = self.slots[idx].swap_path.as_ref().unwrap().clone();
         let current_gen = self.slots[idx].editor.buffer().dirty_gen();
         if self.slots[idx].last_swap_dirty_gen == Some(current_gen) {
             return; // Nothing changed since last swap.
         }
 
-        // mtime of the file on disk.
-        let file_mtime_unix_ms = self.slots[idx]
-            .disk_mtime
-            .and_then(|t| {
-                t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                    .ok()
-                    .map(|d| d.as_millis() as u64)
-            })
-            .unwrap_or(0);
-
         let (cursor_row, cursor_col) = self.slots[idx].editor.cursor();
-        let canonical_path = std::fs::canonicalize(&filename)
-            .unwrap_or_else(|_| filename.clone())
-            .to_string_lossy()
-            .into_owned();
+
+        let (canonical_path, file_mtime_unix_ms) = if is_scratch {
+            // Scratch swap: empty canonical_path marks it as scratch.
+            (String::new(), 0u64)
+        } else {
+            let filename = self.slots[idx].filename.as_ref().unwrap().clone();
+            let mtime = self.slots[idx]
+                .disk_mtime
+                .and_then(|t| {
+                    t.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .ok()
+                        .map(|d| d.as_millis() as u64)
+                })
+                .unwrap_or(0);
+            let cp = std::fs::canonicalize(&filename)
+                .unwrap_or_else(|_| filename.clone())
+                .to_string_lossy()
+                .into_owned();
+            (cp, mtime)
+        };
+
         let header = SwapHeader {
             magic: SwapHeader::MAGIC,
             version: SwapHeader::VERSION,
@@ -1100,11 +1133,120 @@ impl App {
     /// Remove all slots' swap files. Called on graceful shutdown so a clean
     /// exit leaves no swap (no false recovery next open); a crash/kill bypasses
     /// this and the swap survives for recovery.
+    ///
+    /// Scratch buffers are covered: once their first non-empty idle write fires,
+    /// `swap_path` is `Some` and is removed here on graceful exit just like
+    /// named-file swaps. Empty scratch buffers never get a swap_path, so there
+    /// is nothing to clean up for them.
     pub(crate) fn cleanup_swaps_on_exit(&mut self) {
         for slot in &mut self.slots {
             if let Some(p) = slot.swap_path.take() {
                 let _ = hjkl_app::swap::remove_swap(&p);
             }
+        }
+    }
+
+    /// Load any orphan scratch swaps (unsaved buffers from a crashed session)
+    /// from `dir` into recovered unnamed buffers. Returns the count recovered.
+    ///
+    /// Each recovered buffer is dirty (nudging the user to `:w <name>`), and the
+    /// originating orphan swap file is deleted so it is not re-recovered on the
+    /// next launch.  The new buffers are appended as background slots — focus is
+    /// NOT switched (user navigates to them via `:bnext` / buffer picker).
+    ///
+    /// The `_from(dir)` variant accepts a directory for testability without real
+    /// XDG I/O.  `recover_orphan_scratch_buffers` calls the real `swap_dir()`.
+    ///
+    /// NOTE: auto-loads all orphans (MVP). A picker UI for many orphans is
+    /// out of scope for issue #185.
+    ///
+    /// Called once from `main` after construction + config + CLI files are
+    /// loaded — NOT from `App::new` (keeps tests and every App::new free of
+    /// real-XDG scanning).
+    pub(crate) fn recover_orphan_scratch_buffers_from(&mut self, dir: &std::path::Path) -> usize {
+        use crate::app::STATUS_LINE_HEIGHT;
+        use crate::host::TuiHost;
+        use hjkl_app::swap;
+        use hjkl_buffer::Buffer;
+        use hjkl_engine::{Editor, Options};
+
+        let orphans = swap::scan_orphan_scratch_swaps_in(dir);
+        let n = orphans.len();
+        if n == 0 {
+            return 0;
+        }
+
+        for orphan in orphans {
+            // Build a fresh unnamed slot (mirrors build_slot with path=None).
+            let buffer_id = self.next_buffer_id;
+            self.next_buffer_id += 1;
+            let host = TuiHost::new();
+            let mut editor = Editor::new(Buffer::new(), host, Options::default());
+            if let Ok(size) = crossterm::terminal::size() {
+                let vp = editor.host_mut().viewport_mut();
+                vp.width = size.0;
+                vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);
+            }
+            // Drain initial (empty) content signals so they don't confuse syntax.
+            let _ = editor.take_content_edits();
+            let _ = editor.take_content_reset();
+
+            // Install recovered content via set_content (full reset path so
+            // syntax gets a clean parse_initial, not a stale incremental edit).
+            let stripped = orphan.body.strip_suffix('\n').unwrap_or(&orphan.body);
+            editor.set_content(stripped);
+
+            // Restore cursor from swap header.
+            let (row, col) = orphan.header.cursor;
+            editor.jump_cursor(row as usize, col as usize);
+
+            let mut slot = super::BufferSlot {
+                buffer_id,
+                editor,
+                filename: None,
+                dirty: true, // nudge user to :w as <name>
+                is_new_file: false,
+                is_untracked: false,
+                diag_signs: Vec::new(),
+                diag_signs_lsp: Vec::new(),
+                lsp_diags: Vec::new(),
+                last_lsp_dirty_gen: None,
+                git_signs: Vec::new(),
+                last_git_dirty_gen: None,
+                last_git_refresh_at: std::time::Instant::now(),
+                saved_hash: 0,
+                saved_len: 0,
+                signature_cache: None,
+                disk_mtime: None,
+                disk_len: None,
+                disk_state: super::DiskState::Synced,
+                // Leave swap_path None: the idle writer will assign a fresh
+                // scratch path for this session on the next edit if needed.
+                swap_path: None,
+                last_swap_dirty_gen: None,
+            };
+            slot.snapshot_saved();
+            // Re-mark dirty after snapshot (snapshot_saved clears dirty).
+            slot.dirty = true;
+            self.slots.push(slot);
+
+            // Delete the orphan swap so it won't recover again next launch.
+            let _ = swap::remove_swap(&orphan.swap_path);
+        }
+
+        self.bus.info(format!(
+            "Recovered {n} unsaved buffer(s) from a previous session"
+        ));
+        n
+    }
+
+    /// Convenience wrapper: scan the real `swap_dir()`.
+    ///
+    /// Called once from `main` after construction — NOT from `App::new`.
+    pub(crate) fn recover_orphan_scratch_buffers(&mut self) -> usize {
+        match hjkl_app::swap::swap_dir() {
+            Ok(d) => self.recover_orphan_scratch_buffers_from(&d),
+            Err(_) => 0,
         }
     }
 
