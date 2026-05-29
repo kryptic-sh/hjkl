@@ -400,3 +400,47 @@ initial_cursor = [0, 0]
 keys = ":s/hello/world/<CR>:earlier 5<CR>"
 expected_buffer = "hello\n"
 expected_cursor = [0, 0]
+
+# ─── linewise change preserves first-line indent (autoindent on) ──────────────
+#
+# hjkl defaults autoindent on; nvim --clean defaults it off, so each case
+# prefixes ":set autoindent<CR>" to put BOTH sides in the same mode. cc/cj/Vc
+# all leave one line carrying the changed line's leading whitespace; cursor on
+# the last inserted char. Verified against nvim v0.12.2 with :set autoindent.
+
+# cc on an indented line keeps the indent, replaces content.
+[[cases]]
+name = "change_cc_preserves_indent"
+initial_buffer = "fn f() {\n    a;\n    b;\n}\n"
+initial_cursor = [1, 4]
+keys = ":set autoindent<CR>ccbar<Esc>"
+expected_buffer = "fn f() {\n    bar\n    b;\n}\n"
+expected_cursor = [1, 6]
+
+# cj (change current + line below) collapses to one indented line.
+[[cases]]
+name = "change_cj_preserves_indent_one_line"
+initial_buffer = "fn f() {\n    a;\n    b;\n}\n"
+initial_cursor = [1, 4]
+keys = ":set autoindent<CR>cjbar<Esc>"
+expected_buffer = "fn f() {\n    bar\n}\n"
+expected_cursor = [1, 6]
+
+# Vjc (visual-line change of two rows) — same as cj.
+[[cases]]
+name = "change_visual_line_preserves_indent"
+initial_buffer = "fn f() {\n    a;\n    b;\n}\n"
+initial_cursor = [1, 4]
+keys = ":set autoindent<CR>Vjcbar<Esc>"
+expected_buffer = "fn f() {\n    bar\n}\n"
+expected_cursor = [1, 6]
+
+# ck (change current + line above) — top row is the unindented `fn f() {`,
+# so the surviving line has no indent.
+[[cases]]
+name = "change_ck_uses_top_line_indent"
+initial_buffer = "fn f() {\n    a;\n    b;\n}\n"
+initial_cursor = [1, 4]
+keys = ":set autoindent<CR>ckbar<Esc>"
+expected_buffer = "bar\n    b;\n}\n"
+expected_cursor = [0, 2]
