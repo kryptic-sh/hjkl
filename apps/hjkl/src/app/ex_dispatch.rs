@@ -1126,6 +1126,30 @@ impl App {
         true
     }
 
+    /// Install the recovered swap `body` into slot `slot_idx` and restore the
+    /// cursor. Used by the recovery-prompt `y` path.
+    ///
+    /// MUST signal a full content reset (not an incremental edit): the slot's
+    /// syntax tree was parsed against the on-disk content during `build_slot`,
+    /// so swapping in the swap body wholesale requires a fresh `parse_initial`.
+    /// A raw `BufferEdit::replace_all` only emits an incremental ContentEdit,
+    /// which drifts the retained tree against the new bytes → broken
+    /// highlighting (#185). `Editor::set_content` sets `pending_content_reset`,
+    /// which `sync_after_engine_mutation` routes to `syntax.reset`.
+    pub(crate) fn recover_install_content(
+        &mut self,
+        slot_idx: usize,
+        body: &str,
+        row: usize,
+        col: usize,
+    ) {
+        // Strip trailing newline — the engine's content format omits it.
+        let stripped = body.strip_suffix('\n').unwrap_or(body);
+        self.slots[slot_idx].editor.set_content(stripped);
+        self.slots[slot_idx].editor.jump_cursor(row, col);
+        self.slots[slot_idx].dirty = true;
+    }
+
     /// Handle a keypress while the recovery prompt is active.
     ///
     /// - `y` → load the swap body into the buffer, mark dirty, keep swap.
@@ -1141,19 +1165,8 @@ impl App {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 let body = pr.body.clone();
                 let slot_idx = pr.slot_idx;
-                // Strip trailing newline as the engine's content format omits it.
-                let stripped = body.strip_suffix('\n').unwrap_or(&body).to_string();
-                let body_stripped = stripped.as_str();
-                hjkl_engine::BufferEdit::replace_all(
-                    self.slots[slot_idx].editor.buffer_mut(),
-                    body_stripped,
-                );
-                // Restore cursor from header.
                 let (row, col) = pr.header.cursor;
-                self.slots[slot_idx]
-                    .editor
-                    .jump_cursor(row as usize, col as usize);
-                self.slots[slot_idx].dirty = true;
+                self.recover_install_content(slot_idx, &body, row as usize, col as usize);
                 self.pending_recovery = None;
                 self.bus.info("Recovered from swap file. Use :w to save.");
                 self.sync_after_engine_mutation();

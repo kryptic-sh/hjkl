@@ -1906,3 +1906,62 @@ fn recovery_y_loads_swap_body() {
         "buffer must contain swap body after 'y', got: {content:?}"
     );
 }
+
+// ── #185 recovery must reset syntax (content_reset) ──────────────────────────
+
+#[test]
+fn recovery_y_resets_syntax_spans() {
+    // Repro for the syntax-highlight-breaks-after-recovery bug: the recovery
+    // accept path must signal a content reset (like a normal file open) so the
+    // syntax layer drops its stale tree + spans. We assert this via the proxy
+    // that `handle_active_content_reset` clears `styled_spans` to empty — which
+    // only happens when the content-install flags `pending_content_reset`.
+    let td = tempfile::tempdir().unwrap();
+    let file_path = td.path().join("recover_syntax.txt");
+    std::fs::write(&file_path, "on disk\n").unwrap();
+    let canonical = std::fs::canonicalize(&file_path).unwrap();
+    let file_mtime_ms = std::fs::metadata(&file_path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let swap_path = td.path().join("recover_syntax.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canonical.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: file_mtime_ms,
+        write_time_unix_ms: file_mtime_ms + 10_000,
+        cursor: (0, 0),
+    };
+    let rope = ropey::Rope::from_str("recovered body line one\nline two\n");
+    hjkl_app::swap::write_swap(&swap_path, &header, &rope).unwrap();
+
+    let mut app = App::new(Some(file_path.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    app.active_mut().swap_path = Some(swap_path.clone());
+
+    let idx = app.focused_slot_idx();
+
+    // The slot's syntax tree was parsed against the on-disk bytes in
+    // build_slot. Recovering must force a fresh parse_initial — i.e. signal a
+    // FULL content reset (pending_content_reset), not an incremental ContentEdit
+    // — or the retained tree drifts against the swapped-in bytes and
+    // highlighting breaks (#185). Drain build_slot's own reset first, then
+    // install the recovered body and assert the reset fired.
+    let _ = app.active_mut().editor.take_content_reset();
+    app.recover_install_content(idx, "recovered body line one\nline two\n", 0, 0);
+    assert!(
+        app.active_mut().editor.take_content_reset(),
+        "recovery content install must signal a full content reset (set_content), \
+         not an incremental edit (replace_all) — else the syntax tree drifts"
+    );
+    let content = app.active().editor.buffer().content_joined();
+    assert!(
+        content.contains("recovered body line one"),
+        "buffer must hold the recovered body, got: {content:?}"
+    );
+}
