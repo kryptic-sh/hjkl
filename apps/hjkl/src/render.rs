@@ -919,7 +919,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // on just these two cells for maximum contrast.
     if is_focused && let Some(pairs) = app.matchparen_cells() {
         let match_paren_style = Style::default()
-            .fg(app.theme.ui.match_paren_fg)
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let text_x = area.x + sign_w + num_gw;
