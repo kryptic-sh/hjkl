@@ -5861,10 +5861,20 @@ fn execute_line_op<H: crate::types::Host>(
                     kind: BufKind::Line,
                 });
             }
+            // Vim `cc` with `autoindent` preserves the changed line's leading
+            // whitespace and drops the cursor after it. With autoindent off it
+            // wipes the whole line. Compute the indent char-count of `row`
+            // before mutating.
+            let indent_chars = if ed.settings.autoindent {
+                let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(&ed.buffer), row);
+                line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+            } else {
+                0
+            };
             let line_chars = buf_line_chars(&ed.buffer, row);
-            if line_chars > 0 {
+            if line_chars > indent_chars {
                 ed.mutate_edit(Edit::DeleteRange {
-                    start: Position::new(row, 0),
+                    start: Position::new(row, indent_chars),
                     end: Position::new(row, line_chars),
                     kind: BufKind::Char,
                 });
@@ -5873,7 +5883,7 @@ fn execute_line_op<H: crate::types::Host>(
                 ed.record_yank_to_host(payload.clone());
                 ed.record_delete(payload, true);
             }
-            buf_set_cursor_rc(&mut ed.buffer, row, 0);
+            buf_set_cursor_rc(&mut ed.buffer, row, indent_chars);
             ed.push_buffer_cursor_to_textarea();
             begin_insert_noundo(ed, 1, InsertReason::AfterChange);
         }

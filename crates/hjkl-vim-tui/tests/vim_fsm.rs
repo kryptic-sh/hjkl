@@ -1729,6 +1729,30 @@ fn cc_leaves_blank_line() {
     );
 }
 
+#[test]
+fn cc_preserves_indent_with_autoindent() {
+    // autoindent defaults on → `cc` keeps the changed line's leading
+    // whitespace and drops the cursor after it (vim parity).
+    let mut e = editor_with("fn f() {\n    let x = 1;\n}");
+    e.jump_cursor(1, 4);
+    run_keys(&mut e, "ccbar<Esc>");
+    assert_eq!(
+        e.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect::<Vec<_>>(),
+        &[
+            "fn f() {".to_string(),
+            "    bar".to_string(),
+            "}".to_string()
+        ]
+    );
+}
+
 // ─── Scrolling ────────────────────────────────────────────────────────
 
 // ─── WORD motions (W/B/E) ─────────────────────────────────────────────
