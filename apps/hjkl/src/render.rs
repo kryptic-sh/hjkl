@@ -913,11 +913,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // ── matchparen bracket highlight ──────────────────────────────────────
-    // Patch the bg of both the cursor bracket and its partner. Only for
-    // the focused window. Compose: use cell.style().patch(…) so rainbow
-    // fg colors from the syntax layer survive — only the bg is overridden.
+    // Highlight both the cursor bracket and its partner, focused window only.
+    // Bold + reversed + a bright accent bg so the pair is unmistakable; the
+    // explicit fg/bg (rather than a bg-only patch) overrides the rainbow color
+    // on just these two cells for maximum contrast.
     if is_focused && let Some(pairs) = app.matchparen_cells() {
-        let match_paren_style = Style::default().bg(app.theme.ui.match_paren_bg);
+        let match_paren_style = Style::default()
+            .fg(app.theme.ui.match_paren_fg)
+            .bg(app.theme.ui.match_paren_bg)
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED);
         let text_x = area.x + sign_w + num_gw;
         let vp_bot = vp_top + area.height as usize;
         let buf = frame.buffer_mut();
