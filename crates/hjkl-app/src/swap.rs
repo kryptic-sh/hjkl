@@ -447,6 +447,9 @@ mod tests {
 
     // ── scan_orphan_scratch_swaps_in tests ───────────────────────────────────
 
+    // Only used by the unix-gated scan tests below (pid liveness); gating it
+    // too keeps `-D dead_code` happy on Windows.
+    #[cfg(unix)]
     fn dead_pid_scratch_header() -> SwapHeader {
         SwapHeader {
             magic: SwapHeader::MAGIC,
