@@ -95,6 +95,8 @@ pub fn all_setting_names() -> Vec<String> {
         "tts".into(),
         "rainbow_brackets".into(),
         "rb".into(),
+        "matchparen".into(),
+        "mps".into(),
     ]
 }
 
@@ -118,7 +120,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -161,6 +163,7 @@ pub(crate) fn apply_set<H: Host>(
                 "off"
             },
             if s.rainbow_brackets { "on" } else { "off" },
+            if s.matchparen { "on" } else { "off" },
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -241,6 +244,7 @@ fn query_option_value<H: Host>(
         "format_on_save" | "fos" => on_off(s.format_on_save),
         "trim_trailing_whitespace" | "tts" => on_off(s.trim_trailing_whitespace),
         "rainbow_brackets" | "rb" => on_off(s.rainbow_brackets),
+        "matchparen" | "mps" => on_off(s.matchparen),
         _ => return None,
     })
 }
@@ -457,6 +461,7 @@ fn apply_set_token<H: Host>(
             editor.settings_mut().trim_trailing_whitespace = value
         }
         "rainbow_brackets" | "rb" => editor.settings_mut().rainbow_brackets = value,
+        "matchparen" | "mps" => editor.settings_mut().matchparen = value,
         "foldenable" | "fen" | "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }

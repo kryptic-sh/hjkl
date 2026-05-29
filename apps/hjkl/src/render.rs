@@ -912,6 +912,30 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── matchparen bracket highlight ──────────────────────────────────────
+    // Patch the bg of both the cursor bracket and its partner. Only for
+    // the focused window. Compose: use cell.style().patch(…) so rainbow
+    // fg colors from the syntax layer survive — only the bg is overridden.
+    if is_focused && let Some(pairs) = app.matchparen_cells() {
+        let match_paren_style = Style::default().bg(app.theme.ui.match_paren_bg);
+        let text_x = area.x + sign_w + num_gw;
+        let vp_bot = vp_top + area.height as usize;
+        let buf = frame.buffer_mut();
+        for (pair_row, pair_col) in pairs {
+            if pair_row < vp_top || pair_row >= vp_bot {
+                continue;
+            }
+            let screen_row = area.y + (pair_row - vp_top) as u16;
+            let screen_col = text_x + pair_col as u16;
+            if screen_col >= area.x + area.width {
+                continue;
+            }
+            if let Some(cell) = buf.cell_mut((screen_col, screen_row)) {
+                cell.set_style(cell.style().patch(match_paren_style));
+            }
+        }
+    }
+
     // Emit the terminal cursor only for the focused window.
     // extra_gutter_width = sign_w + fold_w (cells left of number column).
     if show_cursor

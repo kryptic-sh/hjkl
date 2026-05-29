@@ -767,3 +767,68 @@ fn default_config_chord_timeout_ms_is_1000() {
         "bundled default chord_timeout_ms must be 1000"
     );
 }
+
+// ── matchparen_cells tests ───────────────────────────────────────────────────
+
+/// matchparen_cells resolves both bracket positions when cursor is on a bracket.
+#[test]
+fn matchparen_cells_resolves_pair_on_bracket() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo(bar)baz");
+
+    // Move cursor to col 3 — the `(` opener.
+    use hjkl_buffer::Position;
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 3));
+
+    let cells = app.matchparen_cells();
+    assert_eq!(
+        cells,
+        Some([(0, 3), (0, 7)]),
+        "cursor on `(` must report pair [(0,3),(0,7)]"
+    );
+
+    // Move cursor to col 7 — the `)` closer.
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 7));
+    let cells = app.matchparen_cells();
+    assert_eq!(
+        cells,
+        Some([(0, 7), (0, 3)]),
+        "cursor on `)` must report pair [(0,7),(0,3)]"
+    );
+
+    // Move cursor to col 0 — not a bracket.
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 0));
+    let cells = app.matchparen_cells();
+    assert_eq!(cells, None, "cursor on non-bracket must return None");
+}
+
+/// matchparen_cells returns None when matchparen is disabled.
+#[test]
+fn matchparen_off_returns_none() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo(bar)baz");
+
+    // Cursor on `(` — would normally produce a pair.
+    use hjkl_buffer::Position;
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 3));
+
+    // Disable matchparen.
+    app.dispatch_ex("set nomatchparen");
+    let cells = app.matchparen_cells();
+    assert_eq!(
+        cells, None,
+        "matchparen_cells must return None when matchparen is disabled"
+    );
+}

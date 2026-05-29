@@ -57,3 +57,6 @@ bg            = "#2e2810"  # auto-indent (=) flash row highlight — muted amber
 [indent_guide]
 fg            = "#3c3c3c"  # inactive indent guide fg — very dark gray, low contrast
 active_fg     = "#787878"  # active (cursor-level) indent guide fg — medium gray
+
+[match_paren]
+bg            = "#45475a"  # matched bracket pair bg — muted slate, distinct from cursor_line

@@ -119,6 +119,12 @@ pub struct UiTheme {
     /// Fg color for the active (cursor's indent level) guide line.
     /// Slightly brighter than inactive. Default: medium gray (#787878).
     pub indent_guide_active_fg: Color,
+
+    // [match_paren]
+    /// Background painted over both matched bracket cells when matchparen is
+    /// active. Chosen to be distinct from cursor_line and search without being
+    /// jarring — muted slate fits the ui-dark palette.
+    pub match_paren_bg: Color,
 }
 
 impl UiTheme {
@@ -156,6 +162,7 @@ impl UiTheme {
             indent_flash_bg: parse_hex(&raw.indent_flash.bg)?,
             indent_guide_fg: parse_hex(&raw.indent_guide.fg)?,
             indent_guide_active_fg: parse_hex(&raw.indent_guide.active_fg)?,
+            match_paren_bg: parse_hex(&raw.match_paren.bg)?,
         })
     }
 }
@@ -173,6 +180,7 @@ struct RawUiTheme {
     recording: RawRecording,
     indent_flash: RawIndentFlash,
     indent_guide: RawIndentGuide,
+    match_paren: RawMatchParen,
 }
 
 #[derive(Deserialize)]
@@ -247,6 +255,11 @@ struct RawIndentGuide {
     active_fg: String,
 }
 
+#[derive(Deserialize)]
+struct RawMatchParen {
+    bg: String,
+}
+
 fn parse_hex(s: &str) -> Result<Color> {
     let bytes = s.as_bytes();
     if bytes.len() != 7 || bytes[0] != b'#' {
@@ -275,6 +288,12 @@ mod tests {
             theme.ui.indent_flash_bg,
             Color::Rgb(0x2e, 0x28, 0x10),
             "indent_flash_bg must match ui-dark.toml value"
+        );
+        // match_paren_bg must parse — muted slate.
+        assert_eq!(
+            theme.ui.match_paren_bg,
+            Color::Rgb(0x45, 0x47, 0x5a),
+            "match_paren_bg must match ui-dark.toml value"
         );
         // Syntax theme must resolve a known capture.
         assert!(theme.syntax.style("@keyword").is_some());

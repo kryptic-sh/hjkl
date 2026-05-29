@@ -896,6 +896,10 @@ pub struct Settings {
     /// Milliseconds of inactivity before swap-file write. Default `4000`.
     /// Matches Vim's `updatetime`; alias `ut`.
     pub updatetime: u32,
+    /// Highlight matching bracket pair under the cursor. hjkl-specific. Default `true`.
+    /// `:set nomatchparen` / `:set mps` to toggle. Only the char-scan path
+    /// (C-style brackets) is active; tag-pair matching is pending #240.
+    pub matchparen: bool,
 }
 
 impl Default for Settings {
@@ -955,6 +959,7 @@ impl Default for Settings {
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
             updatetime: 4000,
+            matchparen: true,
         }
     }
 }
@@ -1014,6 +1019,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         trim_trailing_whitespace: o.trim_trailing_whitespace,
         rainbow_brackets: o.rainbow_brackets,
         updatetime: o.updatetime,
+        matchparen: o.matchparen,
     }
 }
 
@@ -2461,6 +2467,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.format_on_save = opts.format_on_save;
         self.settings.trim_trailing_whitespace = opts.trim_trailing_whitespace;
         self.settings.rainbow_brackets = opts.rainbow_brackets;
+        self.settings.matchparen = opts.matchparen;
     }
 
     /// Active visual selection as a SPEC [`crate::types::Highlight`]

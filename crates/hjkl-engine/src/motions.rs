@@ -477,19 +477,27 @@ pub fn move_word_end_back<B: Cursor + Query>(
 
 // ── Find / match ────────────────────────────────────────────────────
 
-/// `%` — jump to the matching bracket. Walks the buffer
-/// counting nesting depth so nested pairs resolve correctly.
-/// Returns `true` when the cursor moved.
-pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
-    let cursor = read_cursor(buf);
-    let line = match read_line_opt(buf, cursor.row) {
-        Some(l) => l,
-        None => return false,
-    };
-    let ch = match line.chars().nth(cursor.col) {
-        Some(c) => c,
-        None => return false,
-    };
+/// Pure bracket-match query — returns the `(row, col)` of the bracket
+/// that pairs with the character at `(row, col)` without moving the cursor.
+///
+/// C-style brackets only: `(`, `)`, `[`, `]`, `{`, `}`, `<`, `>`.
+/// Nesting is depth-counted so nested pairs resolve correctly.
+/// Cross-line scanning: openers scan forward, closers scan backward.
+/// Returns `None` when:
+/// - `(row, col)` is not a bracket character, or
+/// - the bracket is unbalanced (no matching partner found).
+///
+/// # TODO(#240): tag-pair matching via tree-sitter
+/// HTML/XML `<tag>…</tag>` matching is out of scope for the char-scan
+/// implementation here. When tree-sitter grammar integration lands,
+/// add a separate path that resolves element start/end nodes.
+pub fn matching_bracket_pos<B: Cursor + Query>(
+    buf: &B,
+    row: usize,
+    col: usize,
+) -> Option<(usize, usize)> {
+    let line = read_line_opt(buf, row)?;
+    let ch = line.chars().nth(col)?;
     let (open, close, forward) = match ch {
         '(' => ('(', ')', true),
         ')' => ('(', ')', false),
@@ -499,13 +507,13 @@ pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
         '}' => ('{', '}', false),
         '<' => ('<', '>', true),
         '>' => ('<', '>', false),
-        _ => return false,
+        _ => return None,
     };
     let mut depth: i32 = 0;
     let row_count = read_row_count(buf);
     if forward {
-        let mut r = cursor.row;
-        let mut c = cursor.col;
+        let mut r = row;
+        let mut c = col;
         loop {
             let chars: Vec<char> = read_line(buf, r).chars().collect();
             while c < chars.len() {
@@ -515,21 +523,20 @@ pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
                 } else if here == close {
                     depth -= 1;
                     if depth == 0 {
-                        write_cursor(buf, Position::new(r, c));
-                        return true;
+                        return Some((r, c));
                     }
                 }
                 c += 1;
             }
             if r + 1 >= row_count {
-                return false;
+                return None;
             }
             r += 1;
             c = 0;
         }
     } else {
-        let mut r = cursor.row;
-        let mut c = cursor.col as isize;
+        let mut r = row;
+        let mut c = col as isize;
         loop {
             let chars: Vec<char> = read_line(buf, r).chars().collect();
             while c >= 0 {
@@ -539,18 +546,31 @@ pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
                 } else if here == open {
                     depth -= 1;
                     if depth == 0 {
-                        write_cursor(buf, Position::new(r, c as usize));
-                        return true;
+                        return Some((r, c as usize));
                     }
                 }
                 c -= 1;
             }
             if r == 0 {
-                return false;
+                return None;
             }
             r -= 1;
             c = read_line(buf, r).chars().count() as isize - 1;
         }
+    }
+}
+
+/// `%` — jump to the matching bracket. Walks the buffer
+/// counting nesting depth so nested pairs resolve correctly.
+/// Returns `true` when the cursor moved.
+pub fn match_bracket<B: Cursor + Query>(buf: &mut B) -> bool {
+    let cursor = read_cursor(buf);
+    match matching_bracket_pos(buf, cursor.row, cursor.col) {
+        Some((r, c)) => {
+            write_cursor(buf, Position::new(r, c));
+            true
+        }
+        None => false,
     }
 }
 
@@ -1343,6 +1363,57 @@ mod tests {
     fn match_bracket_returns_false_off_bracket() {
         let mut b = Buffer::from_str("hello");
         assert!(!match_bracket(&mut b));
+    }
+
+    // ── matching_bracket_pos (pure) tests ─────────────────────────────
+
+    #[test]
+    fn matching_bracket_pos_same_line_pair() {
+        let b = Buffer::from_str("foo(bar)baz");
+        // opener at col 3 → closer at col 7
+        assert_eq!(matching_bracket_pos(&b, 0, 3), Some((0, 7)));
+        // closer at col 7 → opener at col 3
+        assert_eq!(matching_bracket_pos(&b, 0, 7), Some((0, 3)));
+    }
+
+    #[test]
+    fn matching_bracket_pos_nesting() {
+        let b = Buffer::from_str("((x))");
+        // outer opener at 0 → outer closer at 4
+        assert_eq!(matching_bracket_pos(&b, 0, 0), Some((0, 4)));
+        // inner opener at 1 → inner closer at 3
+        assert_eq!(matching_bracket_pos(&b, 0, 1), Some((0, 3)));
+    }
+
+    #[test]
+    fn matching_bracket_pos_cross_line() {
+        let b = Buffer::from_str("{\n  x\n}");
+        assert_eq!(matching_bracket_pos(&b, 0, 0), Some((2, 0)));
+        assert_eq!(matching_bracket_pos(&b, 2, 0), Some((0, 0)));
+    }
+
+    #[test]
+    fn matching_bracket_pos_off_bracket_none() {
+        let b = Buffer::from_str("hello world");
+        assert_eq!(matching_bracket_pos(&b, 0, 0), None);
+        assert_eq!(matching_bracket_pos(&b, 0, 4), None);
+    }
+
+    #[test]
+    fn matching_bracket_pos_unbalanced_none() {
+        // Unmatched opener — no closing bracket
+        let b = Buffer::from_str("(abc");
+        assert_eq!(matching_bracket_pos(&b, 0, 0), None);
+        // Unmatched closer — no opening bracket
+        let b2 = Buffer::from_str("abc)");
+        assert_eq!(matching_bracket_pos(&b2, 0, 3), None);
+    }
+
+    #[test]
+    fn matching_bracket_pos_closer_finds_opener() {
+        // Ensure backward scan from a closer correctly returns the opener.
+        let b = Buffer::from_str("[hello]");
+        assert_eq!(matching_bracket_pos(&b, 0, 6), Some((0, 0)));
     }
 
     #[test]

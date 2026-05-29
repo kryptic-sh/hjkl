@@ -380,6 +380,12 @@ pub struct Options {
     /// Matches Vim's `:set updatetime` / `:set ut`. Default `4000`.
     /// hjkl-specific swap-file write cadence; does NOT affect CursorHold.
     pub updatetime: u32,
+    /// Highlight matching bracket pair under the cursor (vim matchparen).
+    /// When `true` (default), both the bracket under the cursor and its
+    /// matching partner are highlighted with the `match_paren` theme style.
+    /// C-style brackets only: `()[]{}` and `<>`. Alias `mps`.
+    /// `:set nomatchparen` disables. hjkl-specific.
+    pub matchparen: bool,
 }
 
 /// Invisibles rendering configuration for `:set list` / `:set listchars`.
@@ -491,6 +497,7 @@ impl Default for Options {
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
             updatetime: 4000,
+            matchparen: true,
         }
     }
 }
@@ -760,6 +767,7 @@ impl Options {
             "trim_trailing_whitespace" | "tts" => set_bool!(trim_trailing_whitespace),
             "rainbow_brackets" | "rb" => set_bool!(rainbow_brackets),
             "updatetime" | "ut" => set_u32!(updatetime),
+            "matchparen" | "mps" => set_bool!(matchparen),
             other => Err(EngineError::Ex(format!("unknown option `{other}`"))),
         }
     }
@@ -820,6 +828,7 @@ impl Options {
             "trim_trailing_whitespace" | "tts" => OptionValue::Bool(self.trim_trailing_whitespace),
             "rainbow_brackets" | "rb" => OptionValue::Bool(self.rainbow_brackets),
             "updatetime" | "ut" => OptionValue::Int(self.updatetime as i64),
+            "matchparen" | "mps" => OptionValue::Bool(self.matchparen),
             _ => return None,
         })
     }
@@ -2200,6 +2209,40 @@ mod tests {
             o.get_by_name("updatetime"),
             Some(OptionValue::Int(1000)),
             "get_by_name(updatetime) must also reflect the new value"
+        );
+    }
+
+    // ── matchparen ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn matchparen_default_true() {
+        let o = Options::default();
+        assert!(o.matchparen, "matchparen must default to true");
+        assert_eq!(
+            o.get_by_name("matchparen"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(matchparen) must return Bool(true)"
+        );
+    }
+
+    #[test]
+    fn options_matchparen_set_and_get() {
+        let mut o = Options::default();
+        o.set_by_name("matchparen", OptionValue::Bool(false))
+            .unwrap();
+        assert!(!o.matchparen, "matchparen must be false after set");
+        assert_eq!(
+            o.get_by_name("matchparen"),
+            Some(OptionValue::Bool(false)),
+            "get_by_name(matchparen) must reflect false"
+        );
+        // Alias mps
+        o.set_by_name("mps", OptionValue::Bool(true)).unwrap();
+        assert!(o.matchparen, "mps alias must set matchparen to true");
+        assert_eq!(
+            o.get_by_name("mps"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(mps) must reflect true"
         );
     }
 }

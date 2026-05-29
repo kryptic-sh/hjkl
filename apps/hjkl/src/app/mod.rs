@@ -851,6 +851,26 @@ impl App {
         self.focused_slot_idx()
     }
 
+    /// When `matchparen` is on and the cursor sits on a C-style bracket with
+    /// a matching partner, return `[(cursor_row, cursor_col), (match_row, match_col)]`.
+    /// Otherwise returns `None`.
+    ///
+    /// Display-only: char-col indices (not byte offsets), suitable for
+    /// direct screen column math after adding gutter width.
+    /// Tag-pair matching (`<tag>…</tag>`) is out of scope here.
+    /// TODO(#240): tag-pair matching via tree-sitter
+    pub fn matchparen_cells(&self) -> Option<[(usize, usize); 2]> {
+        let slot_idx = self.focused_slot_idx();
+        let editor = &self.slots[slot_idx].editor;
+        if !editor.settings().matchparen {
+            return None;
+        }
+        let cur = editor.buffer().cursor();
+        let (row, col) = (cur.row, cur.col); // hjkl_buffer::Position fields are usize
+        let match_pos = hjkl_engine::motions::matching_bracket_pos(editor.buffer(), row, col)?;
+        Some([(row, col), match_pos])
+    }
+
     /// Refresh window cursor cache, drain dirty flag + content edits, notify
     /// LSP, recompute syntax — call this after any code path that mutated
     /// engine state via `apply_motion` / `handle_key` / replay / etc.
