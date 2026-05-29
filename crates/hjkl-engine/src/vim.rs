@@ -4741,6 +4741,59 @@ fn motion_kind(motion: &Motion) -> RangeKind {
     }
 }
 
+/// Linewise change of rows `[top_row, end_row]` (vim `cc`/`cj`/`Vc`/`cip`…).
+///
+/// Deletes the spanned lines, leaves one line carrying the first row's
+/// leading whitespace (when `autoindent` is on), parks the cursor after
+/// the indent, and enters insert mode. Records the full linewise payload
+/// to the yank + delete registers and sets `change_mark_start` for the
+/// `[`/`]` deferral. Calls `push_undo` internally — callers must NOT also
+/// call it.
+fn change_linewise_rows<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    top_row: usize,
+    end_row: usize,
+) {
+    use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
+    // Vim `:h '[`: stash change start for `]` deferral on insert-exit.
+    ed.vim.change_mark_start = Some((top_row, 0));
+    ed.push_undo();
+    ed.sync_buffer_content_from_textarea();
+    // Read the cut payload first so yank reflects every original line.
+    let payload = read_vim_range(ed, (top_row, 0), (end_row, 0), RangeKind::Linewise);
+    // Drop every row after the first (rows [top_row+1, end_row]).
+    if end_row > top_row {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(top_row + 1, 0),
+            end: Position::new(end_row, 0),
+            kind: BufKind::Line,
+        });
+    }
+    // Preserve the first row's leading whitespace when autoindent is on;
+    // wipe the whole line content otherwise (cursor lands at col 0).
+    let indent_chars = if ed.settings.autoindent {
+        let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(&ed.buffer), top_row);
+        line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+    } else {
+        0
+    };
+    let line_chars = buf_line_chars(&ed.buffer, top_row);
+    if line_chars > indent_chars {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: Position::new(top_row, indent_chars),
+            end: Position::new(top_row, line_chars),
+            kind: BufKind::Char,
+        });
+    }
+    if !payload.is_empty() {
+        ed.record_yank_to_host(payload.clone());
+        ed.record_delete(payload, true);
+    }
+    buf_set_cursor_rc(&mut ed.buffer, top_row, indent_chars);
+    ed.push_buffer_cursor_to_textarea();
+    begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+}
+
 fn run_operator_over_range<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
@@ -4802,10 +4855,18 @@ fn run_operator_over_range<H: crate::types::Host>(
             // before the cut. `]` is deferred to insert-exit (AfterChange
             // path in finish_insert_session) where the cursor sits on the
             // last inserted char.
-            ed.vim.change_mark_start = Some(top);
-            ed.push_undo();
-            cut_vim_range(ed, top, bot, kind);
-            begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+            if matches!(kind, RangeKind::Linewise) {
+                // Linewise change (`cj`/`ck`/`cip`/`cap`/…): preserve the
+                // first line's indent and leave exactly one row open for
+                // insert. The helper handles push_undo + insert entry.
+                change_linewise_rows(ed, top.0, bot.0);
+            } else {
+                // Charwise change: cut the range and enter insert.
+                ed.vim.change_mark_start = Some(top);
+                ed.push_undo();
+                cut_vim_range(ed, top, bot, kind);
+                begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+            }
         }
         Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
             apply_case_op_to_selection(ed, op, top, bot, kind);
@@ -5844,48 +5905,10 @@ fn execute_line_op<H: crate::types::Host>(
             ed.set_mark(']', pos);
         }
         Operator::Change => {
-            // `cc` / `3cc`: wipe contents of the covered lines but leave
-            // a single blank line so insert-mode opens on it. Done as two
-            // edits: drop rows past the first, then clear row `row`.
-            use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
-            // Vim `:h '[`: stash change start for `]` deferral on insert-exit.
-            ed.vim.change_mark_start = Some((row, 0));
-            ed.push_undo();
-            ed.sync_buffer_content_from_textarea();
-            // Read the cut payload first so yank reflects every line.
-            let payload = read_vim_range(ed, (row, col), (end_row, 0), RangeKind::Linewise);
-            if end_row > row {
-                ed.mutate_edit(Edit::DeleteRange {
-                    start: Position::new(row + 1, 0),
-                    end: Position::new(end_row, 0),
-                    kind: BufKind::Line,
-                });
-            }
-            // Vim `cc` with `autoindent` preserves the changed line's leading
-            // whitespace and drops the cursor after it. With autoindent off it
-            // wipes the whole line. Compute the indent char-count of `row`
-            // before mutating.
-            let indent_chars = if ed.settings.autoindent {
-                let line = hjkl_buffer::rope_line_str(&crate::types::Query::rope(&ed.buffer), row);
-                line.chars().take_while(|c| *c == ' ' || *c == '\t').count()
-            } else {
-                0
-            };
-            let line_chars = buf_line_chars(&ed.buffer, row);
-            if line_chars > indent_chars {
-                ed.mutate_edit(Edit::DeleteRange {
-                    start: Position::new(row, indent_chars),
-                    end: Position::new(row, line_chars),
-                    kind: BufKind::Char,
-                });
-            }
-            if !payload.is_empty() {
-                ed.record_yank_to_host(payload.clone());
-                ed.record_delete(payload, true);
-            }
-            buf_set_cursor_rc(&mut ed.buffer, row, indent_chars);
-            ed.push_buffer_cursor_to_textarea();
-            begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+            // `cc` / `3cc`: delegate to the shared linewise-change helper
+            // which preserves the first line's indent, leaves one row open,
+            // and enters insert mode.
+            change_linewise_rows(ed, row, end_row);
         }
         Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
             // `gUU` / `guu` / `g~~` — linewise case transform over
@@ -5977,34 +6000,9 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     ed.vim.mode = Mode::Normal;
                 }
                 Operator::Change => {
-                    // Vim `Vc`: wipe the line contents but leave a blank
-                    // line in place so insert-mode starts on an empty row.
-                    use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
-                    ed.push_undo();
-                    ed.sync_buffer_content_from_textarea();
-                    let payload = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
-                    if bot > top {
-                        ed.mutate_edit(Edit::DeleteRange {
-                            start: Position::new(top + 1, 0),
-                            end: Position::new(bot, 0),
-                            kind: BufKind::Line,
-                        });
-                    }
-                    let line_chars = buf_line_chars(&ed.buffer, top);
-                    if line_chars > 0 {
-                        ed.mutate_edit(Edit::DeleteRange {
-                            start: Position::new(top, 0),
-                            end: Position::new(top, line_chars),
-                            kind: BufKind::Char,
-                        });
-                    }
-                    if !payload.is_empty() {
-                        ed.record_yank_to_host(payload.clone());
-                        ed.record_delete(payload, true);
-                    }
-                    buf_set_cursor_rc(&mut ed.buffer, top, 0);
-                    ed.push_buffer_cursor_to_textarea();
-                    begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+                    // Vim `Vc` / `Vjc`: same linewise-change semantics as
+                    // `cc` — preserve first line's indent, enter insert.
+                    change_linewise_rows(ed, top, bot);
                 }
                 Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
                     let bot = buf_cursor_pos(&ed.buffer)

@@ -1753,6 +1753,103 @@ fn cc_preserves_indent_with_autoindent() {
     );
 }
 
+/// Helper: collect rope lines (strip trailing `\n`) into a `Vec<String>`.
+fn rope_lines(e: &Editor<hjkl_buffer::Buffer, impl hjkl_engine::types::Host>) -> Vec<String> {
+    e.buffer()
+        .rope()
+        .lines()
+        .map(|s| {
+            let s = s.to_string();
+            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+        })
+        .collect()
+}
+
+#[test]
+fn cj_preserves_indent_and_leaves_one_line() {
+    // `cj` changes current line + line below (linewise). With autoindent on
+    // the first changed line's indent (4 spaces) is preserved.
+    // nvim --clean verified: ["fn f() {", "    bar", "}"]
+    let mut e = editor_with("fn f() {\n    a;\n    b;\n}");
+    e.jump_cursor(1, 4);
+    run_keys(&mut e, "cjbar<Esc>");
+    assert_eq!(
+        rope_lines(&e),
+        &[
+            "fn f() {".to_string(),
+            "    bar".to_string(),
+            "}".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn ck_change_up_uses_top_line_indent() {
+    // `ck` changes current line + line above (linewise). Cursor on line 2
+    // (`    b;`); the top of the changed range is line 1 (`    a;`, 4-space
+    // indent). With autoindent that indent is preserved.
+    // nvim --clean verified (cursor(3,5) then `normal ckbar`):
+    // ["fn f() {", "    bar", "}"]
+    let mut e = editor_with("fn f() {\n    a;\n    b;\n}");
+    e.jump_cursor(2, 4);
+    run_keys(&mut e, "ckbar<Esc>");
+    assert_eq!(
+        rope_lines(&e),
+        &[
+            "fn f() {".to_string(),
+            "    bar".to_string(),
+            "}".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn visual_line_change_preserves_indent() {
+    // `Vjc` selects lines 1-2 in visual-line mode then changes them.
+    // With autoindent the first selected line's indent (4 spaces) is kept.
+    // nvim --clean verified: ["fn f() {", "    bar", "}"]
+    let mut e = editor_with("fn f() {\n    a;\n    b;\n}");
+    e.jump_cursor(1, 4);
+    run_keys(&mut e, "Vjcbar<Esc>");
+    assert_eq!(
+        rope_lines(&e),
+        &[
+            "fn f() {".to_string(),
+            "    bar".to_string(),
+            "}".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn cip_preserves_indent_on_indented_paragraph() {
+    // `cip` on a paragraph that starts with indented lines should keep the
+    // first paragraph line's leading whitespace (4 spaces) on the inserted
+    // line. `top` and `bot` lines are intact.
+    // nvim --clean verified: blank lines contain a single space (autoindent
+    // artefact); the changed line is "    XXX".
+    let mut e = editor_with("top\n\n    a;\n    b;\n\nbot");
+    e.jump_cursor(2, 4);
+    run_keys(&mut e, "cipXXX<Esc>");
+    let lines = rope_lines(&e);
+    // "top" and "bot" must be untouched.
+    assert_eq!(lines[0], "top");
+    assert_eq!(*lines.last().unwrap(), "bot");
+    // The paragraph collapsed to one line carrying the original indent.
+    let changed_idx = lines.iter().position(|l| l.trim() == "XXX").unwrap();
+    assert_eq!(lines[changed_idx], "    XXX");
+}
+
+#[test]
+fn cc_no_indent_when_autoindent_off() {
+    // With autoindent disabled `cc` wipes the whole line (cursor at col 0).
+    let mut e = editor_with("    a;");
+    e.settings_mut().autoindent = false;
+    e.jump_cursor(0, 4);
+    run_keys(&mut e, "ccbar<Esc>");
+    assert_eq!(rope_lines(&e), &["bar".to_string()]);
+}
+
 // ─── Scrolling ────────────────────────────────────────────────────────
 
 // ─── WORD motions (W/B/E) ─────────────────────────────────────────────
