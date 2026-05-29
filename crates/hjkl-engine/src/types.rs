@@ -335,6 +335,11 @@ pub struct Options {
     /// Number of lines from each end to scan for vim modelines.
     /// Matches vim's `:set modelines`. Default `5`.
     pub modelines: u32,
+    /// Auto-reload a clean (non-dirty) buffer when its file changes on disk
+    /// (detected by `:checktime` / focus-regain). When `false`, an external
+    /// change is reported as a warning and the buffer is left untouched.
+    /// Matches vim's `:set autoread`. Default `true`.
+    pub autoreload: bool,
     /// Enable vim-sneak style two-char digraph jump on `s` / `S` in normal
     /// mode. When `true` (default), `s`/`S` operate as sneak jumps rather
     /// than vim's built-in substitute-char / substitute-line.
@@ -474,6 +479,7 @@ impl Default for Options {
             sidescrolloff: 0,
             modeline: true,
             modelines: 5,
+            autoreload: true,
             motion_sneak: true,
             list: false,
             listchars: ListChars::default(),
@@ -709,6 +715,7 @@ impl Options {
                 Ok(())
             }
             "modeline" | "ml" => set_bool!(modeline),
+            "autoreload" | "ar" => set_bool!(autoreload),
             "modelines" | "mls" => set_u32!(modelines),
             "motion_sneak" | "snk" => set_bool!(motion_sneak),
             "list" => set_bool!(list),
@@ -814,6 +821,7 @@ impl Options {
             "scrolloff" | "so" => OptionValue::Int(self.scrolloff as i64),
             "sidescrolloff" | "siso" => OptionValue::Int(self.sidescrolloff as i64),
             "modeline" | "ml" => OptionValue::Bool(self.modeline),
+            "autoreload" | "ar" => OptionValue::Bool(self.autoreload),
             "modelines" | "mls" => OptionValue::Int(self.modelines as i64),
             "motion_sneak" | "snk" => OptionValue::Bool(self.motion_sneak),
             "list" => OptionValue::Bool(self.list),
@@ -2180,6 +2188,22 @@ mod tests {
             Some(OptionValue::Bool(false)),
             "get_by_name(rainbow_brackets) must also reflect the new value"
         );
+    }
+
+    #[test]
+    fn autoreload_default_true() {
+        assert!(
+            Options::default().autoreload,
+            "autoreload must default true"
+        );
+    }
+
+    #[test]
+    fn options_ar_alias_sets_autoreload() {
+        let mut o = Options::default();
+        o.set_by_name("ar", OptionValue::Bool(false)).unwrap();
+        assert!(!o.autoreload, "ar alias must set autoreload");
+        assert_eq!(o.get_by_name("autoreload"), Some(OptionValue::Bool(false)));
     }
 
     // ── updatetime ────────────────────────────────────────────────────────────

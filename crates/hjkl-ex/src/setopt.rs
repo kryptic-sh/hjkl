@@ -85,6 +85,8 @@ pub fn all_setting_names() -> Vec<String> {
         "ap".into(),
         "autoclose-tag".into(),
         "act".into(),
+        "autoreload".into(),
+        "ar".into(),
         "indent_guides".into(),
         "ig".into(),
         "indent_guide_char".into(),
@@ -120,7 +122,7 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -164,6 +166,7 @@ pub(crate) fn apply_set<H: Host>(
             },
             if s.rainbow_brackets { "on" } else { "off" },
             if s.matchparen { "on" } else { "off" },
+            if s.autoreload { "on" } else { "off" },
         ));
     }
     let mut query_lines: Vec<String> = Vec::new();
@@ -228,6 +231,7 @@ fn query_option_value<H: Host>(
         "smartcase" | "scs" => on_off(s.smartcase),
         "wrapscan" | "ws" => on_off(s.wrapscan),
         "autoindent" | "ai" => on_off(s.autoindent),
+        "autoreload" | "ar" => on_off(s.autoreload),
         "smartindent" | "si" => on_off(s.smartindent),
         "undobreak" => on_off(s.undo_break_on_motion),
         "readonly" | "ro" => on_off(s.readonly),
@@ -414,6 +418,7 @@ fn apply_set_token<H: Host>(
         "wrapscan" | "ws" => editor.settings_mut().wrapscan = value,
         "expandtab" | "et" => editor.settings_mut().expandtab = value,
         "autoindent" | "ai" => editor.settings_mut().autoindent = value,
+        "autoreload" | "ar" => editor.settings_mut().autoreload = value,
         "smartindent" | "si" => editor.settings_mut().smartindent = value,
         "undobreak" => editor.settings_mut().undo_break_on_motion = value,
         "readonly" | "ro" => editor.settings_mut().readonly = value,

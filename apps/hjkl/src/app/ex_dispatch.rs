@@ -1736,15 +1736,20 @@ impl App {
                         }
                         continue;
                     }
-                    // File changed. If dirty — warn once; don't reload.
-                    if self.slots[idx].dirty {
+                    // File changed. Warn (don't reload) when the buffer is dirty
+                    // OR `:set noautoreload` is active; otherwise auto-reload.
+                    let autoreload = self.slots[idx].editor.settings().autoreload;
+                    if self.slots[idx].dirty || !autoreload {
                         let prev = self.slots[idx].disk_state;
                         self.slots[idx].disk_state = DiskState::ChangedOnDisk;
                         if prev != DiskState::ChangedOnDisk {
-                            messages.push(format!(
-                                "W: \"{}\" changed on disk (buffer is dirty, use :e! to reload)",
-                                path.display()
-                            ));
+                            let why = if self.slots[idx].dirty {
+                                "buffer is dirty, use :e! to reload"
+                            } else {
+                                "autoreload off, use :e to reload"
+                            };
+                            messages
+                                .push(format!("W: \"{}\" changed on disk ({why})", path.display()));
                         }
                     } else {
                         // Clean buffer — reload automatically.
@@ -1753,13 +1758,13 @@ impl App {
                             Err(_) => continue,
                         };
                         let trimmed = content.strip_suffix('\n').unwrap_or(&content);
-                        // Preserve cursor position clamped to new line count.
+                        // Preserve cursor row + column, clamped to the new
+                        // content (vim's autoread keeps the cursor where it was).
                         let (cur_row, cur_col) = self.slots[idx].editor.cursor();
                         self.slots[idx].editor.set_content(trimmed);
                         let new_line_count = self.slots[idx].editor.buffer().line_count() as usize;
                         let clamped_row = cur_row.min(new_line_count.saturating_sub(1));
-                        self.slots[idx].editor.goto_line(clamped_row + 1);
-                        let _ = cur_col; // column is reset by goto_line
+                        self.slots[idx].editor.jump_cursor(clamped_row, cur_col);
                         self.slots[idx].is_new_file = false;
                         // Update disk metadata baseline.
                         self.slots[idx].disk_mtime = new_mtime;

@@ -865,6 +865,9 @@ pub struct Settings {
     /// mode only). `0` = no margin (vim default). Matches `:set sidescrolloff`.
     /// Default `0`.
     pub sidescrolloff: usize,
+    /// Auto-reload a clean buffer when its file changes on disk. Matches vim's
+    /// `:set autoread`. Default `true`. Consumed by the host's `:checktime`.
+    pub autoreload: bool,
     /// Enable vim-sneak style two-char digraph jump via `s` (forward) and
     /// `S` (backward). When `true` (default), `s`/`S` no longer behave as
     /// vim's built-in substitute-char / substitute-line; `;`/`,` smart-fall-
@@ -936,6 +939,7 @@ impl Default for Settings {
             autoclose_tag: true,
             scrolloff: 5,
             sidescrolloff: 0,
+            autoreload: true,
             motion_sneak: true,
             list: false,
             listchars: crate::types::ListChars::default(),
@@ -1008,6 +1012,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         autoclose_tag: true,
         scrolloff: o.scrolloff,
         sidescrolloff: o.sidescrolloff,
+        autoreload: o.autoreload,
         motion_sneak: o.motion_sneak,
         list: o.list,
         listchars: o.listchars.clone(),
@@ -2460,6 +2465,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.colorcolumn = opts.colorcolumn.clone();
         self.settings.scrolloff = opts.scrolloff;
         self.settings.sidescrolloff = opts.sidescrolloff;
+        self.settings.autoreload = opts.autoreload;
         self.settings.list = opts.list;
         self.settings.listchars = opts.listchars.clone();
         self.settings.colorizer = opts.colorizer;

@@ -789,6 +789,56 @@ fn checktime_marks_dirty_buffer_as_changed_on_disk_no_reload() {
 }
 
 #[test]
+fn checktime_with_autoreload_off_does_not_reload_clean_buffer() {
+    let path = std::env::temp_dir().join("hjkl_ct_noar.txt");
+    std::fs::write(&path, "original\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+
+    // Disable autoreload (default is on).
+    app.dispatch_ex("set noautoreload");
+    assert!(!app.active().editor.settings().autoreload);
+
+    write_and_wait(&path, "changed on disk\n");
+    app.checktime_all();
+
+    // Clean buffer but autoreload off → must NOT reload; flagged ChangedOnDisk.
+    assert_eq!(
+        app.active()
+            .editor
+            .buffer()
+            .rope()
+            .lines()
+            .map(|s| s.to_string().trim_end_matches('\n').to_string())
+            .collect::<Vec<_>>(),
+        vec!["original"],
+        "autoreload off must leave the clean buffer untouched"
+    );
+    assert_eq!(app.active().disk_state, DiskState::ChangedOnDisk);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn checktime_reload_preserves_cursor_column() {
+    let path = std::env::temp_dir().join("hjkl_ct_curcol.txt");
+    std::fs::write(&path, "abcdefgh\nsecond\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    // Park the cursor mid-line (row 0, col 4).
+    app.active_mut().editor.jump_cursor(0, 4);
+
+    // External change keeps row 0 long enough that col 4 is still valid.
+    write_and_wait(&path, "abXXdefgh longer\nsecond\n");
+    app.checktime_all();
+
+    let (row, col) = app.active().editor.cursor();
+    assert_eq!(
+        (row, col),
+        (0, 4),
+        "reload must preserve cursor row + column"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn checktime_marks_deleted_when_file_removed() {
     let path = std::env::temp_dir().join("hjkl_ct_deleted.txt");
     std::fs::write(&path, "content\n").unwrap();
