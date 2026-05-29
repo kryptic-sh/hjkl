@@ -1408,7 +1408,17 @@ impl App {
     /// `hjkl a.rs b.rs c.rs` — slots 1…N are populated here after `App::new`
     /// opens slot 0.
     pub fn open_extra(&mut self, path: PathBuf) -> Result<(), String> {
-        self.open_new_slot(path).map(|_| ())
+        let idx = self.open_new_slot(path)?;
+        // Run the swap crash-recovery / multi-instance lock check for this
+        // CLI-opened slot, same as the startup slot 0 and `:e`. Without this,
+        // `hjkl a b c` skipped the check for every file after the first —
+        // leaving locked secondaries editable (#185). When not locked / not
+        // recovering, arm the swap so the lock exists immediately.
+        let recovering = self.check_recovery_on_open(idx);
+        if !recovering {
+            self.arm_swap_on_open(idx);
+        }
+        Ok(())
     }
 
     /// Dismiss the active completion popup (if any).

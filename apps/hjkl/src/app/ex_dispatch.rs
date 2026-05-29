@@ -1195,26 +1195,6 @@ impl App {
         }
     }
 
-    /// Remove a freshly-created slot (by index) on open-refusal or abort, then
-    /// fix all window pointers so no window references the removed index.
-    ///
-    /// Mirrors the logic in `handle_recovery_key`'s `q` branch.  Only operates
-    /// when there is more than one slot (we never drop the last slot).
-    pub(crate) fn remove_slot_on_refuse(&mut self, slot_idx: usize) {
-        if self.slots.len() <= 1 {
-            return;
-        }
-        let removed = self.slots.remove(slot_idx);
-        self.syntax.forget(removed.buffer_id);
-        let slot_count = self.slots.len();
-        for win in self.windows.iter_mut().flatten() {
-            if win.slot >= slot_idx && win.slot > 0 {
-                win.slot -= 1;
-            }
-            win.slot = win.slot.min(slot_count.saturating_sub(1));
-        }
-    }
-
     /// Check whether opening `slot_idx` (which has just been loaded) requires
     /// a recovery prompt.  If a swap file newer than the on-disk content exists,
     /// sets `self.pending_recovery` and returns `true` (caller should not show
@@ -1257,30 +1237,23 @@ impl App {
             }
         };
 
-        // PID-lock check: if another LIVE process wrote this swap, refuse the open.
+        // PID-lock check: if another LIVE process wrote this swap, open the
+        // buffer READ-ONLY (vim's "[O]pen Read-Only" for a locked swap). This
+        // is uniform across single-file, multi-file, and `:e` opens: the file
+        // the user requested stays visible but can't be `:w`-saved over the
+        // owning instance. The slot's swap_path is cleared so this process
+        // never overwrites the owner's swap. We do NOT remove the slot —
+        // dropping an explicitly-requested file (e.g. `hjkl a b c`) would be
+        // surprising, and a sole buffer can't be removed at all.
         let our_pid = std::process::id();
         if header.writer_pid != our_pid && swap::pid_is_alive(header.writer_pid) {
             let name = filename.display().to_string();
             let pid = header.writer_pid;
-            // When another buffer exists, drop the freshly-created slot and
-            // fall back to the previous one. When this is the SOLE buffer
-            // (e.g. `hjkl <lockedfile>` startup) we can't remove it without
-            // leaving the app bufferless, so open it READ-ONLY instead — the
-            // user can view the file but can't `:w` over the other instance.
-            // Crucially, the read-only slot's swap_path is cleared so this
-            // process never overwrites the owner's swap.
-            if self.slots.len() > 1 {
-                self.bus.error(format!(
-                    "E325: \"{name}\" is already open in another hjkl (pid {pid})"
-                ));
-                self.remove_slot_on_refuse(slot_idx);
-            } else {
-                self.slots[slot_idx].editor.settings_mut().readonly = true;
-                self.slots[slot_idx].swap_path = None;
-                self.bus.error(format!(
-                    "E325: \"{name}\" is already open in another hjkl (pid {pid}) — opened read-only"
-                ));
-            }
+            self.slots[slot_idx].editor.settings_mut().readonly = true;
+            self.slots[slot_idx].swap_path = None;
+            self.bus.error(format!(
+                "E325: \"{name}\" is already open in another hjkl (pid {pid}) — opened read-only"
+            ));
             return false;
         }
 

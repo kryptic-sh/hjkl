@@ -2366,3 +2366,60 @@ fn open_locked_sole_buffer_is_readonly() {
         "write must be refused with a readonly error; got: {msgs:?}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn locked_secondary_slot_is_readonly_not_removed() {
+    // `hjkl file1 file2` where file2 is locked by another live instance:
+    // file2's slot must open READ-ONLY and stay present — not be removed
+    // (silently dropping a file the user explicitly asked for) nor left
+    // editable. Repro for the multi-file open lock-handling bug.
+    let td = tempfile::tempdir().unwrap();
+    let file1 = td.path().join("ms_file1.txt");
+    let file2 = td.path().join("ms_file2.txt");
+    std::fs::write(&file1, "first\n").unwrap();
+    std::fs::write(&file2, "second owned\n").unwrap();
+
+    let canon2 = std::fs::canonicalize(&file2).unwrap();
+    let mtime2 = std::fs::metadata(&file2)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let swap2 = td.path().join("ms_file2.swp");
+    let header = hjkl_app::swap::SwapHeader {
+        magic: hjkl_app::swap::SwapHeader::MAGIC,
+        version: hjkl_app::swap::SwapHeader::VERSION,
+        canonical_path: canon2.to_string_lossy().into_owned(),
+        file_mtime_unix_ms: mtime2,
+        write_time_unix_ms: mtime2 + 10_000,
+        cursor: (0, 0),
+        writer_pid: 1, // alive, not us → live lock
+    };
+    hjkl_app::swap::write_swap(&swap2, &header, &ropey::Rope::from_str("x")).unwrap();
+
+    let mut app = App::new(Some(file1.clone()), false, None, None).unwrap();
+    app.pending_recovery = None;
+    // Open file2 as a second slot (mirrors CLI `hjkl file1 file2`).
+    let idx2 = app.open_new_slot(file2.clone()).unwrap();
+    assert_eq!(app.slots.len(), 2, "precondition: two slots");
+    app.slots[idx2].swap_path = Some(swap2.clone());
+
+    let recovery = app.check_recovery_on_open(idx2);
+    assert!(!recovery, "locked secondary slot must not enter recovery");
+    assert_eq!(
+        app.slots.len(),
+        2,
+        "locked secondary slot must NOT be removed — the file was requested"
+    );
+    assert!(
+        app.slots[idx2].editor.is_readonly(),
+        "locked secondary slot must open read-only"
+    );
+    assert!(
+        app.slots[idx2].swap_path.is_none(),
+        "locked read-only slot must not own a swap path"
+    );
+}
