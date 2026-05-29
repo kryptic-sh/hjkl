@@ -74,15 +74,8 @@ mod tests {
     // Minimal waker helpers
     // ---------------------------------------------------------------------------
 
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn noop_cx() -> (Arc<NoopWaker>, std::task::Waker) {
-        let w = Arc::new(NoopWaker);
-        let waker = std::task::Waker::from(w.clone());
-        (w, waker)
+    fn noop_cx() -> std::task::Waker {
+        std::task::Waker::noop().clone()
     }
 
     /// A waker that unparks a specific thread when woken.
@@ -106,7 +99,7 @@ mod tests {
         let os = Oneshot::new();
         os.resolve(42u32);
 
-        let (_, waker) = noop_cx();
+        let waker = noop_cx();
         let mut cx = Context::from_waker(&waker);
         assert_eq!(os.poll(&mut cx), Poll::Ready(42u32));
     }
@@ -117,7 +110,7 @@ mod tests {
     fn poll_before_resolve() {
         let os = Oneshot::new();
 
-        let (_, waker) = noop_cx();
+        let waker = noop_cx();
         let mut cx = Context::from_waker(&waker);
 
         // First poll — nothing ready yet.
@@ -135,12 +128,12 @@ mod tests {
     fn multiple_polls_before_resolve() {
         let os = Oneshot::new();
 
-        let (_, w1) = noop_cx();
+        let w1 = noop_cx();
         let mut cx1 = Context::from_waker(&w1);
         assert_eq!(os.poll(&mut cx1), Poll::Pending);
 
         // Second poll overwrites waker.
-        let (_, w2) = noop_cx();
+        let w2 = noop_cx();
         let mut cx2 = Context::from_waker(&w2);
         assert_eq!(os.poll(&mut cx2), Poll::Pending);
 
@@ -148,7 +141,7 @@ mod tests {
         // so we just verify no panic and that the value is returned correctly).
         os.resolve(7u32);
 
-        let (_, w3) = noop_cx();
+        let w3 = noop_cx();
         let mut cx3 = Context::from_waker(&w3);
         assert_eq!(os.poll(&mut cx3), Poll::Ready(7u32));
     }
@@ -166,7 +159,7 @@ mod tests {
         let os = Oneshot::new();
         os.resolve(1u32);
 
-        let (_, waker) = noop_cx();
+        let waker = noop_cx();
         let mut cx = Context::from_waker(&waker);
 
         // Consume the value.
@@ -184,7 +177,7 @@ mod tests {
         let os = Oneshot::new();
         os.resolve(1u32);
 
-        let (_, waker) = noop_cx();
+        let waker = noop_cx();
         let mut cx = Context::from_waker(&waker);
 
         // Consume the value — drives state to `Taken`.

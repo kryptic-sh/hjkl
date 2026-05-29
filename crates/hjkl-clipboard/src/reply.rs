@@ -38,12 +38,7 @@ impl<T> Reply<T> {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::task::{Context, Poll, Wake};
-
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
+    use std::task::{Context, Poll};
 
     /// `Sync` variant: condvar wakeup delivers value to a waiting thread.
     #[test]
@@ -74,7 +69,7 @@ mod tests {
 
         reply.resolve(77u32);
 
-        let waker = std::task::Waker::from(Arc::new(NoopWaker));
+        let waker = std::task::Waker::noop().clone();
         let mut cx = Context::from_waker(&waker);
         assert_eq!(os.poll(&mut cx), Poll::Ready(77u32));
     }
