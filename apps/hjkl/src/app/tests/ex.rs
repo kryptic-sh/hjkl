@@ -2596,3 +2596,50 @@ fn active_swap_pending_true_for_dirty_scratch_buffer() {
         "dirty non-empty scratch buffer must arm the idle swap writer"
     );
 }
+
+// ── :colorscheme (#35) ───────────────────────────────────────────────────────
+
+#[test]
+fn colorscheme_switches_and_reports() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.colorscheme, "dark", "default colorscheme is dark");
+
+    app.dispatch_ex("colorscheme light");
+    assert_eq!(app.colorscheme, "light");
+    assert!(
+        app.bus.last_body_or_empty().contains("colorscheme light"),
+        "switch must report the new scheme"
+    );
+
+    // Bare query reports current.
+    app.dispatch_ex("colorscheme");
+    assert!(app.bus.last_body_or_empty().contains("colorscheme light"));
+
+    // `:colo` abbreviation switches back.
+    app.dispatch_ex("colo dark");
+    assert_eq!(app.colorscheme, "dark");
+}
+
+#[test]
+fn colorscheme_unknown_errors_and_keeps_current() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("colorscheme solarized");
+    assert_eq!(
+        app.colorscheme, "dark",
+        "unknown scheme must not change current"
+    );
+    assert!(
+        app.bus.last_body_or_empty().contains("E185"),
+        "unknown colorscheme must report E185"
+    );
+}
+
+#[test]
+fn set_background_tracks_colorscheme() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set background=light");
+    assert_eq!(
+        app.colorscheme, "light",
+        ":set background= must track colorscheme"
+    );
+}

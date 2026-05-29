@@ -185,14 +185,12 @@ impl App {
         if let Some(rest) = cmd.strip_prefix("set background=") {
             match rest.trim() {
                 "dark" => {
-                    self.syntax.set_theme(Arc::new(DotFallbackTheme::dark()));
-                    self.recompute_and_install();
+                    self.apply_colorscheme("dark");
                     self.bus.info("background=dark");
                     return;
                 }
                 "light" => {
-                    self.syntax.set_theme(Arc::new(DotFallbackTheme::light()));
-                    self.recompute_and_install();
+                    self.apply_colorscheme("light");
                     self.bus.info("background=light");
                     return;
                 }
@@ -201,6 +199,32 @@ impl App {
                         .error(format!("E: unknown background value: {other}"));
                     return;
                 }
+            }
+        }
+
+        // `:colorscheme [name]` / `:colo` — vim alias for switching the active
+        // theme. Bundled schemes: `dark`, `light`. Bare or `?` reports current.
+        {
+            let mut parts = cmd.split_whitespace();
+            if let Some(kw) = parts.next()
+                && matches!(kw, "colorscheme" | "colorsc" | "colors" | "color" | "colo")
+            {
+                let arg = parts.next().unwrap_or("").trim();
+                match arg {
+                    "" | "?" => {
+                        let cur = self.colorscheme.clone();
+                        self.bus.info(format!("colorscheme {cur}"));
+                    }
+                    "dark" | "light" => {
+                        self.apply_colorscheme(arg);
+                        self.bus.info(format!("colorscheme {arg}"));
+                    }
+                    other => {
+                        self.bus
+                            .error(format!("E185: cannot find colorscheme '{other}'"));
+                    }
+                }
+                return;
             }
         }
 
@@ -1335,6 +1359,19 @@ impl App {
                 self.bus.info(format!("No swap file found for {path}"));
             }
         }
+    }
+
+    /// Switch the active syntax theme to a bundled colorscheme (`"dark"` /
+    /// `"light"`), recompute the visible spans, and record the name for
+    /// `:colorscheme?`. Shared by `:set background=` and `:colorscheme`.
+    pub(crate) fn apply_colorscheme(&mut self, name: &str) {
+        let theme: Arc<dyn hjkl_bonsai::Theme + Send + Sync> = match name {
+            "light" => Arc::new(DotFallbackTheme::light()),
+            _ => Arc::new(DotFallbackTheme::dark()),
+        };
+        self.syntax.set_theme(theme);
+        self.recompute_and_install();
+        self.colorscheme = name.to_string();
     }
 
     /// Check whether opening `slot_idx` (which has just been loaded) requires

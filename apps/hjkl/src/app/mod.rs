@@ -359,6 +359,10 @@ pub struct App {
     /// active slot's `dirty_gen` to decide when the `updatetime` idle deadline
     /// has elapsed for swap-file writes.
     pub(crate) last_input_at: std::time::Instant,
+    /// Name of the active colorscheme (`"dark"` / `"light"`). Set by
+    /// `:colorscheme {name}` and `:set background=`; reported by bare
+    /// `:colorscheme` / `:colorscheme?`. Default `"dark"`.
+    pub(crate) colorscheme: String,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -1308,6 +1312,7 @@ impl App {
             confirming_substitute: None,
             pending_recovery: None,
             last_input_at: std::time::Instant::now(),
+            colorscheme: "dark".to_string(),
         };
         // Check for crash recovery on the initial file slot (#185).
         // If no recovery prompt is needed, arm the PID-lock swap immediately so
