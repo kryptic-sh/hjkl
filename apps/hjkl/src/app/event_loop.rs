@@ -977,6 +977,24 @@ impl App {
                         }
                         return MouseOutcome::Continue;
                     }
+                    // ── P10: left-click a fold marker in the gutter → toggle fold.
+                    mouse::Zone::Gutter { win_id, doc_row } => {
+                        // Focus the clicked window first (matches inactive-window
+                        // click-to-focus behaviour); only toggle when a fold
+                        // actually starts/contains this row so plain line-number
+                        // clicks stay no-ops (see `gutter_click_no_cursor_move`).
+                        let current_focus = self.focused_window();
+                        if win_id != current_focus {
+                            self.switch_focus(win_id);
+                        }
+                        if self.active().editor.buffer().fold_at_row(doc_row).is_some() {
+                            self.active_mut()
+                                .editor
+                                .apply_fold_op(hjkl_engine::FoldOp::ToggleAt(doc_row));
+                            self.sync_after_engine_mutation();
+                        }
+                        return MouseOutcome::Continue;
+                    }
                     _ => {}
                 }
 

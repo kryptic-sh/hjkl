@@ -905,4 +905,79 @@ mod border_drag_tests {
         assert!(app.hover_popup.is_none());
         assert!(app.hover_timer.is_none());
     }
+
+    // ── P10: gutter left-click fold toggle ─────────────────────────────────────
+
+    /// Synthesise a left-click `MouseEvent` at `(col, row)` with no modifiers.
+    fn left_down(col: u16, row: u16) -> crossterm::event::MouseEvent {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// Left-clicking the gutter on a row that has a fold toggles that fold
+    /// (#114 P10). A second click re-opens it.
+    #[test]
+    fn gutter_click_toggles_fold() {
+        let mut app = make_app_with_window(
+            "line0\nline1\nline2\nline3\nline4\nline5",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        // Open fold spanning rows 1..=3; header row is doc row 1.
+        app.active_mut().editor.buffer_mut().add_fold(1, 3, false);
+        assert_eq!(
+            app.active()
+                .editor
+                .buffer()
+                .fold_at_row(1)
+                .map(|f| f.closed),
+            Some(false),
+            "precondition: fold at row 1 is open"
+        );
+
+        // Click the gutter (col 0) on the fold header row (screen row 1 = doc row 1).
+        // With default settings (number=true, numberwidth=4, no signs), gutter width=4,
+        // so col 0 is inside the gutter. Window area.y == 0, so screen row 1 = doc row 1.
+        app.handle_mouse(left_down(0, 1));
+        assert_eq!(
+            app.active()
+                .editor
+                .buffer()
+                .fold_at_row(1)
+                .map(|f| f.closed),
+            Some(true),
+            "gutter click on fold header must close the open fold"
+        );
+
+        // Click again → re-opens.
+        app.handle_mouse(left_down(0, 1));
+        assert_eq!(
+            app.active()
+                .editor
+                .buffer()
+                .fold_at_row(1)
+                .map(|f| f.closed),
+            Some(false),
+            "second gutter click must re-open the fold"
+        );
+    }
+
+    /// Left-clicking the gutter on a row WITHOUT a fold must not create or
+    /// toggle any fold (guards the P10 arm against over-firing).
+    #[test]
+    fn gutter_click_without_fold_is_noop() {
+        let mut app = make_app_with_window(
+            "alpha\nbeta\ngamma",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        app.handle_mouse(left_down(0, 0));
+        assert!(
+            app.active().editor.buffer().folds().is_empty(),
+            "gutter click on a non-fold row must not create a fold"
+        );
+    }
 }
