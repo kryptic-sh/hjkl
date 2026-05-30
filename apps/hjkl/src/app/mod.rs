@@ -861,8 +861,8 @@ impl App {
     ///
     /// Display-only: char-col indices (not byte offsets), suitable for
     /// direct screen column math after adding gutter width.
-    /// Tag-pair matching (`<tag>…</tag>`) is out of scope here.
-    /// TODO(#240): tag-pair matching via tree-sitter
+    /// Tag-pair matching (`<tag>…</tag>`) is handled by `matchparen_tag_cells`
+    /// via char-scan (not tree-sitter) as of #243.
     pub fn matchparen_cells(&self) -> Option<[(usize, usize); 2]> {
         let slot_idx = self.focused_slot_idx();
         let editor = &self.slots[slot_idx].editor;
@@ -873,6 +873,27 @@ impl App {
         let (row, col) = (cur.row, cur.col); // hjkl_buffer::Position fields are usize
         let match_pos = hjkl_engine::motions::matching_bracket_pos(editor.buffer(), row, col)?;
         Some([(row, col), match_pos])
+    }
+
+    /// Tag-name pair under the cursor for matchparen highlight (#243). Returns
+    /// the per-cell char-col positions covering BOTH the open and close tag
+    /// names, or `None` when matchparen is off or the cursor is not on a
+    /// paired tag name.
+    pub fn matchparen_tag_cells(&self) -> Option<Vec<(usize, usize)>> {
+        let slot_idx = self.focused_slot_idx();
+        let editor = &self.slots[slot_idx].editor;
+        if !editor.settings().matchparen {
+            return None;
+        }
+        let cur = editor.buffer().cursor();
+        let pair = hjkl_engine::vim::matching_tag_pair(editor.buffer(), cur.row, cur.col)?;
+        let mut cells = Vec::new();
+        for (row, start, end) in pair {
+            for col in start..end {
+                cells.push((row, col));
+            }
+        }
+        Some(cells)
     }
 
     /// Refresh window cursor cache, drain dirty flag + content edits, notify

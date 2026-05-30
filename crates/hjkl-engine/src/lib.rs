@@ -31,7 +31,7 @@ pub mod search;
 pub mod substitute;
 pub mod types;
 mod viewport_math;
-mod vim;
+pub mod vim;
 
 pub use editor::{Editor, LspIntent, MarkJump, StepBookkeeping};
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};

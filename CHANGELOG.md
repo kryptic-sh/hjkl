@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- Matchparen now highlights the matching HTML/XML **tag pair** under the cursor
+  (#243). When the cursor sits on an open or close tag name, both the `<tag>`
+  and `</tag>` name runs get the same bold+reversed emphasis as bracket
+  matching. Nested same-name tags pair by depth. Char-scan based (reuses the
+  #182 tag resolver); gated by `:set matchparen`. New public
+  `hjkl_engine::vim::matching_tag_pair` resolver and
+  `App::matchparen_tag_cells`.
+
 ## [0.28.1] - 2026-05-30
 
 ### Added

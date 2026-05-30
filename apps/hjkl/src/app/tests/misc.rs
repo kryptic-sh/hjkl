@@ -832,3 +832,151 @@ fn matchparen_off_returns_none() {
         "matchparen_cells must return None when matchparen is disabled"
     );
 }
+
+// ── matchparen_tag_cells tests ───────────────────────────────────────────────
+
+/// matchparen_tag_cells returns cells for both names when cursor is on the
+/// open tag name.
+#[test]
+fn matchparen_tag_cells_resolves_on_open_tag() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // `<div></div>`:
+    //   open  name at cols 1..4  (d=1, i=2, v=3)
+    //   close name at cols 7..10 (d=7, i=8, v=9)
+    seed_buffer(&mut app, "<div></div>");
+
+    use hjkl_buffer::Position;
+    // col 2 is inside "div" of the opener.
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 2));
+
+    let cells = app.matchparen_tag_cells();
+    assert!(
+        cells.is_some(),
+        "cursor on open tag name must return Some(cells)"
+    );
+    let cells = cells.unwrap();
+    // Opener name cols 1,2,3 + closer name cols 7,8,9 = 6 cells.
+    assert_eq!(cells.len(), 6, "expected 3 opener + 3 closer cells");
+    // Opener cells.
+    assert!(cells.contains(&(0, 1)), "missing opener col 1");
+    assert!(cells.contains(&(0, 2)), "missing opener col 2");
+    assert!(cells.contains(&(0, 3)), "missing opener col 3");
+    // Closer cells.
+    assert!(cells.contains(&(0, 7)), "missing closer col 7");
+    assert!(cells.contains(&(0, 8)), "missing closer col 8");
+    assert!(cells.contains(&(0, 9)), "missing closer col 9");
+}
+
+/// matchparen_tag_cells returns cells for both names when cursor is on the
+/// close tag name.
+#[test]
+fn matchparen_tag_cells_resolves_on_close_tag() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "<div></div>");
+
+    use hjkl_buffer::Position;
+    // col 8 is inside "div" of the closer.
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 8));
+
+    let cells = app.matchparen_tag_cells();
+    assert!(
+        cells.is_some(),
+        "cursor on close tag name must return Some(cells)"
+    );
+    let cells = cells.unwrap();
+    assert_eq!(cells.len(), 6, "expected 3 opener + 3 closer cells");
+    assert!(cells.contains(&(0, 1)));
+    assert!(cells.contains(&(0, 7)));
+}
+
+/// Nested same-name tags pair by structural depth — the outer opener must
+/// match the outer closer, not the inner one.
+#[test]
+fn matchparen_tag_cells_nested_pairs_by_depth() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // `<div><div></div></div>`:
+    //   outer open  name cols  1..4
+    //   inner open  name cols  6..9
+    //   inner close name cols 12..15
+    //   outer close name cols 18..21
+    seed_buffer(&mut app, "<div><div></div></div>");
+
+    use hjkl_buffer::Position;
+    // col 2 → inside the OUTER opener "div".
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 2));
+
+    let cells = app.matchparen_tag_cells();
+    assert!(cells.is_some(), "outer opener must pair with outer closer");
+    let cells = cells.unwrap();
+    // Should include outer opener (cols 1-3) and outer closer (cols 18-20),
+    // NOT the inner pair (cols 6-8 / 12-14).
+    assert!(
+        cells.contains(&(0, 1)),
+        "outer opener col 1 must be highlighted"
+    );
+    assert!(
+        cells.contains(&(0, 18)),
+        "outer closer col 18 must be highlighted"
+    );
+    assert!(
+        !cells.contains(&(0, 6)),
+        "inner opener col 6 must NOT be highlighted for outer pair"
+    );
+}
+
+/// matchparen_tag_cells returns None when matchparen is disabled.
+#[test]
+fn matchparen_tag_cells_off_returns_none() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "<div></div>");
+
+    use hjkl_buffer::Position;
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 2));
+
+    app.dispatch_ex("set nomatchparen");
+    let cells = app.matchparen_tag_cells();
+    assert_eq!(
+        cells, None,
+        "matchparen_tag_cells must return None when matchparen is disabled"
+    );
+}
+
+/// matchparen_tag_cells returns None when cursor is not on a tag name.
+#[test]
+fn matchparen_tag_cells_none_when_not_on_tag() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // col 0 is `<` — not inside a name region.
+    seed_buffer(&mut app, "<div></div>after");
+
+    use hjkl_buffer::Position;
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 0));
+
+    let cells = app.matchparen_tag_cells();
+    assert_eq!(
+        cells, None,
+        "cursor on `<` (not a name char) must return None"
+    );
+
+    // Also try plain text after the tags.
+    app.active_mut()
+        .editor
+        .buffer_mut()
+        .set_cursor(Position::new(0, 12));
+    let cells = app.matchparen_tag_cells();
+    assert_eq!(cells, None, "cursor on plain text must return None");
+}

@@ -1668,6 +1668,25 @@ pub(crate) fn sync_paired_tag_on_exit<H: crate::types::Host>(
     ed.push_buffer_cursor_to_textarea();
 }
 
+/// Resolve the HTML/XML tag-name pair under the cursor for matchparen-style
+/// highlight (#243). Returns `[(row, name_start_col, name_end_col); 2]` for
+/// the tag under the cursor and its structural partner, or `None` when the
+/// cursor is not on a tag name or the tag is unpaired. Char-column ranges
+/// (display), consistent with `motions::matching_bracket_pos`.
+pub fn matching_tag_pair(
+    buffer: &hjkl_buffer::Buffer,
+    row: usize,
+    col: usize,
+) -> Option<[(usize, usize, usize); 2]> {
+    let line = buf_line(buffer, row)?;
+    let anchor = detect_tag_at_cursor(&line, row, col)?;
+    let partner = find_matching_tag(buffer, &anchor)?;
+    Some([
+        (anchor.row, anchor.name_start_col, anchor.name_end_col),
+        (partner.row, partner.name_start_col, partner.name_end_col),
+    ])
+}
+
 /// Void HTML elements that must never get an auto-close tag.
 fn is_void_element(tag: &str) -> bool {
     matches!(
