@@ -43,7 +43,14 @@ fn any_line_contains(session: &TerminalSession, needle: &str) -> bool {
 /// moved the cursor to line 100 but the window cursor cache wasn't flushed
 /// after `ex::run`, so the displayed cursor stayed at row 0 of the screen
 /// even though line 100 was scrolled into view.
+///
+/// IGNORED in CI: a real-pty render-sync test — it spawns the binary under a
+/// pseudo-terminal and depends on the editor emitting the scroll frame within
+/// a timing budget, which a loaded GitHub runner can't guarantee (it has flaked
+/// across several unrelated commits even after a 10s poll). Run locally with
+/// `cargo test -- --ignored`. Tracked for a deterministic, non-timing rewrite.
 #[test]
+#[ignore = "flaky under CI load — real-pty timing; run locally with --ignored"]
 fn goto_line_100_scrolls_viewport() {
     let mut s = TerminalSession::spawn_with_file(&fixture("lines_120.txt"));
 

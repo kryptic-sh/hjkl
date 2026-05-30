@@ -908,7 +908,7 @@ fn goto_references_always_opens_picker() {
 }
 
 #[test]
-fn hover_response_sets_info_popup() {
+fn hover_response_sets_hover_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     let hover = lsp_types::Hover {
         contents: lsp_types::HoverContents::Markup(lsp_types::MarkupContent {
@@ -921,13 +921,20 @@ fn hover_response_sets_info_popup() {
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
     app.handle_hover_response(buffer_id, (0, 0), result);
 
-    assert!(app.info_popup.is_some(), "hover must set info_popup");
-    let popup = app.info_popup.as_ref().unwrap();
+    // K-key hover now uses the compact, cursor-anchored hover_popup (the same
+    // widget mouse hover uses), not the 80%×60% info_popup modal.
+    assert!(
+        app.info_popup.is_none(),
+        "K hover should no longer use the info_popup modal"
+    );
+    let popup = app
+        .hover_popup
+        .as_ref()
+        .expect("hover must set hover_popup");
     assert!(
         popup.content.contains("foo"),
-        "popup must contain function name"
+        "hover_popup must contain the function name"
     );
-    assert_eq!(popup.kind, hjkl_info_popup::ContentKind::Markdown);
 }
 
 #[test]
