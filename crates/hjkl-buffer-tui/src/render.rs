@@ -647,7 +647,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let prefix = first_line.trim();
         let count = fold.line_count();
         let label = if prefix.is_empty() {
-            format!("▸ {count} lines folded")
+            format!("{count} lines folded")
         } else {
             const MAX_PREFIX: usize = 60;
             let trimmed = if prefix.chars().count() > MAX_PREFIX {
@@ -656,7 +656,7 @@ impl<R: StyleResolver> BufferView<'_, R> {
             } else {
                 prefix.to_string()
             };
-            format!("▸ {trimmed}  ({count} lines)")
+            format!("{trimmed}  ({count} lines)")
         };
         let mut x = area.x;
         let row_end_x = area.x + area.width;
