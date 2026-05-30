@@ -141,9 +141,15 @@ where
 }
 
 /// Cursor's screen row counted from `top` rather than `viewport.top_row`.
-/// Internal — drives both [`ensure_cursor_visible`] (which feeds
-/// successive candidate `top` rows) and [`cursor_screen_row`].
-fn cursor_screen_row_from<B>(
+///
+/// The single source of truth for "which screen row is the cursor on",
+/// fold- and wrap-aware. Drives [`ensure_cursor_visible`] (which feeds
+/// successive candidate `top` rows), [`cursor_screen_row`], and the
+/// terminal cursor-block placement in [`crate::Editor::cursor_screen_pos`].
+/// Under `Wrap::None` each non-hidden doc row counts as exactly one
+/// screen row, so the result is the fold-collapsed doc-row delta;
+/// `None` only when the cursor sits above `top`.
+pub fn cursor_screen_row_from<B>(
     buf: &B,
     folds: &dyn FoldProvider,
     viewport: &Viewport,

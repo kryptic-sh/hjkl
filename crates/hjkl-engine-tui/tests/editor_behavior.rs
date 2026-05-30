@@ -3196,3 +3196,129 @@ fn filter_range_timeout_kills_slow_command() {
         "buffer must be unchanged"
     );
 }
+
+// ── cursor_screen_pos fold-aware row regression (#244) ────────────────────
+
+/// Regression test for #244: `cursor_screen_pos` must subtract hidden rows
+/// (rows inside a closed fold) when computing the screen-row delta `dy`.
+///
+/// Setup: 50-line buffer, closed fold over rows 11..=43 (32 hidden rows;
+/// row 11 is the visible fold-start marker). Cursor at doc row 44.
+/// Screen row = 44 - 0 (top_row) - 32 (hidden) = 12.
+/// Before the fix `dy` was computed as a raw `pos_row - top_row = 44`,
+/// painting the terminal cursor block 32 rows too low.
+#[test]
+fn cursor_screen_pos_skips_hidden_fold_rows() {
+    let content = (0..50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+
+    // Viewport: top_row=0, height=60 (shows whole file), width=80, tab_width=4.
+    e.set_viewport_height(60);
+    e.sync_buffer_from_textarea();
+    {
+        let vp = e.host_mut().viewport_mut();
+        vp.top_row = 0;
+        vp.width = 80;
+        vp.tab_width = 4;
+    }
+
+    // Closed fold: rows 11..=43. Row 11 is the visible marker; rows 12..=43
+    // (32 rows) are hidden.
+    e.buffer_mut().add_fold(11, 43, true);
+
+    // Cursor at doc row 44 (the first row below the fold).
+    e.jump_cursor(44, 0);
+
+    let pos = e.cursor_screen_pos(0, 0, 80, 60, 0);
+    assert!(
+        pos.is_some(),
+        "cursor at row 44 must be visible in a height-60 viewport"
+    );
+    let screen_row = pos.unwrap().1;
+    assert_eq!(
+        screen_row, 12,
+        "cursor_screen_pos must subtract 32 hidden rows: expected screen row 12, got {screen_row} \
+         (pre-fix value would be 44 — the terminal cursor block was painted 32 rows too low)"
+    );
+}
+
+/// Sanity: with no folds, cursor at doc row 5 must map to screen row 5
+/// (top_row=0). Verifies the fix did not break the no-fold path.
+#[test]
+fn cursor_screen_pos_no_fold_row_unchanged() {
+    let content = (0..50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+
+    e.set_viewport_height(60);
+    e.sync_buffer_from_textarea();
+    {
+        let vp = e.host_mut().viewport_mut();
+        vp.top_row = 0;
+        vp.width = 80;
+        vp.tab_width = 4;
+    }
+
+    // No folds.
+    e.jump_cursor(5, 0);
+
+    let pos = e.cursor_screen_pos(0, 0, 80, 60, 0);
+    assert!(pos.is_some(), "cursor at row 5 must be visible");
+    let screen_row = pos.unwrap().1;
+    assert_eq!(
+        screen_row, 5,
+        "no-fold path: screen row must equal doc row when top_row=0, got {screen_row}"
+    );
+}
+
+/// Partial-fold sanity: fold rows 11..=20 closed (9 hidden rows), cursor at
+/// doc row 44. Expected screen row = 44 - 0 - 9 = 35.
+#[test]
+fn cursor_screen_pos_partial_fold_arithmetic() {
+    let content = (0..50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+
+    e.set_viewport_height(60);
+    e.sync_buffer_from_textarea();
+    {
+        let vp = e.host_mut().viewport_mut();
+        vp.top_row = 0;
+        vp.width = 80;
+        vp.tab_width = 4;
+    }
+
+    // Closed fold rows 11..=20: row 11 visible, rows 12..=20 hidden (9 rows).
+    e.buffer_mut().add_fold(11, 20, true);
+    e.jump_cursor(44, 0);
+
+    let pos = e.cursor_screen_pos(0, 0, 80, 60, 0);
+    assert!(pos.is_some(), "cursor at row 44 must be visible");
+    let screen_row = pos.unwrap().1;
+    assert_eq!(
+        screen_row, 35,
+        "partial fold (9 hidden rows): expected screen row 35, got {screen_row}"
+    );
+}

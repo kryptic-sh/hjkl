@@ -34,6 +34,14 @@ patch bumps.
   step over the closed fold as a single unit instead of stranding the cursor on
   a hidden row. Fix lives in `Editor::apply_fold_op`, so keyboard and
   gutter-click paths share it.
+- Folds (#244): the terminal cursor block is now painted on the correct screen
+  row when closed folds sit above the cursor. `Editor::cursor_screen_pos` was
+  computing a naive `pos_row - top_row` delta that ignored fold-collapsed rows,
+  drawing the block N rows too low while the (fold-aware) text and line
+  highlight rendered correctly. It now delegates its screen-row math to the
+  single canonical `viewport_math::cursor_screen_row_from` calculator that
+  already drives scrolling and scrolloff — one fold/wrap-aware source of truth
+  instead of three.
 
 ## [0.28.1] - 2026-05-30
 

@@ -2160,7 +2160,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let lnum_width = self.lnum_width();
         // Full offset from the left edge of the window to the first text cell.
         let gutter_total = lnum_width + extra_gutter_width;
-        let dy = (pos_row - v.top_row) as u16;
+        // Screen row delta: delegate to the single fold- and wrap-aware
+        // calculator that already drives scrolling + scrolloff, rather than
+        // recomputing `pos_row - top_row` here. That naive delta ignored rows
+        // collapsed by closed folds, painting the cursor block N rows too low
+        // while the (fold-aware) text + line-highlight rendered correctly.
+        // One source of truth → no drift between scroll math and cursor math. (#244)
+        let folds = crate::buffer_impl::SnapshotFoldProvider::from_buffer(&self.buffer);
+        let dy = crate::viewport_math::cursor_screen_row_from(&self.buffer, &folds, v, v.top_row)?
+            as u16;
         // Convert char column to visual column so cursor lands on the
         // correct cell when the line contains tabs (which the renderer
         // expands to TAB_WIDTH stops). Tab width must match the renderer.
