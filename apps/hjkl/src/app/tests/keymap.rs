@@ -1758,6 +1758,41 @@ fn zf_in_visual_creates_fold() {
     assert!(folds[0].closed, "fold must be closed");
 }
 
+/// `:set foldmethod=marker` generates folds from `{{{` / `}}}` markers via a
+/// pure text scan (grammar-independent — works on a plain scratch buffer).
+#[test]
+fn foldmethod_marker_generates_folds_from_markers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // rows: 0 open, 1 body, 2 close, 3 tail
+    seed_buffer(&mut app, "region {{{\nbody\nend }}}\ntail");
+    app.dispatch_ex("set foldmethod=marker");
+    // Drive the auto-fold pass (normally fired from the event loop).
+    app.recompute_and_install();
+
+    let folds = app.active().editor.buffer().folds();
+    assert_eq!(
+        folds.len(),
+        1,
+        "marker pair must produce exactly one fold, got {folds:?}"
+    );
+    assert_eq!(folds[0].start_row, 0, "fold starts on the `{{{{{{` row");
+    assert_eq!(folds[0].end_row, 2, "fold ends on the `}}}}}}` row");
+}
+
+/// `:set foldmethod=manual` must NOT auto-generate folds from markers.
+#[test]
+fn foldmethod_manual_ignores_markers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "region {{{\nbody\nend }}}\ntail");
+    app.dispatch_ex("set foldmethod=manual");
+    app.recompute_and_install();
+
+    assert!(
+        app.active().editor.buffer().folds().is_empty(),
+        "manual foldmethod must not generate marker folds"
+    );
+}
+
 // ── Phase 2c-i: AfterOp integration tests ────────────────────────────────────
 
 /// Helper: drive a sequence of chars through drive_key.

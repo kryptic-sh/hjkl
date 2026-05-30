@@ -289,10 +289,10 @@ impl App {
 
         self.refresh_git_signs();
 
-        // --- Tree-sitter auto-folds (foldmethod=expr) ---
+        // --- Auto-folds (foldmethod=expr / marker) ---
         // After render_viewport triggers a reparse, extract fold ranges and
         // apply them to the buffer. Runs only when dirty_gen has advanced
-        // since the last fold pass — O(tree) once per edit, never per-frame.
+        // since the last fold pass — once per edit, never per-frame.
         let (fdm, fen, fls) = {
             let s = self.slots[active_idx].editor.settings();
             (s.foldmethod, s.foldenable, s.foldlevelstart)
@@ -300,37 +300,63 @@ impl App {
         let dg = self.slots[active_idx].editor.buffer().dirty_gen();
         let last_fold_dg = self.slots[active_idx].last_fold_dirty_gen;
 
-        if fen && fdm == hjkl_engine::types::FoldMethod::Expr && last_fold_dg != Some(dg) {
-            // Extract fold ranges from the (now fresh) tree.
-            // `extract_fold_ranges` returns `None` when the grammar is not yet
-            // ready (still loading or unknown extension). In that case we must
-            // NOT record the dirty_gen as processed — the next recompute after
-            // the grammar finishes loading will see `last_fold_dg != Some(dg)`
-            // and re-run fold extraction against the now-ready tree.
-            let ranges_opt = {
-                let buf = self.slots[active_idx].editor.buffer();
-                self.syntax.extract_fold_ranges(buffer_id, buf)
-            };
-            if let Some(ranges) = ranges_opt {
-                if !ranges.is_empty() {
-                    // Apply new auto-folds to the buffer via set_auto_folds:
-                    // - Preserves open/closed state for folds at the same start_row.
-                    // - New folds default open (fls >= 99) or closed (fls == 0).
-                    // - Manual folds are never touched.
-                    let default_closed = fls == 0;
+        if fen && last_fold_dg != Some(dg) {
+            use hjkl_engine::types::FoldMethod;
+            let default_closed = fls == 0;
+            match fdm {
+                FoldMethod::Expr => {
+                    // Extract fold ranges from the (now fresh) tree.
+                    // `extract_fold_ranges` returns `None` when the grammar is
+                    // not yet ready (still loading or unknown extension). In
+                    // that case we must NOT record the dirty_gen as processed —
+                    // the next recompute after the grammar finishes loading will
+                    // see `last_fold_dg != Some(dg)` and re-run against the
+                    // now-ready tree.
+                    let ranges_opt = {
+                        let buf = self.slots[active_idx].editor.buffer();
+                        self.syntax.extract_fold_ranges(buffer_id, buf)
+                    };
+                    if let Some(ranges) = ranges_opt {
+                        if !ranges.is_empty() {
+                            // set_auto_folds preserves open/closed state for
+                            // folds at the same start_row; new folds default
+                            // open (fls >= 99) or closed (fls == 0); manual
+                            // folds are never touched.
+                            self.slots[active_idx]
+                                .editor
+                                .buffer_mut()
+                                .set_auto_folds(&ranges, default_closed);
+                        }
+                        // Grammar was ready and extraction ran (even if no
+                        // folds found). Mark this dirty_gen as processed.
+                        self.slots[active_idx].last_fold_dirty_gen = Some(dg);
+                    }
+                    // If ranges_opt is None (grammar not ready),
+                    // last_fold_dirty_gen stays at the old value — retried on
+                    // the next recompute_and_install when the load completes.
+                }
+                FoldMethod::Marker => {
+                    // Marker folds (`{{{` / `}}}`) are grammar-independent: a
+                    // pure text scan over the rope. They work on any file, so
+                    // there is no "not ready" state — always record dirty_gen.
+                    // Always call set_auto_folds (even with an empty range list)
+                    // so that removing the last marker also removes its fold.
+                    let ranges = {
+                        let buf = self.slots[active_idx].editor.buffer();
+                        hjkl_bonsai::extract_marker_fold_ranges_rope(
+                            &buf.rope(),
+                            hjkl_bonsai::DEFAULT_FOLD_MARKER_OPEN,
+                            hjkl_bonsai::DEFAULT_FOLD_MARKER_CLOSE,
+                        )
+                    };
                     self.slots[active_idx]
                         .editor
                         .buffer_mut()
                         .set_auto_folds(&ranges, default_closed);
+                    self.slots[active_idx].last_fold_dirty_gen = Some(dg);
                 }
-                // Grammar was ready and extraction ran (even if no folds found).
-                // Mark this dirty_gen as processed so we don't re-run per-frame.
-                self.slots[active_idx].last_fold_dirty_gen = Some(dg);
+                FoldMethod::Manual => {}
             }
-            // If ranges_opt is None (grammar not ready), last_fold_dirty_gen
-            // stays at the old value — fold extraction will retry on the next
-            // recompute_and_install call (triggered by poll_grammar_loads when
-            // the async load completes).
         }
     }
 

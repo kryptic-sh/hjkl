@@ -244,6 +244,93 @@ pub fn extract_fold_ranges_rope(
 }
 
 // ---------------------------------------------------------------------------
+// Marker folds (foldmethod=marker) — grammar-independent
+// ---------------------------------------------------------------------------
+
+/// The default vim fold markers (`foldmarker={{{,}}}`).
+pub const DEFAULT_FOLD_MARKER_OPEN: &str = "{{{";
+pub const DEFAULT_FOLD_MARKER_CLOSE: &str = "}}}";
+
+/// Scan `rope` for vim-style marker folds (`open` / `close`, default
+/// `{{{` / `}}}`).
+///
+/// This is **grammar-independent** — it works on any text (including plain
+/// `.txt`) because the markers are matched literally, not via tree-sitter.
+/// Markers normally live inside comments (`// {{{`, `# }}}`, `-- {{{`) but,
+/// matching vim, the marker text is found anywhere on a line regardless of
+/// comment syntax.
+///
+/// Pairing is stack-based: each `open` pushes the current row, each `close`
+/// pops the most-recent open and emits `(start_row, end_row)`. Within a single
+/// line, markers are processed left-to-right (so `}}} … {{{` on one line closes
+/// then re-opens). A `close` with no matching `open` is ignored; an unclosed
+/// `open` at end-of-file is dropped — exactly like vim.
+///
+/// An optional level digit after a marker (vim's `{{{1`) is accepted and
+/// ignored — folds are paired by nesting, not by explicit level.
+///
+/// Returns sorted `(start_row, end_row)` pairs (both inclusive, 0-based),
+/// deduplicated by `start_row` (largest span wins) to match
+/// [`extract_fold_ranges`]. Single-line folds (`open` and `close` on the same
+/// row) are skipped.
+///
+/// **Bounded**: one linear pass over the rope — O(N bytes). No recursion.
+pub fn extract_marker_fold_ranges_rope(
+    rope: &ropey::Rope,
+    open: &str,
+    close: &str,
+) -> Vec<(usize, usize)> {
+    let ob = open.as_bytes();
+    let cb = close.as_bytes();
+    if ob.is_empty() || cb.is_empty() {
+        return Vec::new();
+    }
+
+    let mut stack: Vec<usize> = Vec::new();
+    // Keyed by start_row; value = largest end_row seen — mirrors the TS path.
+    let mut by_start: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+
+    let mut scratch = String::new();
+    for (row, line) in rope.lines().enumerate() {
+        // Borrow the line bytes without allocating when the chunk is contiguous.
+        let bytes: &[u8] = match line.as_str() {
+            Some(s) => s.as_bytes(),
+            None => {
+                scratch.clear();
+                scratch.extend(line.chunks());
+                scratch.as_bytes()
+            }
+        };
+
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i..].starts_with(ob) {
+                stack.push(row);
+                i += ob.len();
+            } else if bytes[i..].starts_with(cb) {
+                if let Some(start) = stack.pop()
+                    && row > start
+                {
+                    by_start
+                        .entry(start)
+                        .and_modify(|e| {
+                            if row > *e {
+                                *e = row;
+                            }
+                        })
+                        .or_insert(row);
+                }
+                i += cb.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    by_start.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -329,5 +416,76 @@ mod tests {
         let r1 = extract_fold_ranges(&tree, &grammar, source);
         let r2 = extract_fold_ranges(&tree, &grammar, source);
         assert_eq!(r1, r2, "fold extraction must be idempotent");
+    }
+
+    // ── Marker folds (grammar-free — run in the normal lane) ─────────────────
+
+    fn markers(src: &str) -> Vec<(usize, usize)> {
+        let rope = ropey::Rope::from_str(src);
+        extract_marker_fold_ranges_rope(&rope, DEFAULT_FOLD_MARKER_OPEN, DEFAULT_FOLD_MARKER_CLOSE)
+    }
+
+    #[test]
+    fn marker_simple_pair() {
+        // rows: 0 open, 1 body, 2 close
+        let got = markers("// region {{{\nbody\n// }}}\n");
+        assert_eq!(got, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn marker_nested_pairs() {
+        // 0 {{{, 1 {{{, 2 }}}, 3 }}}  → inner (1,2), outer (0,3)
+        let got = markers("a {{{\nb {{{\nc }}}\nd }}}\n");
+        assert_eq!(got, vec![(0, 3), (1, 2)]);
+    }
+
+    #[test]
+    fn marker_unmatched_close_ignored() {
+        let got = markers("foo\n}}}\nbar\n");
+        assert!(got.is_empty(), "stray close must be ignored, got {got:?}");
+    }
+
+    #[test]
+    fn marker_unclosed_open_dropped() {
+        let got = markers("{{{\nbody\nmore\n");
+        assert!(got.is_empty(), "unclosed open must be dropped, got {got:?}");
+    }
+
+    #[test]
+    fn marker_single_line_skipped() {
+        // open and close on the same row → no multi-line fold
+        let got = markers("inline {{{ }}} end\n");
+        assert!(
+            got.is_empty(),
+            "single-line marker must be skipped, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn marker_level_digit_ignored() {
+        // vim's `{{{1` / `}}}1` — digit accepted and ignored
+        let got = markers("a {{{1\nb\nc }}}1\n");
+        assert_eq!(got, vec![(0, 2)]);
+    }
+
+    #[test]
+    fn marker_close_then_open_same_line() {
+        // 0 {{{, 1 "}}} {{{" closes (0,1) then opens, 2 }}} closes (1,2)
+        let got = markers("a {{{\nb }}} {{{\nc }}}\n");
+        assert_eq!(got, vec![(0, 1), (1, 2)]);
+    }
+
+    #[test]
+    fn marker_works_without_comment_syntax() {
+        // Grammar-independent: bare markers, no comment leader.
+        let got = markers("{{{\nx\ny\n}}}\n");
+        assert_eq!(got, vec![(0, 3)]);
+    }
+
+    #[test]
+    fn marker_empty_delims_returns_empty() {
+        let rope = ropey::Rope::from_str("{{{\n}}}\n");
+        assert!(extract_marker_fold_ranges_rope(&rope, "", "}}}").is_empty());
+        assert!(extract_marker_fold_ranges_rope(&rope, "{{{", "").is_empty());
     }
 }

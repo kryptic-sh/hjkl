@@ -42,7 +42,10 @@ pub mod theme;
 
 // Flat re-exports for the primary public API surface.
 pub use comment_markers::{CommentMarkerPass, MarkerWord, default_markers};
-pub use folds::{builtin_folds, extract_fold_ranges, extract_fold_ranges_rope};
+pub use folds::{
+    DEFAULT_FOLD_MARKER_CLOSE, DEFAULT_FOLD_MARKER_OPEN, builtin_folds, extract_fold_ranges,
+    extract_fold_ranges_rope, extract_marker_fold_ranges_rope,
+};
 pub use hex_color::{HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass};
 pub use highlighter::parse_counter;
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
