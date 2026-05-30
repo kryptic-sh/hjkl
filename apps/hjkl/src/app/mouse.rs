@@ -200,7 +200,7 @@ fn text_start_offset(
 /// Fold-column width for `slot`, matching the renderer's auto rule: 1 when
 /// the buffer has any fold (widened by an explicit `foldcolumn`), else the
 /// `foldcolumn` setting (0 by default).
-fn fold_column_width_for(slot: &crate::app::Slot) -> u16 {
+fn fold_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
     let fdc = slot.editor.settings().foldcolumn.min(12) as u16;
     if slot.editor.buffer().folds().is_empty() {
         fdc
@@ -250,7 +250,12 @@ pub fn cell_to_doc(
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
-    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
+    let gw = text_start_offset(
+        slot.editor.lnum_width(),
+        s.signcolumn,
+        has_visible_signs,
+        fold_column_width_for(slot),
+    );
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -322,7 +327,12 @@ pub fn doc_to_cell(
         .chain(slot.diag_signs_lsp.iter())
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
-    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
+    let gw = text_start_offset(
+        slot.editor.lnum_width(),
+        s.signcolumn,
+        has_visible_signs,
+        fold_column_width_for(slot),
+    );
 
     let cell_y = rect.y + (doc_row - vp_top) as u16;
 
@@ -821,7 +831,12 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
-    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
+    let gw = text_start_offset(
+        slot.editor.lnum_width(),
+        s.signcolumn,
+        has_visible_signs,
+        fold_column_width_for(slot),
+    );
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
