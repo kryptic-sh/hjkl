@@ -49,6 +49,20 @@ fn goto_line_100_scrolls_viewport() {
 
     s.keys(":100<Enter>");
 
+    // Poll until line100 has actually rendered. A fixed settle delay races
+    // the repaint on slow CI: the engine moves the cursor but the frame
+    // containing line100 can land after keys()'s 200ms settle window, so a
+    // one-shot read sees stale rows (passed locally, failed on CI runners).
+    let mut rendered = false;
+    for _ in 0..300 {
+        if (0..24u16).any(|r| s.line(r).contains("line100")) {
+            rendered = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(rendered, "line100 never rendered after :100<Enter>");
+
     let (cursor_row, _) = s.cursor();
 
     // The cursor must be on a visible row (0-based, within the 24-row terminal).
