@@ -244,7 +244,33 @@ impl App {
         self.syntax.set_rainbow_brackets(rb);
         let buf = self.slots[active_idx].editor.buffer();
 
-        let out = self.syntax.render_viewport(buffer_id, buf, top, height);
+        // BUG 1 fix: `height` is measured in SCREEN rows, but closed folds
+        // hide doc rows without consuming a screen row.  The renderer walks
+        // more doc rows than `height` to fill the screen; rows beyond
+        // `top + height` would miss syntax spans.  Expand the requested
+        // doc-row range by counting hidden rows inside it so the syntax
+        // layer covers the full visible doc range.
+        let effective_height = {
+            let row_count = buf.row_count();
+            let mut screen = 0usize;
+            let mut doc = top;
+            while screen < height && doc < row_count {
+                if buf.is_row_hidden(doc) {
+                    // Hidden rows cost no screen rows but advance doc.
+                    doc += 1;
+                } else {
+                    screen += 1;
+                    doc += 1;
+                }
+            }
+            // `doc` is now the first doc row beyond the visible window.
+            // The span range must cover `top..doc`, i.e. `doc - top` rows.
+            doc.saturating_sub(top).max(height)
+        };
+
+        let out = self
+            .syntax
+            .render_viewport(buffer_id, buf, top, effective_height);
 
         if let Some(out) = out {
             let start = out.key.1;

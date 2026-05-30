@@ -939,6 +939,10 @@ impl App {
                 .shift_syntax_spans_for_edits(&edits);
         }
         self.lsp_notify_change_active(&edits);
+        // Drain pending fold ops so the vec doesn't grow unboundedly.
+        // `recompute_and_install` below handles the visual refresh; the ops
+        // are queued for host observation but this app has no other consumer.
+        let _ = self.active_mut().editor.take_fold_ops();
         self.recompute_and_install();
     }
 

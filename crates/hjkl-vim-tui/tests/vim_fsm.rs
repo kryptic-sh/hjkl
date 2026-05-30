@@ -4277,6 +4277,90 @@ fn edit_pipeline_emits_invalidate_fold_op() {
     );
 }
 
+// ─── Fold subsystem regression tests (issue #244) ─────────────────────────
+
+/// BUG 2 regression: closing a fold with the cursor inside the fold body
+/// must snap the cursor to the fold's start_row (vim behaviour).
+#[test]
+fn close_fold_snaps_cursor_to_start_row() {
+    // Buffer: rows 0-4. Fold covers rows 1-3. Cursor starts on row 2
+    // (inside the fold body). Closing the fold must snap cursor to row 1.
+    let mut e = editor_with("a\nb\nc\nd\ne");
+    e.buffer_mut().add_fold(1, 3, false); // open fold, rows 1-3
+    e.jump_cursor(2, 0); // cursor inside fold body
+    run_keys(&mut e, "zc"); // close the fold
+    let (row, _col) = e.cursor();
+    assert_eq!(
+        row, 1,
+        "cursor should snap to fold start_row=1, got row={row}"
+    );
+    // Row 2 and 3 must now be hidden.
+    assert!(e.buffer().is_row_hidden(2), "row 2 should be hidden");
+    assert!(e.buffer().is_row_hidden(3), "row 3 should be hidden");
+}
+
+/// BUG 2 regression: toggling (za) a fold closed with the cursor on a
+/// hidden row snaps cursor to start_row.
+#[test]
+fn toggle_fold_closed_snaps_cursor_to_start_row() {
+    let mut e = editor_with("a\nb\nc\nd\ne");
+    e.buffer_mut().add_fold(1, 3, false); // open fold
+    e.jump_cursor(3, 0); // cursor on last hidden row
+    run_keys(&mut e, "za"); // toggle to closed
+    let (row, _col) = e.cursor();
+    assert_eq!(
+        row, 1,
+        "cursor should snap to fold start_row=1 after toggle-close, got row={row}"
+    );
+}
+
+/// BUG 2 regression: after closing a fold that strands the cursor, j/k
+/// should step over the fold as a single visual unit.
+#[test]
+fn j_after_fold_close_steps_over_fold() {
+    // Buffer: rows 0-4. Fold rows 1-3 (closed). Cursor at start_row=1.
+    // j from row 1 should go to row 4 (first visible row after fold).
+    let mut e = editor_with_rows(5, 10);
+    e.buffer_mut().add_fold(1, 3, true); // already closed
+    e.jump_cursor(1, 0); // at fold start (visible)
+    run_keys(&mut e, "j"); // step down
+    let (row, _) = e.cursor();
+    assert_eq!(
+        row, 4,
+        "j from fold start_row=1 should land on row 4 (after fold), got row={row}"
+    );
+}
+
+/// BUG 2 regression: k from the row after a closed fold should jump back
+/// to the fold's start_row.
+#[test]
+fn k_before_fold_jumps_to_fold_start() {
+    let mut e = editor_with_rows(5, 10);
+    e.buffer_mut().add_fold(1, 3, true); // closed, rows 1-3 hidden
+    e.jump_cursor(4, 0); // row after fold
+    run_keys(&mut e, "k"); // step up
+    let (row, _) = e.cursor();
+    assert_eq!(
+        row, 1,
+        "k from row 4 should land on fold start_row=1, got row={row}"
+    );
+}
+
+/// BUG 2 regression: zo (open fold) with cursor on start_row must NOT
+/// move the cursor (it was already visible).
+#[test]
+fn open_fold_keeps_cursor_on_start_row() {
+    let mut e = editor_with("a\nb\nc\nd");
+    e.buffer_mut().add_fold(1, 2, true); // closed
+    e.jump_cursor(1, 0); // cursor at fold start (visible)
+    run_keys(&mut e, "zo"); // open fold
+    let (row, _) = e.cursor();
+    assert_eq!(
+        row, 1,
+        "zo from fold start_row=1 must keep cursor at row 1, got row={row}"
+    );
+}
+
 #[test]
 fn dot_mark_jumps_to_last_edit_position() {
     let mut e = editor_with("alpha\nbeta\ngamma\ndelta");

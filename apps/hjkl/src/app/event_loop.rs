@@ -1428,6 +1428,10 @@ impl App {
                                 .shift_syntax_spans_for_edits(&edits);
                         }
                         self.lsp_notify_change_active(&edits);
+                        // Drain pending fold ops to prevent unbounded growth;
+                        // `recompute_and_install` (via `pending_recompute`)
+                        // handles the visual refresh.
+                        let _ = self.active_mut().editor.take_fold_ops();
                         self.pending_recompute = true;
                     }
                 }
@@ -1491,6 +1495,9 @@ impl App {
                                         .shift_syntax_spans_for_edits(&edits);
                                 }
                                 self.lsp_notify_change_active(&edits);
+                                // Drain pending fold ops (drain-loop mirror of
+                                // the primary key arm above).
+                                let _ = self.active_mut().editor.take_fold_ops();
                                 self.pending_recompute = true;
                             }
                         },

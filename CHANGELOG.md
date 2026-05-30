@@ -22,6 +22,19 @@ patch bumps.
   otherwise a no-op. The git-sign hunk-preview half of P10 remains blocked on
   #115.
 
+### Fixed
+
+- Folds (#244): closing or toggling a fold no longer corrupts syntax
+  highlighting on the visible rows — the syntax span recompute now expands the
+  requested doc-row range to account for rows hidden by closed folds, so spans
+  cover the full visible window. Pending fold ops are drained on both the
+  keyboard (`za`/`zc`) and gutter-click paths.
+- Folds (#244): closing a fold with the cursor inside the fold body now snaps
+  the cursor to the fold's first line (vim behaviour), so subsequent `j`/`k`
+  step over the closed fold as a single unit instead of stranding the cursor on
+  a hidden row. Fix lives in `Editor::apply_fold_op`, so keyboard and
+  gutter-click paths share it.
+
 ## [0.28.1] - 2026-05-30
 
 ### Added

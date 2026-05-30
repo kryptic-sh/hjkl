@@ -1835,6 +1835,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.pending_fold_ops.push(op);
         let mut provider = crate::buffer_impl::BufferFoldProviderMut::new(&mut self.buffer);
         provider.apply(op);
+        // BUG 2 fix: after a close/toggle-that-closes, the cursor may sit on a
+        // hidden row (inside the fold body). Vim snaps the cursor to the fold's
+        // first line (start_row). Do it here so every call site — keyboard `za`/
+        // `zc` AND the gutter-click path — converges on the same behaviour.
+        let cursor_row = buf_cursor_row(&self.buffer);
+        if self.buffer.is_row_hidden(cursor_row)
+            && let Some(fold) = self.buffer.fold_at_row(cursor_row)
+        {
+            let snap_row = fold.start_row;
+            buf_set_cursor_rc(&mut self.buffer, snap_row, 0);
+            self.sticky_col = Some(0);
+        }
     }
 
     /// Refresh the host viewport's height from the cached
