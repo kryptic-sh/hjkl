@@ -53,5 +53,9 @@ filter = 'package(hjkl-anvil)'
 test-group = 'anvil-env'
 
 [[profile.default.overrides]]
-filter = 'package(hjkl-bonsai) & test(/rust_fold/)'
+# All grammar-cloning bonsai fold tests share the on-disk grammar cache; run
+# them one at a time so they don't race on the same `<grammar>.tmp` clone dir.
+# `all_bundled_fold_queries_compile` clones every bundled grammar, so it must be
+# in this group too (it does not match `/rust_fold/`).
+filter = 'package(hjkl-bonsai) & (test(/rust_fold/) | test(/all_bundled_fold/))'
 test-group = 'grammar-cache'
