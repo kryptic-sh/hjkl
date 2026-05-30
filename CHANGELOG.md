@@ -8,6 +8,20 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-05-30
+
+### Added
+
+- Count-aware bracket text objects: `2di{` / `3di{` (and the `c` / `y`
+  operators) now target the Nth enclosing pair, matching Vim.
+
+### Fixed
+
+- Bracket text objects (`di{`, `ci{`, `di}`, …) now operate correctly when the
+  cursor sits on the closing bracket — previously a silent no-op.
+- The matching-paren highlight is now rendered bold + reversed video, making the
+  matched bracket clearly visible.
+
 ## [0.28.0] - 2026-05-25
 
 ### Breaking
@@ -3743,7 +3757,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.28.1...HEAD
+[0.28.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.28.1
 [0.28.0]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...v0.26.0
