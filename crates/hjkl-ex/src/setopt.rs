@@ -230,6 +230,7 @@ fn query_option_value<H: Host>(
             hjkl_engine::types::FoldMethod::Marker => "marker".to_string(),
         },
         "foldenable" | "fen" => on_off(s.foldenable),
+        "foldmarker" | "fmr" => format!("\"{}\"", s.foldmarker),
         "foldlevelstart" | "fls" => s.foldlevelstart.to_string(),
         "scrolloff" | "so" => s.scrolloff.to_string(),
         "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
@@ -825,6 +826,29 @@ mod tests {
         let mut editor = make_editor();
         assert_eq!(apply_set(&mut editor, "colorcolumn=80"), ExEffect::Ok);
         assert_eq!(editor.settings().colorcolumn, "80");
+    }
+
+    #[test]
+    fn set_foldmarker_default_is_curly_triples() {
+        let editor = make_editor();
+        assert_eq!(editor.settings().foldmarker, "{{{,}}}");
+    }
+
+    #[test]
+    fn set_foldmarker_stored() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "foldmarker=[[[,]]]"), ExEffect::Ok);
+        assert_eq!(editor.settings().foldmarker, "[[[,]]]");
+    }
+
+    #[test]
+    fn set_fmr_alias_stores_foldmarker() {
+        let mut editor = make_editor();
+        assert_eq!(
+            apply_set(&mut editor, "fmr=#region,#endregion"),
+            ExEffect::Ok
+        );
+        assert_eq!(editor.settings().foldmarker, "#region,#endregion");
     }
 
     #[test]
