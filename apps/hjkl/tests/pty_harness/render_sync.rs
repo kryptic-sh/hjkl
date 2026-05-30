@@ -49,33 +49,30 @@ fn goto_line_100_scrolls_viewport() {
 
     s.keys(":100<Enter>");
 
-    // Poll until line100 has actually rendered. A fixed settle delay races
-    // the repaint on slow CI: the engine moves the cursor but the frame
-    // containing line100 can land after keys()'s 200ms settle window, so a
-    // one-shot read sees stale rows (passed locally, failed on CI runners).
-    let mut rendered = false;
-    for _ in 0..300 {
-        if (0..24u16).any(|r| s.line(r).contains("line100")) {
-            rendered = true;
+    // Poll until the cursor lands on a visible row whose text contains
+    // "line100". A fixed settle delay races the repaint on a loaded CI runner:
+    // both the scroll frame and the reported cursor position can arrive after
+    // keys()'s 200ms settle window, so a one-shot read (or a two-read scan that
+    // polls "any row" then re-reads the cursor) can still see stale state. Poll
+    // the *cursor row* directly with a generous budget so the assertion can't
+    // race the render.
+    let mut cursor_row = u16::MAX;
+    let mut last_line = String::new();
+    let mut ok = false;
+    for _ in 0..1000 {
+        let (row, _) = s.cursor();
+        cursor_row = row;
+        last_line = s.line(row);
+        if row < 24 && last_line.contains("line100") {
+            ok = true;
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert!(rendered, "line100 never rendered after :100<Enter>");
-
-    let (cursor_row, _) = s.cursor();
-
-    // The cursor must be on a visible row (0-based, within the 24-row terminal).
     assert!(
-        cursor_row < 24,
-        "cursor row {cursor_row} is off-screen (terminal has 24 rows)"
-    );
-
-    // The line at the cursor row must contain "line100".
-    let line_text = s.line(cursor_row);
-    assert!(
-        line_text.contains("line100"),
-        "cursor row {cursor_row} shows {line_text:?} — expected \"line100\""
+        ok,
+        "after :100<Enter>, cursor row {cursor_row} shows {last_line:?} — \
+         expected a visible row containing \"line100\""
     );
 }
 
