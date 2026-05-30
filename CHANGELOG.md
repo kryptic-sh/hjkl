@@ -42,6 +42,11 @@ patch bumps.
   single canonical `viewport_math::cursor_screen_row_from` calculator that
   already drives scrolling and scrolloff — one fold/wrap-aware source of truth
   instead of three.
+- Folds (#244): `:<n>` (and every other `Editor::goto_line` caller — picker
+  jump, LSP goto, open-file-at-line) now opens the closed fold(s) enclosing the
+  target line via the new `Buffer::reveal_row`, so the cursor lands on a visible
+  row instead of vanishing inside a collapsed fold. Handles nested folds in one
+  pass.
 
 ## [0.28.1] - 2026-05-30
 
