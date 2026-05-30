@@ -339,15 +339,24 @@ impl App {
                     // Marker folds (`{{{` / `}}}`) are grammar-independent: a
                     // pure text scan over the rope. They work on any file, so
                     // there is no "not ready" state — always record dirty_gen.
+                    // The marker pair comes from `:set foldmarker=open,close`,
+                    // falling back to the vim default when unset or malformed
+                    // (no comma, or an empty side).
+                    let fmr = self.slots[active_idx].editor.settings().foldmarker.clone();
+                    let (open, close) = match fmr.split_once(',') {
+                        Some((o, c)) if !o.is_empty() && !c.is_empty() => {
+                            (o.to_string(), c.to_string())
+                        }
+                        _ => (
+                            hjkl_bonsai::DEFAULT_FOLD_MARKER_OPEN.to_string(),
+                            hjkl_bonsai::DEFAULT_FOLD_MARKER_CLOSE.to_string(),
+                        ),
+                    };
                     // Always call set_auto_folds (even with an empty range list)
                     // so that removing the last marker also removes its fold.
                     let ranges = {
                         let buf = self.slots[active_idx].editor.buffer();
-                        hjkl_bonsai::extract_marker_fold_ranges_rope(
-                            &buf.rope(),
-                            hjkl_bonsai::DEFAULT_FOLD_MARKER_OPEN,
-                            hjkl_bonsai::DEFAULT_FOLD_MARKER_CLOSE,
-                        )
+                        hjkl_bonsai::extract_marker_fold_ranges_rope(&buf.rope(), &open, &close)
                     };
                     self.slots[active_idx]
                         .editor

@@ -38,6 +38,8 @@ pub fn all_setting_names() -> Vec<String> {
         // string (fold-related)
         "foldmethod".into(),
         "fdm".into(),
+        "foldmarker".into(),
+        "fmr".into(),
         // string
         "listchars".into(),
         "lcs".into(),

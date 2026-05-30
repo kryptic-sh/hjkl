@@ -833,6 +833,9 @@ pub struct Settings {
     /// Level at which auto-folds start open. `99` = all open (default). Alias `fls`.
     /// Matches vim's `:set foldlevelstart`.
     pub foldlevelstart: u32,
+    /// Open/close markers for `foldmethod=marker`, comma-separated `open,close`.
+    /// Matches vim's `:set foldmarker` / `fmr`. Default `"{{{,}}}"`.
+    pub foldmarker: String,
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
@@ -943,6 +946,7 @@ impl Default for Settings {
             foldmethod: crate::types::FoldMethod::Expr,
             foldenable: true,
             foldlevelstart: 99,
+            foldmarker: "{{{,}}}".to_string(),
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
@@ -1019,6 +1023,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         foldmethod: o.foldmethod,
         foldenable: o.foldenable,
         foldlevelstart: o.foldlevelstart,
+        foldmarker: o.foldmarker.clone(),
         colorcolumn: o.colorcolumn.clone(),
         formatoptions: o.formatoptions.clone(),
         filetype: o.filetype.clone(),

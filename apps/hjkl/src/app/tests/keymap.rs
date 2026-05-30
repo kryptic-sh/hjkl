@@ -1793,6 +1793,53 @@ fn foldmethod_manual_ignores_markers() {
     );
 }
 
+/// `:set foldmarker=open,close` customizes the marker pair: the custom pair
+/// (`[[[`/`]]]`) folds while the vim default (`{{{`) does not.
+#[test]
+fn foldmarker_custom_pair_overrides_default() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Custom-marked block; the default `{{{` does not appear.
+    seed_buffer(&mut app, "open [[[\nbody\nclose ]]]\ntail");
+    app.dispatch_ex("set foldmethod=marker");
+    app.dispatch_ex("set foldmarker=[[[,]]]");
+    app.recompute_and_install();
+
+    let folds = app.active().editor.buffer().folds();
+    assert_eq!(
+        folds.len(),
+        1,
+        "custom foldmarker must fold the [[[ / ]]] block, got {folds:?}"
+    );
+    assert_eq!(folds[0].start_row, 0);
+    assert_eq!(folds[0].end_row, 2);
+
+    // The default `{{{` must NOT fold under the custom marker setting.
+    seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
+    app.recompute_and_install();
+    assert!(
+        app.active().editor.buffer().folds().is_empty(),
+        "default {{{{{{ must not fold when foldmarker is [[[ / ]]]"
+    );
+}
+
+/// A malformed `foldmarker` (no comma) falls back to the vim default so the
+/// standard `{{{` / `}}}` markers keep working.
+#[test]
+fn foldmarker_malformed_falls_back_to_default() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
+    app.dispatch_ex("set foldmethod=marker");
+    app.dispatch_ex("set foldmarker=nocomma");
+    app.recompute_and_install();
+
+    let folds = app.active().editor.buffer().folds();
+    assert_eq!(
+        folds.len(),
+        1,
+        "malformed foldmarker must fall back to default {{{{{{ / }}}}}}, got {folds:?}"
+    );
+}
+
 // ── Phase 2c-i: AfterOp integration tests ────────────────────────────────────
 
 /// Helper: drive a sequence of chars through drive_key.

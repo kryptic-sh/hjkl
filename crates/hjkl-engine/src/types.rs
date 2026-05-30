@@ -319,6 +319,11 @@ pub struct Options {
     /// Level at which folds start open. `99` (default) means all folds open;
     /// `0` means all closed. Matches vim's `:set foldlevelstart`. Alias `fls`.
     pub foldlevelstart: u32,
+    /// Open/close markers for [`FoldMethod::Marker`], as a comma-separated
+    /// pair `open,close`. Matches vim's `:set foldmarker` / `fmr`.
+    /// Default `"{{{,}}}"`. An invalid value (no comma, or an empty side)
+    /// falls back to the default at fold-extraction time.
+    pub foldmarker: String,
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Empty string = no rulers. Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
@@ -505,6 +510,7 @@ impl Default for Options {
             foldmethod: FoldMethod::Expr,
             foldenable: true,
             foldlevelstart: 99,
+            foldmarker: "{{{,}}}".to_string(),
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
