@@ -174,10 +174,29 @@ keys = "di{"
 expected_buffer = "foo {}\n"
 expected_cursor = [0, 5]
 
-# NOTE: the di{ scenarios below currently DIVERGE from neovim and are tracked
-# for an engine fix. Kept here (commented) so the corpus stays green meanwhile:
-#   - cursor ON the closing brace → hjkl no-ops, nvim deletes the inner span
+# `di{` with the cursor sitting ON the closing brace still deletes the inner
+# span. Before the fix, find_open_bracket counted the cursor's own `}` and
+# skipped past its matching `{`, making this a silent no-op.
+[[cases]]
+name = "textobj_di_curlybrace_on_close"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 6]
+keys = "di{"
+expected_buffer = "x {} y\n"
+expected_cursor = [0, 3]
+
+# Same fix, multi-line: cursor on the `}` line deletes the inner body.
+[[cases]]
+name = "textobj_di_curlybrace_on_close_multiline"
+initial_buffer = "fn x() {\n    body\n}\n"
+initial_cursor = [2, 0]
+keys = "di{"
+expected_buffer = "fn x() {\n}\n"
+expected_cursor = [1, 0]
+
+# NOTE: the di{ scenarios below still DIVERGE from neovim and are tracked in
+# corpus/known_divergences.toml for a follow-up `current_block` rewrite:
 #   - whitespace-only body `{\n   \n}` → hjkl deletes the line, nvim leaves it
 #   - open-brace line has trailing content `{ a\n  b\n}` → hjkl `{ a\n}`,
-#     nvim goes linewise to `{\n}`
+#     nvim strips the open trailing too, giving `{\n}`
 #   - count `2di{` → hjkl ignores the count, nvim targets the outer pair

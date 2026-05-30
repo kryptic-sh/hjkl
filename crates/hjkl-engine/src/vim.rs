@@ -6933,13 +6933,33 @@ fn bracket_text_object<H: crate::types::Host>(
     let (row, col) = ed.cursor();
     let lines = rope_to_lines_vec(&crate::types::Query::rope(&ed.buffer));
     let lines = lines.as_slice();
-    // Walk backward from cursor to find unbalanced opening. When the
-    // cursor isn't inside any pair, fall back to scanning forward for
-    // the next opening bracket (targets.vim-style: `ci(` works when
-    // cursor is before the `(` on the same line or below).
-    let open_pos = find_open_bracket(lines, row, col, open, close)
-        .or_else(|| find_next_open(lines, row, col, open))?;
-    let close_pos = find_close_bracket(lines, open_pos.0, open_pos.1 + 1, open, close)?;
+    // If the cursor sits ON the closing bracket, vim anchors the pair to that
+    // bracket: the close is at the cursor and the open is found by scanning
+    // backward from just before it. Without this, `find_open_bracket` counts
+    // the cursor's own close, increments depth, and skips past its matching
+    // open — making `di}`/`di{`-on-`}` a silent no-op.
+    let cursor_char = lines.get(row).and_then(|l| l.chars().nth(col));
+    let (open_pos, close_pos) = if cursor_char == Some(close) {
+        let open_pos = if col > 0 {
+            find_open_bracket(lines, row, col - 1, open, close)
+        } else if row > 0 {
+            let pr = row - 1;
+            let pc = lines[pr].chars().count().saturating_sub(1);
+            find_open_bracket(lines, pr, pc, open, close)
+        } else {
+            None
+        }?;
+        (open_pos, (row, col))
+    } else {
+        // Walk backward from cursor to find unbalanced opening. When the
+        // cursor isn't inside any pair, fall back to scanning forward for
+        // the next opening bracket (targets.vim-style: `ci(` works when
+        // cursor is before the `(` on the same line or below).
+        let open_pos = find_open_bracket(lines, row, col, open, close)
+            .or_else(|| find_next_open(lines, row, col, open))?;
+        let close_pos = find_close_bracket(lines, open_pos.0, open_pos.1 + 1, open, close)?;
+        (open_pos, close_pos)
+    };
     // End positions are *exclusive*.
     if inner {
         // Multi-line `iB` / `i{` etc: vim deletes the full lines between
