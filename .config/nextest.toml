@@ -24,10 +24,25 @@
 #
 # Proper fix (follow-up): use `std::env::var` lookup-at-call-time + per-test
 # temp dir injection so no global env mutation is needed.
+#
+# ── grammar-cache ────────────────────────────────────────────────────────────
+# The `#[ignore]`'d real-grammar tests (run only by the dedicated "grammar
+# tests" CI job via `--run-ignored all`) build tree-sitter grammars on demand:
+# bonsai clones `tree-sitter-rust` into a SHARED cache dir
+# (`~/.cache/bonsai/grammars/rust-<rev>.tmp`) and compiles it. Under nextest
+# each test is its own process, so two grammar tests for the same grammar race
+# on the identical tmp clone dir — symptoms observed in CI: ubuntu `git fetch …
+# No such file or directory` (one process removed the tmp dir mid-fetch) and
+# macOS `git init … cannot copy fsmonitor-watchman.sample: File exists` (two
+# `git init` into the same .git template at once). Capping this group to 1 lets
+# the first test fully populate the cache; the rest hit it warm — no clone race.
+# These tests don't run in the normal `--workspace` lane (they're ignored), so
+# this override has zero effect there.
 
 [test-groups]
 clipboard-display = { max-threads = 1 }
 anvil-env = { max-threads = 1 }
+grammar-cache = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(hjkl-clipboard)'
@@ -36,3 +51,7 @@ test-group = 'clipboard-display'
 [[profile.default.overrides]]
 filter = 'package(hjkl-anvil)'
 test-group = 'anvil-env'
+
+[[profile.default.overrides]]
+filter = 'package(hjkl-bonsai) & test(/rust_fold/)'
+test-group = 'grammar-cache'
