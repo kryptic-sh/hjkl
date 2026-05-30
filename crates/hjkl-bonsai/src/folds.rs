@@ -436,6 +436,7 @@ mod tests {
     #[ignore = "network + compiler: clones tree-sitter-rust then builds it"]
     fn rust_fold_extraction_is_idempotent() {
         use crate::runtime::{GrammarLoader, GrammarRegistry};
+        use std::sync::Arc;
 
         let registry = GrammarRegistry::embedded().expect("embedded registry");
         let loader = GrammarLoader::user_default(registry.meta()).expect("user loader");
@@ -515,7 +516,7 @@ mod tests {
             // And it actually defines a @fold capture.
             let q = q.unwrap();
             assert!(
-                q.capture_names().iter().any(|n| *n == "fold"),
+                q.capture_names().contains(&"fold"),
                 "folds/{lang}.scm has no @fold capture"
             );
         }
