@@ -194,6 +194,39 @@ keys = "di{"
 expected_buffer = "fn x() {\n}\n"
 expected_cursor = [1, 0]
 
+# ─── Change-inner-bracket (`ci{` / `ci(` / `ci[`) ────────────────────────────
+# Same resolver as `di`, but the change operator deletes the inner span and
+# enters insert; the typed `Z` lands between the preserved brackets.
+
+[[cases]]
+name = "textobj_ci_curlybrace"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 4]
+keys = "ci{Z<Esc>"
+expected_buffer = "x {Z} y\n"
+expected_cursor = [0, 3]
+
+[[cases]]
+name = "textobj_ci_paren"
+initial_buffer = "x (a b) y\n"
+initial_cursor = [0, 4]
+keys = "ci(Z<Esc>"
+expected_buffer = "x (Z) y\n"
+expected_cursor = [0, 3]
+
+[[cases]]
+name = "textobj_ci_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "ci[Z<Esc>"
+expected_buffer = "x [Z] y\n"
+expected_cursor = [0, 3]
+
+# NOTE: `ci{` with the cursor ON the closing brace produces the correct buffer
+# (`x {Z} y`) but lands the cursor one col late (on `}`, not the inserted `Z`)
+# after <Esc> — a minor change-from-on-close cursor quirk tracked separately.
+# The `di{`-on-close fix (correct buffer + cursor) is covered above.
+
 # NOTE: the di{ scenarios below still DIVERGE from neovim and are tracked in
 # corpus/known_divergences.toml for a follow-up `current_block` rewrite:
 #   - whitespace-only body `{\n   \n}` → hjkl deletes the line, nvim leaves it
