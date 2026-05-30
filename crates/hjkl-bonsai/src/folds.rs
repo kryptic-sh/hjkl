@@ -269,7 +269,6 @@ mod tests {
     /// one fold range. Requires the tree-sitter-rust grammar to be available
     /// at runtime (network + compiler on first run).
     #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar installed"]
     fn rust_fold_query_extracts_fn_range() {
         use crate::runtime::{GrammarLoader, GrammarRegistry};
         use std::sync::Arc;
@@ -304,7 +303,6 @@ mod tests {
     /// Idempotency: calling extract_fold_ranges twice on the same tree must
     /// produce the same result (no global mutation, no state leakage).
     #[test]
-    #[ignore = "network + compiler: needs tree-sitter-rust grammar installed"]
     fn rust_fold_extraction_is_idempotent() {
         use crate::runtime::{GrammarLoader, GrammarRegistry};
         use std::sync::Arc;

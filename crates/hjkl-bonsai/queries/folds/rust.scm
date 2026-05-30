@@ -16,7 +16,7 @@
 (enum_item) @fold
 (union_item) @fold
 (trait_item) @fold
-(type_alias) @fold
+(type_item) @fold
 
 ; Modules
 (mod_item) @fold
