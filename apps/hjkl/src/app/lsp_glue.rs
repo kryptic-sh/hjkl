@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 
 use hjkl_buffer_tui::Sign;
-use hjkl_info_popup::InfoPopup;
 use ratatui::style::{Color, Modifier, Style};
 use serde_json::json;
 
