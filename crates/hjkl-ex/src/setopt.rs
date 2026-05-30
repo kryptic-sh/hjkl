@@ -347,6 +347,13 @@ fn apply_set_token<H: Host>(
             editor.settings_mut().colorcolumn = value.to_string();
             return Ok(());
         }
+        if matches!(name, "foldmarker" | "fmr") {
+            // Stored verbatim as `open,close`; validated (comma-separated,
+            // both sides non-empty) at fold-extraction time, falling back to
+            // the vim default `{{{,}}}` when malformed.
+            editor.settings_mut().foldmarker = value.to_string();
+            return Ok(());
+        }
         if matches!(name, "formatoptions" | "fo") {
             editor.settings_mut().formatoptions = value.to_string();
             return Ok(());
