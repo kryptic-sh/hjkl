@@ -1793,6 +1793,29 @@ fn foldmethod_manual_ignores_markers() {
     );
 }
 
+/// `foldmethod=marker` also recognizes the universal `#region` / `#endregion`
+/// convention, alongside the configured `foldmarker` pair — no extra config.
+#[test]
+fn foldmethod_marker_recognizes_region_markers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set foldmethod=marker");
+    // VS Code / Visual Studio style region, in a comment leader.
+    seed_buffer(
+        &mut app,
+        "// #region Setup\nlet a = 1;\nlet b = 2;\n// #endregion\ntail",
+    );
+    app.recompute_and_install();
+
+    let folds = app.active().editor.buffer().folds();
+    assert_eq!(
+        folds.len(),
+        1,
+        "#region/#endregion must fold under foldmethod=marker, got {folds:?}"
+    );
+    assert_eq!(folds[0].start_row, 0);
+    assert_eq!(folds[0].end_row, 3);
+}
+
 /// `:set foldmarker=open,close` customizes the marker pair: the custom pair
 /// (`[[[`/`]]]`) folds while the vim default (`{{{`) does not.
 #[test]

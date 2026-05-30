@@ -261,6 +261,16 @@ pub fn extract_fold_ranges_rope(
 pub const DEFAULT_FOLD_MARKER_OPEN: &str = "{{{";
 pub const DEFAULT_FOLD_MARKER_CLOSE: &str = "}}}";
 
+/// The universal "region" marker pair (`#region` / `#endregion`), recognized in
+/// addition to [`DEFAULT_FOLD_MARKER_OPEN`] under `foldmethod=marker`. This is
+/// the Visual Studio / VS Code convention and appears across many comment
+/// syntaxes (`// #region`, `# #region`, `<!-- #region -->`, `;; #region`).
+///
+/// Note: `#endregion` does not start with `#region`, so the two never collide
+/// in the left-to-right scan.
+pub const DEFAULT_REGION_MARKER_OPEN: &str = "#region";
+pub const DEFAULT_REGION_MARKER_CLOSE: &str = "#endregion";
+
 /// Scan `rope` for vim-style marker folds (`open` / `close`, default
 /// `{{{` / `}}}`).
 ///
@@ -290,49 +300,67 @@ pub fn extract_marker_fold_ranges_rope(
     open: &str,
     close: &str,
 ) -> Vec<(usize, usize)> {
-    let ob = open.as_bytes();
-    let cb = close.as_bytes();
-    if ob.is_empty() || cb.is_empty() {
-        return Vec::new();
-    }
+    extract_marker_fold_ranges_rope_multi(rope, &[(open, close)])
+}
 
-    let mut stack: Vec<usize> = Vec::new();
+/// Multi-pair variant of [`extract_marker_fold_ranges_rope`].
+///
+/// Scans `rope` for every `(open, close)` marker pair in `pairs`, pairing each
+/// pair independently (its own stack), and merges all results into one sorted,
+/// `start_row`-deduplicated list (largest span wins). Use this to recognize the
+/// configured `foldmarker` *and* the universal `#region` / `#endregion` pair in
+/// a single call. Empty-delimiter pairs are skipped.
+///
+/// **Bounded**: `pairs.len()` linear passes over the rope — O(P·N bytes).
+pub fn extract_marker_fold_ranges_rope_multi(
+    rope: &ropey::Rope,
+    pairs: &[(&str, &str)],
+) -> Vec<(usize, usize)> {
     // Keyed by start_row; value = largest end_row seen — mirrors the TS path.
     let mut by_start: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
 
-    let mut scratch = String::new();
-    for (row, line) in rope.lines().enumerate() {
-        // Borrow the line bytes without allocating when the chunk is contiguous.
-        let bytes: &[u8] = match line.as_str() {
-            Some(s) => s.as_bytes(),
-            None => {
-                scratch.clear();
-                scratch.extend(line.chunks());
-                scratch.as_bytes()
-            }
-        };
+    for &(open, close) in pairs {
+        let ob = open.as_bytes();
+        let cb = close.as_bytes();
+        if ob.is_empty() || cb.is_empty() {
+            continue;
+        }
 
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i..].starts_with(ob) {
-                stack.push(row);
-                i += ob.len();
-            } else if bytes[i..].starts_with(cb) {
-                if let Some(start) = stack.pop()
-                    && row > start
-                {
-                    by_start
-                        .entry(start)
-                        .and_modify(|e| {
-                            if row > *e {
-                                *e = row;
-                            }
-                        })
-                        .or_insert(row);
+        let mut stack: Vec<usize> = Vec::new();
+        let mut scratch = String::new();
+        for (row, line) in rope.lines().enumerate() {
+            // Borrow the line bytes without allocating when the chunk is contiguous.
+            let bytes: &[u8] = match line.as_str() {
+                Some(s) => s.as_bytes(),
+                None => {
+                    scratch.clear();
+                    scratch.extend(line.chunks());
+                    scratch.as_bytes()
                 }
-                i += cb.len();
-            } else {
-                i += 1;
+            };
+
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i..].starts_with(ob) {
+                    stack.push(row);
+                    i += ob.len();
+                } else if bytes[i..].starts_with(cb) {
+                    if let Some(start) = stack.pop()
+                        && row > start
+                    {
+                        by_start
+                            .entry(start)
+                            .and_modify(|e| {
+                                if row > *e {
+                                    *e = row;
+                                }
+                            })
+                            .or_insert(row);
+                    }
+                    i += cb.len();
+                } else {
+                    i += 1;
+                }
             }
         }
     }
@@ -551,5 +579,67 @@ mod tests {
         let rope = ropey::Rope::from_str("{{{\n}}}\n");
         assert!(extract_marker_fold_ranges_rope(&rope, "", "}}}").is_empty());
         assert!(extract_marker_fold_ranges_rope(&rope, "{{{", "").is_empty());
+    }
+
+    // ── #region / #endregion + multi-pair ────────────────────────────────────
+
+    fn multi(src: &str, pairs: &[(&str, &str)]) -> Vec<(usize, usize)> {
+        extract_marker_fold_ranges_rope_multi(&ropey::Rope::from_str(src), pairs)
+    }
+
+    #[test]
+    fn region_markers_fold() {
+        let got = multi(
+            "// #region Foo\nbody\nmore\n// #endregion\n",
+            &[(DEFAULT_REGION_MARKER_OPEN, DEFAULT_REGION_MARKER_CLOSE)],
+        );
+        assert_eq!(got, vec![(0, 3)]);
+    }
+
+    #[test]
+    fn region_endregion_does_not_false_match_region_open() {
+        // `#endregion` must NOT be parsed as a `#region` open — else the stack
+        // would never balance. A lone `#endregion` is a stray close → ignored.
+        let got = multi(
+            "#endregion\nbody\n",
+            &[(DEFAULT_REGION_MARKER_OPEN, DEFAULT_REGION_MARKER_CLOSE)],
+        );
+        assert!(
+            got.is_empty(),
+            "stray #endregion must be ignored, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn multi_pair_recognizes_both_curly_and_region() {
+        // Curly block at rows 0..=2, region block at rows 3..=5.
+        let src = "a {{{\nb\nc }}}\n// #region\nx\n// #endregion\n";
+        let got = multi(
+            src,
+            &[
+                (DEFAULT_FOLD_MARKER_OPEN, DEFAULT_FOLD_MARKER_CLOSE),
+                (DEFAULT_REGION_MARKER_OPEN, DEFAULT_REGION_MARKER_CLOSE),
+            ],
+        );
+        assert_eq!(got, vec![(0, 2), (3, 5)]);
+    }
+
+    #[test]
+    fn multi_pair_same_start_keeps_largest_span() {
+        // Both pairs open on row 0; the larger span (region close on row 4) wins
+        // over the curly close on row 2 at the shared start_row.
+        let src = "{{{ #region\nx\n}}}\ny\n#endregion\n";
+        let got = multi(
+            src,
+            &[
+                (DEFAULT_FOLD_MARKER_OPEN, DEFAULT_FOLD_MARKER_CLOSE),
+                (DEFAULT_REGION_MARKER_OPEN, DEFAULT_REGION_MARKER_CLOSE),
+            ],
+        );
+        assert_eq!(
+            got,
+            vec![(0, 4)],
+            "largest span must win at shared start_row"
+        );
     }
 }
