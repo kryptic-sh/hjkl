@@ -336,12 +336,12 @@ impl App {
                     // the next recompute_and_install when the load completes.
                 }
                 FoldMethod::Marker => {
-                    // Marker folds (`{{{` / `}}}`) are grammar-independent: a
-                    // pure text scan over the rope. They work on any file, so
-                    // there is no "not ready" state — always record dirty_gen.
-                    // The marker pair comes from `:set foldmarker=open,close`,
-                    // falling back to the vim default when unset or malformed
-                    // (no comma, or an empty side).
+                    // Marker folds are grammar-independent: a pure text scan over
+                    // the rope. They work on any file, so there is no "not ready"
+                    // state — always record dirty_gen. We recognize TWO marker
+                    // pairs: the configured `:set foldmarker=open,close` (default
+                    // vim `{{{` / `}}}`, used when unset or malformed) AND the
+                    // universal `#region` / `#endregion` convention.
                     let fmr = self.slots[active_idx].editor.settings().foldmarker.clone();
                     let (open, close) = match fmr.split_once(',') {
                         Some((o, c)) if !o.is_empty() && !c.is_empty() => {
@@ -356,7 +356,16 @@ impl App {
                     // so that removing the last marker also removes its fold.
                     let ranges = {
                         let buf = self.slots[active_idx].editor.buffer();
-                        hjkl_bonsai::extract_marker_fold_ranges_rope(&buf.rope(), &open, &close)
+                        hjkl_bonsai::extract_marker_fold_ranges_rope_multi(
+                            &buf.rope(),
+                            &[
+                                (open.as_str(), close.as_str()),
+                                (
+                                    hjkl_bonsai::DEFAULT_REGION_MARKER_OPEN,
+                                    hjkl_bonsai::DEFAULT_REGION_MARKER_CLOSE,
+                                ),
+                            ],
+                        )
                     };
                     self.slots[active_idx]
                         .editor
