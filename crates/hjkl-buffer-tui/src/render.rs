@@ -385,6 +385,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     if seg_idx == 0 {
                         self.paint_gutter(term_buf, area, screen_row, doc_row, gutter);
                         self.paint_signs(term_buf, area, screen_row, doc_row, gutter);
+                        self.paint_fold_column(term_buf, area, screen_row, doc_row, gutter, &folds);
                     } else {
                         self.paint_blank_gutter(term_buf, area, screen_row, gutter);
                     }
@@ -2086,9 +2087,11 @@ mod tests {
         let term = run_render(view, 30, 5);
         // Row 0: "a"
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
-        // Row 1: fold marker — leading `▸ ` then the start row's
-        // trimmed content + line count.
-        assert_eq!(term.cell((0, 1)).unwrap().symbol(), "▸");
+        // Row 1: fold marker — foldtext is now the start row's trimmed
+        // content + line count, with NO `▸` prefix (the open/closed glyph
+        // lives in the gutter fold column, not the buffer text). The fold
+        // starts on doc row 1 ("b"), so the first text cell is 'b'.
+        assert_eq!(term.cell((0, 1)).unwrap().symbol(), "b");
         // Row 2: "e" (the 5th doc row, after the collapsed range).
         assert_eq!(term.cell((0, 2)).unwrap().symbol(), "e");
     }
