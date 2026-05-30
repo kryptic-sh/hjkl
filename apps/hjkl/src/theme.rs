@@ -81,6 +81,7 @@ pub struct UiTheme {
     // [cursor_line]
     pub cursor_line_bg: Color,
     pub cursor_column_bg: Color,
+    pub fold_line_bg: Color,
 
     // [colorcolumn]
     pub colorcolumn_bg: Color,
@@ -148,6 +149,7 @@ impl UiTheme {
             mode_visual_bg: parse_hex(&raw.mode.visual_bg)?,
             cursor_line_bg: parse_hex(&raw.cursor_line.bg)?,
             cursor_column_bg: parse_hex(&raw.cursor_line.column_bg)?,
+            fold_line_bg: parse_hex(&raw.cursor_line.fold_bg)?,
             colorcolumn_bg: parse_hex(&raw.colorcolumn.bg)?,
             search_bg: parse_hex(&raw.search.bg)?,
             search_fg: parse_hex(&raw.search.fg)?,
@@ -207,6 +209,7 @@ struct RawMode {
 struct RawCursorLine {
     bg: String,
     column_bg: String,
+    fold_bg: String,
 }
 
 #[derive(Deserialize)]
@@ -283,6 +286,11 @@ mod tests {
         assert_eq!(theme.ui.text, Color::Rgb(0xe5, 0xe9, 0xf0));
         assert_eq!(theme.ui.mode_insert_bg, Color::Rgb(0x7e, 0xe7, 0x87));
         assert_eq!(theme.ui.cursor_line_bg, Color::Rgb(0x2a, 0x32, 0x40));
+        assert_eq!(
+            theme.ui.fold_line_bg,
+            Color::Rgb(0x3a, 0x4a, 0x5a),
+            "fold_line_bg must match ui-dark.toml fold_bg value"
+        );
         // indent_flash_bg must parse — muted amber tint.
         assert_eq!(
             theme.ui.indent_flash_bg,

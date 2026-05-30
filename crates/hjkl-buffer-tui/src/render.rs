@@ -69,6 +69,10 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// Bg painted across the cursor row (vim's `cursorline`). Pass
     /// `Style::default()` to disable.
     pub cursor_line_bg: Style,
+    /// Bg painted across a closed fold's header row — brighter than
+    /// `cursor_line_bg` so a collapsed fold is visually distinct.
+    /// `Style::default()` to disable.
+    pub fold_line_bg: Style,
     /// Bg painted down the cursor column (vim's `cursorcolumn`). Pass
     /// `Style::default()` to disable.
     pub cursor_column_bg: Style,
@@ -348,8 +352,47 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     self.paint_signs(term_buf, area, screen_row, doc_row, gutter);
                     self.paint_fold_column(term_buf, area, screen_row, doc_row, gutter, &folds);
                 }
-                self.paint_fold_marker(term_buf, text_area, screen_row, fold, line, is_cursor_row);
-                search_hit_at_cursor_col.push(false);
+                // Render the fold's first line exactly like a normal line
+                // (real syntax highlighting, selection, search matches, conceals).
+                // Only the first screen segment (Wrap::None: top_col..MAX) is needed
+                // since a closed fold collapses to exactly one screen row.
+                let fold_search_ranges = self.row_search_ranges(line);
+                let fold_conceals: Vec<&Conceal> = {
+                    let mut v: Vec<&Conceal> =
+                        self.conceals.iter().filter(|c| c.row == doc_row).collect();
+                    v.sort_by_key(|c| c.start_byte);
+                    v
+                };
+                self.paint_row(
+                    term_buf,
+                    text_area,
+                    screen_row,
+                    line,
+                    row_spans,
+                    sel_range,
+                    &fold_search_ranges,
+                    is_cursor_row,
+                    cursor.col,
+                    top_col,
+                    usize::MAX,
+                    true, // is_last_segment
+                    &fold_conceals,
+                );
+                // Overlay fold bg across the full row (gutter + text) so the
+                // collapsed fold header is visually distinct. Patched so only
+                // bg changes — fg, glyphs, and text are preserved.
+                if self.fold_line_bg != Style::default() {
+                    let y = area.y + screen_row;
+                    for x in area.x..(area.x + area.width) {
+                        if let Some(cell) = term_buf.cell_mut((x, y)) {
+                            cell.set_style(cell.style().patch(self.fold_line_bg));
+                        }
+                    }
+                }
+                let fold_has_hit = fold_search_ranges
+                    .iter()
+                    .any(|&(s, e)| cursor.col >= s && cursor.col < e);
+                search_hit_at_cursor_col.push(fold_has_hit);
                 screen_row += 1;
                 doc_row = fold.end_row + 1;
                 continue;
@@ -618,62 +661,6 @@ impl<R: StyleResolver> BufferView<'_, R> {
                 (start, end)
             })
             .collect()
-    }
-
-    fn paint_fold_marker(
-        &self,
-        term_buf: &mut TermBuffer,
-        area: Rect,
-        screen_row: u16,
-        fold: hjkl_buffer::Fold,
-        first_line: &str,
-        is_cursor_row: bool,
-    ) {
-        let y = area.y + screen_row;
-        let style = if is_cursor_row && self.cursor_line_bg != Style::default() {
-            self.cursor_line_bg
-        } else {
-            Style::default()
-        };
-        // Bg the whole row first so the marker reads like one cell.
-        for x in area.x..(area.x + area.width) {
-            if let Some(cell) = term_buf.cell_mut((x, y)) {
-                cell.set_style(style);
-            }
-        }
-        // Build a label that hints at the fold's contents instead of
-        // a generic "+-- N lines folded --". Use the start row's
-        // trimmed text (truncated) plus the line count.
-        let prefix = first_line.trim();
-        let count = fold.line_count();
-        let label = if prefix.is_empty() {
-            format!("{count} lines folded")
-        } else {
-            const MAX_PREFIX: usize = 60;
-            let trimmed = if prefix.chars().count() > MAX_PREFIX {
-                let head: String = prefix.chars().take(MAX_PREFIX - 1).collect();
-                format!("{head}…")
-            } else {
-                prefix.to_string()
-            };
-            format!("{trimmed}  ({count} lines)")
-        };
-        let mut x = area.x;
-        let row_end_x = area.x + area.width;
-        for ch in label.chars() {
-            if x >= row_end_x {
-                break;
-            }
-            let width = ch.width().unwrap_or(1) as u16;
-            if x + width > row_end_x {
-                break;
-            }
-            if let Some(cell) = term_buf.cell_mut((x, y)) {
-                cell.set_char(ch);
-                cell.set_style(style);
-            }
-            x = x.saturating_add(width);
-        }
     }
 
     fn paint_signs(
@@ -1198,6 +1185,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -1237,6 +1225,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1277,6 +1266,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1322,6 +1312,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1362,6 +1353,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1405,6 +1397,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -1462,6 +1455,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -1523,6 +1517,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -1589,6 +1584,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -1644,6 +1640,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -1686,6 +1683,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -1736,6 +1734,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -1791,6 +1790,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1838,6 +1838,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1886,6 +1887,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1935,6 +1937,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1994,6 +1997,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -2041,6 +2045,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -2051,18 +2056,22 @@ mod tests {
         assert_eq!(term.cell((4, 0)).unwrap().symbol(), "🔗");
     }
 
+    /// Closed fold header renders the first line's real content (no summary
+    /// text), and the `fold_line_bg` is overlaid across that row.
     #[test]
-    fn closed_fold_collapses_rows_and_paints_marker() {
+    fn closed_fold_renders_first_line_content_with_fold_bg() {
         let mut b = Buffer::from_str("a\nb\nc\nd\ne");
         let v = vp(30, 5);
-        // Fold rows 1-3 closed. Visible should be: 'a', marker, 'e'.
+        // Fold rows 1-3 closed. Visible should be: 'a', fold-header, 'e'.
         b.add_fold(1, 3, true);
+        let fold_bg = Color::Rgb(0x3a, 0x4a, 0x5a);
         let view = BufferView {
             buffer: &b,
             viewport: &v,
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            fold_line_bg: Style::default().bg(fold_bg),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2085,13 +2094,25 @@ mod tests {
             indent_guide_active_col: None,
         };
         let term = run_render(view, 30, 5);
-        // Row 0: "a"
+        // Row 0: "a" — normal line, no fold bg.
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
-        // Row 1: fold marker — foldtext is now the start row's trimmed
-        // content + line count, with NO `▸` prefix (the open/closed glyph
-        // lives in the gutter fold column, not the buffer text). The fold
-        // starts on doc row 1 ("b"), so the first text cell is 'b'.
-        assert_eq!(term.cell((0, 1)).unwrap().symbol(), "b");
+        assert_ne!(
+            term.cell((0, 0)).unwrap().bg,
+            fold_bg,
+            "row 0 is not a fold header and must NOT carry fold_bg"
+        );
+        // Row 1: closed fold header — renders doc row 1's real content ('b'),
+        // no summary text. The fold_line_bg must be applied.
+        assert_eq!(
+            term.cell((0, 1)).unwrap().symbol(),
+            "b",
+            "fold header row must show the first line's real content, not summary text"
+        );
+        assert_eq!(
+            term.cell((0, 1)).unwrap().bg,
+            fold_bg,
+            "fold header row must carry fold_line_bg"
+        );
         // Row 2: "e" (the 5th doc row, after the collapsed range).
         assert_eq!(term.cell((0, 2)).unwrap().symbol(), "e");
     }
@@ -2127,6 +2148,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -2165,6 +2187,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -2183,6 +2206,7 @@ mod tests {
             selection: None,
             resolver,
             cursor_line_bg: Style::default(),
+            fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2385,6 +2409,7 @@ mod tests {
             selection: None,
             resolver,
             cursor_line_bg: Style::default(),
+            fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2583,6 +2608,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -2653,6 +2679,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -2715,6 +2742,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 2);
 
@@ -2779,6 +2807,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -2840,6 +2869,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -2914,6 +2944,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.
@@ -2948,6 +2979,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),
@@ -3002,6 +3034,7 @@ mod tests {
             indent_guide_fg: Color::DarkGray,
             indent_guide_active_fg: Color::Gray,
             indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
         };
         let term = run_render(view, 20, 2);
         // No cell should contain '│' anywhere.

@@ -812,6 +812,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         selection,
         resolver: &resolver,
         cursor_line_bg: cursor_line_style,
+        fold_line_bg: Style::default().bg(app.theme.ui.fold_line_bg),
         cursor_column_bg: cursor_column_style,
         selection_bg: Style::default().bg(Color::Blue),
         cursor_style: Style::default(),
