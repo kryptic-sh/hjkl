@@ -127,8 +127,15 @@ impl App {
             return;
         }
         self.lsp_detach_buffer(active_slot);
-        let removed = self.slots.remove(active_slot);
+        let mut removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
+        // Drop the closed buffer's swap. The owning process stays alive, so the
+        // orphan scan never reaps it, and the slot is gone so cleanup_swaps_on_exit
+        // can't either — leaving it makes a later open of the same file surface a
+        // spurious recovery prompt.
+        if let Some(p) = removed.swap_path.take() {
+            let _ = hjkl_app::swap::remove_swap(&p);
+        }
         // Fix up all window slot pointers that reference the removed or shifted slots.
         let slot_count = self.slots.len();
         for win in self.windows.iter_mut().flatten() {
@@ -228,8 +235,12 @@ impl App {
         // Multi-slot: removing the slot entirely discards the editor (and all
         // its marks/jumps) — same mechanics as buffer_delete.
         self.lsp_detach_buffer(active_slot);
-        let removed = self.slots.remove(active_slot);
+        let mut removed = self.slots.remove(active_slot);
         self.syntax.forget(removed.buffer_id);
+        // Drop the closed buffer's swap (see buffer_delete for rationale).
+        if let Some(p) = removed.swap_path.take() {
+            let _ = hjkl_app::swap::remove_swap(&p);
+        }
         let slot_count = self.slots.len();
         for win in self.windows.iter_mut().flatten() {
             if win.slot == active_slot {
