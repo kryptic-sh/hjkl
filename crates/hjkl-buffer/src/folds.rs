@@ -183,11 +183,16 @@ impl crate::Buffer {
     /// Drop the fold whose range covers `row`. Returns `true` when a
     /// fold was actually removed.
     pub fn remove_fold_at(&mut self, row: usize) -> bool {
+        // Remove the INNERMOST fold containing `row` (largest start_row), so
+        // `zd` on a nested fold drops the inner one, not the enclosing block.
         let idx = self
             .content_lock()
             .folds
             .iter()
-            .position(|f| f.contains(row));
+            .enumerate()
+            .filter(|(_, f)| f.contains(row))
+            .max_by_key(|(_, f)| f.start_row)
+            .map(|(i, _)| i);
         let Some(idx) = idx else {
             return false;
         };
@@ -200,7 +205,12 @@ impl crate::Buffer {
     pub fn open_fold_at(&mut self, row: usize) -> bool {
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c.folds.iter_mut().find(|f| f.contains(row)) else {
+            let Some(f) = c
+                .folds
+                .iter_mut()
+                .filter(|f| f.contains(row))
+                .max_by_key(|f| f.start_row)
+            else {
                 return false;
             };
             if !f.closed {
@@ -219,7 +229,12 @@ impl crate::Buffer {
     pub fn close_fold_at(&mut self, row: usize) -> bool {
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c.folds.iter_mut().find(|f| f.contains(row)) else {
+            let Some(f) = c
+                .folds
+                .iter_mut()
+                .filter(|f| f.contains(row))
+                .max_by_key(|f| f.start_row)
+            else {
                 return false;
             };
             if f.closed {
@@ -238,7 +253,12 @@ impl crate::Buffer {
     pub fn toggle_fold_at(&mut self, row: usize) -> bool {
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c.folds.iter_mut().find(|f| f.contains(row)) else {
+            let Some(f) = c
+                .folds
+                .iter_mut()
+                .filter(|f| f.contains(row))
+                .max_by_key(|f| f.start_row)
+            else {
                 return false;
             };
             f.closed = !f.closed;
@@ -298,10 +318,15 @@ impl crate::Buffer {
     /// First fold whose range contains `row`. Useful for the host's
     /// `za`/`zo`/`zc` handlers.
     pub fn fold_at_row(&self, row: usize) -> Option<Fold> {
+        // Innermost fold containing `row`: with nested folds, the one with the
+        // largest `start_row` is the most-deeply-nested. Folds are stored in
+        // start-row order, so a plain `.find` would return the OUTERMOST fold
+        // and `zc`/`za`/`zo` would act on the wrong level.
         self.content_lock()
             .folds
             .iter()
-            .find(|f| f.contains(row))
+            .filter(|f| f.contains(row))
+            .max_by_key(|f| f.start_row)
             .copied()
     }
 
