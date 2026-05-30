@@ -269,6 +269,67 @@ pub fn cell_to_doc(
     Some((doc_row, char_col))
 }
 
+// ── doc_to_cell ─────────────────────────────────────────────────────────────────
+
+/// Inverse of [`cell_to_doc`]: translate a doc-space `(doc_row, char_col)` in
+/// window `win_id` to the terminal cell `(cell_x, cell_y)` where that character
+/// is drawn, using the window's stored `last_rect`, viewport, and gutter
+/// geometry. Used to anchor the K-key hover popup at the cursor cell so it
+/// reuses the same compact, content-sized popup as mouse hover.
+///
+/// Returns `None` when the doc row is outside the visible viewport or the cell
+/// would fall outside the window's text area.
+pub fn doc_to_cell(
+    app: &App,
+    win_id: window::WindowId,
+    doc_row: usize,
+    char_col: usize,
+) -> Option<(u16, u16)> {
+    let win = app.windows.get(win_id)?.as_ref()?;
+    let rect = win.last_rect?;
+
+    let slot_idx = win.slot;
+    let slot = app.slots().get(slot_idx)?;
+    let s = slot.editor.settings();
+    let vp = slot.editor.host().viewport();
+
+    // Row must be within the visible viewport.
+    let vp_top = vp.top_row;
+    let vp_bot = vp_top + rect.h as usize;
+    if doc_row < vp_top || doc_row >= vp_bot {
+        return None;
+    }
+
+    // Gutter width — must match cell_to_doc's sign-column visibility math.
+    let has_visible_signs = slot
+        .diag_signs
+        .iter()
+        .chain(slot.diag_signs_lsp.iter())
+        .chain(slot.git_signs.iter())
+        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
+    let gw = text_start_offset(slot.editor.lnum_width(), s.signcolumn, has_visible_signs);
+
+    let cell_y = rect.y + (doc_row - vp_top) as u16;
+
+    // char col → visual col (tab expansion) → screen cell, accounting for
+    // horizontal scroll. The exact inverse of cell_to_doc's column math.
+    let tab_width = vp.effective_tab_width();
+    let rope = slot.editor.buffer().rope();
+    let line_str = if doc_row < rope.len_lines() {
+        hjkl_buffer::rope_line_str(&rope, doc_row)
+    } else {
+        String::new()
+    };
+    let visual_col = hjkl_buffer::char_col_to_visual_col(&line_str, char_col, tab_width);
+    let text_rel_x = visual_col.saturating_sub(vp.top_col) as u16;
+    let cell_x = rect.x + gw + text_rel_x;
+
+    if cell_x >= rect.x + rect.w {
+        return None;
+    }
+    Some((cell_x, cell_y))
+}
+
 // ── MouseClickTracker ─────────────────────────────────────────────────────────
 
 /// Tracks double/triple-click state (same position, same window, within 500ms).
