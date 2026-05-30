@@ -32,6 +32,16 @@ use crate::runtime::Grammar;
 pub fn builtin_folds(lang: &str) -> Option<&'static str> {
     match lang {
         "rust" => Some(include_str!("../queries/folds/rust.scm")),
+        "python" => Some(include_str!("../queries/folds/python.scm")),
+        "javascript" => Some(include_str!("../queries/folds/javascript.scm")),
+        "typescript" => Some(include_str!("../queries/folds/typescript.scm")),
+        "go" => Some(include_str!("../queries/folds/go.scm")),
+        "c" => Some(include_str!("../queries/folds/c.scm")),
+        "cpp" => Some(include_str!("../queries/folds/cpp.scm")),
+        "json" => Some(include_str!("../queries/folds/json.scm")),
+        "bash" => Some(include_str!("../queries/folds/bash.scm")),
+        "lua" => Some(include_str!("../queries/folds/lua.scm")),
+        "java" => Some(include_str!("../queries/folds/java.scm")),
         _ => None,
     }
 }
@@ -416,6 +426,60 @@ mod tests {
         let r1 = extract_fold_ranges(&tree, &grammar, source);
         let r2 = extract_fold_ranges(&tree, &grammar, source);
         assert_eq!(r1, r2, "fold extraction must be idempotent");
+    }
+
+    /// Every bundled `folds.scm` MUST compile against its real grammar.
+    ///
+    /// `tree_sitter::Query::new` is all-or-nothing: a single invalid node type
+    /// fails the ENTIRE query, silently disabling folds for that language (this
+    /// is the `type_alias` bug that shipped once). `get_or_compile` swallows the
+    /// error and returns `None`, so the only way to catch a bad query is to
+    /// compile it against the real grammar — which needs network + a C compiler.
+    /// Runs in the dedicated "grammar tests" CI job via `--run-ignored all`.
+    #[test]
+    #[ignore = "network + compiler: clones each grammar then builds it"]
+    fn all_bundled_fold_queries_compile() {
+        use crate::runtime::{GrammarLoader, GrammarRegistry};
+
+        let langs = [
+            "rust",
+            "python",
+            "javascript",
+            "typescript",
+            "go",
+            "c",
+            "cpp",
+            "json",
+            "bash",
+            "lua",
+            "java",
+        ];
+
+        let registry = GrammarRegistry::embedded().expect("embedded registry");
+        let loader = GrammarLoader::user_default(registry.meta()).expect("user loader");
+
+        for lang in langs {
+            let src =
+                builtin_folds(lang).unwrap_or_else(|| panic!("builtin_folds missing for `{lang}`"));
+            let spec = registry
+                .by_name(lang)
+                .unwrap_or_else(|| panic!("`{lang}` not in manifest"));
+            let grammar = crate::runtime::Grammar::load(lang, spec, &loader, registry.meta())
+                .unwrap_or_else(|e| panic!("load `{lang}` grammar: {e}"));
+            // The real assertion: the query compiles. A bad node type errors here.
+            let q = tree_sitter::Query::new(grammar.language(), src);
+            assert!(
+                q.is_ok(),
+                "folds/{lang}.scm failed to compile: {:?}",
+                q.err()
+            );
+            // And it actually defines a @fold capture.
+            let q = q.unwrap();
+            assert!(
+                q.capture_names().iter().any(|n| *n == "fold"),
+                "folds/{lang}.scm has no @fold capture"
+            );
+        }
     }
 
     // ── Marker folds (grammar-free — run in the normal lane) ─────────────────
