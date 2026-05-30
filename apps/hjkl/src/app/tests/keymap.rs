@@ -1798,10 +1798,12 @@ fn foldmethod_manual_ignores_markers() {
 #[test]
 fn foldmarker_custom_pair_overrides_default() {
     let mut app = App::new(None, false, None, None).unwrap();
-    // Custom-marked block; the default `{{{` does not appear.
-    seed_buffer(&mut app, "open [[[\nbody\nclose ]]]\ntail");
+    // Set options BEFORE seeding so the buffer's final dirty_gen advance (which
+    // gates the auto-fold pass) happens with the custom marker already in place.
     app.dispatch_ex("set foldmethod=marker");
     app.dispatch_ex("set foldmarker=[[[,]]]");
+    // Custom-marked block; the default `{{{` does not appear.
+    seed_buffer(&mut app, "open [[[\nbody\nclose ]]]\ntail");
     app.recompute_and_install();
 
     let folds = app.active().editor.buffer().folds();
@@ -1827,9 +1829,9 @@ fn foldmarker_custom_pair_overrides_default() {
 #[test]
 fn foldmarker_malformed_falls_back_to_default() {
     let mut app = App::new(None, false, None, None).unwrap();
-    seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
     app.dispatch_ex("set foldmethod=marker");
     app.dispatch_ex("set foldmarker=nocomma");
+    seed_buffer(&mut app, "open {{{\nbody\nclose }}}\ntail");
     app.recompute_and_install();
 
     let folds = app.active().editor.buffer().folds();
