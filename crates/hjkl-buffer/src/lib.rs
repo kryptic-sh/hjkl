@@ -59,7 +59,7 @@ pub use buffer::{rope_line_bytes, rope_line_str};
 pub use content::Content;
 pub use edit::{Edit, MotionKind};
 pub use folds::Fold;
-pub use geom::visual_col_to_char_col;
+pub use geom::{char_col_to_visual_col, visual_col_to_char_col};
 pub use listchars::{ListChars, apply_listchars};
 pub use motion::is_keyword_char;
 pub use position::Position;

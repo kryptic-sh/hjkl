@@ -1615,11 +1615,13 @@ impl App {
         // completion was already taken via `take()` above, so it's already None.
     }
 
-    /// Handle a hover response (K-key) — set `info_popup` with markdown content.
+    /// Handle a hover response (K-key) — show the compact cursor-anchored hover
+    /// popup, the same widget mouse hover uses (content-sized, not an 80%×60%
+    /// modal). `origin` is the cursor's doc `(row, col)` from the request.
     pub(crate) fn handle_hover_response(
         &mut self,
         _buffer_id: hjkl_lsp::BufferId,
-        _origin: (usize, usize),
+        origin: (usize, usize),
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
     ) {
         let val = match result {
@@ -1644,7 +1646,13 @@ impl App {
         if text.trim().is_empty() {
             self.bus.warn("no hover info");
         } else {
-            self.info_popup = Some(InfoPopup::markdown("hover", text));
+            // Anchor at the cursor cell and reuse the mouse-hover popup so K
+            // and mouse hover share the same compact, content-sized rendering.
+            let win_id = self.focused_window();
+            let (doc_row, doc_col) = origin;
+            let cell =
+                crate::app::mouse::doc_to_cell(self, win_id, doc_row, doc_col).unwrap_or((0, 0));
+            self.hover_popup = Some(crate::hover_popup::new(text, cell));
         }
     }
 

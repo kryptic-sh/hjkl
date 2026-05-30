@@ -66,6 +66,49 @@ pub fn visual_col_to_char_col(line: &str, visual_col: usize, tab_width: usize) -
     line.chars().count()
 }
 
+/// Map a character index in `line` to its starting visual column (tab-expanded
+/// screen-cell offset from line start). The inverse of [`visual_col_to_char_col`].
+///
+/// Used to anchor screen overlays (e.g. the K-key hover popup) at a document
+/// position — the doc→cell counterpart of mouse-click translation.
+///
+/// # Tab expansion rule
+///
+/// Matches [`visual_col_to_char_col`]: a `\t` advances to the next `tab_width`
+/// stop (`tab_width - (visual % tab_width)`). `tab_width == 0` is treated as 1.
+/// Non-tab chars are 1 cell wide (no wide-char/CJK handling, same caveat as the
+/// inverse). `char_col` past the line end clamps to the line's full visual width.
+///
+/// # Examples
+///
+/// ```rust
+/// use hjkl_buffer::char_col_to_visual_col;
+///
+/// // ASCII line — visual col == char col
+/// assert_eq!(char_col_to_visual_col("hello", 2, 4), 2);
+///
+/// // A leading tab pushes the next char to the tab stop
+/// assert_eq!(char_col_to_visual_col("\tx", 1, 4), 4);
+///
+/// // Past EOL clamps to the line's visual width
+/// assert_eq!(char_col_to_visual_col("hi", 99, 4), 2);
+/// ```
+pub fn char_col_to_visual_col(line: &str, char_col: usize, tab_width: usize) -> usize {
+    let tab_w = if tab_width == 0 { 1 } else { tab_width };
+    let mut visual = 0usize;
+    for (i, ch) in line.chars().enumerate() {
+        if i == char_col {
+            return visual;
+        }
+        visual += if ch == '\t' {
+            tab_w - (visual % tab_w)
+        } else {
+            1
+        };
+    }
+    visual
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
