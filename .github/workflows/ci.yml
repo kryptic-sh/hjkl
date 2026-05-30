@@ -89,6 +89,31 @@ jobs:
         run: cargo build --workspace --examples --all-features
         # `--examples` is a no-op until examples land; harmless before then.
 
+  # Grammar-dependent tests clone + cc-compile a tree-sitter grammar at runtime
+  # (network + C compiler). They are `#[ignore]`d so the main `test` lane stays
+  # hermetic; this dedicated job opts them in. Linux + macOS only — bonsai's
+  # compiler driver shells out to `cc`/`$CC` and has no MSVC path yet, so
+  # Windows is intentionally excluded.
+  grammar_tests:
+    name: grammar tests ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: rustup update --no-self-update stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      # Run ONLY the ignored grammar tests (the hermetic ones already ran in
+      # the `test` lane). `--run-ignored all` includes them; `-E` filters to
+      # the crates whose ignored tests need a real grammar.
+      - run: cargo nextest run --run-ignored all --no-fail-fast -p hjkl-bonsai -p hjkl-syntax -p hjkl -E 'test(/fold/)'
+
   no_std:
     name: no_std + wasm smoke
     runs-on: ubuntu-latest

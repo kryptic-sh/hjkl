@@ -267,8 +267,13 @@ mod tests {
     /// Verify that the bundled rust folds.scm compiles against the tree-sitter
     /// Rust language grammar and that a simple multi-line `fn` yields at least
     /// one fold range. Requires the tree-sitter-rust grammar to be available
-    /// at runtime (network + compiler on first run).
+    /// at runtime (network + compiler on first run). Gated `#[ignore]` like
+    /// every other grammar-loading test in the workspace — the plain
+    /// `--workspace` CI lane excludes it; the dedicated "grammar tests" CI job
+    /// (Linux+macOS, where a C compiler + network are available) runs it via
+    /// `cargo nextest --run-ignored all`.
     #[test]
+    #[ignore = "network + compiler: clones tree-sitter-rust then builds it"]
     fn rust_fold_query_extracts_fn_range() {
         use crate::runtime::{GrammarLoader, GrammarRegistry};
         use std::sync::Arc;
@@ -303,6 +308,7 @@ mod tests {
     /// Idempotency: calling extract_fold_ranges twice on the same tree must
     /// produce the same result (no global mutation, no state leakage).
     #[test]
+    #[ignore = "network + compiler: clones tree-sitter-rust then builds it"]
     fn rust_fold_extraction_is_idempotent() {
         use crate::runtime::{GrammarLoader, GrammarRegistry};
         use std::sync::Arc;
