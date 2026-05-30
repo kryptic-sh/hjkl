@@ -432,6 +432,36 @@ fn bdelete_does_not_explicitly_wipe_marks_path() {
     let _ = std::fs::remove_file(&path_b);
 }
 
+/// Regression: `:bwipe` in a multi-buffer session must also delete the closed
+/// buffer's swap (same rationale as `bdelete_removes_closed_buffers_swap` — the
+/// other slot-removal site in `buffer_ops.rs`).
+#[test]
+fn bwipe_removes_closed_buffers_swap() {
+    let path_a = std::env::temp_dir().join("hjkl_bw_swap_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_bw_swap_b.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    std::fs::write(&path_b, "b\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+
+    // Inject a real swap file for the active (b) slot.
+    let swap_b = std::env::temp_dir().join("hjkl_bw_swap_b.swp");
+    std::fs::write(&swap_b, b"x").unwrap();
+    app.active_mut().swap_path = Some(swap_b.clone());
+    assert!(swap_b.exists(), "swap must exist before bwipe");
+
+    app.dispatch_ex("bw");
+
+    assert_eq!(app.slots.len(), 1, "one slot should remain after bwipe");
+    assert!(
+        !swap_b.exists(),
+        "closed buffer's swap must be removed by bwipe"
+    );
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+    let _ = std::fs::remove_file(&swap_b);
+}
+
 #[test]
 fn bwipeout_multi_slot_removes_slot() {
     let path_a = std::env::temp_dir().join("hjkl_bwipeout_multi_a.txt");
