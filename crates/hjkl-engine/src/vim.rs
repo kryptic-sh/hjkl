@@ -4601,10 +4601,10 @@ pub(crate) fn apply_op_text_obj_inner<H: crate::types::Host>(
     op: Operator,
     ch: char,
     inner: bool,
-    _total_count: usize,
+    total_count: usize,
 ) -> bool {
-    // total_count unused — text objects don't repeat in vim's current grammar.
-    // Kept for API symmetry with apply_op_motion / apply_op_find.
+    // `total_count` drives bracket text objects: `2di{` targets the Nth
+    // enclosing pair. Non-bracket objects ignore it (vim does too).
     let obj = match ch {
         'w' => TextObject::Word { big: false },
         'W' => TextObject::Word { big: true },
@@ -4618,7 +4618,7 @@ pub(crate) fn apply_op_text_obj_inner<H: crate::types::Host>(
         's' => TextObject::Sentence,
         _ => return false,
     };
-    apply_op_with_text_object(ed, op, obj, inner);
+    apply_op_with_text_object(ed, op, obj, inner, total_count.max(1));
     if !ed.vim.replaying && op_is_change(op) {
         ed.vim.last_change = Some(LastChange::OpTextObj {
             op,
@@ -4706,8 +4706,9 @@ fn apply_op_with_text_object<H: crate::types::Host>(
     op: Operator,
     obj: TextObject,
     inner: bool,
+    count: usize,
 ) {
-    let Some((start, end, kind)) = text_object_range(ed, obj, inner) else {
+    let Some((start, end, kind)) = text_object_range(ed, obj, inner, count) else {
         return;
     };
     ed.jump_cursor(start.0, start.1);
@@ -5253,7 +5254,7 @@ pub(crate) fn text_object_inner_bracket_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
-    bracket_text_object(ed, open, true).map(|(s, e, _kind)| (s, e))
+    bracket_text_object(ed, open, true, 1).map(|(s, e, _kind)| (s, e))
 }
 
 /// Resolve the range of `a<bracket>` (around bracket pair). Includes the
@@ -5263,7 +5264,7 @@ pub(crate) fn text_object_around_bracket_bridge<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
 ) -> Option<((usize, usize), (usize, usize))> {
-    bracket_text_object(ed, open, false).map(|(s, e, _kind)| (s, e))
+    bracket_text_object(ed, open, false, 1).map(|(s, e, _kind)| (s, e))
 }
 
 // ── Sentence bridges (is / as) ─────────────────────────────────────────────
@@ -6427,6 +6428,7 @@ pub(crate) fn text_object_range<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     obj: TextObject,
     inner: bool,
+    count: usize,
 ) -> Option<(Pos, Pos, RangeKind)> {
     match obj {
         TextObject::Word { big } => {
@@ -6435,7 +6437,7 @@ pub(crate) fn text_object_range<H: crate::types::Host>(
         TextObject::Quote(q) => {
             quote_text_object(ed, q, inner).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
-        TextObject::Bracket(open) => bracket_text_object(ed, open, inner),
+        TextObject::Bracket(open) => bracket_text_object(ed, open, inner, count),
         TextObject::Paragraph => {
             paragraph_text_object(ed, inner).map(|(s, e)| (s, e, RangeKind::Linewise))
         }
@@ -6922,6 +6924,7 @@ fn bracket_text_object<H: crate::types::Host>(
     ed: &Editor<hjkl_buffer::Buffer, H>,
     open: char,
     inner: bool,
+    count: usize,
 ) -> Option<(Pos, Pos, RangeKind)> {
     let close = match open {
         '(' => ')',
@@ -6959,6 +6962,30 @@ fn bracket_text_object<H: crate::types::Host>(
             .or_else(|| find_next_open(lines, row, col, open))?;
         let close_pos = find_close_bracket(lines, open_pos.0, open_pos.1 + 1, open, close)?;
         (open_pos, close_pos)
+    };
+    // Count: `2i{` / `2a{` target the Nth enclosing pair. Expand outward from
+    // the innermost pair, re-anchoring to each enclosing bracket in turn. Stop
+    // early (and use the outermost found) if there aren't `count` levels.
+    let (open_pos, close_pos) = {
+        let (mut op, mut cp) = (open_pos, close_pos);
+        for _ in 1..count.max(1) {
+            let outer = if op.1 > 0 {
+                find_open_bracket(lines, op.0, op.1 - 1, open, close)
+            } else if op.0 > 0 {
+                let pr = op.0 - 1;
+                let pc = lines[pr].chars().count().saturating_sub(1);
+                find_open_bracket(lines, pr, pc, open, close)
+            } else {
+                None
+            };
+            let Some(oo) = outer else { break };
+            let Some(oc) = find_close_bracket(lines, oo.0, oo.1 + 1, open, close) else {
+                break;
+            };
+            op = oo;
+            cp = oc;
+        }
+        (op, cp)
     };
     // End positions are *exclusive*.
     if inner {
@@ -7681,7 +7708,9 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
             inner,
             inserted,
         } => {
-            apply_op_with_text_object(ed, op, obj, inner);
+            // Dot-repeat replays the text object at count 1 (the original
+            // count is not retained in `LastChange::OpTextObj`).
+            apply_op_with_text_object(ed, op, obj, inner, 1);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);
             }

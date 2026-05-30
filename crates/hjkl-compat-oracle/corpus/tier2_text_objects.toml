@@ -227,6 +227,30 @@ expected_cursor = [0, 3]
 # after <Esc> — a minor change-from-on-close cursor quirk tracked separately.
 # The `di{`-on-close fix (correct buffer + cursor) is covered above.
 
+# ─── Counted bracket text objects (`2di{` / `2ci{`) ──────────────────────────
+# A count targets the Nth enclosing pair: `2di{` from inside a nested block
+# deletes the OUTER pair's contents.
+
+[[cases]]
+name = "textobj_2di_curlybrace_nested_outer"
+initial_buffer = "{ a { b } c }\n"
+initial_cursor = [0, 6]
+keys = "2di{"
+expected_buffer = "{}\n"
+expected_cursor = [0, 1]
+
+# (`2ci{` produces the correct buffer `{Z}` but inherits the same change-insert-
+# exit cursor-one-col-late quirk noted above, so it's not asserted here.)
+
+# `3di{` walks out three levels.
+[[cases]]
+name = "textobj_3di_curlybrace_triple_nest"
+initial_buffer = "{ { { x } } }\n"
+initial_cursor = [0, 6]
+keys = "3di{"
+expected_buffer = "{}\n"
+expected_cursor = [0, 1]
+
 # NOTE: the di{ scenarios below still DIVERGE from neovim and are tracked in
 # corpus/known_divergences.toml for a follow-up `current_block` rewrite:
 #   - whitespace-only body `{\n   \n}` → hjkl deletes the line, nvim leaves it

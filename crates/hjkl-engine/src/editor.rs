@@ -3526,7 +3526,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         &self,
         ch: char,
         inner: bool,
-        _total_count: usize,
+        total_count: usize,
     ) -> Option<(usize, usize)> {
         let obj = match ch {
             'w' => vim::TextObject::Word { big: false },
@@ -3541,7 +3541,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             's' => vim::TextObject::Sentence,
             _ => return None,
         };
-        let (start, end, _kind) = vim::text_object_range(self, obj, inner)?;
+        let (start, end, _kind) = vim::text_object_range(self, obj, inner, total_count.max(1))?;
         let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
         Some((r0, r1))
     }
@@ -5900,7 +5900,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
             's' => TextObject::Sentence,
             _ => return,
         };
-        let Some((start, end, kind)) = vim::text_object_range(self, obj, inner) else {
+        let Some((start, end, kind)) = vim::text_object_range(self, obj, inner, 1) else {
             return;
         };
         match kind {

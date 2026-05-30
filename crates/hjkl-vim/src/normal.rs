@@ -906,15 +906,20 @@ fn handle_text_object<H: Host>(
     ed: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
     input: Input,
     op: Operator,
-    _count1: usize,
+    count1: usize,
     inner: bool,
 ) -> bool {
     let Key::Char(ch) = input.key else {
         return true;
     };
+    // Counts multiply across the operator and the text object: both `2di{` and
+    // `d2i{` target the 2nd enclosing pair. For bracket objects this selects
+    // the Nth enclosing pair; non-bracket objects ignore the count (as in vim).
+    let count2 = ed.take_count();
+    let total = count1.max(1) * count2.max(1);
     // Delegate to shared implementation; unknown chars are a no-op (return true
     // to consume the key from the FSM regardless).
-    ed.apply_op_text_obj(op, ch, inner, 1);
+    ed.apply_op_text_obj(op, ch, inner, total);
     true
 }
 
