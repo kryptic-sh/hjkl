@@ -228,6 +228,31 @@ impl crate::Buffer {
         self.folds().iter().any(|f| f.hides(row))
     }
 
+    /// Open every closed fold whose body hides `row`, so the row becomes
+    /// visible. Handles nested folds in a single pass — unlike
+    /// `open_fold_at` / `FoldOp::OpenAt`, which only act on the first fold
+    /// containing the row and so can never reach a nested inner fold.
+    /// Used by `goto_line` so a jump into a folded region reveals the
+    /// target line instead of stranding the cursor on a hidden row.
+    /// Returns `true` if any fold was opened.
+    pub fn reveal_row(&mut self, row: usize) -> bool {
+        let changed = {
+            let mut c = self.content_lock_mut();
+            let mut any = false;
+            for f in c.folds.iter_mut() {
+                if f.hides(row) {
+                    f.closed = false;
+                    any = true;
+                }
+            }
+            any
+        };
+        if changed {
+            self.dirty_gen_bump();
+        }
+        changed
+    }
+
     /// First visible row strictly after `row`, skipping any rows hidden
     /// by closed folds. Returns `None` past the end of the buffer.
     pub fn next_visible_row(&self, row: usize) -> Option<usize> {
