@@ -17,6 +17,10 @@ patch bumps.
   #182 tag resolver); gated by `:set matchparen`. New public
   `hjkl_engine::vim::matching_tag_pair` resolver and
   `App::matchparen_tag_cells`.
+- Mouse: left-clicking a fold marker in the gutter now toggles that fold (#114
+  P10, partial). Clicking a gutter row with no fold focuses the window but is
+  otherwise a no-op. The git-sign hunk-preview half of P10 remains blocked on
+  #115.
 
 ## [0.28.1] - 2026-05-30
 
