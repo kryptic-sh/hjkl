@@ -29,10 +29,15 @@ pub fn all_setting_names() -> Vec<String> {
         "nuw".into(),
         "foldcolumn".into(),
         "fdc".into(),
+        "foldlevelstart".into(),
+        "fls".into(),
         "scrolloff".into(),
         "so".into(),
         "sidescrolloff".into(),
         "siso".into(),
+        // string (fold-related)
+        "foldmethod".into(),
+        "fdm".into(),
         // string
         "listchars".into(),
         "lcs".into(),
@@ -121,8 +126,13 @@ pub(crate) fn apply_set<H: Host>(
             hjkl_engine::types::SignColumnMode::No => "no",
             hjkl_engine::types::SignColumnMode::Auto => "auto",
         };
+        let fdm = match s.foldmethod {
+            hjkl_engine::types::FoldMethod::Manual => "manual",
+            hjkl_engine::types::FoldMethod::Expr => "expr",
+            hjkl_engine::types::FoldMethod::Marker => "marker",
+        };
         return ExEffect::Info(format!(
-            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}",
+            "shiftwidth={}  tabstop={}  softtabstop={}  textwidth={}  undolevels={}  timeoutlen={}  iskeyword=\"{}\"  expandtab={}  ignorecase={}  smartcase={}  wrapscan={}  autoindent={}  smartindent={}  undobreak={}  readonly={}  wrap={}  number={}  relativenumber={}  numberwidth={}  cursorline={}  cursorcolumn={}  signcolumn={}  foldcolumn={}  foldmethod={}  foldenable={}  foldlevelstart={}  colorcolumn=\"{}\"  formatoptions=\"{}\"  filetype=\"{}\"  commentstring=\"{}\"  autopair={}  autoclose-tag={}  scrolloff={}  sidescrolloff={}  list={}  listchars=\"{}\"  indent_guides={}  indent_guide_char={}  format_on_save={}  trim_trailing_whitespace={}  rainbow_brackets={}  matchparen={}  autoreload={}",
             s.shiftwidth,
             s.tabstop,
             s.softtabstop,
@@ -146,6 +156,9 @@ pub(crate) fn apply_set<H: Host>(
             if s.cursorcolumn { "on" } else { "off" },
             scl,
             s.foldcolumn,
+            fdm,
+            if s.foldenable { "on" } else { "off" },
+            s.foldlevelstart,
             s.colorcolumn,
             s.formatoptions,
             s.filetype,
@@ -209,6 +222,13 @@ fn query_option_value<H: Host>(
         "timeoutlen" | "tm" => s.timeout_len.as_millis().to_string(),
         "numberwidth" | "nuw" => s.numberwidth.to_string(),
         "foldcolumn" | "fdc" => s.foldcolumn.to_string(),
+        "foldmethod" | "fdm" => match s.foldmethod {
+            hjkl_engine::types::FoldMethod::Manual => "manual".to_string(),
+            hjkl_engine::types::FoldMethod::Expr => "expr".to_string(),
+            hjkl_engine::types::FoldMethod::Marker => "marker".to_string(),
+        },
+        "foldenable" | "fen" => on_off(s.foldenable),
+        "foldlevelstart" | "fls" => s.foldlevelstart.to_string(),
         "scrolloff" | "so" => s.scrolloff.to_string(),
         "sidescrolloff" | "siso" => s.sidescrolloff.to_string(),
         "iskeyword" | "isk" => format!("\"{}\"", s.iskeyword),
@@ -308,6 +328,19 @@ fn apply_set_token<H: Host>(
             };
             return Ok(());
         }
+        if matches!(name, "foldmethod" | "fdm") {
+            editor.settings_mut().foldmethod = match value {
+                "manual" => hjkl_engine::types::FoldMethod::Manual,
+                "expr" | "syntax" => hjkl_engine::types::FoldMethod::Expr,
+                "marker" => hjkl_engine::types::FoldMethod::Marker,
+                other => {
+                    return Err(format!(
+                        "foldmethod must be `manual`, `expr`, `syntax`, or `marker`, got `{other}`"
+                    ));
+                }
+            };
+            return Ok(());
+        }
         if matches!(name, "colorcolumn" | "cc") {
             editor.settings_mut().colorcolumn = value.to_string();
             return Ok(());
@@ -377,6 +410,9 @@ fn apply_set_token<H: Host>(
                     return Err(format!("foldcolumn must be in range 0..=12, got {parsed}"));
                 }
                 editor.settings_mut().foldcolumn = parsed as u32;
+            }
+            "foldlevelstart" | "fls" => {
+                editor.settings_mut().foldlevelstart = parsed.min(u32::MAX as usize) as u32;
             }
             "scrolloff" | "so" => {
                 editor.settings_mut().scrolloff = parsed;
@@ -467,7 +503,8 @@ fn apply_set_token<H: Host>(
         }
         "rainbow_brackets" | "rb" => editor.settings_mut().rainbow_brackets = value,
         "matchparen" | "mps" => editor.settings_mut().matchparen = value,
-        "foldenable" | "fen" | "background" | "bg" => {}
+        "foldenable" | "fen" => editor.settings_mut().foldenable = value,
+        "background" | "bg" => {}
         other => return Err(format!("unknown :set option `{other}`")),
     }
     Ok(())
@@ -1042,6 +1079,139 @@ mod tests {
                 assert!(
                     s.contains("listchars="),
                     "bare :set output must include listchars=, got: {s}"
+                );
+            }
+            other => panic!("expected Info(_), got {other:?}"),
+        }
+    }
+
+    // ── foldmethod / foldenable / foldlevelstart ──────────────────────────────
+
+    #[test]
+    fn set_foldmethod_default_is_expr() {
+        let editor = make_editor();
+        assert_eq!(
+            editor.settings().foldmethod,
+            hjkl_engine::types::FoldMethod::Expr,
+            "foldmethod default must be Expr"
+        );
+    }
+
+    #[test]
+    fn set_foldmethod_eq_manual() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "foldmethod=manual"), ExEffect::Ok);
+        assert_eq!(
+            editor.settings().foldmethod,
+            hjkl_engine::types::FoldMethod::Manual
+        );
+    }
+
+    #[test]
+    fn set_fdm_alias_sets_foldmethod() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "fdm=marker"), ExEffect::Ok);
+        assert_eq!(
+            editor.settings().foldmethod,
+            hjkl_engine::types::FoldMethod::Marker
+        );
+    }
+
+    #[test]
+    fn set_foldmethod_eq_expr() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "foldmethod=expr"), ExEffect::Ok);
+        assert_eq!(
+            editor.settings().foldmethod,
+            hjkl_engine::types::FoldMethod::Expr
+        );
+    }
+
+    #[test]
+    fn set_foldmethod_syntax_is_alias_for_expr() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "foldmethod=syntax"), ExEffect::Ok);
+        assert_eq!(
+            editor.settings().foldmethod,
+            hjkl_engine::types::FoldMethod::Expr,
+            "foldmethod=syntax must map to Expr"
+        );
+    }
+
+    #[test]
+    fn set_foldmethod_invalid_returns_error() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "foldmethod=bogus") {
+            ExEffect::Error(_) => {}
+            other => panic!("expected Error(_), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_foldenable_default_is_true() {
+        let editor = make_editor();
+        assert!(
+            editor.settings().foldenable,
+            "foldenable default must be true"
+        );
+    }
+
+    #[test]
+    fn set_nofoldenable_disables_foldenable() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "nofoldenable"), ExEffect::Ok);
+        assert!(!editor.settings().foldenable);
+    }
+
+    #[test]
+    fn set_fen_alias_toggles_foldenable() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "nofen"), ExEffect::Ok);
+        assert!(!editor.settings().foldenable);
+        assert_eq!(apply_set(&mut editor, "fen"), ExEffect::Ok);
+        assert!(editor.settings().foldenable);
+    }
+
+    #[test]
+    fn set_foldlevelstart_default_is_99() {
+        let editor = make_editor();
+        assert_eq!(
+            editor.settings().foldlevelstart,
+            99,
+            "foldlevelstart default must be 99"
+        );
+    }
+
+    #[test]
+    fn set_foldlevelstart_eq_0() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "foldlevelstart=0"), ExEffect::Ok);
+        assert_eq!(editor.settings().foldlevelstart, 0);
+    }
+
+    #[test]
+    fn set_fls_alias_sets_foldlevelstart() {
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "fls=5"), ExEffect::Ok);
+        assert_eq!(editor.settings().foldlevelstart, 5);
+    }
+
+    #[test]
+    fn bare_set_output_contains_foldmethod() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "") {
+            ExEffect::Info(s) => {
+                assert!(
+                    s.contains("foldmethod="),
+                    "bare :set output must include foldmethod=, got: {s}"
+                );
+                assert!(
+                    s.contains("foldenable="),
+                    "bare :set output must include foldenable=, got: {s}"
+                );
+                assert!(
+                    s.contains("foldlevelstart="),
+                    "bare :set output must include foldlevelstart=, got: {s}"
                 );
             }
             other => panic!("expected Info(_), got {other:?}"),

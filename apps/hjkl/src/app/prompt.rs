@@ -738,6 +738,7 @@ impl App {
             disk_state: crate::app::DiskState::Synced,
             swap_path: None,
             last_swap_dirty_gen: None,
+            last_fold_dirty_gen: None,
         };
         self.slots.push(slot);
         let slot_idx = self.slots.len() - 1;

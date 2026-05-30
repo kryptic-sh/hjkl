@@ -36,6 +36,14 @@ pub struct Fold {
     pub end_row: usize,
     /// `true` = collapsed (rows after `start_row` are hidden).
     pub closed: bool,
+    /// `true` when this fold was created by the auto-fold engine
+    /// (tree-sitter foldmethod=expr). Manual folds created via `zf` /
+    /// [`crate::Buffer::add_fold`] set this to `false`.
+    ///
+    /// Used by [`crate::Buffer::set_auto_folds`] to distinguish auto
+    /// folds (which it manages) from manual folds (which it leaves
+    /// untouched).
+    pub auto_generated: bool,
 }
 
 impl Fold {
@@ -81,6 +89,7 @@ impl crate::Buffer {
             start_row,
             end_row,
             closed,
+            auto_generated: false,
         };
         {
             let mut c = self.content_lock_mut();
@@ -95,6 +104,79 @@ impl crate::Buffer {
                 c.folds.insert(pos, fold);
             }
         }
+        self.dirty_gen_bump();
+    }
+
+    /// Replace all auto-generated folds with a new set derived from
+    /// `ranges`, while leaving manual folds untouched.
+    ///
+    /// ## Algorithm (O(N) — bounded by `ranges.len()`, no unbounded growth)
+    ///
+    /// 1. Snapshot `start_row → closed` for every existing auto fold so
+    ///    open/closed state survives a reparse.
+    /// 2. Retain only manual folds (`auto_generated == false`).
+    /// 3. Insert one new `Fold` per range, re-using the snapshotted closed
+    ///    state when the start_row existed before, else `default_closed`.
+    ///
+    /// Invariants preserved:
+    /// - Folds stay sorted by `start_row` (same ordering as `add_fold`).
+    /// - Duplicate start_rows: the last range in `ranges` wins (consistent
+    ///   with `add_fold`'s replace-on-same-start-row semantics). In practice
+    ///   TS query ranges are already deduplicated.
+    /// - Empty / inverted ranges (end_row < start_row) are silently skipped.
+    /// - `end_row` is clamped to the last valid row, same as `add_fold`.
+    pub fn set_auto_folds(&mut self, ranges: &[(usize, usize)], default_closed: bool) {
+        // 1. Snapshot closed state of existing auto folds by start_row.
+        let prev_closed: std::collections::HashMap<usize, bool> = self
+            .content_lock()
+            .folds
+            .iter()
+            .filter(|f| f.auto_generated)
+            .map(|f| (f.start_row, f.closed))
+            .collect();
+
+        // 2. Retain manual folds only.
+        {
+            let mut c = self.content_lock_mut();
+            c.folds.retain(|f| !f.auto_generated);
+        }
+
+        // 3. Insert new auto folds in sorted order.
+        let last = self.row_count().saturating_sub(1);
+        for &(start_row, end_row) in ranges {
+            // Skip empty/inverted and out-of-bounds ranges.
+            if end_row < start_row || start_row > last {
+                continue;
+            }
+            let end_row = end_row.min(last);
+            // Only folds spanning more than one row are meaningful.
+            if end_row == start_row {
+                continue;
+            }
+            let closed = prev_closed
+                .get(&start_row)
+                .copied()
+                .unwrap_or(default_closed);
+            let fold = Fold {
+                start_row,
+                end_row,
+                closed,
+                auto_generated: true,
+            };
+            let mut c = self.content_lock_mut();
+            // Replace any existing fold at this start_row (manual or auto).
+            if let Some(idx) = c.folds.iter().position(|f| f.start_row == start_row) {
+                c.folds[idx] = fold;
+            } else {
+                let pos = c
+                    .folds
+                    .iter()
+                    .position(|f| f.start_row > start_row)
+                    .unwrap_or(c.folds.len());
+                c.folds.insert(pos, fold);
+            }
+        }
+
         self.dirty_gen_bump();
     }
 
@@ -371,5 +453,110 @@ mod tests {
         buf.invalidate_folds_in_range(2, 3);
         let starts: Vec<usize> = buf.folds().iter().map(|f| f.start_row).collect();
         assert_eq!(starts, vec![0, 4]);
+    }
+
+    // ── auto_generated flag + set_auto_folds ─────────────────────────────────
+
+    #[test]
+    fn add_fold_sets_auto_generated_false() {
+        let mut buf = b();
+        buf.add_fold(1, 3, false);
+        assert!(
+            !buf.folds()[0].auto_generated,
+            "manual add_fold must have auto_generated=false"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_adds_auto_folds() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 2), (3, 4)], false);
+        let folds = buf.folds();
+        assert_eq!(folds.len(), 2);
+        assert!(folds[0].auto_generated);
+        assert!(folds[1].auto_generated);
+        assert_eq!(folds[0].start_row, 0);
+        assert_eq!(folds[1].start_row, 3);
+    }
+
+    #[test]
+    fn set_auto_folds_second_call_replaces_first() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 2), (3, 4)], false);
+        assert_eq!(buf.folds().len(), 2);
+        // Replace with a different set.
+        buf.set_auto_folds(&[(1, 4)], false);
+        let folds = buf.folds();
+        assert_eq!(folds.len(), 1, "second call must replace first set");
+        assert_eq!(folds[0].start_row, 1);
+        assert!(folds[0].auto_generated);
+    }
+
+    #[test]
+    fn set_auto_folds_preserves_manual_folds() {
+        let mut buf = b();
+        // Add a manual fold.
+        buf.add_fold(0, 1, true);
+        // Auto-fold the remaining range.
+        buf.set_auto_folds(&[(2, 4)], false);
+        let folds = buf.folds();
+        assert_eq!(folds.len(), 2, "manual fold must survive set_auto_folds");
+        let manual = folds.iter().find(|f| f.start_row == 0).unwrap();
+        assert!(!manual.auto_generated, "manual fold flag must stay false");
+        let auto = folds.iter().find(|f| f.start_row == 2).unwrap();
+        assert!(auto.auto_generated);
+    }
+
+    #[test]
+    fn set_auto_folds_preserves_open_closed_state_by_start_row() {
+        let mut buf = b();
+        // First auto-fold pass: create a closed fold at row 0.
+        buf.set_auto_folds(&[(0, 2)], true); // default_closed=true → starts closed
+        assert!(buf.folds()[0].closed, "fold must start closed per default");
+
+        // User opens the fold (simulated by toggle).
+        buf.toggle_fold_at(0);
+        assert!(!buf.folds()[0].closed, "fold must now be open");
+
+        // Second auto-fold pass with same start_row — must preserve open state.
+        buf.set_auto_folds(&[(0, 2)], true); // default_closed=true but prev was open
+        assert!(
+            !buf.folds()[0].closed,
+            "open/closed state must be preserved across set_auto_folds"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_skips_single_row_and_inverted_ranges() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(1, 1), (3, 2)], false);
+        assert!(
+            buf.folds().is_empty(),
+            "single-row and inverted ranges must be skipped"
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_new_folds_use_default_closed() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 4)], true);
+        assert!(
+            buf.folds()[0].closed,
+            "new auto fold must use default_closed=true"
+        );
+
+        // Clear and re-run with default_closed=false.
+        buf.set_auto_folds(&[(0, 4)], false);
+        // This is a *new* start_row (it was removed + re-added), BUT the
+        // snapshot preserved the previous state (closed=true from above)
+        // because the start_row is the same.
+        // Wait — the test verifies the preservation path, not the default path.
+        // Let's use a fresh start_row to test the default path:
+        let mut buf2 = b();
+        buf2.set_auto_folds(&[(2, 4)], false);
+        assert!(
+            !buf2.folds()[0].closed,
+            "brand-new auto fold must start open when default_closed=false"
+        );
     }
 }

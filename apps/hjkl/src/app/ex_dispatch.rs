@@ -744,6 +744,7 @@ impl App {
                 disk_state: super::DiskState::Synced,
                 swap_path: None,
                 last_swap_dirty_gen: None,
+                last_fold_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -823,6 +824,7 @@ impl App {
                 disk_state: super::DiskState::Synced,
                 swap_path: None,
                 last_swap_dirty_gen: None,
+                last_fold_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);
@@ -1248,6 +1250,7 @@ impl App {
                 // scratch path for this session on the next edit if needed.
                 swap_path: None,
                 last_swap_dirty_gen: None,
+                last_fold_dirty_gen: None,
             };
             slot.snapshot_saved();
             // Re-mark dirty after snapshot (snapshot_saved clears dirty).
@@ -2035,6 +2038,7 @@ impl App {
                 disk_state: super::DiskState::Synced,
                 swap_path: None,
                 last_swap_dirty_gen: None,
+                last_fold_dirty_gen: None,
             };
             slot.snapshot_saved();
             self.slots.push(slot);

@@ -335,6 +335,11 @@ pub struct BufferSlot {
     /// `None` = never written.  Used to skip redundant writes when the
     /// buffer has not changed since the last swap flush.
     pub last_swap_dirty_gen: Option<u64>,
+    /// `dirty_gen` at which auto-folds (from `foldmethod=expr`) were last
+    /// applied to the buffer. `None` = never applied.
+    /// Used to skip re-extraction when the tree hasn't changed since the
+    /// last fold pass.
+    pub(super) last_fold_dirty_gen: Option<u64>,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

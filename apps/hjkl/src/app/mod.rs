@@ -597,6 +597,7 @@ pub(super) fn build_slot(
         disk_state: DiskState::Synced,
         swap_path,
         last_swap_dirty_gen: None,
+        last_fold_dirty_gen: None,
     };
     slot.snapshot_saved();
     Ok(slot)

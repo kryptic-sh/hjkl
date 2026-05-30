@@ -18,7 +18,7 @@ use hjkl_bonsai::runtime::{Grammar, LoadHandle};
 use hjkl_bonsai::{
     CommentMarkerPass, DotFallbackTheme, HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass,
     Highlighter, InputEdit, MetaValue, Point, RAINBOW_BRACKET_CAPTURE, RAINBOW_DEPTH_KEY, Theme,
-    rainbow_spans_rope,
+    extract_fold_ranges_rope, rainbow_spans_rope,
 };
 use hjkl_engine::Query;
 use hjkl_lang::{GrammarRequest, LanguageDirectory};
@@ -614,6 +614,43 @@ impl SyntaxLayer {
             }
             c.invalidate_cache();
         }
+    }
+
+    /// Extract fold ranges from the buffer's retained tree using the bundled
+    /// `folds.scm` for this grammar.
+    ///
+    /// Returns a sorted `Vec<(start_row, end_row)>` (0-based, inclusive).
+    /// Returns an empty vec when:
+    /// - No grammar is attached.
+    /// - The tree has not been parsed yet (call `render_viewport` first to
+    ///   trigger an initial parse, then call this).
+    /// - No bundled `folds.scm` for the current grammar.
+    ///
+    /// **NOT viewport-bounded** — runs over the full tree (once per reparse).
+    /// Do not call this per-frame; call it only when `dirty_gen` has changed.
+    pub fn extract_fold_ranges(
+        &mut self,
+        id: BufferId,
+        buffer: &impl hjkl_engine::Query,
+    ) -> Vec<(usize, usize)> {
+        let client = match self.clients.get_mut(&id) {
+            Some(c) if c.has_language => c,
+            _ => return Vec::new(),
+        };
+        let highlighter = match client.highlighter.as_mut() {
+            Some(h) => h,
+            None => return Vec::new(),
+        };
+        let tree = match highlighter.tree() {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+        let grammar = match highlighter.grammar() {
+            Some(g) => g,
+            None => return Vec::new(),
+        };
+        let rope = buffer.rope();
+        extract_fold_ranges_rope(tree, grammar, &rope)
     }
 
     /// Render spans for the visible viewport. Fully synchronous.

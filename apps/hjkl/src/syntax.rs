@@ -121,6 +121,18 @@ impl SyntaxLayer {
         self.inner.apply_edits(id, edits);
     }
 
+    /// Extract fold ranges from the retained parse tree (not viewport-bounded).
+    ///
+    /// Returns empty when no grammar is attached or no `folds.scm` is bundled.
+    /// Call once per reparse (when dirty_gen changes), not per-frame.
+    pub fn extract_fold_ranges(
+        &mut self,
+        id: BufferId,
+        buffer: &impl hjkl_engine::Query,
+    ) -> Vec<(usize, usize)> {
+        self.inner.extract_fold_ranges(id, buffer)
+    }
+
     /// Render spans for the visible viewport. Fully synchronous.
     pub fn render_viewport(
         &mut self,

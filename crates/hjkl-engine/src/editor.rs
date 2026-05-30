@@ -824,6 +824,15 @@ pub struct Settings {
     /// Number of cells reserved for a fold-marker gutter.
     /// Matches vim's `:set foldcolumn`. Default `0`.
     pub foldcolumn: u32,
+    /// How folds are automatically generated. Default `Expr` (tree-sitter).
+    /// Alias `fdm`. Matches vim's `:set foldmethod`.
+    pub foldmethod: crate::types::FoldMethod,
+    /// Enable automatic folds. Default `true`. Alias `fen`.
+    /// Matches vim's `:set foldenable`.
+    pub foldenable: bool,
+    /// Level at which auto-folds start open. `99` = all open (default). Alias `fls`.
+    /// Matches vim's `:set foldlevelstart`.
+    pub foldlevelstart: u32,
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
@@ -931,6 +940,9 @@ impl Default for Settings {
             cursorcolumn: false,
             signcolumn: crate::types::SignColumnMode::Auto,
             foldcolumn: 0,
+            foldmethod: crate::types::FoldMethod::Expr,
+            foldenable: true,
+            foldlevelstart: 99,
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
@@ -1004,6 +1016,9 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         cursorcolumn: o.cursorcolumn,
         signcolumn: o.signcolumn,
         foldcolumn: o.foldcolumn,
+        foldmethod: o.foldmethod,
+        foldenable: o.foldenable,
+        foldlevelstart: o.foldlevelstart,
         colorcolumn: o.colorcolumn.clone(),
         formatoptions: o.formatoptions.clone(),
         filetype: o.filetype.clone(),
@@ -2482,6 +2497,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         self.settings.cursorcolumn = opts.cursorcolumn;
         self.settings.signcolumn = opts.signcolumn;
         self.settings.foldcolumn = opts.foldcolumn;
+        self.settings.foldmethod = opts.foldmethod;
+        self.settings.foldenable = opts.foldenable;
+        self.settings.foldlevelstart = opts.foldlevelstart;
         self.settings.colorcolumn = opts.colorcolumn.clone();
         self.settings.scrolloff = opts.scrolloff;
         self.settings.sidescrolloff = opts.sidescrolloff;

@@ -307,6 +307,18 @@ pub struct Options {
     /// Number of cells reserved for a fold-marker gutter (0 = none, max 12).
     /// Matches vim's `:set foldcolumn`. Default `0`.
     pub foldcolumn: u32,
+    /// How folds are automatically generated. Matches vim's `:set foldmethod`.
+    /// Default [`FoldMethod::Expr`] (tree-sitter) — diverges from vim's
+    /// `manual` default; functions/if/match/blocks fold when `folds.scm` ships.
+    /// Alias `fdm`.
+    pub foldmethod: FoldMethod,
+    /// Enable auto-folds. When `false`, no folds are generated regardless
+    /// of `foldmethod`. Matches vim's `:set foldenable`. Alias `fen`.
+    /// Default `true`.
+    pub foldenable: bool,
+    /// Level at which folds start open. `99` (default) means all folds open;
+    /// `0` means all closed. Matches vim's `:set foldlevelstart`. Alias `fls`.
+    pub foldlevelstart: u32,
     /// Comma-separated 1-based column indices for vertical rulers.
     /// Empty string = no rulers. Matches vim's `:set colorcolumn`. Default `""`.
     pub colorcolumn: String,
@@ -399,6 +411,24 @@ pub struct Options {
 /// the engine surface don't need to import `hjkl-buffer` directly.
 pub use hjkl_buffer::ListChars;
 
+/// Fold method. Controls how folds are automatically generated.
+/// Matches vim's `:set foldmethod`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum FoldMethod {
+    /// No automatic folds; only manual `zf` folds. Matches vim's `manual`.
+    Manual,
+    /// Automatically generate folds from the tree-sitter parse tree using
+    /// per-grammar `folds.scm` queries. Matches vim's `expr`/`syntax`.
+    /// **Default** — hjkl diverges from vim's `manual` default; functions /
+    /// if / match / blocks fold automatically when a `folds.scm` ships.
+    #[default]
+    Expr,
+    /// Marker folds via `{{{` / `}}}` comment delimiters. Matches vim's
+    /// `marker`. Parsed but not yet active (P4). Accepted without error.
+    Marker,
+}
+
 /// Sign-column display mode. Controls whether a 1-cell gutter is reserved
 /// for diagnostic and git signs. Matches vim's `:set signcolumn`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
@@ -472,6 +502,9 @@ impl Default for Options {
             cursorcolumn: false,
             signcolumn: SignColumnMode::Auto,
             foldcolumn: 0,
+            foldmethod: FoldMethod::Expr,
+            foldenable: true,
+            foldlevelstart: 99,
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
             filetype: String::new(),
@@ -679,6 +712,28 @@ impl Options {
                 };
                 Ok(())
             }
+            "foldmethod" | "fdm" => {
+                self.foldmethod = match val {
+                    OptionValue::String(ref s) => match s.as_str() {
+                        "manual" => FoldMethod::Manual,
+                        "expr" | "syntax" => FoldMethod::Expr,
+                        "marker" => FoldMethod::Marker,
+                        other => {
+                            return Err(EngineError::Ex(format!(
+                                "option `{name}` must be `manual`, `expr`, `syntax`, or `marker`, got `{other}`"
+                            )));
+                        }
+                    },
+                    other => {
+                        return Err(EngineError::Ex(format!(
+                            "option `{name}` expects string, got {other:?}"
+                        )));
+                    }
+                };
+                Ok(())
+            }
+            "foldenable" | "fen" => set_bool!(foldenable),
+            "foldlevelstart" | "fls" => set_u32!(foldlevelstart),
             "colorcolumn" | "cc" => set_string!(colorcolumn),
             "formatoptions" | "fo" => set_string!(formatoptions),
             "filetype" | "ft" => set_string!(filetype),
@@ -815,6 +870,16 @@ impl Options {
                 .to_string(),
             ),
             "foldcolumn" | "fdc" => OptionValue::Int(self.foldcolumn as i64),
+            "foldmethod" | "fdm" => OptionValue::String(
+                match self.foldmethod {
+                    FoldMethod::Manual => "manual",
+                    FoldMethod::Expr => "expr",
+                    FoldMethod::Marker => "marker",
+                }
+                .to_string(),
+            ),
+            "foldenable" | "fen" => OptionValue::Bool(self.foldenable),
+            "foldlevelstart" | "fls" => OptionValue::Int(self.foldlevelstart as i64),
             "colorcolumn" | "cc" => OptionValue::String(self.colorcolumn.clone()),
             "formatoptions" | "fo" => OptionValue::String(self.formatoptions.clone()),
             "filetype" | "ft" => OptionValue::String(self.filetype.clone()),
@@ -2268,5 +2333,103 @@ mod tests {
             Some(OptionValue::Bool(true)),
             "get_by_name(mps) must reflect true"
         );
+    }
+
+    // ── foldmethod / foldenable / foldlevelstart ──────────────────────────────
+
+    #[test]
+    fn foldmethod_default_expr() {
+        let o = Options::default();
+        assert_eq!(
+            o.foldmethod,
+            FoldMethod::Expr,
+            "foldmethod must default to Expr (tree-sitter)"
+        );
+        assert_eq!(
+            o.get_by_name("foldmethod"),
+            Some(OptionValue::String("expr".into())),
+            "get_by_name(foldmethod) must return \"expr\""
+        );
+    }
+
+    #[test]
+    fn foldmethod_fdm_alias_roundtrip() {
+        let mut o = Options::default();
+        o.set_by_name("fdm", OptionValue::String("manual".into()))
+            .unwrap();
+        assert_eq!(o.foldmethod, FoldMethod::Manual);
+        assert_eq!(
+            o.get_by_name("fdm"),
+            Some(OptionValue::String("manual".into()))
+        );
+        o.set_by_name("foldmethod", OptionValue::String("expr".into()))
+            .unwrap();
+        assert_eq!(o.foldmethod, FoldMethod::Expr);
+        o.set_by_name("foldmethod", OptionValue::String("marker".into()))
+            .unwrap();
+        assert_eq!(o.foldmethod, FoldMethod::Marker);
+        // "syntax" is an alias for "expr"
+        o.set_by_name("foldmethod", OptionValue::String("syntax".into()))
+            .unwrap();
+        assert_eq!(o.foldmethod, FoldMethod::Expr);
+    }
+
+    #[test]
+    fn foldmethod_rejects_invalid_value() {
+        let mut o = Options::default();
+        let err = o
+            .set_by_name("foldmethod", OptionValue::String("bogus".into()))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("must be"),
+            "expected error about valid values, got: {err}"
+        );
+    }
+
+    #[test]
+    fn foldenable_default_true() {
+        let o = Options::default();
+        assert!(o.foldenable, "foldenable must default to true");
+        assert_eq!(
+            o.get_by_name("foldenable"),
+            Some(OptionValue::Bool(true)),
+            "get_by_name(foldenable) must return Bool(true)"
+        );
+    }
+
+    #[test]
+    fn foldenable_fen_alias_roundtrip() {
+        let mut o = Options::default();
+        o.set_by_name("fen", OptionValue::Bool(false)).unwrap();
+        assert!(!o.foldenable, "fen alias must disable foldenable");
+        assert_eq!(o.get_by_name("fen"), Some(OptionValue::Bool(false)));
+        o.set_by_name("foldenable", OptionValue::Bool(true))
+            .unwrap();
+        assert!(o.foldenable);
+    }
+
+    #[test]
+    fn foldlevelstart_default_99() {
+        let o = Options::default();
+        assert_eq!(o.foldlevelstart, 99, "foldlevelstart must default to 99");
+        assert_eq!(
+            o.get_by_name("foldlevelstart"),
+            Some(OptionValue::Int(99)),
+            "get_by_name(foldlevelstart) must return Int(99)"
+        );
+    }
+
+    #[test]
+    fn foldlevelstart_fls_alias_roundtrip() {
+        let mut o = Options::default();
+        o.set_by_name("fls", OptionValue::Int(0)).unwrap();
+        assert_eq!(
+            o.foldlevelstart, 0,
+            "fls alias must set foldlevelstart to 0"
+        );
+        assert_eq!(o.get_by_name("fls"), Some(OptionValue::Int(0)));
+        o.set_by_name("foldlevelstart", OptionValue::Int(5))
+            .unwrap();
+        assert_eq!(o.foldlevelstart, 5);
     }
 }

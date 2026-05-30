@@ -288,6 +288,37 @@ impl App {
         }
 
         self.refresh_git_signs();
+
+        // --- Tree-sitter auto-folds (foldmethod=expr) ---
+        // After render_viewport triggers a reparse, extract fold ranges and
+        // apply them to the buffer. Runs only when dirty_gen has advanced
+        // since the last fold pass — O(tree) once per edit, never per-frame.
+        let (fdm, fen, fls) = {
+            let s = self.slots[active_idx].editor.settings();
+            (s.foldmethod, s.foldenable, s.foldlevelstart)
+        };
+        let dg = self.slots[active_idx].editor.buffer().dirty_gen();
+        let last_fold_dg = self.slots[active_idx].last_fold_dirty_gen;
+
+        if fen && fdm == hjkl_engine::types::FoldMethod::Expr && last_fold_dg != Some(dg) {
+            // Extract fold ranges from the (now fresh) tree.
+            let ranges = {
+                let buf = self.slots[active_idx].editor.buffer();
+                self.syntax.extract_fold_ranges(buffer_id, buf)
+            };
+            if !ranges.is_empty() {
+                // Apply new auto-folds to the buffer via set_auto_folds:
+                // - Preserves open/closed state for folds at the same start_row.
+                // - New folds default open (fls >= 99) or closed (fls == 0).
+                // - Manual folds are never touched.
+                let default_closed = fls == 0;
+                self.slots[active_idx]
+                    .editor
+                    .buffer_mut()
+                    .set_auto_folds(&ranges, default_closed);
+            }
+            self.slots[active_idx].last_fold_dirty_gen = Some(dg);
+        }
     }
 
     /// Compute syntax highlight spans for a one-off preview snippet.
