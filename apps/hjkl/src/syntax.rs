@@ -123,13 +123,21 @@ impl SyntaxLayer {
 
     /// Extract fold ranges from the retained parse tree (not viewport-bounded).
     ///
-    /// Returns empty when no grammar is attached or no `folds.scm` is bundled.
+    /// Returns `Some(ranges)` when the grammar is attached and the tree has
+    /// been parsed — `ranges` may be empty when no bundled `folds.scm` exists
+    /// for the grammar or the file has no multi-line foldable nodes.
+    ///
+    /// Returns `None` when the grammar is not yet ready (still loading, unknown
+    /// extension, or no highlighter). Callers must NOT update their dirty_gen
+    /// cache when `None` is returned — fold extraction must retry on the next
+    /// call once the grammar has loaded.
+    ///
     /// Call once per reparse (when dirty_gen changes), not per-frame.
     pub fn extract_fold_ranges(
         &mut self,
         id: BufferId,
         buffer: &impl hjkl_engine::Query,
-    ) -> Vec<(usize, usize)> {
+    ) -> Option<Vec<(usize, usize)>> {
         self.inner.extract_fold_ranges(id, buffer)
     }
 

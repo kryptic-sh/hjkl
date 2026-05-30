@@ -302,22 +302,35 @@ impl App {
 
         if fen && fdm == hjkl_engine::types::FoldMethod::Expr && last_fold_dg != Some(dg) {
             // Extract fold ranges from the (now fresh) tree.
-            let ranges = {
+            // `extract_fold_ranges` returns `None` when the grammar is not yet
+            // ready (still loading or unknown extension). In that case we must
+            // NOT record the dirty_gen as processed — the next recompute after
+            // the grammar finishes loading will see `last_fold_dg != Some(dg)`
+            // and re-run fold extraction against the now-ready tree.
+            let ranges_opt = {
                 let buf = self.slots[active_idx].editor.buffer();
                 self.syntax.extract_fold_ranges(buffer_id, buf)
             };
-            if !ranges.is_empty() {
-                // Apply new auto-folds to the buffer via set_auto_folds:
-                // - Preserves open/closed state for folds at the same start_row.
-                // - New folds default open (fls >= 99) or closed (fls == 0).
-                // - Manual folds are never touched.
-                let default_closed = fls == 0;
-                self.slots[active_idx]
-                    .editor
-                    .buffer_mut()
-                    .set_auto_folds(&ranges, default_closed);
+            if let Some(ranges) = ranges_opt {
+                if !ranges.is_empty() {
+                    // Apply new auto-folds to the buffer via set_auto_folds:
+                    // - Preserves open/closed state for folds at the same start_row.
+                    // - New folds default open (fls >= 99) or closed (fls == 0).
+                    // - Manual folds are never touched.
+                    let default_closed = fls == 0;
+                    self.slots[active_idx]
+                        .editor
+                        .buffer_mut()
+                        .set_auto_folds(&ranges, default_closed);
+                }
+                // Grammar was ready and extraction ran (even if no folds found).
+                // Mark this dirty_gen as processed so we don't re-run per-frame.
+                self.slots[active_idx].last_fold_dirty_gen = Some(dg);
             }
-            self.slots[active_idx].last_fold_dirty_gen = Some(dg);
+            // If ranges_opt is None (grammar not ready), last_fold_dirty_gen
+            // stays at the old value — fold extraction will retry on the next
+            // recompute_and_install call (triggered by poll_grammar_loads when
+            // the async load completes).
         }
     }
 

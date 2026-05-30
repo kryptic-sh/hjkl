@@ -619,12 +619,19 @@ impl SyntaxLayer {
     /// Extract fold ranges from the buffer's retained tree using the bundled
     /// `folds.scm` for this grammar.
     ///
-    /// Returns a sorted `Vec<(start_row, end_row)>` (0-based, inclusive).
-    /// Returns an empty vec when:
-    /// - No grammar is attached.
-    /// - The tree has not been parsed yet (call `render_viewport` first to
-    ///   trigger an initial parse, then call this).
-    /// - No bundled `folds.scm` for the current grammar.
+    /// Returns `Some(ranges)` when the grammar is attached and the tree has
+    /// been parsed — `ranges` may be empty when the grammar has no bundled
+    /// `folds.scm` or the file contains no foldable nodes.
+    ///
+    /// Returns `None` when:
+    /// - No grammar is attached yet (grammar still loading or unknown extension).
+    /// - No highlighter has been created for this buffer.
+    /// - The tree has not been parsed yet (call `render_viewport` first).
+    ///
+    /// **Callers must treat `None` as "not ready — retry later"** and must NOT
+    /// record the dirty_gen as processed when `None` is returned. Returning
+    /// `Some(empty)` is the signal that the grammar ran but produced no folds
+    /// (e.g. no `folds.scm` for this language).
     ///
     /// **NOT viewport-bounded** — runs over the full tree (once per reparse).
     /// Do not call this per-frame; call it only when `dirty_gen` has changed.
@@ -632,25 +639,20 @@ impl SyntaxLayer {
         &mut self,
         id: BufferId,
         buffer: &impl hjkl_engine::Query,
-    ) -> Vec<(usize, usize)> {
+    ) -> Option<Vec<(usize, usize)>> {
         let client = match self.clients.get_mut(&id) {
             Some(c) if c.has_language => c,
-            _ => return Vec::new(),
+            // Grammar not yet attached (loading or unknown) — signal "not ready".
+            _ => return None,
         };
-        let highlighter = match client.highlighter.as_mut() {
-            Some(h) => h,
-            None => return Vec::new(),
-        };
-        let tree = match highlighter.tree() {
-            Some(t) => t,
-            None => return Vec::new(),
-        };
-        let grammar = match highlighter.grammar() {
-            Some(g) => g,
-            None => return Vec::new(),
-        };
+        // Highlighter creation failed — signal "not ready".
+        let highlighter = client.highlighter.as_mut()?;
+        // Tree not yet parsed — signal "not ready".
+        let tree = highlighter.tree()?;
+        let grammar = highlighter.grammar()?;
         let rope = buffer.rope();
-        extract_fold_ranges_rope(tree, grammar, &rope)
+        // Grammar is ready and tree is parsed — return Some even if empty.
+        Some(extract_fold_ranges_rope(tree, grammar, &rope))
     }
 
     /// Render spans for the visible viewport. Fully synchronous.
@@ -1416,6 +1418,58 @@ mod tests {
         layer.set_language_for_path(TID, Path::new("a.zzz_unknown"));
         layer.forget(TID);
         assert!(!layer.clients.contains_key(&TID));
+    }
+
+    // --- Regression: fold extraction must return None when grammar not ready ---
+    //
+    // Before the fix (commit edbe2e99), `extract_fold_ranges` returned
+    // `Vec::new()` for BOTH "grammar not ready" and "grammar ready but no
+    // folds". The caller in `syntax_glue.rs::recompute_and_install` could not
+    // distinguish the two cases, so it set `last_fold_dirty_gen = Some(dg)`
+    // even when the grammar was still loading. When the grammar finished
+    // loading, `dirty_gen` was unchanged → the fold-extraction condition
+    // (`last_fold_dg != Some(dg)`) was false → folds were NEVER extracted.
+    //
+    // The fix changes `extract_fold_ranges` to return `Option<Vec<...>>`:
+    // - `None`  = grammar not ready yet — caller must NOT update dirty_gen,
+    //             so fold extraction retries on the next recompute.
+    // - `Some`  = grammar was ready and ran (ranges may be empty if no
+    //             folds.scm or no multi-line nodes).
+    //
+    // These tests exercise both branches WITHOUT requiring a downloaded grammar.
+
+    #[test]
+    fn extract_fold_ranges_returns_none_when_no_language_attached() {
+        // Simulates the "grammar still loading" or "unknown extension" state.
+        // `extract_fold_ranges` must return `None` so the caller knows NOT to
+        // mark the dirty_gen as processed. Before the fix this returned
+        // `Vec::new()`, which the caller misinterpreted as "ran successfully,
+        // no folds" → dirty_gen stamped → folds never re-tried after load.
+        let buf =
+            Buffer::from_str("fn hello() {\n    let x = 1;\n    x\n}\n\nfn world() {\n    2\n}\n");
+        let mut layer = default_layer();
+        // Deliberately use an unknown extension so no grammar is attached.
+        layer.set_language_for_path(TID, Path::new("a.zzz_no_grammar_here"));
+        let result = layer.extract_fold_ranges(TID, &buf);
+        assert!(
+            result.is_none(),
+            "extract_fold_ranges must return None when no grammar is attached \
+             (grammar still loading or unknown extension); got {result:?}"
+        );
+    }
+
+    #[test]
+    fn extract_fold_ranges_returns_none_when_no_client_registered() {
+        // Buffer ID with no prior `set_language_for_path` call — no client at all.
+        let buf = Buffer::from_str("fn foo() {}\n");
+        let mut layer = default_layer();
+        // Never called set_language_for_path for TID.
+        let result = layer.extract_fold_ranges(TID, &buf);
+        assert!(
+            result.is_none(),
+            "extract_fold_ranges must return None when buffer has no syntax client; \
+             got {result:?}"
+        );
     }
 
     // --- Network-dependent tests (grammar needed) ---
