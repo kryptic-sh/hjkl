@@ -2972,6 +2972,13 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let row = line.saturating_sub(1);
         let max = buf_row_count(&self.buffer).saturating_sub(1);
         let target = row.min(max);
+        // If the target row is hidden inside one or more closed folds, open
+        // every fold that collapses it so the landing line is actually
+        // visible — a jump to an unseen row is useless. `reveal_row` opens
+        // all hiding folds (outer + nested) in one pass; `open_fold_at` /
+        // `FoldOp::OpenAt` can't, because they only act on the first fold
+        // containing the row and so can never reach a nested inner fold.
+        self.buffer.reveal_row(target);
         buf_set_cursor_rc(&mut self.buffer, target, 0);
         // Vim: `:N` / `+N` jump scrolls the viewport too — without this
         // the cursor lands off-screen and the user has to scroll

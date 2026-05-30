@@ -3322,3 +3322,57 @@ fn cursor_screen_pos_partial_fold_arithmetic() {
         "partial fold (9 hidden rows): expected screen row 35, got {screen_row}"
     );
 }
+
+/// #244 follow-up: `:<n>` / `goto_line` to a row hidden inside a closed
+/// fold must open the enclosing fold(s) so the landing line is visible,
+/// then place the cursor on it. A jump to an unseen row is useless.
+#[test]
+fn goto_line_opens_enclosing_fold() {
+    let content: String = (0..50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+    // Closed fold over rows 11..=43; rows 12..=43 hidden.
+    e.buffer_mut().add_fold(11, 43, true);
+    assert!(
+        e.buffer().is_row_hidden(20),
+        "precondition: row 20 hidden by closed fold"
+    );
+    // `:21` → 1-based line 21 == row 20, which is inside the closed fold.
+    e.goto_line(21);
+    assert_eq!(e.cursor().0, 20, "cursor must land on the target row 20");
+    assert!(
+        !e.buffer().is_row_hidden(20),
+        "goto_line must open the enclosing fold so the target row is visible"
+    );
+}
+
+/// #244 follow-up: nested closed folds must all open along the path to
+/// the target row.
+#[test]
+fn goto_line_opens_nested_folds() {
+    let content: String = (0..50)
+        .map(|i| format!("line{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut e = Editor::new(
+        hjkl_buffer::Buffer::from_str(&content),
+        hjkl_engine::types::DefaultHost::new(),
+        hjkl_engine::types::Options::default(),
+    );
+    // Outer fold 5..=40 closed, inner fold 10..=20 closed (nested).
+    e.buffer_mut().add_fold(5, 40, true);
+    e.buffer_mut().add_fold(10, 20, true);
+    assert!(e.buffer().is_row_hidden(15), "precondition: row 15 hidden");
+    e.goto_line(16); // row 15, inside both folds
+    assert_eq!(e.cursor().0, 15, "cursor must land on row 15");
+    assert!(
+        !e.buffer().is_row_hidden(15),
+        "both nested folds must open so row 15 is visible"
+    );
+}
