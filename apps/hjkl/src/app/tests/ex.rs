@@ -303,6 +303,38 @@ fn bdelete_force_removes_dirty_slot() {
     let _ = std::fs::remove_file(&path_b);
 }
 
+/// Regression: closing a buffer in a multi-buffer session must delete that
+/// buffer's swap file. The owning process stays alive (so the orphan scan never
+/// reaps it) and the slot is gone (so cleanup_swaps_on_exit can't either) —
+/// leaving it behind makes the next open of that file surface a spurious
+/// recovery prompt.
+#[test]
+fn bdelete_removes_closed_buffers_swap() {
+    let path_a = std::env::temp_dir().join("hjkl_bd_swap_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_bd_swap_b.txt");
+    std::fs::write(&path_a, "a\n").unwrap();
+    std::fs::write(&path_b, "b\n").unwrap();
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+
+    // Inject a real swap file for the active (b) slot.
+    let swap_b = std::env::temp_dir().join("hjkl_bd_swap_b.swp");
+    std::fs::write(&swap_b, b"x").unwrap();
+    app.active_mut().swap_path = Some(swap_b.clone());
+    assert!(swap_b.exists(), "swap must exist before bdelete");
+
+    app.dispatch_ex("bd");
+
+    assert_eq!(app.slots.len(), 1, "one slot should remain after bdelete");
+    assert!(
+        !swap_b.exists(),
+        "closed buffer's swap must be removed by bdelete"
+    );
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+    let _ = std::fs::remove_file(&swap_b);
+}
+
 #[test]
 fn bdelete_on_last_slot_resets_to_no_name() {
     let path = std::env::temp_dir().join("hjkl_phc_bd_last.txt");
