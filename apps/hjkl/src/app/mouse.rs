@@ -209,6 +209,28 @@ fn fold_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
     }
 }
 
+// ── doc_row_at_screen_offset ─────────────────────────────────────────────────
+
+/// Map a screen-row offset (rows below the viewport top, as the renderer
+/// draws them) to a document row, skipping rows hidden by closed folds —
+/// the inverse of the renderer's fold-collapsing walk and the screen→doc
+/// counterpart of `viewport_math::cursor_screen_row_from`. Without this,
+/// clicks below a closed fold land on the wrong line.
+fn doc_row_at_screen_offset(
+    buffer: &hjkl_buffer::Buffer,
+    top_row: usize,
+    screen_offset: usize,
+) -> usize {
+    let mut doc = top_row;
+    for _ in 0..screen_offset {
+        match buffer.next_visible_row(doc) {
+            Some(r) => doc = r,
+            None => break, // past last visible row — clamp
+        }
+    }
+    doc
+}
+
 // ── cell_to_doc ───────────────────────────────────────────────────────────────
 
 /// Translate a terminal cell `(cell_x, cell_y)` inside window `win_id` to a
@@ -270,8 +292,10 @@ pub fn cell_to_doc(
     let text_rel_x = rel_x - gw; // cells from text-area left edge
     let visual_col = vp.top_col.saturating_add(text_rel_x as usize);
 
-    // Doc row.
-    let doc_row = vp.top_row.saturating_add(rel_y as usize);
+    // Doc row — fold-aware: a closed fold collapses to a single screen row,
+    // so naively adding rel_y to top_row would land on a hidden row when any
+    // closed fold sits above the click. Walk visible rows instead.
+    let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
     if doc_row >= line_count {
         return None; // past EOF
     }
@@ -843,7 +867,9 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
 
     if rel_x < gw {
         // Click is in the gutter — compute doc_row without char_col.
-        let doc_row = vp.top_row.saturating_add(rel_y as usize);
+        // Fold-aware: walk visible rows so a closed fold above the click
+        // does not cause the gutter zone to map to a hidden/wrong row.
+        let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
         if doc_row < line_count {
             return Zone::Gutter { win_id, doc_row };
         }

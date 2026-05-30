@@ -980,4 +980,105 @@ mod border_drag_tests {
             "gutter click on a non-fold row must not create a fold"
         );
     }
+
+    // ── Regression: closed fold above click maps to wrong doc row (#244/#245) ──
+
+    /// Verify that `cell_to_doc` maps screen rows correctly when a closed fold
+    /// sits above the click point.
+    ///
+    /// Layout with a closed fold over doc rows 1..=3:
+    ///   screen row 0 → doc row 0  (line0)
+    ///   screen row 1 → doc row 1  (fold marker — rows 1-3 collapsed to one screen row)
+    ///   screen row 2 → doc row 4  (line4, first visible row after the fold)
+    ///
+    /// Without the fix `doc_row_at_screen_offset`, screen row 2 would naively
+    /// map to `top_row + 2 = 2`, which is hidden inside the fold body — wrong.
+    #[test]
+    fn cell_to_doc_fold_aware_maps_screen_row_past_closed_fold() {
+        use crate::app::mouse;
+
+        // 10-line buffer; window at (0,0) 80×24, no horizontal scroll.
+        let content = (0..10)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = make_app_with_window(&content, ratatui::layout::Rect::new(0, 0, 80, 24));
+
+        // Add a CLOSED fold over doc rows 1..=3.
+        app.active_mut()
+            .editor
+            .buffer_mut()
+            .add_fold(1, 3, true /* closed */);
+
+        // Sanity: fold start row (1) is visible, rows 2-3 are hidden, row 4 is visible.
+        assert!(
+            !app.active().editor.buffer().is_row_hidden(1),
+            "fold start row 1 must remain visible as the marker"
+        );
+        assert!(
+            app.active().editor.buffer().is_row_hidden(2),
+            "row 2 must be hidden by the closed fold"
+        );
+        assert!(
+            !app.active().editor.buffer().is_row_hidden(4),
+            "row 4 must be visible (first row after the fold)"
+        );
+
+        // Default settings: number=true, numberwidth=4, no signs → gutter_width=4.
+        // Because the buffer now has a fold, fold_column_width_for returns 1,
+        // so actual gutter = lnum_width + sign_width + fold_col = 4 + 0 + 1 = 5.
+        // First text cell is col 5.
+        //
+        // Click at screen (col=5, row=2): that is 2 screen rows below the window top.
+        //   Naïve:    top_row + 2 = 0 + 2 = doc row 2  (BUG: hidden inside fold)
+        //   Correct:  walk 2 visible steps from row 0:
+        //               step 1: next_visible_row(0) = 1  (fold marker)
+        //               step 2: next_visible_row(1) = 4  (skips hidden rows 2,3)
+        //             → doc row 4
+        let result = mouse::cell_to_doc(&app, 0, 5, 2);
+        assert!(
+            result.is_some(),
+            "cell_to_doc must return Some for a valid click below the fold"
+        );
+        let (doc_row, _doc_col) = result.unwrap();
+        assert_eq!(
+            doc_row, 4,
+            "screen row 2 with a closed fold at rows 1-3 must map to doc row 4, not doc row 2 \
+             (regression: #244/#245 — naïve top_row+rel_y lands inside the hidden fold body)"
+        );
+    }
+
+    /// Verify that `hit_test_zone` maps the gutter click correctly when a closed
+    /// fold sits above the click point (the `Zone::Gutter` path).
+    #[test]
+    fn hit_test_zone_gutter_fold_aware_maps_screen_row_past_closed_fold() {
+        use crate::app::mouse;
+
+        let content = (0..10)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = make_app_with_window(&content, ratatui::layout::Rect::new(0, 0, 80, 24));
+
+        // Add a CLOSED fold over doc rows 1..=3.
+        app.active_mut()
+            .editor
+            .buffer_mut()
+            .add_fold(1, 3, true /* closed */);
+
+        // Gutter click at col=0, screen row=2.
+        // With fold present: gutter width = lnum(4) + sign(0) + fold_col(1) = 5,
+        // so col 0 < gw=5 → Gutter zone.
+        let zone = mouse::hit_test_zone(&app, 0, 2);
+        match zone {
+            mouse::Zone::Gutter { doc_row, .. } => {
+                assert_eq!(
+                    doc_row, 4,
+                    "gutter click at screen row 2 with closed fold rows 1-3 must map to doc row 4, \
+                     not doc row 2 (regression: #244/#245)"
+                );
+            }
+            other => panic!("expected Zone::Gutter, got {other:?}"),
+        }
+    }
 }
