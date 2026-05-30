@@ -1,0 +1,307 @@
+# Tier 2 change/yank text-object matrix — c{i,a} and y{i,a} across every
+# supported target (quotes, brackets, angle, word, paragraph, tag).
+# Generated from headless nvim 0.12 ground truth; do not hand-edit values.
+#
+# `c` cases type `Z` then <Esc> after the change so we assert the inserted
+# text lands correctly and the editor returns to normal mode. `y` cases
+# leave the buffer unchanged — the assertion is cursor + the " register.
+#
+# di{ / da / di coverage lives in tier2_text_objects.toml; the 3 ci bracket
+# cases there overlap with this file intentionally (kept for locality).
+
+
+# ─── change-inner (ci) ───────────────────────────────────────────
+[[cases]]
+name = "textobj_ci_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "ci<lt>Z<Esc>"
+expected_buffer = "x <Z> y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_curlybrace"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 4]
+keys = "ci{Z<Esc>"
+expected_buffer = "x {Z} y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_doublequote"
+initial_buffer = "x \"a b\" y\n"
+initial_cursor = [0, 4]
+keys = "ci\"Z<Esc>"
+expected_buffer = "x \"Z\" y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "cipZ<Esc>"
+expected_buffer = "Z\n\ngamma\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "alpha beta\n"]
+[[cases]]
+name = "textobj_ci_paren"
+initial_buffer = "x (a b) y\n"
+initial_cursor = [0, 4]
+keys = "ci(Z<Esc>"
+expected_buffer = "x (Z) y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_singlequote"
+initial_buffer = "x 'a b' y\n"
+initial_cursor = [0, 4]
+keys = "ci'Z<Esc>"
+expected_buffer = "x 'Z' y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "ci[Z<Esc>"
+expected_buffer = "x [Z] y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_ci_tag"
+initial_buffer = "<a>x y</a>\n"
+initial_cursor = [0, 4]
+keys = "citZ<Esc>"
+expected_buffer = "<a>Z</a>\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "x y"]
+[[cases]]
+name = "textobj_ci_word"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 4]
+keys = "ciwZ<Esc>"
+expected_buffer = "foo Z baz\n"
+expected_cursor = [0, 4]
+expected_register = ["\"", "bar"]
+
+# ─── change-around (ca) ───────────────────────────────────────────
+[[cases]]
+name = "textobj_ca_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "ca<lt>Z<Esc>"
+expected_buffer = "x Z y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "<a b>"]
+[[cases]]
+name = "textobj_ca_curlybrace"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 4]
+keys = "ca{Z<Esc>"
+expected_buffer = "x Z y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "{a b}"]
+[[cases]]
+name = "textobj_ca_doublequote"
+initial_buffer = "x \"a b\" y\n"
+initial_cursor = [0, 4]
+keys = "ca\"Z<Esc>"
+expected_buffer = "x Zy\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "\"a b\" "]
+[[cases]]
+name = "textobj_ca_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "capZ<Esc>"
+expected_buffer = "Z\ngamma\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "alpha beta\n\n"]
+[[cases]]
+name = "textobj_ca_paren"
+initial_buffer = "x (a b) y\n"
+initial_cursor = [0, 4]
+keys = "ca(Z<Esc>"
+expected_buffer = "x Z y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "(a b)"]
+[[cases]]
+name = "textobj_ca_singlequote"
+initial_buffer = "x 'a b' y\n"
+initial_cursor = [0, 4]
+keys = "ca'Z<Esc>"
+expected_buffer = "x Zy\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "'a b' "]
+[[cases]]
+name = "textobj_ca_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "ca[Z<Esc>"
+expected_buffer = "x Z y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "[a b]"]
+[[cases]]
+name = "textobj_ca_tag"
+initial_buffer = "<a>x y</a>\n"
+initial_cursor = [0, 4]
+keys = "catZ<Esc>"
+expected_buffer = "Z\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "<a>x y</a>"]
+[[cases]]
+name = "textobj_ca_word"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 4]
+keys = "cawZ<Esc>"
+expected_buffer = "foo Zbaz\n"
+expected_cursor = [0, 4]
+expected_register = ["\"", "bar "]
+
+# ─── yank-inner (yi) ───────────────────────────────────────────
+[[cases]]
+name = "textobj_yi_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "yi<lt>"
+expected_buffer = "x <a b> y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_curlybrace"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 4]
+keys = "yi{"
+expected_buffer = "x {a b} y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_doublequote"
+initial_buffer = "x \"a b\" y\n"
+initial_cursor = [0, 4]
+keys = "yi\""
+expected_buffer = "x \"a b\" y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "yip"
+expected_buffer = "alpha beta\n\ngamma\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "alpha beta\n"]
+[[cases]]
+name = "textobj_yi_paren"
+initial_buffer = "x (a b) y\n"
+initial_cursor = [0, 4]
+keys = "yi("
+expected_buffer = "x (a b) y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_singlequote"
+initial_buffer = "x 'a b' y\n"
+initial_cursor = [0, 4]
+keys = "yi'"
+expected_buffer = "x 'a b' y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "yi["
+expected_buffer = "x [a b] y\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "a b"]
+[[cases]]
+name = "textobj_yi_tag"
+initial_buffer = "<a>x y</a>\n"
+initial_cursor = [0, 4]
+keys = "yit"
+expected_buffer = "<a>x y</a>\n"
+expected_cursor = [0, 3]
+expected_register = ["\"", "x y"]
+[[cases]]
+name = "textobj_yi_word"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 4]
+keys = "yiw"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 4]
+expected_register = ["\"", "bar"]
+
+# ─── yank-around (ya) ───────────────────────────────────────────
+[[cases]]
+name = "textobj_ya_anglebracket"
+initial_buffer = "x <a b> y\n"
+initial_cursor = [0, 4]
+keys = "ya<lt>"
+expected_buffer = "x <a b> y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "<a b>"]
+[[cases]]
+name = "textobj_ya_curlybrace"
+initial_buffer = "x {a b} y\n"
+initial_cursor = [0, 4]
+keys = "ya{"
+expected_buffer = "x {a b} y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "{a b}"]
+[[cases]]
+name = "textobj_ya_doublequote"
+initial_buffer = "x \"a b\" y\n"
+initial_cursor = [0, 4]
+keys = "ya\""
+expected_buffer = "x \"a b\" y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "\"a b\" "]
+[[cases]]
+name = "textobj_ya_paragraph"
+initial_buffer = "alpha beta\n\ngamma\n"
+initial_cursor = [0, 0]
+keys = "yap"
+expected_buffer = "alpha beta\n\ngamma\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "alpha beta\n\n"]
+[[cases]]
+name = "textobj_ya_paren"
+initial_buffer = "x (a b) y\n"
+initial_cursor = [0, 4]
+keys = "ya("
+expected_buffer = "x (a b) y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "(a b)"]
+[[cases]]
+name = "textobj_ya_singlequote"
+initial_buffer = "x 'a b' y\n"
+initial_cursor = [0, 4]
+keys = "ya'"
+expected_buffer = "x 'a b' y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "'a b' "]
+[[cases]]
+name = "textobj_ya_squarebracket"
+initial_buffer = "x [a b] y\n"
+initial_cursor = [0, 4]
+keys = "ya["
+expected_buffer = "x [a b] y\n"
+expected_cursor = [0, 2]
+expected_register = ["\"", "[a b]"]
+[[cases]]
+name = "textobj_ya_tag"
+initial_buffer = "<a>x y</a>\n"
+initial_cursor = [0, 4]
+keys = "yat"
+expected_buffer = "<a>x y</a>\n"
+expected_cursor = [0, 0]
+expected_register = ["\"", "<a>x y</a>"]
+[[cases]]
+name = "textobj_ya_word"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 4]
+keys = "yaw"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 4]
+expected_register = ["\"", "bar "]
