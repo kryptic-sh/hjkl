@@ -200,6 +200,13 @@ pub struct Gutter {
     /// painted in `area.x .. area.x + sign_column_width`; numbers are
     /// painted in `area.x + sign_column_width .. area.x + sign_column_width + width`.
     pub sign_column_width: u16,
+    /// Width of the fold-indicator column, painted to the RIGHT of the
+    /// number column and LEFT of the text (`[sign][number][fold][text]`,
+    /// matching the cursor/overlay geometry which reserves
+    /// `sign_column_width + fold_column_width` of extra gutter). Typically
+    /// 0 (no fold cue) or 1. The renderer paints an open/closed fold glyph
+    /// per row into this column; `0` collapses it entirely.
+    pub fold_column_width: u16,
 }
 
 /// Single-cell marker painted into the leftmost gutter column for a
@@ -243,6 +250,24 @@ pub struct DiagOverlay {
     pub style: Style,
 }
 
+/// Glyph for the fold-indicator column at `doc_row`:
+///   `▾` open fold start · `▸` closed fold start ·
+///   `│` row inside an open fold body · ` ` no fold.
+/// A row that is both an open-fold start and inside an outer open fold
+/// still reads as a start (`▾`), matching vim's foldcolumn precedence.
+fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
+    let mut inside_open = false;
+    for f in folds {
+        if f.start_row == doc_row {
+            return if f.closed { '▸' } else { '▾' };
+        }
+        if !f.closed && doc_row > f.start_row && doc_row <= f.end_row {
+            inside_open = true;
+        }
+    }
+    if inside_open { '│' } else { ' ' }
+}
+
 impl<R: StyleResolver> Widget for BufferView<'_, R> {
     fn render(self, area: Rect, term_buf: &mut TermBuffer) {
         let viewport = *self.viewport;
@@ -274,7 +299,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
 
         let gutter_total = self
             .gutter
-            .map(|g| g.sign_column_width + g.width)
+            .map(|g| g.sign_column_width + g.width + g.fold_column_width)
             .unwrap_or(0);
         let text_area = Rect {
             x: area.x.saturating_add(gutter_total),
@@ -321,6 +346,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 if let Some(gutter) = self.gutter {
                     self.paint_gutter(term_buf, area, screen_row, doc_row, gutter);
                     self.paint_signs(term_buf, area, screen_row, doc_row, gutter);
+                    self.paint_fold_column(term_buf, area, screen_row, doc_row, gutter, &folds);
                 }
                 self.paint_fold_marker(term_buf, text_area, screen_row, fold, line, is_cursor_row);
                 search_hit_at_cursor_col.push(false);
@@ -772,6 +798,37 @@ impl<R: StyleResolver> BufferView<'_, R> {
         if let Some(cell) = term_buf.cell_mut((spacer_x, y)) {
             cell.set_char(' ');
             cell.set_style(gutter.style);
+        }
+    }
+
+    /// Paint the fold-indicator column for `doc_row`. The column sits to
+    /// the RIGHT of the number column and LEFT of the text
+    /// (`[sign][number][fold][text]`). One glyph per row:
+    ///   `▸` closed fold start · `▾` open fold start ·
+    ///   `│` open fold body · ` ` otherwise.
+    /// No-op when `fold_column_width == 0`.
+    fn paint_fold_column(
+        &self,
+        term_buf: &mut TermBuffer,
+        area: Rect,
+        screen_row: u16,
+        doc_row: usize,
+        gutter: Gutter,
+        folds: &[hjkl_buffer::Fold],
+    ) {
+        if gutter.fold_column_width == 0 {
+            return;
+        }
+        let y = area.y + screen_row;
+        let fold_x = area.x + gutter.sign_column_width + gutter.width;
+        let glyph = fold_column_glyph(folds, doc_row);
+        // Only the leftmost fold cell carries the glyph; any remaining
+        // fold-column cells are blanked so the gutter bg stays continuous.
+        for (i, x) in (fold_x..fold_x + gutter.fold_column_width).enumerate() {
+            if let Some(cell) = term_buf.cell_mut((x, y)) {
+                cell.set_char(if i == 0 { glyph } else { ' ' });
+                cell.set_style(gutter.style);
+            }
         }
     }
 
@@ -1660,6 +1717,7 @@ mod tests {
                 line_offset: 0,
                 numbers: GutterNumbers::Relative { cursor_row: 2 },
                 sign_column_width: 0,
+                fold_column_width: 0,
             }),
             search_bg: Style::default(),
             signs: &[],
@@ -1714,6 +1772,7 @@ mod tests {
                 line_offset: 0,
                 numbers: GutterNumbers::Hybrid { cursor_row: 1 },
                 sign_column_width: 0,
+                fold_column_width: 0,
             }),
             search_bg: Style::default(),
             signs: &[],
@@ -1760,6 +1819,7 @@ mod tests {
                 line_offset: 0,
                 numbers: GutterNumbers::None,
                 sign_column_width: 0,
+                fold_column_width: 0,
             }),
             search_bg: Style::default(),
             signs: &[],
@@ -1914,6 +1974,7 @@ mod tests {
                 style: Style::default().fg(Color::DarkGray),
                 line_offset: 0,
                 sign_column_width: 1,
+                fold_column_width: 0,
                 ..Default::default()
             }),
             search_bg: Style::default(),
@@ -2571,6 +2632,7 @@ mod tests {
                 line_offset: 0,
                 numbers: GutterNumbers::Absolute,
                 sign_column_width: 0,
+                fold_column_width: 0,
             }),
             search_bg: Style::default(),
             signs: &[],
@@ -2756,6 +2818,7 @@ mod tests {
                 style: Style::default(),
                 line_offset: 13108, // row 0 displays as 13109
                 sign_column_width: 1,
+                fold_column_width: 0,
                 ..Default::default()
             }),
             search_bg: Style::default(),
@@ -2829,6 +2892,7 @@ mod tests {
                 style: Style::default(),
                 line_offset: 0,
                 sign_column_width: 0,
+                fold_column_width: 0,
                 ..Default::default()
             }),
             search_bg: Style::default(),
@@ -3076,6 +3140,37 @@ mod tests {
             term.cell((4, 0)).unwrap().symbol(),
             ":",
             "custom guide char ':' at col 4"
+        );
+    }
+
+    #[test]
+    fn fold_column_glyph_open_closed_body() {
+        // Outer fold rows 1..=4 OPEN, with a CLOSED fold rows 2..=3 inside.
+        let mut b = hjkl_buffer::Buffer::from_str("a\nb\nc\nd\ne\nf");
+        b.add_fold(1, 4, false); // open outer
+        b.add_fold(2, 3, true); // closed inner
+        let folds = b.folds();
+        assert_eq!(super::fold_column_glyph(&folds, 0), ' ', "row 0: no fold");
+        assert_eq!(
+            super::fold_column_glyph(&folds, 1),
+            '\u{25be}',
+            "row 1: open fold start = \u{25be}"
+        );
+        assert_eq!(
+            super::fold_column_glyph(&folds, 2),
+            '\u{25b8}',
+            "row 2: closed fold start = \u{25b8}"
+        );
+        // row 4 is inside the open outer fold body (and not a start) → bar.
+        assert_eq!(
+            super::fold_column_glyph(&folds, 4),
+            '\u{2502}',
+            "row 4: open fold body = \u{2502}"
+        );
+        assert_eq!(
+            super::fold_column_glyph(&folds, 5),
+            ' ',
+            "row 5: outside all folds"
         );
     }
 }

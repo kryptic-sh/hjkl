@@ -177,21 +177,36 @@ fn sign_column_width(
 /// Width of the non-text region on the left edge of a window — the cells the
 /// renderer reserves before the first text cell.
 ///
-/// With the dedicated sign column layout, text starts at
-/// `area.x + sign_w + num_gw` (sign column to the far left, then number
-/// column, then text). The fold column is reserved in width math but
-/// never actually painted, so it is not included here.
+/// Gutter layout is `[sign][number][fold][text]`, matching the renderer
+/// (`apps/hjkl/src/render.rs`). Text starts at
+/// `area.x + sign_w + num_gw + fold_w`. The fold column (#245) is now
+/// painted, so it MUST be included here or clicks in a buffer with folds
+/// map one column too far left.
 ///
-/// `lnum_width` must come from `Editor::lnum_width()`. `cell_to_doc` and
-/// `hit_test_zone` must use this so mouse clicks map to the correct document
-/// coordinates.
+/// `lnum_width` must come from `Editor::lnum_width()`; `fold_w` is the fold
+/// column width (auto: 1 when the buffer has folds, widened by `foldcolumn`).
+/// `cell_to_doc` and `hit_test_zone` must use this so mouse clicks map to the
+/// correct document coordinates.
 fn text_start_offset(
     lnum_width: u16,
     signcolumn: hjkl_engine::types::SignColumnMode,
     has_visible_signs: bool,
+    fold_w: u16,
 ) -> u16 {
     let sign_w = sign_column_width(signcolumn, has_visible_signs);
-    lnum_width + sign_w
+    lnum_width + sign_w + fold_w
+}
+
+/// Fold-column width for `slot`, matching the renderer's auto rule: 1 when
+/// the buffer has any fold (widened by an explicit `foldcolumn`), else the
+/// `foldcolumn` setting (0 by default).
+fn fold_column_width_for(slot: &crate::app::Slot) -> u16 {
+    let fdc = slot.editor.settings().foldcolumn.min(12) as u16;
+    if slot.editor.buffer().folds().is_empty() {
+        fdc
+    } else {
+        fdc.max(1)
+    }
 }
 
 // ── cell_to_doc ───────────────────────────────────────────────────────────────

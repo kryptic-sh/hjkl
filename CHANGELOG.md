@@ -10,6 +10,13 @@ patch bumps.
 
 ### Added
 
+- Fold gutter markers (#245): a 1-cell fold-indicator column now appears
+  automatically whenever the buffer has any fold (no `:set foldcolumn` needed;
+  an explicit `foldcolumn=N` still widens it, and files with no folds are
+  unchanged). It paints `▾` at an open fold start, `▸` at a closed fold start,
+  and `│` down an open fold's body. The gutter layout is now
+  `[sign][number][fold][text]`; the renderer, cursor-block placement, matchparen
+  overlays, and mouse hit-testing all account for the fold column.
 - Matchparen now highlights the matching HTML/XML **tag pair** under the cursor
   (#243). When the cursor sits on an open or close tag name, both the `<tag>`
   and `</tag>` name runs get the same bold+reversed emphasis as bracket

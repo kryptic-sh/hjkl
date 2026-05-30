@@ -642,7 +642,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             }
         }
     };
-    let fold_w = fdc.min(12) as u16;
+    // Fold column: auto-show a 1-cell indicator whenever the buffer has any
+    // fold (#245), so foldable/folded regions are visible without `:set
+    // foldcolumn`. An explicit `foldcolumn=N` still widens it. No folds and
+    // foldcolumn=0 → no column (0 cells), so files without folds are unchanged.
+    let has_folds = !app.slots()[slot_idx].editor.buffer().folds().is_empty();
+    let fold_w = (fdc.min(12) as u16).max(if has_folds { 1 } else { 0 });
     let num_gw_for_text = app.slots()[slot_idx].editor.lnum_width();
     let gw = sign_w + num_gw_for_text + fold_w;
     let text_width = area.width.saturating_sub(gw);
@@ -670,13 +675,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     };
     // Number-column width only (sign/fold widths are tracked separately).
     let num_gw = app.slots()[slot_idx].editor.lnum_width();
-    let gutter = if num_gw > 0 || sign_w > 0 {
+    let gutter = if num_gw > 0 || sign_w > 0 || fold_w > 0 {
         Some(Gutter {
             width: num_gw,
             style: Style::default().fg(app.theme.ui.gutter),
             line_offset: 0,
             numbers,
             sign_column_width: sign_w,
+            fold_column_width: fold_w,
         })
     } else {
         None
@@ -855,7 +861,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // `area.x + sign_w + num_gw` (dedicated sign column + number column).
         // Without this, the gutter and text area share the same flash bg
         // and the cursor visually appears to sit "in the gutter".
-        let text_x = area.x + sign_w + num_gw;
+        let text_x = area.x + sign_w + num_gw + fold_w;
         let text_right = area.x + area.width;
         // Clamp flash range to visible rows.
         let vis_start = flash_top.max(vp_top);
@@ -894,7 +900,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let line_no_nl = line.trim_end_matches('\n');
             let char_start = line_no_nl[..m.byte_start as usize].chars().count();
             let char_end = line_no_nl[..m.byte_end as usize].chars().count();
-            let text_x = area.x + sign_w + num_gw;
+            let text_x = area.x + sign_w + num_gw + fold_w;
             let highlight_style = Style::default()
                 .bg(app.theme.ui.search_bg)
                 .fg(app.theme.ui.search_fg)
@@ -921,7 +927,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let text_x = area.x + sign_w + num_gw;
+        let text_x = area.x + sign_w + num_gw + fold_w;
         let vp_bot = vp_top + area.height as usize;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in pairs {
@@ -947,7 +953,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let text_x = area.x + sign_w + num_gw;
+        let text_x = area.x + sign_w + num_gw + fold_w;
         let vp_bot = vp_top + area.height as usize;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in tag_cells {
