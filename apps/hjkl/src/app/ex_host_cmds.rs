@@ -890,6 +890,84 @@ impl HostCmd<App> for LspFormatCmd {
     }
 }
 
+/// `:GitDiff` — preview the git hunk under the cursor in an info popup (#115).
+pub(crate) struct GitDiffCmd;
+
+impl HostCmd<App> for GitDiffCmd {
+    fn name(&self) -> &'static str {
+        "GitDiff"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        "GitDiff".len()
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.git_show_hunk_diff();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:GitStage` — stage the git hunk under the cursor into the index (#115).
+pub(crate) struct GitStageCmd;
+
+impl HostCmd<App> for GitStageCmd {
+    fn name(&self) -> &'static str {
+        "GitStage"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        "GitStage".len()
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.git_stage_hunk_at_cursor();
+        Some(ExEffect::Ok)
+    }
+}
+
+/// `:GitRevert` — discard the git hunk under the cursor, restoring HEAD (#115).
+pub(crate) struct GitRevertCmd;
+
+impl HostCmd<App> for GitRevertCmd {
+    fn name(&self) -> &'static str {
+        "GitRevert"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        "GitRevert".len()
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.git_revert_hunk_at_cursor();
+        Some(ExEffect::Ok)
+    }
+}
+
 /// `:LspCodeAction` / `:CodeAction` — LSP code actions.
 pub(crate) struct LspCodeActionCmd;
 

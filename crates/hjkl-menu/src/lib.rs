@@ -654,27 +654,55 @@ pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
 /// let plain = build_gutter_menu(false, false, true, false);
 /// assert!(!plain.iter().any(|it| it.action == MenuAction::DiagnosticDetail));
 /// ```
-pub fn build_gutter_menu(has_diag: bool, has_lsp: bool, has_sel: bool) -> Vec<MenuItem> {
-    // No diagnostic on this line → there is nothing gutter-specific to offer
-    // (git hunk actions are deferred to #115), so reuse the Code menu verbatim.
-    if !has_diag {
+pub fn build_gutter_menu(
+    has_diag: bool,
+    has_git_hunk: bool,
+    has_lsp: bool,
+    has_sel: bool,
+) -> Vec<MenuItem> {
+    // Nothing gutter-specific on this line → reuse the Code menu verbatim.
+    if !has_diag && !has_git_hunk {
         return build_code_menu(has_sel, has_lsp);
     }
 
-    let mut items = vec![
-        MenuItem::new(
+    let mut items = Vec::new();
+
+    // Diagnostic entries lead when a diagnostic is on the line (#114 P6).
+    if has_diag {
+        items.push(MenuItem::new(
             "Show Diagnostic",
             MenuAction::DiagnosticDetail,
             Some("<leader>e".into()),
-        ),
-        MenuItem {
+        ));
+        items.push(MenuItem {
             label: "Code Actions".into(),
             action: MenuAction::LspCodeActions,
             enabled: has_lsp,
             shortcut_hint: Some("<leader>ca".into()),
-        },
-        MenuItem::separator(),
-    ];
+        });
+        items.push(MenuItem::separator());
+    }
+
+    // Git-hunk entries when a git change is on the line (#114 P6/P10, #115).
+    if has_git_hunk {
+        items.push(MenuItem::new(
+            "Stage Hunk",
+            MenuAction::GitStageHunk,
+            Some(":GitStage".into()),
+        ));
+        items.push(MenuItem::new(
+            "Revert Hunk",
+            MenuAction::GitRevertHunk,
+            Some(":GitRevert".into()),
+        ));
+        items.push(MenuItem::new(
+            "Show Hunk Diff",
+            MenuAction::GitShowHunk,
+            Some(":GitDiff".into()),
+        ));
+        items.push(MenuItem::separator());
+    }
+
     // Append the standard Code-zone actions so navigation / clipboard / format
     // stay reachable from the gutter.
     items.extend(build_code_menu(has_sel, has_lsp));
