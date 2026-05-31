@@ -51,6 +51,9 @@ pub enum MenuAction {
     LspRename,
     LspCodeActions,
     LspFormat,
+    // ── Gutter / diagnostic menu ───────────────────────────────────────────
+    /// Show the diagnostic(s) on the line under the pointer (#114 P6).
+    DiagnosticDetail,
     // ── Status-line menu ───────────────────────────────────────────────────
     /// Restart the LSP server for the current buffer.
     LspRestart,
@@ -174,6 +177,10 @@ impl MenuAction {
                 handler(MenuActionKind::LspFormat);
                 true
             }
+            MenuAction::DiagnosticDetail => {
+                handler(MenuActionKind::DiagnosticDetail);
+                true
+            }
             MenuAction::LspRestart => {
                 handler(MenuActionKind::LspRestart);
                 true
@@ -248,6 +255,8 @@ pub enum MenuActionKind {
     LspRename,
     LspCodeActions,
     LspFormat,
+    // ── Gutter / diagnostic menu ───────────────────────────────────────────
+    DiagnosticDetail,
     // ── Status-line menu ───────────────────────────────────────────────────
     LspRestart,
     OpenFilePicker,
@@ -595,6 +604,58 @@ pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
             shortcut_hint: Some(":LspFormat".into()),
         },
     ]
+}
+
+/// Build the context menu for a right-click in the gutter / sign column
+/// (#114 P6).
+///
+/// When a diagnostic sign is present on the clicked line (`has_diag`), the
+/// menu leads with diagnostic-aware entries — "Show Diagnostic" (always usable
+/// when a diagnostic is present) and "Code Actions" (enabled only when a
+/// language server is attached, since quick-fixes come from the server). Below
+/// a separator it falls through to the same Code-zone actions so the gutter is
+/// never a dead-end.
+///
+/// The git half of this menu (stage / revert / preview hunk) is intentionally
+/// omitted until #115 lands; this builder covers only the diagnostic surface.
+///
+/// ```rust
+/// use hjkl_menu::{build_gutter_menu, MenuAction};
+///
+/// // Diagnostic present + LSP attached → leads with Show Diagnostic.
+/// let items = build_gutter_menu(true, true, false);
+/// assert_eq!(items[0].action, MenuAction::DiagnosticDetail);
+/// assert!(items.iter().any(|it| it.action == MenuAction::LspCodeActions && it.enabled));
+///
+/// // No diagnostic on the line → plain Code menu (no DiagnosticDetail row).
+/// let plain = build_gutter_menu(false, true, false);
+/// assert!(!plain.iter().any(|it| it.action == MenuAction::DiagnosticDetail));
+/// ```
+pub fn build_gutter_menu(has_diag: bool, has_lsp: bool, has_sel: bool) -> Vec<MenuItem> {
+    // No diagnostic on this line → there is nothing gutter-specific to offer
+    // (git hunk actions are deferred to #115), so reuse the Code menu verbatim.
+    if !has_diag {
+        return build_code_menu(has_sel, has_lsp);
+    }
+
+    let mut items = vec![
+        MenuItem::new(
+            "Show Diagnostic",
+            MenuAction::DiagnosticDetail,
+            Some("<leader>e".into()),
+        ),
+        MenuItem {
+            label: "Code Actions".into(),
+            action: MenuAction::LspCodeActions,
+            enabled: has_lsp,
+            shortcut_hint: Some("<leader>ca".into()),
+        },
+        MenuItem::separator(),
+    ];
+    // Append the standard Code-zone actions so navigation / clipboard / format
+    // stay reachable from the gutter.
+    items.extend(build_code_menu(has_sel, has_lsp));
+    items
 }
 
 /// Build the context menu for a right-click on the status line.
@@ -1071,6 +1132,66 @@ mod tests {
         assert_eq!(items[sep_positions[0]].action, MenuAction::Separator);
         assert_eq!(items[sep_positions[0] - 1].action, MenuAction::Paste);
         assert_eq!(items[sep_positions[1] + 1].action, MenuAction::LspRename);
+    }
+
+    // ── build_gutter_menu (#114 P6) ─────────────────────────────────────────
+
+    #[test]
+    fn build_gutter_menu_with_diag_leads_with_diagnostic_detail() {
+        let items = build_gutter_menu(true, true, false);
+        assert_eq!(
+            items[0].action,
+            MenuAction::DiagnosticDetail,
+            "gutter menu with a diagnostic must lead with Show Diagnostic"
+        );
+        // Code Actions appears and is enabled when LSP is attached.
+        assert!(
+            items
+                .iter()
+                .any(|it| it.action == MenuAction::LspCodeActions && it.enabled),
+            "Code Actions must be enabled when LSP is attached"
+        );
+        // The standard Code menu is still appended below.
+        assert!(
+            items.iter().any(|it| it.action == MenuAction::Paste),
+            "gutter menu must still include the Code actions"
+        );
+    }
+
+    #[test]
+    fn build_gutter_menu_code_actions_disabled_without_lsp() {
+        let items = build_gutter_menu(true, false, false);
+        let ca = items
+            .iter()
+            .find(|it| it.action == MenuAction::LspCodeActions)
+            .expect("Code Actions present");
+        assert!(!ca.enabled, "Code Actions disabled when no LSP attached");
+    }
+
+    #[test]
+    fn build_gutter_menu_without_diag_is_plain_code_menu() {
+        let gutter = build_gutter_menu(false, true, false);
+        let code = build_code_menu(false, true);
+        let g: Vec<&MenuAction> = gutter.iter().map(|it| &it.action).collect();
+        let c: Vec<&MenuAction> = code.iter().map(|it| &it.action).collect();
+        assert_eq!(g, c, "no diagnostic → identical to the Code menu");
+        assert!(
+            !gutter
+                .iter()
+                .any(|it| it.action == MenuAction::DiagnosticDetail),
+            "no DiagnosticDetail row when the line has no diagnostic"
+        );
+    }
+
+    #[test]
+    fn diagnostic_detail_dispatches_to_kind() {
+        let mut hit = false;
+        let handled = MenuAction::DiagnosticDetail.dispatch(|kind| {
+            if let MenuActionKind::DiagnosticDetail = kind {
+                hit = true;
+            }
+        });
+        assert!(handled && hit, "DiagnosticDetail must dispatch to its kind");
     }
 
     // ── build_tab_menu ──────────────────────────────────────────────────────

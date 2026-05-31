@@ -2277,6 +2277,16 @@ impl App {
         }
     }
 
+    /// Whether the active buffer has any LSP diagnostic that touches `row`
+    /// (its span covers the row). Used by the gutter context menu (#114 P6)
+    /// to decide whether to surface diagnostic-specific entries.
+    pub(crate) fn diagnostic_on_row(&self, row: usize) -> bool {
+        self.active()
+            .lsp_diags
+            .iter()
+            .any(|d| d.start_row <= row && row <= d.end_row)
+    }
+
     /// `<leader>d` — show all diagnostics overlapping the cursor in info popup.
     pub(crate) fn show_diag_at_cursor(&mut self) {
         let (row, col) = self.active().editor.cursor();

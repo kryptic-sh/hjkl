@@ -1549,6 +1549,8 @@ impl App {
             MenuActionKind::LspHover => self.lsp_hover(),
             MenuActionKind::LspCodeActions => self.lsp_code_actions(),
             MenuActionKind::LspFormat => self.lsp_format(),
+            // ── Gutter / diagnostic menu (#114 P6) ────────────────────────────
+            MenuActionKind::DiagnosticDetail => self.show_diag_at_cursor(),
             // Rename needs a new name from the user.  The ex command
             // `:Rename <newname>` is the supported entry point — mirror the
             // same status-message prompt the `<leader>rn` keybind uses so the

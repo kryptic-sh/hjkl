@@ -1112,13 +1112,27 @@ impl App {
                 self.hover_timer = None;
                 let zone = mouse::hit_test_zone(self, me.column, me.row);
                 let items = match zone {
-                    mouse::Zone::Code { .. } | mouse::Zone::Gutter { .. } => {
+                    mouse::Zone::Code { .. } => {
                         self.move_cursor_for_right_click(me.column, me.row);
                         let has_sel = matches!(
                             self.active().editor.vim_mode(),
                             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
                         );
                         build_code_menu(has_sel, self.active_has_lsp())
+                    }
+                    // ── Phase 6: gutter / sign-column menu ─────────
+                    // A diagnostic on the clicked line leads with
+                    // Show Diagnostic + Code Actions (wired to #116);
+                    // otherwise this falls through to the Code menu.
+                    // The git hunk half waits on #115.
+                    mouse::Zone::Gutter { doc_row, .. } => {
+                        self.move_cursor_for_right_click(me.column, me.row);
+                        let has_sel = matches!(
+                            self.active().editor.vim_mode(),
+                            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+                        );
+                        let has_diag = self.diagnostic_on_row(doc_row);
+                        crate::menu::build_gutter_menu(has_diag, self.active_has_lsp(), has_sel)
                     }
                     mouse::Zone::TabBar { tab_idx } => {
                         // Switch to the clicked tab first so that

@@ -968,6 +968,80 @@ mod border_drag_tests {
 
     /// Left-clicking the gutter on a row WITHOUT a fold must not create or
     /// toggle any fold (guards the P10 arm against over-firing).
+    /// Build a right-button Down event at (col, row).
+    fn right_down(col: u16, row: u16) -> crossterm::event::MouseEvent {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: col,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    /// #114 P6: right-click on a gutter line that has a diagnostic opens a
+    /// context menu led by "Show Diagnostic".
+    #[test]
+    fn gutter_right_click_with_diagnostic_offers_show_diagnostic() {
+        use crate::app::types::{DiagSeverity, LspDiag};
+        use crate::menu::MenuAction;
+
+        let mut app = make_app_with_window(
+            "line0\nline1\nline2\nline3\nline4",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        // Inject a diagnostic spanning doc row 1.
+        app.slots_mut()[0].lsp_diags.push(LspDiag {
+            start_row: 1,
+            start_col: 0,
+            end_row: 1,
+            end_col: 4,
+            severity: DiagSeverity::Error,
+            message: "boom".into(),
+            source: None,
+            code: None,
+        });
+
+        // Right-click the gutter (col 0) on screen row 1 (= doc row 1).
+        app.handle_mouse(right_down(0, 1));
+
+        let menu = app
+            .context_menu
+            .as_ref()
+            .expect("right-click on gutter must open a context menu");
+        assert_eq!(
+            menu.items[0].action,
+            MenuAction::DiagnosticDetail,
+            "diagnostic-line gutter menu must lead with Show Diagnostic"
+        );
+    }
+
+    /// #114 P6: right-click on a gutter line WITHOUT a diagnostic falls back to
+    /// the plain Code menu (no Show Diagnostic entry).
+    #[test]
+    fn gutter_right_click_without_diagnostic_has_no_show_diagnostic() {
+        use crate::menu::MenuAction;
+
+        let mut app = make_app_with_window(
+            "line0\nline1\nline2\nline3\nline4",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        // No diagnostics injected.
+        app.handle_mouse(right_down(0, 1));
+
+        let menu = app
+            .context_menu
+            .as_ref()
+            .expect("right-click on gutter must open a context menu");
+        assert!(
+            !menu
+                .items
+                .iter()
+                .any(|it| it.action == MenuAction::DiagnosticDetail),
+            "no diagnostic on the line → no Show Diagnostic entry"
+        );
+    }
+
     #[test]
     fn gutter_click_without_fold_is_noop() {
         let mut app = make_app_with_window(
