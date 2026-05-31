@@ -1108,11 +1108,11 @@ mod tests {
     #[test]
     fn set_blame_inline_toggles() {
         let mut editor = make_editor();
-        assert!(!editor.settings().blame_inline, "default off");
-        assert_eq!(apply_set(&mut editor, "blame_inline"), ExEffect::Ok);
-        assert!(editor.settings().blame_inline, "set on");
+        assert!(editor.settings().blame_inline, "default on");
         assert_eq!(apply_set(&mut editor, "noblame_inline"), ExEffect::Ok);
         assert!(!editor.settings().blame_inline, "no- turns off");
+        assert_eq!(apply_set(&mut editor, "blame_inline"), ExEffect::Ok);
+        assert!(editor.settings().blame_inline, "set on");
     }
 
     #[test]
