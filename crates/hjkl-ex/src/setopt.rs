@@ -59,6 +59,7 @@ pub fn all_setting_names() -> Vec<String> {
         "background".into(),
         "bg".into(),
         "list".into(),
+        "blame_inline".into(),
         // boolean
         "ignorecase".into(),
         "ic".into(),
@@ -265,6 +266,7 @@ fn query_option_value<H: Host>(
         "autopair" | "ap" => on_off(s.autopair),
         "autoclose-tag" | "act" => on_off(s.autoclose_tag),
         "list" => on_off(s.list),
+        "blame_inline" => on_off(s.blame_inline),
         "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
         "indent_guides" | "ig" => on_off(s.indent_guides),
         "indent_guide_char" | "igc" => s.indent_guide_char.to_string(),
@@ -506,6 +508,7 @@ fn apply_set_token<H: Host>(
         "autoclose-tag" | "act" => editor.settings_mut().autoclose_tag = value,
         "motion_sneak" | "snk" => editor.settings_mut().motion_sneak = value,
         "list" => editor.settings_mut().list = value,
+        "blame_inline" => editor.settings_mut().blame_inline = value,
         "indent_guides" | "ig" => editor.settings_mut().indent_guides = value,
         "format_on_save" | "fos" => editor.settings_mut().format_on_save = value,
         "trim_trailing_whitespace" | "tts" => {
@@ -1098,6 +1101,18 @@ mod tests {
     fn set_list_default_is_false() {
         let editor = make_editor();
         assert!(!editor.settings().list, "list default must be false");
+    }
+
+    // ---- blame_inline -------------------------------------------------------
+
+    #[test]
+    fn set_blame_inline_toggles() {
+        let mut editor = make_editor();
+        assert!(!editor.settings().blame_inline, "default off");
+        assert_eq!(apply_set(&mut editor, "blame_inline"), ExEffect::Ok);
+        assert!(editor.settings().blame_inline, "set on");
+        assert_eq!(apply_set(&mut editor, "noblame_inline"), ExEffect::Ok);
+        assert!(!editor.settings().blame_inline, "no- turns off");
     }
 
     #[test]

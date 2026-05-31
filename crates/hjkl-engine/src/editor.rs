@@ -890,6 +890,9 @@ pub struct Settings {
     /// Render invisible characters (tabs, trailing spaces, EOL markers).
     /// Matches vim's `:set list` / `:set nolist`. Default `false`.
     pub list: bool,
+    /// Show inline git blame as end-of-line virtual text on the cursor line
+    /// (gitsigns-style). Default off — opt-in like GitLens. (#202)
+    pub blame_inline: bool,
     /// Characters used to represent invisibles when `list` is on.
     /// Matches vim's `:set listchars` / `:set lcs`.
     pub listchars: crate::types::ListChars,
@@ -958,6 +961,7 @@ impl Default for Settings {
             autoreload: true,
             motion_sneak: true,
             list: false,
+            blame_inline: false,
             listchars: crate::types::ListChars::default(),
             indent_guides: true,
             indent_guide_char: '│',
@@ -1035,6 +1039,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         autoreload: o.autoreload,
         motion_sneak: o.motion_sneak,
         list: o.list,
+        blame_inline: false,
         listchars: o.listchars.clone(),
         indent_guides: o.indent_guides,
         indent_guide_char: o.indent_guide_char,
