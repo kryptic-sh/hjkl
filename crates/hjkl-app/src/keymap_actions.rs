@@ -36,6 +36,8 @@ pub enum AppAction {
     GitStashes,
     GitTags,
     GitRemotes,
+    /// `<leader>gm` — git blame for the cursor line in a popup (#202).
+    GitBlameLine,
 
     // ── LSP ───────────────────────────────────────────────────────────
     ShowDiagAtCursor,

@@ -815,6 +815,7 @@ impl App {
             AppAction::GitStashes => self.open_git_stash_picker(),
             AppAction::GitTags => self.open_git_tags_picker(),
             AppAction::GitRemotes => self.open_git_remotes_picker(),
+            AppAction::GitBlameLine => self.git_blame_popup(),
             _ => {}
         }
     }
