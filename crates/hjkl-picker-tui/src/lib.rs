@@ -200,6 +200,8 @@ pub fn preview_pane(
         indent_guide_fg: ratatui::style::Color::Reset,
         indent_guide_active_fg: ratatui::style::Color::Reset,
         indent_guide_active_col: None,
+        // Picker preview never shows inline blame.
+        eol_hints: &[],
     };
     frame.render_widget(view, inner);
 }

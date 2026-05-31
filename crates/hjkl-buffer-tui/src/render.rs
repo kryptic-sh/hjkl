@@ -155,6 +155,9 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// cursor row's leading whitespace and `indent_guide_shiftwidth`.
     /// `None` when the cursor sits on a non-indented or empty row.
     pub indent_guide_active_col: Option<usize>,
+    /// End-of-line virtual-text hints (e.g. inline git blame). Painted after
+    /// each row's real text in a post-pass. Empty slice = none. Added for #202.
+    pub eol_hints: &'a [EolHint],
 }
 
 /// Controls what numbers are rendered in the gutter.
@@ -254,6 +257,21 @@ pub struct DiagOverlay {
     pub style: Style,
 }
 
+/// End-of-line virtual text (e.g. inline git blame). Painted in the trailing
+/// cells of `row` after its real text, in `style`, with a 2-column gap. Purely
+/// decorative — occupies no buffer bytes and never affects cursor motion or
+/// layout. Truncated at the right edge of the text area; skipped when the row's
+/// text already fills the width.
+#[derive(Debug, Clone)]
+pub struct EolHint {
+    /// 0-based document row the hint trails.
+    pub row: usize,
+    /// The virtual text to paint (already formatted by the host).
+    pub text: String,
+    /// Style for the hint cells (typically a dimmed fg).
+    pub style: Style,
+}
+
 /// Glyph for the fold-indicator column at `doc_row`:
 ///   `▾` open fold start · `▸` closed fold start ·
 ///   `│` row inside an open fold body · ` ` no fold.
@@ -270,6 +288,22 @@ fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
         }
     }
     if inside_open { '│' } else { ' ' }
+}
+
+/// Compute the visual display width of `line` in terminal cells, expanding
+/// tabs to the next multiple of `tab_width` (matching `paint_row`'s logic).
+/// Uses `UnicodeWidthChar` for non-tab characters, identical to how
+/// `paint_row` advances `screen_x`.
+fn display_width(line: &str, tab_width: usize) -> usize {
+    let mut col: usize = 0;
+    for ch in line.chars() {
+        if ch == '\t' {
+            col += tab_width - (col % tab_width);
+        } else {
+            col += ch.width().unwrap_or(1);
+        }
+    }
+    col
 }
 
 impl<R: StyleResolver> Widget for BufferView<'_, R> {
@@ -327,6 +361,11 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // search bg already painted, so search highlight wins over
         // the column bg.
         let mut search_hit_at_cursor_col: Vec<bool> = Vec::new();
+        // Map each painted screen row to the doc row whose LAST visual segment
+        // landed there, so the EOL-hint pass can paint at the right y for the
+        // correct row (handles folds + soft-wrap: only the last segment row of
+        // a doc row is recorded). `None` for tilde/blank rows.
+        let mut screen_to_doc: Vec<Option<usize>> = vec![None; area.height as usize];
         // Walk the document forward, skipping rows hidden by closed
         // folds. Emit the start row of a closed fold as a marker
         // line instead of its actual content.
@@ -393,6 +432,9 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     .iter()
                     .any(|&(s, e)| cursor.col >= s && cursor.col < e);
                 search_hit_at_cursor_col.push(fold_has_hit);
+                if (screen_row as usize) < screen_to_doc.len() {
+                    screen_to_doc[screen_row as usize] = Some(doc_row);
+                }
                 screen_row += 1;
                 doc_row = fold.end_row + 1;
                 continue;
@@ -449,6 +491,9 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                     &row_conceals,
                 );
                 search_hit_at_cursor_col.push(row_has_hit_at_cursor_col);
+                if seg_idx == last_seg_idx && (screen_row as usize) < screen_to_doc.len() {
+                    screen_to_doc[screen_row as usize] = Some(doc_row);
+                }
                 screen_row += 1;
             }
             doc_row += 1;
@@ -468,6 +513,42 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             }
             screen_row += 1;
         }
+        // ── EOL virtual-text pass (#202): paint host hints after row text ──
+        if !self.eol_hints.is_empty() {
+            let tab_width = self.viewport.effective_tab_width();
+            for (sr, maybe_doc) in screen_to_doc.iter().enumerate() {
+                let Some(doc) = *maybe_doc else { continue };
+                let Some(hint) = self.eol_hints.iter().find(|h| h.row == doc) else {
+                    continue;
+                };
+                // Visual width of the row's text in cells (tab-expanded),
+                // minus horizontal scroll, to find where real text ends.
+                let line = line_at(doc);
+                let text_cols = display_width(&line, tab_width);
+                let start_vis = text_cols.saturating_sub(top_col);
+                // 2-col gap after the text.
+                let x = text_area
+                    .x
+                    .saturating_add(start_vis as u16)
+                    .saturating_add(2);
+                let y = text_area.y + sr as u16;
+                let right = text_area.x + text_area.width;
+                if x >= right {
+                    continue; // no room
+                }
+                for (i, ch) in hint.text.chars().enumerate() {
+                    let cx = x + i as u16;
+                    if cx >= right {
+                        break;
+                    }
+                    if let Some(cell) = term_buf.cell_mut((cx, y)) {
+                        cell.set_char(ch);
+                        cell.set_style(hint.style);
+                    }
+                }
+            }
+        }
+
         // Cursorcolumn pass: layer the bg over the cursor's visible
         // column once every row is painted so it composes on top of
         // syntax / cursorline backgrounds without disturbing fg.
@@ -1186,6 +1267,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 5);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "h");
@@ -1226,6 +1308,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 1);
         let cursor_cell = term.cell((1, 0)).unwrap();
@@ -1267,6 +1350,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 1);
         assert!(term.cell((0, 0)).unwrap().bg != Color::Blue);
@@ -1313,6 +1397,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // Empty middle row (y=1) — col 0 must carry the selection bg.
@@ -1354,6 +1439,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         assert_eq!(term.cell((0, 1)).unwrap().bg, Color::Blue);
@@ -1398,6 +1484,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // Empty row (y=1): cols 2..=5 carry selection bg (block width).
@@ -1456,6 +1543,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         // 5-wide area; block lo=1, hi=20 → paint cols 1..=4 (rest clipped).
         let term = run_render(view, 5, 3);
@@ -1518,6 +1606,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 1);
         // Cols 0-1 ("fn"): narrow fg + broad bg.
@@ -1585,6 +1674,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 1);
         // Cols 0-5 ("hello "): broad bg only.
@@ -1641,6 +1731,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 1);
         for x in 0..6 {
@@ -1684,6 +1775,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // Width 4 = 3 number cells + 1 spacer; right-aligned "  1".
@@ -1735,6 +1827,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 5);
         // Width 4 = 3 number cells + 1 spacer.
@@ -1791,6 +1884,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // Row 0 (doc 0): offset from cursor row 1 → 1
@@ -1839,6 +1933,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // All gutter cells (0..4) on every row should be blank spaces.
@@ -1888,6 +1983,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 1);
         for x in 0..3 {
@@ -1938,6 +2034,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 1);
         // Cursor cell at (1, 0) is in the search match. Search wins.
@@ -1998,6 +2095,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 3);
         // Sign 'E' (higher priority) lands in the sign column at x=0.
@@ -2046,6 +2144,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 30, 1);
         // Cells 0..=3: "see "
@@ -2092,6 +2191,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            eol_hints: &[],
         };
         let term = run_render(view, 30, 5);
         // Row 0: "a" — normal line, no fold bg.
@@ -2149,6 +2249,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 5, 3);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "a");
@@ -2188,6 +2289,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 4, 1);
         assert_eq!(term.cell((0, 0)).unwrap().symbol(), "d");
@@ -2227,6 +2329,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            eol_hints: &[],
         }
     }
 
@@ -2430,6 +2533,7 @@ mod tests {
             indent_guide_fg: Color::Reset,
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
+            eol_hints: &[],
         }
     }
 
@@ -2609,6 +2713,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 10);
         // Rows 0-4 have content — first cell should NOT be `~`.
@@ -2680,6 +2785,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 5);
         // Rows 2-4 are past EOF.
@@ -2743,6 +2849,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 2);
 
@@ -2808,6 +2915,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
@@ -2870,6 +2978,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 2);
         // Sign column (x=0) must contain the sign char '~'.
@@ -2945,6 +3054,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 10, 1);
         // No sign column: x=0 must be a number digit or space, NOT 'E'.
@@ -3000,6 +3110,7 @@ mod tests {
             indent_guide_fg: guide_fg,
             indent_guide_active_fg: active_fg,
             indent_guide_active_col: active_col,
+            eol_hints: &[],
         }
     }
 
@@ -3035,6 +3146,7 @@ mod tests {
             indent_guide_active_fg: Color::Gray,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            eol_hints: &[],
         };
         let term = run_render(view, 20, 2);
         // No cell should contain '│' anywhere.
@@ -3176,6 +3288,62 @@ mod tests {
             term.cell((4, 0)).unwrap().symbol(),
             ":",
             "custom guide char ':' at col 4"
+        );
+    }
+
+    #[test]
+    fn eol_hint_paints_after_text() {
+        // Buffer with line "ab". EolHint{row:0, text:"BLAME"} must paint the
+        // 5 chars "BLAME" somewhere to the right of "ab" on screen row 0.
+        let b = Buffer::from_str("ab");
+        let v = vp(30, 1);
+        let hint = EolHint {
+            row: 0,
+            text: "BLAME".into(),
+            style: Style::default(),
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            fold_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default(),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            eol_hints: &[hint],
+        };
+        let term = run_render(view, 30, 1);
+        // "ab" is at x=0 and x=1; hint starts at x = 2 + 2 (gap) = 4.
+        // Scan row 0 for the substring "BLAME".
+        let row_text: String = (0..30u16)
+            .map(|x| {
+                term.cell((x, 0))
+                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                    .unwrap_or(' ')
+            })
+            .collect();
+        assert!(
+            row_text.contains("BLAME"),
+            "expected 'BLAME' to appear in row 0, got: {row_text:?}"
         );
     }
 

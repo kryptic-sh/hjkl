@@ -837,6 +837,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         indent_guide_fg: app.theme.ui.indent_guide_fg,
         indent_guide_active_fg: app.theme.ui.indent_guide_active_fg,
         indent_guide_active_col,
+        // #202 P4: inline blame EOL hints. Populated in P5 (cursor-line only,
+        // gated on `blame_inline` + idle); empty until then.
+        eol_hints: &[],
     };
     frame.render_widget(view, area);
 
