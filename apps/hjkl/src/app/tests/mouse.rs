@@ -1042,6 +1042,53 @@ mod border_drag_tests {
         );
     }
 
+    /// #114 P6/P10 (#115): right-click on a gutter line with a git change opens
+    /// a context menu offering Stage / Revert / Show Hunk.
+    #[test]
+    fn gutter_right_click_with_git_hunk_offers_hunk_actions() {
+        use crate::menu::MenuAction;
+        use hjkl_buffer_tui::Sign;
+        use ratatui::style::Style;
+
+        let mut app = make_app_with_window(
+            "line0\nline1\nline2\nline3\nline4",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        // Inject a git change sign on doc row 1.
+        app.slots_mut()[0].git_signs.push(Sign {
+            row: 1,
+            ch: '~',
+            style: Style::default(),
+            priority: 50,
+        });
+
+        // Right-click the gutter (col 0) on screen row 1 (= doc row 1).
+        app.handle_mouse(right_down(0, 1));
+
+        let menu = app
+            .context_menu
+            .as_ref()
+            .expect("right-click on a git-change gutter row must open a menu");
+        assert!(
+            menu.items
+                .iter()
+                .any(|it| it.action == MenuAction::GitStageHunk),
+            "git-hunk gutter menu must offer Stage Hunk"
+        );
+        assert!(
+            menu.items
+                .iter()
+                .any(|it| it.action == MenuAction::GitRevertHunk),
+            "git-hunk gutter menu must offer Revert Hunk"
+        );
+        assert!(
+            menu.items
+                .iter()
+                .any(|it| it.action == MenuAction::GitShowHunk),
+            "git-hunk gutter menu must offer Show Hunk Diff"
+        );
+    }
+
     #[test]
     fn gutter_click_without_fold_is_noop() {
         let mut app = make_app_with_window(

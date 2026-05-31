@@ -54,6 +54,13 @@ pub enum MenuAction {
     // ── Gutter / diagnostic menu ───────────────────────────────────────────
     /// Show the diagnostic(s) on the line under the pointer (#114 P6).
     DiagnosticDetail,
+    // ── Gutter / git-hunk menu (#114 P6/P10, #115) ──────────────────────────
+    /// Stage the git hunk under the pointer into the index.
+    GitStageHunk,
+    /// Revert the git hunk under the pointer, restoring HEAD.
+    GitRevertHunk,
+    /// Show the git hunk under the pointer in a popup.
+    GitShowHunk,
     // ── Status-line menu ───────────────────────────────────────────────────
     /// Restart the LSP server for the current buffer.
     LspRestart,
@@ -181,6 +188,18 @@ impl MenuAction {
                 handler(MenuActionKind::DiagnosticDetail);
                 true
             }
+            MenuAction::GitStageHunk => {
+                handler(MenuActionKind::GitStageHunk);
+                true
+            }
+            MenuAction::GitRevertHunk => {
+                handler(MenuActionKind::GitRevertHunk);
+                true
+            }
+            MenuAction::GitShowHunk => {
+                handler(MenuActionKind::GitShowHunk);
+                true
+            }
             MenuAction::LspRestart => {
                 handler(MenuActionKind::LspRestart);
                 true
@@ -257,6 +276,10 @@ pub enum MenuActionKind {
     LspFormat,
     // ── Gutter / diagnostic menu ───────────────────────────────────────────
     DiagnosticDetail,
+    // ── Gutter / git-hunk menu ──────────────────────────────────────────────
+    GitStageHunk,
+    GitRevertHunk,
+    GitShowHunk,
     // ── Status-line menu ───────────────────────────────────────────────────
     LspRestart,
     OpenFilePicker,
@@ -623,12 +646,12 @@ pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
 /// use hjkl_menu::{build_gutter_menu, MenuAction};
 ///
 /// // Diagnostic present + LSP attached → leads with Show Diagnostic.
-/// let items = build_gutter_menu(true, true, false);
+/// let items = build_gutter_menu(true, false, true, false);
 /// assert_eq!(items[0].action, MenuAction::DiagnosticDetail);
 /// assert!(items.iter().any(|it| it.action == MenuAction::LspCodeActions && it.enabled));
 ///
 /// // No diagnostic on the line → plain Code menu (no DiagnosticDetail row).
-/// let plain = build_gutter_menu(false, true, false);
+/// let plain = build_gutter_menu(false, false, true, false);
 /// assert!(!plain.iter().any(|it| it.action == MenuAction::DiagnosticDetail));
 /// ```
 pub fn build_gutter_menu(has_diag: bool, has_lsp: bool, has_sel: bool) -> Vec<MenuItem> {
@@ -1138,7 +1161,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_with_diag_leads_with_diagnostic_detail() {
-        let items = build_gutter_menu(true, true, false);
+        let items = build_gutter_menu(true, false, true, false);
         assert_eq!(
             items[0].action,
             MenuAction::DiagnosticDetail,
@@ -1160,7 +1183,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_code_actions_disabled_without_lsp() {
-        let items = build_gutter_menu(true, false, false);
+        let items = build_gutter_menu(true, false, false, false);
         let ca = items
             .iter()
             .find(|it| it.action == MenuAction::LspCodeActions)
@@ -1170,7 +1193,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_without_diag_is_plain_code_menu() {
-        let gutter = build_gutter_menu(false, true, false);
+        let gutter = build_gutter_menu(false, false, true, false);
         let code = build_code_menu(false, true);
         let g: Vec<&MenuAction> = gutter.iter().map(|it| &it.action).collect();
         let c: Vec<&MenuAction> = code.iter().map(|it| &it.action).collect();

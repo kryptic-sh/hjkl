@@ -1120,11 +1120,11 @@ impl App {
                         );
                         build_code_menu(has_sel, self.active_has_lsp())
                     }
-                    // ── Phase 6: gutter / sign-column menu ─────────
-                    // A diagnostic on the clicked line leads with
-                    // Show Diagnostic + Code Actions (wired to #116);
+                    // ── Phase 6/10: gutter / sign-column menu ──────
+                    // A diagnostic on the clicked line leads with Show
+                    // Diagnostic + Code Actions (#116); a git change on
+                    // the line adds Stage / Revert / Show Hunk (#115);
                     // otherwise this falls through to the Code menu.
-                    // The git hunk half waits on #115.
                     mouse::Zone::Gutter { doc_row, .. } => {
                         self.move_cursor_for_right_click(me.column, me.row);
                         let has_sel = matches!(
@@ -1132,7 +1132,13 @@ impl App {
                             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
                         );
                         let has_diag = self.diagnostic_on_row(doc_row);
-                        crate::menu::build_gutter_menu(has_diag, self.active_has_lsp(), has_sel)
+                        let has_git_hunk = self.active().git_signs.iter().any(|s| s.row == doc_row);
+                        crate::menu::build_gutter_menu(
+                            has_diag,
+                            has_git_hunk,
+                            self.active_has_lsp(),
+                            has_sel,
+                        )
                     }
                     mouse::Zone::TabBar { tab_idx } => {
                         // Switch to the clicked tab first so that
