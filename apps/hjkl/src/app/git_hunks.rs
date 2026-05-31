@@ -208,6 +208,99 @@ impl App {
     }
 }
 
+/// One blame-column entry, aligned to a visible screen row. `text` is empty for
+/// continuation rows (same commit as the row above) so only the FIRST line of
+/// each contiguous commit run is labeled. Uncommitted rows render their own
+/// label every time they start a run.
+// wired in P2 (blame column render)
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BlameColumnRow {
+    pub text: String,
+    pub is_uncommitted: bool,
+}
+
+/// Format a commit time for the blame column. Within 8 hours of `now` (both
+/// unix seconds, UTC), show a coarse relative label ("just now", "5m", "3h");
+/// at 8 hours or older, fall back to the absolute ISO date `YYYY-MM-DD`.
+/// `now < time_unix` (clock skew / future commit) also falls back to ISO.
+// wired in P2 (blame column render)
+#[allow(dead_code)]
+fn format_blame_time(time_unix: i64, now: i64) -> String {
+    const EIGHT_HOURS: i64 = 8 * 3600;
+    let delta = now - time_unix;
+    if !(0..EIGHT_HOURS).contains(&delta) {
+        return format_blame_date(time_unix);
+    }
+    if delta < 60 {
+        "just now".to_string()
+    } else if delta < 3600 {
+        format!("{}m", delta / 60)
+    } else {
+        format!("{}h", delta / 3600)
+    }
+}
+
+/// Build per-visible-row blame-column labels. `visible_doc_rows[i]` is the
+/// 0-based document row shown on screen row `i` (caller computes this fold-aware;
+/// pass `usize::MAX` for screen rows past EOF / blank — those get an empty entry).
+/// `blame[doc_row]` is the attribution (None when unavailable). A row is labeled
+/// only when its commit hash differs from the immediately preceding visible row's
+/// commit (viewport-local comparison). For `i == 0` the row is always labeled.
+/// Label text = `"{author} · {time}"` truncated to `width` display columns (chars).
+// wired in P2 (blame column render)
+#[allow(dead_code)]
+pub(crate) fn build_blame_column(
+    blame: &[Option<git::BlameInfo>],
+    visible_doc_rows: &[usize],
+    now: i64,
+    width: usize,
+) -> Vec<BlameColumnRow> {
+    let mut out = Vec::with_capacity(visible_doc_rows.len());
+    for (i, &dr) in visible_doc_rows.iter().enumerate() {
+        if dr == usize::MAX || dr >= blame.len() || blame[dr].is_none() {
+            out.push(BlameColumnRow {
+                text: String::new(),
+                is_uncommitted: false,
+            });
+            continue;
+        }
+        let info = blame[dr].as_ref().unwrap();
+        // Compare against the immediately preceding visible row's commit.
+        let above = i
+            .checked_sub(1)
+            .and_then(|j| visible_doc_rows.get(j))
+            .and_then(|&d| blame.get(d))
+            .and_then(|o| o.as_ref());
+        let same = above.map(|a| a.commit == info.commit).unwrap_or(false);
+        if same {
+            out.push(BlameColumnRow {
+                text: String::new(),
+                is_uncommitted: info.is_uncommitted,
+            });
+        } else {
+            let raw = format!(
+                "{} · {}",
+                info.author,
+                format_blame_time(info.time_unix, now)
+            );
+            let text = if width == 0 {
+                String::new()
+            } else if raw.chars().count() > width {
+                let truncated: String = raw.chars().take(width - 1).collect();
+                format!("{truncated}…")
+            } else {
+                raw
+            };
+            out.push(BlameColumnRow {
+                text,
+                is_uncommitted: info.is_uncommitted,
+            });
+        }
+    }
+    out
+}
+
 /// Format a unix timestamp (seconds, UTC) as `YYYY-MM-DD`. Self-contained
 /// civil-date conversion (Howard Hinnant's algorithm) — no chrono/time dep.
 fn format_blame_date(time_unix: i64) -> String {
@@ -227,10 +320,106 @@ fn format_blame_date(time_unix: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::format_blame_date;
+    use super::{build_blame_column, format_blame_date, format_blame_time};
+    use hjkl_app::git::BlameInfo;
+
+    fn make_info(commit: &str, author: &str, time_unix: i64) -> BlameInfo {
+        BlameInfo {
+            commit: commit.to_string(),
+            author: author.to_string(),
+            time_unix,
+            summary: "test commit".to_string(),
+            is_uncommitted: false,
+        }
+    }
+
     #[test]
     fn format_blame_date_known_epochs() {
         assert_eq!(format_blame_date(0), "1970-01-01");
         assert_eq!(format_blame_date(1_700_000_000), "2023-11-14");
+    }
+
+    #[test]
+    fn format_blame_time_relative_and_iso() {
+        let now: i64 = 1_700_000_000;
+        assert_eq!(format_blame_time(now, now), "just now");
+        assert_eq!(format_blame_time(now - 120, now), "2m");
+        assert_eq!(format_blame_time(now - 7200, now), "2h");
+        assert_eq!(
+            format_blame_time(now - 8 * 3600, now),
+            format_blame_date(now - 8 * 3600)
+        );
+        // future commit → ISO
+        assert_eq!(
+            format_blame_time(now + 100, now),
+            format_blame_date(now + 100)
+        );
+    }
+
+    #[test]
+    fn build_blame_column_collapses_runs() {
+        let now: i64 = 1_700_000_000;
+        let blame: Vec<Option<BlameInfo>> = vec![
+            Some(make_info("aaaaaaa", "alice", now - 3600)),
+            Some(make_info("aaaaaaa", "alice", now - 3600)),
+            Some(make_info("bbbbbbb", "bob", now - 7200)),
+            Some(make_info("bbbbbbb", "bob", now - 7200)),
+        ];
+        let visible = vec![0usize, 1, 2, 3];
+        let result = build_blame_column(&blame, &visible, now, 40);
+        assert_eq!(result.len(), 4);
+        assert!(
+            result[0].text.starts_with("alice"),
+            "row0={:?}",
+            result[0].text
+        );
+        assert!(
+            result[1].text.is_empty(),
+            "row1 should be blank, got {:?}",
+            result[1].text
+        );
+        assert!(
+            result[2].text.starts_with("bob"),
+            "row2={:?}",
+            result[2].text
+        );
+        assert!(
+            result[3].text.is_empty(),
+            "row3 should be blank, got {:?}",
+            result[3].text
+        );
+    }
+
+    #[test]
+    fn build_blame_column_blank_for_eof_and_none() {
+        let now: i64 = 1_700_000_000;
+        let blame: Vec<Option<BlameInfo>> = vec![Some(make_info("aaaaaaa", "alice", now - 60))];
+        let visible = vec![0usize, usize::MAX];
+        let result = build_blame_column(&blame, &visible, now, 40);
+        assert_eq!(result.len(), 2);
+        assert!(!result[0].text.is_empty());
+        assert!(result[1].text.is_empty());
+    }
+
+    #[test]
+    fn build_blame_column_truncates() {
+        let now: i64 = 1_700_000_000;
+        // Author name long enough to exceed width=10 when combined with time.
+        let blame: Vec<Option<BlameInfo>> =
+            vec![Some(make_info("aaaaaaa", "averylongauthorname", now - 60))];
+        let visible = vec![0usize];
+        let result = build_blame_column(&blame, &visible, now, 10);
+        assert_eq!(result.len(), 1);
+        let char_count = result[0].text.chars().count();
+        assert!(
+            char_count <= 10,
+            "expected <=10 chars, got {char_count}: {:?}",
+            result[0].text
+        );
+        assert!(
+            result[0].text.ends_with('…'),
+            "expected trailing ellipsis: {:?}",
+            result[0].text
+        );
     }
 }
