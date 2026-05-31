@@ -1042,53 +1042,147 @@ mod border_drag_tests {
         );
     }
 
-    /// #114 P6/P10 (#115): right-click on a gutter line with a git change opens
-    /// a context menu offering Stage / Revert / Show Hunk.
+    /// #114 P6/P10 (#115): the gutter menu reflects *real* git state via
+    /// `git_hunk_kind_at_row`. With no repo behind the file there is no hunk, so
+    /// a right-click falls back to the plain Code menu — no git items, no panic.
+    /// The git-items paths need a real repo and are covered by the ignored
+    /// integration tests below.
     #[test]
-    fn gutter_right_click_with_git_hunk_offers_hunk_actions() {
+    fn gutter_right_click_no_repo_falls_back_to_code_menu() {
         use crate::menu::MenuAction;
-        use hjkl_buffer_tui::Sign;
-        use ratatui::style::Style;
 
         let mut app = make_app_with_window(
             "line0\nline1\nline2\nline3\nline4",
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
-        // Give the slot a filename so the right-click git-signs refresh submits
-        // an async job rather than clearing `git_signs` (the no-name path).
-        app.slots_mut()[0].filename = Some(std::path::PathBuf::from("/tmp/hjkl_gh_test.txt"));
-        // Inject a git change sign on doc row 1.
-        app.slots_mut()[0].git_signs.push(Sign {
-            row: 1,
-            ch: '~',
-            style: Style::default(),
-            priority: 50,
-        });
+        app.slots_mut()[0].filename = Some(std::path::PathBuf::from("/tmp/hjkl_no_repo_menu.txt"));
 
-        // Right-click the gutter (col 0) on screen row 1 (= doc row 1).
         app.handle_mouse(right_down(0, 1));
 
         let menu = app
             .context_menu
             .as_ref()
-            .expect("right-click on a git-change gutter row must open a menu");
+            .expect("right-click in the gutter must open a menu");
+        assert!(
+            !menu
+                .items
+                .iter()
+                .any(|it| it.action == MenuAction::GitStageHunk
+                    || it.action == MenuAction::GitUnstageHunk),
+            "no repo → no git items in the gutter menu"
+        );
+        assert!(
+            menu.items.iter().any(|it| it.action == MenuAction::Paste),
+            "gutter menu must still fall back to the Code actions"
+        );
+    }
+
+    /// #115: right-click on an *unstaged* hunk offers Stage / Revert / Show.
+    /// Integration: real repo + git subprocess (same flake class as git.rs).
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn gutter_right_click_unstaged_hunk_offers_stage() {
+        use crate::menu::MenuAction;
+        use std::process::Command;
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .expect("git")
+                    .success(),
+                "git {args:?} failed"
+            );
+        }
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("h.txt");
+        std::fs::write(&f, "a\nb\nc\nd\ne\n").unwrap();
+        git(tmp.path(), &["add", "h.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Buffer differs from HEAD/index on row 1 → unstaged hunk at row 1.
+        let mut app =
+            make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.slots_mut()[0].filename = Some(f.clone());
+
+        app.handle_mouse(right_down(0, 1));
+
+        let menu = app.context_menu.as_ref().expect("menu must open");
         assert!(
             menu.items
                 .iter()
                 .any(|it| it.action == MenuAction::GitStageHunk),
-            "git-hunk gutter menu must offer Stage Hunk"
+            "unstaged hunk must offer Stage Hunk"
         );
         assert!(
             menu.items
                 .iter()
                 .any(|it| it.action == MenuAction::GitRevertHunk),
-            "git-hunk gutter menu must offer Revert Hunk"
+            "unstaged hunk must offer Revert Hunk"
         );
+        assert!(
+            !menu
+                .items
+                .iter()
+                .any(|it| it.action == MenuAction::GitUnstageHunk),
+            "unstaged hunk must not offer Unstage"
+        );
+    }
+
+    /// #115: after staging a hunk, right-click on it offers Unstage (not Stage).
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn gutter_right_click_staged_hunk_offers_unstage() {
+        use crate::menu::MenuAction;
+        use std::process::Command;
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(dir)
+                    .status()
+                    .expect("git")
+                    .success(),
+                "git {args:?} failed"
+            );
+        }
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("h.txt");
+        std::fs::write(&f, "a\nb\nc\nd\ne\n").unwrap();
+        git(tmp.path(), &["add", "h.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Modify on disk, stage it: now HEAD↔index differs but index==worktree.
+        std::fs::write(&f, "a\nB\nc\nd\ne\n").unwrap();
+        git(tmp.path(), &["add", "h.txt"]);
+
+        // Buffer matches the staged worktree content → row 1 is a *staged* hunk.
+        let mut app =
+            make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.slots_mut()[0].filename = Some(f.clone());
+
+        app.handle_mouse(right_down(0, 1));
+
+        let menu = app.context_menu.as_ref().expect("menu must open");
         assert!(
             menu.items
                 .iter()
-                .any(|it| it.action == MenuAction::GitShowHunk),
-            "git-hunk gutter menu must offer Show Hunk Diff"
+                .any(|it| it.action == MenuAction::GitUnstageHunk),
+            "staged hunk must offer Unstage Hunk"
+        );
+        assert!(
+            !menu
+                .items
+                .iter()
+                .any(|it| it.action == MenuAction::GitStageHunk),
+            "staged hunk must not offer Stage"
         );
     }
 

@@ -1136,10 +1136,10 @@ impl App {
                             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
                         );
                         let has_diag = self.diagnostic_on_row(doc_row);
-                        let has_git_hunk = self.active().git_signs.iter().any(|s| s.row == doc_row);
+                        let git_kind = self.git_hunk_kind_at_row(doc_row);
                         crate::menu::build_gutter_menu(
                             has_diag,
-                            has_git_hunk,
+                            git_kind,
                             self.active_has_lsp(),
                             has_sel,
                         )

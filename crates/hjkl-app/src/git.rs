@@ -25,6 +25,10 @@ use git2::{DiffOptions, ErrorCode, Patch, Repository};
 pub struct GitChange {
     pub row: usize,
     pub kind: GitChangeKind,
+    /// `true` when this change lives in the index (HEAD↔index — already
+    /// staged), `false` when it is a worktree/buffer change not yet staged
+    /// (index↔buffer). Hosts render staged rows with a distinct gutter glyph.
+    pub staged: bool,
 }
 
 /// The kind of change on a given row.
@@ -46,50 +50,63 @@ pub fn changes_for_bytes(path: &Path, current: &[u8]) -> Vec<GitChange> {
     try_changes_with_bytes(path, current).unwrap_or_default()
 }
 
-fn try_changes_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<GitChange>, git2::Error> {
-    // Canonicalize first so relative single-component paths (e.g.
-    // `.gitignore`) don't yield an empty parent — Path::new("foo").parent()
-    // returns Some("") not None, which Repository::discover rejects.
+/// Resolve `path` to `(repo, workdir_relative_path)`, canonicalizing first so
+/// relative single-component paths (e.g. `.gitignore`) don't yield an empty
+/// parent — `Path::new("foo").parent()` returns `Some("")` not `None`, which
+/// `Repository::discover` rejects.
+fn open_repo_for(path: &Path) -> Result<(Repository, std::path::PathBuf), git2::Error> {
     let canon_path = path
         .canonicalize()
         .map_err(|e| git2::Error::from_str(&e.to_string()))?;
     let parent = canon_path.parent().unwrap_or(Path::new("."));
     let repo = Repository::discover(parent)?;
-    let workdir = repo
-        .workdir()
-        .ok_or_else(|| git2::Error::from_str("bare repo has no workdir"))?;
-    let rel = canon_path
-        .strip_prefix(
-            workdir
-                .canonicalize()
-                .map_err(|e| git2::Error::from_str(&e.to_string()))?,
-        )
-        .map_err(|_| git2::Error::from_str("path outside repo workdir"))?
-        .to_path_buf();
+    let rel = {
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| git2::Error::from_str("bare repo has no workdir"))?;
+        canon_path
+            .strip_prefix(
+                workdir
+                    .canonicalize()
+                    .map_err(|e| git2::Error::from_str(&e.to_string()))?,
+            )
+            .map_err(|_| git2::Error::from_str("path outside repo workdir"))?
+            .to_path_buf()
+    };
+    Ok((repo, rel))
+}
 
-    // Untracked or no HEAD → no per-line changes (status line carries
-    // the `[Untracked]` tag instead; per-line `+` floods are noise).
+/// The blob for `rel` in the HEAD tree, or `None` when there is no HEAD
+/// (unborn branch / empty repo) or the path is not tracked in HEAD.
+fn head_blob<'r>(repo: &'r Repository, rel: &Path) -> Result<Option<git2::Blob<'r>>, git2::Error> {
     let head = match repo.head() {
         Ok(h) => h,
         Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         Err(e) => return Err(e),
     };
     let tree = head.peel_to_tree()?;
-    let entry = match tree.get_path(&rel) {
-        Ok(e) => e,
-        Err(e) if e.code() == ErrorCode::NotFound => {
-            return Ok(Vec::new());
-        }
-        Err(e) => return Err(e),
-    };
-    let blob = repo.find_blob(entry.id())?;
+    match tree.get_path(rel) {
+        Ok(entry) => Ok(Some(repo.find_blob(entry.id())?)),
+        Err(e) if e.code() == ErrorCode::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
 
-    let mut opts = DiffOptions::new();
-    opts.context_lines(0);
-    let patch = Patch::from_blob_and_buffer(&blob, None, current, None, Some(&mut opts))?;
+/// The blob for `rel` in the index (stage 0), or `None` when the path has no
+/// index entry (untracked, or a conflict with no stage-0 entry).
+fn index_blob<'r>(repo: &'r Repository, rel: &Path) -> Result<Option<git2::Blob<'r>>, git2::Error> {
+    let index = repo.index()?;
+    match index.get_path(rel, 0) {
+        Some(entry) => Ok(Some(repo.find_blob(entry.id)?)),
+        None => Ok(None),
+    }
+}
 
+/// Collect per-row [`GitChange`]s from a computed context-0 [`Patch`], tagging
+/// each with `staged`. Rows are in the patch's *new*-side coordinates.
+fn collect_row_changes(patch: &Patch, staged: bool) -> Result<Vec<GitChange>, git2::Error> {
     let mut changes = Vec::new();
     for h in 0..patch.num_hunks() {
         let (hunk, _) = patch.hunk(h)?;
@@ -98,16 +115,17 @@ fn try_changes_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<GitChange>,
         let old_lines = hunk.old_lines() as usize;
 
         if new_lines == 0 && old_lines > 0 {
-            let row = new_start.saturating_sub(1);
             changes.push(GitChange {
-                row,
+                row: new_start.saturating_sub(1),
                 kind: GitChangeKind::Delete,
+                staged,
             });
         } else if old_lines == 0 && new_lines > 0 {
             for i in 0..new_lines {
                 changes.push(GitChange {
                     row: (new_start + i).saturating_sub(1),
                     kind: GitChangeKind::Add,
+                    staged,
                 });
             }
         } else {
@@ -115,7 +133,56 @@ fn try_changes_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<GitChange>,
                 changes.push(GitChange {
                     row: (new_start + i).saturating_sub(1),
                     kind: GitChangeKind::Modify,
+                    staged,
                 });
+            }
+        }
+    }
+    Ok(changes)
+}
+
+/// Compute gutter changes split into **unstaged** (index↔buffer) and **staged**
+/// (HEAD↔index) sets.
+///
+/// When nothing is staged the index equals HEAD, so the staged set is empty and
+/// the unstaged set is exactly HEAD↔buffer — identical to the pre-staging
+/// behavior. Untracked / no-HEAD files yield an empty Vec (the `[Untracked]`
+/// status tag carries that signal; per-line `+` floods are noise).
+///
+/// Per-row dedup: when a row carries both a staged and an unstaged change (e.g.
+/// a line was staged then edited again), the **unstaged** change wins — that's
+/// what the user is actively looking at. Staged rows are attributed in index
+/// coordinates; with concurrent unstaged edits above them the mapping is
+/// approximate, which is acceptable for a gutter hint.
+fn try_changes_with_bytes(path: &Path, current: &[u8]) -> Result<Vec<GitChange>, git2::Error> {
+    let (repo, rel) = open_repo_for(path)?;
+
+    // Untracked or no HEAD → no per-line changes.
+    let Some(head_blob) = head_blob(&repo, &rel)? else {
+        return Ok(Vec::new());
+    };
+    let index_blob = index_blob(&repo, &rel)?;
+
+    // Unstaged: index (or HEAD when there's no index entry) ↔ buffer.
+    let unstaged_old = index_blob.as_ref().unwrap_or(&head_blob);
+    let mut opts = DiffOptions::new();
+    opts.context_lines(0);
+    let patch = Patch::from_blob_and_buffer(unstaged_old, None, current, None, Some(&mut opts))?;
+    let mut changes = collect_row_changes(&patch, false)?;
+
+    // Staged: HEAD ↔ index, only when the index differs from HEAD.
+    if let Some(idx) = index_blob.as_ref()
+        && idx.id() != head_blob.id()
+    {
+        let mut opts = DiffOptions::new();
+        opts.context_lines(0);
+        let patch = Patch::from_blobs(&head_blob, None, idx, None, Some(&mut opts))?;
+        let staged = collect_row_changes(&patch, true)?;
+        let unstaged_rows: std::collections::HashSet<usize> =
+            changes.iter().map(|c| c.row).collect();
+        for c in staged {
+            if !unstaged_rows.contains(&c.row) {
+                changes.push(c);
             }
         }
     }
@@ -261,6 +328,53 @@ pub fn hunk_at(hunks: &[Hunk], row: usize) -> Option<&Hunk> {
     hunks.iter().find(|h| h.new_row_range().contains(&row))
 }
 
+/// Unstaged hunks: index↔buffer (what `git add`/stage would move into the
+/// index). When nothing is staged the index equals HEAD, so this is identical
+/// to [`hunks_for_bytes`] (HEAD↔buffer). Use this for stage / revert / preview
+/// of the change the user is actively editing, since the patch is relative to
+/// the index and `git apply --cached` applies cleanly.
+pub fn unstaged_hunks_for_bytes(path: &Path, current: &[u8]) -> Vec<Hunk> {
+    try_unstaged_hunks(path, current).unwrap_or_default()
+}
+
+fn try_unstaged_hunks(path: &Path, current: &[u8]) -> Result<Vec<Hunk>, git2::Error> {
+    let (repo, rel) = open_repo_for(path)?;
+    let Some(head_blob) = head_blob(&repo, &rel)? else {
+        return Ok(Vec::new());
+    };
+    let index_blob = index_blob(&repo, &rel)?;
+    let old = index_blob.as_ref().unwrap_or(&head_blob);
+    let mut opts = DiffOptions::new();
+    opts.context_lines(3);
+    let patch = Patch::from_blob_and_buffer(old, None, current, None, Some(&mut opts))?;
+    Ok(hunks_from_patch(&patch))
+}
+
+/// Staged hunks: HEAD↔index (what is already staged and could be *unstaged*).
+/// Empty when the index matches HEAD. Row ranges are in index coordinates;
+/// when the staged region is unchanged in the buffer (the common case after
+/// staging without further edits) those rows line up with buffer rows.
+pub fn staged_hunks_for_path(path: &Path) -> Vec<Hunk> {
+    try_staged_hunks(path).unwrap_or_default()
+}
+
+fn try_staged_hunks(path: &Path) -> Result<Vec<Hunk>, git2::Error> {
+    let (repo, rel) = open_repo_for(path)?;
+    let Some(head_blob) = head_blob(&repo, &rel)? else {
+        return Ok(Vec::new());
+    };
+    let Some(index_blob) = index_blob(&repo, &rel)? else {
+        return Ok(Vec::new());
+    };
+    if index_blob.id() == head_blob.id() {
+        return Ok(Vec::new());
+    }
+    let mut opts = DiffOptions::new();
+    opts.context_lines(3);
+    let patch = Patch::from_blobs(&head_blob, None, &index_blob, None, Some(&mut opts))?;
+    Ok(hunks_from_patch(&patch))
+}
+
 // ---------------------------------------------------------------------------
 // Hunk stage / revert (#115 Phase 2) — mutate the index / worktree.
 // ---------------------------------------------------------------------------
@@ -335,11 +449,21 @@ pub fn stage_hunk(path: &Path, hunk: &Hunk) -> Result<(), HunkApplyError> {
 }
 
 /// Revert `hunk` in the worktree (`git apply --reverse`), discarding that
-/// change and restoring the HEAD/index version of those lines on disk.
+/// change and restoring the index version of those lines on disk. Pair with an
+/// unstaged hunk (index↔buffer) so the discard targets the index baseline.
 pub fn revert_hunk(path: &Path, hunk: &Hunk) -> Result<(), HunkApplyError> {
     let (workdir, rel) = resolve_in_repo(path)?;
     let patch = build_patch(&rel, hunk);
     run_git_apply(&workdir, &["apply", "--reverse", "-"], &patch)
+}
+
+/// Unstage `hunk` from the index (`git apply --cached --reverse`), moving that
+/// change back out of the index toward HEAD. Pair with a staged hunk
+/// (HEAD↔index). The worktree / buffer is untouched, so no save is required.
+pub fn unstage_hunk(path: &Path, hunk: &Hunk) -> Result<(), HunkApplyError> {
+    let (workdir, rel) = resolve_in_repo(path)?;
+    let patch = build_patch(&rel, hunk);
+    run_git_apply(&workdir, &["apply", "--cached", "--reverse", "-"], &patch)
 }
 
 /// Run `git <args>` in `cwd`, feeding `patch` on stdin.

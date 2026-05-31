@@ -57,7 +57,9 @@ pub enum MenuAction {
     // ── Gutter / git-hunk menu (#114 P6/P10, #115) ──────────────────────────
     /// Stage the git hunk under the pointer into the index.
     GitStageHunk,
-    /// Revert the git hunk under the pointer, restoring HEAD.
+    /// Unstage the git hunk under the pointer from the index.
+    GitUnstageHunk,
+    /// Revert the git hunk under the pointer, restoring the index baseline.
     GitRevertHunk,
     /// Show the git hunk under the pointer in a popup.
     GitShowHunk,
@@ -192,6 +194,10 @@ impl MenuAction {
                 handler(MenuActionKind::GitStageHunk);
                 true
             }
+            MenuAction::GitUnstageHunk => {
+                handler(MenuActionKind::GitUnstageHunk);
+                true
+            }
             MenuAction::GitRevertHunk => {
                 handler(MenuActionKind::GitRevertHunk);
                 true
@@ -278,6 +284,7 @@ pub enum MenuActionKind {
     DiagnosticDetail,
     // ── Gutter / git-hunk menu ──────────────────────────────────────────────
     GitStageHunk,
+    GitUnstageHunk,
     GitRevertHunk,
     GitShowHunk,
     // ── Status-line menu ───────────────────────────────────────────────────
@@ -629,39 +636,61 @@ pub fn build_code_menu(has_sel: bool, has_lsp: bool) -> Vec<MenuItem> {
     ]
 }
 
+/// Which git-hunk state, if any, is under the gutter pointer. Drives whether the
+/// gutter menu offers stage/revert (unstaged) or unstage (already staged).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GitHunkKind {
+    /// No git hunk on this line.
+    #[default]
+    None,
+    /// An unstaged change (index↔buffer) — stageable / revertable.
+    Unstaged,
+    /// A staged change (HEAD↔index) — unstageable.
+    Staged,
+}
+
 /// Build the context menu for a right-click in the gutter / sign column
-/// (#114 P6).
+/// (#114 P6/P10, #115).
 ///
 /// When a diagnostic sign is present on the clicked line (`has_diag`), the
 /// menu leads with diagnostic-aware entries — "Show Diagnostic" (always usable
 /// when a diagnostic is present) and "Code Actions" (enabled only when a
-/// language server is attached, since quick-fixes come from the server). Below
-/// a separator it falls through to the same Code-zone actions so the gutter is
-/// never a dead-end.
+/// language server is attached, since quick-fixes come from the server).
 ///
-/// The git half of this menu (stage / revert / preview hunk) is intentionally
-/// omitted until #115 lands; this builder covers only the diagnostic surface.
+/// The git section adapts to `git`: an [`GitHunkKind::Unstaged`] change offers
+/// Stage / Revert / Show Hunk Diff; a [`GitHunkKind::Staged`] change offers
+/// Unstage / Show Hunk Diff. Below a separator it falls through to the same
+/// Code-zone actions so the gutter is never a dead-end.
 ///
 /// ```rust
-/// use hjkl_menu::{build_gutter_menu, MenuAction};
+/// use hjkl_menu::{build_gutter_menu, GitHunkKind, MenuAction};
 ///
 /// // Diagnostic present + LSP attached → leads with Show Diagnostic.
-/// let items = build_gutter_menu(true, false, true, false);
+/// let items = build_gutter_menu(true, GitHunkKind::None, true, false);
 /// assert_eq!(items[0].action, MenuAction::DiagnosticDetail);
-/// assert!(items.iter().any(|it| it.action == MenuAction::LspCodeActions && it.enabled));
 ///
-/// // No diagnostic on the line → plain Code menu (no DiagnosticDetail row).
-/// let plain = build_gutter_menu(false, false, true, false);
+/// // Unstaged hunk → Stage / Revert offered.
+/// let un = build_gutter_menu(false, GitHunkKind::Unstaged, false, false);
+/// assert!(un.iter().any(|it| it.action == MenuAction::GitStageHunk));
+/// assert!(un.iter().any(|it| it.action == MenuAction::GitRevertHunk));
+///
+/// // Staged hunk → Unstage offered, no Stage/Revert.
+/// let st = build_gutter_menu(false, GitHunkKind::Staged, false, false);
+/// assert!(st.iter().any(|it| it.action == MenuAction::GitUnstageHunk));
+/// assert!(!st.iter().any(|it| it.action == MenuAction::GitStageHunk));
+///
+/// // Nothing gutter-specific → plain Code menu.
+/// let plain = build_gutter_menu(false, GitHunkKind::None, true, false);
 /// assert!(!plain.iter().any(|it| it.action == MenuAction::DiagnosticDetail));
 /// ```
 pub fn build_gutter_menu(
     has_diag: bool,
-    has_git_hunk: bool,
+    git: GitHunkKind,
     has_lsp: bool,
     has_sel: bool,
 ) -> Vec<MenuItem> {
     // Nothing gutter-specific on this line → reuse the Code menu verbatim.
-    if !has_diag && !has_git_hunk {
+    if !has_diag && git == GitHunkKind::None {
         return build_code_menu(has_sel, has_lsp);
     }
 
@@ -683,24 +712,40 @@ pub fn build_gutter_menu(
         items.push(MenuItem::separator());
     }
 
-    // Git-hunk entries when a git change is on the line (#114 P6/P10, #115).
-    if has_git_hunk {
-        items.push(MenuItem::new(
-            "Stage Hunk",
-            MenuAction::GitStageHunk,
-            Some(":GitStage".into()),
-        ));
-        items.push(MenuItem::new(
-            "Revert Hunk",
-            MenuAction::GitRevertHunk,
-            Some(":GitRevert".into()),
-        ));
-        items.push(MenuItem::new(
-            "Show Hunk Diff",
-            MenuAction::GitShowHunk,
-            Some(":GitDiff".into()),
-        ));
-        items.push(MenuItem::separator());
+    // Git-hunk entries adapt to staged state (#114 P6/P10, #115).
+    match git {
+        GitHunkKind::Unstaged => {
+            items.push(MenuItem::new(
+                "Stage Hunk",
+                MenuAction::GitStageHunk,
+                Some(":GitStage".into()),
+            ));
+            items.push(MenuItem::new(
+                "Revert Hunk",
+                MenuAction::GitRevertHunk,
+                Some(":GitRevert".into()),
+            ));
+            items.push(MenuItem::new(
+                "Show Hunk Diff",
+                MenuAction::GitShowHunk,
+                Some(":GitDiff".into()),
+            ));
+            items.push(MenuItem::separator());
+        }
+        GitHunkKind::Staged => {
+            items.push(MenuItem::new(
+                "Unstage Hunk",
+                MenuAction::GitUnstageHunk,
+                Some(":GitUnstage".into()),
+            ));
+            items.push(MenuItem::new(
+                "Show Hunk Diff",
+                MenuAction::GitShowHunk,
+                Some(":GitDiff".into()),
+            ));
+            items.push(MenuItem::separator());
+        }
+        GitHunkKind::None => {}
     }
 
     // Append the standard Code-zone actions so navigation / clipboard / format
@@ -1189,7 +1234,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_with_diag_leads_with_diagnostic_detail() {
-        let items = build_gutter_menu(true, false, true, false);
+        let items = build_gutter_menu(true, GitHunkKind::None, true, false);
         assert_eq!(
             items[0].action,
             MenuAction::DiagnosticDetail,
@@ -1211,7 +1256,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_code_actions_disabled_without_lsp() {
-        let items = build_gutter_menu(true, false, false, false);
+        let items = build_gutter_menu(true, GitHunkKind::None, false, false);
         let ca = items
             .iter()
             .find(|it| it.action == MenuAction::LspCodeActions)
@@ -1221,7 +1266,7 @@ mod tests {
 
     #[test]
     fn build_gutter_menu_without_diag_is_plain_code_menu() {
-        let gutter = build_gutter_menu(false, false, true, false);
+        let gutter = build_gutter_menu(false, GitHunkKind::None, true, false);
         let code = build_code_menu(false, true);
         let g: Vec<&MenuAction> = gutter.iter().map(|it| &it.action).collect();
         let c: Vec<&MenuAction> = code.iter().map(|it| &it.action).collect();
@@ -1232,6 +1277,56 @@ mod tests {
                 .any(|it| it.action == MenuAction::DiagnosticDetail),
             "no DiagnosticDetail row when the line has no diagnostic"
         );
+    }
+
+    #[test]
+    fn build_gutter_menu_unstaged_offers_stage_and_revert() {
+        let items = build_gutter_menu(false, GitHunkKind::Unstaged, false, false);
+        assert!(items.iter().any(|it| it.action == MenuAction::GitStageHunk));
+        assert!(
+            items
+                .iter()
+                .any(|it| it.action == MenuAction::GitRevertHunk)
+        );
+        assert!(items.iter().any(|it| it.action == MenuAction::GitShowHunk));
+        assert!(
+            !items
+                .iter()
+                .any(|it| it.action == MenuAction::GitUnstageHunk),
+            "unstaged hunk must not offer Unstage"
+        );
+    }
+
+    #[test]
+    fn build_gutter_menu_staged_offers_unstage_only() {
+        let items = build_gutter_menu(false, GitHunkKind::Staged, false, false);
+        assert!(
+            items
+                .iter()
+                .any(|it| it.action == MenuAction::GitUnstageHunk)
+        );
+        assert!(items.iter().any(|it| it.action == MenuAction::GitShowHunk));
+        assert!(
+            !items.iter().any(|it| it.action == MenuAction::GitStageHunk),
+            "staged hunk must not offer Stage"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|it| it.action == MenuAction::GitRevertHunk),
+            "staged hunk must not offer Revert (use Unstage)"
+        );
+    }
+
+    #[test]
+    fn git_unstage_hunk_dispatches_to_kind() {
+        let mut hit = false;
+        let handled = MenuAction::GitUnstageHunk.dispatch(|kind| {
+            if let MenuActionKind::GitUnstageHunk = kind {
+                hit = true;
+            }
+        });
+        assert!(handled && hit, "GitUnstageHunk must dispatch to its kind");
     }
 
     #[test]

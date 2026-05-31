@@ -33,37 +33,68 @@ impl App {
         bytes
     }
 
-    /// Compute the hunk covering `row` for the active buffer, if any.
+    /// Compute the **unstaged** hunk (index↔buffer) covering `row`, if any.
     /// Returns `(path, hunk)` so callers can act without re-resolving.
-    fn hunk_at_row(&self, row: usize) -> Option<(std::path::PathBuf, git::Hunk)> {
+    fn unstaged_hunk_at_row(&self, row: usize) -> Option<(std::path::PathBuf, git::Hunk)> {
         let path = self.active().filename.clone()?;
         let bytes = self.active_buffer_git_bytes();
-        let hunks = git::hunks_for_bytes(&path, &bytes);
+        let hunks = git::unstaged_hunks_for_bytes(&path, &bytes);
         git::hunk_at(&hunks, row).cloned().map(|h| (path, h))
     }
 
-    /// Compute the hunk under the cursor for the active buffer, if any.
-    /// Returns `(path, hunk)` so callers can act without re-resolving.
-    fn hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
-        let row = self.active().editor.cursor().0;
-        self.hunk_at_row(row)
+    /// Compute the **staged** hunk (HEAD↔index) covering `row`, if any.
+    fn staged_hunk_at_row(&self, row: usize) -> Option<(std::path::PathBuf, git::Hunk)> {
+        let path = self.active().filename.clone()?;
+        let hunks = git::staged_hunks_for_path(&path);
+        git::hunk_at(&hunks, row).cloned().map(|h| (path, h))
+    }
+
+    /// The unstaged hunk under the cursor, if any.
+    fn unstaged_hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
+        self.unstaged_hunk_at_row(self.active().editor.cursor().0)
+    }
+
+    /// The staged hunk under the cursor, if any.
+    fn staged_hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
+        self.staged_hunk_at_row(self.active().editor.cursor().0)
+    }
+
+    /// Classify the git change covering `row` for the active buffer. Unstaged
+    /// (index↔buffer) takes priority over staged (HEAD↔index) so a row with
+    /// fresh edits reads as still-unstaged. Drives the adaptive gutter menu.
+    pub(crate) fn git_hunk_kind_at_row(&self, row: usize) -> crate::menu::GitHunkKind {
+        if self.unstaged_hunk_at_row(row).is_some() {
+            crate::menu::GitHunkKind::Unstaged
+        } else if self.staged_hunk_at_row(row).is_some() {
+            crate::menu::GitHunkKind::Staged
+        } else {
+            crate::menu::GitHunkKind::None
+        }
+    }
+
+    /// Show `hunk` in a read-only info popup, titled by staged state.
+    fn show_hunk_popup(&mut self, hunk: &git::Hunk, staged: bool) {
+        let title = if staged {
+            "git hunk (staged)"
+        } else {
+            "git hunk"
+        };
+        let body = format!("{}\n{}", hunk.header, hunk.body);
+        self.info_popup = Some(hjkl_info_popup::InfoPopup::new(title, body));
     }
 
     /// `:GitDiff` / gutter "Show Diff" — preview the hunk under the cursor in an
-    /// info popup. Read-only; works on dirty buffers (uses in-memory bytes).
+    /// info popup. Read-only; works on dirty buffers. Prefers the unstaged hunk
+    /// (what the user is editing), falling back to the staged hunk.
     pub(crate) fn git_show_hunk_diff(&mut self) {
-        match self.hunk_under_cursor() {
-            Some((_, hunk)) => {
-                let body = format!("{}\n{}", hunk.header, hunk.body);
-                self.info_popup = Some(hjkl_info_popup::InfoPopup::new("git hunk", body));
-            }
-            None => {
-                if self.active().filename.is_none() {
-                    self.bus.warn("no file for this buffer");
-                } else {
-                    self.bus.warn("no git hunk under cursor");
-                }
-            }
+        if let Some((_, hunk)) = self.unstaged_hunk_under_cursor() {
+            self.show_hunk_popup(&hunk, false);
+        } else if let Some((_, hunk)) = self.staged_hunk_under_cursor() {
+            self.show_hunk_popup(&hunk, true);
+        } else if self.active().filename.is_none() {
+            self.bus.warn("no file for this buffer");
+        } else {
+            self.bus.warn("no git hunk under cursor");
         }
     }
 
@@ -71,21 +102,23 @@ impl App {
     /// without moving the cursor (gutter clicks never move the cursor; see
     /// `gutter_click_no_cursor_move`). Silent no-op when no hunk covers the row.
     pub(crate) fn git_show_hunk_diff_at_row(&mut self, row: usize) {
-        if let Some((_, hunk)) = self.hunk_at_row(row) {
-            let body = format!("{}\n{}", hunk.header, hunk.body);
-            self.info_popup = Some(hjkl_info_popup::InfoPopup::new("git hunk", body));
+        if let Some((_, hunk)) = self.unstaged_hunk_at_row(row) {
+            self.show_hunk_popup(&hunk, false);
+        } else if let Some((_, hunk)) = self.staged_hunk_at_row(row) {
+            self.show_hunk_popup(&hunk, true);
         }
     }
 
-    /// `:GitStage` / gutter "Stage Hunk" — stage the hunk under the cursor into
-    /// the index. Requires a saved buffer (the patch applies against disk).
+    /// `:GitStage` / gutter "Stage Hunk" — stage the unstaged hunk under the
+    /// cursor into the index. Requires a saved buffer (the patch applies against
+    /// disk).
     pub(crate) fn git_stage_hunk_at_cursor(&mut self) {
         if self.active().dirty {
             self.bus.warn("save the buffer before staging (:w)");
             return;
         }
-        let Some((path, hunk)) = self.hunk_under_cursor() else {
-            self.bus.warn("no git hunk under cursor");
+        let Some((path, hunk)) = self.unstaged_hunk_under_cursor() else {
+            self.bus.warn("no unstaged hunk under cursor");
             return;
         };
         match git::stage_hunk(&path, &hunk) {
@@ -99,16 +132,35 @@ impl App {
         }
     }
 
-    /// `:GitRevert` / gutter "Revert Hunk" — discard the hunk under the cursor,
-    /// restoring the HEAD/index version on disk, then reload the buffer so the
-    /// editor reflects the reverted file. Requires a saved buffer.
+    /// `:GitUnstage` / gutter "Unstage Hunk" — move the staged hunk under the
+    /// cursor back out of the index toward HEAD. Touches only the index, so no
+    /// buffer save is required.
+    pub(crate) fn git_unstage_hunk_at_cursor(&mut self) {
+        let Some((path, hunk)) = self.staged_hunk_under_cursor() else {
+            self.bus.warn("no staged hunk under cursor");
+            return;
+        };
+        match git::unstage_hunk(&path, &hunk) {
+            Ok(()) => {
+                self.bus.info("hunk unstaged");
+                self.refresh_git_signs_force();
+            }
+            Err(e) => {
+                self.bus.error(format!("git unstage: {e}"));
+            }
+        }
+    }
+
+    /// `:GitRevert` / gutter "Revert Hunk" — discard the unstaged hunk under the
+    /// cursor, restoring the index baseline on disk, then reload the buffer so
+    /// the editor reflects the reverted file. Requires a saved buffer.
     pub(crate) fn git_revert_hunk_at_cursor(&mut self) {
         if self.active().dirty {
             self.bus.warn("save the buffer before reverting (:w)");
             return;
         }
-        let Some((path, hunk)) = self.hunk_under_cursor() else {
-            self.bus.warn("no git hunk under cursor");
+        let Some((path, hunk)) = self.unstaged_hunk_under_cursor() else {
+            self.bus.warn("no unstaged hunk under cursor");
             return;
         };
         match git::revert_hunk(&path, &hunk) {
