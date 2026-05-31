@@ -1054,6 +1054,9 @@ mod border_drag_tests {
             "line0\nline1\nline2\nline3\nline4",
             ratatui::layout::Rect::new(0, 0, 80, 24),
         );
+        // Give the slot a filename so the right-click git-signs refresh submits
+        // an async job rather than clearing `git_signs` (the no-name path).
+        app.slots_mut()[0].filename = Some(std::path::PathBuf::from("/tmp/hjkl_gh_test.txt"));
         // Inject a git change sign on doc row 1.
         app.slots_mut()[0].git_signs.push(Sign {
             row: 1,
