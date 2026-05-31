@@ -109,6 +109,35 @@ impl App {
         }
     }
 
+    /// `:Gblame` — show git blame attribution for the cursor line in a
+    /// read-only info popup (hash, author, date, summary). Accounts for unsaved
+    /// edits (uncommitted lines show "Not Committed Yet"). Non-git / untracked
+    /// files warn and no-op. (#202)
+    pub(crate) fn git_blame_popup(&mut self) {
+        let Some(path) = self.active().filename.clone() else {
+            self.bus.warn("no file for this buffer");
+            return;
+        };
+        let row = self.active().editor.cursor().0;
+        let bytes = self.active_buffer_git_bytes();
+        let Some(info) = git::blame_line(&path, row, &bytes) else {
+            self.bus.warn("no git blame for this line");
+            return;
+        };
+        let body = if info.is_uncommitted {
+            format!("{}\n{}", info.commit, info.summary)
+        } else {
+            format!(
+                "commit {}\nauthor {}\ndate   {}\n\n{}",
+                info.commit,
+                info.author,
+                format_blame_date(info.time_unix),
+                info.summary,
+            )
+        };
+        self.info_popup = Some(hjkl_info_popup::InfoPopup::new("git blame", body));
+    }
+
     /// `:GitStage` / gutter "Stage Hunk" — stage the unstaged hunk under the
     /// cursor into the index. Requires a saved buffer (the patch applies against
     /// disk).
@@ -176,5 +205,32 @@ impl App {
                 self.bus.error(format!("git revert: {e}"));
             }
         }
+    }
+}
+
+/// Format a unix timestamp (seconds, UTC) as `YYYY-MM-DD`. Self-contained
+/// civil-date conversion (Howard Hinnant's algorithm) — no chrono/time dep.
+fn format_blame_date(time_unix: i64) -> String {
+    let days = time_unix.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_blame_date;
+    #[test]
+    fn format_blame_date_known_epochs() {
+        assert_eq!(format_blame_date(0), "1970-01-01");
+        assert_eq!(format_blame_date(1_700_000_000), "2023-11-14");
     }
 }

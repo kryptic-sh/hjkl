@@ -995,6 +995,32 @@ impl HostCmd<App> for GitUnstageCmd {
     }
 }
 
+/// `:Gblame` — show git blame for the cursor line in a popup (#202).
+pub(crate) struct GblameCmd;
+
+impl HostCmd<App> for GblameCmd {
+    fn name(&self) -> &'static str {
+        "Gblame"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        "Gblame".len()
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.git_blame_popup();
+        Some(ExEffect::Ok)
+    }
+}
+
 /// `:LspCodeAction` / `:CodeAction` — LSP code actions.
 pub(crate) struct LspCodeActionCmd;
 
@@ -1385,6 +1411,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(GitStageCmd));
     reg.add(Box::new(GitRevertCmd));
     reg.add(Box::new(GitUnstageCmd));
+    reg.add(Box::new(GblameCmd));
     reg.add(Box::new(LspCodeActionCmd));
     reg.add(Box::new(LopenCmd));
     reg.add(Box::new(LnextCmd));
