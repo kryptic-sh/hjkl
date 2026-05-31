@@ -182,7 +182,7 @@ impl App {
         // Install any git diff-sign results that arrived from the worker.
         // Redraw request is implicit: if signs changed the next frame picks
         // them up; we don't force a dedicated redraw here to avoid a busy loop.
-        let _ = self.poll_git_signs();
+        let _ = self.poll_git_signs() | self.poll_blame();
 
         // Install any completed async format results (#118).
         let _ = self.poll_format_results();

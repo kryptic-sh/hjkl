@@ -16,7 +16,7 @@ use crate::keymap_actions::AppAction;
 
 use crate::host::TuiHost;
 use crate::syntax::{self, BufferId, SyntaxLayer};
-use hjkl_app::git_worker::GitSignsWorker;
+use hjkl_app::git_worker::{BlameWorker, GitSignsWorker};
 use std::collections::HashSet;
 
 mod buffer_ops;
@@ -185,6 +185,8 @@ pub struct App {
     syntax: SyntaxLayer,
     /// Background worker for git diff-sign computation.
     git_worker: GitSignsWorker,
+    /// Background worker for git blame computation.
+    pub(crate) blame_worker: BlameWorker,
     /// Background worker for external formatter invocations (`=` / `==`).
     /// Moves blocking subprocess calls off the UI thread (#118).
     pub(crate) format_worker: hjkl_mangler::FormatWorker,
@@ -590,6 +592,9 @@ pub(super) fn build_slot(
         git_signs: Vec::new(),
         last_git_dirty_gen: None,
         last_git_refresh_at: Instant::now(),
+        blame: Vec::new(),
+        last_blame_dirty_gen: None,
+        last_blame_refresh_at: Instant::now(),
         saved_hash: 0,
         saved_len: 0,
         signature_cache: None,
@@ -1273,6 +1278,7 @@ impl App {
             last_cursor_shape: CursorShape::Block,
             syntax,
             git_worker: GitSignsWorker::new(),
+            blame_worker: BlameWorker::new(),
             format_worker: hjkl_mangler::FormatWorker::spawn(),
             format_pending: HashSet::new(),
             directory,

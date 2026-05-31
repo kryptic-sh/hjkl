@@ -7,7 +7,7 @@ use hjkl_engine::types::{Attrs, Color as EngineColor, Style as EngineStyle};
 use hjkl_picker::PreviewSpans;
 
 use hjkl_app::git::{GitChange, GitChangeKind};
-use hjkl_app::git_worker::GitJob;
+use hjkl_app::git_worker::{BlameJob, GitJob};
 use hjkl_buffer_tui::Sign;
 use hjkl_lang::GrammarRequest;
 use ratatui::style::{Color, Style};
@@ -109,6 +109,72 @@ impl App {
                 slot.git_signs = result.changes.into_iter().map(change_to_sign).collect();
                 slot.is_untracked = result.is_untracked;
                 slot.last_git_dirty_gen = Some(result.dirty_gen);
+                redraw = true;
+            }
+        }
+        redraw
+    }
+
+    /// Queue a git blame refresh for the current buffer (throttled, no-op when
+    /// `blame_inline` is off).
+    pub(crate) fn refresh_blame(&mut self) {
+        use std::time::{Duration, Instant};
+        const BLAME_MIN_INTERVAL: Duration = Duration::from_millis(250);
+
+        // When the setting is off, clear stale data and bail out.
+        if !self.active().editor.settings().blame_inline {
+            let slot = self.active_mut();
+            slot.blame.clear();
+            slot.last_blame_dirty_gen = None;
+            return;
+        }
+
+        let path = match self.active().filename.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                let slot = self.active_mut();
+                slot.blame.clear();
+                slot.last_blame_dirty_gen = None;
+                return;
+            }
+        };
+
+        let dg = self.active().editor.buffer().dirty_gen();
+        if self.active().last_blame_dirty_gen == Some(dg) {
+            return;
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.active().last_blame_refresh_at) < BLAME_MIN_INTERVAL {
+            return;
+        }
+
+        let rope = self.active().editor.buffer().rope();
+        let buffer_id = self.active().buffer_id;
+        self.active_mut().last_blame_refresh_at = now;
+
+        self.blame_worker.submit(BlameJob {
+            buffer_id,
+            path,
+            rope,
+            dirty_gen: dg,
+        });
+    }
+
+    /// Drain completed blame results from the worker and install them.
+    pub(crate) fn poll_blame(&mut self) -> bool {
+        let mut redraw = false;
+        while let Some(result) = self.blame_worker.try_recv() {
+            if let Some(slot) = self
+                .slots
+                .iter_mut()
+                .find(|s| s.buffer_id == result.buffer_id)
+                && slot
+                    .last_blame_dirty_gen
+                    .is_none_or(|dg| dg <= result.dirty_gen)
+            {
+                slot.blame = result.blame;
+                slot.last_blame_dirty_gen = Some(result.dirty_gen);
                 redraw = true;
             }
         }
@@ -304,6 +370,7 @@ impl App {
         }
 
         self.refresh_git_signs();
+        self.refresh_blame();
 
         // --- Auto-folds (foldmethod=expr / marker) ---
         // After render_viewport triggers a reparse, extract fold ranges and

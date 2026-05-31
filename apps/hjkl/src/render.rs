@@ -806,6 +806,42 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         };
 
     let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
+
+    // #202 P5: inline blame EOL hint — cursor line only, shown after a short
+    // idle period so it doesn't flicker while typing or moving quickly.
+    const BLAME_IDLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+    let blame_hints: Vec<hjkl_buffer_tui::render::EolHint> = {
+        let slot = &app.slots()[slot_idx];
+        let show = slot.editor.settings().blame_inline
+            && is_focused
+            && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY;
+        if show {
+            let cursor_row = slot.editor.buffer().cursor().row;
+            if let Some(Some(info)) = slot.blame.get(cursor_row) {
+                let text = if info.is_uncommitted {
+                    "You \u{00b7} Not Committed Yet".to_string()
+                } else {
+                    let summary = if info.summary.len() > 50 {
+                        format!("{}\u{2026}", &info.summary[..50])
+                    } else {
+                        info.summary.clone()
+                    };
+                    format!("{} \u{00b7} {}", info.author, summary)
+                };
+                let style = Style::default().fg(app.theme.ui.non_text);
+                vec![hjkl_buffer_tui::render::EolHint {
+                    row: cursor_row,
+                    text,
+                    style,
+                }]
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        }
+    };
+
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
@@ -837,9 +873,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         indent_guide_fg: app.theme.ui.indent_guide_fg,
         indent_guide_active_fg: app.theme.ui.indent_guide_active_fg,
         indent_guide_active_col,
-        // #202 P4: inline blame EOL hints. Populated in P5 (cursor-line only,
-        // gated on `blame_inline` + idle); empty until then.
-        eol_hints: &[],
+        // #202 P5: inline blame EOL hints (cursor line, idle-gated).
+        eol_hints: &blame_hints,
     };
     frame.render_widget(view, area);
 
