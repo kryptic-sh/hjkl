@@ -1675,7 +1675,7 @@ impl App {
     }
 
     /// Reload the active slot from disk (`:e` no-arg / `:e %`).
-    fn reload_current(&mut self, force: bool) {
+    pub(crate) fn reload_current(&mut self, force: bool) {
         let path = match self.active().filename.clone() {
             Some(p) => p,
             None => {

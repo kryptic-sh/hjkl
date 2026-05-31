@@ -1276,6 +1276,9 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(VerticalResizeCmd));
     reg.add(Box::new(RenameCmd));
     reg.add(Box::new(LspFormatCmd));
+    reg.add(Box::new(GitDiffCmd));
+    reg.add(Box::new(GitStageCmd));
+    reg.add(Box::new(GitRevertCmd));
     reg.add(Box::new(LspCodeActionCmd));
     reg.add(Box::new(LopenCmd));
     reg.add(Box::new(LnextCmd));

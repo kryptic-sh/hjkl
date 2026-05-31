@@ -28,6 +28,7 @@ mod engine_actions;
 mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
+mod git_hunks;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
 pub mod lsp_glue;
