@@ -968,6 +968,33 @@ impl HostCmd<App> for GitRevertCmd {
     }
 }
 
+/// `:GitUnstage` — unstage the staged git hunk under the cursor from the index
+/// (#115).
+pub(crate) struct GitUnstageCmd;
+
+impl HostCmd<App> for GitUnstageCmd {
+    fn name(&self) -> &'static str {
+        "GitUnstage"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn min_prefix(&self) -> usize {
+        "GitUnstage".len()
+    }
+
+    fn arg_kind(&self) -> ArgKind {
+        ArgKind::None
+    }
+
+    fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
+        app.git_unstage_hunk_at_cursor();
+        Some(ExEffect::Ok)
+    }
+}
+
 /// `:LspCodeAction` / `:CodeAction` — LSP code actions.
 pub(crate) struct LspCodeActionCmd;
 
