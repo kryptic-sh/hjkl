@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use git2::{DiffOptions, ErrorCode, Patch, Repository};
+use git2::{BlameOptions, DiffOptions, ErrorCode, Patch, Repository};
 
 /// One per-row git-diff change. Hosts convert to their own render
 /// type (e.g. `hjkl_buffer::Sign` for the ratatui TUI).
@@ -499,6 +499,132 @@ fn run_git_apply(cwd: &Path, args: &[&str], patch: &str) -> Result<(), HunkApply
     }
 }
 
+// ---------------------------------------------------------------------------
+// Blame (#202) — per-line attribution.
+// ---------------------------------------------------------------------------
+
+/// One line's git blame attribution. `commit` is the short (7-char) hash;
+/// for an uncommitted (locally-modified, not yet committed) line, `is_uncommitted`
+/// is true and the other fields carry placeholder values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlameInfo {
+    pub commit: String,  // short hash, or "0000000" when uncommitted
+    pub author: String,  // author name, or "You" when uncommitted
+    pub time_unix: i64,  // author time (unix seconds), 0 when uncommitted
+    pub summary: String, // commit summary line, or "Not Committed Yet"
+    pub is_uncommitted: bool,
+}
+
+/// Convert a [`git2::BlameHunk`] to a [`BlameInfo`], looking up the commit
+/// summary from `repo` when the hunk is committed.
+fn hunk_to_info(repo: &Repository, hunk: &git2::BlameHunk<'_>) -> BlameInfo {
+    let oid = hunk.final_commit_id();
+    if oid.is_zero() {
+        return BlameInfo {
+            commit: "0000000".into(),
+            author: "You".into(),
+            time_unix: 0,
+            summary: "Not Committed Yet".into(),
+            is_uncommitted: true,
+        };
+    }
+    let short = oid.to_string();
+    let short = short[..7.min(short.len())].to_owned();
+    let author = hunk
+        .final_signature()
+        .and_then(|s| s.name().ok().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    let time_unix = hunk
+        .final_signature()
+        .map(|s| s.when().seconds())
+        .unwrap_or(0);
+    let summary = repo
+        .find_commit(oid)
+        .ok()
+        .and_then(|c| c.summary().ok().flatten().map(str::to_owned))
+        .unwrap_or_default();
+    BlameInfo {
+        commit: short,
+        author,
+        time_unix,
+        summary,
+        is_uncommitted: false,
+    }
+}
+
+/// Blame a single line of a file, accounting for in-memory (unsaved) edits.
+///
+/// `row` is 0-based (editor convention). Returns `None` when the file is
+/// outside a repo, has no HEAD, is untracked, or `row` is out of range.
+pub fn blame_line(path: &Path, row: usize, current: &[u8]) -> Option<BlameInfo> {
+    try_blame_line(path, row, current).ok().flatten()
+}
+
+fn try_blame_line(
+    path: &Path,
+    row: usize,
+    current: &[u8],
+) -> Result<Option<BlameInfo>, git2::Error> {
+    let (repo, rel) = open_repo_for(path)?;
+    // Guard no-HEAD (unborn branch / not found).
+    match repo.head() {
+        Ok(_) => {}
+        Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    }
+    let mut opts = BlameOptions::new();
+    let blame = repo.blame_file(&rel, Some(&mut opts))?;
+    let blame = blame.blame_buffer(current)?;
+    let hunk = match blame.get_line(row + 1) {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+    Ok(Some(hunk_to_info(&repo, &hunk)))
+}
+
+/// Blame every line of the in-memory buffer for `path`.
+///
+/// Returns a `Vec` with one entry per line; entries are `None` only when
+/// `get_line` yields nothing for that row (shouldn't happen in practice).
+/// Out-of-repo / no-HEAD / untracked files return an empty `Vec`.
+pub fn blame_file_all(path: &Path, current: &[u8]) -> Vec<Option<BlameInfo>> {
+    try_blame_all(path, current).unwrap_or_default()
+}
+
+fn try_blame_all(path: &Path, current: &[u8]) -> Result<Vec<Option<BlameInfo>>, git2::Error> {
+    let (repo, rel) = open_repo_for(path)?;
+    match repo.head() {
+        Ok(_) => {}
+        Err(e) if e.code() == ErrorCode::UnbornBranch || e.code() == ErrorCode::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(e) => return Err(e),
+    }
+    let mut opts = BlameOptions::new();
+    let blame = repo.blame_file(&rel, Some(&mut opts))?;
+    let blame = blame.blame_buffer(current)?;
+
+    // Count lines: split on '\n', drop trailing empty entry if buffer ends with '\n'.
+    let line_count = {
+        let parts = current.split(|&b| b == b'\n');
+        let count = parts.count();
+        if current.ends_with(b"\n") && count > 0 {
+            count - 1
+        } else {
+            count
+        }
+    };
+
+    let mut result = Vec::with_capacity(line_count);
+    for row in 0..line_count {
+        let entry = blame.get_line(row + 1).map(|h| hunk_to_info(&repo, &h));
+        result.push(entry);
+    }
+    Ok(result)
+}
+
 /// `true` when the file exists in a git workdir but isn't present in
 /// the HEAD tree (newly created, never committed). Drives the
 /// `[Untracked]` status-line tag — distinct from the diff-changes path
@@ -815,5 +941,65 @@ mod tests {
             matches!(stage_hunk(&f, &dummy), Err(HunkApplyError::NotInRepo)),
             "staging outside a repo must be NotInRepo"
         );
+    }
+
+    // ── Blame (#202) ─────────────────────────────────────────────────────────
+
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn blame_line_committed_line_attributes_commit() {
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
+        let info = blame_line(&f, 1, b"a\nb\nc\n");
+        let info = info.expect("blame_line must return Some for a tracked committed file");
+        assert!(!info.is_uncommitted, "line 1 is committed");
+        assert!(!info.author.is_empty(), "author must be non-empty");
+        assert_eq!(info.commit.len(), 7, "commit hash must be 7 chars");
+    }
+
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn blame_line_uncommitted_edit_is_not_committed() {
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
+        let info = blame_line(&f, 1, b"a\nMODIFIED\nc\n");
+        let info = info.expect("blame_line must return Some for in-memory modified line");
+        assert!(
+            info.is_uncommitted,
+            "modified line must be is_uncommitted=true"
+        );
+        assert_eq!(info.summary, "Not Committed Yet");
+    }
+
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn blame_line_out_of_repo_is_none() {
+        let tmp = TempDir::new().unwrap();
+        let f = tmp.path().join("loose.txt");
+        std::fs::write(&f, "hello\n").unwrap();
+        assert!(
+            blame_line(&f, 0, b"hello\n").is_none(),
+            "file outside repo must yield None"
+        );
+    }
+
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn blame_file_all_len_matches_lines() {
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
+        let all = blame_file_all(&f, b"a\nb\nc\n");
+        assert!(
+            all.len() >= 3,
+            "expected at least 3 entries, got {}",
+            all.len()
+        );
+        for (i, entry) in all.iter().enumerate().take(3) {
+            let info = entry.as_ref().expect("entry must be Some");
+            assert!(!info.is_uncommitted, "line {i} is committed");
+        }
     }
 }
