@@ -33,14 +33,20 @@ impl App {
         bytes
     }
 
-    /// Compute the hunk under the cursor for the active buffer, if any.
+    /// Compute the hunk covering `row` for the active buffer, if any.
     /// Returns `(path, hunk)` so callers can act without re-resolving.
-    fn hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
+    fn hunk_at_row(&self, row: usize) -> Option<(std::path::PathBuf, git::Hunk)> {
         let path = self.active().filename.clone()?;
         let bytes = self.active_buffer_git_bytes();
         let hunks = git::hunks_for_bytes(&path, &bytes);
-        let row = self.active().editor.cursor().0;
         git::hunk_at(&hunks, row).cloned().map(|h| (path, h))
+    }
+
+    /// Compute the hunk under the cursor for the active buffer, if any.
+    /// Returns `(path, hunk)` so callers can act without re-resolving.
+    fn hunk_under_cursor(&self) -> Option<(std::path::PathBuf, git::Hunk)> {
+        let row = self.active().editor.cursor().0;
+        self.hunk_at_row(row)
     }
 
     /// `:GitDiff` / gutter "Show Diff" — preview the hunk under the cursor in an
@@ -58,6 +64,16 @@ impl App {
                     self.bus.warn("no git hunk under cursor");
                 }
             }
+        }
+    }
+
+    /// P10 gutter left-click on a git sign — preview the hunk covering `row`
+    /// without moving the cursor (gutter clicks never move the cursor; see
+    /// `gutter_click_no_cursor_move`). Silent no-op when no hunk covers the row.
+    pub(crate) fn git_show_hunk_diff_at_row(&mut self, row: usize) {
+        if let Some((_, hunk)) = self.hunk_at_row(row) {
+            let body = format!("{}\n{}", hunk.header, hunk.body);
+            self.info_popup = Some(hjkl_info_popup::InfoPopup::new("git hunk", body));
         }
     }
 

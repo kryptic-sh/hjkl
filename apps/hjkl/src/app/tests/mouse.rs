@@ -1105,6 +1105,86 @@ mod border_drag_tests {
         );
     }
 
+    /// #114 P10 (#115): left-click on a gutter row carrying a git sign (but no
+    /// fold) previews the hunk. With no real repo there is no hunk, so the click
+    /// must be a clean no-op — no popup, no fold, no panic. The popup-appears
+    /// path needs a real repo and is covered by the ignored integration test
+    /// `gutter_left_click_git_sign_shows_hunk_popup`.
+    #[test]
+    fn gutter_left_click_git_sign_without_repo_is_noop() {
+        use hjkl_buffer_tui::Sign;
+        use ratatui::style::Style;
+
+        let mut app = make_app_with_window(
+            "line0\nline1\nline2\nline3\nline4",
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        // Filename points at a path with no git repo above it.
+        app.slots_mut()[0].filename = Some(std::path::PathBuf::from("/tmp/hjkl_no_repo_xyz.txt"));
+        app.slots_mut()[0].git_signs.push(Sign {
+            row: 1,
+            ch: '~',
+            style: Style::default(),
+            priority: 50,
+        });
+
+        app.handle_mouse(left_down(0, 1));
+
+        assert!(
+            app.info_popup.is_none(),
+            "left-click git sign with no repo must not open a hunk popup"
+        );
+        assert!(
+            app.active().editor.buffer().folds().is_empty(),
+            "left-click git sign must not create a fold"
+        );
+    }
+
+    /// #114 P10 (#115): left-click on a git-sign gutter row opens a read-only
+    /// hunk-diff popup. Integration: needs a real repo + `git` subprocess; same
+    /// flake class as the git.rs stage/revert tests (CRLF-sensitive on Windows).
+    #[test]
+    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn gutter_left_click_git_sign_shows_hunk_popup() {
+        use hjkl_buffer_tui::Sign;
+        use ratatui::style::Style;
+        use std::process::Command;
+
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let st = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .expect("git");
+            assert!(st.success(), "git {args:?} failed");
+        }
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = tmp.path().join("h.txt");
+        std::fs::write(&f, "a\nb\nc\nd\ne\n").unwrap();
+        git(tmp.path(), &["add", "h.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        // Buffer differs from HEAD on row 1 → one hunk covering row 1.
+        let mut app =
+            make_app_with_window("a\nB\nc\nd\ne", ratatui::layout::Rect::new(0, 0, 80, 24));
+        app.slots_mut()[0].filename = Some(f.clone());
+        app.slots_mut()[0].git_signs.push(Sign {
+            row: 1,
+            ch: '~',
+            style: Style::default(),
+            priority: 50,
+        });
+
+        app.handle_mouse(left_down(0, 1));
+
+        assert!(
+            app.info_popup.is_some(),
+            "left-click on a git-sign row must open the hunk-diff popup"
+        );
+    }
+
     // ── Regression: closed fold above click maps to wrong doc row (#244/#245) ──
 
     /// Verify that `cell_to_doc` maps screen rows correctly when a closed fold

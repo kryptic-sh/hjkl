@@ -992,6 +992,10 @@ impl App {
                                 .editor
                                 .apply_fold_op(hjkl_engine::FoldOp::ToggleAt(doc_row));
                             self.sync_after_engine_mutation();
+                        } else if self.active().git_signs.iter().any(|s| s.row == doc_row) {
+                            // P10: no fold here, but a git sign is — preview the
+                            // hunk covering this row in a read-only popup.
+                            self.git_show_hunk_diff_at_row(doc_row);
                         }
                         return MouseOutcome::Continue;
                     }
