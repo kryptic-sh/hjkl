@@ -340,6 +340,16 @@ pub struct BufferSlot {
     /// Used to skip re-extraction when the tree hasn't changed since the
     /// last fold pass.
     pub(super) last_fold_dirty_gen: Option<u64>,
+    /// Cached per-row git blame. `blame[row]` is `None` when the row has no
+    /// attribution (new file, untracked, or row past blame output).
+    /// Cleared when `blame_inline` is toggled off.
+    pub(crate) blame: Vec<Option<hjkl_app::git::BlameInfo>>,
+    /// `dirty_gen` of the buffer when `blame` was last rebuilt.
+    /// `None` = stale or never computed.
+    pub(crate) last_blame_dirty_gen: Option<u64>,
+    /// Wall-clock time of the last successful blame refresh — used
+    /// to throttle the libgit2 blame call to ~4 Hz during active typing.
+    pub(crate) last_blame_refresh_at: Instant,
 }
 
 /// Walk up from `start` looking for a project-root marker file.
