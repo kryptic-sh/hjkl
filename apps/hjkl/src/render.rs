@@ -841,8 +841,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 let text = if info.is_uncommitted {
                     "You \u{00b7} Not Committed Yet".to_string()
                 } else {
-                    let summary = if info.summary.len() > 50 {
-                        format!("{}\u{2026}", &info.summary[..50])
+                    // Char-safe truncation: byte-indexing `&str` panics when
+                    // byte 50 splits a multi-byte char (emoji/CJK summaries).
+                    let summary = if info.summary.chars().count() > 50 {
+                        format!(
+                            "{}\u{2026}",
+                            info.summary.chars().take(50).collect::<String>()
+                        )
                     } else {
                         info.summary.clone()
                     };

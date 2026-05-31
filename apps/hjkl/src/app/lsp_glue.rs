@@ -26,6 +26,20 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
     }
 }
 
+/// Snap `byte` down to the nearest char boundary in `rope`.
+///
+/// LSP byte offsets that are clamped to `len_bytes` can land in the middle of
+/// a multi-byte char (e.g. a 4-byte emoji whose last byte is at position N-1
+/// while `len_bytes` clamps to N-3). `ropey::Rope::byte_slice` panics on a
+/// non-aligned range; this helper floors the byte index to the start of the
+/// char that contains it using ropey's own conversion, which is safe on any
+/// byte value ≤ len_bytes (the docs guarantee `byte_to_char` returns the char
+/// index of the char *containing* that byte when it is a non-boundary byte).
+fn snap_to_char_boundary(rope: &ropey::Rope, byte: usize) -> usize {
+    let b = byte.min(rope.len_bytes());
+    rope.char_to_byte(rope.byte_to_char(b))
+}
+
 /// Build the `TextChange[]` array for `textDocument/didChange` incremental
 /// sync from the engine's `ContentEdit` batch.
 ///
@@ -50,8 +64,12 @@ fn build_text_changes(
     edits
         .iter()
         .map(|e| {
-            let start = e.start_byte.min(len_bytes);
-            let end = e.new_end_byte.min(len_bytes).max(start);
+            // Clamp then snap to char boundaries: `.min(len_bytes)` can land
+            // in the middle of a multi-byte char (e.g. on emoji/CJK content),
+            // causing `byte_slice` to panic. `snap_to_char_boundary` floors
+            // each bound to the start of the char that contains it.
+            let start = snap_to_char_boundary(rope, e.start_byte.min(len_bytes));
+            let end = snap_to_char_boundary(rope, e.new_end_byte.min(len_bytes)).max(start);
             let text = rope.byte_slice(start..end).to_string();
             hjkl_lsp::TextChange {
                 start_line: e.start_position.0,
@@ -1753,5 +1771,55 @@ impl App {
             AppAction::DiagPrevError => self.lprev_severity(Some(super::DiagSeverity::Error)),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod lsp_glue_tests {
+    use super::snap_to_char_boundary;
+
+    /// `snap_to_char_boundary` must floor a byte index that falls inside a
+    /// multi-byte char (here a 4-byte emoji U+1F600) to the char's first byte.
+    #[test]
+    fn snap_floors_interior_emoji_byte() {
+        // "😀" encodes as 4 bytes: F0 9F 98 80
+        let rope = ropey::Rope::from_str("hi😀bye");
+        // Char starts at byte 2; bytes 3, 4, 5 are interior continuation bytes.
+        let emoji_start = 2usize;
+        for interior in emoji_start..emoji_start + 4 {
+            let snapped = snap_to_char_boundary(&rope, interior);
+            assert_eq!(
+                snapped, emoji_start,
+                "byte {interior} inside emoji should snap to byte {emoji_start}, got {snapped}"
+            );
+        }
+        // Byte past the emoji should snap to itself (it's already aligned).
+        let past = emoji_start + 4;
+        assert_eq!(snap_to_char_boundary(&rope, past), past);
+    }
+
+    /// `build_text_changes` must not panic when `new_end_byte` is clamped
+    /// into the middle of a multi-byte char.
+    #[test]
+    fn build_text_changes_no_panic_on_emoji() {
+        use hjkl_engine::ContentEdit;
+        // Build a rope whose length falls mid-emoji when clamped.
+        // "abc😀" = 3 + 4 = 7 bytes; len_bytes = 7.
+        // Craft an edit whose new_end_byte = len - 2 lands inside the 4-byte emoji.
+        let rope = ropey::Rope::from_str("abc😀\n");
+        let len = rope.len_bytes();
+        let edit = ContentEdit {
+            start_byte: 0,
+            old_end_byte: 0,
+            new_end_byte: len.saturating_sub(2), // interior emoji byte
+            start_position: (0, 0),
+            old_end_position: (0, 0),
+            new_end_position: (0, 0),
+        };
+        // Must not panic.
+        let changes = super::build_text_changes(&rope, &[edit]);
+        assert!(!changes.is_empty());
+        // The extracted text must be valid UTF-8 (implicit: it compiled to String).
+        assert!(std::str::from_utf8(changes[0].text.as_bytes()).is_ok());
     }
 }

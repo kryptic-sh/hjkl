@@ -179,10 +179,14 @@ impl App {
             self.recompute_and_install();
         }
 
-        // Install any git diff-sign results that arrived from the worker.
-        // Redraw request is implicit: if signs changed the next frame picks
-        // them up; we don't force a dedicated redraw here to avoid a busy loop.
-        let _ = self.poll_git_signs() | self.poll_blame();
+        // Install any git diff-sign / blame results that arrived from workers.
+        // When either poll returns true (new data arrived), set pending_recompute
+        // so the top-of-loop flush redraws the updated column/signs on the next
+        // iteration — without this the blame column stays blank until the next
+        // keypress because drain_async_polls runs AFTER terminal.draw.
+        if self.poll_git_signs() | self.poll_blame() {
+            self.pending_recompute = true;
+        }
 
         // Install any completed async format results (#118).
         let _ = self.poll_format_results();
