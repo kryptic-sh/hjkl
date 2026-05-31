@@ -34,7 +34,8 @@ impl App {
             | AppAction::GitFileHistory
             | AppAction::GitStashes
             | AppAction::GitTags
-            | AppAction::GitRemotes => self.dispatch_git_action(action),
+            | AppAction::GitRemotes
+            | AppAction::GitBlameLine => self.dispatch_git_action(action),
 
             // ── LSP + diagnostic navigation ────────────────────────────────
             AppAction::ShowDiagAtCursor
