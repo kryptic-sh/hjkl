@@ -261,6 +261,120 @@ pub fn hunk_at(hunks: &[Hunk], row: usize) -> Option<&Hunk> {
     hunks.iter().find(|h| h.new_row_range().contains(&row))
 }
 
+// ---------------------------------------------------------------------------
+// Hunk stage / revert (#115 Phase 2) — mutate the index / worktree.
+// ---------------------------------------------------------------------------
+
+/// Outcome of a stage / revert attempt.
+#[derive(Debug)]
+pub enum HunkApplyError {
+    /// `path` is not inside a git repository.
+    NotInRepo,
+    /// The repo path could not be turned into a workdir-relative path.
+    PathResolution,
+    /// `git apply` ran but rejected the patch (stderr captured).
+    ApplyFailed(String),
+    /// Spawning `git` failed (not installed / I/O error).
+    Spawn(String),
+}
+
+impl std::fmt::Display for HunkApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HunkApplyError::NotInRepo => write!(f, "not in a git repository"),
+            HunkApplyError::PathResolution => write!(f, "could not resolve path within repo"),
+            HunkApplyError::ApplyFailed(e) => write!(f, "git apply failed: {e}"),
+            HunkApplyError::Spawn(e) => write!(f, "could not run git: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for HunkApplyError {}
+
+/// Build a complete patch (with `diff --git` preamble) for `hunk` on the
+/// workdir-relative path `rel`, suitable for `git apply`.
+///
+/// `git apply` needs the `a/`,`b/` path headers to know which file the hunk
+/// targets; the `@@` header + body come straight from [`Hunk`].
+fn build_patch(rel: &Path, hunk: &Hunk) -> String {
+    let p = rel.to_string_lossy();
+    format!(
+        "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n{}\n{}",
+        hunk.header, hunk.body
+    )
+}
+
+/// Resolve `path` to `(repo_workdir, workdir_relative_path)`.
+fn resolve_in_repo(
+    path: &Path,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), HunkApplyError> {
+    let canon = path.canonicalize().map_err(|_| HunkApplyError::NotInRepo)?;
+    let parent = canon.parent().unwrap_or(Path::new("."));
+    let repo = Repository::discover(parent).map_err(|_| HunkApplyError::NotInRepo)?;
+    let workdir = repo
+        .workdir()
+        .ok_or(HunkApplyError::NotInRepo)?
+        .canonicalize()
+        .map_err(|_| HunkApplyError::PathResolution)?;
+    let rel = canon
+        .strip_prefix(&workdir)
+        .map_err(|_| HunkApplyError::PathResolution)?
+        .to_path_buf();
+    Ok((workdir, rel))
+}
+
+/// Stage `hunk` for `path` into the git index (`git apply --cached`).
+///
+/// Operates on the on-disk file's relationship to HEAD, so callers must ensure
+/// the buffer is saved first (the hunk was computed from buffer bytes that must
+/// match disk for the patch to apply cleanly).
+pub fn stage_hunk(path: &Path, hunk: &Hunk) -> Result<(), HunkApplyError> {
+    let (workdir, rel) = resolve_in_repo(path)?;
+    let patch = build_patch(&rel, hunk);
+    run_git_apply(&workdir, &["apply", "--cached", "-"], &patch)
+}
+
+/// Revert `hunk` in the worktree (`git apply --reverse`), discarding that
+/// change and restoring the HEAD/index version of those lines on disk.
+pub fn revert_hunk(path: &Path, hunk: &Hunk) -> Result<(), HunkApplyError> {
+    let (workdir, rel) = resolve_in_repo(path)?;
+    let patch = build_patch(&rel, hunk);
+    run_git_apply(&workdir, &["apply", "--reverse", "-"], &patch)
+}
+
+/// Run `git <args>` in `cwd`, feeding `patch` on stdin.
+fn run_git_apply(cwd: &Path, args: &[&str], patch: &str) -> Result<(), HunkApplyError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| HunkApplyError::Spawn(e.to_string()))?;
+
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| HunkApplyError::Spawn("no stdin".into()))?
+        .write_all(patch.as_bytes())
+        .map_err(|e| HunkApplyError::Spawn(e.to_string()))?;
+
+    let out = child
+        .wait_with_output()
+        .map_err(|e| HunkApplyError::Spawn(e.to_string()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(HunkApplyError::ApplyFailed(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ))
+    }
+}
+
 /// `true` when the file exists in a git workdir but isn't present in
 /// the HEAD tree (newly created, never committed). Drives the
 /// `[Untracked]` status-line tag — distinct from the diff-changes path
@@ -498,5 +612,76 @@ mod tests {
         let f = tmp.path().join("x.txt");
         std::fs::write(&f, "hello\n").unwrap();
         assert!(hunks_for_bytes(&f, b"changed\n").is_empty());
+    }
+
+    // ── Stage / revert (#115 Phase 2) ─────────────────────────────────────────
+
+    /// Capture `git diff --cached` for `name` (what's staged in the index).
+    fn staged_diff(tmp: &Path, name: &str) -> String {
+        let out = Command::new("git")
+            .args(["diff", "--cached", "--", name])
+            .current_dir(tmp)
+            .output()
+            .expect("git diff --cached");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    fn stage_hunk_applies_to_index() {
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = commit_file(tmp.path(), "s.txt", "a\nb\nc\n");
+        // Edit on disk + save (stage works against the on-disk file vs HEAD).
+        std::fs::write(&f, "a\nB\nc\n").unwrap();
+
+        let bytes = std::fs::read(&f).unwrap();
+        let hunks = hunks_for_bytes(&f, &bytes);
+        assert_eq!(hunks.len(), 1, "expected one hunk, got {hunks:?}");
+
+        stage_hunk(&f, &hunks[0]).expect("stage_hunk");
+
+        // The index now carries the b→B change.
+        let staged = staged_diff(tmp.path(), "s.txt");
+        assert!(
+            staged.contains("-b") && staged.contains("+B"),
+            "staged: {staged}"
+        );
+    }
+
+    #[test]
+    fn revert_hunk_restores_worktree() {
+        let tmp = TempDir::new().unwrap();
+        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        let f = commit_file(tmp.path(), "r.txt", "a\nb\nc\n");
+        std::fs::write(&f, "a\nB\nc\n").unwrap();
+
+        let bytes = std::fs::read(&f).unwrap();
+        let hunks = hunks_for_bytes(&f, &bytes);
+        assert_eq!(hunks.len(), 1);
+
+        revert_hunk(&f, &hunks[0]).expect("revert_hunk");
+
+        // The worktree file is back to the committed content.
+        let after = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(after, "a\nb\nc\n", "revert must restore HEAD content");
+    }
+
+    #[test]
+    fn stage_hunk_outside_repo_errs() {
+        let tmp = TempDir::new().unwrap();
+        let f = tmp.path().join("loose.txt");
+        std::fs::write(&f, "x\n").unwrap();
+        let dummy = Hunk {
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: 1,
+            header: "@@ -1,1 +1,1 @@".into(),
+            body: "-x\n+y\n".into(),
+        };
+        assert!(
+            matches!(stage_hunk(&f, &dummy), Err(HunkApplyError::NotInRepo)),
+            "staging outside a repo must be NotInRepo"
+        );
     }
 }
