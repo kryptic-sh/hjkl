@@ -1571,6 +1571,10 @@ impl App {
             MenuActionKind::PickerOpenVSplit => self.picker_open_in_vsplit(),
             MenuActionKind::PickerOpenTab => self.picker_open_in_tab(),
             MenuActionKind::PickerCopyPath => self.picker_copy_path(),
+            // ── Gutter / git-hunk menu (#114 P6/P10, #115) ────────────────────
+            MenuActionKind::GitStageHunk => self.git_stage_hunk_at_cursor(),
+            MenuActionKind::GitRevertHunk => self.git_revert_hunk_at_cursor(),
+            MenuActionKind::GitShowHunk => self.git_show_hunk_diff(),
             MenuActionKind::Separator | MenuActionKind::Info => {} // no-op
         });
     }
