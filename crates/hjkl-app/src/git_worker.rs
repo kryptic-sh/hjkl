@@ -189,6 +189,175 @@ fn worker_loop(job_rx: Receiver<GitJob>, res_tx: Sender<GitResult>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// BlameWorker — mirrors GitSignsWorker but calls blame_file_all.
+// ---------------------------------------------------------------------------
+
+/// A git blame job submitted to the blame worker.
+///
+/// `rope` is O(1) `Clone` (Arc-cloned root), so submission stays cheap on
+/// the UI thread. The worker materialises the byte buffer itself.
+pub struct BlameJob {
+    pub buffer_id: BufferId,
+    pub path: PathBuf,
+    pub rope: Rope,
+    pub dirty_gen: u64,
+}
+
+/// Result produced by the blame worker for a single job.
+///
+/// `blame[row]` is the attribution for 0-based document `row`.
+/// `None` means attribution was unavailable for that line.
+pub struct BlameResult {
+    pub buffer_id: BufferId,
+    pub dirty_gen: u64,
+    pub blame: Vec<Option<crate::git::BlameInfo>>,
+}
+
+/// Background worker that computes git blame off the UI thread.
+///
+/// One background thread services all submissions. Jobs are coalesced
+/// per buffer_id (latest-wins) so a burst of edits never queues more
+/// than one job per buffer at a time.
+pub struct BlameWorker {
+    tx: Option<Sender<BlameJob>>,
+    rx: Receiver<BlameResult>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl BlameWorker {
+    /// Spawn the worker thread. Returns immediately.
+    pub fn new() -> Self {
+        let (job_tx, job_rx) = crossbeam_channel::unbounded::<BlameJob>();
+        let (res_tx, res_rx) = crossbeam_channel::unbounded::<BlameResult>();
+
+        let handle = thread::Builder::new()
+            .name("hjkl-git-blame".into())
+            .spawn(move || blame_worker_loop(job_rx, res_tx))
+            .expect("spawn git-blame worker");
+
+        Self {
+            tx: Some(job_tx),
+            rx: res_rx,
+            join: Some(handle),
+        }
+    }
+
+    /// Submit a blame job. Non-blocking.
+    ///
+    /// Coalescing is handled on the worker side. Here we just push onto
+    /// the unbounded channel; latest-wins logic lives in
+    /// [`blame_worker_loop`].
+    pub fn submit(&self, job: BlameJob) {
+        // Ignore send errors — if the channel is disconnected (worker
+        // panicked and was cleaned up), silently drop the job. The UI
+        // will simply not receive updated blame info.
+        if let Some(tx) = self.tx.as_ref() {
+            let _ = tx.send(job);
+        }
+    }
+
+    /// Non-blocking drain. Returns the next completed result, if any.
+    /// Call repeatedly per tick to process all queued results.
+    pub fn try_recv(&self) -> Option<BlameResult> {
+        self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for BlameWorker {
+    /// Close the job channel and join the worker thread before returning.
+    ///
+    /// **Why join, not detach.** The worker calls `libgit2`, which lazily
+    /// initialises OpenSSL on the worker thread. Without a join, the
+    /// worker can still be mid-`Repository::discover` when `libc`'s
+    /// `atexit` handler runs `OPENSSL_cleanup`, racing the worker's
+    /// crypto state and crashing in `pthread_rwlock_unlock`. Joining
+    /// guarantees the worker is fully torn down before process exit.
+    fn drop(&mut self) {
+        drop(self.tx.take());
+        if let Some(h) = self.join.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Default for BlameWorker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Main loop executed on the blame worker thread.
+///
+/// Mirrors [`worker_loop`]: drains incoming jobs into a per-buffer-id
+/// "latest job" map, then processes one job at a time in FIFO order of
+/// first arrival, always using the most-recent job for that buffer_id
+/// (coalesce). Results are sent back on `res_tx`.
+fn blame_worker_loop(job_rx: Receiver<BlameJob>, res_tx: Sender<BlameResult>) {
+    // Map from buffer_id to the most recent pending job for that buffer.
+    let mut pending: HashMap<BufferId, BlameJob> = HashMap::new();
+    // Queue of buffer_ids to process in order (FIFO by first arrival).
+    let mut queue: Vec<BufferId> = Vec::new();
+
+    loop {
+        // Block until at least one job arrives (or channel closes).
+        let first = match job_rx.recv() {
+            Ok(j) => j,
+            Err(_) => return, // sender dropped → exit
+        };
+
+        // Drain all immediately-available additional jobs without blocking.
+        let mut batch = vec![first];
+        while let Ok(j) = job_rx.try_recv() {
+            batch.push(j);
+        }
+
+        // Coalesce: latest-wins per buffer_id, FIFO queue for first arrival.
+        for job in batch {
+            let id = job.buffer_id;
+            let is_new = !pending.contains_key(&id);
+            pending.insert(id, job);
+            if is_new {
+                queue.push(id);
+            }
+        }
+
+        // Process all queued buffer_ids (in order of first arrival).
+        // Each processes the most recent job for that buffer.
+        let ids: Vec<BufferId> = std::mem::take(&mut queue);
+        for id in ids {
+            let job = match pending.remove(&id) {
+                Some(j) => j,
+                None => continue, // already consumed by a duplicate entry
+            };
+
+            // Materialise the byte buffer here on the worker thread so
+            // the main thread doesn't pay the allocation cost. Trailing
+            // newline mirrors the prior call-site behaviour (matches `:w`).
+            let mut bytes: Vec<u8> = Vec::with_capacity(job.rope.len_bytes() + 1);
+            for chunk in job.rope.chunks() {
+                bytes.extend_from_slice(chunk.as_bytes());
+            }
+            if !bytes.is_empty() {
+                bytes.push(b'\n');
+            }
+
+            let blame = crate::git::blame_file_all(&job.path, &bytes);
+
+            let result = BlameResult {
+                buffer_id: job.buffer_id,
+                dirty_gen: job.dirty_gen,
+                blame,
+            };
+
+            if res_tx.send(result).is_err() {
+                // Receiver dropped → UI is gone. Exit.
+                return;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +445,81 @@ mod tests {
         }
         // The last result must have a dirty_gen of 4 (the latest submitted).
         // Due to coalescing the worker may skip intermediate gens.
+        let last_gen = results.iter().map(|r| r.dirty_gen).max().unwrap();
+        assert_eq!(last_gen, 4, "expected latest dirty_gen=4 to be delivered");
+    }
+
+    /// Blame worker with a nonexistent path and empty rope must return an
+    /// empty `blame` vec — no repo means `blame_file_all` returns `[]`.
+    /// Bounded to 500 ms.
+    #[test]
+    fn blame_worker_returns_result_for_nonexistent_path() {
+        let worker = BlameWorker::new();
+        let job = BlameJob {
+            buffer_id: 42,
+            path: PathBuf::from("/tmp/nonexistent_hjkl_blame_test_xyz/file.txt"),
+            rope: Rope::new(),
+            dirty_gen: 7,
+        };
+        worker.submit(job);
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let result = loop {
+            if let Some(r) = worker.try_recv() {
+                break Some(r);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        let result = result.expect("blame worker should return a result within 500ms");
+        assert_eq!(result.buffer_id, 42);
+        assert_eq!(result.dirty_gen, 7);
+        assert!(
+            result.blame.is_empty(),
+            "expected empty blame for nonexistent path; got {} entries",
+            result.blame.len()
+        );
+    }
+
+    /// Five blame jobs for the same buffer_id submitted in quick succession
+    /// should coalesce: the last dirty_gen delivered must equal 4.
+    #[test]
+    fn blame_worker_coalesces_jobs_for_same_buffer() {
+        let worker = BlameWorker::new();
+        for dg in 0u64..5 {
+            worker.submit(BlameJob {
+                buffer_id: 1,
+                path: PathBuf::from("/tmp/nonexistent_hjkl_blame_coalesce_test/f.txt"),
+                rope: Rope::new(),
+                dirty_gen: dg,
+            });
+        }
+
+        // Drain whatever we get within 500 ms.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let mut results: Vec<BlameResult> = Vec::new();
+        loop {
+            while let Some(r) = worker.try_recv() {
+                results.push(r);
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            !results.is_empty(),
+            "expected at least one result from the blame worker"
+        );
+        // All results must be for buffer_id 1.
+        for r in &results {
+            assert_eq!(r.buffer_id, 1);
+        }
+        // The last result must have a dirty_gen of 4 (the latest submitted).
         let last_gen = results.iter().map(|r| r.dirty_gen).max().unwrap();
         assert_eq!(last_gen, 4, "expected latest dirty_gen=4 to be delivered");
     }
