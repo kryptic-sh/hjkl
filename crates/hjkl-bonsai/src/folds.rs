@@ -481,6 +481,15 @@ mod tests {
             "bash",
             "lua",
             "java",
+            "html",
+            "css",
+            "scss",
+            "yaml",
+            "toml",
+            "ruby",
+            "php",
+            "c_sharp",
+            "markdown",
         ];
 
         let registry = GrammarRegistry::embedded().expect("embedded registry");
