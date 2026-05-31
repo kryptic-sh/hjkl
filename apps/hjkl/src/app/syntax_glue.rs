@@ -10,7 +10,7 @@ use hjkl_app::git::{GitChange, GitChangeKind};
 use hjkl_app::git_worker::GitJob;
 use hjkl_buffer_tui::Sign;
 use hjkl_lang::GrammarRequest;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 
 use super::App;
 
@@ -19,9 +19,9 @@ use super::App;
 /// The glyph encodes the change *kind* (`+` add, `~` modify, `_` delete); the
 /// colour encodes *staged state*. Unstaged changes keep the per-kind colours
 /// (green / yellow / red). Staged changes (already in the index) render in
-/// **bold blue** regardless of kind, so the gutter shows at a glance which
-/// changes are staged vs not. Unstaged signs sit at a slightly higher priority
-/// so an overlapping row reads as "still has unstaged work".
+/// **blue** regardless of kind, so the gutter shows at a glance which changes
+/// are staged vs not. Unstaged signs sit at a slightly higher priority so an
+/// overlapping row reads as "still has unstaged work".
 fn change_to_sign(c: GitChange) -> Sign {
     let ch = match c.kind {
         GitChangeKind::Add => '+',
@@ -29,12 +29,7 @@ fn change_to_sign(c: GitChange) -> Sign {
         GitChangeKind::Delete => '_',
     };
     let (style, priority) = if c.staged {
-        (
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-            49,
-        )
+        (Style::default().fg(Color::Blue), 49)
     } else {
         let color = match c.kind {
             GitChangeKind::Add => Color::Green,
