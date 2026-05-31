@@ -781,6 +781,7 @@ fn build_scratch_slot(
         blame: Vec::new(),
         last_blame_dirty_gen: None,
         last_blame_refresh_at: Instant::now(),
+        blame_column: false,
         saved_hash: 0,
         saved_len: 0,
         signature_cache: None,
@@ -815,7 +816,7 @@ impl App {
             AppAction::GitStashes => self.open_git_stash_picker(),
             AppAction::GitTags => self.open_git_tags_picker(),
             AppAction::GitRemotes => self.open_git_remotes_picker(),
-            AppAction::GitBlameLine => self.git_blame_popup(),
+            AppAction::GitBlameLine => self.toggle_blame_column(),
             _ => {}
         }
     }

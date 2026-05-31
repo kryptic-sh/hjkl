@@ -615,6 +615,25 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let indent_guide_shiftwidth = s.shiftwidth;
     let indent_guide_tabstop = s.tabstop;
 
+    // ── Left git-blame column (#202 follow-up) ────────────────────────────────
+    // Carve a fixed-width strip off the LEFT of the window area when the blame
+    // column is toggled on (Wrap::None only — column rows map 1:1 to screen rows
+    // without soft-wrap). Save original left edge + y before shrinking so the
+    // column can be painted there after the BufferView. `last_rect` is already
+    // set to the full window area above — it stays unchanged; the gutter offset
+    // in mouse.rs accounts for the column width via `blame_column_width_for`.
+    let blame_col_x = area.x;
+    let blame_col_y = area.y;
+    let blame_col_width: u16 = crate::app::mouse::blame_column_width_for(&app.slots()[slot_idx]);
+    // Re-bind `area` so all downstream geometry (gutter, viewport, render) uses
+    // the narrowed region.
+    let area = Rect {
+        x: area.x + blame_col_width,
+        y: area.y,
+        width: area.width.saturating_sub(blame_col_width),
+        height: area.height,
+    };
+
     // We need visible signs before computing gutter width for signcolumn=auto.
     // Pre-compute a lightweight "has any visible sign" check using the last
     // known viewport top (updated after lnum_width when focused).
@@ -813,6 +832,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let blame_hints: Vec<hjkl_buffer_tui::render::EolHint> = {
         let slot = &app.slots()[slot_idx];
         let show = slot.editor.settings().blame_inline
+            && !slot.blame_column
             && is_focused
             && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY;
         if show {
@@ -877,6 +897,56 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         eol_hints: &blame_hints,
     };
     frame.render_widget(view, area);
+
+    // ── Left git-blame column paint ───────────────────────────────────────────
+    // Paint the blame strip into `[blame_col_x .. blame_col_x + blame_col_width)`
+    // which was carved off before the BufferView render.
+    if blame_col_width > 0 {
+        let slot = &app.slots()[slot_idx];
+        let top_row = slot.editor.host().viewport().top_row;
+        let height = area.height as usize;
+        let line_count = slot.editor.buffer().line_count() as usize;
+        let mut visible_doc_rows: Vec<usize> = Vec::with_capacity(height);
+        for sr in 0..height {
+            let dr = crate::app::mouse::doc_row_at_screen_offset(slot.editor.buffer(), top_row, sr);
+            visible_doc_rows.push(if dr < line_count { dr } else { usize::MAX });
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        // Pass width - 1 as text width so there's a 1-cell spacer on the right.
+        let rows = crate::app::git_hunks::build_blame_column(
+            &slot.blame,
+            &visible_doc_rows,
+            now,
+            blame_col_width.saturating_sub(1) as usize,
+        );
+        let dim_style = Style::default().fg(app.theme.ui.non_text);
+        let buf = frame.buffer_mut();
+        for (sr, row) in rows.iter().enumerate() {
+            let y = blame_col_y + sr as u16;
+            // Clear the strip (erase stale paint).
+            for cx in 0..blame_col_width {
+                if let Some(cell) = buf.cell_mut((blame_col_x + cx, y)) {
+                    cell.set_char(' ');
+                    cell.set_style(dim_style);
+                }
+            }
+            // Write text, leaving the last column as a spacer.
+            let right = blame_col_x + blame_col_width.saturating_sub(1);
+            for (i, ch) in row.text.chars().enumerate() {
+                let cx = blame_col_x + i as u16;
+                if cx >= right {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((cx, y)) {
+                    cell.set_char(ch);
+                    cell.set_style(dim_style);
+                }
+            }
+        }
+    }
 
     // ── Auto-indent flash overlay ─────────────────────────────────────────
     //

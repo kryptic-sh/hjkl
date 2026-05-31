@@ -28,7 +28,7 @@ mod engine_actions;
 mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
-mod git_hunks;
+pub(crate) mod git_hunks;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
 pub mod lsp_glue;
@@ -595,6 +595,7 @@ pub(super) fn build_slot(
         blame: Vec::new(),
         last_blame_dirty_gen: None,
         last_blame_refresh_at: Instant::now(),
+        blame_column: false,
         saved_hash: 0,
         saved_len: 0,
         signature_cache: None,

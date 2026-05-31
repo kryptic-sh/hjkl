@@ -733,6 +733,7 @@ impl App {
             blame: Vec::new(),
             last_blame_dirty_gen: None,
             last_blame_refresh_at: Instant::now(),
+            blame_column: false,
             saved_hash: 0,
             saved_len: 0,
             signature_cache: None,

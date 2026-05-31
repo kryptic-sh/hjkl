@@ -995,12 +995,12 @@ impl HostCmd<App> for GitUnstageCmd {
     }
 }
 
-/// `:Gblame` — show git blame for the cursor line in a popup (#202).
-pub(crate) struct GblameCmd;
+/// `:GitBlame` — toggle the left-side git blame column for the active buffer (#202).
+pub(crate) struct GitBlameCmd;
 
-impl HostCmd<App> for GblameCmd {
+impl HostCmd<App> for GitBlameCmd {
     fn name(&self) -> &'static str {
-        "Gblame"
+        "GitBlame"
     }
 
     fn aliases(&self) -> &'static [&'static str] {
@@ -1008,7 +1008,7 @@ impl HostCmd<App> for GblameCmd {
     }
 
     fn min_prefix(&self) -> usize {
-        "Gblame".len()
+        "GitBlame".len()
     }
 
     fn arg_kind(&self) -> ArgKind {
@@ -1016,7 +1016,7 @@ impl HostCmd<App> for GblameCmd {
     }
 
     fn run(&self, app: &mut App, _args: &str) -> Option<ExEffect> {
-        app.git_blame_popup();
+        app.toggle_blame_column();
         Some(ExEffect::Ok)
     }
 }
@@ -1411,7 +1411,7 @@ fn build_registry() -> hjkl_ex::HostRegistry<App> {
     reg.add(Box::new(GitStageCmd));
     reg.add(Box::new(GitRevertCmd));
     reg.add(Box::new(GitUnstageCmd));
-    reg.add(Box::new(GblameCmd));
+    reg.add(Box::new(GitBlameCmd));
     reg.add(Box::new(LspCodeActionCmd));
     reg.add(Box::new(LopenCmd));
     reg.add(Box::new(LnextCmd));

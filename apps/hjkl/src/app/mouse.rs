@@ -197,6 +197,21 @@ fn text_start_offset(
     lnum_width + sign_w + fold_w
 }
 
+/// Width of the left git-blame column for `slot` (0 when off or when
+/// soft-wrap is active). Mirrors the renderer's `blame_col_width` gate.
+/// Folded into `text_start_offset` callers so clicks map past the column.
+pub(crate) const BLAME_COLUMN_WIDTH: u16 = 22;
+
+/// Returns [`BLAME_COLUMN_WIDTH`] when the blame column is visible for `slot`,
+/// 0 otherwise. Mirrors the renderer's gate (blame_column on + Wrap::None).
+pub(crate) fn blame_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
+    if slot.blame_column && matches!(slot.editor.host().viewport().wrap, hjkl_buffer::Wrap::None) {
+        BLAME_COLUMN_WIDTH
+    } else {
+        0
+    }
+}
+
 /// Fold-column width for `slot`, matching the renderer's auto rule: 1 when
 /// the buffer has any fold (widened by an explicit `foldcolumn`), else the
 /// `foldcolumn` setting (0 by default).
@@ -216,7 +231,7 @@ fn fold_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
 /// the inverse of the renderer's fold-collapsing walk and the screen→doc
 /// counterpart of `viewport_math::cursor_screen_row_from`. Without this,
 /// clicks below a closed fold land on the wrong line.
-fn doc_row_at_screen_offset(
+pub(crate) fn doc_row_at_screen_offset(
     buffer: &hjkl_buffer::Buffer,
     top_row: usize,
     screen_offset: usize,
@@ -277,7 +292,7 @@ pub fn cell_to_doc(
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    );
+    ) + blame_column_width_for(slot);
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -356,7 +371,7 @@ pub fn doc_to_cell(
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    );
+    ) + blame_column_width_for(slot);
 
     let cell_y = rect.y + (doc_row - vp_top) as u16;
 
@@ -860,7 +875,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    );
+    ) + blame_column_width_for(slot);
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);

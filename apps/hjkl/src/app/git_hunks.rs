@@ -109,33 +109,22 @@ impl App {
         }
     }
 
-    /// `:Gblame` — show git blame attribution for the cursor line in a
-    /// read-only info popup (hash, author, date, summary). Accounts for unsaved
-    /// edits (uncommitted lines show "Not Committed Yet"). Non-git / untracked
-    /// files warn and no-op. (#202)
-    pub(crate) fn git_blame_popup(&mut self) {
-        let Some(path) = self.active().filename.clone() else {
-            self.bus.warn("no file for this buffer");
-            return;
-        };
-        let row = self.active().editor.cursor().0;
-        let bytes = self.active_buffer_git_bytes();
-        let Some(info) = git::blame_line(&path, row, &bytes) else {
-            self.bus.warn("no git blame for this line");
-            return;
-        };
-        let body = if info.is_uncommitted {
-            format!("{}\n{}", info.commit, info.summary)
+    /// `:GitBlame` / `<leader>gm` — toggle the left-side git blame column for
+    /// the active buffer. When turned on, also kicks a blame refresh so the
+    /// column populates immediately; auto-hides the inline EOL blame.
+    pub(crate) fn toggle_blame_column(&mut self) {
+        let on = !self.active().blame_column;
+        self.active_mut().blame_column = on;
+        if on {
+            // Blame data is normally gated on settings().blame_inline; the
+            // column needs it regardless, so force a refresh now.
+            self.refresh_blame_force();
+        }
+        self.bus.info(if on {
+            "git blame column: on"
         } else {
-            format!(
-                "commit {}\nauthor {}\ndate   {}\n\n{}",
-                info.commit,
-                info.author,
-                format_blame_date(info.time_unix),
-                info.summary,
-            )
-        };
-        self.info_popup = Some(hjkl_info_popup::InfoPopup::new("git blame", body));
+            "git blame column: off"
+        });
     }
 
     /// `:GitStage` / gutter "Stage Hunk" — stage the unstaged hunk under the
@@ -212,8 +201,6 @@ impl App {
 /// continuation rows (same commit as the row above) so only the FIRST line of
 /// each contiguous commit run is labeled. Uncommitted rows render their own
 /// label every time they start a run.
-// wired in P2 (blame column render)
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlameColumnRow {
     pub text: String,
@@ -224,8 +211,6 @@ pub(crate) struct BlameColumnRow {
 /// unix seconds, UTC), show a coarse relative label ("just now", "5m", "3h");
 /// at 8 hours or older, fall back to the absolute ISO date `YYYY-MM-DD`.
 /// `now < time_unix` (clock skew / future commit) also falls back to ISO.
-// wired in P2 (blame column render)
-#[allow(dead_code)]
 fn format_blame_time(time_unix: i64, now: i64) -> String {
     const EIGHT_HOURS: i64 = 8 * 3600;
     let delta = now - time_unix;
@@ -248,8 +233,6 @@ fn format_blame_time(time_unix: i64, now: i64) -> String {
 /// only when its commit hash differs from the immediately preceding visible row's
 /// commit (viewport-local comparison). For `i == 0` the row is always labeled.
 /// Label text = `"{author} · {time}"` truncated to `width` display columns (chars).
-// wired in P2 (blame column render)
-#[allow(dead_code)]
 pub(crate) fn build_blame_column(
     blame: &[Option<git::BlameInfo>],
     visible_doc_rows: &[usize],

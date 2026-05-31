@@ -115,14 +115,30 @@ impl App {
         redraw
     }
 
-    /// Queue a git blame refresh for the current buffer (throttled, no-op when
-    /// `blame_inline` is off).
+    /// Queue a git blame refresh for the current buffer (throttled).
+    ///
+    /// No-op when neither `blame_inline` nor `blame_column` is on (and
+    /// clears stale data in that case). `force = true` bypasses the dirty-gen
+    /// dedup and the 250 ms throttle so the column populates immediately on
+    /// toggle.
     pub(crate) fn refresh_blame(&mut self) {
+        self.refresh_blame_inner(false);
+    }
+
+    /// Force-refresh blame, bypassing the throttle and dirty-gen dedup.
+    /// Used by `toggle_blame_column` so data populates immediately on enable.
+    pub(crate) fn refresh_blame_force(&mut self) {
+        self.refresh_blame_inner(true);
+    }
+
+    fn refresh_blame_inner(&mut self, force: bool) {
         use std::time::{Duration, Instant};
         const BLAME_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
-        // When the setting is off, clear stale data and bail out.
-        if !self.active().editor.settings().blame_inline {
+        // When neither inline nor column blame is on, clear stale data and bail.
+        let blame_inline = self.active().editor.settings().blame_inline;
+        let blame_column = self.active().blame_column;
+        if !blame_inline && !blame_column {
             let slot = self.active_mut();
             slot.blame.clear();
             slot.last_blame_dirty_gen = None;
@@ -140,12 +156,12 @@ impl App {
         };
 
         let dg = self.active().editor.buffer().dirty_gen();
-        if self.active().last_blame_dirty_gen == Some(dg) {
+        if !force && self.active().last_blame_dirty_gen == Some(dg) {
             return;
         }
 
         let now = Instant::now();
-        if now.duration_since(self.active().last_blame_refresh_at) < BLAME_MIN_INTERVAL {
+        if !force && now.duration_since(self.active().last_blame_refresh_at) < BLAME_MIN_INTERVAL {
             return;
         }
 
