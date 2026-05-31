@@ -42,6 +42,15 @@ pub fn builtin_folds(lang: &str) -> Option<&'static str> {
         "bash" => Some(include_str!("../queries/folds/bash.scm")),
         "lua" => Some(include_str!("../queries/folds/lua.scm")),
         "java" => Some(include_str!("../queries/folds/java.scm")),
+        "html" => Some(include_str!("../queries/folds/html.scm")),
+        "css" => Some(include_str!("../queries/folds/css.scm")),
+        "scss" => Some(include_str!("../queries/folds/scss.scm")),
+        "yaml" => Some(include_str!("../queries/folds/yaml.scm")),
+        "toml" => Some(include_str!("../queries/folds/toml.scm")),
+        "ruby" => Some(include_str!("../queries/folds/ruby.scm")),
+        "php" => Some(include_str!("../queries/folds/php.scm")),
+        "c_sharp" => Some(include_str!("../queries/folds/c_sharp.scm")),
+        "markdown" => Some(include_str!("../queries/folds/markdown.scm")),
         _ => None,
     }
 }
