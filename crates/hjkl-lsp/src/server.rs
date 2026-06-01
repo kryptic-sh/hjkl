@@ -301,8 +301,15 @@ where
     tokio::spawn(stdin_task(stdin_rx, stdin_writer));
 
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
-    let capabilities =
-        initialize_handshake(&key, &stdin_tx, stdout_reader, evt_tx, pending.clone(), None).await?;
+    let capabilities = initialize_handshake(
+        &key,
+        &stdin_tx,
+        stdout_reader,
+        evt_tx,
+        pending.clone(),
+        None,
+    )
+    .await?;
 
     Ok(Server {
         key,
