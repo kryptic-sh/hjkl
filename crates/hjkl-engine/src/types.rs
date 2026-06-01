@@ -448,6 +448,21 @@ pub enum SignColumnMode {
     Auto,
 }
 
+/// Inline diagnostic ghost-text mode. Controls where the end-of-line `// …`
+/// diagnostic message is shown (Error-Lens style). Matches
+/// `:set diagnostics_inline=off|current|all`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum DiagInlineMode {
+    /// Never show inline diagnostic ghost text.
+    Off,
+    /// Show only on the cursor's current line.
+    Current,
+    /// Show on every line that has a diagnostic (default).
+    #[default]
+    All,
+}
+
 /// Soft-wrap mode for the renderer + scroll math + `gj` / `gk`.
 /// Engine-native equivalent of [`hjkl_buffer::Wrap`]; the engine
 /// converts at the boundary to the buffer's runtime wrap setting.

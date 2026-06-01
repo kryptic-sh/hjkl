@@ -60,6 +60,8 @@ pub fn all_setting_names() -> Vec<String> {
         "bg".into(),
         "list".into(),
         "blame_inline".into(),
+        "diagnostics_inline".into(),
+        "diaginline".into(),
         // boolean
         "ignorecase".into(),
         "ic".into(),
@@ -267,6 +269,11 @@ fn query_option_value<H: Host>(
         "autoclose-tag" | "act" => on_off(s.autoclose_tag),
         "list" => on_off(s.list),
         "blame_inline" => on_off(s.blame_inline),
+        "diagnostics_inline" | "diaginline" => match s.diagnostics_inline {
+            hjkl_engine::types::DiagInlineMode::Off => "off".into(),
+            hjkl_engine::types::DiagInlineMode::Current => "current".into(),
+            hjkl_engine::types::DiagInlineMode::All => "all".into(),
+        },
         "listchars" | "lcs" => format!("\"{}\"", s.listchars.to_canonical_string()),
         "indent_guides" | "ig" => on_off(s.indent_guides),
         "indent_guide_char" | "igc" => s.indent_guide_char.to_string(),
@@ -328,6 +335,19 @@ fn apply_set_token<H: Host>(
                 other => {
                     return Err(format!(
                         "signcolumn must be `yes`, `no`, or `auto`, got `{other}`"
+                    ));
+                }
+            };
+            return Ok(());
+        }
+        if matches!(name, "diagnostics_inline" | "diaginline") {
+            editor.settings_mut().diagnostics_inline = match value {
+                "off" | "no" | "disable" | "disabled" => hjkl_engine::types::DiagInlineMode::Off,
+                "current" | "cursor" | "line" => hjkl_engine::types::DiagInlineMode::Current,
+                "all" | "on" | "enable" | "enabled" => hjkl_engine::types::DiagInlineMode::All,
+                other => {
+                    return Err(format!(
+                        "diagnostics_inline must be `off`, `current`, or `all`, got `{other}`"
                     ));
                 }
             };
@@ -1113,6 +1133,43 @@ mod tests {
         assert!(!editor.settings().blame_inline, "no- turns off");
         assert_eq!(apply_set(&mut editor, "blame_inline"), ExEffect::Ok);
         assert!(editor.settings().blame_inline, "set on");
+    }
+
+    // ---- diagnostics_inline -------------------------------------------------
+
+    #[test]
+    fn set_diagnostics_inline_modes() {
+        use hjkl_engine::types::DiagInlineMode;
+        let mut editor = make_editor();
+        assert_eq!(
+            editor.settings().diagnostics_inline,
+            DiagInlineMode::All,
+            "default is all"
+        );
+        assert_eq!(
+            apply_set(&mut editor, "diagnostics_inline=off"),
+            ExEffect::Ok
+        );
+        assert_eq!(editor.settings().diagnostics_inline, DiagInlineMode::Off);
+        assert_eq!(
+            apply_set(&mut editor, "diaginline=current"),
+            ExEffect::Ok,
+            "alias + current mode"
+        );
+        assert_eq!(
+            editor.settings().diagnostics_inline,
+            DiagInlineMode::Current
+        );
+        assert_eq!(
+            apply_set(&mut editor, "diagnostics_inline=all"),
+            ExEffect::Ok
+        );
+        assert_eq!(editor.settings().diagnostics_inline, DiagInlineMode::All);
+        // Invalid value is rejected.
+        assert!(matches!(
+            apply_set(&mut editor, "diagnostics_inline=bogus"),
+            ExEffect::Error(_)
+        ));
     }
 
     #[test]

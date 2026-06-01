@@ -848,68 +848,81 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
 
-    // Inline end-of-line ghost text on the cursor line. Rendered comment-style
-    // (`// …` in Rust/JS, `# …` in Python, …) so it reads like a trailing
-    // comment, with per-hint colors. Two sources, cursor-line only:
-    //   1. LSP diagnostics — `// message` in the severity color (takes
-    //      precedence: an error on the line matters more than blame).
-    //   2. Inline git blame — `// author · summary` dimmed, idle-gated so it
-    //      doesn't flicker while typing / moving quickly (#202 P5).
+    // Inline end-of-line ghost text, rendered comment-style (`// …` in
+    // Rust/JS, `# …` in Python, …) so it reads like a trailing comment, with
+    // per-hint colors. Two sources:
+    //   1. LSP diagnostics — `// message` in the severity color. Mode is
+    //      `:set diagnostics_inline=off|current|all` (default `all`): `all`
+    //      annotates every diagnostic line, `current` only the cursor line.
+    //      One hint per line (most-severe diagnostic wins).
+    //   2. Inline git blame — `// author · summary` dimmed on the cursor line,
+    //      idle-gated so it doesn't flicker while moving (#202 P5). Shown only
+    //      when the cursor line has no diagnostic hint.
+    use hjkl_engine::types::DiagInlineMode;
     const BLAME_IDLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
     use hjkl_buffer_tui::render::EolHint;
     let comment_lead = app.active_comment_lead();
     let eol_hints: Vec<EolHint> = {
         let slot = &app.slots()[slot_idx];
         let cursor_row = slot.editor.buffer().cursor().row;
+        let diag_mode = slot.editor.settings().diagnostics_inline;
 
-        // 1. Most-severe diagnostic overlapping the cursor line.
-        let diag_hint = if is_focused {
-            slot.lsp_diags
-                .iter()
-                .filter(|d| d.start_row <= cursor_row && cursor_row <= d.end_row)
-                .min_by_key(|d| diag_severity_rank(d.severity))
-                .map(|d| {
-                    let msg = d.message.lines().next().unwrap_or("");
-                    EolHint {
-                        row: cursor_row,
-                        text: format!("{comment_lead} {}", truncate_chars(msg, 80)),
-                        style: Style::default()
-                            .fg(diag_severity_fg(d.severity))
-                            .add_modifier(Modifier::ITALIC),
-                    }
-                })
-        } else {
-            None
-        };
+        let mut hints: Vec<EolHint> = Vec::new();
 
-        if let Some(hint) = diag_hint {
-            vec![hint]
-        } else {
-            // 2. Inline blame fallback (idle-gated, opt-in via `blame_inline`).
-            let show = slot.editor.settings().blame_inline
-                && !slot.blame_column
-                && is_focused
-                && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY;
-            match slot.blame.get(cursor_row) {
-                Some(Some(info)) if show => {
-                    let body = if info.is_uncommitted {
-                        "You \u{00b7} Not Committed Yet".to_string()
-                    } else {
-                        format!(
-                            "{} \u{00b7} {}",
-                            info.author,
-                            truncate_chars(&info.summary, 50)
-                        )
-                    };
-                    vec![EolHint {
-                        row: cursor_row,
-                        text: format!("{comment_lead} {body}"),
-                        style: Style::default().fg(app.theme.ui.non_text),
-                    }]
+        // 1. Diagnostics — pick the most-severe diagnostic per (start) line.
+        if is_focused && diag_mode != DiagInlineMode::Off {
+            let mut by_row: std::collections::HashMap<usize, (DiagSeverity, &str)> =
+                std::collections::HashMap::new();
+            for d in &slot.lsp_diags {
+                if diag_mode == DiagInlineMode::Current && d.start_row != cursor_row {
+                    continue;
                 }
-                _ => vec![],
+                let msg = d.message.lines().next().unwrap_or("");
+                by_row
+                    .entry(d.start_row)
+                    .and_modify(|cur| {
+                        if diag_severity_rank(d.severity) < diag_severity_rank(cur.0) {
+                            *cur = (d.severity, msg);
+                        }
+                    })
+                    .or_insert((d.severity, msg));
+            }
+            for (row, (severity, msg)) in by_row {
+                hints.push(EolHint {
+                    row,
+                    text: format!("{comment_lead} {}", truncate_chars(msg, 80)),
+                    style: Style::default()
+                        .fg(diag_severity_fg(severity))
+                        .add_modifier(Modifier::ITALIC),
+                });
             }
         }
+
+        // 2. Inline blame on the cursor line, unless a diagnostic already
+        //    annotates it (errors take precedence over blame).
+        let blame_show = slot.editor.settings().blame_inline
+            && !slot.blame_column
+            && is_focused
+            && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY
+            && !hints.iter().any(|h| h.row == cursor_row);
+        if blame_show && let Some(Some(info)) = slot.blame.get(cursor_row) {
+            let body = if info.is_uncommitted {
+                "You \u{00b7} Not Committed Yet".to_string()
+            } else {
+                format!(
+                    "{} \u{00b7} {}",
+                    info.author,
+                    truncate_chars(&info.summary, 50)
+                )
+            };
+            hints.push(EolHint {
+                row: cursor_row,
+                text: format!("{comment_lead} {body}"),
+                style: Style::default().fg(app.theme.ui.non_text),
+            });
+        }
+
+        hints
     };
 
     let view = BufferView {
