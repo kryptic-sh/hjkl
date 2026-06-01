@@ -389,7 +389,7 @@ pub struct Options {
     /// each `:w` save. On formatter error the save is aborted. When no formatter
     /// is registered for the file extension, or the tool is not installed, the
     /// save proceeds without formatting (warn-and-fall-through for missing tool).
-    /// hjkl-specific. Alias `fos`. Default `false`.
+    /// hjkl-specific. Alias `fos`. Default `true`.
     pub format_on_save: bool,
     /// Strip trailing `[ \t]` from every line in the buffer before each `:w`
     /// save. Applied in-place so post-save `:e` reflects the trimmed content.
@@ -553,7 +553,7 @@ impl Default for Options {
                 "lua".to_string(),
                 "vim".to_string(),
             ],
-            format_on_save: false,
+            format_on_save: true,
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
             updatetime: 4000,
@@ -2197,9 +2197,9 @@ mod tests {
     // ── format_on_save / trim_trailing_whitespace ─────────────────────────────
 
     #[test]
-    fn format_on_save_default_false() {
+    fn format_on_save_default_true() {
         let o = Options::default();
-        assert!(!o.format_on_save, "format_on_save must default to false");
+        assert!(o.format_on_save, "format_on_save must default to true");
     }
 
     #[test]

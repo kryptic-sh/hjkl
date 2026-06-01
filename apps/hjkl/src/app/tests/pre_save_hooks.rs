@@ -169,9 +169,12 @@ fn save_writes_unformatted_when_no_formatter_for_path() {
 #[test]
 fn set_fos_alias_enables_format_on_save_via_ex() {
     let mut app = App::new(None, false, None, None).unwrap();
+    // format_on_save defaults to on; turn it off first so the alias toggle is
+    // exercised in both directions.
+    app.dispatch_ex("set nofos");
     assert!(
         !app.active().editor.settings().format_on_save,
-        "format_on_save must start false"
+        ":set nofos must disable format_on_save"
     );
     app.dispatch_ex("set fos");
     assert!(

@@ -983,7 +983,7 @@ impl Default for Settings {
                 "lua".to_string(),
                 "vim".to_string(),
             ],
-            format_on_save: false,
+            format_on_save: true,
             trim_trailing_whitespace: false,
             rainbow_brackets: true,
             updatetime: 4000,

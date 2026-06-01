@@ -42,12 +42,12 @@ enabled = true
 delay_ms = 500
 
 [lsp]
-# LSP subsystem. Set `enabled = true` in your user config (~/.config/hjkl/config.toml)
-# to opt in. Default off so installs without language servers don't pay the spawn
-# cost. The `[lsp.servers.<lang>]` blocks below ship as sensible defaults — a
-# server only spawns when you open a file matching its language AND the binary
-# resolves on $PATH; missing binaries fail silently.
-enabled = false
+# LSP subsystem. Enabled by default — set `enabled = false` in your user config
+# (~/.config/hjkl/config.toml) to turn it off. The `[lsp.servers.<lang>]` blocks
+# below ship as sensible defaults — a server only spawns when you open a file
+# matching its language AND the binary resolves on $PATH; missing binaries fail
+# silently, so installs without language servers pay no real cost.
+enabled = true
 
 [lsp.servers.rust]
 command = "rust-analyzer"
