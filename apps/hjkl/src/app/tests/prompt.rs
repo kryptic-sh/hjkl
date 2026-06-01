@@ -370,8 +370,9 @@ fn colon_shift_tab_navigates_popup_backward() {
 
 #[test]
 fn colon_enter_accepts_selected_item_no_execute() {
-    // "e" → popup opens → Enter accepts first candidate, field updated, popup closed.
-    // A second Enter is needed to execute.
+    // Typing "e" resolves to a runnable command (`edit`), so a bare Enter would
+    // execute it. But once the user NAVIGATES the popup, Enter must accept the
+    // highlighted candidate (field stays open) rather than execute.
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "e");
@@ -379,7 +380,8 @@ fn colon_enter_accepts_selected_item_no_execute() {
         app.completion.is_some(),
         "popup must be open after typing 'e'"
     );
-    // Accept with Enter.
+    // Navigate off the auto-selected best match, then accept with Enter.
+    app.handle_command_field_key(key(KeyCode::Tab));
     app.handle_command_field_key(key(KeyCode::Enter));
     // Popup must now be closed.
     assert!(
@@ -397,11 +399,13 @@ fn colon_enter_accepts_selected_item_no_execute() {
 }
 
 #[test]
-fn colon_enter_accept_arg_command_appends_space() {
-    // "edit" takes an argument → accepted text should end with a space.
+fn colon_accept_arg_command_appends_space() {
+    // Accepting an arg-taking command (`edit` → `ArgKind::Path`) appends a
+    // trailing space so the user can type the argument. Drive the accept
+    // mechanism directly (the Enter routing for a complete/runnable command is
+    // covered separately by the alias/exact-match tests).
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
-    // Type enough to uniquely select "edit".
     type_str(&mut app, "edit");
     assert!(app.completion.is_some(), "popup must be open");
     // Find "edit" in the popup and select it.
@@ -412,7 +416,7 @@ fn colon_enter_accept_arg_command_appends_space() {
         .position(|&idx| popup.all_items[idx].label == "edit");
     if let Some(vis_idx) = edit_vis_idx {
         app.completion.as_mut().unwrap().selected = vis_idx;
-        app.handle_command_field_key(key(KeyCode::Enter));
+        app.accept_command_completion();
         let text = app.command_field.as_ref().unwrap().text();
         assert!(
             text.ends_with(' '),
@@ -454,6 +458,59 @@ fn colon_enter_exact_match_executes_directly() {
         app.command_field.is_none(),
         "exact-match command must execute on the first Enter (field closed)"
     );
+}
+
+#[test]
+fn colon_alias_command_executes_directly() {
+    // ":w" is an alias of "write". The popup only lists canonical names
+    // (write, wall, wnext…), so "w" is never an item — but typing ":w<Enter>"
+    // must run write, NOT accept the top-ranked "wa*" candidate.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    // Popup is open and the typed line resolves to a runnable command.
+    assert!(app.completion.is_some(), "popup should be open after 'w'");
+    assert!(
+        app.command_line_is_runnable(),
+        "':w' must resolve as a runnable command via its alias"
+    );
+    app.handle_command_field_key(key(KeyCode::Enter));
+    assert!(
+        app.command_field.is_none(),
+        "alias command ':w' must execute on the first Enter (field closed)"
+    );
+}
+
+#[test]
+fn colon_navigated_popup_still_accepts_over_runnable_alias() {
+    // If the user actively navigates the popup away from the default, Enter
+    // should accept the chosen candidate even when the typed prefix happens to
+    // be a runnable alias.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    // Navigate off the auto-selected best match.
+    app.handle_command_field_key(key(KeyCode::Tab));
+    let selected_label = app
+        .completion
+        .as_ref()
+        .and_then(|p| p.selected_item())
+        .map(|i| i.label.clone());
+    app.handle_command_field_key(key(KeyCode::Enter));
+    // Accept replaces the line with the selected candidate; the field stays
+    // open (awaiting the execute Enter) rather than running ":w".
+    assert!(
+        app.command_field.is_some(),
+        "navigated accept must not execute the alias"
+    );
+    if let Some(label) = selected_label {
+        let text = app.command_field.as_ref().unwrap().text();
+        assert_eq!(
+            text.trim_end(),
+            label,
+            "line must become the navigated candidate (modulo arg space)"
+        );
+    }
 }
 
 #[test]

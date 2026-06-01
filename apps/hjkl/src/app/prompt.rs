@@ -307,6 +307,33 @@ impl App {
         }
     }
 
+    /// `true` when the leading command word of the current line resolves to a
+    /// real ex command — by canonical name **or alias**. The completion popup
+    /// only lists canonical names (e.g. `write`, `wall`), so a typed alias like
+    /// `w` never appears as an item; without this check Enter would "accept"
+    /// the top-ranked candidate (`wall`) instead of running `:w`. Aliases
+    /// resolve here so `:w<Enter>` executes directly.
+    pub(crate) fn command_line_is_runnable(&self) -> bool {
+        let line = match self.command_field.as_ref() {
+            Some(f) => f.text(),
+            None => return false,
+        };
+        // Leading command word: alphanumeric / `_` run after trimming leading
+        // whitespace. (Range-prefixed commands won't resolve here and fall back
+        // to the accept path, which is fine.)
+        let token: String = line
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if token.is_empty() {
+            return false;
+        }
+        let host_reg = super::ex_host_cmds::host_registry();
+        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
+        host_reg.resolve(&token).is_some() || editor_reg.resolve(&token).is_some()
+    }
+
     pub(crate) fn accept_command_completion(&mut self) {
         let new_text = self.computed_command_accept_text();
         // Clear popup state regardless (accept consumes it).
@@ -450,12 +477,16 @@ impl App {
 
         // Computed before the mutable `command_field` borrow below so it can
         // immutably inspect the popup + field together. When the popup is open,
-        // Enter accepts the selected item (then a second Enter runs) — UNLESS
-        // accepting would be a no-op because the line already equals the
-        // selected candidate (e.g. an exact match like `:wq`), in which case we
-        // execute directly instead of requiring a second press.
-        let enter_should_accept =
-            self.completion.is_some() && self.command_accept_would_change_line();
+        // Enter accepts the selected item (then a second Enter runs) — UNLESS:
+        //   - accepting would be a no-op because the line already equals the
+        //     selected candidate (an exact match like `:wq`), OR
+        //   - the typed line is itself a runnable command (by name or alias,
+        //     e.g. `:w` → `write`) and the user hasn't navigated the popup,
+        // in which case we execute directly instead of accepting `:wall`.
+        let user_navigated = self.completion.as_ref().is_some_and(|p| p.selected != 0);
+        let enter_should_accept = self.completion.is_some()
+            && self.command_accept_would_change_line()
+            && (user_navigated || !self.command_line_is_runnable());
 
         let field = match self.command_field.as_mut() {
             Some(f) => f,
