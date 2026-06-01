@@ -425,6 +425,40 @@ fn colon_enter_accept_arg_command_appends_space() {
 }
 
 #[test]
+fn colon_enter_exact_match_executes_directly() {
+    // Typing a full no-arg command name (e.g. "wq") that exactly matches the
+    // selected candidate must EXECUTE on the first Enter — accepting would be a
+    // no-op (line already == candidate, no trailing space), so we skip the
+    // accept step and run directly rather than requiring a second Enter.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "wq");
+    // Popup is open with "wq" highlighted (it's a real command). Ensure "wq" is
+    // the selected candidate so accept would be a no-op.
+    let wq_vis_idx = app.completion.as_ref().and_then(|popup| {
+        popup
+            .visible
+            .iter()
+            .position(|&idx| popup.all_items[idx].label == "wq")
+    });
+    if let (Some(vis_idx), Some(popup)) = (wq_vis_idx, app.completion.as_mut()) {
+        popup.selected = vis_idx;
+        // accept-would-change must be false for an exact match.
+        assert!(
+            !app.command_accept_would_change_line(),
+            "exact-match 'wq' should not change the line on accept"
+        );
+    }
+    app.handle_command_field_key(key(KeyCode::Enter));
+    // Single Enter executed: the command field is closed (not still awaiting a
+    // second Enter).
+    assert!(
+        app.command_field.is_none(),
+        "exact-match command must execute on the first Enter (field closed)"
+    );
+}
+
+#[test]
 fn colon_esc_with_popup_open_clears_popup_keeps_text() {
     // "w" → popup opens → Esc → popup clears, text stays, field stays open.
     let mut app = App::new(None, false, None, None).unwrap();

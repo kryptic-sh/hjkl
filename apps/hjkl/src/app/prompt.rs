@@ -247,25 +247,21 @@ impl App {
     /// Accept the currently selected item from the `:` completion popup:
     /// replaces the token in the command field and closes the popup.
     /// Does NOT execute the command — the user presses Enter again for that.
-    pub(crate) fn accept_command_completion(&mut self) {
-        let popup = match self.completion.take() {
-            Some(p) => p,
-            None => return,
-        };
-        let range = self.command_completion_range.take();
-
-        let item = match popup.selected_item() {
-            Some(i) => i.clone(),
-            None => return,
-        };
-
-        let field = match self.command_field.as_mut() {
-            Some(f) => f,
-            None => return,
-        };
+    /// Compute the command-line text that accepting the currently-selected
+    /// completion candidate would produce, without mutating anything. Returns
+    /// `None` when there is no popup / no selection / no command field.
+    ///
+    /// Shared by [`Self::accept_command_completion`] (which applies the result)
+    /// and [`Self::command_accept_would_change_line`] (which compares it to the
+    /// current line to decide whether Enter should accept or execute directly).
+    fn computed_command_accept_text(&self) -> Option<String> {
+        let popup = self.completion.as_ref()?;
+        let item = popup.selected_item()?;
+        let field = self.command_field.as_ref()?;
         let line = field.text();
-        let start = range.as_ref().map(|r| r.start).unwrap_or(0);
-        let end = range.as_ref().map(|r| r.end).unwrap_or(line.len());
+        let range = self.command_completion_range.as_ref();
+        let start = range.map(|r| r.start).unwrap_or(0);
+        let end = range.map(|r| r.end).unwrap_or(line.len());
 
         // Determine if this command takes an argument (add trailing space).
         // We check by trying to resolve the accepted label as a command name.
@@ -287,16 +283,39 @@ impl App {
             ""
         };
 
-        let new_text = format!(
+        Some(format!(
             "{}{}{}{}",
             &line[..start],
             item.insert_text,
             suffix,
             &line[end.min(line.len())..],
-        );
+        ))
+    }
 
-        set_field_text(field, &new_text);
-        // popup is already None (taken above).
+    /// `true` when accepting the selected completion would change the command
+    /// line. When `false` (the line already equals the candidate — e.g. an
+    /// exact match like `:wq`), Enter should execute directly instead of
+    /// requiring a second press.
+    pub(crate) fn command_accept_would_change_line(&self) -> bool {
+        match (
+            self.computed_command_accept_text(),
+            self.command_field.as_ref(),
+        ) {
+            (Some(new_text), Some(field)) => new_text != field.text(),
+            // No candidate/selection → nothing to accept → don't intercept Enter.
+            _ => false,
+        }
+    }
+
+    pub(crate) fn accept_command_completion(&mut self) {
+        let new_text = self.computed_command_accept_text();
+        // Clear popup state regardless (accept consumes it).
+        self.completion = None;
+        self.command_completion_range = None;
+        let Some(new_text) = new_text else { return };
+        if let Some(field) = self.command_field.as_mut() {
+            set_field_text(field, &new_text);
+        }
     }
 
     pub(crate) fn handle_command_field_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -429,6 +448,15 @@ impl App {
             return;
         }
 
+        // Computed before the mutable `command_field` borrow below so it can
+        // immutably inspect the popup + field together. When the popup is open,
+        // Enter accepts the selected item (then a second Enter runs) — UNLESS
+        // accepting would be a no-op because the line already equals the
+        // selected candidate (e.g. an exact match like `:wq`), in which case we
+        // execute directly instead of requiring a second press.
+        let enter_should_accept =
+            self.completion.is_some() && self.command_accept_would_change_line();
+
         let field = match self.command_field.as_mut() {
             Some(f) => f,
             None => return,
@@ -436,8 +464,7 @@ impl App {
 
         // ── Enter ────────────────────────────────────────────────────────────
         if input.key == EngineKey::Enter {
-            if self.completion.is_some() {
-                // Accept selected item, close popup, do NOT execute yet.
+            if enter_should_accept {
                 self.accept_command_completion();
                 return;
             }
