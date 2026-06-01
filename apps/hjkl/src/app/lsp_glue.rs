@@ -963,36 +963,163 @@ impl App {
             .any(|p| matches!(p, LspPendingRequest::Completion { .. }))
     }
 
-    /// Auto-fire a completion request as the user types in insert mode.
+    /// Auto-fire completion as the user types in insert mode.
     ///
     /// Fires when `ch` is either a server-declared trigger character (e.g. `.`,
     /// `::`) **or** an identifier character (letter / digit / `_`) so the popup
     /// surfaces keywords, locals, fields and types mid-word — not only after a
-    /// member-access dot. No-ops silently when no completion-capable server is
-    /// attached, and coalesces while a request is already pending.
+    /// member-access dot.
+    ///
+    /// When an LSP server is attached, fires a `textDocument/completion` request
+    /// (its response is augmented with buffer words). When no server is
+    /// attached, opens a buffer-words-only popup synchronously so completion of
+    /// already-typed identifiers still works without a language server.
     pub(crate) fn maybe_auto_trigger_completion(&mut self, ch: char) {
-        // Only when an LSP server actually advertises completion for this file.
-        let provider = match self.active_completion_provider() {
-            Some(p) => p,
-            None => return,
+        // Decide whether to fire, and whether an LSP server is available, while
+        // only borrowing `self` immutably — then act with the mutable borrow.
+        let (has_provider, is_trigger) = match self.active_completion_provider() {
+            Some(p) => {
+                let is_trigger = p
+                    .pointer("/triggerCharacters")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|arr| {
+                        arr.iter()
+                            .any(|s| s.as_str() == Some(ch.to_string().as_str()))
+                    });
+                (true, is_trigger)
+            }
+            None => (false, false),
         };
-        let is_trigger = provider
-            .pointer("/triggerCharacters")
-            .and_then(|v| v.as_array())
-            .is_some_and(|arr| {
-                arr.iter()
-                    .any(|s| s.as_str() == Some(ch.to_string().as_str()))
-            });
         let is_ident = ch.is_alphanumeric() || ch == '_';
         if !(is_trigger || is_ident) {
             return;
         }
-        // Don't pile up requests while one is in flight; the local prefix
-        // filter narrows the open popup until the response lands.
-        if self.lsp_has_pending_completion() {
+        if has_provider {
+            // Don't pile up requests while one is in flight; the local prefix
+            // filter narrows the open popup until the response lands. Buffer
+            // words are merged in when the response arrives.
+            if self.lsp_has_pending_completion() {
+                return;
+            }
+            self.lsp_request_completion_inner(true);
+        } else if is_ident {
+            // No language server — surface unique tokens from the open buffers.
+            self.open_buffer_word_completion();
+        }
+    }
+
+    /// Open a completion popup populated purely from unique identifier tokens
+    /// found across all open buffers (vim's keyword completion, `<C-n>`). Used
+    /// when no LSP server is attached so word completion still works.
+    pub(crate) fn open_buffer_word_completion(&mut self) {
+        let cursor = self.active().editor.buffer().cursor();
+        let (row, col) = (cursor.row, cursor.col);
+        let anchor_col = self.identifier_start_col(row, col);
+        let token = self.token_between(row, anchor_col, col);
+        let items = self.buffer_word_items(&token);
+        if items.is_empty() {
             return;
         }
-        self.lsp_request_completion_inner(true);
+        let mut popup = Completion::new(row, anchor_col, items);
+        if !token.is_empty() {
+            popup.set_prefix(&token);
+            if popup.is_empty() {
+                return;
+            }
+        }
+        self.completion = Some(popup);
+    }
+
+    /// The text between byte columns `[lo, hi)` on `row` (the partial word
+    /// under the cursor). Empty when out of range.
+    fn token_between(&self, row: usize, lo: usize, hi: usize) -> String {
+        let rope = self.active().editor.buffer().rope();
+        if row >= rope.len_lines() {
+            return String::new();
+        }
+        let line = hjkl_buffer::rope_line_str(&rope, row);
+        let lo = lo.min(line.len());
+        let hi = hi.min(line.len());
+        if lo <= hi {
+            line[lo..hi].to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Collect unique identifier tokens from every open buffer as completion
+    /// items (kind `Other`). Tokens must start with a letter or `_` and be at
+    /// least two chars; `exclude` (the partial word currently under the cursor)
+    /// is skipped so the popup never suggests exactly what's being typed.
+    ///
+    /// Bounded: scans at most `MAX_SCAN_BYTES` per buffer and returns at most
+    /// `MAX_WORDS` items so a giant buffer can't stall the insert path.
+    pub(crate) fn buffer_word_items(
+        &self,
+        exclude: &str,
+    ) -> Vec<crate::completion::CompletionItem> {
+        use crate::completion::CompletionItem;
+        const MAX_WORDS: usize = 2000;
+        const MAX_SCAN_BYTES: usize = 1_000_000;
+
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut items: Vec<CompletionItem> = Vec::new();
+
+        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let is_word_start = |c: char| c.is_alphabetic() || c == '_';
+
+        'buffers: for slot in &self.slots {
+            let rope = slot.editor.buffer().rope();
+            let mut word = String::new();
+            let mut scanned = 0usize;
+            for ch in rope.chars() {
+                scanned += ch.len_utf8();
+                if is_word_char(ch) {
+                    word.push(ch);
+                } else if !word.is_empty() {
+                    Self::push_buffer_word(
+                        &mut word,
+                        exclude,
+                        &mut seen,
+                        &mut items,
+                        is_word_start,
+                    );
+                    if items.len() >= MAX_WORDS {
+                        break 'buffers;
+                    }
+                }
+                if scanned >= MAX_SCAN_BYTES {
+                    break;
+                }
+            }
+            if !word.is_empty() {
+                Self::push_buffer_word(&mut word, exclude, &mut seen, &mut items, is_word_start);
+                if items.len() >= MAX_WORDS {
+                    break 'buffers;
+                }
+            }
+        }
+        items
+    }
+
+    /// Helper for [`Self::buffer_word_items`]: accept `word` as a candidate when
+    /// it is a valid identifier, not the excluded prefix, and not already seen.
+    /// Clears `word` for reuse either way.
+    fn push_buffer_word(
+        word: &mut String,
+        exclude: &str,
+        seen: &mut std::collections::HashSet<String>,
+        items: &mut Vec<crate::completion::CompletionItem>,
+        is_word_start: impl Fn(char) -> bool,
+    ) {
+        if word.len() >= 2
+            && word.as_str() != exclude
+            && word.chars().next().is_some_and(&is_word_start)
+            && seen.insert(word.clone())
+        {
+            items.push(crate::completion::CompletionItem::new(word.clone()));
+        }
+        word.clear();
     }
 
     /// Send a `textDocument/completion` request for the current cursor position
@@ -1646,7 +1773,31 @@ impl App {
             serde_json::from_value::<Vec<lsp_types::CompletionItem>>(val).unwrap_or_default()
         };
 
-        if lsp_items.is_empty() {
+        // The partial word currently under the cursor — used both to filter the
+        // popup and as the `exclude` token for buffer-word harvesting.
+        let cursor = self.active().editor.buffer().cursor();
+        let prefix = if cursor.row == anchor_row && cursor.col >= anchor_col {
+            self.token_between(anchor_row, anchor_col, cursor.col)
+        } else {
+            String::new()
+        };
+
+        let mut items: Vec<crate::completion::CompletionItem> =
+            lsp_items.into_iter().map(item_from_lsp).collect();
+
+        // Augment LSP results with unique tokens from the open buffers (vim-like
+        // keyword completion). Dedupe by label so a word the server already
+        // returned isn't listed twice; buffer words rank below exact LSP hits
+        // via the shared fuzzy scorer once the prefix is applied.
+        let existing: std::collections::HashSet<String> =
+            items.iter().map(|i| i.label.clone()).collect();
+        for w in self.buffer_word_items(&prefix) {
+            if !existing.contains(&w.label) {
+                items.push(w);
+            }
+        }
+
+        if items.is_empty() {
             // As-you-type requests stay quiet; only an explicit invocation
             // reports an empty result.
             if !auto {
@@ -1655,27 +1806,13 @@ impl App {
             return;
         }
 
-        let items: Vec<crate::completion::CompletionItem> =
-            lsp_items.into_iter().map(item_from_lsp).collect();
         let mut popup = Completion::new(anchor_row, anchor_col, items);
         // The user may have typed further chars between firing the request and
         // this response landing. Filter the freshly-opened popup by whatever is
         // currently between the anchor and the cursor so it shows the right
         // subset immediately rather than the full list for one frame.
-        let cursor = self.active().editor.buffer().cursor();
-        if cursor.row == anchor_row && cursor.col >= anchor_col {
-            let rope = self.active().editor.buffer().rope();
-            if anchor_row < rope.len_lines() {
-                let line = hjkl_buffer::rope_line_str(&rope, anchor_row);
-                let lo = anchor_col.min(line.len());
-                let hi = cursor.col.min(line.len());
-                if lo <= hi {
-                    let prefix = line[lo..hi].to_string();
-                    if !prefix.is_empty() {
-                        popup.set_prefix(&prefix);
-                    }
-                }
-            }
+        if !prefix.is_empty() {
+            popup.set_prefix(&prefix);
         }
         if popup.is_empty() {
             return;

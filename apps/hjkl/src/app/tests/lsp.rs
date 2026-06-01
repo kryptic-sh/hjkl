@@ -1139,6 +1139,37 @@ fn accept_completion_inserts_selected_item() {
 }
 
 #[test]
+fn buffer_word_items_collects_unique_identifiers() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "let foo = bar;\nfoo_bar(foo, 123, x)");
+    let items = app.buffer_word_items("");
+    let labels: std::collections::HashSet<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    assert!(labels.contains("foo"), "labels: {labels:?}");
+    assert!(labels.contains("bar"));
+    assert!(labels.contains("foo_bar"));
+    assert!(labels.contains("let"));
+    assert!(
+        !labels.contains("x"),
+        "single-char tokens excluded (len < 2)"
+    );
+    assert!(!labels.contains("123"), "digit-leading tokens excluded");
+    // "foo" appears twice in the source but must be listed once.
+    assert_eq!(items.iter().filter(|i| i.label == "foo").count(), 1);
+}
+
+#[test]
+fn buffer_word_items_excludes_current_token() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "alpha beta alpha");
+    let items = app.buffer_word_items("alpha");
+    assert!(
+        !items.iter().any(|i| i.label == "alpha"),
+        "the word being typed must not suggest itself"
+    );
+    assert!(items.iter().any(|i| i.label == "beta"));
+}
+
+#[test]
 fn accept_completion_records_content_edit_for_resync() {
     // Regression (#143): accepting a completion must go through the editor's
     // tracked mutation funnel so a `ContentEdit` is recorded. Otherwise the
