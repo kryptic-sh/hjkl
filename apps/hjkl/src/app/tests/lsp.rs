@@ -1139,6 +1139,20 @@ fn accept_completion_inserts_selected_item() {
 }
 
 #[test]
+fn active_comment_lead_matches_language() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.rs"));
+    assert_eq!(app.active_comment_lead(), "//", "rust");
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.py"));
+    assert_eq!(app.active_comment_lead(), "#", "python");
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.js"));
+    assert_eq!(app.active_comment_lead(), "//", "javascript");
+    // Unknown / no extension falls back to `//`.
+    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.unknownext"));
+    assert_eq!(app.active_comment_lead(), "//", "unknown fallback");
+}
+
+#[test]
 fn buffer_word_items_collects_unique_identifiers() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "let foo = bar;\nfoo_bar(foo, 123, x)");

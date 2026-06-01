@@ -326,19 +326,41 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
 
 /// Build the style for a diagnostic severity used in overlays and the status line.
 fn diag_severity_style(sev: DiagSeverity) -> Style {
+    Style::default()
+        .fg(diag_severity_fg(sev))
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Foreground color for a diagnostic severity. Shared by the squiggly span
+/// overlay ([`diag_severity_style`]) and the inline end-of-line ghost-text
+/// hint, so both read the same palette.
+fn diag_severity_fg(sev: DiagSeverity) -> Color {
     match sev {
-        DiagSeverity::Error => Style::default()
-            .fg(Color::Red)
-            .add_modifier(Modifier::UNDERLINED),
-        DiagSeverity::Warning => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::UNDERLINED),
-        DiagSeverity::Info => Style::default()
-            .fg(Color::Blue)
-            .add_modifier(Modifier::UNDERLINED),
-        DiagSeverity::Hint => Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::UNDERLINED),
+        DiagSeverity::Error => Color::Red,
+        DiagSeverity::Warning => Color::Yellow,
+        DiagSeverity::Info => Color::Blue,
+        DiagSeverity::Hint => Color::Cyan,
+    }
+}
+
+/// Sort rank for severity — lower is more severe. Used to pick the single
+/// diagnostic to surface as the cursor-line inline hint.
+fn diag_severity_rank(sev: DiagSeverity) -> u8 {
+    match sev {
+        DiagSeverity::Error => 0,
+        DiagSeverity::Warning => 1,
+        DiagSeverity::Info => 2,
+        DiagSeverity::Hint => 3,
+    }
+}
+
+/// Char-safe truncation with an ellipsis. Byte-indexing `&str` panics when the
+/// cut lands inside a multi-byte char (CJK / emoji); counting chars avoids it.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}\u{2026}", s.chars().take(max).collect::<String>())
+    } else {
+        s.to_string()
     }
 }
 
@@ -826,44 +848,67 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     let diag_overlays = build_diag_overlays(&app.slots()[slot_idx], &app.theme.ui);
 
-    // #202 P5: inline blame EOL hint — cursor line only, shown after a short
-    // idle period so it doesn't flicker while typing or moving quickly.
+    // Inline end-of-line ghost text on the cursor line. Rendered comment-style
+    // (`// …` in Rust/JS, `# …` in Python, …) so it reads like a trailing
+    // comment, with per-hint colors. Two sources, cursor-line only:
+    //   1. LSP diagnostics — `// message` in the severity color (takes
+    //      precedence: an error on the line matters more than blame).
+    //   2. Inline git blame — `// author · summary` dimmed, idle-gated so it
+    //      doesn't flicker while typing / moving quickly (#202 P5).
     const BLAME_IDLE_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
-    let blame_hints: Vec<hjkl_buffer_tui::render::EolHint> = {
+    use hjkl_buffer_tui::render::EolHint;
+    let comment_lead = app.active_comment_lead();
+    let eol_hints: Vec<EolHint> = {
         let slot = &app.slots()[slot_idx];
-        let show = slot.editor.settings().blame_inline
-            && !slot.blame_column
-            && is_focused
-            && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY;
-        if show {
-            let cursor_row = slot.editor.buffer().cursor().row;
-            if let Some(Some(info)) = slot.blame.get(cursor_row) {
-                let text = if info.is_uncommitted {
-                    "You \u{00b7} Not Committed Yet".to_string()
-                } else {
-                    // Char-safe truncation: byte-indexing `&str` panics when
-                    // byte 50 splits a multi-byte char (emoji/CJK summaries).
-                    let summary = if info.summary.chars().count() > 50 {
-                        format!(
-                            "{}\u{2026}",
-                            info.summary.chars().take(50).collect::<String>()
-                        )
-                    } else {
-                        info.summary.clone()
-                    };
-                    format!("{} \u{00b7} {}", info.author, summary)
-                };
-                let style = Style::default().fg(app.theme.ui.non_text);
-                vec![hjkl_buffer_tui::render::EolHint {
-                    row: cursor_row,
-                    text,
-                    style,
-                }]
-            } else {
-                vec![]
-            }
+        let cursor_row = slot.editor.buffer().cursor().row;
+
+        // 1. Most-severe diagnostic overlapping the cursor line.
+        let diag_hint = if is_focused {
+            slot.lsp_diags
+                .iter()
+                .filter(|d| d.start_row <= cursor_row && cursor_row <= d.end_row)
+                .min_by_key(|d| diag_severity_rank(d.severity))
+                .map(|d| {
+                    let msg = d.message.lines().next().unwrap_or("");
+                    EolHint {
+                        row: cursor_row,
+                        text: format!("{comment_lead} {}", truncate_chars(msg, 80)),
+                        style: Style::default()
+                            .fg(diag_severity_fg(d.severity))
+                            .add_modifier(Modifier::ITALIC),
+                    }
+                })
         } else {
-            vec![]
+            None
+        };
+
+        if let Some(hint) = diag_hint {
+            vec![hint]
+        } else {
+            // 2. Inline blame fallback (idle-gated, opt-in via `blame_inline`).
+            let show = slot.editor.settings().blame_inline
+                && !slot.blame_column
+                && is_focused
+                && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY;
+            match slot.blame.get(cursor_row) {
+                Some(Some(info)) if show => {
+                    let body = if info.is_uncommitted {
+                        "You \u{00b7} Not Committed Yet".to_string()
+                    } else {
+                        format!(
+                            "{} \u{00b7} {}",
+                            info.author,
+                            truncate_chars(&info.summary, 50)
+                        )
+                    };
+                    vec![EolHint {
+                        row: cursor_row,
+                        text: format!("{comment_lead} {body}"),
+                        style: Style::default().fg(app.theme.ui.non_text),
+                    }]
+                }
+                _ => vec![],
+            }
         }
     };
 
@@ -898,8 +943,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         indent_guide_fg: app.theme.ui.indent_guide_fg,
         indent_guide_active_fg: app.theme.ui.indent_guide_active_fg,
         indent_guide_active_col,
-        // #202 P5: inline blame EOL hints (cursor line, idle-gated).
-        eol_hints: &blame_hints,
+        // Inline EOL ghost text (cursor line): diagnostics + git blame.
+        eol_hints: &eol_hints,
     };
     frame.render_widget(view, area);
 

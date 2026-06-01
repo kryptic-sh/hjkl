@@ -431,6 +431,23 @@ impl App {
         }
     }
 
+    /// Single-line comment lead for the active buffer's language (e.g. `"//"`
+    /// for Rust/JS/C, `"#"` for Python/shell, `"--"` for Lua/SQL). Used to
+    /// prefix end-of-line ghost-text hints (inline blame, diagnostics) so they
+    /// read like a trailing comment. Falls back to `"//"` for unknown
+    /// languages.
+    pub(crate) fn active_comment_lead(&self) -> &'static str {
+        self.active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext)
+            .and_then(hjkl_lang::comment::commentstring_for_lang)
+            .map(|(start, _)| start)
+            .unwrap_or("//")
+    }
+
     /// LSP server name for the active buffer, if one is attached.
     ///
     /// Returns the `language` string from the first matching [`ServerKey`]
