@@ -958,6 +958,28 @@ impl App {
                 }
                 // ── End pre-save hooks ──────────────────────────────────────
 
+                // The format-on-save / trim hooks may have rewritten the buffer
+                // (via `set_content_undoable` → whole-buffer reset, or content
+                // edits). Fan those changes into the syntax tree NOW so the next
+                // render doesn't query a stale tree (old byte offsets) against
+                // the new rope — that mismatch slices a node range mid-char and
+                // panics `ropey::byte_slice`.
+                {
+                    let bid = self.slots[idx].buffer_id;
+                    let was_reset = self.slots[idx].editor.take_content_reset();
+                    if was_reset {
+                        self.syntax.reset(bid);
+                    }
+                    let edits = self.slots[idx].editor.take_content_edits();
+                    if !edits.is_empty() {
+                        self.syntax.apply_edits(bid, &edits);
+                    }
+                    // Rebuild spans for the active buffer before the next draw.
+                    if (was_reset || !edits.is_empty()) && idx == self.focused_slot_idx() {
+                        self.pending_recompute = true;
+                    }
+                }
+
                 // Reuse the per-dirty_gen Arc<String> from content_joined() so
                 // saves share the same allocation that LSP / git / syntax / dirty
                 // signature paths already paid for. Was Buffer::lines().join()
