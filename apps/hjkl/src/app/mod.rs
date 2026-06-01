@@ -230,6 +230,12 @@ pub struct App {
     /// mouse-scroll events fires one sync query instead of N.
     pub(crate) pending_recompute: bool,
     pub last_signature_us: u128,
+    /// `(buffer_id, viewport top_row, viewport height, content dirty_gen)` at
+    /// the last syntax recompute driven by `sync_after_engine_mutation`. Lets
+    /// that hot path skip the tree-sitter viewport query on a pure cursor move
+    /// (e.g. a mouse selection drag), which changes none of these — re-querying
+    /// dominated the profile during mouse drags. `None` forces a recompute.
+    pub(crate) last_synced_syntax_view: Option<(hjkl_lsp::BufferId, usize, u16, u64)>,
     /// User config (bundled defaults + optional XDG overrides). Tests
     /// receive `Config::default()` (the bundled values); main wires the
     /// XDG-merged value via [`Self::with_config`] before entering the
@@ -946,7 +952,8 @@ impl App {
             }
         }
         let buffer_id = self.active().buffer_id;
-        if self.active_mut().editor.take_content_reset() {
+        let content_reset = self.active_mut().editor.take_content_reset();
+        if content_reset {
             self.handle_active_content_reset(buffer_id);
         }
         let edits = self.active_mut().editor.take_content_edits();
@@ -958,10 +965,30 @@ impl App {
         }
         self.lsp_notify_change_active(&edits);
         // Drain pending fold ops so the vec doesn't grow unboundedly.
-        // `recompute_and_install` below handles the visual refresh; the ops
-        // are queued for host observation but this app has no other consumer.
-        let _ = self.active_mut().editor.take_fold_ops();
-        self.recompute_and_install();
+        // `recompute_and_install` handles the visual refresh; the ops are
+        // queued for host observation but this app has no other consumer.
+        let had_fold_ops = !self.active_mut().editor.take_fold_ops().is_empty();
+
+        // Only re-run the tree-sitter viewport query when something that
+        // affects syntax spans actually changed: buffer content (dirty_gen
+        // bumps on every edit path), a content reset, a fold toggle, or a
+        // viewport scroll/resize/buffer-switch. A pure cursor move — notably a
+        // mouse selection drag, which fires many events per second — leaves all
+        // of these identical, so recomputing would be wasted work (it dominated
+        // the mouse-drag profile at ~88% inclusive). Selection, search, and
+        // matchparen highlights are render-time overlays and refresh each frame
+        // regardless of this gate. Direct callers of `recompute_and_install`
+        // (settings/theme/`:syntax`) are unaffected — they still recompute
+        // unconditionally.
+        let view_now = {
+            let vp = self.active().editor.host().viewport();
+            let dg = self.active().editor.buffer().dirty_gen();
+            (buffer_id, vp.top_row, vp.height, dg)
+        };
+        if content_reset || had_fold_ops || self.last_synced_syntax_view != Some(view_now) {
+            self.last_synced_syntax_view = Some(view_now);
+            self.recompute_and_install();
+        }
     }
 
     /// Return the active auto-indent flash row range `(top, bot)` while
@@ -1301,6 +1328,7 @@ impl App {
             // flush so render::frame doesn't need a redundant sync parse.
             pending_recompute: true,
             last_signature_us: 0,
+            last_synced_syntax_view: None,
             config: hjkl_app::config::Config::default(),
             start_screen,
             lsp: None,
