@@ -560,6 +560,12 @@ pub struct VimState {
     /// sole source of truth; until then both fields are kept in sync.
     /// Initialized to `Normal` via `#[derive(Default)]`.
     pub(crate) current_mode: crate::VimMode,
+    /// Read-only view overlay layered over `current_mode` (git blame, …).
+    /// Orthogonal to the input mode: while `Blame`, input is still
+    /// interpreted as Normal but mutations are blocked and the host renders
+    /// the overlay. Auto-reset to `Normal` whenever the input mode leaves
+    /// `Normal` (see `drop_blame_if_left_normal`). Initialized to `Normal`.
+    pub(crate) view: crate::ViewMode,
     /// Most recent successful :s invocation. Stored so :& / :&& can repeat it.
     pub last_substitute: Option<crate::substitute::SubstituteCmd>,
     /// Stack of auto-inserted closing characters awaiting skip-over.
@@ -1228,6 +1234,7 @@ pub(crate) fn begin_insert<H: crate::types::Host>(
     ed.vim.mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
     ed.vim.current_mode = crate::VimMode::Insert;
+    drop_blame_if_left_normal(ed);
 }
 
 /// `:set undobreak` semantics for insert-mode motions. When the
@@ -2876,6 +2883,20 @@ pub(crate) fn do_undo_bridge<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer:
 //   - Bridge fn is `pub(crate) fn *_bridge<H: Host>(ed, …)` in this file.
 //   - Public wrapper is `pub fn *(&mut self, …)` in `editor.rs` with rustdoc.
 
+/// Drop the `Blame` view overlay whenever the input mode is no longer
+/// `Normal`. BLAME is a Normal-only read-only view; entering Insert/Visual/etc.
+/// (by keyboard, mouse drag, or programmatic transition) implicitly leaves it.
+/// Called from every mode-transition funnel so the FSM is the single source of
+/// truth — the host never has to police this.
+#[inline]
+pub(crate) fn drop_blame_if_left_normal<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+) {
+    if ed.vim.current_mode != crate::VimMode::Normal {
+        ed.vim.view = crate::ViewMode::Normal;
+    }
+}
+
 /// Helper — set both the FSM-internal `mode` and the stable `current_mode`
 /// field in one call. Every Phase 6.3 bridge that changes mode calls this so
 /// `vim_mode()` stays correct without going through the FSM's `step()` loop.
@@ -2886,6 +2907,7 @@ pub(crate) fn set_vim_mode_bridge<H: crate::types::Host>(
 ) {
     ed.vim.mode = mode;
     ed.vim.current_mode = ed.vim.public_mode();
+    drop_blame_if_left_normal(ed);
 }
 
 /// `v` from Normal — enter charwise Visual mode. Anchors at the current
@@ -3073,6 +3095,7 @@ pub(crate) fn set_mode_bridge<H: crate::types::Host>(
     };
     ed.vim.mode = internal;
     ed.vim.current_mode = mode;
+    drop_blame_if_left_normal(ed);
 }
 
 // ─── Normal / Visual / Operator-pending dispatcher removed in Phase 6.6g.3 ──
@@ -4687,6 +4710,7 @@ fn begin_insert_noundo<H: crate::types::Host>(
     ed.vim.mode = Mode::Insert;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
     ed.vim.current_mode = crate::VimMode::Insert;
+    drop_blame_if_left_normal(ed);
 }
 
 // ─── Operator × Motion application ─────────────────────────────────────────

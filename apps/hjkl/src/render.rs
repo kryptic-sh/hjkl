@@ -905,7 +905,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // 2. Inline blame on the cursor line, unless a diagnostic already
         //    annotates it (errors take precedence over blame).
         let blame_show = slot.editor.settings().blame_inline
-            && !slot.blame_column
+            && !slot.editor.is_blame()
             && is_focused
             && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY
             && !hints.iter().any(|h| h.row == cursor_row);
@@ -935,7 +935,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // — this only changes how the viewport is painted.
     let box_mode = {
         let s = &app.slots()[slot_idx];
-        s.blame_column && matches!(s.editor.host().viewport().wrap, hjkl_buffer::Wrap::None)
+        s.editor.is_blame() && matches!(s.editor.host().viewport().wrap, hjkl_buffer::Wrap::None)
     };
     let blame_box_plan: Vec<hjkl_buffer_tui::render::BlameRow> = if box_mode {
         let s = &app.slots()[slot_idx];

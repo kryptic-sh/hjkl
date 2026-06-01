@@ -117,7 +117,7 @@ impl App {
 
     /// Queue a git blame refresh for the current buffer (throttled).
     ///
-    /// No-op when neither `blame_inline` nor `blame_column` is on (and
+    /// No-op when neither `blame_inline` nor the BLAME view is on (and
     /// clears stale data in that case). `force = true` bypasses the dirty-gen
     /// dedup and the 250 ms throttle so the column populates immediately on
     /// toggle.
@@ -135,10 +135,10 @@ impl App {
         use std::time::{Duration, Instant};
         const BLAME_MIN_INTERVAL: Duration = Duration::from_millis(250);
 
-        // When neither inline nor column blame is on, clear stale data and bail.
+        // When neither inline nor blame-view is on, clear stale data and bail.
         let blame_inline = self.active().editor.settings().blame_inline;
-        let blame_column = self.active().blame_column;
-        if !blame_inline && !blame_column {
+        let blame_view = self.active().editor.is_blame();
+        if !blame_inline && !blame_view {
             let slot = self.active_mut();
             slot.blame.clear();
             slot.last_blame_dirty_gen = None;

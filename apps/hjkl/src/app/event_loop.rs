@@ -257,34 +257,12 @@ impl App {
             return KeyOutcome::Break;
         }
 
-        // ── BLAME mode key handling ───────────────────────────────
-        // The git blame view is a read-only Normal-mode overlay. `Esc` exits
-        // it back to Normal; the mode-entering keys (i I a A o O c C s S R v V
-        // <C-v>) exit BLAME and then fall through so they enter that mode (the
-        // buffer becomes editable again). Movement keys stay in BLAME; any
-        // mutating Normal command is a no-op while read-only is forced on.
-        if self.active().blame_column
-            && self.active().editor.vim_mode() == VimMode::Normal
-            && self.command_field.is_none()
-            && self.search_field.is_none()
-            && !self.is_cmdline_win_focused()
-            && !self.overlay_active()
-        {
-            if key.code == KeyCode::Esc {
-                self.exit_blame_mode();
-                return KeyOutcome::Continue;
-            }
-            if let KeyCode::Char(c) = key.code {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                let enters_mode =
-                    (!ctrl && "iIaAoOcCsSRvV".contains(c)) || (ctrl && (c == 'v' || c == 'V'));
-                if enters_mode {
-                    // Leave BLAME (restores editability), then fall through so
-                    // the keypress enters its target mode normally.
-                    self.exit_blame_mode();
-                }
-            }
-        }
+        // ── BLAME mode ────────────────────────────────────────────
+        // BLAME is now an FSM-owned read-only view (`Editor::view_mode`). The
+        // engine handles every transition out of it natively: `Esc` (hjkl-vim
+        // normal dispatch), mode-entering keys (i/v/… via the mode funnels),
+        // and mouse-drag-into-Visual (the visual bridge) all auto-exit BLAME.
+        // No host-side key interception or per-tick invariant is needed.
 
         // ── Cmdline window <CR> intercept (issue #37) ─────────────
         // Must run BEFORE normal-mode routing so `<Enter>` in the
@@ -1388,11 +1366,6 @@ impl App {
                 terminal.clear()?;
             }
             let t_draw = std::time::Instant::now();
-            // BLAME is a Normal-mode-only view; if any path (notably a mouse
-            // drag into Visual) left the editor in another mode while blame is
-            // on, drop out of BLAME before drawing.
-            self.enforce_blame_normal_invariant();
-
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(
                 target: "hjkl::profile",

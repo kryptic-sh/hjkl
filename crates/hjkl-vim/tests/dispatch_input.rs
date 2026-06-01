@@ -248,3 +248,25 @@ fn sneak_disabled_falls_through_to_substitute_char() {
     // Cursor should be at col 0 after Esc.
     assert_eq!(e.cursor().1, 0, "cursor should be col 0 after s+char+Esc");
 }
+
+/// `esc_exits_blame_view`: BLAME is an FSM-owned read-only view; Esc in Normal
+/// leaves it (the host no longer intercepts the key).
+#[test]
+fn esc_exits_blame_view() {
+    let mut e = editor_with("hello\nworld");
+    e.enter_blame();
+    assert!(e.is_blame());
+    dispatch_keys(&mut e, "<Esc>");
+    assert!(!e.is_blame(), "Esc must exit BLAME via the FSM");
+}
+
+/// `mode_entry_key_exits_blame_view`: pressing `v` (or any mode-entry key) in
+/// BLAME drops the overlay and enters that mode, all inside the FSM.
+#[test]
+fn mode_entry_key_exits_blame_view() {
+    let mut e = editor_with("hello\nworld");
+    e.enter_blame();
+    dispatch_keys(&mut e, "v");
+    assert!(!e.is_blame());
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Visual);
+}

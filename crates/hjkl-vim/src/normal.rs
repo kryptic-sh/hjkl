@@ -114,6 +114,9 @@ pub fn step_normal<H: Host>(
     // Common normal / visual keys.
     match input.key {
         Key::Esc => {
+            // BLAME is a Normal-only read-only view; Esc leaves it (returning
+            // to a plain Normal view) as well as clearing any pending state.
+            ed.exit_blame();
             ed.force_normal();
             return true;
         }

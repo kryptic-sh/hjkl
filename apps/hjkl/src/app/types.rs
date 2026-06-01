@@ -354,9 +354,6 @@ pub struct BufferSlot {
     /// Wall-clock time of the last successful blame refresh — used
     /// to throttle the libgit2 blame call to ~4 Hz during active typing.
     pub(crate) last_blame_refresh_at: Instant,
-    /// When true, show the left-side git blame column for this buffer
-    /// (`:GitBlame` / `<leader>gm`). Default false. Auto-hides inline blame.
-    pub(crate) blame_column: bool,
 }
 
 /// Walk up from `start` looking for a project-root marker file.

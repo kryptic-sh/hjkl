@@ -1936,7 +1936,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // self-inverse no-op (`InsertStr` of an empty string at the
         // current cursor) so callers that push the return value onto
         // an undo stack still get a structurally valid round trip.
-        if self.settings.readonly {
+        // `:set readonly` OR the BLAME view overlay short-circuits every
+        // mutation funnel. BLAME is an intrinsically read-only view: the engine
+        // blocks edits while it's active, so the host never has to force
+        // `readonly` on/off around it.
+        if self.settings.readonly || self.vim.view == crate::ViewMode::Blame {
             let _ = edit;
             return hjkl_buffer::Edit::InsertStr {
                 at: buf_cursor_pos(&self.buffer),
@@ -2225,6 +2229,35 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// FSM-internal `mode` field via `public_mode()`.
     pub fn vim_mode(&self) -> VimMode {
         self.vim.current_mode
+    }
+
+    /// The active read-only view overlay (see [`crate::ViewMode`]). Independent
+    /// of [`Editor::vim_mode`]; the host renderer reads this as the source of
+    /// truth for whether to draw the git-blame framing.
+    pub fn view_mode(&self) -> crate::ViewMode {
+        self.vim.view
+    }
+
+    /// `true` when the git-blame read-only overlay is active. Masked on the
+    /// input mode: BLAME is only meaningful in Normal, so this returns `false`
+    /// the instant the editor enters Insert/Visual/etc., even before the
+    /// overlay flag is dropped. Use this for both rendering and mode-label.
+    pub fn is_blame(&self) -> bool {
+        self.vim.view == crate::ViewMode::Blame && self.vim.current_mode == VimMode::Normal
+    }
+
+    /// Enter the git-blame read-only overlay. No-op unless the editor is in
+    /// Normal mode (BLAME is a Normal-only view). While active, every mutation
+    /// funnel is blocked and the host renders the per-commit framing.
+    pub fn enter_blame(&mut self) {
+        if self.vim.current_mode == VimMode::Normal {
+            self.vim.view = crate::ViewMode::Blame;
+        }
+    }
+
+    /// Leave the git-blame overlay, returning to a plain Normal view. Idempotent.
+    pub fn exit_blame(&mut self) {
+        self.vim.view = crate::ViewMode::Normal;
     }
 
     /// Bounds of the active visual-block rectangle as
@@ -5817,6 +5850,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         }
         // ── Phase 6.3: current_mode sync ─────────────────────────────────────
         self.vim.current_mode = self.vim.public_mode();
+        // BLAME is a Normal-only read-only view; any transition out of Normal
+        // (a keyboard mode switch, etc.) implicitly leaves it.
+        vim::drop_blame_if_left_normal(self);
         consumed
     }
 
@@ -6453,6 +6489,98 @@ mod insert_mode_scrolloff_tests {
         assert!(
             cursor_screen_row <= max_screen_row,
             "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod blame_view_mode_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_ed(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        Editor::new(buf, DefaultHost::default(), Options::default())
+    }
+
+    #[test]
+    fn enter_blame_sets_view_in_normal() {
+        let mut ed = make_ed("hello\nworld");
+        assert!(!ed.is_blame());
+        assert_eq!(ed.view_mode(), crate::ViewMode::Normal);
+        ed.enter_blame();
+        assert!(ed.is_blame());
+        assert_eq!(ed.view_mode(), crate::ViewMode::Blame);
+    }
+
+    #[test]
+    fn exit_blame_clears_view() {
+        let mut ed = make_ed("hello");
+        ed.enter_blame();
+        ed.exit_blame();
+        assert!(!ed.is_blame());
+        assert_eq!(ed.view_mode(), crate::ViewMode::Normal);
+    }
+
+    #[test]
+    fn enter_blame_is_noop_outside_normal() {
+        let mut ed = make_ed("hello");
+        ed.set_mode(VimMode::Insert);
+        ed.enter_blame();
+        assert!(!ed.is_blame(), "BLAME is Normal-only");
+        assert_eq!(ed.view_mode(), crate::ViewMode::Normal);
+    }
+
+    #[test]
+    fn entering_visual_drops_blame() {
+        let mut ed = make_ed("hello\nworld");
+        ed.enter_blame();
+        assert!(ed.is_blame());
+        // Mouse drag and keyboard `v` both funnel through this.
+        ed.enter_visual_char();
+        assert!(!ed.is_blame());
+        assert_eq!(ed.view_mode(), crate::ViewMode::Normal);
+        // Returning to Normal must NOT resurrect the overlay.
+        ed.exit_visual_to_normal();
+        assert!(!ed.is_blame());
+    }
+
+    #[test]
+    fn entering_insert_drops_blame() {
+        let mut ed = make_ed("hello");
+        ed.enter_blame();
+        ed.enter_insert_i(1);
+        assert!(!ed.is_blame());
+        ed.leave_insert_to_normal();
+        assert!(
+            !ed.is_blame(),
+            "overlay must not resurrect on Esc-to-Normal"
+        );
+    }
+
+    #[test]
+    fn is_blame_masked_while_in_visual() {
+        // Even before the overlay flag is dropped, is_blame() is masked on the
+        // input mode so the renderer never frames blame outside Normal.
+        let mut ed = make_ed("hello");
+        ed.enter_blame();
+        ed.set_mode(VimMode::Visual);
+        assert!(!ed.is_blame());
+    }
+
+    #[test]
+    fn mutation_blocked_while_blame() {
+        let mut ed = make_ed("hello");
+        ed.enter_blame();
+        let result = ed.mutate_edit(hjkl_buffer::Edit::InsertStr {
+            at: hjkl_buffer::Position::new(0, 0),
+            text: "XXX".to_string(),
+        });
+        // BLAME swallows the edit and hands back a self-inverse no-op.
+        assert!(
+            matches!(result, hjkl_buffer::Edit::InsertStr { ref text, .. } if text.is_empty()),
+            "edit must be swallowed while BLAME is active"
         );
     }
 }

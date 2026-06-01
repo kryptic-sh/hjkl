@@ -102,3 +102,19 @@ pub enum VimMode {
     VisualLine,
     VisualBlock,
 }
+
+/// A read-only *view* layered over the real input [`VimMode`]. Unlike a vim
+/// mode (which decides how keystrokes are interpreted), a `ViewMode` only
+/// changes what the buffer presents — input is still interpreted as Normal.
+///
+/// `Blame` is the git-blame overlay: the editor is read-only and the host
+/// renders per-commit framing. It is only meaningful while the input mode is
+/// `Normal`; any transition to Insert/Visual/etc. drops it back to `Normal`
+/// (see [`Editor::is_blame`]). New read-only overlays (diff, conflict, …)
+/// become additional variants here without touching `VimMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    Normal,
+    Blame,
+}

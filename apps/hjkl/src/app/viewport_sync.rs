@@ -85,7 +85,7 @@ impl App {
     /// the blame box is active. Bounded so it always terminates.
     pub(crate) fn adjust_blame_box_viewport(&mut self) {
         let slot = self.active();
-        let box_mode = slot.blame_column
+        let box_mode = slot.editor.is_blame()
             && matches!(slot.editor.host().viewport().wrap, hjkl_buffer::Wrap::None);
         if !box_mode {
             return;

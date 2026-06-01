@@ -140,11 +140,6 @@ pub struct App {
     /// The slot that was active just before the most recent `switch_to`
     /// call. Used by `<C-^>` / `:b#` to jump to the alternate buffer.
     pub prev_active: Option<usize>,
-    /// The active buffer's `readonly` setting captured when BLAME mode was
-    /// entered, restored on exit. BLAME mode forces read-only; this remembers
-    /// whether the file was already read-only (e.g. `-R`) so exiting doesn't
-    /// wrongly clear it.
-    pub(crate) blame_prev_readonly: bool,
     /// Set to `true` when the FSM or Ctrl-C wants to quit.
     pub exit_requested: bool,
     /// Notification bus — collects all info/warn/error toasts pushed during
@@ -602,7 +597,6 @@ pub(super) fn build_slot(
         blame: Vec::new(),
         last_blame_dirty_gen: None,
         last_blame_refresh_at: Instant::now(),
-        blame_column: false,
         saved_hash: 0,
         saved_len: 0,
         signature_cache: None,
@@ -1273,7 +1267,6 @@ impl App {
             next_window_id: 1,
             next_buffer_id: 1,
             prev_active: None,
-            blame_prev_readonly: false,
             exit_requested: false,
             bus: HollerBus::new(),
             info_popup: None,
@@ -1471,8 +1464,9 @@ impl App {
         if self.start_screen.is_some() {
             return "START";
         }
-        // The read-only git blame view is its own mode while in Normal.
-        if self.active().blame_column && self.active().editor.vim_mode() == VimMode::Normal {
+        // The read-only git blame view is its own mode (engine-owned, masked
+        // to Normal by `is_blame`).
+        if self.active().editor.is_blame() {
             return "BLAME";
         }
         match self.active().editor.vim_mode() {

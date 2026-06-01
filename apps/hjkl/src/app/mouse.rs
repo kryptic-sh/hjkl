@@ -307,7 +307,7 @@ pub fn cell_to_doc(
 
     // Boxed-blame view reserves a 1-col left frame and inserts virtual border
     // rows; map clicks through the box plan and account for the frame.
-    let box_mode = slot.blame_column && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
     let frame = u16::from(box_mode);
 
     let gw = text_start_offset(
@@ -926,7 +926,7 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     }
 
     // Box mode reserves a 1-col left frame; widen the gutter hit region by it.
-    let box_mode = slot.blame_column && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
     let gw = gw + u16::from(box_mode);
 
     if rel_x < gw {

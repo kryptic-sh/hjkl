@@ -113,42 +113,23 @@ impl App {
     /// the active buffer. When turned on, also kicks a blame refresh so the
     /// column populates immediately; auto-hides the inline EOL blame.
     pub(crate) fn toggle_blame_column(&mut self) {
-        let on = !self.active().blame_column;
-        self.active_mut().blame_column = on;
+        // BLAME is an FSM-owned read-only view (`Editor::view_mode`): the engine
+        // tracks it, blocks edits while active, and auto-exits on any mode
+        // change (keyboard, mouse drag, Esc). The host only flips it on/off and
+        // loads the git data — it never has to police read-only or transitions.
+        let on = !self.active().editor.is_blame();
         if on {
-            // Entering BLAME mode: force read-only (remembering the prior value)
-            // and refresh the blame data (normally gated on `blame_inline`).
-            self.blame_prev_readonly = self.active().editor.is_readonly();
-            self.active_mut().editor.settings_mut().readonly = true;
+            self.active_mut().editor.enter_blame();
+            // Refresh the blame data (normally gated on `blame_inline`).
             self.refresh_blame_force();
         } else {
-            // Leaving BLAME mode: restore the file's original read-only state.
-            let prev = self.blame_prev_readonly;
-            self.active_mut().editor.settings_mut().readonly = prev;
+            self.active_mut().editor.exit_blame();
         }
         self.bus.info(if on {
             "BLAME mode (read-only) — gb or Esc to exit"
         } else {
             "BLAME mode off"
         });
-    }
-
-    /// Leave BLAME mode if active (used by the mode-switch key interceptor).
-    pub(crate) fn exit_blame_mode(&mut self) {
-        if self.active().blame_column {
-            self.toggle_blame_column();
-        }
-    }
-
-    /// BLAME is a Normal-mode-only view. Catch-all backstop: if the editor is
-    /// in any other vim mode (e.g. a mouse drag entered Visual, bypassing the
-    /// keyboard mode-switch interceptor) while blame is on, exit BLAME. Called
-    /// once per event-loop tick before drawing.
-    pub(crate) fn enforce_blame_normal_invariant(&mut self) {
-        use hjkl_engine::VimMode;
-        if self.active().blame_column && self.active().editor.vim_mode() != VimMode::Normal {
-            self.exit_blame_mode();
-        }
     }
 
     /// Mouse-hover over the blame column at `doc_row` — show the full commit
