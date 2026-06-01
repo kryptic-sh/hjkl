@@ -1012,10 +1012,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     cell.set_style(dim_style);
                 }
             }
-            // Paint segments left-to-right with a single space between them,
-            // leaving the last column as a spacer.
+            // Leading bracket marker (`┍`/`│`/`┕`/`╺`) + a space, then the
+            // segments left-to-right with a single space between them. The last
+            // column stays a spacer.
             let right = blame_col_x + blame_col_width.saturating_sub(1);
             let mut cx = blame_col_x;
+            if row.marker != ' '
+                && cx < right
+                && let Some(cell) = buf.cell_mut((cx, y))
+            {
+                cell.set_char(row.marker);
+                cell.set_style(dim_style);
+            }
+            // Advance past the marker cell + its trailing space.
+            cx += 2;
             for (seg_idx, (text, seg)) in row.segments.iter().enumerate() {
                 if seg_idx > 0 {
                     // Space separator (cell already cleared to ' ').

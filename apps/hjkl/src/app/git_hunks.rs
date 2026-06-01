@@ -244,12 +244,15 @@ pub(crate) enum BlameSeg {
 }
 
 /// One blame-column entry, aligned to a visible screen row. gitsigns-style:
-/// the FIRST visible row of a contiguous commit run carries the metadata
-/// segments (`<hash> <author> <date>`), the SECOND carries the commit summary,
-/// and the rest of the run is blank (`segments` empty). `segments` are painted
-/// left-to-right with one space between them.
+/// the FIRST row of a contiguous commit run carries the metadata segments
+/// (`<hash> <author> <date>`), the SECOND carries the commit summary, the rest
+/// are blank. A leading `marker` box-drawing char brackets the commit's run:
+///   `╺` single-line run · `┍` run start · `│` run body · `┕` run end · `' '`
+/// when the row has no blame. `segments` paint left-to-right, one space apart,
+/// after the marker + a space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlameColumnRow {
+    pub marker: char,
     pub segments: Vec<(String, BlameSeg)>,
     pub is_uncommitted: bool,
 }
@@ -257,6 +260,7 @@ pub(crate) struct BlameColumnRow {
 impl BlameColumnRow {
     fn blank() -> Self {
         Self {
+            marker: ' ',
             segments: Vec::new(),
             is_uncommitted: false,
         }
@@ -300,71 +304,83 @@ fn format_blame_time(time_unix: i64, now: i64) -> String {
 /// for screen rows past EOF / blank → blank entry). `blame[doc_row]` is the
 /// attribution (None when unavailable).
 ///
-/// Each contiguous run of the same commit produces:
-///   - row 0 of the run → metadata segments `<hash> <author> <date>`,
-///   - row 1 of the run → the commit summary,
-///   - remaining rows   → blank.
+/// Run membership is computed from **document** adjacency (not just the visible
+/// window) so the bracket markers are correct even when a run extends past the
+/// viewport. For each contiguous run of the same commit:
+///   - first doc row → metadata `<hash> <author> <date>` + `┍` (or `╺` if the
+///     run is a single line),
+///   - second doc row → commit summary + `│`,
+///   - middle rows → blank + `│`,
+///   - last doc row → blank + `┕`.
 ///
-/// Segments are truncated to fit `width` display columns.
+/// Segments are truncated to fit `width` columns after the marker + a space.
 pub(crate) fn build_blame_column(
     blame: &[Option<git::BlameInfo>],
     visible_doc_rows: &[usize],
     now: i64,
     width: usize,
 ) -> Vec<BlameColumnRow> {
+    // Whether doc row `r` shares a commit with row `other` (both must exist
+    // and be committed/attributed).
+    let same = |r: usize, other: i64| -> bool {
+        if other < 0 {
+            return false;
+        }
+        let other = other as usize;
+        match (blame.get(r), blame.get(other)) {
+            (Some(Some(a)), Some(Some(b))) => a.commit == b.commit,
+            _ => false,
+        }
+    };
+    // Body budget after the marker (1) + its trailing space (1).
+    let body_width = width.saturating_sub(2);
+
     let mut out = Vec::with_capacity(visible_doc_rows.len());
-    let mut prev_commit: Option<String> = None;
-    let mut run_pos: usize = 0;
     for &dr in visible_doc_rows {
         if dr == usize::MAX || dr >= blame.len() || blame[dr].is_none() {
             out.push(BlameColumnRow::blank());
-            prev_commit = None;
-            run_pos = 0;
             continue;
         }
         let info = blame[dr].as_ref().unwrap();
-        if prev_commit.as_deref() == Some(info.commit.as_str()) {
-            run_pos += 1;
-        } else {
-            run_pos = 0;
-        }
-        prev_commit = Some(info.commit.clone());
+        let prev_same = same(dr, dr as i64 - 1);
+        let prev2_same = same(dr, dr as i64 - 2);
+        let next_same = same(dr, dr as i64 + 1);
 
-        let row = match run_pos {
-            // First row of the run — `<hash> <author> <date>`.
-            0 => {
-                let hash: String = info.commit.chars().take(8).collect();
-                let date = if info.is_uncommitted {
-                    String::new()
-                } else {
-                    format_blame_time(info.time_unix, now)
-                };
-                // Budget the author to whatever's left after hash + date + the
-                // single-space separators between segments.
-                let date_cost = if date.is_empty() { 0 } else { date.len() + 1 };
-                let author_budget = width.saturating_sub(hash.len() + 1 + date_cost);
-                let author = truncate_to(&info.author, author_budget);
-                let mut segments = vec![(hash, BlameSeg::Hash), (author, BlameSeg::Author)];
-                if !date.is_empty() {
-                    segments.push((date, BlameSeg::Date));
-                }
-                BlameColumnRow {
-                    segments,
-                    is_uncommitted: info.is_uncommitted,
-                }
-            }
-            // Second row of the run — the commit summary.
-            1 => BlameColumnRow {
-                segments: vec![(truncate_to(&info.summary, width), BlameSeg::Summary)],
-                is_uncommitted: info.is_uncommitted,
-            },
-            // Rest of the run — blank.
-            _ => BlameColumnRow {
-                segments: Vec::new(),
-                is_uncommitted: info.is_uncommitted,
-            },
+        // Bracket marker from run adjacency.
+        let marker = match (prev_same, next_same) {
+            (false, false) => '╺', // single-line run
+            (false, true) => '┍',  // run start
+            (true, true) => '│',   // run body
+            (true, false) => '┕',  // run end
         };
-        out.push(row);
+
+        // Body: metadata on the run's first row, summary on the second.
+        let segments = if !prev_same {
+            let hash: String = info.commit.chars().take(8).collect();
+            let date = if info.is_uncommitted {
+                String::new()
+            } else {
+                format_blame_time(info.time_unix, now)
+            };
+            let date_cost = if date.is_empty() { 0 } else { date.len() + 1 };
+            let author_budget = body_width.saturating_sub(hash.len() + 1 + date_cost);
+            let author = truncate_to(&info.author, author_budget);
+            let mut segs = vec![(hash, BlameSeg::Hash), (author, BlameSeg::Author)];
+            if !date.is_empty() {
+                segs.push((date, BlameSeg::Date));
+            }
+            segs
+        } else if !prev2_same {
+            vec![(truncate_to(&info.summary, body_width), BlameSeg::Summary)]
+        } else {
+            Vec::new()
+        };
+
+        out.push(BlameColumnRow {
+            marker,
+            segments,
+            is_uncommitted: info.is_uncommitted,
+        });
     }
     out
 }
