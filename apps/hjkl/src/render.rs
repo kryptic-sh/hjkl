@@ -1200,12 +1200,60 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 }
 
 /// Render one complete frame into `frame`.
-/// Paint the left file-explorer pane (#55) into `area`. Adjusts the explorer's
-/// scroll offset to keep the selection visible, then draws one row per visible
-/// tree node: `depth` indentation, a `▾`/`▸` caret for dirs, the entry name
-/// (dirs bold + trailing `/`), with the selected row highlighted.
+/// Nerd-font icon for a directory entry (open vs closed), with a few special
+/// folder names. Glyphs assume a Nerd Font (the status line already relies on
+/// one).
+fn explorer_dir_icon(path: &std::path::Path, expanded: bool) -> char {
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        match name {
+            ".git" => return '\u{e702}',         //
+            ".github" => return '\u{e709}',      //
+            ".config" => return '\u{f013}',      //
+            "node_modules" => return '\u{e718}', //
+            _ => {}
+        }
+    }
+    if expanded {
+        '\u{f0770}' // 󰝰 open folder
+    } else {
+        '\u{f024b}' // 󰉋 closed folder
+    }
+}
+
+/// Nerd-font icon for a file, keyed by extension (default document glyph).
+fn explorer_file_icon(path: &std::path::Path) -> char {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "rs" => '\u{f1617}',                                                   // 󱘗
+        "md" | "markdown" => '\u{f0354}',                                      // 󰍔
+        "toml" | "ini" | "conf" | "cfg" => '\u{f013}',                         //
+        "lock" => '\u{f023}',                                                  //
+        "json" => '\u{e60b}',                                                  //
+        "yaml" | "yml" => '\u{f0626}',                                         // 󰘦
+        "html" | "htm" => '\u{f031d}',                                         // 󰌝
+        "css" | "scss" => '\u{e749}',                                          //
+        "js" | "mjs" | "cjs" => '\u{e74e}',                                    //
+        "ts" | "tsx" => '\u{e628}',                                            //
+        "py" => '\u{e606}',                                                    //
+        "go" => '\u{e627}',                                                    //
+        "sh" | "bash" | "zsh" | "fish" => '\u{f489}',                          //
+        "txt" | "text" => '\u{f0219}',                                         // 󰈙
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => '\u{f1c5}', //
+        _ => '\u{f0214}',                                                      // 󰈔 generic document
+    }
+}
+
+/// Paint the left file-explorer pane (#55) into `area`: a rounded title/header
+/// box, then the tree — each row draws `│`/`├╴`/`└╴` guides from the node's
+/// branch info, a Nerd-font folder/file icon, and the name (dirs bold). The
+/// selected row is highlighted; scroll keeps the selection visible.
 fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
-    if area.width == 0 || area.height == 0 {
+    use crate::app::explorer::EXPLORER_HEADER_H;
+    if area.width < 4 || area.height == 0 {
         return;
     }
     // Snapshot colors before borrowing the explorer mutably.
@@ -1213,25 +1261,33 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
     let dir_fg = app.theme.ui.text;
     let file_fg = app.theme.ui.text_dim;
     let sel_bg = app.theme.ui.picker_selection_bg;
+    let border_fg = app.theme.ui.non_text;
+    let title_fg = app.theme.ui.text;
+
+    let header_h = EXPLORER_HEADER_H.min(area.height);
+    let list_h = area.height.saturating_sub(header_h) as usize;
 
     let Some(exp) = app.explorer.as_mut() else {
         return;
     };
-    let height = area.height as usize;
     let sel = exp.selected_index();
-    // Keep the selection within the visible window.
+    // Keep the selection within the visible list window.
     let mut top = exp.top();
-    if sel < top {
+    if list_h == 0 || sel < top {
         top = sel;
-    } else if sel >= top + height {
-        top = sel + 1 - height;
+    } else if sel >= top + list_h {
+        top = sel + 1 - list_h;
     }
     exp.set_top(top);
+    let total = exp.nodes().len();
 
+    let max_x = area.x + area.width;
+    let last_x = max_x - 1;
     let buf = frame.buffer_mut();
+
     // Clear the pane to the panel background.
     for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
+        for x in area.x..max_x {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.set_char(' ');
                 cell.set_style(Style::default().bg(panel_bg));
@@ -1239,10 +1295,62 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let max_x = area.x + area.width;
-    for (i, node) in exp.nodes().iter().enumerate().skip(top).take(height) {
-        let y = area.y + (i - top) as u16;
-        let selected = i == sel;
+    // ── Rounded header box ────────────────────────────────────────────────
+    let border = Style::default().bg(panel_bg).fg(border_fg);
+    let put = |buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: char, st: Style| {
+        if x < max_x
+            && let Some(cell) = buf.cell_mut((x, y))
+        {
+            cell.set_char(ch);
+            cell.set_style(st);
+        }
+    };
+    if header_h >= 1 {
+        let y = area.y;
+        for x in area.x..max_x {
+            put(buf, x, y, '─', border);
+        }
+        put(buf, area.x, y, '╭', border);
+        put(buf, last_x, y, '╮', border);
+        let title_st = Style::default()
+            .bg(panel_bg)
+            .fg(title_fg)
+            .add_modifier(Modifier::BOLD);
+        for (i, ch) in " Explorer ".chars().enumerate() {
+            let x = area.x + 2 + i as u16;
+            if x >= last_x {
+                break;
+            }
+            put(buf, x, y, ch, title_st);
+        }
+    }
+    if header_h >= 2 {
+        let y = area.y + 1;
+        put(buf, area.x, y, '│', border);
+        put(buf, last_x, y, '│', border);
+        let count = format!("{total}/{total}");
+        let start = last_x.saturating_sub(1 + count.chars().count() as u16);
+        for (i, ch) in count.chars().enumerate() {
+            let x = start + i as u16;
+            if x > area.x && x < last_x {
+                put(buf, x, y, ch, border);
+            }
+        }
+    }
+    if header_h >= 3 {
+        let y = area.y + 2;
+        for x in area.x..max_x {
+            put(buf, x, y, '─', border);
+        }
+        put(buf, area.x, y, '╰', border);
+        put(buf, last_x, y, '╯', border);
+    }
+
+    // ── Tree rows ─────────────────────────────────────────────────────────
+    let list_y0 = area.y + header_h;
+    for (vis_i, node) in exp.nodes().iter().enumerate().skip(top).take(list_h) {
+        let y = list_y0 + (vis_i - top) as u16;
+        let selected = vis_i == sel;
         let row_bg = if selected { sel_bg } else { panel_bg };
         if selected {
             for x in area.x..max_x {
@@ -1251,35 +1359,48 @@ fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
-        let caret = if node.is_dir {
-            if exp.is_expanded(&node.path) {
-                "▾ "
-            } else {
-                "▸ "
+
+        // Build the row as styled cells (guides → icon → space → name) so the
+        // segments paint with one enumerate, with a 1-col left margin.
+        let mut cells: Vec<(char, Style)> = Vec::with_capacity(area.width as usize);
+        if node.depth >= 1 {
+            let guide_st = Style::default().bg(row_bg).fg(border_fg);
+            for &b in &node.branches {
+                cells.push((if b { '│' } else { ' ' }, guide_st));
+                cells.push((' ', guide_st));
             }
+            cells.push((if node.is_last { '└' } else { '├' }, guide_st));
+            cells.push(('╴', guide_st));
+        }
+        let icon = if node.is_dir {
+            explorer_dir_icon(&node.path, exp.is_expanded(&node.path))
         } else {
-            "  "
+            explorer_file_icon(&node.path)
         };
+        let body_fg = if node.is_dir { dir_fg } else { file_fg };
+        cells.push((icon, Style::default().bg(row_bg).fg(body_fg)));
+        cells.push((' ', Style::default().bg(row_bg)));
         let name = node
             .path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let suffix = if node.is_dir { "/" } else { "" };
-        let line = format!("{}{caret}{name}{suffix}", "  ".repeat(node.depth));
-        let fg = if node.is_dir { dir_fg } else { file_fg };
-        let mut style = Style::default().bg(row_bg).fg(fg);
+        let mut name_st = Style::default().bg(row_bg).fg(body_fg);
         if node.is_dir {
-            style = style.add_modifier(Modifier::BOLD);
+            name_st = name_st.add_modifier(Modifier::BOLD);
         }
-        for (i, ch) in line.chars().enumerate() {
-            let x = area.x + i as u16;
+        for ch in name.chars() {
+            cells.push((ch, name_st));
+        }
+
+        for (i, (ch, st)) in cells.iter().enumerate() {
+            let x = area.x + 1 + i as u16;
             if x >= max_x {
                 break;
             }
             if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(ch);
-                cell.set_style(style);
+                cell.set_char(*ch);
+                cell.set_style(*st);
             }
         }
     }

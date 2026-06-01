@@ -11,15 +11,24 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Default width of the explorer pane in terminal columns.
-pub(crate) const EXPLORER_WIDTH: u16 = 30;
+pub(crate) const EXPLORER_WIDTH: u16 = 36;
+
+/// Height of the explorer's title/header box (rows reserved at the top).
+pub(crate) const EXPLORER_HEADER_H: u16 = 3;
 
 /// One visible row in the flattened tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExplorerNode {
     pub path: PathBuf,
-    /// Nesting depth from the root (root entries are depth 0).
+    /// Nesting depth: the root is depth 0, its children depth 1, …
     pub depth: usize,
     pub is_dir: bool,
+    /// True when this node is the last child of its parent (`└╴` vs `├╴`).
+    pub is_last: bool,
+    /// For each ancestor level above this node (excluding the root): whether that
+    /// ancestor has a following sibling, i.e. whether to draw a `│` guide in that
+    /// column. Length `depth - 1` for `depth >= 1`; empty for the root.
+    pub branches: Vec<bool>,
 }
 
 /// Explorer pane state. `None` on `App` means the pane is closed.
@@ -47,10 +56,13 @@ impl ExplorerState {
     /// Open a fresh explorer rooted at `root` (everything collapsed, first row
     /// selected, focused).
     pub(crate) fn open(root: PathBuf) -> Self {
+        let mut expanded = HashSet::new();
+        // The root starts expanded so its contents show immediately.
+        expanded.insert(root.clone());
         let mut s = Self {
             root,
             nodes: Vec::new(),
-            expanded: HashSet::new(),
+            expanded,
             selected: 0,
             top: 0,
             focused: true,
@@ -116,28 +128,53 @@ impl ExplorerState {
         entries
     }
 
-    /// Recursively append `dir`'s subtree (expanded dirs only) to `out`.
-    fn push_subtree(&self, dir: &Path, depth: usize, out: &mut Vec<ExplorerNode>) {
-        for (path, is_dir) in Self::read_children(dir) {
-            let expanded = is_dir && self.expanded.contains(&path);
+    /// Recursively append `dir`'s expanded children to `out`. `prefix` carries,
+    /// for each ancestor guide column, whether to draw a `│` (the ancestor has a
+    /// following sibling).
+    fn push_children(
+        &self,
+        dir: &Path,
+        depth: usize,
+        prefix: &[bool],
+        out: &mut Vec<ExplorerNode>,
+    ) {
+        let children = Self::read_children(dir);
+        let n = children.len();
+        for (i, (path, is_dir)) in children.into_iter().enumerate() {
+            let is_last = i + 1 == n;
             out.push(ExplorerNode {
                 path: path.clone(),
                 depth,
                 is_dir,
+                is_last,
+                branches: prefix.to_vec(),
             });
-            if expanded {
-                self.push_subtree(&path, depth + 1, out);
+            if is_dir && self.expanded.contains(&path) {
+                let mut child_prefix = prefix.to_vec();
+                // This node's column shows a `│` for its children iff it has a
+                // following sibling.
+                child_prefix.push(!is_last);
+                self.push_children(&path, depth + 1, &child_prefix, out);
             }
         }
     }
 
-    /// Rebuild the flattened visible-node list from `root` + `expanded`, keeping
-    /// the selection on the same path when possible (else clamped).
+    /// Rebuild the flattened visible-node list (root node + expanded subtree),
+    /// keeping the selection on the same path when possible (else clamped).
     pub(crate) fn rebuild(&mut self) {
         let prev_path = self.nodes.get(self.selected).map(|n| n.path.clone());
         let mut out = Vec::new();
         let root = self.root.clone();
-        self.push_subtree(&root, 0, &mut out);
+        out.push(ExplorerNode {
+            path: root.clone(),
+            depth: 0,
+            is_dir: true,
+            is_last: true,
+            branches: Vec::new(),
+        });
+        if self.expanded.contains(&root) {
+            self.push_children(&root, 1, &[], &mut out);
+        }
         self.nodes = out;
         self.selected = match prev_path {
             Some(p) => self.nodes.iter().position(|n| n.path == p).unwrap_or(0),
@@ -257,16 +294,21 @@ impl super::App {
         }
     }
 
-    /// A left-click on explorer pane row `pane_row` (0-based from the pane top):
-    /// focus the explorer, select that node, and activate it (toggle a dir /
-    /// open a file). Clicks past the last entry just focus the pane.
+    /// A left-click on explorer pane row `pane_row` (0-based from the pane top,
+    /// header included): focus the explorer, select the node under it, and
+    /// activate it (toggle a dir / open a file). Clicks on the header or past
+    /// the last entry just focus the pane.
     pub(crate) fn explorer_click(&mut self, pane_row: usize) {
         let open_path = {
             let Some(exp) = self.explorer.as_mut() else {
                 return;
             };
             exp.set_focused(true);
-            let idx = exp.top() + pane_row;
+            let header = EXPLORER_HEADER_H as usize;
+            if pane_row < header {
+                return; // header click → focus only
+            }
+            let idx = exp.top() + (pane_row - header);
             if idx >= exp.nodes().len() {
                 return;
             }
@@ -386,38 +428,55 @@ mod tests {
         base
     }
 
-    fn names(s: &ExplorerState) -> Vec<String> {
-        s.nodes()
+    /// Names of the non-root nodes (the visible tree under the root).
+    fn child_names(s: &ExplorerState) -> Vec<String> {
+        s.nodes()[1..]
             .iter()
             .map(|n| n.path.file_name().unwrap().to_string_lossy().into_owned())
             .collect()
     }
 
     #[test]
-    fn dirs_first_then_name() {
+    fn root_first_then_dirs_first_then_name() {
         let root = make_tree();
         let s = ExplorerState::open(root.clone());
+        // node 0 is the root dir (depth 0, expanded).
+        assert_eq!(s.nodes()[0].path, root);
+        assert!(s.nodes()[0].is_dir && s.nodes()[0].depth == 0);
         // dirs (a_dir, b_dir) before files (m_file, z_file), each alpha.
         assert_eq!(
-            names(&s),
+            child_names(&s),
             vec!["a_dir", "b_dir", "m_file.txt", "z_file.txt"]
         );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn expand_inserts_children_at_depth() {
+    fn expand_inserts_children_at_depth_with_guide() {
         let root = make_tree();
         let mut s = ExplorerState::open(root.clone());
-        // select a_dir (index 0) and expand it.
+        s.select_index(1); // a_dir
         assert!(s.toggle_selected());
         assert_eq!(
-            names(&s),
+            child_names(&s),
             vec!["a_dir", "inner.txt", "b_dir", "m_file.txt", "z_file.txt"]
         );
-        let inner = &s.nodes()[1];
-        assert_eq!(inner.depth, 1);
+        let inner = &s.nodes()[2]; // root, a_dir, inner.txt
+        assert_eq!(inner.depth, 2);
         assert!(!inner.is_dir);
+        // a_dir is not the last child → its subtree draws one `│` guide column.
+        assert_eq!(inner.branches, vec![true]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn last_child_flag() {
+        let root = make_tree();
+        let s = ExplorerState::open(root.clone());
+        assert!(!s.nodes()[1].is_last); // a_dir
+        let z = s.nodes().last().unwrap();
+        assert_eq!(z.path.file_name().unwrap(), "z_file.txt");
+        assert!(z.is_last);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -425,12 +484,12 @@ mod tests {
     fn collapse_removes_subtree() {
         let root = make_tree();
         let mut s = ExplorerState::open(root.clone());
-        s.toggle_selected(); // a_dir open → inner.txt visible
-        assert_eq!(s.nodes().len(), 5);
-        // selection is on a_dir (an expanded dir) → h collapses it.
-        s.collapse_or_parent();
+        s.select_index(1); // a_dir
+        s.toggle_selected(); // open → inner.txt visible
+        assert_eq!(s.nodes().len(), 6); // root + 4 + inner
+        s.collapse_or_parent(); // a_dir is an expanded dir → collapse
         assert_eq!(
-            names(&s),
+            child_names(&s),
             vec!["a_dir", "b_dir", "m_file.txt", "z_file.txt"]
         );
         let _ = fs::remove_dir_all(&root);
@@ -440,10 +499,11 @@ mod tests {
     fn collapse_or_parent_selects_parent() {
         let root = make_tree();
         let mut s = ExplorerState::open(root.clone());
-        s.toggle_selected(); // a_dir open
-        s.select_index(1); // inner.txt (depth 1, a file)
-        s.collapse_or_parent(); // → selects parent a_dir (depth 0)
-        assert_eq!(s.selected_index(), 0);
+        s.select_index(1); // a_dir
+        s.toggle_selected(); // open
+        s.select_index(2); // inner.txt (a file under a_dir)
+        s.collapse_or_parent(); // → selects parent a_dir at index 1
+        assert_eq!(s.selected_index(), 1);
         assert_eq!(
             s.selected_node().unwrap().path.file_name().unwrap(),
             "a_dir"
@@ -452,15 +512,25 @@ mod tests {
     }
 
     #[test]
+    fn collapse_root_hides_all() {
+        let root = make_tree();
+        let mut s = ExplorerState::open(root.clone());
+        s.select_first(); // root
+        s.collapse_or_parent(); // collapse the root
+        assert_eq!(s.nodes().len(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn navigation_clamps() {
         let root = make_tree();
         let mut s = ExplorerState::open(root.clone());
-        s.select_prev(); // already at 0 → stays
+        s.select_prev(); // at 0 (root) → stays
         assert_eq!(s.selected_index(), 0);
         s.select_last();
-        assert_eq!(s.selected_index(), 3);
+        assert_eq!(s.selected_index(), s.nodes().len() - 1);
         s.select_next(); // at last → stays
-        assert_eq!(s.selected_index(), 3);
+        assert_eq!(s.selected_index(), s.nodes().len() - 1);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -468,7 +538,11 @@ mod tests {
     fn expand_is_noop_on_file() {
         let root = make_tree();
         let mut s = ExplorerState::open(root.clone());
-        s.select_index(2); // m_file.txt
+        s.select_index(3); // root, a_dir, b_dir, m_file.txt
+        assert_eq!(
+            s.selected_node().unwrap().path.file_name().unwrap(),
+            "m_file.txt"
+        );
         assert!(!s.toggle_selected());
         let _ = fs::remove_dir_all(&root);
     }
