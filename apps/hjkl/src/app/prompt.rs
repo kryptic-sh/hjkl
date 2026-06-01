@@ -424,21 +424,21 @@ impl App {
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
 
         if input.key == EngineKey::Esc {
-            if self.completion.is_some() {
-                // Dismiss popup but keep typed text.
-                self.completion = None;
-                self.command_completion_range = None;
-                return;
-            }
+            // Dismiss the popup if open, but DON'T stop here — Esc must also
+            // propagate to the field's normal handling (leave insert mode /
+            // close prompt). A single Esc both closes the popup and steps the
+            // prompt's mode, matching the buffer/LSP popup behavior.
+            self.completion = None;
+            self.command_completion_range = None;
             let field = match self.command_field.as_mut() {
                 Some(f) => f,
                 None => return,
             };
-            if field.text().is_empty() {
-                self.command_field = None;
-                self.prompt_history_index = None;
-                self.prompt_user_input = None;
-            } else if field.vim_mode() == VimMode::Insert {
+            // Behavior keyed purely on vim mode (matches buffer/LSP popup):
+            //   Insert → leave Insert (one Esc both dismisses the popup AND
+            //            steps out of Insert; no second press needed).
+            //   Normal → close the prompt.
+            if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;

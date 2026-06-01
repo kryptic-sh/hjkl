@@ -254,19 +254,17 @@ fn esc_on_nonempty_command_drops_to_normal_then_closes() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     app.handle_command_field_key(key(KeyCode::Char('w')));
-    // Esc1: dismiss popup (if open).
-    if app.completion.is_some() {
-        app.handle_command_field_key(key(KeyCode::Esc));
-        assert!(app.completion.is_none(), "Esc must dismiss popup");
-    }
-    // Esc2: drop to Normal (Insert → Normal).
+    // Esc1: a single press dismisses the popup AND leaves Insert mode.
+    assert!(app.completion.is_some(), "popup must be open after 'w'");
     app.handle_command_field_key(key(KeyCode::Esc));
-    assert!(app.command_field.is_some());
+    assert!(app.completion.is_none(), "Esc must dismiss popup");
+    assert!(app.command_field.is_some(), "field stays open after Esc");
     assert_eq!(
         app.command_field.as_ref().unwrap().vim_mode(),
-        VimMode::Normal
+        VimMode::Normal,
+        "single Esc must also leave Insert mode"
     );
-    // Esc3: close the field.
+    // Esc2: from Normal, close the field.
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(app.command_field.is_none());
 }
@@ -459,13 +457,20 @@ fn colon_enter_exact_match_executes_directly() {
 }
 
 #[test]
-fn colon_esc_with_popup_open_clears_popup_keeps_text() {
-    // "w" → popup opens → Esc → popup clears, text stays, field stays open.
+fn colon_esc_with_popup_open_clears_popup_and_propagates() {
+    // "w" → popup opens → Esc → popup clears AND the Esc propagates to the
+    // field's normal handling (a single Esc both dismisses the popup and steps
+    // the prompt's vim mode out of Insert — it does NOT require a second Esc).
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "w");
     let text_before = app.command_field.as_ref().unwrap().text();
     assert!(app.completion.is_some());
+    assert_eq!(
+        app.command_field.as_ref().unwrap().vim_mode(),
+        hjkl_form::VimMode::Insert,
+        "prompt starts in Insert mode"
+    );
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(
         app.completion.is_none(),
@@ -473,9 +478,15 @@ fn colon_esc_with_popup_open_clears_popup_keeps_text() {
     );
     assert!(
         app.command_field.is_some(),
-        "command field must stay open after Esc-dismiss-popup"
+        "command field must stay open (non-empty text → Normal, not closed)"
     );
-    // Text must be unchanged (Esc dismissed popup, did not revert text).
+    // Esc propagated: the field left Insert mode (no second Esc needed).
+    assert_eq!(
+        app.command_field.as_ref().unwrap().vim_mode(),
+        hjkl_form::VimMode::Normal,
+        "Esc must also leave Insert mode, not only dismiss the popup"
+    );
+    // Text must be unchanged (Esc dismissed popup + changed mode, didn't edit).
     let text_after = app.command_field.as_ref().unwrap().text();
     assert_eq!(
         text_before, text_after,
