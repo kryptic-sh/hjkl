@@ -1058,7 +1058,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             .map(|i| i.commit.clone());
         if let Some(cc) = cursor_commit {
             let hl = Style::default().bg(app.theme.ui.blame_highlight_bg);
-            let left = blame_col_x;
+            // Tint only the buffer region (gutter + text), not the blame
+            // sidebar — the commit-message column keeps its own background.
+            let left = area.x;
             let right = area.x + area.width;
             let buf = frame.buffer_mut();
             for sr in 0..area.height {
