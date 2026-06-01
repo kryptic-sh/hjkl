@@ -1042,6 +1042,52 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── Blame: highlight the cursor commit's other lines ──────────────────
+    // When the blame column is on, tint every visible line attributed to the
+    // same commit as the cursor's line (the cursor line itself keeps its own
+    // cursorline bg). Groups a commit's scattered lines at a glance.
+    if is_focused && blame_col_width > 0 {
+        let slot = &app.slots()[slot_idx];
+        let top_row = slot.editor.host().viewport().top_row;
+        let line_count = slot.editor.buffer().line_count() as usize;
+        let cursor_row = slot.editor.buffer().cursor().row;
+        let cursor_commit = slot
+            .blame
+            .get(cursor_row)
+            .and_then(|o| o.as_ref())
+            .map(|i| i.commit.clone());
+        if let Some(cc) = cursor_commit {
+            let hl = Style::default().bg(app.theme.ui.blame_highlight_bg);
+            let left = blame_col_x;
+            let right = area.x + area.width;
+            let buf = frame.buffer_mut();
+            for sr in 0..area.height {
+                let dr = crate::app::mouse::doc_row_at_screen_offset(
+                    slot.editor.buffer(),
+                    top_row,
+                    sr as usize,
+                );
+                if dr >= line_count || dr == cursor_row {
+                    continue;
+                }
+                let same = slot
+                    .blame
+                    .get(dr)
+                    .and_then(|o| o.as_ref())
+                    .is_some_and(|i| i.commit == cc);
+                if !same {
+                    continue;
+                }
+                let y = blame_col_y + sr;
+                for x in left..right {
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_style(cell.style().patch(hl));
+                    }
+                }
+            }
+        }
+    }
+
     // ── Auto-indent flash overlay ─────────────────────────────────────────
     //
     // Approach: post-render ratatui buffer walk. After `BufferView` has painted
