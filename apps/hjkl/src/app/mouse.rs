@@ -268,6 +268,52 @@ pub(crate) fn box_plan_doc_row(
     }
 }
 
+/// Resolve the document row whose commit a hovered cell belongs to in the
+/// BLAME view — including the virtual box border rows. The commit header
+/// (`BorderTop`) maps to the run's first content line and the bottom border to
+/// its last, so hovering the header shows that commit's message popup. Outside
+/// box mode it falls back to the plain content row under the cell. Returns
+/// `None` outside any window or past the plan / buffer.
+pub(crate) fn blame_hover_doc_row(app: &App, col: u16, row: u16) -> Option<usize> {
+    use hjkl_buffer_tui::render::BlameRow;
+    let win_id = hit_test_window(app, col, row)?;
+    let win = app.windows.get(win_id)?.as_ref()?;
+    let rect = win.last_rect?;
+    let slot = app.slots().get(win.slot)?;
+    let vp = slot.editor.host().viewport();
+    let rel_y = row.saturating_sub(rect.y) as usize;
+    let buf = slot.editor.buffer();
+    let line_count = buf.line_count() as usize;
+
+    // Non-box BLAME (soft-wrap): no virtual rows — use the plain content row.
+    if !matches!(vp.wrap, hjkl_buffer::Wrap::None) {
+        let d = doc_row_at_screen_offset(buf, vp.top_row, rel_y);
+        return (d < line_count).then_some(d);
+    }
+
+    let plan = crate::app::git_hunks::build_blame_box_plan(
+        &slot.blame,
+        buf.row_count(),
+        |r| buf.is_row_hidden(r),
+        vp.top_row,
+        rect.h as usize,
+        0,
+    );
+    match plan.get(rel_y)? {
+        BlameRow::Content(d) => Some(*d),
+        // Commit header → the run's first content line below it.
+        BlameRow::BorderTop(_) => plan.get(rel_y + 1..)?.iter().find_map(|r| match r {
+            BlameRow::Content(d) => Some(*d),
+            _ => None,
+        }),
+        // Bottom border → the run's last content line above it.
+        BlameRow::BorderBottom => plan[..rel_y].iter().rev().find_map(|r| match r {
+            BlameRow::Content(d) => Some(*d),
+            _ => None,
+        }),
+    }
+}
+
 pub fn cell_to_doc(
     app: &App,
     win_id: window::WindowId,
