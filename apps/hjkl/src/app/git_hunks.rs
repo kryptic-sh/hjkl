@@ -116,15 +116,28 @@ impl App {
         let on = !self.active().blame_column;
         self.active_mut().blame_column = on;
         if on {
-            // Blame data is normally gated on settings().blame_inline; the
-            // column needs it regardless, so force a refresh now.
+            // Entering BLAME mode: force read-only (remembering the prior value)
+            // and refresh the blame data (normally gated on `blame_inline`).
+            self.blame_prev_readonly = self.active().editor.is_readonly();
+            self.active_mut().editor.settings_mut().readonly = true;
             self.refresh_blame_force();
+        } else {
+            // Leaving BLAME mode: restore the file's original read-only state.
+            let prev = self.blame_prev_readonly;
+            self.active_mut().editor.settings_mut().readonly = prev;
         }
         self.bus.info(if on {
-            "git blame column: on"
+            "BLAME mode (read-only) — gb or Esc to exit"
         } else {
-            "git blame column: off"
+            "BLAME mode off"
         });
+    }
+
+    /// Leave BLAME mode if active (used by the mode-switch key interceptor).
+    pub(crate) fn exit_blame_mode(&mut self) {
+        if self.active().blame_column {
+            self.toggle_blame_column();
+        }
     }
 
     /// Mouse-hover over the blame column at `doc_row` — show the full commit

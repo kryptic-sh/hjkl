@@ -57,7 +57,8 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
         ("<leader>gS", AppAction::GitStashes, "git stashes"),
         ("<leader>gt", AppAction::GitTags, "git tags"),
         ("<leader>gr", AppAction::GitRemotes, "git remotes"),
-        ("<leader>gm", AppAction::GitBlameLine, "toggle git blame"),
+        // `gb` (top-level g-chord, dispatched from chord_routing.rs) toggles the
+        // read-only git BLAME mode — replaces the former `<leader>gm`.
         // ── LSP / diagnostics ─────────────────────────────────────────────
         ("<leader>d", AppAction::ShowDiagAtCursor, "show diagnostic"),
         ("<leader>ca", AppAction::LspCodeActions, "code actions"),

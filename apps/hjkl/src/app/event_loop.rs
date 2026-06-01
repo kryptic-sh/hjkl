@@ -257,6 +257,35 @@ impl App {
             return KeyOutcome::Break;
         }
 
+        // ── BLAME mode key handling ───────────────────────────────
+        // The git blame view is a read-only Normal-mode overlay. `Esc` exits
+        // it back to Normal; the mode-entering keys (i I a A o O c C s S R v V
+        // <C-v>) exit BLAME and then fall through so they enter that mode (the
+        // buffer becomes editable again). Movement keys stay in BLAME; any
+        // mutating Normal command is a no-op while read-only is forced on.
+        if self.active().blame_column
+            && self.active().editor.vim_mode() == VimMode::Normal
+            && self.command_field.is_none()
+            && self.search_field.is_none()
+            && !self.is_cmdline_win_focused()
+            && !self.overlay_active()
+        {
+            if key.code == KeyCode::Esc {
+                self.exit_blame_mode();
+                return KeyOutcome::Continue;
+            }
+            if let KeyCode::Char(c) = key.code {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                let enters_mode =
+                    (!ctrl && "iIaAoOcCsSRvV".contains(c)) || (ctrl && (c == 'v' || c == 'V'));
+                if enters_mode {
+                    // Leave BLAME (restores editability), then fall through so
+                    // the keypress enters its target mode normally.
+                    self.exit_blame_mode();
+                }
+            }
+        }
+
         // ── Cmdline window <CR> intercept (issue #37) ─────────────
         // Must run BEFORE normal-mode routing so `<Enter>` in the
         // cmdline window commits the line rather than opening a new line

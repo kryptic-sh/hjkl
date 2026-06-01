@@ -231,6 +231,14 @@ impl App {
                                 );
                                 return true;
                             }
+                            // `gb` — toggle the read-only git BLAME view/mode.
+                            'b' => {
+                                self.dispatch_action(
+                                    crate::keymap_actions::AppAction::GitBlameLine,
+                                    count as u32,
+                                );
+                                return true;
+                            }
                             't' => {
                                 self.dispatch_action(
                                     crate::keymap_actions::AppAction::Tabnext,
