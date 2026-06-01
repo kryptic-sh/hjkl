@@ -61,6 +61,10 @@ impl App {
     /// engine's auto-scroll and cursor updates are persisted in the window
     /// snapshot.
     pub fn sync_viewport_from_editor(&mut self) {
+        // Boxed-blame view inserts virtual border rows that consume screen
+        // height the engine doesn't know about; nudge the scroll so the cursor
+        // stays visible. Render-level only — the engine still owns cursor row/col.
+        self.adjust_blame_box_viewport();
         let vp = self.active().editor.host().viewport();
         let (top_row, top_col) = (vp.top_row, vp.top_col);
         let (cursor_row, cursor_col) = self.active().editor.cursor();
@@ -70,6 +74,77 @@ impl App {
         win.top_col = top_col;
         win.cursor_row = cursor_row;
         win.cursor_col = cursor_col;
+    }
+
+    /// Keep the cursor visible in the boxed-blame view by nudging `top_row` to
+    /// compensate for the virtual box-border rows that eat screen height. The
+    /// engine scrolls in document rows assuming a 1:1 screen mapping; the box
+    /// borders break that, so the engine can leave the cursor's *rendered* row
+    /// off-screen. We rebuild the render plan and step `top_row` until the
+    /// cursor's plan row sits within scrolloff of the top/bottom. No-op unless
+    /// the blame box is active. Bounded so it always terminates.
+    pub(crate) fn adjust_blame_box_viewport(&mut self) {
+        let slot = self.active();
+        let box_mode = slot.blame_column
+            && matches!(slot.editor.host().viewport().wrap, hjkl_buffer::Wrap::None);
+        if !box_mode {
+            return;
+        }
+        let height = slot.editor.host().viewport().height as usize;
+        if height < 3 {
+            return;
+        }
+        let cursor_row = slot.editor.buffer().cursor().row;
+        let line_count = slot.editor.buffer().row_count();
+        let scrolloff = slot
+            .editor
+            .settings()
+            .scrolloff
+            .min(height.saturating_sub(1) / 2);
+
+        for _ in 0..(height * 2 + 4) {
+            // Rebuild the plan at the current top and locate the cursor's row.
+            let (top, idx) = {
+                let slot = self.active();
+                let top = slot.editor.host().viewport().top_row;
+                let buf = slot.editor.buffer();
+                let plan = crate::app::git_hunks::build_blame_box_plan(
+                    &slot.blame,
+                    line_count,
+                    |r| buf.is_row_hidden(r),
+                    top,
+                    height,
+                    0, // title text is irrelevant to border placement
+                );
+                let idx = plan.iter().position(|r| {
+                    matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cursor_row)
+                });
+                (top, idx)
+            };
+            let new_top = match idx {
+                // Cursor row isn't in the visible plan — scroll toward it.
+                None => {
+                    if cursor_row >= top {
+                        top + 1
+                    } else {
+                        top.saturating_sub(1)
+                    }
+                }
+                Some(i) => {
+                    if i < scrolloff && top > 0 {
+                        top - 1
+                    } else if i + 1 + scrolloff > height && top + 1 < line_count {
+                        top + 1
+                    } else {
+                        break;
+                    }
+                }
+            };
+            if new_top == top {
+                break;
+            }
+            self.active_mut().editor.host_mut().viewport_mut().top_row = new_top;
+        }
     }
 
     /// Switch focus from the current window to `target_id`, saving the current
