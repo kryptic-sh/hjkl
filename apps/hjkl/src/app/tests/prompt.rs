@@ -514,6 +514,24 @@ fn colon_navigated_popup_still_accepts_over_runnable_alias() {
 }
 
 #[test]
+fn colon_empty_prompt_has_no_popup_and_esc_closes_in_one_press() {
+    // A bare `:` must not show the completion popup (it would dump every
+    // command and force a second Esc). One Esc closes the empty prompt.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    assert!(app.command_field.is_some());
+    assert!(
+        app.completion.is_none(),
+        "empty `:` prompt must not show a popup"
+    );
+    app.handle_command_field_key(key(KeyCode::Esc));
+    assert!(
+        app.command_field.is_none(),
+        "single Esc must close an empty `:` prompt"
+    );
+}
+
+#[test]
 fn colon_esc_with_popup_open_clears_popup_and_propagates() {
     // "w" → popup opens → Esc → popup clears AND the Esc propagates to the
     // field's normal handling (a single Esc both dismisses the popup and steps

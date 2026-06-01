@@ -185,6 +185,16 @@ impl App {
         let (range, metas) = hjkl_ex::complete_command_meta(&line, caret, &editor_reg, host_reg);
 
         if !metas.is_empty() {
+            // Don't surface the popup on a bare `:` (no command name typed yet):
+            // it would dump every command, intercept <C-p>/<C-n> history recall,
+            // and force a second <Esc> to close the empty prompt. Wait until the
+            // user has typed at least one character of a command name.
+            let typed_prefix = &line[range.start..caret.min(range.end)];
+            if typed_prefix.is_empty() {
+                self.completion = None;
+                self.command_completion_range = None;
+                return;
+            }
             let items: Vec<CompletionItem> = metas
                 .iter()
                 .map(|m| {
@@ -201,14 +211,11 @@ impl App {
             self.command_completion_range = Some(range.clone());
             let mut popup = Completion::new(0, range.start, items);
             // Filter by typed prefix so the popup highlights correctly.
-            let typed_prefix = &line[range.start..caret.min(range.end)];
-            if !typed_prefix.is_empty() {
-                popup.set_prefix(typed_prefix);
-                if popup.is_empty() {
-                    self.completion = None;
-                    self.command_completion_range = None;
-                    return;
-                }
+            popup.set_prefix(typed_prefix);
+            if popup.is_empty() {
+                self.completion = None;
+                self.command_completion_range = None;
+                return;
             }
             self.completion = Some(popup);
             return;
@@ -461,11 +468,20 @@ impl App {
                 Some(f) => f,
                 None => return,
             };
-            // Behavior keyed purely on vim mode (matches buffer/LSP popup):
-            //   Insert → leave Insert (one Esc both dismisses the popup AND
-            //            steps out of Insert; no second press needed).
-            //   Normal → close the prompt.
-            if field.vim_mode() == VimMode::Insert {
+            // Esc semantics:
+            //   empty field   → close the prompt outright (a single Esc on a
+            //                   bare `:` dismisses everything; no popup shows on
+            //                   an empty command line, so there's nothing to
+            //                   step through first).
+            //   Insert + text → leave Insert (one Esc both dismisses the popup
+            //                   AND steps out of Insert; matches the buffer/LSP
+            //                   popup behavior).
+            //   Normal + text → close the prompt.
+            if field.text().is_empty() {
+                self.command_field = None;
+                self.prompt_history_index = None;
+                self.prompt_user_input = None;
+            } else if field.vim_mode() == VimMode::Insert {
                 field.enter_normal();
             } else {
                 self.command_field = None;
