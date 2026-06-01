@@ -661,6 +661,7 @@ impl App {
             mouse::Zone::None
             | mouse::Zone::StatusLine
             | mouse::Zone::SplitBorder { .. }
+            | mouse::Zone::BlameColumn { .. }
             | mouse::Zone::PickerRow { .. } => {}
         }
     }

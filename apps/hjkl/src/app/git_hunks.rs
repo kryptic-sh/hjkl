@@ -127,6 +127,39 @@ impl App {
         });
     }
 
+    /// Mouse-hover over the blame column at `doc_row` — show the full commit
+    /// message for that line's commit in the markdown hover popup (the same
+    /// widget LSP hovers use), anchored at `cell`. No-op when the row has no
+    /// blame attribution; uncommitted rows show a short placeholder.
+    pub(crate) fn show_blame_commit_hover(&mut self, doc_row: usize, cell: (u16, u16)) {
+        let info = match self.active().blame.get(doc_row) {
+            Some(Some(i)) => i.clone(),
+            _ => return,
+        };
+        let content = if info.is_uncommitted {
+            "**Not Committed Yet**".to_string()
+        } else {
+            let header = format!(
+                "**{}**  {} · {}",
+                info.commit,
+                info.author,
+                format_blame_date(info.time_unix)
+            );
+            // Full commit message (resolved from the repo); fall back to the
+            // header alone when it can't be fetched.
+            let msg = self
+                .active()
+                .filename
+                .clone()
+                .and_then(|p| git::commit_message(&p, &info.commit));
+            match msg {
+                Some(m) => format!("{header}\n\n{m}"),
+                None => header,
+            }
+        };
+        self.hover_popup = Some(crate::hover_popup::new(content, cell));
+    }
+
     /// `:GitStage` / gutter "Stage Hunk" — stage the unstaged hunk under the
     /// cursor into the index. Requires a saved buffer (the patch applies against
     /// disk).

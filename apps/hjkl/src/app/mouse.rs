@@ -510,6 +510,12 @@ pub enum Zone {
         win_id: window::WindowId,
         doc_row: usize,
     },
+    /// Inside the left git-blame column (when toggled on). `doc_row` is the
+    /// document row whose blame attribution the cell sits on.
+    BlameColumn {
+        win_id: window::WindowId,
+        doc_row: usize,
+    },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
     /// On the buffer-line region of the unified top bar (one entry per open
@@ -879,6 +885,18 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
+
+    // The blame column is carved off the left edge of the gutter region; a
+    // cell there resolves to a blame-column hover (commit message), not a
+    // regular gutter click.
+    let blame_w = blame_column_width_for(slot);
+    if blame_w > 0 && rel_x < blame_w {
+        let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
+        if doc_row < line_count {
+            return Zone::BlameColumn { win_id, doc_row };
+        }
+        return Zone::None;
+    }
 
     if rel_x < gw {
         // Click is in the gutter — compute doc_row without char_col.

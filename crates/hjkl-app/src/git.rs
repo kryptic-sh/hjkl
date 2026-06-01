@@ -625,6 +625,19 @@ fn try_blame_all(path: &Path, current: &[u8]) -> Result<Vec<Option<BlameInfo>>, 
     Ok(result)
 }
 
+/// Full commit message for `short_hash` (resolved against the repo containing
+/// `path`). Returns `None` when the repo can't be opened, the hash doesn't
+/// resolve, or the commit has no message. Used by the blame-column hover popup.
+pub fn commit_message(path: &Path, short_hash: &str) -> Option<String> {
+    try_commit_message(path, short_hash).ok().flatten()
+}
+
+fn try_commit_message(path: &Path, short_hash: &str) -> Result<Option<String>, git2::Error> {
+    let (repo, _rel) = open_repo_for(path)?;
+    let commit = repo.revparse_single(short_hash)?.peel_to_commit()?;
+    Ok(commit.message().ok().map(|m| m.trim_end().to_string()))
+}
+
 /// `true` when the file exists in a git workdir but isn't present in
 /// the HEAD tree (newly created, never committed). Drives the
 /// `[Untracked]` status-line tag — distinct from the diff-changes path
