@@ -1619,15 +1619,47 @@ impl App {
             col: cur_col as u32,
         };
 
-        // Replace [anchor_col, cur_col) with insert_text.
+        // For Function/Method items: ensure parens exist and place cursor inside.
+        // Strip trivial snippet markers ($0, ${0}) before examining the text.
+        let raw_text = &item.insert_text;
+        let is_fn = matches!(
+            item.kind,
+            crate::completion::CompletionKind::Function | crate::completion::CompletionKind::Method
+        );
+
+        let (actual_text, cursor_offset) = if is_fn {
+            // Strip a trailing `$0` or `${0}` snippet placeholder if present.
+            let stripped = if raw_text.ends_with("$0") {
+                &raw_text[..raw_text.len() - 2]
+            } else if raw_text.ends_with("${0}") {
+                &raw_text[..raw_text.len() - 4]
+            } else {
+                raw_text.as_str()
+            };
+
+            if let Some(paren_pos) = stripped.find('(') {
+                // Already has parens — place cursor after the `(`.
+                (stripped.to_string(), paren_pos + 1)
+            } else {
+                // Bare name — append `()` and place cursor between them.
+                let with_parens = format!("{}()", stripped);
+                let offset = stripped.len() + 1; // position after `(`
+                (with_parens, offset)
+            }
+        } else {
+            // Non-function: cursor at end of inserted text.
+            (raw_text.clone(), raw_text.len())
+        };
+
+        // Replace [anchor_col, cur_col) with actual_text.
         BufferEdit::replace_range(
             self.active_mut().editor.buffer_mut(),
             start..end,
-            &item.insert_text,
+            &actual_text,
         );
 
-        // Move cursor past the inserted text.
-        let new_col = anchor_col + item.insert_text.len();
+        // Move cursor to computed offset within the inserted text.
+        let new_col = anchor_col + cursor_offset;
         self.active_mut().editor.jump_cursor(row, new_col);
         // completion was already taken via `take()` above, so it's already None.
     }

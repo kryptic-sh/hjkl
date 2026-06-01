@@ -1120,6 +1120,95 @@ fn accept_completion_inserts_selected_item() {
 }
 
 #[test]
+fn accept_function_completion_places_cursor_in_parens() {
+    // Bare name "foo" with kind=Function → inserts "foo()" with cursor between parens.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+
+    // Anchor at col 0, row 0; insert_text = "foo", kind = Function.
+    let mut item = crate::completion::CompletionItem::new("foo");
+    item.kind = crate::completion::CompletionKind::Function;
+    app.completion = Some(crate::completion::Completion::new(0, 0, vec![item]));
+
+    app.accept_completion();
+    app.sync_after_engine_mutation();
+
+    assert!(app.completion.is_none(), "popup must be dismissed");
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    assert_eq!(
+        line.trim_end_matches('\n'),
+        "foo()",
+        "buffer must contain 'foo()' after function completion"
+    );
+    // Cursor must sit between the parens: anchor_col(0) + len("foo") + 1 = col 4.
+    let (_, col) = app.active().editor.cursor();
+    assert_eq!(
+        col, 4,
+        "cursor must be inside parens at col 4, got col {col}"
+    );
+}
+
+#[test]
+fn accept_function_completion_with_existing_parens() {
+    // insert_text already contains "bar()" → cursor placed between existing parens.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+
+    let mut item = crate::completion::CompletionItem::new("bar()");
+    item.kind = crate::completion::CompletionKind::Method;
+    item.label = "bar".to_string();
+    app.completion = Some(crate::completion::Completion::new(0, 0, vec![item]));
+
+    app.accept_completion();
+    app.sync_after_engine_mutation();
+
+    assert!(app.completion.is_none(), "popup must be dismissed");
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    assert_eq!(
+        line.trim_end_matches('\n'),
+        "bar()",
+        "buffer must contain 'bar()' without double-parens"
+    );
+    // `(` is at byte offset 3 in "bar()" → cursor at anchor_col(0) + 3 + 1 = col 4.
+    let (_, col) = app.active().editor.cursor();
+    assert_eq!(
+        col, 4,
+        "cursor must be inside parens at col 4, got col {col}"
+    );
+}
+
+#[test]
+fn accept_variable_completion_cursor_at_end() {
+    // kind=Variable → no parens added, cursor at end of inserted text.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "");
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+
+    let mut item = crate::completion::CompletionItem::new("x");
+    item.kind = crate::completion::CompletionKind::Variable;
+    app.completion = Some(crate::completion::Completion::new(0, 0, vec![item]));
+
+    app.accept_completion();
+    app.sync_after_engine_mutation();
+
+    assert!(app.completion.is_none(), "popup must be dismissed");
+    let line = hjkl_buffer::rope_line_str(&app.active().editor.buffer().rope(), 0);
+    assert_eq!(
+        line.trim_end_matches('\n'),
+        "x",
+        "buffer must contain 'x' with no parens added"
+    );
+    // Cursor at end: anchor_col(0) + len("x") = col 1.
+    let (_, col) = app.active().editor.cursor();
+    assert_eq!(
+        col, 1,
+        "cursor must be at end (col 1) for non-function completion"
+    );
+}
+
+#[test]
 fn dismiss_completion_clears_state() {
     let mut app = App::new(None, false, None, None).unwrap();
     let items = vec![make_completion_item("foo")];

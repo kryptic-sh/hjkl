@@ -573,6 +573,25 @@ impl App {
                         }
                         return KeyOutcome::Continue;
                     }
+                    // <Down> / <Up> navigate selection (mirrors <C-n>/<C-p>).
+                    KeyCode::Down => {
+                        if let Some(ref mut p) = self.completion {
+                            p.select_next();
+                        }
+                        return KeyOutcome::Continue;
+                    }
+                    KeyCode::Up => {
+                        if let Some(ref mut p) = self.completion {
+                            p.select_prev();
+                        }
+                        return KeyOutcome::Continue;
+                    }
+                    // <Enter> accepts the selected item (only when popup is open).
+                    KeyCode::Enter => {
+                        self.accept_completion();
+                        self.sync_after_engine_mutation();
+                        return KeyOutcome::Continue;
+                    }
                     // <Tab> or <C-y> accept selected item.
                     KeyCode::Tab => {
                         self.accept_completion();
