@@ -370,13 +370,24 @@ impl App {
             .syntax
             .render_viewport(buffer_id, buf, top, effective_height);
 
+        // When a language server owns this buffer's diagnostics, drop the
+        // tree-sitter parse-error gutter signs: one syntax error makes TS
+        // error-recovery flag a cascade of downstream lines, which conflicts
+        // with the server's precise per-line diagnostics. Keep TS signs only
+        // as a fallback for buffers with no LSP attached.
+        let suppress_ts_diag_signs = self.slot_has_lsp(active_idx);
+
         if let Some(out) = out {
             let start = out.key.1;
             let end = start + out.spans.len();
             self.slots[active_idx]
                 .editor
                 .patch_ratatui_syntax_spans_range(start..end, &out.spans);
-            self.slots[active_idx].diag_signs = out.signs;
+            self.slots[active_idx].diag_signs = if suppress_ts_diag_signs {
+                Vec::new()
+            } else {
+                out.signs
+            };
         } else {
             // No spans available (no language or grammar still loading).
             // Clear stale spans and let the renderer draw plain text.

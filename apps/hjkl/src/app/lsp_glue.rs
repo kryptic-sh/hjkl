@@ -972,6 +972,28 @@ impl App {
         })
     }
 
+    /// `true` when an LSP server is attached for the buffer in `slot_idx`
+    /// (its language has an initialized entry in `lsp_state`). When a server
+    /// owns diagnostics for a buffer, the noisy tree-sitter parse-error gutter
+    /// signs are suppressed — a single syntax error makes the TS error-recovery
+    /// flag a cascade of downstream lines, which conflicts with the server's
+    /// precise diagnostics. TS signs remain a fallback for non-LSP buffers.
+    pub(crate) fn slot_has_lsp(&self, slot_idx: usize) -> bool {
+        let Some(slot) = self.slots.get(slot_idx) else {
+            return false;
+        };
+        let lang = slot
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext);
+        match lang {
+            Some(l) => self.lsp_state.keys().any(|k| k.language == l),
+            None => false,
+        }
+    }
+
     /// `true` when a `textDocument/completion` request is already in flight.
     /// Used to suppress request storms while auto-completing as the user types.
     fn lsp_has_pending_completion(&self) -> bool {
