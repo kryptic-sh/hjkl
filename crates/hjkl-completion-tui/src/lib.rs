@@ -95,6 +95,11 @@ fn to_rcolor(c: Color) -> RColor {
 ///   `viewport` it flips above the cursor instead.
 /// - `viewport`   — the buffer pane area used for overflow clamping.
 ///
+/// The popup is **directional**: when rendered below the anchor the best match
+/// (`visible[0]`) is at the top (nearest the anchor). When flipped above the
+/// anchor the list is inverted so `visible[0]` is at the bottom row of the
+/// popup — still physically nearest the anchor line.
+///
 /// Returns immediately if `completion.is_empty()`.
 pub fn popup(
     frame: &mut Frame,
@@ -132,7 +137,8 @@ pub fn popup(
     // Popup position: one row below anchor, clamped to viewport.
     let popup_h = visible_count + 2; // +2 for border
     let below_row = anchor.y + 1;
-    let popup_y = if below_row + popup_h > viewport.y + viewport.height {
+    let flipped = below_row + popup_h > viewport.y + viewport.height;
+    let popup_y = if flipped {
         // Would extend past bottom — shift above cursor.
         anchor.y.saturating_sub(popup_h).max(viewport.y)
     } else {
@@ -164,7 +170,10 @@ pub fn popup(
     let normal_style = Style::default().fg(to_rcolor(theme.normal_fg));
     let detail_style = Style::default().fg(to_rcolor(theme.detail_fg));
 
-    let items: Vec<ListItem> = completion
+    // Build items in logical order (vis_idx 0 = best match).
+    // The per-item inline bold style is pre-baked here and will travel with
+    // its item through any subsequent reverse().
+    let mut items: Vec<ListItem> = completion
         .visible
         .iter()
         .enumerate()
@@ -200,8 +209,27 @@ pub fn popup(
         })
         .collect();
 
+    // When flipped (popup above anchor) invert visual order so the best match
+    // (logical index 0) ends up at the bottom row, physically closest to the
+    // anchor line.  The pre-baked inline styles travel with their items, so
+    // the bold highlight stays on the correct logical row.
+    if flipped {
+        items.reverse();
+    }
+
+    // ListState selection must point at the correct VISUAL row after any reverse.
+    // Not flipped: visual row == logical row (sel = completion.selected).
+    // Flipped:     visual row = (N-1) - logical row.
+    let n = items.len();
+    let clamped_sel = completion.selected.min(n.saturating_sub(1));
+    let sel_visual = if flipped {
+        n.saturating_sub(1).saturating_sub(clamped_sel)
+    } else {
+        clamped_sel
+    };
+
     let mut state = ListState::default();
-    state.select(Some(completion.selected.min(items.len().saturating_sub(1))));
+    state.select(Some(sel_visual));
     let list = List::new(items).highlight_style(selected_style);
     frame.render_stateful_widget(list, inner, &mut state);
 }
@@ -212,6 +240,7 @@ pub fn popup(
 mod tests {
     use super::*;
     use hjkl_completion::{Completion, CompletionItem};
+    use ratatui::{Terminal, backend::TestBackend};
 
     fn make_item(label: &str) -> CompletionItem {
         CompletionItem::new(label)
@@ -219,6 +248,30 @@ mod tests {
 
     fn make_completion(labels: &[&str]) -> Completion {
         Completion::new(0, 0, labels.iter().map(|l| make_item(l)).collect())
+    }
+
+    /// Collect the full text of a rendered row at screen `y` for columns
+    /// `x_start..x_end` (exclusive).
+    fn row_text(buf: &ratatui::buffer::Buffer, y: u16, x_start: u16, x_end: u16) -> String {
+        (x_start..x_end)
+            .map(|x| {
+                buf.cell((x, y))
+                    .map(|c| c.symbol().to_string())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Find the first screen row (within `y_start..y_end`) that contains `text`.
+    fn find_row(
+        buf: &ratatui::buffer::Buffer,
+        text: &str,
+        x_start: u16,
+        x_end: u16,
+        y_start: u16,
+        y_end: u16,
+    ) -> Option<u16> {
+        (y_start..y_end).find(|&y| row_text(buf, y, x_start, x_end).contains(text))
     }
 
     #[test]
@@ -312,5 +365,96 @@ mod tests {
             below_row
         };
         assert_eq!(expected_y, 6, "popup must appear below when room available");
+    }
+
+    /// Directional: popup below → visible[0] (best match) appears on a higher
+    /// screen row than visible[1].
+    #[test]
+    fn popup_below_line_best_match_on_top() {
+        // Large viewport — anchor near top leaves plenty of room below.
+        let width: u16 = 80;
+        let height: u16 = 40;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let completion = make_completion(&["alpha_best", "beta_second"]);
+        let theme = CompletionTheme::default();
+        // anchor at row 2 — popup will appear below at row 3, well within 40.
+        let anchor = Rect {
+            x: 0,
+            y: 2,
+            width: 1,
+            height: 1,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+
+        terminal
+            .draw(|frame| {
+                popup(frame, &completion, &theme, anchor, viewport);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let row_alpha =
+            find_row(&buf, "alpha_best", 0, width, 0, height).expect("alpha_best not found");
+        let row_beta =
+            find_row(&buf, "beta_second", 0, width, 0, height).expect("beta_second not found");
+
+        assert!(
+            row_alpha < row_beta,
+            "below popup: best match (alpha_best, row {row_alpha}) must be ABOVE \
+             second item (beta_second, row {row_beta})"
+        );
+    }
+
+    /// Directional: popup above (flipped) → visible[0] (best match) appears on
+    /// a LOWER screen row than visible[1] — best match is nearest the anchor.
+    #[test]
+    fn popup_above_line_inverts_best_match_to_bottom() {
+        // Small viewport — anchor near the bottom forces a flip.
+        let width: u16 = 80;
+        let height: u16 = 24;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let completion = make_completion(&["alpha_best", "beta_second"]);
+        let theme = CompletionTheme::default();
+        // anchor at row 22 (near bottom of 24-row viewport).
+        // visible_count=2, popup_h=4; below_row=23; 23+4=27 > 24 → flipped.
+        let anchor = Rect {
+            x: 0,
+            y: 22,
+            width: 1,
+            height: 1,
+        };
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+
+        terminal
+            .draw(|frame| {
+                popup(frame, &completion, &theme, anchor, viewport);
+            })
+            .unwrap();
+
+        let buf = terminal.backend().buffer().clone();
+        let row_alpha =
+            find_row(&buf, "alpha_best", 0, width, 0, height).expect("alpha_best not found");
+        let row_beta =
+            find_row(&buf, "beta_second", 0, width, 0, height).expect("beta_second not found");
+
+        assert!(
+            row_alpha > row_beta,
+            "flipped popup: best match (alpha_best, row {row_alpha}) must be BELOW \
+             second item (beta_second, row {row_beta})"
+        );
     }
 }
