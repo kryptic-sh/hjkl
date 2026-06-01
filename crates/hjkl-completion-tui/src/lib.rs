@@ -138,6 +138,9 @@ pub fn popup(
     let popup_h = visible_count + 2; // +2 for border
     let below_row = anchor.y + 1;
     let flipped = below_row + popup_h > viewport.y + viewport.height;
+    // Record orientation so the key handlers can mirror cursor navigation to
+    // match the on-screen layout (best match at bottom when flipped).
+    completion.note_flip(flipped);
     let popup_y = if flipped {
         // Would extend past bottom — shift above cursor.
         anchor.y.saturating_sub(popup_h).max(viewport.y)

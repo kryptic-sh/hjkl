@@ -563,26 +563,26 @@ impl App {
                     // <C-n> / <C-p> navigate selection.
                     KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if let Some(ref mut p) = self.completion {
-                            p.select_next();
+                            p.cycle_down();
                         }
                         return KeyOutcome::Continue;
                     }
                     KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if let Some(ref mut p) = self.completion {
-                            p.select_prev();
+                            p.cycle_up();
                         }
                         return KeyOutcome::Continue;
                     }
                     // <Down> / <Up> navigate selection (mirrors <C-n>/<C-p>).
                     KeyCode::Down => {
                         if let Some(ref mut p) = self.completion {
-                            p.select_next();
+                            p.cycle_down();
                         }
                         return KeyOutcome::Continue;
                     }
                     KeyCode::Up => {
                         if let Some(ref mut p) = self.completion {
-                            p.select_prev();
+                            p.cycle_up();
                         }
                         return KeyOutcome::Continue;
                     }

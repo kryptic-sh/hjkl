@@ -109,6 +109,13 @@ pub struct Completion {
     pub selected: usize,
     /// Prefix the user has typed since the popup was opened.
     pub prefix: String,
+    /// Whether the renderer last drew the popup *above* the anchor line
+    /// (flipped) rather than below it. Set by the view each frame via
+    /// [`Completion::note_flip`]; consumed by [`Completion::cycle_down`] /
+    /// [`Completion::cycle_up`] so cursor-key navigation always moves the
+    /// highlight in the on-screen direction the user pressed. `Cell` so the
+    /// view can record it through a shared `&Completion` borrow.
+    flipped: std::cell::Cell<bool>,
 }
 
 impl Completion {
@@ -134,6 +141,7 @@ impl Completion {
             visible,
             selected: 0,
             prefix: String::new(),
+            flipped: std::cell::Cell::new(false),
         }
     }
 
@@ -175,6 +183,39 @@ impl Completion {
             self.selected = self.visible.len() - 1;
         } else {
             self.selected -= 1;
+        }
+    }
+
+    /// Record whether the view drew this popup flipped (above the anchor).
+    /// Called by the renderer each frame; navigation then mirrors accordingly.
+    pub fn note_flip(&self, flipped: bool) {
+        self.flipped.set(flipped);
+    }
+
+    /// `true` when the popup was last rendered above the anchor line.
+    pub fn is_flipped(&self) -> bool {
+        self.flipped.get()
+    }
+
+    /// Move the highlight one row *down on screen*, regardless of orientation.
+    /// When not flipped, visual order == logical order, so this is `select_next`.
+    /// When flipped, the list is drawn inverted (best match at the bottom), so
+    /// moving down visually means stepping to the previous logical item.
+    pub fn cycle_down(&mut self) {
+        if self.flipped.get() {
+            self.select_prev();
+        } else {
+            self.select_next();
+        }
+    }
+
+    /// Move the highlight one row *up on screen*, regardless of orientation.
+    /// Inverse of [`Self::cycle_down`].
+    pub fn cycle_up(&mut self) {
+        if self.flipped.get() {
+            self.select_next();
+        } else {
+            self.select_prev();
         }
     }
 
@@ -309,6 +350,37 @@ mod tests {
         let mut c = popup(&["a", "b", "c"]);
         c.selected = 0;
         c.select_prev();
+        assert_eq!(c.selected, 2);
+    }
+
+    #[test]
+    fn cycle_matches_logical_direction_when_not_flipped() {
+        let mut c = popup(&["a", "b", "c"]);
+        c.note_flip(false);
+        assert_eq!(c.selected, 0);
+        c.cycle_down(); // down on screen == next logical item
+        assert_eq!(c.selected, 1);
+        c.cycle_up();
+        assert_eq!(c.selected, 0);
+    }
+
+    #[test]
+    fn cycle_inverts_logical_direction_when_flipped() {
+        // Flipped: best match (logical 0) is drawn at the BOTTOM, so moving the
+        // highlight down on screen must step to the *previous* logical item
+        // (wrapping to the worst match), and up steps to the next-best.
+        let mut c = popup(&["a", "b", "c"]);
+        c.note_flip(true);
+        assert_eq!(c.selected, 0);
+        c.cycle_up(); // up on screen, flipped == next logical item
+        assert_eq!(c.selected, 1);
+        c.cycle_up();
+        assert_eq!(c.selected, 2);
+        c.cycle_down(); // down on screen, flipped == prev logical item
+        assert_eq!(c.selected, 1);
+        // From the best match, down on screen wraps past the bottom edge.
+        c.selected = 0;
+        c.cycle_down();
         assert_eq!(c.selected, 2);
     }
 

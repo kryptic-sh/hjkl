@@ -344,7 +344,7 @@ impl App {
                 }
             }
             if let Some(ref mut popup) = self.completion {
-                popup.select_next();
+                popup.cycle_down();
                 return;
             }
             // No popup — refresh (may open one) then no-op.
@@ -353,7 +353,7 @@ impl App {
         }
         if key.code == KeyCode::BackTab {
             if let Some(ref mut popup) = self.completion {
-                popup.select_prev();
+                popup.cycle_up();
                 return;
             }
             return;
@@ -369,9 +369,9 @@ impl App {
             // If popup is open, navigate it.
             if let Some(ref mut popup) = self.completion {
                 if is_ctrl_p {
-                    popup.select_prev();
+                    popup.cycle_up();
                 } else {
-                    popup.select_next();
+                    popup.cycle_down();
                 }
                 return;
             }
