@@ -1058,10 +1058,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             .map(|i| i.commit.clone());
         if let Some(cc) = cursor_commit {
             let hl = Style::default().bg(app.theme.ui.blame_highlight_bg);
-            // Tint only the buffer region (gutter + text), not the blame
-            // sidebar — the commit-message column keeps its own background.
-            let left = area.x;
-            let right = area.x + area.width;
+            // Sidebar (blame column) cells: the whole current-commit run gets
+            // the commit highlight uniformly — including the cursor's own row.
+            let sidebar = blame_col_x..(blame_col_x + blame_col_width);
+            // Buffer cells (gutter + text): tint the commit's other lines, but
+            // leave the cursor line to its own cursorline background.
+            let buffer = area.x..(area.x + area.width);
             let buf = frame.buffer_mut();
             for sr in 0..area.height {
                 let dr = crate::app::mouse::doc_row_at_screen_offset(
@@ -1069,7 +1071,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     top_row,
                     sr as usize,
                 );
-                if dr >= line_count || dr == cursor_row {
+                if dr >= line_count {
                     continue;
                 }
                 let same = slot
@@ -1081,9 +1083,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     continue;
                 }
                 let y = blame_col_y + sr;
-                for x in left..right {
+                // Sidebar: always (uniform commit block).
+                for x in sidebar.clone() {
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_style(cell.style().patch(hl));
+                    }
+                }
+                // Buffer: skip the cursor row so its cursorline shows through.
+                if dr != cursor_row {
+                    for x in buffer.clone() {
+                        if let Some(cell) = buf.cell_mut((x, y)) {
+                            cell.set_style(cell.style().patch(hl));
+                        }
                     }
                 }
             }
