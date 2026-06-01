@@ -438,7 +438,28 @@ pub fn doc_to_cell(
         fold_column_width_for(slot),
     );
 
-    let cell_y = rect.y + (doc_row - vp_top) as u16;
+    // Box mode (BLAME, no soft-wrap) inserts virtual border rows and reserves a
+    // 1-col left frame, so the screen row is the doc row's index in the render
+    // plan (not `doc_row - vp_top`) and the text shifts right by the frame.
+    let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let cell_y = if box_mode {
+        use hjkl_buffer_tui::render::BlameRow;
+        let buf = slot.editor.buffer();
+        let plan = crate::app::git_hunks::build_blame_box_plan(
+            &slot.blame,
+            buf.row_count(),
+            |r| buf.is_row_hidden(r),
+            vp_top,
+            rect.h as usize,
+            0,
+        );
+        let idx = plan
+            .iter()
+            .position(|r| matches!(r, BlameRow::Content(d) if *d == doc_row))?;
+        rect.y + idx as u16
+    } else {
+        rect.y + (doc_row - vp_top) as u16
+    };
 
     // char col → visual col (tab expansion) → screen cell, accounting for
     // horizontal scroll. The exact inverse of cell_to_doc's column math.
@@ -451,7 +472,7 @@ pub fn doc_to_cell(
     };
     let visual_col = hjkl_buffer::char_col_to_visual_col(&line_str, char_col, tab_width);
     let text_rel_x = visual_col.saturating_sub(vp.top_col) as u16;
-    let cell_x = rect.x + gw + text_rel_x;
+    let cell_x = rect.x + gw + u16::from(box_mode) + text_rel_x;
 
     if cell_x >= rect.x + rect.w {
         return None;

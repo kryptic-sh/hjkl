@@ -695,6 +695,16 @@ impl App {
 
     /// `K` — show hover info.
     pub(crate) fn lsp_hover(&mut self) {
+        // In BLAME mode `K` shows the cursor line's commit message (the same
+        // markdown popup), not an LSP symbol hover — the buffer is a read-only
+        // blame view.
+        if self.active().editor.is_blame() {
+            let (row, col) = self.active().editor.cursor();
+            let win_id = self.focused_window();
+            let cell = crate::app::mouse::doc_to_cell(self, win_id, row, col).unwrap_or((0, 0));
+            self.show_blame_commit_hover(row, cell);
+            return;
+        }
         self.lsp_send_goto("textDocument/hover", None, |buf, orig| {
             LspPendingRequest::Hover {
                 buffer_id: buf,
