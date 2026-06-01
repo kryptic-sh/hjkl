@@ -197,19 +197,12 @@ fn text_start_offset(
     lnum_width + sign_w + fold_w
 }
 
-/// Width of the left git-blame column for `slot` (0 when off or when
-/// soft-wrap is active). Mirrors the renderer's `blame_col_width` gate.
-/// Folded into `text_start_offset` callers so clicks map past the column.
-pub(crate) const BLAME_COLUMN_WIDTH: u16 = 32;
-
-/// Returns [`BLAME_COLUMN_WIDTH`] when the blame column is visible for `slot`,
-/// 0 otherwise. Mirrors the renderer's gate (blame_column on + Wrap::None).
-pub(crate) fn blame_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
-    if slot.blame_column && matches!(slot.editor.host().viewport().wrap, hjkl_buffer::Wrap::None) {
-        BLAME_COLUMN_WIDTH
-    } else {
-        0
-    }
+/// Left git-blame **sidebar** width. Now always 0: the blame view renders as an
+/// in-buffer box (titled top/bottom borders + `│` sides) instead of a left
+/// column, so no horizontal space is carved and click geometry is unaffected.
+/// Kept as a function so the (gated-off) sidebar paint path compiles.
+pub(crate) fn blame_column_width_for(_slot: &crate::app::BufferSlot) -> u16 {
+    0
 }
 
 /// Fold-column width for `slot`, matching the renderer's auto rule: 1 when

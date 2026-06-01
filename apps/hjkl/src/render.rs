@@ -929,6 +929,35 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         hints
     };
 
+    // Boxed-blame layout: when the blame view is on (Wrap::None), build a
+    // render plan that frames each commit run in a box (titled top border,
+    // `│` sides, bottom border). The engine's cursor/scroll stays authoritative
+    // — this only changes how the viewport is painted.
+    let box_mode = {
+        let s = &app.slots()[slot_idx];
+        s.blame_column && matches!(s.editor.host().viewport().wrap, hjkl_buffer::Wrap::None)
+    };
+    let blame_box_plan: Vec<hjkl_buffer_tui::render::BlameRow> = if box_mode {
+        let s = &app.slots()[slot_idx];
+        let vp_top = s.editor.host().viewport().top_row;
+        let line_count = s.editor.buffer().line_count() as usize;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let buf = s.editor.buffer();
+        crate::app::git_hunks::build_blame_box_plan(
+            &s.blame,
+            line_count,
+            |r| buf.is_row_hidden(r),
+            vp_top,
+            area.height as usize,
+            now,
+        )
+    } else {
+        Vec::new()
+    };
+
     let view = BufferView {
         buffer: app.slots()[slot_idx].editor.buffer(),
         viewport: viewport_ref,
@@ -962,6 +991,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         indent_guide_active_col,
         // Inline EOL ghost text (cursor line): diagnostics + git blame.
         eol_hints: &eol_hints,
+        blame_plan: if box_mode {
+            Some(&blame_box_plan)
+        } else {
+            None
+        },
     };
     frame.render_widget(view, area);
 
@@ -1319,7 +1353,22 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             sign_w + fold_w,
         )
     {
-        frame.set_cursor_position((cx, cy));
+        if box_mode {
+            // Boxed-blame: the cursor's screen row comes from the plan (borders
+            // shift content down); the column shifts right by the box frame.
+            // Hidden when the cursor row scrolled past the plan's last row.
+            let cur = app.slots()[slot_idx].editor.buffer().cursor().row;
+            if let Some(idx) = blame_box_plan.iter().position(
+                |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cur),
+            ) {
+                frame.set_cursor_position((
+                    cx + hjkl_buffer_tui::render::BLAME_BOX_FRAME_LEFT,
+                    area.y + idx as u16,
+                ));
+            }
+        } else {
+            frame.set_cursor_position((cx, cy));
+        }
     }
 }
 

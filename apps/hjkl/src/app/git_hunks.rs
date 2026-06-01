@@ -385,6 +385,78 @@ pub(crate) fn build_blame_column(
     out
 }
 
+/// Relative time within one day (`now`, `t` unix seconds, UTC) as `now`/`{m}m`/
+/// `{h}h`; the absolute ISO date otherwise (or for clock-skew/future commits).
+fn format_blame_reltime(t: i64, now: i64) -> String {
+    let d = now - t;
+    if !(0..86_400).contains(&d) {
+        return format_blame_date(t);
+    }
+    if d < 60 {
+        "now".to_string()
+    } else if d < 3600 {
+        format!("{}m", d / 60)
+    } else {
+        format!("{}h", d / 3600)
+    }
+}
+
+/// Build the boxed-blame render plan for the viewport: walk visible document
+/// rows from `top_row`, inserting a titled top border at each commit run's
+/// first row and a bottom border after its last row, capped to `height` screen
+/// rows. `is_hidden(row)` reports fold-hidden rows (skipped). The title is
+/// `<hash> <author> · <reltime> · <summary>`.
+pub(crate) fn build_blame_box_plan(
+    blame: &[Option<git::BlameInfo>],
+    line_count: usize,
+    is_hidden: impl Fn(usize) -> bool,
+    top_row: usize,
+    height: usize,
+    now: i64,
+) -> Vec<hjkl_buffer_tui::render::BlameRow> {
+    use hjkl_buffer_tui::render::BlameRow;
+    let commit_of = |r: usize| blame.get(r).and_then(|o| o.as_ref());
+    let mut plan: Vec<BlameRow> = Vec::with_capacity(height);
+    let mut dr = top_row;
+    while dr < line_count && plan.len() < height {
+        if is_hidden(dr) {
+            dr += 1;
+            continue;
+        }
+        let Some(info) = commit_of(dr) else {
+            plan.push(BlameRow::Content(dr));
+            dr += 1;
+            continue;
+        };
+        let run_start = dr == 0 || commit_of(dr - 1).is_none_or(|p| p.commit != info.commit);
+        if run_start {
+            let hash: String = info.commit.chars().take(8).collect();
+            let when = if info.is_uncommitted {
+                "now".to_string()
+            } else {
+                format_blame_reltime(info.time_unix, now)
+            };
+            plan.push(BlameRow::BorderTop(format!(
+                "{hash} {} · {when} · {}",
+                info.author, info.summary
+            )));
+            if plan.len() >= height {
+                break;
+            }
+        }
+        plan.push(BlameRow::Content(dr));
+        if plan.len() >= height {
+            break;
+        }
+        let run_end = commit_of(dr + 1).is_none_or(|n| n.commit != info.commit);
+        if run_end {
+            plan.push(BlameRow::BorderBottom);
+        }
+        dr += 1;
+    }
+    plan
+}
+
 /// Format a unix timestamp (seconds, UTC) as `YYYY-MM-DD`. Self-contained
 /// civil-date conversion (Howard Hinnant's algorithm) — no chrono/time dep.
 fn format_blame_date(time_unix: i64) -> String {

@@ -202,6 +202,7 @@ pub fn preview_pane(
         indent_guide_active_col: None,
         // Picker preview never shows inline blame.
         eol_hints: &[],
+        blame_plan: None,
     };
     frame.render_widget(view, inner);
 }
