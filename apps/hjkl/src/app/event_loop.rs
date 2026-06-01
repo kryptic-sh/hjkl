@@ -1365,6 +1365,10 @@ impl App {
                 self.force_clear_screen = false;
                 terminal.clear()?;
             }
+            // Refresh the inline-blame idle debounce from the cursor position
+            // (source-agnostic) before drawing so the blame ghost engages only
+            // after the cursor has settled for `BLAME_IDLE_DELAY`.
+            self.note_blame_cursor_motion();
             let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(

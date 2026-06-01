@@ -907,7 +907,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let blame_show = slot.editor.settings().blame_inline
             && !slot.editor.is_blame()
             && is_focused
-            && app.last_input_at.elapsed() >= BLAME_IDLE_DELAY
+            && app.blame_cursor_moved_at.elapsed() >= BLAME_IDLE_DELAY
             && !hints.iter().any(|h| h.row == cursor_row);
         if blame_show && let Some(Some(info)) = slot.blame.get(cursor_row) {
             let body = if info.is_uncommitted {

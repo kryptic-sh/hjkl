@@ -132,6 +132,20 @@ impl App {
         });
     }
 
+    /// Reset the inline git-blame idle debounce whenever the focused cursor
+    /// moves — from *any* source (keyboard motion, mouse click/drag, macro
+    /// replay, LSP jump, …). Called once per event-loop tick before drawing.
+    /// Debouncing on the cursor position (rather than stamping each input
+    /// path) keeps the delay source- and mode-agnostic with no per-path
+    /// bookkeeping to maintain.
+    pub(crate) fn note_blame_cursor_motion(&mut self) {
+        let cur = (self.focused_slot_idx(), self.active().editor.cursor());
+        if self.blame_prev_cursor != Some(cur) {
+            self.blame_prev_cursor = Some(cur);
+            self.blame_cursor_moved_at = std::time::Instant::now();
+        }
+    }
+
     /// Mouse-hover over the blame column at `doc_row` — show the full commit
     /// message for that line's commit in the markdown hover popup (the same
     /// widget LSP hovers use), anchored at `cell`. No-op when the row has no

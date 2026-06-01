@@ -364,6 +364,14 @@ pub struct App {
     /// active slot's `dirty_gen` to decide when the `updatetime` idle deadline
     /// has elapsed for swap-file writes.
     pub(crate) last_input_at: std::time::Instant,
+    /// `(focused slot, cursor)` seen at the previous draw, used to detect
+    /// cursor movement from any source. `None` before the first draw.
+    pub(crate) blame_prev_cursor: Option<(usize, (usize, usize))>,
+    /// Instant the focused cursor last moved (any source: keyboard, mouse,
+    /// macro, LSP jump). Drives the inline git-blame idle debounce so the
+    /// blame ghost only engages once the cursor has been still for
+    /// `BLAME_IDLE_DELAY` — independent of what moved it or the editor mode.
+    pub(crate) blame_cursor_moved_at: std::time::Instant,
     /// Name of the active colorscheme (`"dark"` / `"light"`). Set by
     /// `:colorscheme {name}` and `:set background=`; reported by bare
     /// `:colorscheme` / `:colorscheme?`. Default `"dark"`.
@@ -1348,6 +1356,8 @@ impl App {
             confirming_substitute: None,
             pending_recovery: None,
             last_input_at: std::time::Instant::now(),
+            blame_prev_cursor: None,
+            blame_cursor_moved_at: std::time::Instant::now(),
             colorscheme: "dark".to_string(),
         };
         // Check for crash recovery on the initial file slot (#185).
