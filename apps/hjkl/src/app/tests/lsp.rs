@@ -1024,7 +1024,7 @@ fn completion_response_opens_popup() {
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
     let response_val = synthesize_completion_response(&["foo", "bar", "baz"]);
-    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+    app.handle_completion_response(buffer_id, 0, 0, false, Ok(response_val));
 
     assert!(app.completion.is_some(), "popup should open");
     let popup = app.completion.as_ref().unwrap();
@@ -1041,7 +1041,7 @@ fn completion_response_empty_no_popup() {
 
     // Empty list response.
     let response_val = serde_json::json!([]);
-    app.handle_completion_response(buffer_id, 0, 0, Ok(response_val));
+    app.handle_completion_response(buffer_id, 0, 0, false, Ok(response_val));
 
     assert!(
         app.completion.is_none(),
@@ -1069,6 +1069,7 @@ fn completion_request_pending_routes_to_handler() {
             buffer_id,
             anchor_row: 0,
             anchor_col: 0,
+            auto: false,
         },
     );
 
@@ -1083,6 +1084,24 @@ fn completion_request_pending_routes_to_handler() {
     );
     let popup = app.completion.as_ref().unwrap();
     assert_eq!(popup.all_items.len(), 2);
+}
+
+#[test]
+fn identifier_start_col_snaps_to_word_boundary() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    // "compute" begins at byte 10; cursor at end of line.
+    seed_buffer(&mut app, "let val = compute");
+    assert_eq!(
+        app.identifier_start_col(0, "let val = compute".len()),
+        10,
+        "anchor should snap to the start of the identifier under the cursor"
+    );
+    // Mid-word: cursor after "comp" still anchors at the word start.
+    assert_eq!(app.identifier_start_col(0, 14), 10);
+    // Right after a non-identifier char (e.g. a `.`), anchor stays at cursor
+    // so member completion behaves exactly as before.
+    seed_buffer(&mut app, "obj.");
+    assert_eq!(app.identifier_start_col(0, 4), 4);
 }
 
 #[test]

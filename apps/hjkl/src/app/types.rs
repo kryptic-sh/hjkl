@@ -210,6 +210,10 @@ pub enum LspPendingRequest {
         /// 0-based cursor position when the request was sent.
         anchor_row: usize,
         anchor_col: usize,
+        /// `true` when fired implicitly as the user types (identifier / trigger
+        /// char), `false` when invoked manually (`<C-n>`/`<C-p>`). Auto requests
+        /// stay silent when the server returns nothing.
+        auto: bool,
     },
     /// `textDocument/codeAction` — Phase 5.
     CodeAction {

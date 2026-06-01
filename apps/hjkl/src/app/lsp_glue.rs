@@ -728,8 +728,9 @@ impl App {
                 buffer_id,
                 anchor_row,
                 anchor_col,
+                auto,
             } => {
-                self.handle_completion_response(buffer_id, anchor_row, anchor_col, result);
+                self.handle_completion_response(buffer_id, anchor_row, anchor_col, auto, result);
             }
             LspPendingRequest::CodeAction {
                 buffer_id,
@@ -936,71 +937,137 @@ impl App {
 
     // ── Completion ────────────────────────────────────────────────────────
 
-    /// Check if `ch` is a trigger character for the active LSP server, and if
-    /// so, fire a completion request. Called after inserting a char in insert mode.
-    pub(crate) fn maybe_auto_trigger_completion(&mut self, ch: char) {
-        // Need an active LSP server with capabilities.
-        let triggers: Vec<String> = self
+    /// Locate the `completionProvider` capability object for the active
+    /// buffer's language server, if one is attached. Returns the object so
+    /// callers can inspect `triggerCharacters` etc.
+    fn active_completion_provider(&self) -> Option<&serde_json::Value> {
+        let lang = self
             .active()
             .filename
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .and_then(|ext| language_id_for_ext(ext))
-            .and_then(|lang| {
-                // Find a server key matching this language in lsp_state.
-                self.lsp_state.iter().find_map(|(key, info)| {
-                    if key.language == lang {
-                        // Pull triggerCharacters from capabilities.
-                        info.capabilities
-                            .pointer("/completionProvider/triggerCharacters")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                                    .collect()
-                            })
-                    } else {
-                        None
-                    }
-                })
-            })
-            .unwrap_or_default();
-
-        let ch_str = ch.to_string();
-        if triggers.contains(&ch_str) {
-            self.lsp_request_completion();
-        }
+            .and_then(language_id_for_ext)?;
+        self.lsp_state.iter().find_map(|(key, info)| {
+            (key.language == lang)
+                .then(|| info.capabilities.pointer("/completionProvider"))
+                .flatten()
+        })
     }
 
-    /// Send a `textDocument/completion` request for the current cursor position.
+    /// `true` when a `textDocument/completion` request is already in flight.
+    /// Used to suppress request storms while auto-completing as the user types.
+    fn lsp_has_pending_completion(&self) -> bool {
+        self.lsp_pending
+            .values()
+            .any(|p| matches!(p, LspPendingRequest::Completion { .. }))
+    }
+
+    /// Auto-fire a completion request as the user types in insert mode.
+    ///
+    /// Fires when `ch` is either a server-declared trigger character (e.g. `.`,
+    /// `::`) **or** an identifier character (letter / digit / `_`) so the popup
+    /// surfaces keywords, locals, fields and types mid-word — not only after a
+    /// member-access dot. No-ops silently when no completion-capable server is
+    /// attached, and coalesces while a request is already pending.
+    pub(crate) fn maybe_auto_trigger_completion(&mut self, ch: char) {
+        // Only when an LSP server actually advertises completion for this file.
+        let provider = match self.active_completion_provider() {
+            Some(p) => p,
+            None => return,
+        };
+        let is_trigger = provider
+            .pointer("/triggerCharacters")
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| {
+                arr.iter()
+                    .any(|s| s.as_str() == Some(ch.to_string().as_str()))
+            });
+        let is_ident = ch.is_alphanumeric() || ch == '_';
+        if !(is_trigger || is_ident) {
+            return;
+        }
+        // Don't pile up requests while one is in flight; the local prefix
+        // filter narrows the open popup until the response lands.
+        if self.lsp_has_pending_completion() {
+            return;
+        }
+        self.lsp_request_completion_inner(true);
+    }
+
+    /// Send a `textDocument/completion` request for the current cursor position
+    /// (manual `<C-n>`/`<C-p>` invocation).
     pub(crate) fn lsp_request_completion(&mut self) {
+        self.lsp_request_completion_inner(false);
+    }
+
+    /// Shared completion request. `auto` marks implicit (as-you-type) requests
+    /// so an empty server response stays silent instead of flashing a warning.
+    ///
+    /// The popup anchor is snapped back to the **start of the identifier under
+    /// the cursor** (not the raw cursor column) so the local prefix filter
+    /// tracks the whole partial word as the user keeps typing. The LSP request
+    /// itself still uses the true cursor position.
+    fn lsp_request_completion_inner(&mut self, auto: bool) {
         if self.lsp.is_none() {
-            self.bus
-                .error("LSP: not enabled (set [lsp] enabled = true in config)");
+            if !auto {
+                self.bus
+                    .error("LSP: not enabled (set [lsp] enabled = true in config)");
+            }
             return;
         }
         let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
-                self.bus.error(
-                    "LSP: no file open in this buffer (use :e <file> or open from the picker)",
-                );
+                if !auto {
+                    self.bus.error(
+                        "LSP: no file open in this buffer (use :e <file> or open from the picker)",
+                    );
+                }
                 return;
             }
         };
+        let anchor_col = self.identifier_start_col(row, col);
         let request_id = self.lsp_alloc_request_id();
         self.lsp_pending.insert(
             request_id,
             LspPendingRequest::Completion {
                 buffer_id,
                 anchor_row: row,
-                anchor_col: col,
+                anchor_col,
+                auto,
             },
         );
         if let Some(mgr) = self.lsp.as_ref() {
             mgr.send_request(request_id, buffer_id, "textDocument/completion", params);
         }
+    }
+
+    /// Scan left from byte column `col` on `row` over identifier characters
+    /// (alphanumeric / `_`) and return the byte column where the current word
+    /// begins. When the character before the cursor is not an identifier char
+    /// (e.g. right after a `.`), this returns `col` unchanged.
+    ///
+    /// Byte-based to match the cursor column (UTF-8 `positionEncoding`) and the
+    /// byte-slice prefix tracking in the insert-mode key handler.
+    pub(crate) fn identifier_start_col(&self, row: usize, col: usize) -> usize {
+        let rope = self.active().editor.buffer().rope();
+        if row >= rope.len_lines() {
+            return col;
+        }
+        let line = hjkl_buffer::rope_line_str(&rope, row);
+        let end = col.min(line.len());
+        let mut start = end;
+        // `char_indices` is double-ended, so walk back from the cursor over the
+        // contiguous run of identifier chars; `b` is the char's byte offset.
+        for (b, c) in line[..end].char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' {
+                start = b;
+            } else {
+                break;
+            }
+        }
+        start
     }
 
     // ── Code actions ──────────────────────────────────────────────────────
@@ -1550,6 +1617,7 @@ impl App {
         buffer_id: hjkl_lsp::BufferId,
         anchor_row: usize,
         anchor_col: usize,
+        auto: bool,
         result: Result<serde_json::Value, hjkl_lsp::RpcError>,
     ) {
         let val = match result {
@@ -1579,13 +1647,40 @@ impl App {
         };
 
         if lsp_items.is_empty() {
-            self.bus.warn("no completions");
+            // As-you-type requests stay quiet; only an explicit invocation
+            // reports an empty result.
+            if !auto {
+                self.bus.warn("no completions");
+            }
             return;
         }
 
         let items: Vec<crate::completion::CompletionItem> =
             lsp_items.into_iter().map(item_from_lsp).collect();
-        self.completion = Some(Completion::new(anchor_row, anchor_col, items));
+        let mut popup = Completion::new(anchor_row, anchor_col, items);
+        // The user may have typed further chars between firing the request and
+        // this response landing. Filter the freshly-opened popup by whatever is
+        // currently between the anchor and the cursor so it shows the right
+        // subset immediately rather than the full list for one frame.
+        let cursor = self.active().editor.buffer().cursor();
+        if cursor.row == anchor_row && cursor.col >= anchor_col {
+            let rope = self.active().editor.buffer().rope();
+            if anchor_row < rope.len_lines() {
+                let line = hjkl_buffer::rope_line_str(&rope, anchor_row);
+                let lo = anchor_col.min(line.len());
+                let hi = cursor.col.min(line.len());
+                if lo <= hi {
+                    let prefix = line[lo..hi].to_string();
+                    if !prefix.is_empty() {
+                        popup.set_prefix(&prefix);
+                    }
+                }
+            }
+        }
+        if popup.is_empty() {
+            return;
+        }
+        self.completion = Some(popup);
     }
 
     /// Accept the currently selected completion item, inserting its text
