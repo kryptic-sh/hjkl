@@ -145,24 +145,33 @@ impl Completion {
         }
     }
 
-    /// Refilter visible items using a subsequence (case-insensitive) match
-    /// against `prefix`. Resets `selected` to 0.
+    /// Refilter visible items using a case-insensitive subsequence match
+    /// against `prefix`, **ranked by match quality** (best first): an exact
+    /// match outranks a prefix match, which outranks a contiguous run, which
+    /// outranks a scattered subsequence; shorter candidates and earlier / more
+    /// word-boundary-aligned matches score higher. Ties keep the original
+    /// (server-provided) order for stability. Resets `selected` to 0 so the
+    /// best match is auto-selected.
     pub fn set_prefix(&mut self, prefix: &str) {
         self.prefix = prefix.to_string();
-        self.visible = self
+        let needle = prefix.to_lowercase();
+        let mut scored: Vec<(usize, i32)> = self
             .all_items
             .iter()
             .enumerate()
-            .filter(|(_, item)| {
+            .filter_map(|(idx, item)| {
                 let haystack = item
                     .filter_text
                     .as_deref()
                     .unwrap_or(&item.label)
                     .to_lowercase();
-                subseq_match(&haystack, &prefix.to_lowercase())
+                match_score(&haystack, &needle).map(|score| (idx, score))
             })
-            .map(|(idx, _)| idx)
             .collect();
+        // Higher score first; on a tie fall back to the original index so the
+        // sort is stable and the server's preferred ordering is preserved.
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        self.visible = scored.into_iter().map(|(idx, _)| idx).collect();
         self.selected = 0;
     }
 
@@ -238,19 +247,66 @@ impl Default for Completion {
     }
 }
 
-/// Returns true when every character of `needle` appears in `haystack`
-/// in order (case already folded by the caller).
-fn subseq_match(haystack: &str, needle: &str) -> bool {
+/// Fuzzy match score for `needle` against `haystack` (both already
+/// case-folded by the caller). Returns `None` when `needle` is not a
+/// subsequence of `haystack`; otherwise a score where **higher is better**.
+///
+/// Heuristics, roughly in order of weight:
+/// - exact equality is the strongest signal,
+/// - a prefix match (`haystack` starts with `needle`) is next,
+/// - contiguous matched runs beat scattered ones (gaps are penalized),
+/// - matches at a word boundary (start, or after `_`) earn a bonus,
+/// - an earlier first match and a shorter candidate score higher.
+///
+/// An empty `needle` matches everything with a neutral score, leaving the
+/// original ordering untouched.
+fn match_score(haystack: &str, needle: &str) -> Option<i32> {
     if needle.is_empty() {
-        return true;
+        return Some(0);
     }
-    let mut hiter = haystack.chars();
-    for nc in needle.chars() {
-        if !hiter.any(|hc| hc == nc) {
-            return false;
+
+    let h: Vec<char> = haystack.chars().collect();
+    let mut needle_iter = needle.chars();
+    let mut want = needle_iter.next();
+    let mut score: i32 = 0;
+    let mut first_match: Option<usize> = None;
+    let mut prev_match: Option<usize> = None;
+
+    for (i, &hc) in h.iter().enumerate() {
+        let Some(nc) = want else { break };
+        if hc == nc {
+            if first_match.is_none() {
+                first_match = Some(i);
+            }
+            match prev_match {
+                Some(p) if p + 1 == i => score += 15,   // contiguous run
+                Some(p) => score -= (i - p - 1) as i32, // gap penalty
+                None => {}
+            }
+            // Word-boundary bonus: start of string or right after `_`.
+            if i == 0 || h[i - 1] == '_' {
+                score += 10;
+            }
+            prev_match = Some(i);
+            want = needle_iter.next();
         }
     }
-    true
+
+    // Not all needle chars were consumed → not a subsequence.
+    if want.is_some() {
+        return None;
+    }
+
+    if let Some(f) = first_match {
+        score -= f as i32; // earlier first match is better
+    }
+    if h == needle.chars().collect::<Vec<_>>() {
+        score += 1000; // exact match
+    } else if haystack.starts_with(needle) {
+        score += 100; // prefix match
+    }
+    score -= (h.len() as i32) / 4; // mild preference for shorter candidates
+    Some(score)
 }
 
 // ── Map lsp_types completion-item kinds ──────────────────────────────────────
@@ -326,6 +382,39 @@ mod tests {
         let mut c = popup(&["FooBar", "foobar"]);
         c.set_prefix("FB");
         assert_eq!(c.visible.len(), 2);
+    }
+
+    #[test]
+    fn set_prefix_ranks_exact_match_first() {
+        // The exact keyword "let" must outrank scattered subsequence matches
+        // like "STATUS_LINE_HEIGHT" (l…e…t) and prefix matches like "letter".
+        let mut c = popup(&["STATUS_LINE_HEIGHT", "letter", "let", "delete"]);
+        c.set_prefix("let");
+        let ranked: Vec<&str> = c
+            .visible
+            .iter()
+            .map(|&i| c.all_items[i].label.as_str())
+            .collect();
+        assert_eq!(ranked.first(), Some(&"let"), "ranked: {ranked:?}");
+        // "letter" (prefix match) must beat the scattered ones.
+        let letter_pos = ranked.iter().position(|&l| l == "letter").unwrap();
+        let status_pos = ranked
+            .iter()
+            .position(|&l| l == "STATUS_LINE_HEIGHT")
+            .unwrap();
+        assert!(
+            letter_pos < status_pos,
+            "prefix match must rank above scattered: {ranked:?}"
+        );
+    }
+
+    #[test]
+    fn set_prefix_prefers_shorter_on_prefix_tie() {
+        // Both start with "in"; the shorter identifier should rank first.
+        let mut c = popup(&["instantiate", "in"]);
+        c.set_prefix("in");
+        let first = c.all_items[c.visible[0]].label.as_str();
+        assert_eq!(first, "in");
     }
 
     #[test]
