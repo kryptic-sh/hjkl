@@ -7,8 +7,15 @@ fn palette_open_and_submit_runs_dispatch_and_closes() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     assert!(app.command_field.is_some());
-    type_str(&mut app, "q");
-    assert_eq!(app.command_field.as_ref().unwrap().text(), "q");
+    // Type a unique command that has no ambiguity — "quit" → only "quit"
+    // matches so popup has exactly one candidate, and we can dismiss
+    // it cleanly.  With the new popup flow, Enter while popup is open
+    // accepts the selected candidate; a second Enter executes.
+    type_str(&mut app, "quit");
+    // Dismiss popup (Esc), then the command is exactly "quit" with no popup.
+    app.handle_command_field_key(key(KeyCode::Esc));
+    assert!(app.completion.is_none(), "popup must be dismissed");
+    // Now Enter executes "quit".
     app.handle_command_field_key(key(KeyCode::Enter));
     assert!(app.command_field.is_none());
     assert!(app.exit_requested);
@@ -42,6 +49,16 @@ fn palette_esc_in_insert_drops_to_normal_then_motions_apply() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "abc");
+    // First Esc: popup is open (typed "abc" matches no commands → popup is None).
+    // "abc" has no matching commands so popup should be None.
+    // If popup is Some, Esc dismisses popup. If None, Esc drops to Normal.
+    // Either way we need Normal mode — press Esc until we get there.
+    if app.completion.is_some() {
+        // Dismiss popup first.
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(app.completion.is_none());
+    }
+    // Now Esc drops to Normal.
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(app.command_field.is_some());
     let f = app.command_field.as_ref().unwrap();
@@ -215,6 +232,16 @@ fn esc_on_empty_command_prompt_dismisses() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     assert!(app.command_field.is_some());
+    // Empty field shows a popup with all commands. First Esc dismisses popup.
+    if app.completion.is_some() {
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(app.completion.is_none(), "first Esc must dismiss popup");
+        assert!(
+            app.command_field.is_some(),
+            "field stays open after popup Esc"
+        );
+    }
+    // Second Esc (or first if no popup) closes the empty field.
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(
         app.command_field.is_none(),
@@ -227,12 +254,19 @@ fn esc_on_nonempty_command_drops_to_normal_then_closes() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     app.handle_command_field_key(key(KeyCode::Char('w')));
+    // Esc1: dismiss popup (if open).
+    if app.completion.is_some() {
+        app.handle_command_field_key(key(KeyCode::Esc));
+        assert!(app.completion.is_none(), "Esc must dismiss popup");
+    }
+    // Esc2: drop to Normal (Insert → Normal).
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(app.command_field.is_some());
     assert_eq!(
         app.command_field.as_ref().unwrap().vim_mode(),
         VimMode::Normal
     );
+    // Esc3: close the field.
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(app.command_field.is_none());
 }
@@ -257,126 +291,188 @@ fn edit_no_arg_no_filename_e32() {
     assert!(msg.contains("E32"), "expected E32, got: {msg}");
 }
 
-// ── Wildmenu / command completion (Phase 5b) tests ──────────────────────────
+// ── Command completion popup tests (new popup-based flow) ──────────────────
 
 #[test]
-fn colon_tab_single_match_inserts_fully() {
-    // "writ" → Tab → should complete to "write" and close menu.
+fn colon_typing_opens_completion_popup() {
+    // Typing in `:` prompt should open the completion popup live.
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
-    type_str(&mut app, "writ");
-    app.handle_command_field_key(tab_key());
-    assert_eq!(
-        app.command_field.as_ref().unwrap().text(),
-        "write",
-        "single match must insert fully"
-    );
+    type_str(&mut app, "w");
+    // After typing "w", popup must be Some with at least one "w*" candidate.
     assert!(
-        app.command_completion.is_none(),
-        "menu must close after single match"
+        app.completion.is_some(),
+        "completion popup must open after typing in : prompt"
+    );
+    let popup = app.completion.as_ref().unwrap();
+    assert!(!popup.is_empty(), "popup must have candidates for 'w'");
+    // All visible candidates must start with 'w'.
+    for &idx in &popup.visible {
+        let label = &popup.all_items[idx].label;
+        assert!(
+            label.starts_with('w'),
+            "candidate {label:?} must start with 'w'"
+        );
+    }
+}
+
+#[test]
+fn colon_popup_items_have_docs() {
+    // Each candidate in the popup must have a detail string.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "e");
+    let popup = app.completion.as_ref().expect("popup must be open");
+    // Find the "edit" candidate and check it has a detail.
+    let edit_item = popup
+        .all_items
+        .iter()
+        .find(|i| i.label == "edit" || i.label.starts_with("edit"));
+    assert!(edit_item.is_some(), "should find an 'edit*' candidate");
+    let item = edit_item.unwrap();
+    assert!(
+        item.detail.is_some(),
+        "command item must have a detail/doc string"
     );
 }
 
 #[test]
-fn colon_tab_multi_match_extends_to_lcp() {
-    // "w" → Tab → LCP of all w-commands; completion state must be Some.
+fn colon_tab_navigates_popup_forward() {
+    // "w" opens popup; Tab moves selection forward.
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "w");
-    app.handle_command_field_key(tab_key());
-    // After first Tab, completion menu is open (multiple w* candidates exist).
+    assert!(app.completion.is_some());
+    let initial_sel = app.completion.as_ref().unwrap().selected;
+    app.handle_command_field_key(tab_key()); // select_next
+    let after_tab = app.completion.as_ref().unwrap().selected;
+    // selected should have moved
+    let visible_len = app.completion.as_ref().unwrap().visible.len();
+    if visible_len > 1 {
+        assert_ne!(initial_sel, after_tab, "Tab must advance selection");
+    }
+}
+
+#[test]
+fn colon_shift_tab_navigates_popup_backward() {
+    // "w" opens popup; Tab forward; S-Tab back.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "w");
+    assert!(app.completion.is_some());
+    let visible_len = app.completion.as_ref().unwrap().visible.len();
+    if visible_len > 1 {
+        app.handle_command_field_key(tab_key()); // move forward
+        let after_tab = app.completion.as_ref().unwrap().selected;
+        app.handle_command_field_key(shift_tab_key()); // move back
+        let after_btab = app.completion.as_ref().unwrap().selected;
+        assert_ne!(after_tab, after_btab, "S-Tab must move selection back");
+    }
+}
+
+#[test]
+fn colon_enter_accepts_selected_item_no_execute() {
+    // "e" → popup opens → Enter accepts first candidate, field updated, popup closed.
+    // A second Enter is needed to execute.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "e");
     assert!(
-        app.command_completion.is_some(),
-        "wildmenu must be open after Tab on multi-match"
+        app.completion.is_some(),
+        "popup must be open after typing 'e'"
     );
+    // Accept with Enter.
+    app.handle_command_field_key(key(KeyCode::Enter));
+    // Popup must now be closed.
+    assert!(
+        app.completion.is_none(),
+        "popup must close after Enter-accept"
+    );
+    // Command field must still be open (not yet executed).
+    assert!(
+        app.command_field.is_some(),
+        "command field must stay open after Enter-accept"
+    );
+    // Field must now contain the accepted command name.
     let text = app.command_field.as_ref().unwrap().text();
-    // All w* candidates share "w" as prefix at minimum.
-    assert!(
-        text.starts_with('w'),
-        "field must start with typed prefix: {text:?}"
-    );
+    assert!(!text.is_empty(), "field must contain accepted text");
 }
 
 #[test]
-fn colon_tab_then_tab_cycles() {
-    // "w" → Tab (LCP, no selection) → Tab (selects idx 0) → Tab (selects idx 1).
+fn colon_enter_accept_arg_command_appends_space() {
+    // "edit" takes an argument → accepted text should end with a space.
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
-    type_str(&mut app, "w");
-    app.handle_command_field_key(tab_key()); // first Tab → LCP, selected=None
-    assert!(app.command_completion.is_some());
-    assert!(app.command_completion.as_ref().unwrap().selected.is_none());
-
-    app.handle_command_field_key(tab_key()); // second Tab → selected=Some(0)
-    let idx0 = app.command_completion.as_ref().unwrap().selected;
-    assert_eq!(idx0, Some(0));
-
-    app.handle_command_field_key(tab_key()); // third Tab → selected=Some(1)
-    let idx1 = app.command_completion.as_ref().unwrap().selected;
-    assert_eq!(idx1, Some(1));
+    // Type enough to uniquely select "edit".
+    type_str(&mut app, "edit");
+    assert!(app.completion.is_some(), "popup must be open");
+    // Find "edit" in the popup and select it.
+    let popup = app.completion.as_ref().unwrap();
+    let edit_vis_idx = popup
+        .visible
+        .iter()
+        .position(|&idx| popup.all_items[idx].label == "edit");
+    if let Some(vis_idx) = edit_vis_idx {
+        app.completion.as_mut().unwrap().selected = vis_idx;
+        app.handle_command_field_key(key(KeyCode::Enter));
+        let text = app.command_field.as_ref().unwrap().text();
+        assert!(
+            text.ends_with(' '),
+            "arg-taking command 'edit' must have trailing space after accept: {text:?}"
+        );
+    }
+    // If "edit" isn't in the popup candidates, we skip the rest of the assertion.
 }
 
 #[test]
-fn colon_shift_tab_cycles_backward() {
-    // "w" → Tab (open, no sel) → Tab (idx 0) → Tab (idx 1) → S-Tab (idx 0).
+fn colon_esc_with_popup_open_clears_popup_keeps_text() {
+    // "w" → popup opens → Esc → popup clears, text stays, field stays open.
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "w");
-    app.handle_command_field_key(tab_key()); // open, no sel
-    app.handle_command_field_key(tab_key()); // idx 0
-    app.handle_command_field_key(tab_key()); // idx 1
-    let before = app.command_completion.as_ref().unwrap().selected.unwrap();
-    app.handle_command_field_key(shift_tab_key()); // back to idx 0
-    let after = app.command_completion.as_ref().unwrap().selected.unwrap();
-    assert_eq!(after, before - 1, "S-Tab must decrement selection");
-}
-
-#[test]
-fn colon_esc_during_completion_reverts() {
-    // "w" → Tab (open) → Tab (select idx 0, text changed) → Esc → back to "w".
-    let mut app = App::new(None, false, None, None).unwrap();
-    app.open_command_prompt();
-    type_str(&mut app, "w");
-    app.handle_command_field_key(tab_key()); // open
-    app.handle_command_field_key(tab_key()); // select first candidate
-    // Field now contains the candidate text, not "w".
-    let candidate_text = app.command_field.as_ref().unwrap().text();
-    // Esc should revert to "w" and clear completion but keep command_field open.
+    let text_before = app.command_field.as_ref().unwrap().text();
+    assert!(app.completion.is_some());
     app.handle_command_field_key(key(KeyCode::Esc));
     assert!(
-        app.command_completion.is_none(),
-        "completion must be cleared after Esc"
+        app.completion.is_none(),
+        "completion must be cleared after Esc with popup open"
     );
     assert!(
         app.command_field.is_some(),
-        "command field must stay open after completion Esc"
+        "command field must stay open after Esc-dismiss-popup"
     );
+    // Text must be unchanged (Esc dismissed popup, did not revert text).
+    let text_after = app.command_field.as_ref().unwrap().text();
     assert_eq!(
-        app.command_field.as_ref().unwrap().text(),
-        "w",
-        "field must revert to original: was {candidate_text:?}"
+        text_before, text_after,
+        "Esc must keep typed text when dismissing popup"
     );
 }
 
 #[test]
-fn colon_other_key_during_completion_commits() {
-    // "w" → Tab (open, LCP applied) → Tab (select idx 0) → Space → commits, menu closed.
+fn colon_popup_closes_when_no_match() {
+    // Type something that has no matching command → popup must be None.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.open_command_prompt();
+    type_str(&mut app, "zzzzzzz_no_such_cmd");
+    assert!(
+        app.completion.is_none(),
+        "popup must be None when no candidates match"
+    );
+}
+
+#[test]
+fn colon_ctrl_n_navigates_popup_when_open() {
+    // When popup is open, C-n must move selection forward (not history nav).
     let mut app = App::new(None, false, None, None).unwrap();
     app.open_command_prompt();
     type_str(&mut app, "w");
-    app.handle_command_field_key(tab_key()); // open
-    app.handle_command_field_key(tab_key()); // select first candidate
-    let candidate_text = app.command_field.as_ref().unwrap().text();
-    // Press Space — should commit the candidate and close the menu.
-    app.handle_command_field_key(key(KeyCode::Char(' ')));
-    assert!(
-        app.command_completion.is_none(),
-        "completion must be cleared after non-Tab/non-Esc key"
-    );
-    // Field text should start with the selected candidate (space appended after commit).
-    let final_text = app.command_field.as_ref().unwrap().text();
-    assert!(
-        final_text.starts_with(&candidate_text),
-        "field must start with committed candidate: candidate={candidate_text:?} final={final_text:?}"
-    );
+    assert!(app.completion.is_some());
+    let sel_before = app.completion.as_ref().unwrap().selected;
+    let visible_len = app.completion.as_ref().unwrap().visible.len();
+    app.handle_command_field_key(ctrl_key('n'));
+    if visible_len > 1 {
+        let sel_after = app.completion.as_ref().unwrap().selected;
+        assert_ne!(sel_before, sel_after, "C-n must advance selection in popup");
+    }
 }

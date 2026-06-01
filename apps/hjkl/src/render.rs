@@ -22,7 +22,7 @@ use ratatui::{
 
 use crate::app::{App, DiagSeverity, DiskState, STATUS_LINE_HEIGHT, TOP_BAR_HEIGHT, window};
 use hjkl_holler_tui::{HollerLayout, render_active};
-use hjkl_prompt_tui::{PromptTheme, build_prompt_line, render_wildmenu};
+use hjkl_prompt_tui::{PromptTheme, build_prompt_line};
 use hjkl_tabs::TabBar;
 use hjkl_tabs_tui::{TabBarTheme, build_line as build_tab_line};
 
@@ -1214,20 +1214,6 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     render_layout(frame, app, buf_area, &mut layout);
     app.restore_layout(layout);
 
-    // When wildmenu is active, split the status row into [wildmenu | prompt].
-    // The wildmenu occupies one additional row ABOVE the prompt; we carve
-    // it from the bottom of buf_area so the buffer view shrinks by one row.
-    if app.command_completion.is_some() && buf_area.height >= 2 {
-        let wm_row = buf_area.y + buf_area.height - 1;
-        let wm_area = Rect {
-            x: buf_area.x,
-            y: wm_row,
-            width: buf_area.width,
-            height: 1,
-        };
-        wildmenu(frame, app, wm_area);
-    }
-
     status_line(frame, app, status_area);
 
     // Picker overlay sits on top of the buffer pane. Renders last so
@@ -1236,9 +1222,14 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
         picker_overlay(frame, app, buf_area);
     }
 
-    // Completion popup: floating over the buffer, below picker/info.
+    // Completion popup: command-bar popup anchored above the status line;
+    // LSP/buffer popup anchored at the buffer cursor.
     if app.completion.is_some() {
-        completion_popup(frame, app, buf_area);
+        if app.command_field.is_some() {
+            command_completion_popup(frame, app, status_area, buf_area);
+        } else {
+            completion_popup(frame, app, buf_area);
+        }
     }
 
     // Which-key popup: shown after a prefix key idles past the configured delay.
@@ -1449,21 +1440,37 @@ fn prompt_theme(ui: &crate::theme::UiTheme) -> PromptTheme {
     )
 }
 
-/// Render the wildmenu strip — one row of all completion candidates with the
-/// selected one highlighted. Called only when `app.command_completion.is_some()`.
-///
-/// Delegates to [`hjkl_prompt_tui::render_wildmenu`].
-fn wildmenu(frame: &mut Frame, app: &App, area: Rect) {
-    let comp = match &app.command_completion {
-        Some(c) => c.clone(),
+/// Render the completion popup anchored above the command-line row.
+/// Called when both `app.command_field` and `app.completion` are `Some`.
+/// The anchor rect is placed at `status_area.y` so the popup flips above it.
+fn command_completion_popup(frame: &mut Frame, app: &App, status_area: Rect, viewport: Rect) {
+    let completion = match app.completion.as_ref() {
+        Some(p) => p,
         None => return,
     };
-    let theme = prompt_theme(&app.theme.ui);
-    // Construct a minimal PromptState carrying just the completion state so we
-    // can delegate to the crate's renderer without duplicating its logic.
-    let mut ps = hjkl_prompt::PromptState::new(hjkl_prompt::PromptKind::Command);
-    ps.completion = Some(comp);
-    render_wildmenu(frame, &ps, &theme, area);
+    // Anchor at the cursor column in the status line. The cursor column is
+    // 1 (for the `:` prefix) + field cursor col.
+    let cursor_col: u16 = if let Some(ref field) = app.command_field {
+        let (_, col) = field.cursor();
+        1u16 + col as u16
+    } else {
+        1
+    };
+    let anchor = Rect {
+        x: status_area.x + cursor_col.min(status_area.width.saturating_sub(1)),
+        y: status_area.y,
+        width: 1,
+        height: 1,
+    };
+    let ui = &app.theme.ui;
+    let theme = hjkl_completion_tui::CompletionTheme::new(
+        to_hjkl_color(ui.border_active),
+        to_hjkl_color(ui.picker_selection_bg),
+        to_hjkl_color(ui.text),
+        to_hjkl_color(ui.text_dim),
+    );
+    // Use full frame area as viewport so popup can extend into buf_area above.
+    hjkl_completion_tui::popup(frame, completion, &theme, anchor, viewport);
 }
 
 /// Render the one-row status line.

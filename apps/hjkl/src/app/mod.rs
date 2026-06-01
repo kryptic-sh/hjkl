@@ -156,9 +156,11 @@ pub struct App {
     /// command. Backed by a vim-grammar [`TextFieldEditor`] so motions
     /// (h/l/w/b/dw/diw/...) work inside the prompt.
     pub command_field: Option<TextFieldEditor>,
-    /// Active wildmenu state for the command-line prompt. `None` outside
-    /// completion (no Tab pressed yet, or after acceptance/cancel).
-    pub(crate) command_completion: Option<hjkl_prompt::CommandCompletion>,
+    /// Byte replace-range in the command field for the active `:` completion
+    /// popup. Set whenever the popup is populated; cleared when the prompt
+    /// closes or the popup is dismissed. The accept path uses this to know
+    /// which token to replace in the field text.
+    pub(crate) command_completion_range: Option<std::ops::Range<usize>>,
     /// Active `!` filter prompt. `Some` while the user is typing a shell
     /// command after a `!{motion}` or `!!` operator. Paired with
     /// `filter_pending_range` which holds the row range to filter.
@@ -1269,7 +1271,7 @@ impl App {
             bus: HollerBus::new(),
             info_popup: None,
             command_field: None,
-            command_completion: None,
+            command_completion_range: None,
             filter_field: None,
             filter_pending_range: None,
             search_field: None,

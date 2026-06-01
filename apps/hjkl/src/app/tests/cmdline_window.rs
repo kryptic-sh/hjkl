@@ -51,11 +51,24 @@ fn prompt_ctrl_p_recalls_previous() {
     app.dispatch_ex("set nu");
     app.dispatch_ex("set nonu");
 
-    // Open the command prompt.
+    // Open the command prompt. This shows a completion popup (all commands).
     app.open_command_prompt();
     assert!(app.command_field.is_some());
 
-    // Ctrl-P should recall the most-recent entry ("set nonu").
+    // Dismiss the completion popup (Esc) so history nav is active.
+    // The new behavior: when popup is open, C-p navigates popup, not history.
+    // Esc closes the popup without closing the prompt.
+    app.handle_command_field_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.completion.is_none(), "popup must be cleared after Esc");
+    assert!(
+        app.command_field.is_some(),
+        "prompt must stay open after Esc-dismiss-popup"
+    );
+
+    // Now Ctrl-P should recall the most-recent entry ("set nonu").
     app.handle_command_field_key(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Char('p'),
         crossterm::event::KeyModifiers::CONTROL,
@@ -72,6 +85,13 @@ fn prompt_ctrl_n_after_p_advances() {
     app.dispatch_ex("set ts=4");
 
     app.open_command_prompt();
+
+    // Dismiss the completion popup first so history nav works.
+    app.handle_command_field_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Esc,
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    assert!(app.completion.is_none(), "popup must be cleared after Esc");
 
     let ctrl_p = crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Char('p'),

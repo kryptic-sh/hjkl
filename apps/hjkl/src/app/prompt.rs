@@ -1,14 +1,14 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey, VimMode};
 use hjkl_form::TextFieldEditor;
-pub(crate) use hjkl_prompt::CommandCompletion;
 use hjkl_prompt::{history_next, history_prev, push_history};
 
 use super::{App, CmdLineKind, CmdLineWindow, STATUS_LINE_HEIGHT, SearchDir};
+use crate::completion::{Completion, CompletionItem, CompletionKind};
 
 /// Replace the full text of a TextFieldEditor, leaving cursor at the end in
 /// Insert mode.
-fn set_field_text(field: &mut TextFieldEditor, text: &str) {
+pub(crate) fn set_field_text(field: &mut TextFieldEditor, text: &str) {
     field.set_text(text);
     field.enter_insert_at_end();
 }
@@ -47,11 +47,82 @@ fn find_token_start(line: &str, caret: usize) -> usize {
     i
 }
 
+/// Map an `hjkl_ex::CompletionKind` to a `hjkl_completion::CompletionKind`.
+fn map_ex_kind(kind: hjkl_ex::CompletionKind) -> CompletionKind {
+    match kind {
+        hjkl_ex::CompletionKind::Command => CompletionKind::Keyword,
+        hjkl_ex::CompletionKind::Path => CompletionKind::File,
+        hjkl_ex::CompletionKind::Setting => CompletionKind::Variable,
+        hjkl_ex::CompletionKind::Buffer => CompletionKind::Variable,
+        hjkl_ex::CompletionKind::Register => CompletionKind::Other,
+        hjkl_ex::CompletionKind::Mark => CompletionKind::Other,
+        hjkl_ex::CompletionKind::None => CompletionKind::Other,
+    }
+}
+
+/// Owned data for building an [`hjkl_ex::ArgSources`].
+type ArgSourcesData = (
+    Option<std::path::PathBuf>, // cwd
+    Vec<String>,                // settings
+    Vec<String>,                // buffers
+    Vec<String>,                // registers
+    Vec<String>,                // marks
+);
+
+/// Build the arg sources (cwd / settings / buffers / registers / marks) for
+/// use in `complete()` / `refresh_command_completion`. Extracted so both the
+/// live-recompute and (optionally) the Tab path can share it.
+fn build_arg_sources_data(app: &App) -> ArgSourcesData {
+    let cwd = std::env::current_dir().ok();
+    let settings: Vec<String> = hjkl_ex::all_setting_names();
+    let buffers: Vec<String> = app
+        .slots
+        .iter()
+        .filter_map(|s| {
+            let name = s
+                .filename
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            if name.is_empty() { None } else { Some(name) }
+        })
+        .collect();
+    let registers: Vec<String> = {
+        let r = app.active().editor.registers();
+        let mut regs: Vec<String> = Vec::new();
+        if !r.unnamed.text.is_empty() {
+            regs.push("\"\"".into());
+        }
+        if !r.yank_zero.text.is_empty() {
+            regs.push("\"0".into());
+        }
+        for (i, slot) in r.delete_ring.iter().enumerate() {
+            if !slot.text.is_empty() {
+                regs.push(format!("\"{}", i + 1));
+            }
+        }
+        for (i, slot) in r.named.iter().enumerate() {
+            if !slot.text.is_empty() {
+                regs.push(format!("\"{}", (b'a' + i as u8) as char));
+            }
+        }
+        regs
+    };
+    let marks: Vec<String> = app
+        .active()
+        .editor
+        .marks()
+        .map(|(c, _)| c.to_string())
+        .collect();
+    (cwd, settings, buffers, registers, marks)
+}
+
 impl App {
     pub(crate) fn open_command_prompt(&mut self) {
         let mut field = TextFieldEditor::new(true);
         field.enter_insert_at_end();
         self.command_field = Some(field);
+        self.refresh_command_completion();
     }
 
     /// Open the command prompt with `prefill` pre-typed and the cursor at end.
@@ -70,26 +141,222 @@ impl App {
             field.handle_input(input);
         }
         self.command_field = Some(field);
+        self.refresh_command_completion();
+    }
+
+    /// Recompute the `:` completion popup from the current field text and
+    /// caret position. Called after every text-changing key while the command
+    /// prompt is open.
+    pub(crate) fn refresh_command_completion(&mut self) {
+        if self.command_field.is_none() {
+            self.completion = None;
+            self.command_completion_range = None;
+            return;
+        }
+
+        // Only show completion popup while in Insert mode (the user is typing
+        // the command). In Normal mode they are navigating/editing the field
+        // with vim motions — don't interrupt that with a popup.
+        if self
+            .command_field
+            .as_ref()
+            .map(|f| f.vim_mode() != hjkl_form::VimMode::Insert)
+            .unwrap_or(false)
+        {
+            self.completion = None;
+            self.command_completion_range = None;
+            return;
+        }
+
+        let line = self.command_field.as_ref().unwrap().text();
+        let (_, col) = self.command_field.as_ref().unwrap().cursor();
+        // Convert char-indexed col to a byte index (safe for ASCII command
+        // lines, UTF-8-correct via char_indices for non-ASCII).
+        let caret = line
+            .char_indices()
+            .nth(col)
+            .map(|(b, _)| b)
+            .unwrap_or(line.len());
+
+        let host_reg = super::ex_host_cmds::host_registry();
+        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
+
+        // Try command-name position first.
+        let (range, metas) = hjkl_ex::complete_command_meta(&line, caret, &editor_reg, host_reg);
+
+        if !metas.is_empty() {
+            let items: Vec<CompletionItem> = metas
+                .iter()
+                .map(|m| {
+                    let mut item = CompletionItem::new(m.name.clone());
+                    item.detail = Some(if m.usage.is_empty() {
+                        "no args".to_string()
+                    } else {
+                        m.usage.to_string()
+                    });
+                    item.kind = CompletionKind::Keyword;
+                    item
+                })
+                .collect();
+            self.command_completion_range = Some(range.clone());
+            let mut popup = Completion::new(0, range.start, items);
+            // Filter by typed prefix so the popup highlights correctly.
+            let typed_prefix = &line[range.start..caret.min(range.end)];
+            if !typed_prefix.is_empty() {
+                popup.set_prefix(typed_prefix);
+                if popup.is_empty() {
+                    self.completion = None;
+                    self.command_completion_range = None;
+                    return;
+                }
+            }
+            self.completion = Some(popup);
+            return;
+        }
+
+        // Fall back to arg-position completion.
+        let (cwd, settings, buffers, registers, marks) = build_arg_sources_data(self);
+        let sources = hjkl_ex::ArgSources {
+            cwd: cwd.as_deref(),
+            settings: &settings,
+            buffers: &buffers,
+            registers: &registers,
+            marks: &marks,
+        };
+        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources);
+        if comp.kind == hjkl_ex::CompletionKind::None || comp.candidates.is_empty() {
+            self.completion = None;
+            self.command_completion_range = None;
+            return;
+        }
+        let kind = map_ex_kind(comp.kind);
+        let items: Vec<CompletionItem> = comp
+            .candidates
+            .iter()
+            .map(|c| {
+                let mut item = CompletionItem::new(c.clone());
+                item.kind = kind;
+                item
+            })
+            .collect();
+        self.command_completion_range = Some(comp.replace_range.clone());
+        let popup = Completion::new(0, comp.replace_range.start, items);
+        self.completion = Some(popup);
+    }
+
+    /// Accept the currently selected item from the `:` completion popup:
+    /// replaces the token in the command field and closes the popup.
+    /// Does NOT execute the command — the user presses Enter again for that.
+    pub(crate) fn accept_command_completion(&mut self) {
+        let popup = match self.completion.take() {
+            Some(p) => p,
+            None => return,
+        };
+        let range = self.command_completion_range.take();
+
+        let item = match popup.selected_item() {
+            Some(i) => i.clone(),
+            None => return,
+        };
+
+        let field = match self.command_field.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+        let line = field.text();
+        let start = range.as_ref().map(|r| r.start).unwrap_or(0);
+        let end = range.as_ref().map(|r| r.end).unwrap_or(line.len());
+
+        // Determine if this command takes an argument (add trailing space).
+        // We check by trying to resolve the accepted label as a command name.
+        let host_reg = super::ex_host_cmds::host_registry();
+        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
+        let takes_arg = host_reg
+            .resolve(&item.label)
+            .map(|c| c.arg_kind() != hjkl_ex::ArgKind::None)
+            .or_else(|| {
+                editor_reg
+                    .resolve(&item.label)
+                    .map(|c| c.arg_kind != hjkl_ex::ArgKind::None)
+            })
+            .unwrap_or(false);
+
+        let suffix = if takes_arg && end >= line.len() {
+            " "
+        } else {
+            ""
+        };
+
+        let new_text = format!(
+            "{}{}{}{}",
+            &line[..start],
+            item.insert_text,
+            suffix,
+            &line[end.min(line.len())..],
+        );
+
+        set_field_text(field, &new_text);
+        // popup is already None (taken above).
     }
 
     pub(crate) fn handle_command_field_key(&mut self, key: crossterm::event::KeyEvent) {
-        // Intercept Tab / S-Tab BEFORE converting to EngineInput.
+        // ── Tab / S-Tab ──────────────────────────────────────────────────────
         if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.advance_command_completion(true);
+            // Tab-time inline expansion (%, #, <cword>) takes priority.
+            if self.command_field.is_some() {
+                let line = self.command_field.as_ref().unwrap().text();
+                let caret = line.len();
+                let token_start = find_token_start(&line, caret);
+                let token = &line[token_start..caret];
+                if token.starts_with('%')
+                    || token.starts_with('#')
+                    || token.starts_with("<cword>")
+                    || token.starts_with("<cWORD>")
+                {
+                    let ctx = build_inline_expand_context(self);
+                    if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {
+                        let new_text =
+                            format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
+                        let field = self.command_field.as_mut().unwrap();
+                        set_field_text(field, &new_text);
+                        self.refresh_command_completion();
+                        return;
+                    }
+                }
+            }
+            if let Some(ref mut popup) = self.completion {
+                popup.select_next();
+                return;
+            }
+            // No popup — refresh (may open one) then no-op.
+            self.refresh_command_completion();
             return;
         }
         if key.code == KeyCode::BackTab {
-            self.advance_command_completion(false);
+            if let Some(ref mut popup) = self.completion {
+                popup.select_prev();
+                return;
+            }
             return;
         }
 
-        // Ctrl-P / Up → previous history entry.
+        // ── Up / Down / C-p / C-n ───────────────────────────────────────────
         let is_ctrl_p = key.code == KeyCode::Up
             || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
         let is_ctrl_n = key.code == KeyCode::Down
             || (key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
 
         if is_ctrl_p || is_ctrl_n {
+            // If popup is open, navigate it.
+            if let Some(ref mut popup) = self.completion {
+                if is_ctrl_p {
+                    popup.select_prev();
+                } else {
+                    popup.select_next();
+                }
+                return;
+            }
+            // Otherwise, history navigation.
             let history = self.ex_history.clone();
             if !history.is_empty() {
                 // Save current typed input on first history nav.
@@ -119,15 +386,13 @@ impl App {
             return;
         }
 
-        // <C-f> mid-prompt: switch into the ex cmdline window (issue #132).
-        // Capture text + cursor col, close the prompt WITHOUT committing to
-        // history, and open the q: window with the in-progress text as the
-        // trailing line.
+        // ── <C-f> mid-prompt: switch into the ex cmdline window ──────────────
         if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(field) = self.command_field.take() {
                 let text = field.text();
                 let (_, col) = field.cursor();
-                self.command_completion = None;
+                self.completion = None;
+                self.command_completion_range = None;
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
                 let prefill = Some((text, col));
@@ -136,29 +401,20 @@ impl App {
             return;
         }
 
+        // ── Esc / C-e: dismiss popup or close prompt ─────────────────────────
         let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
-        let field = match self.command_field.as_mut() {
-            Some(f) => f,
-            None => return,
-        };
-
-        if input.key == EngineKey::Enter {
-            let text = field.text();
-            self.command_field = None;
-            self.command_completion = None;
-            self.prompt_history_index = None;
-            self.prompt_user_input = None;
-            self.dispatch_ex(text.trim());
-            return;
-        }
 
         if input.key == EngineKey::Esc {
-            if let Some(comp) = self.command_completion.take() {
-                let field = self.command_field.as_mut().unwrap();
-                set_field_text(field, &comp.original);
+            if self.completion.is_some() {
+                // Dismiss popup but keep typed text.
+                self.completion = None;
+                self.command_completion_range = None;
                 return;
             }
-            let field = self.command_field.as_mut().unwrap();
+            let field = match self.command_field.as_mut() {
+                Some(f) => f,
+                None => return,
+            };
             if field.text().is_empty() {
                 self.command_field = None;
                 self.prompt_history_index = None;
@@ -173,7 +429,29 @@ impl App {
             return;
         }
 
-        // Backspace on an empty prompt dismisses it.
+        let field = match self.command_field.as_mut() {
+            Some(f) => f,
+            None => return,
+        };
+
+        // ── Enter ────────────────────────────────────────────────────────────
+        if input.key == EngineKey::Enter {
+            if self.completion.is_some() {
+                // Accept selected item, close popup, do NOT execute yet.
+                self.accept_command_completion();
+                return;
+            }
+            let text = field.text();
+            self.command_field = None;
+            self.completion = None;
+            self.command_completion_range = None;
+            self.prompt_history_index = None;
+            self.prompt_user_input = None;
+            self.dispatch_ex(text.trim());
+            return;
+        }
+
+        // ── Backspace on an empty prompt dismisses it ────────────────────────
         if input.key == EngineKey::Backspace
             && self
                 .command_field
@@ -181,166 +459,25 @@ impl App {
                 .is_some_and(|f| f.text().is_empty())
         {
             self.command_field = None;
-            self.command_completion = None;
+            self.completion = None;
+            self.command_completion_range = None;
             self.prompt_history_index = None;
             self.prompt_user_input = None;
             return;
         }
 
-        // Any key that isn't Ctrl-P/N resets history navigation position.
+        // ── Any other key resets history navigation ──────────────────────────
         if self.prompt_history_index.is_some() {
             self.prompt_history_index = None;
             self.prompt_user_input = None;
         }
 
-        // Any other key while completion is active: commit current candidate.
-        if self.command_completion.is_some() {
-            self.command_completion = None;
-        }
-
         let field = self.command_field.as_mut().unwrap();
-        field.handle_input(input);
-    }
-
-    /// Advance (or initialize) wildmenu completion state.
-    /// `forward=true` means Tab (next); `false` means S-Tab (prev).
-    pub(crate) fn advance_command_completion(&mut self, forward: bool) {
-        if self.command_field.is_none() {
-            return;
+        let text_changed = field.handle_input(input);
+        // Recompute popup live when text actually changed.
+        if text_changed {
+            self.refresh_command_completion();
         }
-
-        if let Some(comp) = self.command_completion.as_mut() {
-            // Cycling phase — bump selected index.
-            if comp.candidates.is_empty() {
-                return;
-            }
-            let n = comp.candidates.len();
-            let new_idx = match comp.selected {
-                None => {
-                    if forward {
-                        0
-                    } else {
-                        n - 1
-                    }
-                }
-                Some(i) if forward => (i + 1) % n,
-                Some(i) => (i + n - 1) % n,
-            };
-            comp.selected = Some(new_idx);
-            let candidate = comp.candidates[new_idx].clone();
-            let field = self.command_field.as_mut().unwrap();
-            let new_text = format!("{}{}", &field.text()[..comp.replace_range.start], candidate);
-            let new_replace_end = comp.replace_range.start + candidate.len();
-            comp.replace_range = comp.replace_range.start..new_replace_end;
-            set_field_text(field, &new_text);
-            return;
-        }
-
-        // First Tab — compute completion.
-        let line = {
-            let field = self.command_field.as_ref().unwrap();
-            field.text()
-        };
-        let caret = line.len();
-
-        // Tab-time inline expansion.
-        {
-            let token_start = find_token_start(&line, caret);
-            let token = &line[token_start..caret];
-            if token.starts_with('%')
-                || token.starts_with('#')
-                || token.starts_with("<cword>")
-                || token.starts_with("<cWORD>")
-            {
-                let ctx = build_inline_expand_context(self);
-                if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {
-                    let new_text =
-                        format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
-                    let field = self.command_field.as_mut().unwrap();
-                    set_field_text(field, &new_text);
-                    return;
-                }
-            }
-        }
-
-        let host_reg = super::ex_host_cmds::host_registry();
-        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
-
-        let cwd = std::env::current_dir().ok();
-        let settings: Vec<String> = hjkl_ex::all_setting_names();
-        let buffers: Vec<String> = self
-            .slots
-            .iter()
-            .filter_map(|s| {
-                let name = s
-                    .filename
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
-                if name.is_empty() { None } else { Some(name) }
-            })
-            .collect();
-        let registers: Vec<String> = {
-            let r = self.active().editor.registers();
-            let mut regs: Vec<String> = Vec::new();
-            if !r.unnamed.text.is_empty() {
-                regs.push("\"\"".into());
-            }
-            if !r.yank_zero.text.is_empty() {
-                regs.push("\"0".into());
-            }
-            for (i, slot) in r.delete_ring.iter().enumerate() {
-                if !slot.text.is_empty() {
-                    regs.push(format!("\"{}", i + 1));
-                }
-            }
-            for (i, slot) in r.named.iter().enumerate() {
-                if !slot.text.is_empty() {
-                    regs.push(format!("\"{}", (b'a' + i as u8) as char));
-                }
-            }
-            regs
-        };
-        let marks: Vec<String> = self
-            .active()
-            .editor
-            .marks()
-            .map(|(c, _)| c.to_string())
-            .collect();
-        let sources = hjkl_ex::ArgSources {
-            cwd: cwd.as_deref(),
-            settings: &settings,
-            buffers: &buffers,
-            registers: &registers,
-            marks: &marks,
-        };
-        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources);
-        if comp.candidates.is_empty() {
-            return;
-        }
-        let original = line.clone();
-        if comp.candidates.len() == 1 {
-            let cand = comp.candidates[0].clone();
-            let new_text = format!("{}{}", &line[..comp.replace_range.start], cand);
-            let field = self.command_field.as_mut().unwrap();
-            set_field_text(field, &new_text);
-            return;
-        }
-        let lcp = hjkl_ex::longest_common_prefix(&comp.candidates);
-        let prefix_text = if lcp.len() > comp.replace_range.len() {
-            format!("{}{}", &line[..comp.replace_range.start], lcp)
-        } else {
-            line.clone()
-        };
-        {
-            let field = self.command_field.as_mut().unwrap();
-            set_field_text(field, &prefix_text);
-        }
-        self.command_completion = Some(CommandCompletion::new(
-            original,
-            comp.candidates,
-            comp.replace_range,
-        ));
     }
 
     pub(crate) fn open_search_prompt(&mut self, dir: SearchDir) {
