@@ -197,14 +197,50 @@ impl App {
     }
 }
 
-/// One blame-column entry, aligned to a visible screen row. `text` is empty for
-/// continuation rows (same commit as the row above) so only the FIRST line of
-/// each contiguous commit run is labeled. Uncommitted rows render their own
-/// label every time they start a run.
+/// Kind of a blame-column segment — drives its render color/modifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlameSeg {
+    /// Short commit hash (dim).
+    Hash,
+    /// Author name (bold / bright).
+    Author,
+    /// Commit date (dim).
+    Date,
+    /// Commit summary line (dim italic).
+    Summary,
+}
+
+/// One blame-column entry, aligned to a visible screen row. gitsigns-style:
+/// the FIRST visible row of a contiguous commit run carries the metadata
+/// segments (`<hash> <author> <date>`), the SECOND carries the commit summary,
+/// and the rest of the run is blank (`segments` empty). `segments` are painted
+/// left-to-right with one space between them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlameColumnRow {
-    pub text: String,
+    pub segments: Vec<(String, BlameSeg)>,
     pub is_uncommitted: bool,
+}
+
+impl BlameColumnRow {
+    fn blank() -> Self {
+        Self {
+            segments: Vec::new(),
+            is_uncommitted: false,
+        }
+    }
+}
+
+/// Char-safe truncation to `max` display columns with a trailing ellipsis.
+fn truncate_to(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if s.chars().count() > max {
+        let head: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{head}…")
+    } else {
+        s.to_string()
+    }
 }
 
 /// Format a commit time for the blame column. Within 8 hours of `now` (both
@@ -226,13 +262,17 @@ fn format_blame_time(time_unix: i64, now: i64) -> String {
     }
 }
 
-/// Build per-visible-row blame-column labels. `visible_doc_rows[i]` is the
-/// 0-based document row shown on screen row `i` (caller computes this fold-aware;
-/// pass `usize::MAX` for screen rows past EOF / blank — those get an empty entry).
-/// `blame[doc_row]` is the attribution (None when unavailable). A row is labeled
-/// only when its commit hash differs from the immediately preceding visible row's
-/// commit (viewport-local comparison). For `i == 0` the row is always labeled.
-/// Label text = `"{author} · {time}"` truncated to `width` display columns (chars).
+/// Build per-visible-row blame-column entries (gitsigns-style). `visible_doc_rows[i]`
+/// is the 0-based document row shown on screen row `i` (fold-aware; `usize::MAX`
+/// for screen rows past EOF / blank → blank entry). `blame[doc_row]` is the
+/// attribution (None when unavailable).
+///
+/// Each contiguous run of the same commit produces:
+///   - row 0 of the run → metadata segments `<hash> <author> <date>`,
+///   - row 1 of the run → the commit summary,
+///   - remaining rows   → blank.
+///
+/// Segments are truncated to fit `width` display columns.
 pub(crate) fn build_blame_column(
     blame: &[Option<git::BlameInfo>],
     visible_doc_rows: &[usize],
@@ -240,46 +280,58 @@ pub(crate) fn build_blame_column(
     width: usize,
 ) -> Vec<BlameColumnRow> {
     let mut out = Vec::with_capacity(visible_doc_rows.len());
-    for (i, &dr) in visible_doc_rows.iter().enumerate() {
+    let mut prev_commit: Option<String> = None;
+    let mut run_pos: usize = 0;
+    for &dr in visible_doc_rows {
         if dr == usize::MAX || dr >= blame.len() || blame[dr].is_none() {
-            out.push(BlameColumnRow {
-                text: String::new(),
-                is_uncommitted: false,
-            });
+            out.push(BlameColumnRow::blank());
+            prev_commit = None;
+            run_pos = 0;
             continue;
         }
         let info = blame[dr].as_ref().unwrap();
-        // Compare against the immediately preceding visible row's commit.
-        let above = i
-            .checked_sub(1)
-            .and_then(|j| visible_doc_rows.get(j))
-            .and_then(|&d| blame.get(d))
-            .and_then(|o| o.as_ref());
-        let same = above.map(|a| a.commit == info.commit).unwrap_or(false);
-        if same {
-            out.push(BlameColumnRow {
-                text: String::new(),
-                is_uncommitted: info.is_uncommitted,
-            });
+        if prev_commit.as_deref() == Some(info.commit.as_str()) {
+            run_pos += 1;
         } else {
-            let raw = format!(
-                "{} · {}",
-                info.author,
-                format_blame_time(info.time_unix, now)
-            );
-            let text = if width == 0 {
-                String::new()
-            } else if raw.chars().count() > width {
-                let truncated: String = raw.chars().take(width - 1).collect();
-                format!("{truncated}…")
-            } else {
-                raw
-            };
-            out.push(BlameColumnRow {
-                text,
-                is_uncommitted: info.is_uncommitted,
-            });
+            run_pos = 0;
         }
+        prev_commit = Some(info.commit.clone());
+
+        let row = match run_pos {
+            // First row of the run — `<hash> <author> <date>`.
+            0 => {
+                let hash: String = info.commit.chars().take(8).collect();
+                let date = if info.is_uncommitted {
+                    String::new()
+                } else {
+                    format_blame_time(info.time_unix, now)
+                };
+                // Budget the author to whatever's left after hash + date + the
+                // single-space separators between segments.
+                let date_cost = if date.is_empty() { 0 } else { date.len() + 1 };
+                let author_budget = width.saturating_sub(hash.len() + 1 + date_cost);
+                let author = truncate_to(&info.author, author_budget);
+                let mut segments = vec![(hash, BlameSeg::Hash), (author, BlameSeg::Author)];
+                if !date.is_empty() {
+                    segments.push((date, BlameSeg::Date));
+                }
+                BlameColumnRow {
+                    segments,
+                    is_uncommitted: info.is_uncommitted,
+                }
+            }
+            // Second row of the run — the commit summary.
+            1 => BlameColumnRow {
+                segments: vec![(truncate_to(&info.summary, width), BlameSeg::Summary)],
+                is_uncommitted: info.is_uncommitted,
+            },
+            // Rest of the run — blank.
+            _ => BlameColumnRow {
+                segments: Vec::new(),
+                is_uncommitted: info.is_uncommitted,
+            },
+        };
+        out.push(row);
     }
     out
 }
@@ -339,38 +391,47 @@ mod tests {
         );
     }
 
+    use super::BlameSeg;
+
+    /// Helper: concatenate a row's segment texts (segment kinds aside) for
+    /// assertions that only care about the rendered content.
+    fn seg_text(row: &super::BlameColumnRow) -> String {
+        row.segments
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     #[test]
-    fn build_blame_column_collapses_runs() {
+    fn build_blame_column_meta_then_summary_then_blank() {
         let now: i64 = 1_700_000_000;
+        // One commit spanning 3 rows, then a different commit.
         let blame: Vec<Option<BlameInfo>> = vec![
             Some(make_info("aaaaaaa", "alice", now - 3600)),
             Some(make_info("aaaaaaa", "alice", now - 3600)),
-            Some(make_info("bbbbbbb", "bob", now - 7200)),
+            Some(make_info("aaaaaaa", "alice", now - 3600)),
             Some(make_info("bbbbbbb", "bob", now - 7200)),
         ];
         let visible = vec![0usize, 1, 2, 3];
         let result = build_blame_column(&blame, &visible, now, 40);
         assert_eq!(result.len(), 4);
-        assert!(
-            result[0].text.starts_with("alice"),
-            "row0={:?}",
-            result[0].text
+        // Row 0: metadata — hash, author, date segments.
+        let kinds: Vec<BlameSeg> = result[0].segments.iter().map(|(_, k)| *k).collect();
+        assert_eq!(
+            kinds,
+            vec![BlameSeg::Hash, BlameSeg::Author, BlameSeg::Date]
         );
-        assert!(
-            result[1].text.is_empty(),
-            "row1 should be blank, got {:?}",
-            result[1].text
-        );
-        assert!(
-            result[2].text.starts_with("bob"),
-            "row2={:?}",
-            result[2].text
-        );
-        assert!(
-            result[3].text.is_empty(),
-            "row3 should be blank, got {:?}",
-            result[3].text
-        );
+        assert!(seg_text(&result[0]).contains("alice"));
+        assert!(seg_text(&result[0]).contains("aaaaaaa"));
+        // Row 1: summary.
+        assert_eq!(result[1].segments.len(), 1);
+        assert_eq!(result[1].segments[0].1, BlameSeg::Summary);
+        assert_eq!(result[1].segments[0].0, "test commit");
+        // Row 2: blank (third row of the run).
+        assert!(result[2].segments.is_empty());
+        // Row 3: new commit → metadata again.
+        assert!(seg_text(&result[3]).contains("bob"));
     }
 
     #[test]
@@ -380,29 +441,29 @@ mod tests {
         let visible = vec![0usize, usize::MAX];
         let result = build_blame_column(&blame, &visible, now, 40);
         assert_eq!(result.len(), 2);
-        assert!(!result[0].text.is_empty());
-        assert!(result[1].text.is_empty());
+        assert!(!result[0].segments.is_empty());
+        assert!(result[1].segments.is_empty());
     }
 
     #[test]
-    fn build_blame_column_truncates() {
+    fn build_blame_column_truncates_author() {
         let now: i64 = 1_700_000_000;
-        // Author name long enough to exceed width=10 when combined with time.
         let blame: Vec<Option<BlameInfo>> =
             vec![Some(make_info("aaaaaaa", "averylongauthorname", now - 60))];
         let visible = vec![0usize];
-        let result = build_blame_column(&blame, &visible, now, 10);
-        assert_eq!(result.len(), 1);
-        let char_count = result[0].text.chars().count();
+        let result = build_blame_column(&blame, &visible, now, 20);
+        // hash(7) + spaces + author + date must fit in 20 columns.
+        let total: usize = result[0]
+            .segments
+            .iter()
+            .map(|(t, _)| t.chars().count())
+            .sum::<usize>()
+            + result[0].segments.len().saturating_sub(1); // separators
+        assert!(total <= 20, "row exceeds width: {:?}", result[0].segments);
+        let author = &result[0].segments[1].0;
         assert!(
-            char_count <= 10,
-            "expected <=10 chars, got {char_count}: {:?}",
-            result[0].text
-        );
-        assert!(
-            result[0].text.ends_with('…'),
-            "expected trailing ellipsis: {:?}",
-            result[0].text
+            author.ends_with('…'),
+            "long author must be ellipsized: {author:?}"
         );
     }
 }

@@ -989,7 +989,19 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             now,
             blame_col_width.saturating_sub(1) as usize,
         );
+        use crate::app::git_hunks::BlameSeg;
         let dim_style = Style::default().fg(app.theme.ui.non_text);
+        // Author stands out (bright + bold); hash/date/summary are dim, summary
+        // italic — mirroring gitsigns' blame layout.
+        let author_style = Style::default()
+            .fg(app.theme.ui.text)
+            .add_modifier(Modifier::BOLD);
+        let summary_style = dim_style.add_modifier(Modifier::ITALIC);
+        let seg_style = |seg: BlameSeg| match seg {
+            BlameSeg::Author => author_style,
+            BlameSeg::Summary => summary_style,
+            BlameSeg::Hash | BlameSeg::Date => dim_style,
+        };
         let buf = frame.buffer_mut();
         for (sr, row) in rows.iter().enumerate() {
             let y = blame_col_y + sr as u16;
@@ -1000,16 +1012,31 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     cell.set_style(dim_style);
                 }
             }
-            // Write text, leaving the last column as a spacer.
+            // Paint segments left-to-right with a single space between them,
+            // leaving the last column as a spacer.
             let right = blame_col_x + blame_col_width.saturating_sub(1);
-            for (i, ch) in row.text.chars().enumerate() {
-                let cx = blame_col_x + i as u16;
+            let mut cx = blame_col_x;
+            for (seg_idx, (text, seg)) in row.segments.iter().enumerate() {
+                if seg_idx > 0 {
+                    // Space separator (cell already cleared to ' ').
+                    cx += 1;
+                    if cx >= right {
+                        break;
+                    }
+                }
+                let style = seg_style(*seg);
+                for ch in text.chars() {
+                    if cx >= right {
+                        break;
+                    }
+                    if let Some(cell) = buf.cell_mut((cx, y)) {
+                        cell.set_char(ch);
+                        cell.set_style(style);
+                    }
+                    cx += 1;
+                }
                 if cx >= right {
                     break;
-                }
-                if let Some(cell) = buf.cell_mut((cx, y)) {
-                    cell.set_char(ch);
-                    cell.set_style(dim_style);
                 }
             }
         }

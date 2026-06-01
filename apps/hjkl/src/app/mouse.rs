@@ -200,7 +200,7 @@ fn text_start_offset(
 /// Width of the left git-blame column for `slot` (0 when off or when
 /// soft-wrap is active). Mirrors the renderer's `blame_col_width` gate.
 /// Folded into `text_start_offset` callers so clicks map past the column.
-pub(crate) const BLAME_COLUMN_WIDTH: u16 = 22;
+pub(crate) const BLAME_COLUMN_WIDTH: u16 = 32;
 
 /// Returns [`BLAME_COLUMN_WIDTH`] when the blame column is visible for `slot`,
 /// 0 otherwise. Mirrors the renderer's gate (blame_column on + Wrap::None).
