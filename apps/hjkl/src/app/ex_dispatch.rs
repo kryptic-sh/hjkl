@@ -1019,6 +1019,9 @@ impl App {
                         if idx == self.focused_slot_idx() {
                             self.refresh_git_signs_force();
                         }
+                        // Tell the language server the file was saved so its
+                        // on-save flycheck (e.g. rust-analyzer clippy) re-runs.
+                        self.lsp_notify_save_slot(idx);
                         true
                     }
                     Err(e) => {

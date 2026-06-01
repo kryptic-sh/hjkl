@@ -62,6 +62,9 @@ pub(crate) async fn dispatch(
             LspCommand::NotifyChangeIncremental { id, changes } => {
                 handle_notify_change_incremental(id, changes, &mut servers, &mut buffers);
             }
+            LspCommand::NotifySave { id } => {
+                handle_notify_save(id, &mut servers, &mut buffers);
+            }
             LspCommand::Cancel { request_id } => {
                 // Phase 4 will cancel in-flight requests. For now just log.
                 tracing::debug!(
@@ -250,6 +253,27 @@ fn handle_notify_change(
                 "textDocument": { "uri": uri, "version": version },
                 "contentChanges": [{ "text": full_text.as_str() }],
             }),
+        );
+    }
+}
+
+fn handle_notify_save(
+    id: BufferId,
+    servers: &mut HashMap<ServerKey, Server>,
+    buffers: &mut HashMap<BufferId, AttachedBuffer>,
+) {
+    let buf = match buffers.get(&id) {
+        Some(b) => b,
+        None => {
+            tracing::debug!(id, "NotifySave: buffer not attached");
+            return;
+        }
+    };
+    let uri = buf.uri.as_str().to_string();
+    if let Some(server) = servers.get_mut(&buf.server_key) {
+        server.send_notification(
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri } }),
         );
     }
 }

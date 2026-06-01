@@ -70,8 +70,21 @@ impl Server {
         // We need to perform the initialize handshake before spawning the
         // stdout dispatch loop. We do this by owning the stdout reader here,
         // completing initialize, then handing it off to the dispatch task.
-        let capabilities =
-            initialize_handshake(&key, &stdin_tx, stdout, evt_tx.clone(), pending.clone()).await?;
+        // Effective initializationOptions: explicit config wins, otherwise a
+        // per-server default (rust-analyzer → run clippy on save).
+        let init_options = cmd
+            .initialization_options
+            .clone()
+            .or_else(|| default_init_options(&cmd.command));
+        let capabilities = initialize_handshake(
+            &key,
+            &stdin_tx,
+            stdout,
+            evt_tx.clone(),
+            pending.clone(),
+            init_options.as_ref(),
+        )
+        .await?;
 
         // Spawn wait task so ServerExited is emitted when the child exits.
         spawn_wait_task(child, key.clone(), evt_tx);
@@ -143,6 +156,27 @@ impl Server {
     }
 }
 
+/// Per-server default `initializationOptions` when the user hasn't set any.
+///
+/// For rust-analyzer this turns the on-save flycheck into `cargo clippy` (both
+/// the modern `check.command` and the legacy `checkOnSave.command` keys, for
+/// version compatibility) so clippy lints surface as diagnostics while editing.
+fn default_init_options(command: &str) -> Option<Value> {
+    // Match on the executable's file stem so `/path/to/rust-analyzer` works too.
+    let stem = std::path::Path::new(command)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(command);
+    if stem == "rust-analyzer" {
+        Some(json!({
+            "check": { "command": "clippy" },
+            "checkOnSave": { "command": "clippy" },
+        }))
+    } else {
+        None
+    }
+}
+
 /// Perform the `initialize` / `initialized` handshake over `stdin_tx` / `stdout`.
 ///
 /// Returns (capabilities, stdout_reader) on success. The caller must hand the
@@ -153,6 +187,7 @@ async fn initialize_handshake(
     stdout: impl AsyncRead + Unpin + Send + 'static,
     evt_tx: Sender<LspEvent>,
     pending: PendingMap,
+    init_options: Option<&Value>,
 ) -> anyhow::Result<Value> {
     let root_uri = crate::uri::from_path(&key.root).map_err(|_| {
         anyhow::anyhow!(
@@ -161,32 +196,40 @@ async fn initialize_handshake(
         )
     })?;
 
+    let mut params = json!({
+        "processId": std::process::id(),
+        "clientInfo": { "name": "hjkl", "version": env!("CARGO_PKG_VERSION") },
+        "rootUri": root_uri.as_str(),
+        "capabilities": {
+            // Request UTF-8 byte positions; fall back to UTF-16 if the
+            // server doesn't support it. Asking lets servers (like
+            // rust-analyzer) skip per-line UTF-16 column conversion.
+            "general": {
+                "positionEncodings": ["utf-8", "utf-16"],
+            },
+            "textDocument": {
+                "synchronization": {
+                    "dynamicRegistration": false,
+                    "willSave": false,
+                    "willSaveWaitUntil": false,
+                    // Announce didSave so the server runs its on-save flycheck
+                    // (e.g. rust-analyzer's `cargo clippy`) — without this the
+                    // client never sends didSave and clippy never re-runs.
+                    "didSave": true,
+                }
+            },
+            "workspace": {}
+        },
+    });
+    // Server-specific initializationOptions (e.g. rust-analyzer clippy config).
+    if let (Some(opts), Some(obj)) = (init_options, params.as_object_mut()) {
+        obj.insert("initializationOptions".to_string(), opts.clone());
+    }
     let init_msg = json!({
         "jsonrpc": "2.0",
         "id": 0,
         "method": "initialize",
-        "params": {
-            "processId": std::process::id(),
-            "clientInfo": { "name": "hjkl", "version": env!("CARGO_PKG_VERSION") },
-            "rootUri": root_uri.as_str(),
-            "capabilities": {
-                // Request UTF-8 byte positions; fall back to UTF-16 if the
-                // server doesn't support it. Asking lets servers (like
-                // rust-analyzer) skip per-line UTF-16 column conversion.
-                "general": {
-                    "positionEncodings": ["utf-8", "utf-16"],
-                },
-                "textDocument": {
-                    "synchronization": {
-                        "dynamicRegistration": false,
-                        "willSave": false,
-                        "willSaveWaitUntil": false,
-                        "didSave": false,
-                    }
-                },
-                "workspace": {}
-            },
-        },
+        "params": params,
     });
     let bytes = serde_json::to_vec(&init_msg)?;
     stdin_tx.send(bytes).ok();
@@ -259,7 +302,7 @@ where
 
     let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
     let capabilities =
-        initialize_handshake(&key, &stdin_tx, stdout_reader, evt_tx, pending.clone()).await?;
+        initialize_handshake(&key, &stdin_tx, stdout_reader, evt_tx, pending.clone(), None).await?;
 
     Ok(Server {
         key,

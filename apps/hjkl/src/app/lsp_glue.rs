@@ -365,6 +365,30 @@ impl App {
         }
     }
 
+    /// Notify the LSP server that the buffer in `slot_idx` was saved. Flushes
+    /// the current (post-format-on-save) text with a full `didChange` first so
+    /// the server flychecks exactly what was written, then sends `didSave` —
+    /// which is what triggers rust-analyzer's `cargo clippy` run. No-op when LSP
+    /// is disabled or the buffer isn't attached to a server.
+    pub(crate) fn lsp_notify_save_slot(&mut self, slot_idx: usize) {
+        if self.lsp.is_none() {
+            return;
+        }
+        let Some(slot) = self.slots.get(slot_idx) else {
+            return;
+        };
+        let buffer_id = slot.buffer_id as hjkl_lsp::BufferId;
+        let text = slot.editor.buffer().content_joined();
+        let dg = slot.editor.buffer().dirty_gen();
+        if let Some(mgr) = self.lsp.as_ref() {
+            mgr.notify_change(buffer_id, text);
+            mgr.notify_save(buffer_id);
+        }
+        // Record the synced gen so the next edit's incremental didChange isn't
+        // a redundant resend of the same state.
+        self.slots[slot_idx].last_lsp_dirty_gen = Some(dg);
+    }
+
     /// True when the active buffer's LSP server announced both incremental
     /// sync (`textDocumentSync.change == 2`) and UTF-8 `positionEncoding`.
     /// Falls back conservatively when capabilities are missing.

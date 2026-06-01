@@ -28,4 +28,10 @@ pub struct ServerConfig {
     /// seconds. `0` means never (Phase 1 keeps servers alive anyway).
     #[serde(default)]
     pub shutdown_idle_after_secs: u64,
+    /// Server-specific `initializationOptions` sent in the `initialize`
+    /// request. When unset, a sensible per-server default is applied (e.g.
+    /// rust-analyzer is configured to run `cargo clippy` on save). Set this in
+    /// config to override the default.
+    #[serde(default)]
+    pub initialization_options: Option<serde_json::Value>,
 }

@@ -56,6 +56,9 @@ pub enum LspCommand {
         id: BufferId,
         changes: Vec<TextChange>,
     },
+    /// Notify the server that a buffer was saved (`textDocument/didSave`).
+    /// Triggers the server's on-save flycheck (e.g. rust-analyzer clippy).
+    NotifySave { id: BufferId },
     /// Cancel an in-flight request by id. Reserved for Phase 4.
     Cancel { request_id: i64 },
     /// Send a JSON-RPC request to the server attached to `buffer_id`.

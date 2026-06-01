@@ -98,6 +98,13 @@ impl LspManager {
             .send(LspCommand::NotifyChangeIncremental { id, changes });
     }
 
+    /// Notify the server that a buffer was saved (`textDocument/didSave`).
+    /// rust-analyzer (and most servers) run their flycheck — `cargo check` /
+    /// `cargo clippy` — on save, so this is what surfaces clippy diagnostics.
+    pub fn notify_save(&self, id: BufferId) {
+        let _ = self.cmd_tx.send(LspCommand::NotifySave { id });
+    }
+
     /// Send a JSON-RPC request to the server attached to `buffer_id`.
     ///
     /// `request_id` is app-allocated — it will appear in
