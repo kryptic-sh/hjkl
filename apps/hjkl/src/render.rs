@@ -1200,6 +1200,91 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
 }
 
 /// Render one complete frame into `frame`.
+/// Paint the left file-explorer pane (#55) into `area`. Adjusts the explorer's
+/// scroll offset to keep the selection visible, then draws one row per visible
+/// tree node: `depth` indentation, a `▾`/`▸` caret for dirs, the entry name
+/// (dirs bold + trailing `/`), with the selected row highlighted.
+fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    // Snapshot colors before borrowing the explorer mutably.
+    let panel_bg = app.theme.ui.panel_bg;
+    let dir_fg = app.theme.ui.text;
+    let file_fg = app.theme.ui.text_dim;
+    let sel_bg = app.theme.ui.picker_selection_bg;
+
+    let Some(exp) = app.explorer.as_mut() else {
+        return;
+    };
+    let height = area.height as usize;
+    let sel = exp.selected_index();
+    // Keep the selection within the visible window.
+    let mut top = exp.top();
+    if sel < top {
+        top = sel;
+    } else if sel >= top + height {
+        top = sel + 1 - height;
+    }
+    exp.set_top(top);
+
+    let buf = frame.buffer_mut();
+    // Clear the pane to the panel background.
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_char(' ');
+                cell.set_style(Style::default().bg(panel_bg));
+            }
+        }
+    }
+
+    let max_x = area.x + area.width;
+    for (i, node) in exp.nodes().iter().enumerate().skip(top).take(height) {
+        let y = area.y + (i - top) as u16;
+        let selected = i == sel;
+        let row_bg = if selected { sel_bg } else { panel_bg };
+        if selected {
+            for x in area.x..max_x {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_style(Style::default().bg(row_bg));
+                }
+            }
+        }
+        let caret = if node.is_dir {
+            if exp.is_expanded(&node.path) {
+                "▾ "
+            } else {
+                "▸ "
+            }
+        } else {
+            "  "
+        };
+        let name = node
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let suffix = if node.is_dir { "/" } else { "" };
+        let line = format!("{}{caret}{name}{suffix}", "  ".repeat(node.depth));
+        let fg = if node.is_dir { dir_fg } else { file_fg };
+        let mut style = Style::default().bg(row_bg).fg(fg);
+        if node.is_dir {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        for (i, ch) in line.chars().enumerate() {
+            let x = area.x + i as u16;
+            if x >= max_x {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_char(ch);
+                cell.set_style(style);
+            }
+        }
+    }
+}
+
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
@@ -1252,6 +1337,31 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if let Some(tb) = top_bar_area {
         top_bar(frame, app, tb);
     }
+
+    // ── File-explorer pane (#55) ──────────────────────────────────────────────
+    // Carve a fixed-width strip off the LEFT of the editor area and paint the
+    // tree there; the narrowed `buf_area` feeds the window tree + all overlays so
+    // their geometry stays coherent. Mouse hit-testing accounts for the same
+    // width via `ExplorerState::width` (see mouse.rs).
+    let buf_area = if let Some(exp) = app.explorer.as_ref() {
+        let w = exp.width().min(buf_area.width);
+        let explorer_rect = Rect {
+            x: buf_area.x,
+            y: buf_area.y,
+            width: w,
+            height: buf_area.height,
+        };
+        let narrowed = Rect {
+            x: buf_area.x + w,
+            y: buf_area.y,
+            width: buf_area.width.saturating_sub(w),
+            height: buf_area.height,
+        };
+        render_explorer(frame, app, explorer_rect);
+        narrowed
+    } else {
+        buf_area
+    };
 
     // Walk the window tree and render each pane. Use take_layout /
     // restore_layout so we can pass `&mut LayoutTree` to render_layout

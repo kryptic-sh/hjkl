@@ -28,6 +28,7 @@ mod engine_actions;
 mod event_loop;
 mod ex_dispatch;
 pub(crate) mod ex_host_cmds;
+pub(crate) mod explorer;
 pub(crate) mod git_hunks;
 pub(crate) mod keymap;
 pub(crate) mod keymap_build;
@@ -173,6 +174,8 @@ pub struct App {
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
     pub picker: Option<crate::picker::Picker>,
+    /// Left file-explorer pane (#55). `None` when closed; closed on launch.
+    pub(crate) explorer: Option<explorer::ExplorerState>,
     /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -674,6 +677,7 @@ impl App {
             mouse::Zone::None
             | mouse::Zone::StatusLine
             | mouse::Zone::SplitBorder { .. }
+            | mouse::Zone::Explorer { .. }
             | mouse::Zone::PickerRow { .. } => {}
         }
     }
@@ -1330,6 +1334,7 @@ impl App {
             filter_pending_range: None,
             search_field: None,
             picker: None,
+            explorer: None,
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,

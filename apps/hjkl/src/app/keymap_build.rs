@@ -48,6 +48,7 @@ pub(crate) fn build_app_keymap(leader: char) -> Keymap<AppAction, keymap::HjklMo
         ("<leader><leader>", AppAction::OpenFilePicker, "file picker"),
         ("<leader>f", AppAction::OpenFilePicker, "file picker"),
         ("<leader>b", AppAction::OpenBufferPicker, "buffer picker"),
+        ("<leader>e", AppAction::ToggleExplorer, "toggle explorer"),
         ("<leader>/", AppAction::OpenGrepPicker, "grep picker"),
         // ── Git sub-commands ───────────────────────────────────────────────
         ("<leader>gs", AppAction::GitStatus, "git status"),

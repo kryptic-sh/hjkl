@@ -26,6 +26,7 @@ impl App {
             AppAction::OpenFilePicker => self.open_picker(),
             AppAction::OpenBufferPicker => self.open_buffer_picker(),
             AppAction::OpenGrepPicker => self.open_grep_picker(None),
+            AppAction::ToggleExplorer => self.toggle_explorer(),
 
             // ── Git picker openers ─────────────────────────────────────────
             AppAction::GitStatus

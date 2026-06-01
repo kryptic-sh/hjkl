@@ -27,6 +27,8 @@ pub enum AppAction {
     OpenFilePicker,
     OpenBufferPicker,
     OpenGrepPicker,
+    /// `<leader>e` — toggle the left file-explorer pane (#55).
+    ToggleExplorer,
 
     // ── Git commands ───────────────────────────────────────────────────
     GitStatus,

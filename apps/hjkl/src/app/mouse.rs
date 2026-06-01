@@ -596,6 +596,9 @@ pub enum Zone {
         win_id: window::WindowId,
         doc_row: usize,
     },
+    /// Inside the left file-explorer pane (#55). `row` is the pane row, which
+    /// maps 1:1 to a visible tree-node index (plus the scroll offset).
+    Explorer { row: usize },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
     /// On the buffer-line region of the unified top bar (one entry per open
@@ -913,6 +916,22 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     let is_status_row = row + 1 == terminal_height; // row is 0-based
     if is_status_row && !app.overlay_active() {
         return Zone::StatusLine;
+    }
+
+    // ── 3b. File-explorer pane (#55) ──────────────────────────────────────
+    // The explorer occupies the left strip of the buffer band (below the top
+    // bar, above the status line). Its pane row maps 1:1 to a tree node index.
+    if let Some(exp) = app.explorer.as_ref() {
+        let top_bar_h = if show_top_bar {
+            crate::app::TOP_BAR_HEIGHT
+        } else {
+            0
+        };
+        if row >= top_bar_h && !is_status_row && col < exp.width() {
+            return Zone::Explorer {
+                row: (row - top_bar_h) as usize,
+            };
+        }
     }
 
     // ── 4. Split border ───────────────────────────────────────────────────

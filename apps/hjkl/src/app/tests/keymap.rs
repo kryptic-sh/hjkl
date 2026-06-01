@@ -5496,3 +5496,25 @@ fn close_window_keeps_buffer_for_other_window() {
         "win0's cursor (row 0) should be restored into editor after win1 closed; got {row}"
     );
 }
+
+// ── File explorer (#55) ─────────────────────────────────────────────────
+
+#[test]
+fn toggle_explorer_three_state_cycle() {
+    use crate::keymap_actions::AppAction;
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Closed on launch.
+    assert!(app.explorer.is_none());
+    // Open + focus.
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.explorer.is_some());
+    assert!(app.explorer_focused());
+    // Unfocus (Esc semantics) then toggle → refocus, stays open.
+    app.explorer.as_mut().unwrap().set_focused(false);
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.explorer.is_some());
+    assert!(app.explorer_focused());
+    // Focused → toggle closes.
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    assert!(app.explorer.is_none());
+}

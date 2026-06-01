@@ -363,6 +363,14 @@ impl App {
             return KeyOutcome::Continue;
         }
 
+        // ── File-explorer pane (#55) ──────────────────────────────
+        // When the explorer owns input, it consumes navigation keys (j/k/gg/G/
+        // h/l/Enter/Esc). Unhandled keys (notably the leader chord that toggles
+        // it) fall through to normal routing. Modal overlays above take priority.
+        if self.explorer_focused() && self.explorer_handle_key(key) {
+            return KeyOutcome::Continue;
+        }
+
         // ── Visual-mode `:` → command prompt prefilled with '<,'> ─
         // Must run BEFORE route_chord_key so a pending_state from a
         // prior chord (e.g. first `g` in Visual mode) does not eat
@@ -913,6 +921,13 @@ impl App {
                     return MouseOutcome::Continue;
                 }
 
+                // ── File-explorer pane click (#55) ────────────────
+                if let mouse::Zone::Explorer { row } = mouse::hit_test_zone(self, me.column, me.row)
+                {
+                    self.explorer_click(row);
+                    return MouseOutcome::Continue;
+                }
+
                 // ── Context-menu: click-inside → invoke / click-outside → dismiss
                 if let Some(ref menu) = self.context_menu {
                     let screen_size = self.screen_rect();
@@ -1214,7 +1229,8 @@ impl App {
                             .is_some();
                         build_picker_menu(has_path)
                     }
-                    mouse::Zone::None => {
+                    // File-explorer pane has no right-click menu in v1.
+                    mouse::Zone::Explorer { .. } | mouse::Zone::None => {
                         return MouseOutcome::Continue;
                     }
                 };
