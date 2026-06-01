@@ -216,6 +216,89 @@ fn complete_path_entries(prefix: &str, cwd: &std::path::Path) -> Vec<String> {
     results
 }
 
+/// Short human label for the argument a command takes, for completion docs.
+/// `ArgKind::None` → "" (command takes no argument).
+pub fn arg_kind_usage(kind: ArgKind) -> &'static str {
+    match kind {
+        ArgKind::None => "",
+        ArgKind::Path => "<path>",
+        ArgKind::Buffer => "<buffer>",
+        ArgKind::Setting => "<setting>",
+        ArgKind::Register => "<register>",
+        ArgKind::Mark => "<mark>",
+        ArgKind::Raw => "<args>",
+    }
+}
+
+/// A command-completion candidate enriched with metadata for the UI.
+/// `name` is the canonical command text to insert. `arg_kind` is the kind of
+/// argument the resolved command accepts (`ArgKind::None` when it takes none).
+/// `takes_arg` is `arg_kind != ArgKind::None` — the UI appends a trailing space
+/// on accept only when this is true. `usage` is `arg_kind_usage(arg_kind)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandCandidate {
+    pub name: String,
+    pub arg_kind: ArgKind,
+    pub takes_arg: bool,
+    pub usage: &'static str,
+}
+
+/// Like [`complete`], but for the COMMAND-NAME position it returns enriched
+/// [`CommandCandidate`]s (name + arg metadata) instead of bare strings. Returns
+/// `(replace_range, Vec<CommandCandidate>)`. For ARG positions (caret past the
+/// command name) it returns an EMPTY vec with the arg-token replace_range — arg
+/// candidates have no command metadata, so callers use plain `complete()` for
+/// those. Use this for command-name docs; fall back to `complete()` for args.
+pub fn complete_command_meta<H, Ctx>(
+    line: &str,
+    caret: usize,
+    editor_reg: &Registry<H>,
+    host_reg: &HostRegistry<Ctx>,
+) -> (std::ops::Range<usize>, Vec<CommandCandidate>)
+where
+    H: hjkl_engine::Host,
+{
+    let caret = caret.min(line.len());
+    let (cmd_token_end, _) = first_word_end(line);
+    // Caret is past the command-name token → arg position, no command meta.
+    if caret > cmd_token_end {
+        return (caret..caret, vec![]);
+    }
+    // Gather all candidate names, same as the command-name path in complete().
+    let mut names = collect_host_registry_names(host_reg);
+    names.extend(collect_registry_names(editor_reg));
+    names.sort();
+    names.dedup();
+    // Filter to those that start with the typed prefix.
+    let prefix = &line[..caret];
+    let mut names: Vec<String> = names
+        .into_iter()
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+    names.sort();
+    names.dedup();
+    // Build enriched candidates.
+    let candidates: Vec<CommandCandidate> = names
+        .into_iter()
+        .map(|name| {
+            let arg_kind = host_reg
+                .resolve(&name)
+                .map(|c| c.arg_kind())
+                .or_else(|| editor_reg.resolve(&name).map(|c| c.arg_kind))
+                .unwrap_or(ArgKind::None);
+            let takes_arg = arg_kind != ArgKind::None;
+            let usage = arg_kind_usage(arg_kind);
+            CommandCandidate {
+                name,
+                arg_kind,
+                takes_arg,
+                usage,
+            }
+        })
+        .collect();
+    (0..cmd_token_end, candidates)
+}
+
 /// Per-arg-kind completion. Caller resolves the command and passes its
 /// arg_kind. Returns empty Completions when caret isn't in arg position,
 /// or when no sources match.
@@ -593,5 +676,106 @@ mod tests {
         let result = complete("xxx ", 4, &reg, &host_reg, &sources);
         assert_eq!(result.kind, CompletionKind::None);
         assert!(result.candidates.is_empty());
+    }
+
+    // ── complete_command_meta tests ───────────────────────────────────────────
+
+    #[test]
+    fn arg_kind_usage_labels() {
+        assert_eq!(arg_kind_usage(ArgKind::None), "");
+        assert_eq!(arg_kind_usage(ArgKind::Path), "<path>");
+        assert_eq!(arg_kind_usage(ArgKind::Buffer), "<buffer>");
+        assert_eq!(arg_kind_usage(ArgKind::Setting), "<setting>");
+        assert_eq!(arg_kind_usage(ArgKind::Register), "<register>");
+        assert_eq!(arg_kind_usage(ArgKind::Mark), "<mark>");
+        assert_eq!(arg_kind_usage(ArgKind::Raw), "<args>");
+    }
+
+    #[test]
+    fn complete_command_meta_returns_arg_kinds() {
+        use crate::{ExCommand, Registry};
+        use hjkl_engine::DefaultHost;
+
+        fn noop(
+            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &str,
+            _: Option<crate::range::LineRange>,
+        ) -> Option<crate::effect::ExEffect> {
+            None
+        }
+
+        let mut reg = Registry::<DefaultHost>::new();
+        reg.add(ExCommand {
+            name: "quit",
+            aliases: &[],
+            arg_kind: ArgKind::None,
+            min_prefix: 1,
+            run: noop,
+        });
+        reg.add(ExCommand {
+            name: "edit",
+            aliases: &["e"],
+            arg_kind: ArgKind::Path,
+            min_prefix: 1,
+            run: noop,
+        });
+        let host_reg = HostRegistry::<()>::new();
+
+        // "e" at caret=1 → command position; matches both "e" (alias) and "edit"
+        let (range, candidates) = complete_command_meta("e", 1, &reg, &host_reg);
+        assert_eq!(range, 0..1);
+
+        let edit_cand = candidates.iter().find(|c| c.name == "edit");
+        assert!(
+            edit_cand.is_some(),
+            "expected 'edit' in candidates: {candidates:?}"
+        );
+        let edit_cand = edit_cand.unwrap();
+        assert_eq!(edit_cand.arg_kind, ArgKind::Path);
+        assert!(edit_cand.takes_arg);
+        assert_eq!(edit_cand.usage, "<path>");
+
+        // "quit" doesn't start with "e", but verify a None-arg command via full match
+        let (_, all_candidates) = complete_command_meta("quit", 4, &reg, &host_reg);
+        let quit_cand = all_candidates.iter().find(|c| c.name == "quit");
+        assert!(
+            quit_cand.is_some(),
+            "expected 'quit' in candidates: {all_candidates:?}"
+        );
+        let quit_cand = quit_cand.unwrap();
+        assert_eq!(quit_cand.arg_kind, ArgKind::None);
+        assert!(!quit_cand.takes_arg);
+        assert_eq!(quit_cand.usage, "");
+    }
+
+    #[test]
+    fn complete_command_meta_arg_position_is_empty() {
+        use crate::{ExCommand, Registry};
+        use hjkl_engine::DefaultHost;
+
+        fn noop(
+            _: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, DefaultHost>,
+            _: &str,
+            _: Option<crate::range::LineRange>,
+        ) -> Option<crate::effect::ExEffect> {
+            None
+        }
+
+        let mut reg = Registry::<DefaultHost>::new();
+        reg.add(ExCommand {
+            name: "edit",
+            aliases: &["e"],
+            arg_kind: ArgKind::Path,
+            min_prefix: 1,
+            run: noop,
+        });
+        let host_reg = HostRegistry::<()>::new();
+
+        // "edit " with caret=5 → arg position (past the command name + space)
+        let (_, candidates) = complete_command_meta("edit ", 5, &reg, &host_reg);
+        assert!(
+            candidates.is_empty(),
+            "expected empty candidates for arg position, got: {candidates:?}"
+        );
     }
 }

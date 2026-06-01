@@ -9,8 +9,9 @@
 //! `:undo`, `:redo`, `:qall`, `:qall!`, `:wqall`, `:wqall!`).
 
 pub use complete::{
-    ArgSources, CompletionKind, Completions, collect_host_registry_names, collect_registry_names,
-    complete, complete_arg, complete_command_from_names, first_word_end, longest_common_prefix,
+    ArgSources, CommandCandidate, CompletionKind, Completions, arg_kind_usage,
+    collect_host_registry_names, collect_registry_names, complete, complete_arg,
+    complete_command_from_names, complete_command_meta, first_word_end, longest_common_prefix,
 };
 pub use effect::ExEffect;
 pub use expand::{ExpandContext, expand_args, expand_filename};
