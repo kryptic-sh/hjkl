@@ -959,7 +959,7 @@ impl App {
                             self.switch_focus(win_id);
                         }
                         self.active_mut().editor.mouse_click_doc(doc_row, doc_col);
-                        self.sync_after_engine_mutation();
+                        self.sync_after_engine_mutation_deferred();
                         self.lsp_goto_definition();
                     }
                     // Ctrl+click outside Code zone is a no-op.
@@ -986,7 +986,7 @@ impl App {
                         self.active_mut()
                             .editor
                             .mouse_extend_drag_doc(doc_row, doc_col);
-                        self.sync_after_engine_mutation();
+                        self.sync_after_engine_mutation_deferred();
                     }
                     // Shift+click outside Code zone is a no-op.
                     return MouseOutcome::Continue;
@@ -1021,7 +1021,7 @@ impl App {
                             self.active_mut()
                                 .editor
                                 .apply_fold_op(hjkl_engine::FoldOp::ToggleAt(doc_row));
-                            self.sync_after_engine_mutation();
+                            self.sync_after_engine_mutation_deferred();
                         } else if self.active().git_signs.iter().any(|s| s.row == doc_row) {
                             // P10: no fold here, but a git sign is — preview the
                             // hunk covering this row in a read-only popup.
@@ -1073,7 +1073,7 @@ impl App {
                                 self.active_mut().editor.enter_visual_line();
                             }
                         }
-                        self.sync_after_engine_mutation();
+                        self.sync_after_engine_mutation_deferred();
                     }
                 }
             }
@@ -1111,7 +1111,7 @@ impl App {
                     self.active_mut()
                         .editor
                         .mouse_extend_drag_doc(doc_row, doc_col);
-                    self.sync_after_engine_mutation();
+                    self.sync_after_engine_mutation_deferred();
                 }
             }
             // Up: clear any active border drag; vim stays in

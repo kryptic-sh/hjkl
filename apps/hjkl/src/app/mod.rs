@@ -930,6 +930,21 @@ impl App {
     /// position. This helper consolidates the three previously duplicated
     /// ~15-line sync blocks in `event_loop.rs` into a single call site.
     pub(crate) fn sync_after_engine_mutation(&mut self) {
+        self.sync_after_engine_mutation_inner(false);
+    }
+
+    /// Like [`sync_after_engine_mutation`] but defers the syntax recompute to
+    /// the event loop's `pending_recompute` flush (one query per drawn frame)
+    /// instead of running it synchronously. Used by the mouse handlers: a fast
+    /// drag emits a burst of events drained in a single loop iteration, so a
+    /// synchronous recompute per event would run the tree-sitter viewport query
+    /// many times for one frame (the mouse-drag lag). Deferring collapses the
+    /// whole burst into one recompute before the next draw.
+    pub(crate) fn sync_after_engine_mutation_deferred(&mut self) {
+        self.sync_after_engine_mutation_inner(true);
+    }
+
+    fn sync_after_engine_mutation_inner(&mut self, defer_recompute: bool) {
         // Keymap-dispatched motions go through `apply_motion_kind` which
         // calls `execute_motion` but does NOT invoke `ensure_cursor_in_scrolloff`
         // (the engine FSM `step()` path does it explicitly). Without this call
@@ -987,7 +1002,12 @@ impl App {
         };
         if content_reset || had_fold_ops || self.last_synced_syntax_view != Some(view_now) {
             self.last_synced_syntax_view = Some(view_now);
-            self.recompute_and_install();
+            if defer_recompute {
+                // Flushed once at the top of the event loop before drawing.
+                self.pending_recompute = true;
+            } else {
+                self.recompute_and_install();
+            }
         }
     }
 
