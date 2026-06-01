@@ -1699,20 +1699,10 @@ impl App {
             None => return,
         };
 
-        use hjkl_engine::{BufferEdit, Pos};
         let cursor = self.active().editor.buffer().cursor();
         let row = cursor.row;
         let cur_col = cursor.col;
         let anchor_col = popup.anchor_col.min(cur_col);
-
-        let start = Pos {
-            line: row as u32,
-            col: anchor_col as u32,
-        };
-        let end = Pos {
-            line: row as u32,
-            col: cur_col as u32,
-        };
 
         // For Function/Method items: ensure parens exist and place cursor inside.
         // Strip trivial snippet markers ($0, ${0}) before examining the text.
@@ -1746,12 +1736,20 @@ impl App {
             (raw_text.clone(), raw_text.len())
         };
 
-        // Replace [anchor_col, cur_col) with actual_text.
-        BufferEdit::replace_range(
-            self.active_mut().editor.buffer_mut(),
-            start..end,
-            &actual_text,
-        );
+        // Replace [anchor_col, cur_col) with actual_text via the editor's
+        // tracked mutation funnel. Going through `mutate_edit` (rather than
+        // poking `buffer_mut()` directly) records a `ContentEdit` so the host's
+        // `sync_after_engine_mutation` drains it → `syntax.apply_edits` updates
+        // the tree-sitter tree and `lsp_notify_change_active` fires a didChange.
+        // Without this, accepting a completion left the parse tree and the LSP
+        // server with stale text — diagnostics / parse-error gutter signs for
+        // the now-fixed line lingered until the next manual edit (#143).
+        use hjkl_buffer::{Edit, Position};
+        self.active_mut().editor.mutate_edit(Edit::Replace {
+            start: Position::new(row, anchor_col),
+            end: Position::new(row, cur_col),
+            with: actual_text,
+        });
 
         // Move cursor to computed offset within the inserted text.
         let new_col = anchor_col + cursor_offset;

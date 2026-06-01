@@ -1139,6 +1139,29 @@ fn accept_completion_inserts_selected_item() {
 }
 
 #[test]
+fn accept_completion_records_content_edit_for_resync() {
+    // Regression (#143): accepting a completion must go through the editor's
+    // tracked mutation funnel so a `ContentEdit` is recorded. Otherwise the
+    // tree-sitter tree and the LSP server never learn about the change and
+    // stale parse-error / diagnostic gutter signs linger.
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "fn foo");
+    hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
+    app.completion = Some(crate::completion::Completion::new(
+        0,
+        0,
+        vec![make_completion_item("world")],
+    ));
+    app.accept_completion();
+    // Before any sync drains them, the edit must be present for fan-out.
+    let edits = app.active_mut().editor.take_content_edits();
+    assert!(
+        !edits.is_empty(),
+        "accept_completion must record a ContentEdit so syntax + LSP resync"
+    );
+}
+
+#[test]
 fn accept_function_completion_places_cursor_in_parens() {
     // Bare name "foo" with kind=Function → inserts "foo()" with cursor between parens.
     let mut app = App::new(None, false, None, None).unwrap();
