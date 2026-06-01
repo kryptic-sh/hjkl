@@ -251,6 +251,31 @@ pub(crate) fn doc_row_at_screen_offset(
 ///
 /// The `line_fn` callback looks up a line by 0-based doc row. Pass a closure
 /// over `app.slots()[slot].editor.buffer().line(row)` (or similar).
+/// Resolve the document row shown at screen offset `rel_y` (rows from the
+/// window top) in the boxed-blame view, via the render plan. Returns `None`
+/// when that screen row is a box border (no doc row) or past the plan.
+pub(crate) fn box_plan_doc_row(
+    slot: &crate::app::BufferSlot,
+    top_row: usize,
+    height: usize,
+    rel_y: usize,
+) -> Option<usize> {
+    use hjkl_buffer_tui::render::BlameRow;
+    let buf = slot.editor.buffer();
+    let plan = crate::app::git_hunks::build_blame_box_plan(
+        &slot.blame,
+        buf.row_count(),
+        |r| buf.is_row_hidden(r),
+        top_row,
+        height,
+        0,
+    );
+    match plan.get(rel_y) {
+        Some(BlameRow::Content(d)) => Some(*d),
+        _ => None,
+    }
+}
+
 pub fn cell_to_doc(
     app: &App,
     win_id: window::WindowId,
@@ -280,18 +305,23 @@ pub fn cell_to_doc(
         .chain(slot.git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
+    // Boxed-blame view reserves a 1-col left frame and inserts virtual border
+    // rows; map clicks through the box plan and account for the frame.
+    let box_mode = slot.blame_column && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let frame = u16::from(box_mode);
+
     let gw = text_start_offset(
         slot.editor.lnum_width(),
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    ) + blame_column_width_for(slot);
+    ) + frame;
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
     let rel_y = cell_y.saturating_sub(rect.y);
 
-    // Click is inside the gutter → not a text click.
+    // Click is inside the gutter (or box frame) → not a text click.
     if rel_x < gw {
         return None;
     }
@@ -300,10 +330,14 @@ pub fn cell_to_doc(
     let text_rel_x = rel_x - gw; // cells from text-area left edge
     let visual_col = vp.top_col.saturating_add(text_rel_x as usize);
 
-    // Doc row — fold-aware: a closed fold collapses to a single screen row,
-    // so naively adding rel_y to top_row would land on a hidden row when any
-    // closed fold sits above the click. Walk visible rows instead.
-    let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
+    // Doc row. In box mode resolve via the render plan (border rows have no
+    // doc row); otherwise fold-aware walk from the viewport top.
+    let doc_row = if box_mode {
+        // `None` (border row / past the plan) propagates as "not a text click".
+        box_plan_doc_row(slot, vp.top_row, rect.h as usize, rel_y as usize)?
+    } else {
+        doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize)
+    };
     if doc_row >= line_count {
         return None; // past EOF
     }
@@ -891,11 +925,20 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         return Zone::None;
     }
 
+    // Box mode reserves a 1-col left frame; widen the gutter hit region by it.
+    let box_mode = slot.blame_column && matches!(vp.wrap, hjkl_buffer::Wrap::None);
+    let gw = gw + u16::from(box_mode);
+
     if rel_x < gw {
-        // Click is in the gutter — compute doc_row without char_col.
-        // Fold-aware: walk visible rows so a closed fold above the click
-        // does not cause the gutter zone to map to a hidden/wrong row.
-        let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
+        // Click is in the gutter (or box frame) — compute doc_row only.
+        let doc_row = if box_mode {
+            match box_plan_doc_row(slot, vp.top_row, rect.h as usize, rel_y as usize) {
+                Some(d) => d,
+                None => return Zone::None, // border row
+            }
+        } else {
+            doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize)
+        };
         if doc_row < line_count {
             return Zone::Gutter { win_id, doc_row };
         }

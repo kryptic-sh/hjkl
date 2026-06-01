@@ -1289,54 +1289,59 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
-    // ── matchparen bracket highlight ──────────────────────────────────────
-    // Highlight both the cursor bracket and its partner, focused window only.
-    // Bold + reversed + a bright accent bg so the pair is unmistakable; the
-    // explicit fg/bg (rather than a bg-only patch) overrides the rainbow color
-    // on just these two cells for maximum contrast.
+    // Map a doc `(row, col)` to a terminal cell for post-render overlays,
+    // box-aware: the boxed-blame layout shifts the screen row (virtual border
+    // rows) and the column (+1 box frame). `None` when the row isn't visible.
+    let base_text_x = area.x + sign_w + num_gw + fold_w;
+    let vp_bot_overlay = vp_top + area.height as usize;
+    let map_doc_to_screen = |pair_row: usize, pair_col: usize| -> Option<(u16, u16)> {
+        if box_mode {
+            let idx = blame_box_plan.iter().position(
+                |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == pair_row),
+            )?;
+            Some((
+                base_text_x + hjkl_buffer_tui::render::BLAME_BOX_FRAME_LEFT + pair_col as u16,
+                area.y + idx as u16,
+            ))
+        } else if pair_row >= vp_top && pair_row < vp_bot_overlay {
+            Some((
+                base_text_x + pair_col as u16,
+                area.y + (pair_row - vp_top) as u16,
+            ))
+        } else {
+            None
+        }
+    };
+
+    // ── matchparen bracket highlight (focused window only) ─────────────────
     if is_focused && let Some(pairs) = app.matchparen_cells() {
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let text_x = area.x + sign_w + num_gw + fold_w;
-        let vp_bot = vp_top + area.height as usize;
+        let right = area.x + area.width;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in pairs {
-            if pair_row < vp_top || pair_row >= vp_bot {
-                continue;
-            }
-            let screen_row = area.y + (pair_row - vp_top) as u16;
-            let screen_col = text_x + pair_col as u16;
-            if screen_col >= area.x + area.width {
-                continue;
-            }
-            if let Some(cell) = buf.cell_mut((screen_col, screen_row)) {
+            if let Some((screen_col, screen_row)) = map_doc_to_screen(pair_row, pair_col)
+                && screen_col < right
+                && let Some(cell) = buf.cell_mut((screen_col, screen_row))
+            {
                 cell.set_style(cell.style().patch(match_paren_style));
             }
         }
     }
 
     // ── matchparen tag highlight ──────────────────────────────────────────
-    // Highlight both the open and close tag-name character runs when the
-    // cursor sits on a paired HTML/XML tag name. Uses the same style as the
-    // bracket pair above so the two features feel visually unified.
     if is_focused && let Some(tag_cells) = app.matchparen_tag_cells() {
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
-        let text_x = area.x + sign_w + num_gw + fold_w;
-        let vp_bot = vp_top + area.height as usize;
+        let right = area.x + area.width;
         let buf = frame.buffer_mut();
         for (pair_row, pair_col) in tag_cells {
-            if pair_row < vp_top || pair_row >= vp_bot {
-                continue;
-            }
-            let screen_row = area.y + (pair_row - vp_top) as u16;
-            let screen_col = text_x + pair_col as u16;
-            if screen_col >= area.x + area.width {
-                continue;
-            }
-            if let Some(cell) = buf.cell_mut((screen_col, screen_row)) {
+            if let Some((screen_col, screen_row)) = map_doc_to_screen(pair_row, pair_col)
+                && screen_col < right
+                && let Some(cell) = buf.cell_mut((screen_col, screen_row))
+            {
                 cell.set_style(cell.style().patch(match_paren_style));
             }
         }
