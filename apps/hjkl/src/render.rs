@@ -325,20 +325,24 @@ pub(crate) fn build_normal_status_bar(app: &App, width: u16) -> Line<'static> {
 }
 
 /// Build the style for a diagnostic severity used in overlays and the status line.
+/// Style for the diagnostic span overlay on the offending code. Only the
+/// *underline* is colored (by severity) — the text keeps its syntax-highlight
+/// foreground, so the line is not recolored, just underlined. Applied via
+/// `Style::patch`, so leaving `fg` unset preserves the cell's existing color.
 fn diag_severity_style(sev: DiagSeverity) -> Style {
     Style::default()
-        .fg(diag_severity_fg(sev))
+        .underline_color(diag_severity_fg(sev))
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// Foreground color for a diagnostic severity. Shared by the squiggly span
-/// overlay ([`diag_severity_style`]) and the inline end-of-line ghost-text
-/// hint, so both read the same palette.
+/// Severity color: red = error, orange = warning, green = information,
+/// cyan = hint. Used for the colored underline on the offending span and for
+/// the inline end-of-line ghost-text hint, so both read the same palette.
 fn diag_severity_fg(sev: DiagSeverity) -> Color {
     match sev {
         DiagSeverity::Error => Color::Red,
-        DiagSeverity::Warning => Color::Yellow,
-        DiagSeverity::Info => Color::Blue,
+        DiagSeverity::Warning => Color::Rgb(255, 165, 0), // orange
+        DiagSeverity::Info => Color::Green,
         DiagSeverity::Hint => Color::Cyan,
     }
 }
