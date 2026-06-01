@@ -1388,6 +1388,11 @@ impl App {
                 terminal.clear()?;
             }
             let t_draw = std::time::Instant::now();
+            // BLAME is a Normal-mode-only view; if any path (notably a mouse
+            // drag into Visual) left the editor in another mode while blame is
+            // on, drop out of BLAME before drawing.
+            self.enforce_blame_normal_invariant();
+
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(
                 target: "hjkl::profile",

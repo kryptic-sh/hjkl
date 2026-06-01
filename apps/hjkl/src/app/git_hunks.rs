@@ -140,6 +140,17 @@ impl App {
         }
     }
 
+    /// BLAME is a Normal-mode-only view. Catch-all backstop: if the editor is
+    /// in any other vim mode (e.g. a mouse drag entered Visual, bypassing the
+    /// keyboard mode-switch interceptor) while blame is on, exit BLAME. Called
+    /// once per event-loop tick before drawing.
+    pub(crate) fn enforce_blame_normal_invariant(&mut self) {
+        use hjkl_engine::VimMode;
+        if self.active().blame_column && self.active().editor.vim_mode() != VimMode::Normal {
+            self.exit_blame_mode();
+        }
+    }
+
     /// Mouse-hover over the blame column at `doc_row` — show the full commit
     /// message for that line's commit in the markdown hover popup (the same
     /// widget LSP hovers use), anchored at `cell`. No-op when the row has no
