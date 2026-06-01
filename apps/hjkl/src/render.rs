@@ -1115,6 +1115,67 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     }
 
+    // ── Blame: full-width commit header (top of the box) ───────────────────
+    // With the blame column on, overlay each commit run's FIRST line with a
+    // `━ {summary} ━━━` rule spanning the buffer area, so every commit's first-
+    // line message reads across the editor and the region is boxed (the sidebar
+    // `┍│┕` markers form the left edge). No extra rows — the header replaces
+    // that one line's render while the blame view is active.
+    if is_focused && blame_col_width > 0 {
+        let slot = &app.slots()[slot_idx];
+        let top_row = slot.editor.host().viewport().top_row;
+        let line_count = slot.editor.buffer().line_count() as usize;
+        let border_style = Style::default().fg(app.theme.ui.non_text);
+        let label_style = Style::default()
+            .fg(app.theme.ui.text)
+            .add_modifier(Modifier::BOLD);
+        let left = area.x;
+        let right = area.x + area.width;
+        let buf = frame.buffer_mut();
+        for sr in 0..area.height {
+            let dr = crate::app::mouse::doc_row_at_screen_offset(
+                slot.editor.buffer(),
+                top_row,
+                sr as usize,
+            );
+            if dr >= line_count {
+                continue;
+            }
+            let Some(info) = slot.blame.get(dr).and_then(|o| o.as_ref()) else {
+                continue;
+            };
+            // Run start: the previous doc row has a different commit (or none).
+            let run_start = dr == 0
+                || slot
+                    .blame
+                    .get(dr - 1)
+                    .and_then(|o| o.as_ref())
+                    .is_none_or(|p| p.commit != info.commit);
+            if !run_start {
+                continue;
+            }
+            let y = blame_col_y + sr;
+            // Fill the row with the border rule, then lay the summary over it.
+            for x in left..right {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char('\u{2501}'); // ━
+                    cell.set_style(border_style);
+                }
+            }
+            let label = format!(" {} ", info.summary);
+            for (i, ch) in label.chars().enumerate() {
+                let x = left + 1 + i as u16;
+                if x >= right {
+                    break;
+                }
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(ch);
+                    cell.set_style(label_style);
+                }
+            }
+        }
+    }
+
     // ── Auto-indent flash overlay ─────────────────────────────────────────
     //
     // Approach: post-render ratatui buffer walk. After `BufferView` has painted
