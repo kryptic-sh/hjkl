@@ -82,10 +82,6 @@ pub struct UiTheme {
     pub cursor_line_bg: Color,
     pub cursor_column_bg: Color,
     pub fold_line_bg: Color,
-    /// Background painted over every line attributed to the same commit as the
-    /// cursor's line, when the git blame column is on. Subtle so it groups the
-    /// commit's lines without overpowering the cursor line itself.
-    pub blame_highlight_bg: Color,
 
     // [colorcolumn]
     pub colorcolumn_bg: Color,
@@ -154,7 +150,6 @@ impl UiTheme {
             cursor_line_bg: parse_hex(&raw.cursor_line.bg)?,
             cursor_column_bg: parse_hex(&raw.cursor_line.column_bg)?,
             fold_line_bg: parse_hex(&raw.cursor_line.fold_bg)?,
-            blame_highlight_bg: parse_hex(&raw.cursor_line.blame_bg)?,
             colorcolumn_bg: parse_hex(&raw.colorcolumn.bg)?,
             search_bg: parse_hex(&raw.search.bg)?,
             search_fg: parse_hex(&raw.search.fg)?,
@@ -215,7 +210,6 @@ struct RawCursorLine {
     bg: String,
     column_bg: String,
     fold_bg: String,
-    blame_bg: String,
 }
 
 #[derive(Deserialize)]

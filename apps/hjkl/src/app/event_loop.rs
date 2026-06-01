@@ -1214,9 +1214,7 @@ impl App {
                             .is_some();
                         build_picker_menu(has_path)
                     }
-                    // Blame column has no right-click menu (hover shows the
-                    // commit message instead).
-                    mouse::Zone::BlameColumn { .. } | mouse::Zone::None => {
+                    mouse::Zone::None => {
                         return MouseOutcome::Continue;
                     }
                 };
@@ -1633,19 +1631,24 @@ impl App {
         if !should_fire {
             return;
         }
-        // Hit-test the resting cell: code → LSP hover; blame column → commit
-        // message popup (same markdown popup widget).
+        // Hit-test the resting cell. In BLAME mode every line (text or gutter/
+        // box frame) shows the full commit message in the markdown popup;
+        // otherwise a code cell triggers an LSP hover.
+        let blame = self.active().editor.is_blame();
         match crate::app::mouse::hit_test_zone(self, cell.0, cell.1) {
-            crate::app::mouse::Zone::Code {
-                doc_row, doc_col, ..
-            } => {
-                self.lsp_hover_at_doc(doc_row, doc_col);
+            crate::app::mouse::Zone::Code { doc_row, .. }
+            | crate::app::mouse::Zone::Gutter { doc_row, .. }
+                if blame =>
+            {
+                self.show_blame_commit_hover(doc_row, cell);
                 if let Some(h) = self.hover_timer.as_mut() {
                     h.request_sent = true;
                 }
             }
-            crate::app::mouse::Zone::BlameColumn { doc_row, .. } => {
-                self.show_blame_commit_hover(doc_row, cell);
+            crate::app::mouse::Zone::Code {
+                doc_row, doc_col, ..
+            } => {
+                self.lsp_hover_at_doc(doc_row, doc_col);
                 if let Some(h) = self.hover_timer.as_mut() {
                     h.request_sent = true;
                 }

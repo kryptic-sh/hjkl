@@ -197,14 +197,6 @@ fn text_start_offset(
     lnum_width + sign_w + fold_w
 }
 
-/// Left git-blame **sidebar** width. Now always 0: the blame view renders as an
-/// in-buffer box (titled top/bottom borders + `│` sides) instead of a left
-/// column, so no horizontal space is carved and click geometry is unaffected.
-/// Kept as a function so the (gated-off) sidebar paint path compiles.
-pub(crate) fn blame_column_width_for(_slot: &crate::app::BufferSlot) -> u16 {
-    0
-}
-
 /// Fold-column width for `slot`, matching the renderer's auto rule: 1 when
 /// the buffer has any fold (widened by an explicit `foldcolumn`), else the
 /// `foldcolumn` setting (0 by default).
@@ -398,7 +390,7 @@ pub fn doc_to_cell(
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    ) + blame_column_width_for(slot);
+    );
 
     let cell_y = rect.y + (doc_row - vp_top) as u16;
 
@@ -534,12 +526,6 @@ pub enum Zone {
     },
     /// Inside the gutter (line numbers / signs / fold column) of a window.
     Gutter {
-        win_id: window::WindowId,
-        doc_row: usize,
-    },
-    /// Inside the left git-blame column (when toggled on). `doc_row` is the
-    /// document row whose blame attribution the cell sits on.
-    BlameColumn {
         win_id: window::WindowId,
         doc_row: usize,
     },
@@ -908,22 +894,10 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         s.signcolumn,
         has_visible_signs,
         fold_column_width_for(slot),
-    ) + blame_column_width_for(slot);
+    );
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
-
-    // The blame column is carved off the left edge of the gutter region; a
-    // cell there resolves to a blame-column hover (commit message), not a
-    // regular gutter click.
-    let blame_w = blame_column_width_for(slot);
-    if blame_w > 0 && rel_x < blame_w {
-        let doc_row = doc_row_at_screen_offset(slot.editor.buffer(), vp.top_row, rel_y as usize);
-        if doc_row < line_count {
-            return Zone::BlameColumn { win_id, doc_row };
-        }
-        return Zone::None;
-    }
 
     // Box mode reserves a 1-col left frame; widen the gutter hit region by it.
     let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);

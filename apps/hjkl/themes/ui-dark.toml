@@ -28,7 +28,6 @@ visual_bg     = "#bb9af7"  # VISUAL / VISUAL LINE / VISUAL BLOCK — --accent
 bg            = "#2a3240"  # subtle highlight under cursor row
 column_bg     = "#2a3240"  # subtle highlight down cursor column (cursorcolumn)
 fold_bg       = "#3a4a5a"  # closed fold header row bg — brighter than cursor_line bg
-blame_bg      = "#26303a"  # lines sharing the cursor line's commit (blame column on)
 
 [colorcolumn]
 bg            = "#1f2a30"  # muted teal-dark ruler background (colorcolumn)

@@ -249,161 +249,6 @@ impl App {
     }
 }
 
-/// Kind of a blame-column segment — drives its render color/modifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BlameSeg {
-    /// Short commit hash (dim).
-    Hash,
-    /// Author name (bold / bright).
-    Author,
-    /// Commit date (dim).
-    Date,
-    /// Commit summary line (dim italic).
-    Summary,
-}
-
-/// One blame-column entry, aligned to a visible screen row. gitsigns-style:
-/// the FIRST row of a contiguous commit run carries the metadata segments
-/// (`<hash> <author> <date>`), the SECOND carries the commit summary, the rest
-/// are blank. A leading `marker` box-drawing char brackets the commit's run:
-///   `╺` single-line run · `┍` run start · `│` run body · `┕` run end · `' '`
-/// when the row has no blame. `segments` paint left-to-right, one space apart,
-/// after the marker + a space.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BlameColumnRow {
-    pub marker: char,
-    pub segments: Vec<(String, BlameSeg)>,
-    pub is_uncommitted: bool,
-}
-
-impl BlameColumnRow {
-    fn blank() -> Self {
-        Self {
-            marker: ' ',
-            segments: Vec::new(),
-            is_uncommitted: false,
-        }
-    }
-}
-
-/// Char-safe truncation to `max` display columns with a trailing ellipsis.
-fn truncate_to(s: &str, max: usize) -> String {
-    if max == 0 {
-        return String::new();
-    }
-    if s.chars().count() > max {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
-    } else {
-        s.to_string()
-    }
-}
-
-/// Format a commit time for the blame column. Within 8 hours of `now` (both
-/// unix seconds, UTC), show a coarse relative label ("just now", "5m", "3h");
-/// at 8 hours or older, fall back to the absolute ISO date `YYYY-MM-DD`.
-/// `now < time_unix` (clock skew / future commit) also falls back to ISO.
-fn format_blame_time(time_unix: i64, now: i64) -> String {
-    const EIGHT_HOURS: i64 = 8 * 3600;
-    let delta = now - time_unix;
-    if !(0..EIGHT_HOURS).contains(&delta) {
-        return format_blame_date(time_unix);
-    }
-    if delta < 60 {
-        "just now".to_string()
-    } else if delta < 3600 {
-        format!("{}m", delta / 60)
-    } else {
-        format!("{}h", delta / 3600)
-    }
-}
-
-/// Build per-visible-row blame-column entries (gitsigns-style). `visible_doc_rows[i]`
-/// is the 0-based document row shown on screen row `i` (fold-aware; `usize::MAX`
-/// for screen rows past EOF / blank → blank entry). `blame[doc_row]` is the
-/// attribution (None when unavailable).
-///
-/// Run membership is computed from **document** adjacency (not just the visible
-/// window) so the bracket markers are correct even when a run extends past the
-/// viewport. For each contiguous run of the same commit:
-///   - first doc row → metadata `<hash> <author> <date>` + `┍` (or `╺` if the
-///     run is a single line),
-///   - second doc row → commit summary + `│`,
-///   - middle rows → blank + `│`,
-///   - last doc row → blank + `┕`.
-///
-/// Segments are truncated to fit `width` columns after the marker + a space.
-pub(crate) fn build_blame_column(
-    blame: &[Option<git::BlameInfo>],
-    visible_doc_rows: &[usize],
-    now: i64,
-    width: usize,
-) -> Vec<BlameColumnRow> {
-    // Whether doc row `r` shares a commit with row `other` (both must exist
-    // and be committed/attributed).
-    let same = |r: usize, other: i64| -> bool {
-        if other < 0 {
-            return false;
-        }
-        let other = other as usize;
-        match (blame.get(r), blame.get(other)) {
-            (Some(Some(a)), Some(Some(b))) => a.commit == b.commit,
-            _ => false,
-        }
-    };
-    // Body budget after the marker (1) + its trailing space (1).
-    let body_width = width.saturating_sub(2);
-
-    let mut out = Vec::with_capacity(visible_doc_rows.len());
-    for &dr in visible_doc_rows {
-        if dr == usize::MAX || dr >= blame.len() || blame[dr].is_none() {
-            out.push(BlameColumnRow::blank());
-            continue;
-        }
-        let info = blame[dr].as_ref().unwrap();
-        let prev_same = same(dr, dr as i64 - 1);
-        let prev2_same = same(dr, dr as i64 - 2);
-        let next_same = same(dr, dr as i64 + 1);
-
-        // Bracket marker from run adjacency.
-        let marker = match (prev_same, next_same) {
-            (false, false) => '╺', // single-line run
-            (false, true) => '┍',  // run start
-            (true, true) => '│',   // run body
-            (true, false) => '┕',  // run end
-        };
-
-        // Body: metadata on the run's first row, summary on the second.
-        let segments = if !prev_same {
-            let hash: String = info.commit.chars().take(8).collect();
-            let date = if info.is_uncommitted {
-                String::new()
-            } else {
-                format_blame_time(info.time_unix, now)
-            };
-            let date_cost = if date.is_empty() { 0 } else { date.len() + 1 };
-            let author_budget = body_width.saturating_sub(hash.len() + 1 + date_cost);
-            let author = truncate_to(&info.author, author_budget);
-            let mut segs = vec![(hash, BlameSeg::Hash), (author, BlameSeg::Author)];
-            if !date.is_empty() {
-                segs.push((date, BlameSeg::Date));
-            }
-            segs
-        } else if !prev2_same {
-            vec![(truncate_to(&info.summary, body_width), BlameSeg::Summary)]
-        } else {
-            Vec::new()
-        };
-
-        out.push(BlameColumnRow {
-            marker,
-            segments,
-            is_uncommitted: info.is_uncommitted,
-        });
-    }
-    out
-}
-
 /// Relative time within one day (`now`, `t` unix seconds, UTC) as `now`/`{m}m`/
 /// `{h}h`; the absolute ISO date otherwise (or for clock-skew/future commits).
 fn format_blame_reltime(t: i64, now: i64) -> String {
@@ -495,18 +340,7 @@ fn format_blame_date(time_unix: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_blame_column, format_blame_date, format_blame_time};
-    use hjkl_app::git::BlameInfo;
-
-    fn make_info(commit: &str, author: &str, time_unix: i64) -> BlameInfo {
-        BlameInfo {
-            commit: commit.to_string(),
-            author: author.to_string(),
-            time_unix,
-            summary: "test commit".to_string(),
-            is_uncommitted: false,
-        }
-    }
+    use super::{format_blame_date, format_blame_reltime};
 
     #[test]
     fn format_blame_date_known_epochs() {
@@ -515,95 +349,20 @@ mod tests {
     }
 
     #[test]
-    fn format_blame_time_relative_and_iso() {
+    fn format_blame_reltime_relative_and_iso() {
         let now: i64 = 1_700_000_000;
-        assert_eq!(format_blame_time(now, now), "just now");
-        assert_eq!(format_blame_time(now - 120, now), "2m");
-        assert_eq!(format_blame_time(now - 7200, now), "2h");
+        assert_eq!(format_blame_reltime(now, now), "now");
+        assert_eq!(format_blame_reltime(now - 120, now), "2m");
+        assert_eq!(format_blame_reltime(now - 7200, now), "2h");
+        // ≥ 1 day → ISO date.
         assert_eq!(
-            format_blame_time(now - 8 * 3600, now),
-            format_blame_date(now - 8 * 3600)
+            format_blame_reltime(now - 86_400, now),
+            format_blame_date(now - 86_400)
         );
-        // future commit → ISO
+        // future commit → ISO.
         assert_eq!(
-            format_blame_time(now + 100, now),
+            format_blame_reltime(now + 100, now),
             format_blame_date(now + 100)
-        );
-    }
-
-    use super::BlameSeg;
-
-    /// Helper: concatenate a row's segment texts (segment kinds aside) for
-    /// assertions that only care about the rendered content.
-    fn seg_text(row: &super::BlameColumnRow) -> String {
-        row.segments
-            .iter()
-            .map(|(t, _)| t.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    #[test]
-    fn build_blame_column_meta_then_summary_then_blank() {
-        let now: i64 = 1_700_000_000;
-        // One commit spanning 3 rows, then a different commit.
-        let blame: Vec<Option<BlameInfo>> = vec![
-            Some(make_info("aaaaaaa", "alice", now - 3600)),
-            Some(make_info("aaaaaaa", "alice", now - 3600)),
-            Some(make_info("aaaaaaa", "alice", now - 3600)),
-            Some(make_info("bbbbbbb", "bob", now - 7200)),
-        ];
-        let visible = vec![0usize, 1, 2, 3];
-        let result = build_blame_column(&blame, &visible, now, 40);
-        assert_eq!(result.len(), 4);
-        // Row 0: metadata — hash, author, date segments.
-        let kinds: Vec<BlameSeg> = result[0].segments.iter().map(|(_, k)| *k).collect();
-        assert_eq!(
-            kinds,
-            vec![BlameSeg::Hash, BlameSeg::Author, BlameSeg::Date]
-        );
-        assert!(seg_text(&result[0]).contains("alice"));
-        assert!(seg_text(&result[0]).contains("aaaaaaa"));
-        // Row 1: summary.
-        assert_eq!(result[1].segments.len(), 1);
-        assert_eq!(result[1].segments[0].1, BlameSeg::Summary);
-        assert_eq!(result[1].segments[0].0, "test commit");
-        // Row 2: blank (third row of the run).
-        assert!(result[2].segments.is_empty());
-        // Row 3: new commit → metadata again.
-        assert!(seg_text(&result[3]).contains("bob"));
-    }
-
-    #[test]
-    fn build_blame_column_blank_for_eof_and_none() {
-        let now: i64 = 1_700_000_000;
-        let blame: Vec<Option<BlameInfo>> = vec![Some(make_info("aaaaaaa", "alice", now - 60))];
-        let visible = vec![0usize, usize::MAX];
-        let result = build_blame_column(&blame, &visible, now, 40);
-        assert_eq!(result.len(), 2);
-        assert!(!result[0].segments.is_empty());
-        assert!(result[1].segments.is_empty());
-    }
-
-    #[test]
-    fn build_blame_column_truncates_author() {
-        let now: i64 = 1_700_000_000;
-        let blame: Vec<Option<BlameInfo>> =
-            vec![Some(make_info("aaaaaaa", "averylongauthorname", now - 60))];
-        let visible = vec![0usize];
-        let result = build_blame_column(&blame, &visible, now, 20);
-        // hash(7) + spaces + author + date must fit in 20 columns.
-        let total: usize = result[0]
-            .segments
-            .iter()
-            .map(|(t, _)| t.chars().count())
-            .sum::<usize>()
-            + result[0].segments.len().saturating_sub(1); // separators
-        assert!(total <= 20, "row exceeds width: {:?}", result[0].segments);
-        let author = &result[0].segments[1].0;
-        assert!(
-            author.ends_with('…'),
-            "long author must be ellipsized: {author:?}"
         );
     }
 }
