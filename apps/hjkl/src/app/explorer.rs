@@ -10,53 +10,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-// ── Icon helpers (moved from render.rs so explorer.rs can build text) ─────────
-
-/// Nerd-font icon for a directory entry (open vs closed), with special folder names.
-pub(crate) fn explorer_dir_icon(path: &Path, expanded: bool) -> char {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        match name {
-            ".git" => return '\u{e702}',         //
-            ".github" => return '\u{e709}',      //
-            ".config" => return '\u{f013}',      //
-            "node_modules" => return '\u{e718}', //
-            _ => {}
-        }
-    }
-    if expanded {
-        '\u{f0770}' // 󰝰 open folder
-    } else {
-        '\u{f024b}' // 󰉋 closed folder
-    }
-}
-
-/// Nerd-font icon for a file, keyed by extension.
-pub(crate) fn explorer_file_icon(path: &Path) -> char {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "rs" => '\u{f1617}',                                                   // 󱘗
-        "md" | "markdown" => '\u{f0354}',                                      // 󰍔
-        "toml" | "ini" | "conf" | "cfg" => '\u{f013}',                         //
-        "lock" => '\u{f023}',                                                  //
-        "json" => '\u{e60b}',                                                  //
-        "yaml" | "yml" => '\u{f0626}',                                         // 󰘦
-        "html" | "htm" => '\u{f031d}',                                         // 󰌝
-        "css" | "scss" => '\u{e749}',                                          //
-        "js" | "mjs" | "cjs" => '\u{e74e}',                                    //
-        "ts" | "tsx" => '\u{e628}',                                            //
-        "py" => '\u{e606}',                                                    //
-        "go" => '\u{e627}',                                                    //
-        "sh" | "bash" | "zsh" | "fish" => '\u{f489}',                          //
-        "txt" | "text" => '\u{f0219}',                                         // 󰈙
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => '\u{f1c5}', //
-        _ => '\u{f0214}',                                                      // 󰈔 generic document
-    }
-}
-
 // ── Tree model ─────────────────────────────────────────────────────────────────
 
 /// One visible row in the flattened tree.
@@ -195,7 +148,7 @@ impl ExplorerTree {
     ///
     /// Each line in the returned `String` corresponds to `nodes[i]`, so
     /// `cursor_row` in the editor maps directly to `nodes[cursor_row]`.
-    pub(crate) fn render_text(&self) -> String {
+    pub(crate) fn render_text(&self, icons: hjkl_icons::IconMode) -> String {
         let mut out = String::new();
         for (i, node) in self.nodes.iter().enumerate() {
             if i > 0 {
@@ -208,8 +161,11 @@ impl ExplorerTree {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| node.path.to_string_lossy().into_owned());
-                let icon = explorer_dir_icon(&node.path, self.is_expanded(&node.path));
-                out.push(icon);
+                out.push(hjkl_icons::dir_icon_for_path(
+                    &node.path,
+                    self.is_expanded(&node.path),
+                    icons,
+                ));
                 out.push(' ');
                 out.push_str(&name);
             } else {
@@ -223,9 +179,9 @@ impl ExplorerTree {
                 out.push('╴');
                 // Icon + space + name.
                 let icon = if node.is_dir {
-                    explorer_dir_icon(&node.path, self.is_expanded(&node.path))
+                    hjkl_icons::dir_icon_for_path(&node.path, self.is_expanded(&node.path), icons)
                 } else {
-                    explorer_file_icon(&node.path)
+                    hjkl_icons::file_icon_for_path(&node.path, icons)
                 };
                 out.push(icon);
                 out.push(' ');
@@ -287,7 +243,7 @@ impl super::App {
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let tree = ExplorerTree::new(cwd);
-        let text = tree.render_text();
+        let text = tree.render_text(self.icon_mode);
         // Nodes are rebuilt by new() above; no extra rebuild needed.
 
         let buffer_id = self.next_buffer_id;
@@ -430,8 +386,9 @@ impl super::App {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
+        let icons = self.icon_mode;
         let (text, win_id) = match self.explorer.as_ref() {
-            Some(ep) => (ep.tree.render_text(), ep.win_id),
+            Some(ep) => (ep.tree.render_text(icons), ep.win_id),
             None => return,
         };
         // Stash the path currently under cursor before we rebuild.
@@ -692,7 +649,7 @@ mod tests {
     fn render_text_line_count_matches_nodes() {
         let root = make_tree();
         let tree = ExplorerTree::new(root.clone());
-        let text = tree.render_text();
+        let text = tree.render_text(hjkl_icons::IconMode::Nerd);
         let line_count = text.lines().count();
         assert_eq!(
             line_count,
@@ -708,7 +665,7 @@ mod tests {
         let mut tree = ExplorerTree::new(root.clone());
         let a_dir_path = tree.nodes[1].path.clone();
         tree.toggle(&a_dir_path);
-        let text = tree.render_text();
+        let text = tree.render_text(hjkl_icons::IconMode::Nerd);
         let line_count = text.lines().count();
         assert_eq!(line_count, tree.nodes.len());
         let _ = fs::remove_dir_all(&root);

@@ -70,6 +70,16 @@ pub struct EditorConfig {
     /// a startup warning is emitted and the chord-resolve race described
     /// in the `App::with_config` doc comment may re-emerge.
     pub chord_timeout_ms: u64,
+    /// Icon set for the file explorer: `"nerd"`, `"unicode"`, `"ascii"`, or
+    /// `"auto"`. Terminals can't be queried for their font, so `auto` assumes a
+    /// Nerd Font; `unicode`/`ascii` are the reliable non-Nerd fallbacks (see
+    /// `hjkl-icons`). Defaults to `"auto"` so existing configs keep parsing.
+    #[serde(default = "default_icons")]
+    pub icons: String,
+}
+
+fn default_icons() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]

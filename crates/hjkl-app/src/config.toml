@@ -31,6 +31,12 @@ mouse = true
 # startup warning is emitted (chord-resolve race may re-emerge).
 chord_timeout_ms = 1000
 
+# File-explorer icon set: "nerd" (Nerd-Font glyphs), "unicode" (geometric
+# fallback ▸ ▾ ·), "ascii" (> v), or "auto". Terminals can't be queried for
+# their font, so "auto" assumes a Nerd Font — set "unicode" or "ascii" if you
+# don't have one (that's the reliable fallback).
+icons = "auto"
+
 [theme]
 # Theme name. Currently only "dark" is bundled.
 name = "dark"

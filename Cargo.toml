@@ -36,6 +36,7 @@ hjkl-holler = { path = "crates/hjkl-holler", version = "0.28" }
 hjkl-holler-tui = { path = "crates/hjkl-holler-tui", version = "0.28" }
 hjkl-hover = { path = "crates/hjkl-hover", version = "0.28" }
 hjkl-hover-tui = { path = "crates/hjkl-hover-tui", version = "0.28" }
+hjkl-icons = { path = "crates/hjkl-icons", version = "0.28" }
 hjkl-info-popup = { path = "crates/hjkl-info-popup", version = "0.28" }
 hjkl-info-popup-tui = { path = "crates/hjkl-info-popup-tui", version = "0.28" }
 hjkl-keymap = { path = "crates/hjkl-keymap", version = "0.28", default-features = false }

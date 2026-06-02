@@ -876,6 +876,7 @@ jobs:
           publish_if_missing hjkl-buffer
           publish_if_missing hjkl-buffer-tui
           publish_if_missing hjkl-completion
+          publish_if_missing hjkl-icons
           publish_if_missing hjkl-lang
           publish_if_missing hjkl-clipboard
           publish_if_missing hjkl-config

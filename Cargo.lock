@@ -2225,6 +2225,7 @@ dependencies = [
  "hjkl-holler-tui",
  "hjkl-hover",
  "hjkl-hover-tui",
+ "hjkl-icons",
  "hjkl-info-popup",
  "hjkl-info-popup-tui",
  "hjkl-keymap",
@@ -2559,6 +2560,10 @@ dependencies = [
  "hjkl-markdown-tui",
  "ratatui",
 ]
+
+[[package]]
+name = "hjkl-icons"
+version = "0.28.1"
 
 [[package]]
 name = "hjkl-info-popup"

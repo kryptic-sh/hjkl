@@ -176,6 +176,9 @@ pub struct App {
     pub picker: Option<crate::picker::Picker>,
     /// Left file-explorer window (#55). `None` when closed; closed on launch.
     pub(crate) explorer: Option<explorer::ExplorerPane>,
+    /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
+    /// `icons` config setting.
+    pub(crate) icon_mode: hjkl_icons::IconMode,
     /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -1336,6 +1339,7 @@ impl App {
             search_field: None,
             picker: None,
             explorer: None,
+            icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
             last_cursor_shape: CursorShape::Block,
@@ -1490,6 +1494,12 @@ impl App {
         let timeout = Duration::from_millis(config.editor.chord_timeout_ms);
         self.app_keymap = keymap_build::build_app_keymap(leader);
         self.app_keymap.set_timeout(timeout);
+        // Resolve the explorer icon set. Explicit modes apply directly; `auto`
+        // (and anything unrecognized) assumes a Nerd Font — terminals can't be
+        // probed for font/glyph coverage, so `icons=unicode`/`ascii` is the
+        // reliable fallback for non-Nerd setups.
+        self.icon_mode = hjkl_icons::IconMode::from_config(&config.editor.icons)
+            .unwrap_or(hjkl_icons::IconMode::Nerd);
         self.config = config;
         for slot in &mut self.slots {
             let was_readonly = slot.editor.is_readonly();
