@@ -829,9 +829,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // For non-focused windows, don't show cursor highlight or cursor position.
     let show_cursor = is_focused && !in_prompt;
 
-    // Resolve cursorline / cursorcolumn styles for this window.
-    let cursor_line_style = if show_cursor && cul {
-        cursor_line_bg(&app.theme.ui)
+    // Resolve cursorline / cursorcolumn styles for this window. The cursor line
+    // stays visible on UNFOCUSED windows too (e.g. the explorer's selection when
+    // focus is in the editor), painted with a fainter bg and without the cursor.
+    let cursor_line_style = if cul {
+        if show_cursor {
+            cursor_line_bg(&app.theme.ui)
+        } else {
+            Style::default().bg(app.theme.ui.cursor_line_inactive_bg)
+        }
     } else {
         Style::default()
     };

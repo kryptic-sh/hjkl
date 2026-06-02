@@ -26,6 +26,7 @@ visual_bg     = "#bb9af7"  # VISUAL / VISUAL LINE / VISUAL BLOCK — --accent
 
 [cursor_line]
 bg            = "#2a3240"  # subtle highlight under cursor row
+inactive_bg   = "#20262e"  # fainter cursor row on unfocused windows
 column_bg     = "#2a3240"  # subtle highlight down cursor column (cursorcolumn)
 fold_bg       = "#3a4a5a"  # closed fold header row bg — brighter than cursor_line bg
 

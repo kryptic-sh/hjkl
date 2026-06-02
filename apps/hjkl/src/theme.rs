@@ -80,6 +80,9 @@ pub struct UiTheme {
 
     // [cursor_line]
     pub cursor_line_bg: Color,
+    /// Fainter cursor-line bg painted on UNFOCUSED windows so the current line
+    /// stays visible (e.g. the explorer's selection) without the cursor.
+    pub cursor_line_inactive_bg: Color,
     pub cursor_column_bg: Color,
     pub fold_line_bg: Color,
 
@@ -148,6 +151,7 @@ impl UiTheme {
             mode_insert_bg: parse_hex(&raw.mode.insert_bg)?,
             mode_visual_bg: parse_hex(&raw.mode.visual_bg)?,
             cursor_line_bg: parse_hex(&raw.cursor_line.bg)?,
+            cursor_line_inactive_bg: parse_hex(&raw.cursor_line.inactive_bg)?,
             cursor_column_bg: parse_hex(&raw.cursor_line.column_bg)?,
             fold_line_bg: parse_hex(&raw.cursor_line.fold_bg)?,
             colorcolumn_bg: parse_hex(&raw.colorcolumn.bg)?,
@@ -208,6 +212,7 @@ struct RawMode {
 #[derive(Deserialize)]
 struct RawCursorLine {
     bg: String,
+    inactive_bg: String,
     column_bg: String,
     fold_bg: String,
 }
