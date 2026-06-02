@@ -5518,3 +5518,23 @@ fn toggle_explorer_three_state_cycle() {
     app.dispatch_action(AppAction::ToggleExplorer, 1);
     assert!(app.explorer.is_none());
 }
+
+#[test]
+fn ctrl_h_l_move_between_editor_and_explorer() {
+    use crate::app::NavDir;
+    use crate::keymap_actions::AppAction;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = App::new(None, false, None, None).unwrap();
+    // Open the explorer, then simulate being back in the editor (unfocused pane).
+    app.dispatch_action(AppAction::ToggleExplorer, 1);
+    app.explorer.as_mut().unwrap().set_focused(false);
+    assert!(!app.explorer_focused());
+    // Ctrl-h from the leftmost editor window steps into the explorer.
+    app.dispatch_action(AppAction::TmuxNavigate(NavDir::Left), 1);
+    assert!(app.explorer_focused());
+    // Ctrl-l returns focus to the editor (pane stays open).
+    let cl = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
+    assert!(app.explorer_handle_key(cl));
+    assert!(!app.explorer_focused());
+    assert!(app.explorer.is_some());
+}

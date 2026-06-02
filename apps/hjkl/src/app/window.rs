@@ -121,6 +121,16 @@ impl App {
             NavDir::Up => self.layout().neighbor_above(focused),
             NavDir::Right => self.layout().neighbor_right(focused),
         };
+        // `Ctrl-h` from the leftmost window steps into the explorer pane (it
+        // sits left of the window area), so it behaves like any other vim pane.
+        if matches!(dir, NavDir::Left)
+            && neighbour.is_none()
+            && let Some(e) = self.explorer.as_mut()
+            && !e.focused()
+        {
+            e.set_focused(true);
+            return;
+        }
         if neighbour.is_some() {
             match dir {
                 NavDir::Left => self.focus_left(),

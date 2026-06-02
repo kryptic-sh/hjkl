@@ -341,12 +341,30 @@ impl super::App {
             if !exp.focused() {
                 return false;
             }
-            // Leave Ctrl-/Alt- chords (e.g. window nav) to the normal router.
+            // Window navigation: `Ctrl-l` (or `Ctrl-Right`) returns focus to the
+            // editor — the explorer is the leftmost pane. Other Ctrl nav chords
+            // are swallowed so they don't act on the (hidden) editor window;
+            // remaining Ctrl/Alt chords fall through to the normal router.
             if key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             {
                 exp.clear_g();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match key.code {
+                        KeyCode::Char('l') | KeyCode::Right => {
+                            exp.set_focused(false);
+                            return true;
+                        }
+                        KeyCode::Char('h')
+                        | KeyCode::Char('j')
+                        | KeyCode::Char('k')
+                        | KeyCode::Left
+                        | KeyCode::Down
+                        | KeyCode::Up => return true,
+                        _ => {}
+                    }
+                }
                 return false;
             }
             // `gg` → top.
