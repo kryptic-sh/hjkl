@@ -114,25 +114,37 @@ pub fn popup(
 
     const MIN_WIDTH: u16 = 20;
     const MAX_HEIGHT: u16 = 10;
+    // Cap the popup so one item with a huge `detail` (e.g. rust-analyzer returns
+    // a whole struct's field list for `Self`) can't stretch it across the screen.
+    const MAX_WIDTH: u16 = 60;
+    // Per-item detail columns counted toward the width; the renderer truncates
+    // anything past the popup width anyway.
+    const MAX_DETAIL_COLS: usize = 30;
 
     let visible_count = completion.visible.len().min(MAX_HEIGHT as usize) as u16;
     if visible_count == 0 {
         return;
     }
 
-    // Determine width from longest label + detail.
+    // Determine width from longest label + (clamped) detail.
     let content_width = completion
         .visible
         .iter()
         .filter_map(|&idx| completion.all_items.get(idx))
         .map(|item| {
-            let detail_len = item.detail.as_deref().map(|d| d.len() + 2).unwrap_or(0);
+            let detail_len = item
+                .detail
+                .as_deref()
+                .map(|d| d.chars().count().min(MAX_DETAIL_COLS) + 2)
+                .unwrap_or(0);
             // icon(1) + space(1) + label + space(2) + detail
-            1 + 1 + item.label.len() + 2 + detail_len
+            1 + 1 + item.label.chars().count() + 2 + detail_len
         })
         .max()
         .unwrap_or(MIN_WIDTH as usize) as u16;
-    let popup_w = content_width.max(MIN_WIDTH).min(viewport.width);
+    let popup_w = content_width
+        .clamp(MIN_WIDTH, MAX_WIDTH)
+        .min(viewport.width);
 
     // Popup position: one row below anchor, clamped to viewport.
     let popup_h = visible_count + 2; // +2 for border
