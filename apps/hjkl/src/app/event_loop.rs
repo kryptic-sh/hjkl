@@ -363,12 +363,26 @@ impl App {
             return KeyOutcome::Continue;
         }
 
-        // ── File-explorer pane (#55) ──────────────────────────────
-        // When the explorer owns input, it consumes navigation keys (j/k/gg/G/
-        // h/l/Enter/Esc). Unhandled keys (notably the leader chord that toggles
-        // it) fall through to normal routing. Modal overlays above take priority.
-        if self.explorer_focused() && self.explorer_handle_key(key) {
-            return KeyOutcome::Continue;
+        // ── File-explorer buffer (#55) ────────────────────────────
+        // When the focused window is the explorer buffer and we are in Normal
+        // mode, intercept tree-specific keys (Enter/l/o/Right → activate,
+        // h/Left → collapse). Everything else (j/k/gg/G/`/`/`Ctrl-w`/visual)
+        // falls through to the engine — the explorer is a real window.
+        if self.explorer_buf_focused()
+            && self.active().editor.vim_mode() == VimMode::Normal
+            && key.modifiers == KeyModifiers::NONE
+        {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    self.explorer_activate();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('h') | KeyCode::Left => {
+                    self.explorer_collapse();
+                    return KeyOutcome::Continue;
+                }
+                _ => {} // fall through to engine
+            }
         }
 
         // ── Visual-mode `:` → command prompt prefilled with '<,'> ─
@@ -921,13 +935,6 @@ impl App {
                     return MouseOutcome::Continue;
                 }
 
-                // ── File-explorer pane click (#55) ────────────────
-                if let mouse::Zone::Explorer { row } = mouse::hit_test_zone(self, me.column, me.row)
-                {
-                    self.explorer_click(row);
-                    return MouseOutcome::Continue;
-                }
-
                 // ── Context-menu: click-inside → invoke / click-outside → dismiss
                 if let Some(ref menu) = self.context_menu {
                     let screen_size = self.screen_rect();
@@ -1229,8 +1236,7 @@ impl App {
                             .is_some();
                         build_picker_menu(has_path)
                     }
-                    // File-explorer pane has no right-click menu in v1.
-                    mouse::Zone::Explorer { .. } | mouse::Zone::None => {
+                    mouse::Zone::None => {
                         return MouseOutcome::Continue;
                     }
                 };

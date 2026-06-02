@@ -929,6 +929,7 @@ impl App {
 
         let slot = super::BufferSlot {
             buffer_id,
+            is_explorer: false,
             editor,
             filename: None,
             dirty: false,

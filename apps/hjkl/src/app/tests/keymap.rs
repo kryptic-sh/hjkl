@@ -5500,41 +5500,47 @@ fn close_window_keeps_buffer_for_other_window() {
 // ── File explorer (#55) ─────────────────────────────────────────────────
 
 #[test]
-fn toggle_explorer_three_state_cycle() {
+fn toggle_explorer_opens_window_and_is_explorer_slot() {
     use crate::keymap_actions::AppAction;
     let mut app = App::new(None, false, None, None).unwrap();
     // Closed on launch.
     assert!(app.explorer.is_none());
-    // Open + focus.
+    // Open: creates a window and an is_explorer slot, focused on the explorer.
     app.dispatch_action(AppAction::ToggleExplorer, 1);
-    assert!(app.explorer.is_some());
-    assert!(app.explorer_focused());
-    // Unfocus (Esc semantics) then toggle → refocus, stays open.
-    app.explorer.as_mut().unwrap().set_focused(false);
+    assert!(app.explorer.is_some(), "explorer pane should be open");
+    assert!(
+        app.slots.iter().any(|s| s.is_explorer),
+        "explorer slot must have is_explorer=true"
+    );
+    assert!(
+        app.explorer_buf_focused(),
+        "explorer window should be focused after open"
+    );
+    // Toggle again → close.
     app.dispatch_action(AppAction::ToggleExplorer, 1);
-    assert!(app.explorer.is_some());
-    assert!(app.explorer_focused());
-    // Focused → toggle closes.
-    app.dispatch_action(AppAction::ToggleExplorer, 1);
-    assert!(app.explorer.is_none());
+    assert!(
+        app.explorer.is_none(),
+        "explorer should be closed after second toggle"
+    );
 }
 
 #[test]
-fn ctrl_h_l_move_between_editor_and_explorer() {
-    use crate::app::NavDir;
+fn ctrl_w_nav_moves_between_editor_and_explorer() {
     use crate::keymap_actions::AppAction;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = App::new(None, false, None, None).unwrap();
-    // Open the explorer, then simulate being back in the editor (unfocused pane).
+    // Open explorer → it is focused (left window).
     app.dispatch_action(AppAction::ToggleExplorer, 1);
-    app.explorer.as_mut().unwrap().set_focused(false);
-    assert!(!app.explorer_focused());
-    // Ctrl-h from the leftmost editor window steps into the explorer.
-    app.dispatch_action(AppAction::TmuxNavigate(NavDir::Left), 1);
-    assert!(app.explorer_focused());
-    // Ctrl-l returns focus to the editor (pane stays open).
-    let cl = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL);
-    assert!(app.explorer_handle_key(cl));
-    assert!(!app.explorer_focused());
-    assert!(app.explorer.is_some());
+    assert!(app.explorer_buf_focused());
+    // Ctrl-w l → focus right (editor) window.
+    app.dispatch_action(AppAction::FocusRight, 1);
+    assert!(
+        !app.explorer_buf_focused(),
+        "editor window should be focused after FocusRight"
+    );
+    // Ctrl-w h → focus back left (explorer).
+    app.dispatch_action(AppAction::FocusLeft, 1);
+    assert!(
+        app.explorer_buf_focused(),
+        "explorer should be focused after FocusLeft"
+    );
 }

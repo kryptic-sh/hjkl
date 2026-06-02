@@ -43,22 +43,47 @@ impl App {
         self.refresh_git_signs_force();
     }
 
-    /// `:bnext` — cycle active forward. No-op when only one slot.
+    /// `:bnext` — cycle active forward, skipping `is_explorer` slots.
+    /// No-op when only one non-explorer slot.
     pub(crate) fn buffer_next(&mut self) {
         if !self.require_multi_buffer() {
             return;
         }
-        let next = (self.focused_slot_idx() + 1) % self.slots.len();
-        self.switch_to(next);
+        let n = self.slots.len();
+        let current = self.focused_slot_idx();
+        // Walk forward, skipping explorer slots. Guard against all-explorer edge.
+        let next = (1..=n).find_map(|i| {
+            let idx = (current + i) % n;
+            if !self.slots[idx].is_explorer {
+                Some(idx)
+            } else {
+                None
+            }
+        });
+        if let Some(next) = next {
+            self.switch_to(next);
+        }
     }
 
-    /// `:bprev` — cycle active backward. No-op when only one slot.
+    /// `:bprev` — cycle active backward, skipping `is_explorer` slots.
+    /// No-op when only one non-explorer slot.
     pub(crate) fn buffer_prev(&mut self) {
         if !self.require_multi_buffer() {
             return;
         }
-        let prev = (self.focused_slot_idx() + self.slots.len() - 1) % self.slots.len();
-        self.switch_to(prev);
+        let n = self.slots.len();
+        let current = self.focused_slot_idx();
+        let prev = (1..=n).find_map(|i| {
+            let idx = (current + n - i) % n;
+            if !self.slots[idx].is_explorer {
+                Some(idx)
+            } else {
+                None
+            }
+        });
+        if let Some(prev) = prev {
+            self.switch_to(prev);
+        }
     }
 
     /// `<C-^>` / `:b#` — switch to the previously-active buffer slot.
@@ -261,10 +286,11 @@ impl App {
         self.bus.info(format!("buffer wiped: \"{name}\""));
     }
 
-    /// Returns `true` when multiple slots are open; otherwise sets the
-    /// "only one buffer open" status message and returns `false`.
+    /// Returns `true` when multiple non-explorer slots are open; otherwise
+    /// sets the "only one buffer open" status message and returns `false`.
     pub(crate) fn require_multi_buffer(&mut self) -> bool {
-        if self.slots.len() <= 1 {
+        let real_count = self.slots.iter().filter(|s| !s.is_explorer).count();
+        if real_count <= 1 {
             self.bus.warn("only one buffer open");
             return false;
         }
@@ -272,11 +298,14 @@ impl App {
     }
 
     /// `:ls` / `:buffers` — render the buffer list to a single status
-    /// line. Marks: `%` active, `+` modified.
+    /// line. Marks: `%` active, `+` modified. Explorer slots are excluded.
     pub(crate) fn list_buffers(&self) -> String {
         let active_slot = self.focused_slot_idx();
         let mut parts = Vec::with_capacity(self.slots.len());
         for (i, slot) in self.slots.iter().enumerate() {
+            if slot.is_explorer {
+                continue;
+            }
             let active = if i == active_slot { '%' } else { ' ' };
             let modf = if slot.dirty { '+' } else { ' ' };
             let name = slot

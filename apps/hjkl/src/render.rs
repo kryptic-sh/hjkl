@@ -1199,217 +1199,13 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     hjkl_completion_tui::popup(frame, completion, &theme, anchor, buf_area);
 }
 
-/// Render one complete frame into `frame`.
-/// Nerd-font icon for a directory entry (open vs closed), with a few special
-/// folder names. Glyphs assume a Nerd Font (the status line already relies on
-/// one).
-fn explorer_dir_icon(path: &std::path::Path, expanded: bool) -> char {
-    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        match name {
-            ".git" => return '\u{e702}',         //
-            ".github" => return '\u{e709}',      //
-            ".config" => return '\u{f013}',      //
-            "node_modules" => return '\u{e718}', //
-            _ => {}
-        }
-    }
-    if expanded {
-        '\u{f0770}' // 󰝰 open folder
-    } else {
-        '\u{f024b}' // 󰉋 closed folder
-    }
-}
-
-/// Nerd-font icon for a file, keyed by extension (default document glyph).
-fn explorer_file_icon(path: &std::path::Path) -> char {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "rs" => '\u{f1617}',                                                   // 󱘗
-        "md" | "markdown" => '\u{f0354}',                                      // 󰍔
-        "toml" | "ini" | "conf" | "cfg" => '\u{f013}',                         //
-        "lock" => '\u{f023}',                                                  //
-        "json" => '\u{e60b}',                                                  //
-        "yaml" | "yml" => '\u{f0626}',                                         // 󰘦
-        "html" | "htm" => '\u{f031d}',                                         // 󰌝
-        "css" | "scss" => '\u{e749}',                                          //
-        "js" | "mjs" | "cjs" => '\u{e74e}',                                    //
-        "ts" | "tsx" => '\u{e628}',                                            //
-        "py" => '\u{e606}',                                                    //
-        "go" => '\u{e627}',                                                    //
-        "sh" | "bash" | "zsh" | "fish" => '\u{f489}',                          //
-        "txt" | "text" => '\u{f0219}',                                         // 󰈙
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "ico" => '\u{f1c5}', //
-        _ => '\u{f0214}',                                                      // 󰈔 generic document
-    }
-}
-
-/// Paint the left file-explorer pane (#55) into `area`: a rounded title/header
-/// box, then the tree — each row draws `│`/`├╴`/`└╴` guides from the node's
-/// branch info, a Nerd-font folder/file icon, and the name (dirs bold). The
-/// selected row is highlighted; scroll keeps the selection visible.
-fn render_explorer(frame: &mut Frame, app: &mut App, area: Rect) {
-    use crate::app::explorer::EXPLORER_HEADER_H;
-    if area.width < 4 || area.height == 0 {
-        return;
-    }
-    // Snapshot colors before borrowing the explorer mutably.
-    let panel_bg = app.theme.ui.panel_bg;
-    let dir_fg = app.theme.ui.text;
-    let file_fg = app.theme.ui.text_dim;
-    let sel_bg = app.theme.ui.picker_selection_bg;
-    let border_fg = app.theme.ui.non_text;
-    let title_fg = app.theme.ui.text;
-
-    let header_h = EXPLORER_HEADER_H.min(area.height);
-    let list_h = area.height.saturating_sub(header_h) as usize;
-
-    let Some(exp) = app.explorer.as_mut() else {
-        return;
-    };
-    let sel = exp.selected_index();
-    // Keep the selection within the visible list window.
-    let mut top = exp.top();
-    if list_h == 0 || sel < top {
-        top = sel;
-    } else if sel >= top + list_h {
-        top = sel + 1 - list_h;
-    }
-    exp.set_top(top);
-    let total = exp.nodes().len();
-
-    let max_x = area.x + area.width;
-    let last_x = max_x - 1;
-    let buf = frame.buffer_mut();
-
-    // Clear the pane to the panel background.
-    for y in area.y..area.y + area.height {
-        for x in area.x..max_x {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(' ');
-                cell.set_style(Style::default().bg(panel_bg));
-            }
-        }
-    }
-
-    // ── Rounded header box ────────────────────────────────────────────────
-    let border = Style::default().bg(panel_bg).fg(border_fg);
-    let put = |buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: char, st: Style| {
-        if x < max_x
-            && let Some(cell) = buf.cell_mut((x, y))
-        {
-            cell.set_char(ch);
-            cell.set_style(st);
-        }
-    };
-    if header_h >= 1 {
-        let y = area.y;
-        for x in area.x..max_x {
-            put(buf, x, y, '─', border);
-        }
-        put(buf, area.x, y, '╭', border);
-        put(buf, last_x, y, '╮', border);
-        let title_st = Style::default()
-            .bg(panel_bg)
-            .fg(title_fg)
-            .add_modifier(Modifier::BOLD);
-        for (i, ch) in " Explorer ".chars().enumerate() {
-            let x = area.x + 2 + i as u16;
-            if x >= last_x {
-                break;
-            }
-            put(buf, x, y, ch, title_st);
-        }
-    }
-    if header_h >= 2 {
-        let y = area.y + 1;
-        put(buf, area.x, y, '│', border);
-        put(buf, last_x, y, '│', border);
-        let count = format!("{total}/{total}");
-        let start = last_x.saturating_sub(1 + count.chars().count() as u16);
-        for (i, ch) in count.chars().enumerate() {
-            let x = start + i as u16;
-            if x > area.x && x < last_x {
-                put(buf, x, y, ch, border);
-            }
-        }
-    }
-    if header_h >= 3 {
-        let y = area.y + 2;
-        for x in area.x..max_x {
-            put(buf, x, y, '─', border);
-        }
-        put(buf, area.x, y, '╰', border);
-        put(buf, last_x, y, '╯', border);
-    }
-
-    // ── Tree rows ─────────────────────────────────────────────────────────
-    let list_y0 = area.y + header_h;
-    for (vis_i, node) in exp.nodes().iter().enumerate().skip(top).take(list_h) {
-        let y = list_y0 + (vis_i - top) as u16;
-        let selected = vis_i == sel;
-        let row_bg = if selected { sel_bg } else { panel_bg };
-        if selected {
-            for x in area.x..max_x {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_style(Style::default().bg(row_bg));
-                }
-            }
-        }
-
-        // Build the row as styled cells (guides → icon → space → name) so the
-        // segments paint with one enumerate, with a 1-col left margin.
-        let mut cells: Vec<(char, Style)> = Vec::with_capacity(area.width as usize);
-        if node.depth >= 1 {
-            let guide_st = Style::default().bg(row_bg).fg(border_fg);
-            for &b in &node.branches {
-                cells.push((if b { '│' } else { ' ' }, guide_st));
-                cells.push((' ', guide_st));
-            }
-            cells.push((if node.is_last { '└' } else { '├' }, guide_st));
-            cells.push(('╴', guide_st));
-        }
-        let icon = if node.is_dir {
-            explorer_dir_icon(&node.path, exp.is_expanded(&node.path))
-        } else {
-            explorer_file_icon(&node.path)
-        };
-        let body_fg = if node.is_dir { dir_fg } else { file_fg };
-        cells.push((icon, Style::default().bg(row_bg).fg(body_fg)));
-        cells.push((' ', Style::default().bg(row_bg)));
-        let name = node
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let mut name_st = Style::default().bg(row_bg).fg(body_fg);
-        if node.is_dir {
-            name_st = name_st.add_modifier(Modifier::BOLD);
-        }
-        for ch in name.chars() {
-            cells.push((ch, name_st));
-        }
-
-        for (i, (ch, st)) in cells.iter().enumerate() {
-            let x = area.x + 1 + i as u16;
-            if x >= max_x {
-                break;
-            }
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char(*ch);
-                cell.set_style(*st);
-            }
-        }
-    }
-}
-
 pub fn frame(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
-    let show_top_bar = app.tabs.len() > 1 || app.slots().len() > 1;
+    // Explorer slots don't count as additional user buffers for the top-bar
+    // visibility decision — otherwise opening the explorer alone would show the bar.
+    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
     let (buf_area, status_area, top_bar_area) = {
         // Build constraint list dynamically based on what rows are visible.
         let mut constraints = Vec::new();
@@ -1458,31 +1254,6 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     if let Some(tb) = top_bar_area {
         top_bar(frame, app, tb);
     }
-
-    // ── File-explorer pane (#55) ──────────────────────────────────────────────
-    // Carve a fixed-width strip off the LEFT of the editor area and paint the
-    // tree there; the narrowed `buf_area` feeds the window tree + all overlays so
-    // their geometry stays coherent. Mouse hit-testing accounts for the same
-    // width via `ExplorerState::width` (see mouse.rs).
-    let buf_area = if let Some(exp) = app.explorer.as_ref() {
-        let w = exp.width().min(buf_area.width);
-        let explorer_rect = Rect {
-            x: buf_area.x,
-            y: buf_area.y,
-            width: w,
-            height: buf_area.height,
-        };
-        let narrowed = Rect {
-            x: buf_area.x + w,
-            y: buf_area.y,
-            width: buf_area.width.saturating_sub(w),
-            height: buf_area.height,
-        };
-        render_explorer(frame, app, explorer_rect);
-        narrowed
-    } else {
-        buf_area
-    };
 
     // Walk the window tree and render each pane. Use take_layout /
     // restore_layout so we can pass `&mut LayoutTree` to render_layout
@@ -1572,7 +1343,9 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     let sep_style = Style::default().fg(ui.border);
 
     let show_tabs = app.tabs.len() > 1;
-    let show_buffers = app.slots().len() > 1;
+    // Count only real (non-explorer) slots for the buffer-line visibility check.
+    let real_slot_count = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let show_buffers = real_slot_count > 1;
     let total_width = area.width as usize;
 
     // ── Right side: build a hjkl_tabs::TabBar from the layout tabs ──────────
@@ -1643,7 +1416,13 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut buf_used = 0usize;
 
     if show_buffers && buf_budget > 0 {
+        let mut first = true;
         for (i, slot) in app.slots().iter().enumerate() {
+            // Skip the explorer scratch buffer — it's a real window but not a
+            // user-visible named buffer, so it must not appear in the buffer line.
+            if slot.is_explorer {
+                continue;
+            }
             let base_name = slot
                 .filename
                 .as_ref()
@@ -1655,7 +1434,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!(" {} ", base_name)
             };
-            let sep_len = if i == 0 { 0 } else { 1 };
+            let sep_len = if first { 0 } else { 1 };
             let entry_width = sep_len + label.len();
 
             if buf_used + entry_width > buf_budget {
@@ -1666,7 +1445,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 break;
             }
 
-            if i > 0 {
+            if !first {
                 buf_spans.push(Span::styled("│".to_string(), sep_style));
             }
             let style = if i == app.active_index() {
@@ -1676,6 +1455,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
             };
             buf_spans.push(Span::styled(label, style));
             buf_used += entry_width;
+            first = false;
         }
     }
 

@@ -271,6 +271,9 @@ fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
 pub struct BufferSlot {
     /// Stable id used to multiplex the SyntaxLayer / Worker.
     pub buffer_id: BufferId,
+    /// `true` when this slot backs the explorer buffer window (#55).
+    /// Drives: key interception, buffer-cycle exclusion, gutterless render.
+    pub(crate) is_explorer: bool,
     /// The slot-level editor. Holds buffer content, undo stack, syntax spans,
     /// LSP attachment. The focused window's [`AppWindow::editor`] is the
     /// source of truth for cursor and scroll during dispatch; after each key

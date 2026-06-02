@@ -174,8 +174,8 @@ pub struct App {
     pub search_field: Option<TextFieldEditor>,
     /// Active picker overlay (file, buffer, grep, …).
     pub picker: Option<crate::picker::Picker>,
-    /// Left file-explorer pane (#55). `None` when closed; closed on launch.
-    pub(crate) explorer: Option<explorer::ExplorerState>,
+    /// Left file-explorer window (#55). `None` when closed; closed on launch.
+    pub(crate) explorer: Option<explorer::ExplorerPane>,
     /// Buffered digit-prefix count for an app-level count prefix (e.g. `5` in
     /// `5gt`). Accumulated in Normal mode when no chord prefix is active.
     /// Digits are replayed to the engine when the non-digit key is
@@ -599,6 +599,7 @@ pub(super) fn build_slot(
 
     let mut slot = BufferSlot {
         buffer_id,
+        is_explorer: false,
         editor,
         filename: path,
         dirty: false,
@@ -677,7 +678,6 @@ impl App {
             mouse::Zone::None
             | mouse::Zone::StatusLine
             | mouse::Zone::SplitBorder { .. }
-            | mouse::Zone::Explorer { .. }
             | mouse::Zone::PickerRow { .. } => {}
         }
     }
@@ -750,7 +750,8 @@ impl App {
     /// `bounding_rect` produces at render time.
     pub(crate) fn screen_rect(&self) -> ratatui::layout::Rect {
         let vp = self.active().editor.host().viewport();
-        let show_top_bar = self.tabs.len() > 1 || self.slots.len() > 1;
+        let real_slots = self.slots.iter().filter(|s| !s.is_explorer).count();
+        let show_top_bar = self.tabs.len() > 1 || real_slots > 1;
         let top_bar_h = if show_top_bar { TOP_BAR_HEIGHT } else { 0 };
         ratatui::layout::Rect {
             x: 0,

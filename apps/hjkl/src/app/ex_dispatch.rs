@@ -724,6 +724,7 @@ impl App {
             let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
+                is_explorer: false,
                 editor,
                 filename: None,
                 dirty: false,
@@ -807,6 +808,7 @@ impl App {
             let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
+                is_explorer: false,
                 editor,
                 filename: None,
                 dirty: false,
@@ -1259,6 +1261,7 @@ impl App {
 
             let mut slot = super::BufferSlot {
                 buffer_id,
+                is_explorer: false,
                 editor,
                 filename: None,
                 dirty: true, // nudge user to :w as <name>
@@ -2052,6 +2055,7 @@ impl App {
             let _ = editor.take_content_reset();
             let mut slot = super::BufferSlot {
                 buffer_id,
+                is_explorer: false,
                 editor,
                 filename: None,
                 dirty: false,

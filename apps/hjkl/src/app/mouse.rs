@@ -596,9 +596,6 @@ pub enum Zone {
         win_id: window::WindowId,
         doc_row: usize,
     },
-    /// Inside the left file-explorer pane (#55). `row` is the pane row, which
-    /// maps 1:1 to a visible tree-node index (plus the scroll offset).
-    Explorer { row: usize },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
     /// On the buffer-line region of the unified top bar (one entry per open
@@ -722,8 +719,13 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
     let buf_budget = (bar_width as usize).saturating_sub(tabs_len);
     let mut ranges = Vec::new();
     let mut used = 0usize;
+    let mut first = true;
 
-    for (i, slot) in app.slots().iter().enumerate() {
+    for slot in app.slots().iter() {
+        // Explorer buffers are not shown in the buffer line.
+        if slot.is_explorer {
+            continue;
+        }
         let base_name = slot
             .filename
             .as_ref()
@@ -736,7 +738,7 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
             format!(" {} ", base_name)
         };
 
-        let sep_len = if i == 0 { 0 } else { 1 }; // single '│' between entries
+        let sep_len = if first { 0 } else { 1 }; // single '│' between entries
         let entry_width = sep_len + label.len();
 
         if used + entry_width > buf_budget {
@@ -747,6 +749,7 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
         let end = (used + entry_width) as u16;
         ranges.push((start, end));
         used += entry_width;
+        first = false;
     }
 
     ranges
@@ -761,7 +764,8 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
 pub fn picker_overlay_rect(app: &App) -> Option<Rect> {
     app.picker.as_ref()?;
     let vp = app.active().editor.host().viewport();
-    let show_top_bar = app.tabs.len() > 1 || app.slots().len() > 1;
+    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let show_top_bar = app.tabs.len() > 1 || real_slots > 1;
     let top_bar_h = if show_top_bar {
         crate::app::TOP_BAR_HEIGHT
     } else {
@@ -870,7 +874,8 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     }
 
     let show_tab_bar = app.tabs.len() > 1;
-    let show_buffer_line = app.slots().len() > 1;
+    let real_slots = app.slots().iter().filter(|s| !s.is_explorer).count();
+    let show_buffer_line = real_slots > 1;
     let show_top_bar = show_tab_bar || show_buffer_line;
 
     // Terminal width fallback for bar-geometry math (windows publish their
@@ -916,22 +921,6 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
     let is_status_row = row + 1 == terminal_height; // row is 0-based
     if is_status_row && !app.overlay_active() {
         return Zone::StatusLine;
-    }
-
-    // ── 3b. File-explorer pane (#55) ──────────────────────────────────────
-    // The explorer occupies the left strip of the buffer band (below the top
-    // bar, above the status line). Its pane row maps 1:1 to a tree node index.
-    if let Some(exp) = app.explorer.as_ref() {
-        let top_bar_h = if show_top_bar {
-            crate::app::TOP_BAR_HEIGHT
-        } else {
-            0
-        };
-        if row >= top_bar_h && !is_status_row && col < exp.width() {
-            return Zone::Explorer {
-                row: (row - top_bar_h) as usize,
-            };
-        }
     }
 
     // ── 4. Split border ───────────────────────────────────────────────────

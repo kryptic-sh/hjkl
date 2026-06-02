@@ -44,10 +44,14 @@ impl App {
         self.picker = Some(crate::picker::Picker::new(source));
     }
 
-    /// Open the buffer picker over the currently open slots.
+    /// Open the buffer picker over the currently open slots (explorer excluded).
     pub(crate) fn open_buffer_picker(&mut self) {
+        // Collect only non-explorer slots for the picker so the explorer buffer
+        // never appears in `:buffers` / buffer picker results.
+        let real_slots: Vec<&crate::app::BufferSlot> =
+            self.slots.iter().filter(|s| !s.is_explorer).collect();
         let source = Box::new(crate::picker::BufferSource::new(
-            &self.slots,
+            &real_slots,
             |s| {
                 s.filename
                     .as_ref()
@@ -766,6 +770,7 @@ fn build_scratch_slot(
 
     let mut slot = BufferSlot {
         buffer_id,
+        is_explorer: false,
         editor,
         filename: None,
         dirty: false,
