@@ -1209,12 +1209,15 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         None => return,
     };
 
-    // Convert buffer coordinates to screen coordinates inside buf_area.
-    // The focused window may have a gutter — compute its width.
-    let slot_idx = {
-        let fw = app.focused_window();
-        app.windows[fw].as_ref().map(|w| w.slot).unwrap_or(0)
-    };
+    // Convert buffer coordinates to screen coordinates. Anchor relative to the
+    // FOCUSED window's rect (not `buf_area`) so the popup lands correctly when
+    // the window is offset — e.g. the editor sits right of the explorer sidebar.
+    let fw = app.focused_window();
+    let slot_idx = app.windows[fw].as_ref().map(|w| w.slot).unwrap_or(0);
+    let win_rect = app.windows[fw].as_ref().and_then(|w| w.last_rect);
+    let (base_x, base_y) = win_rect
+        .map(|r| (r.x, r.y))
+        .unwrap_or((buf_area.x, buf_area.y));
     let s = app.slots()[slot_idx].editor.settings();
     let vp = app.slots()[slot_idx].editor.host().viewport();
     let vp_top = vp.top_row;
@@ -1236,8 +1239,8 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     let cursor_row = completion.anchor_row.saturating_sub(vp_top) as u16;
     let cursor_col = completion.anchor_col as u16 + gw;
     let anchor = Rect {
-        x: buf_area.x + cursor_col,
-        y: buf_area.y + cursor_row,
+        x: base_x + cursor_col,
+        y: base_y + cursor_row,
         width: 1,
         height: 1,
     };
