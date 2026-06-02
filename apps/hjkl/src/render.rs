@@ -486,29 +486,25 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
 /// its enclosing vertical split. Called each frame before `render_layout`, so the
 /// sidebar holds a constant width as the terminal or sibling windows resize
 /// (instead of scaling like a normal ratio split) and naturally resists
-/// `<C-w>=` equalize. `parent_width` is the width available to `node`; the
-/// split's own `last_rect` width (from the previous frame) is preferred when
-/// present for accuracy under nesting.
+/// `<C-w>=` equalize. `width` is the column width currently available to `node`,
+/// threaded down from the live frame area (NOT the stale `last_rect`, which would
+/// lag one frame on resize and visibly jiggle).
 fn pin_explorer_width(
     node: &mut window::LayoutTree,
     explorer_win: window::WindowId,
-    parent_width: u16,
+    width: u16,
     fixed: u16,
 ) {
     use window::{Axis, LayoutTree};
     let LayoutTree::Split {
-        dir,
-        ratio,
-        a,
-        b,
-        last_rect,
+        dir, ratio, a, b, ..
     } = node
     else {
         return;
     };
-    let width = last_rect.as_ref().map(|r| r.w).unwrap_or(parent_width).max(1);
+    let w = width.max(1);
     if dir.axis() == Axis::Col {
-        let frac = (fixed as f32 / width as f32).clamp(0.05, 0.9);
+        let frac = (fixed as f32 / w as f32).clamp(0.05, 0.9);
         if matches!(a.as_ref(), LayoutTree::Leaf(id) if *id == explorer_win) {
             *ratio = frac;
             return;
@@ -518,8 +514,19 @@ fn pin_explorer_width(
             return;
         }
     }
-    pin_explorer_width(a, explorer_win, width, fixed);
-    pin_explorer_width(b, explorer_win, width, fixed);
+    // Recurse with each child's CURRENT width (mirrors `split_rect`): a vertical
+    // split divides the width by ratio; a horizontal split gives both children
+    // the full width.
+    let (aw, bw) = match dir.axis() {
+        Axis::Col => {
+            let aw = ((w as f32) * *ratio).round() as u16;
+            let aw = aw.clamp(1, w.saturating_sub(1).max(1));
+            (aw, w.saturating_sub(aw))
+        }
+        Axis::Row => (w, w),
+    };
+    pin_explorer_width(a, explorer_win, aw, fixed);
+    pin_explorer_width(b, explorer_win, bw, fixed);
 }
 
 /// Draw a 1-cell-wide separator between sibling panes.
