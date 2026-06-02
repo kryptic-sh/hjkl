@@ -482,6 +482,46 @@ fn split_rect(area: Rect, dir: window::SplitDir, ratio: f32) -> (Rect, Rect) {
     }
 }
 
+/// Re-pin the explorer window to a fixed column width by overriding the ratio of
+/// its enclosing vertical split. Called each frame before `render_layout`, so the
+/// sidebar holds a constant width as the terminal or sibling windows resize
+/// (instead of scaling like a normal ratio split) and naturally resists
+/// `<C-w>=` equalize. `parent_width` is the width available to `node`; the
+/// split's own `last_rect` width (from the previous frame) is preferred when
+/// present for accuracy under nesting.
+fn pin_explorer_width(
+    node: &mut window::LayoutTree,
+    explorer_win: window::WindowId,
+    parent_width: u16,
+    fixed: u16,
+) {
+    use window::{Axis, LayoutTree};
+    let LayoutTree::Split {
+        dir,
+        ratio,
+        a,
+        b,
+        last_rect,
+    } = node
+    else {
+        return;
+    };
+    let width = last_rect.as_ref().map(|r| r.w).unwrap_or(parent_width).max(1);
+    if dir.axis() == Axis::Col {
+        let frac = (fixed as f32 / width as f32).clamp(0.05, 0.9);
+        if matches!(a.as_ref(), LayoutTree::Leaf(id) if *id == explorer_win) {
+            *ratio = frac;
+            return;
+        }
+        if matches!(b.as_ref(), LayoutTree::Leaf(id) if *id == explorer_win) {
+            *ratio = 1.0 - frac;
+            return;
+        }
+    }
+    pin_explorer_width(a, explorer_win, width, fixed);
+    pin_explorer_width(b, explorer_win, width, fixed);
+}
+
 /// Draw a 1-cell-wide separator between sibling panes.
 ///
 /// For `SplitDir::Vertical` (side-by-side panes) the separator is a column
@@ -1260,6 +1300,15 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
     // (which writes last_rect on Split nodes) while also holding
     // `&mut App` for render_window.
     let mut layout = app.take_layout();
+    // Keep the explorer sidebar a fixed column width across resizes.
+    if let Some(explorer_win) = app.explorer.as_ref().map(|e| e.win_id) {
+        pin_explorer_width(
+            &mut layout,
+            explorer_win,
+            buf_area.width,
+            crate::app::explorer::EXPLORER_WINDOW_WIDTH,
+        );
+    }
     render_layout(frame, app, buf_area, &mut layout);
     app.restore_layout(layout);
 
