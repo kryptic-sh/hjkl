@@ -8,8 +8,68 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-06-02
+
 ### Added
 
+- File explorer sidebar (#55): a Snacks.nvim-style tree pane, toggled with
+  `<leader>e`. It is backed by a **real read-only hjkl buffer in a left
+  window**, so all editor niceties work natively — motions, `/`+`n`/`N` search,
+  visual mode, marks, registers, viewport scroll, and mouse. The tree renders a
+  root node, `├╴`/`└╴`/`│` guides, and filetype/dir icons; `Enter`/`l` expands a
+  dir or opens a file in the main window (explorer stays open), `h` collapses.
+  Move between the explorer and the editor with `Ctrl-w h`/`Ctrl-w l` (and the
+  `Ctrl-h`/`Ctrl-l` shortcuts) like any vim pane. The sidebar keeps a fixed
+  column width across editor resizes, and is excluded from `:bnext`/`:bprev` and
+  the buffer picker. New `BufferSlot.is_explorer`.
+- Git blame (#202): cursor-line blame as inline end-of-line ghost text, served
+  off-thread by a per-buffer-coalescing `BlameWorker` and debounced on cursor
+  movement (no matter what moves the cursor). `:set blame_inline` (default on)
+  toggles it; `:Gblame` pops the full commit for the cursor line;
+  `:GitBlame`/`<leader>gm` toggle a blame view. New end-of-line virtual-text
+  (`EolHint`) render support.
+- BLAME view mode (`gb`): a first-class read-only FSM **view-mode**
+  (`hjkl_engine::ViewMode`), orthogonal to the vim mode, with its own status
+  label. Esc exits; any mode-changing key exits BLAME and applies. Commit runs
+  are framed in-buffer as titled boxes (replacing the old sidebar). Hovering a
+  commit (code, box body, or the box header row) shows the full commit message
+  in the markdown hover popup; `K` in BLAME mode invokes the commit popup
+  instead of the LSP hover. Editing is blocked while in BLAME. Mouse clicks and
+  the matchparen overlay are box-aware.
+- Icon mapping crate `hjkl-icons`: a pure filetype/dir → icon crate with three
+  sets — `nerd` (patched-font glyphs), `unicode` (geometric `▸ ▾ ·`, renders in
+  any monospace font), and `ascii` (`> v`, works everywhere). New
+  `[editor] icons` config (`auto`/`nerd`/`unicode`/`ascii`); `auto` assumes a
+  Nerd Font (terminals can't be queried for their font). Consumed by the file
+  explorer.
+- Folds — markers and tree-sitter auto-folds (#246): `foldmethod=marker` for vim
+  `{{{`/`}}}` marker folds, with configurable `:set foldmarker`/`fmr` and
+  `#region`/`#endregion` recognition. Tree-sitter `folds.scm` queries ship for
+  rust, python, js, ts, go, c, cpp, json, bash, lua, java, html, css, scss,
+  yaml, toml, ruby, php, c_sharp, and markdown, driving automatic folds.
+- Git hunks (#115): stage/unstage individual hunks via `git apply`, with
+  staged/unstaged gutter signs and an adaptive gutter menu. New `:GitStage`,
+  `:GitRevert`, `:GitDiff` commands; right-clicking the gutter opens a
+  Stage/Revert/Show-Hunk menu (#114 P6/P10), and left-clicking a git sign
+  previews the hunk. Right-clicking a diagnostic sign opens a Show-Diagnostic +
+  Code-Actions menu.
+- Inline diagnostics: diagnostics render inline at end-of-line in a comment
+  style with severity colors, controlled by
+  `:set diagnostics_inline=off|current|all`. Diagnostic spans are drawn as
+  severity-colored underlines (red/orange/green/cyan).
+- Unified completion (#202 follow-up): live `:`-command completion through the
+  shared completion popup (with docs; the old wildmenu is retired), a
+  buffer-words provider that augments LSP with unique tokens from open buffers,
+  fuzzy match ranking (exact > prefix > contiguous > scattered), auto-completion
+  of identifiers/keywords as you type (not only after `.`), a directional popup
+  that puts the best match nearest the anchor line when flipped above, and
+  Enter-to-accept with arrow navigation.
+- LSP: rust-analyzer now runs with clippy on save (`initializationOptions` +
+  `didSave`). Format-on-save and LSP are enabled by default (config can
+  disable).
+- Faint cursorline on unfocused windows: the cursorline stays visible (dimmer,
+  no cursor block) in windows that don't have focus. New
+  `ui.cursor_line_inactive_bg` theme token.
 - Fold gutter markers (#245): a 1-cell fold-indicator column now appears
   automatically whenever the buffer has any fold (no `:set foldcolumn` needed;
   an explicit `foldcolumn=N` still widens it, and files with no folds are
@@ -31,6 +91,28 @@ patch bumps.
 
 ### Fixed
 
+- Completion popup: the popup width is capped (and the per-item detail column
+  truncated) so a single suggestion with a very long detail can no longer span
+  the whole screen. The popup is also anchored to the focused window's rect
+  instead of the buffer area, fixing its position when the explorer sidebar is
+  open or the layout is split.
+- Perf (mouse drag): syntax highlighting no longer recomputes per cursor step
+  while dragging a visual selection with the mouse. The tree-sitter viewport
+  query is skipped on pure cursor moves and deferred to at most one query per
+  frame, cutting ~88% CPU during a mouse drag.
+- Save: the syntax tree is reset after a format-on-save rewrite, avoiding a
+  stale-tree `byte_slice` panic.
+- Completion accept now routes through the tracked `mutate_edit` path so syntax
+  and diagnostics resync after accepting an item (#143).
+- Diagnostics: tree-sitter parse-error gutter signs are suppressed when an LSP
+  owns diagnostics for the buffer, so the two sign sources no longer collide.
+- Command line: typing a bare `:` no longer shows a completion popup, a single
+  Esc closes the empty command line, and typing an exact alias/command runs it
+  on the first Enter instead of accepting a longer candidate first.
+- Git: fixed a char-boundary panic on `:Rename` and a blame repaint after async
+  load.
+- Swap: a closed buffer's swap file is now removed on `:bdelete`/`:bwipe` in a
+  multi-buffer session.
 - Folds (#244): closing or toggling a fold no longer corrupts syntax
   highlighting on the visible rows — the syntax span recompute now expands the
   requested doc-row range to account for rows hidden by closed folds, so spans
@@ -3804,7 +3886,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.28.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/kryptic-sh/hjkl/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.28.1
 [0.28.0]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/kryptic-sh/hjkl/compare/v0.26.0...v0.27.0
