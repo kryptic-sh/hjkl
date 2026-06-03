@@ -3,7 +3,7 @@
 //! 0.0.41:
 //!
 //! - `Buffer::ensure_cursor_visible` → [`ensure_cursor_visible`]
-//! - `Buffer::cursor_screen_row` → [`cursor_screen_row`]
+//! - `Buffer::cursor_screen_row` → [`cursor_screen_row_from`]
 //! - `Buffer::max_top_for_height` → [`max_top_for_height`]
 //!
 //! 0.0.42 (Patch C-δ.7): The "Viewport on Host" decision excludes
@@ -77,22 +77,6 @@ where
     viewport.top_col = 0;
 }
 
-/// Cursor's screen row offset (0-based) from `viewport.top_row` under
-/// the current wrap mode + `text_width`. `None` when wrap is off, the
-/// cursor row is hidden by a fold, or the cursor sits above `top_row`.
-///
-/// Replaces the pre-0.0.42 inherent
-/// [`hjkl_buffer::Buffer::cursor_screen_row`].
-pub fn cursor_screen_row<B>(buf: &B, folds: &dyn FoldProvider, viewport: &Viewport) -> Option<usize>
-where
-    B: Cursor + Query + ?Sized,
-{
-    if matches!(viewport.wrap, Wrap::None) || viewport.text_width == 0 {
-        return None;
-    }
-    cursor_screen_row_from(buf, folds, viewport, viewport.top_row)
-}
-
 /// Earliest `top_row` such that the buffer's screen rows from `top` to
 /// the last row total at least `height`. Lets host-side scrolloff math
 /// clamp `top_row` so the buffer never leaves blank rows below the
@@ -144,8 +128,8 @@ where
 ///
 /// The single source of truth for "which screen row is the cursor on",
 /// fold- and wrap-aware. Drives [`ensure_cursor_visible`] (which feeds
-/// successive candidate `top` rows), [`cursor_screen_row`], and the
-/// terminal cursor-block placement in [`crate::Editor::cursor_screen_pos`].
+/// successive candidate `top` rows), the engine's vertical scrolloff, and
+/// the terminal cursor-block placement in [`crate::Editor::cursor_screen_pos`].
 /// Under `Wrap::None` each non-hidden doc row counts as exactly one
 /// screen row, so the result is the fold-collapsed doc-row delta;
 /// `None` only when the cursor sits above `top`.

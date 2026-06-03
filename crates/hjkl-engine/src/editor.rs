@@ -2886,10 +2886,25 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // can't overlap on tiny windows (margin=5 + height=10 would
         // otherwise produce contradictory clamp ranges).
         let margin = self.settings.scrolloff.min(height.saturating_sub(1) / 2);
-        // Soft-wrap path: scrolloff math runs in *screen rows*, not
-        // doc rows, since a wrapped doc row spans many visual lines.
-        if !matches!(self.host.viewport().wrap, hjkl_buffer::Wrap::None) {
-            self.ensure_scrolloff_wrap(height, margin);
+        // Soft-wrap OR folds present → screen-row-aware path: a wrapped doc row
+        // spans many screen lines and a closed fold collapses many doc rows to
+        // one, so doc-row arithmetic mis-measures the margin. Folds and wrap are
+        // the only cases where screen rows ≠ doc rows. When neither applies
+        // (the common case for every j/k/G), the fast O(1) doc-row math below
+        // is exact — and avoids the screen-row walk's O(n) per-step cost on a
+        // big jump, which otherwise slows the redraw enough to matter.
+        let has_folds = !self.buffer.folds().is_empty();
+        let wrapped = !matches!(self.host.viewport().wrap, hjkl_buffer::Wrap::None);
+        if wrapped || has_folds {
+            self.ensure_scrolloff_vertical(height, margin);
+            // Wrap pins top_col = 0 inside the helper; under Wrap::None restore
+            // the fold-aware top_row and let `ensure_visible` set only top_col.
+            if !wrapped {
+                let cursor = buf_cursor_pos(&self.buffer);
+                let saved_top = self.host.viewport().top_row;
+                self.host.viewport_mut().ensure_visible(cursor);
+                self.host.viewport_mut().top_row = saved_top;
+            }
             return;
         }
         let cursor_row = buf_cursor_row(&self.buffer);
@@ -2909,17 +2924,23 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         if v.top_row > max_top {
             v.top_row = max_top;
         }
-        // Defer to Buffer for column-side scroll (no scrolloff for
-        // horizontal scrolling — vim default `sidescrolloff = 0`).
+        // Column-side scroll (vim default `sidescrolloff = 0`).
         let cursor = buf_cursor_pos(&self.buffer);
         self.host.viewport_mut().ensure_visible(cursor);
     }
 
-    /// Soft-wrap-aware scrolloff. Walks `top_row` one visible doc row
-    /// at a time so the cursor's *screen* row stays inside
+    /// Screen-row-aware vertical scrolloff. Walks `top_row` one visible
+    /// doc row at a time so the cursor's *screen* row stays inside
     /// `[margin, height - 1 - margin]`, then clamps `top_row` so the
     /// buffer's bottom never leaves blank rows below it.
-    fn ensure_scrolloff_wrap(&mut self, height: usize, margin: usize) {
+    ///
+    /// Correct under BOTH soft-wrap (a doc row spans many screen lines)
+    /// and folds (a closed fold collapses many doc rows to one screen
+    /// row): [`crate::viewport_math::cursor_screen_row_from`] counts
+    /// visible/wrapped screen rows, so doc-row arithmetic can't drift the
+    /// margin around a fold. Horizontal (column) scroll is the caller's
+    /// job — this only moves `top_row`.
+    fn ensure_scrolloff_vertical(&mut self, height: usize, margin: usize) {
         let cursor_row = buf_cursor_row(&self.buffer);
         // Step 1 — cursor above viewport: snap top to cursor row,
         // then we'll fix up the margin below.
@@ -2939,13 +2960,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
         loop {
             let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-            let csr =
-                crate::viewport_math::cursor_screen_row(&self.buffer, &folds, self.host.viewport())
-                    .unwrap_or(0);
+            let top = self.host.viewport().top_row;
+            let csr = crate::viewport_math::cursor_screen_row_from(
+                &self.buffer,
+                &folds,
+                self.host.viewport(),
+                top,
+            )
+            .unwrap_or(0);
             if csr <= max_csr {
                 break;
             }
-            let top = self.host.viewport().top_row;
             let row_count = buf_row_count(&self.buffer);
             let next = {
                 let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
@@ -2965,13 +2990,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         // past the top margin (`csr >= margin`).
         loop {
             let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-            let csr =
-                crate::viewport_math::cursor_screen_row(&self.buffer, &folds, self.host.viewport())
-                    .unwrap_or(0);
+            let top = self.host.viewport().top_row;
+            let csr = crate::viewport_math::cursor_screen_row_from(
+                &self.buffer,
+                &folds,
+                self.host.viewport(),
+                top,
+            )
+            .unwrap_or(0);
             if csr >= margin {
                 break;
             }
-            let top = self.host.viewport().top_row;
             let prev = {
                 let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
                 <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::prev_visible_row(&folds, top)
@@ -6490,6 +6519,52 @@ mod insert_mode_scrolloff_tests {
             cursor_screen_row <= max_screen_row,
             "cursor screen row {cursor_screen_row} exceeded scrolloff bound {max_screen_row}"
         );
+    }
+
+    /// Scrolloff must be measured in SCREEN rows, not doc rows: a closed
+    /// fold between `top_row` and the cursor collapses its hidden body to
+    /// one screen row. The old doc-row arithmetic left the cursor only a
+    /// few SCREEN rows below the top (it scrolled as if the fold's hidden
+    /// rows still occupied screen space), violating the top margin. The
+    /// fold-aware path keeps the cursor's screen row inside
+    /// `[margin, height - 1 - margin]`.
+    #[test]
+    fn scrolloff_is_fold_aware_screen_rows() {
+        let mut e = ed_with_lines(200);
+        // Close a fold whose body sits between the viewport top and the
+        // cursor: rows 11..=25 are hidden (15 doc rows collapse to 0).
+        e.buffer_mut().add_fold(10, 25, true);
+        // Jump below the fold. The doc-based viewport pre-scroll parks the
+        // cursor near the *top* of the screen because the fold ate the
+        // space above it; scrolloff must pull `top_row` back so the cursor
+        // is at least `margin` screen rows from the top.
+        e.set_cursor_doc(30, 0);
+        e.ensure_cursor_in_scrolloff();
+
+        let vp = e.host().viewport();
+        let (cursor_row, _) = e.cursor();
+        // Fold-aware cursor screen row = count of VISIBLE rows in
+        // [top_row, cursor_row).
+        let screen_row = (vp.top_row..cursor_row)
+            .filter(|&r| !e.buffer().is_row_hidden(r))
+            .count();
+        let height = vp.height as usize;
+        let margin = e.settings().scrolloff.min(height.saturating_sub(1) / 2);
+        let bottom_bound = height - 1 - margin;
+        // Old (doc-row) code produced screen_row = 4 here — below the top
+        // margin of 5. The fix keeps it within the screen-row band.
+        assert!(
+            screen_row >= margin,
+            "cursor screen row {screen_row} is inside the top margin {margin} \
+             (top_row={top}, cursor_row={cursor_row})",
+            top = vp.top_row,
+        );
+        assert!(
+            screen_row <= bottom_bound,
+            "cursor screen row {screen_row} exceeds bottom bound {bottom_bound}"
+        );
+        // Cursor itself must never be on a hidden row.
+        assert!(!e.buffer().is_row_hidden(cursor_row));
     }
 }
 
