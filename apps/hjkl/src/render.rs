@@ -1049,6 +1049,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         selection,
         resolver: &resolver,
         cursor_line_bg: cursor_line_style,
+        // Unfocused windows paint the cursorline on their OWN saved cursor row
+        // (the per-window `cursor_row`), not the shared editor cursor — so the
+        // ghost line stays put when another window on the same buffer moves.
+        // Focused window: `None` defers to the live editor cursor.
+        cursor_line_row: if is_focused {
+            None
+        } else {
+            app.windows
+                .get(win_id)
+                .and_then(|w| w.as_ref())
+                .map(|w| w.cursor_row)
+        },
         fold_line_bg: Style::default().bg(app.theme.ui.fold_line_bg),
         cursor_column_bg: cursor_column_style,
         selection_bg: Style::default().bg(Color::Blue),

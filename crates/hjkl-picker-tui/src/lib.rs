@@ -174,6 +174,7 @@ pub fn preview_pane(
         selection: None,
         resolver: &resolver,
         cursor_line_bg,
+        cursor_line_row: None,
         fold_line_bg: Style::default(),
         cursor_column_bg: Style::default(),
         selection_bg: Style::default(),

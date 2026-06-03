@@ -69,6 +69,13 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// Bg painted across the cursor row (vim's `cursorline`). Pass
     /// `Style::default()` to disable.
     pub cursor_line_bg: Style,
+    /// Row to paint [`Self::cursor_line_bg`] across, overriding the buffer's
+    /// live cursor row. Used for **unfocused** windows sharing a buffer with
+    /// the focused one: each window keeps its own saved cursor row, so the
+    /// inactive "ghost" cursorline must sit on that saved row, not chase the
+    /// active window's cursor. `None` = use `buffer.cursor().row` (the
+    /// focused-window default).
+    pub cursor_line_row: Option<usize>,
     /// Bg painted across a closed fold's header row — brighter than
     /// `cursor_line_bg` so a collapsed fold is visually distinct.
     /// `Style::default()` to disable.
@@ -339,6 +346,9 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         }
         let viewport = *self.viewport;
         let cursor = self.buffer.cursor();
+        // Cursorline lands on the overridden row (unfocused window's saved
+        // cursor) when set, else the buffer's live cursor row.
+        let cursor_line_row = self.cursor_line_row.unwrap_or(cursor.row);
         let spans = self.spans;
         let folds = self.buffer.folds();
         let top_row = viewport.top_row;
@@ -413,7 +423,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             let line: &str = line_owned.as_str();
             let row_spans = spans.get(doc_row).map(Vec::as_slice).unwrap_or(&[]);
             let sel_range = self.selection.and_then(|s| s.row_span(doc_row));
-            let is_cursor_row = doc_row == cursor.row;
+            let is_cursor_row = doc_row == cursor_line_row;
             if let Some(fold) = folded_at_start {
                 if let Some(gutter) = self.gutter {
                     self.paint_gutter(term_buf, area, screen_row, doc_row, gutter);
@@ -1403,6 +1413,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1446,6 +1457,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1490,6 +1502,7 @@ mod tests {
             }),
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1539,6 +1552,7 @@ mod tests {
             }),
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1583,6 +1597,7 @@ mod tests {
             }),
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1630,6 +1645,7 @@ mod tests {
             }),
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1691,6 +1707,7 @@ mod tests {
             }),
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default(),
@@ -1756,6 +1773,7 @@ mod tests {
             selection: None,
             resolver: &resolver,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1826,6 +1844,7 @@ mod tests {
             selection: None,
             resolver: &resolver,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1885,6 +1904,7 @@ mod tests {
             selection: None,
             resolver: &resolver,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1926,6 +1946,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -1978,6 +1999,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2037,6 +2059,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2088,6 +2111,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2147,6 +2171,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2200,6 +2225,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default().bg(Color::DarkGray),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2256,6 +2282,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2314,6 +2341,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),
@@ -2363,6 +2391,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             fold_line_bg: Style::default().bg(fold_bg),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
@@ -2423,6 +2452,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2465,6 +2495,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2507,6 +2538,7 @@ mod tests {
             selection: None,
             resolver,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
@@ -2713,6 +2745,7 @@ mod tests {
             selection: None,
             resolver,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
@@ -2895,6 +2928,7 @@ mod tests {
             selection: None,
             resolver: &r,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2961,6 +2995,7 @@ mod tests {
             selection: None,
             resolver: &r,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),
@@ -3011,6 +3046,7 @@ mod tests {
             selection: None,
             resolver: &r,
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -3084,6 +3120,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -3152,6 +3189,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -3210,6 +3248,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -3287,6 +3326,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -3353,6 +3393,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
@@ -3391,6 +3432,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),
@@ -3576,6 +3618,7 @@ mod tests {
             selection: None,
             resolver: &(no_styles as fn(u32) -> Style),
             cursor_line_bg: Style::default(),
+            cursor_line_row: None,
             fold_line_bg: Style::default(),
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
