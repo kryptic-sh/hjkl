@@ -302,7 +302,7 @@ impl App {
     /// Run `render_viewport` for the active buffer and install the result.
     /// Returns empty spans when no grammar is attached or grammar is loading.
     pub(crate) fn recompute_and_install(&mut self) {
-        if !self.syntax_enabled {
+        if !self.syntax_enabled || !self.active().features.syntax {
             return;
         }
         let buffer_id = self.active().buffer_id;

@@ -527,6 +527,9 @@ impl App {
 
     /// Attach `slot_idx` to the appropriate language server (if configured).
     pub(crate) fn lsp_attach_buffer(&mut self, slot_idx: usize) {
+        if !self.slots[slot_idx].features.lsp {
+            return;
+        }
         let mgr = match self.lsp.as_ref() {
             Some(m) => m,
             None => return,
@@ -695,6 +698,9 @@ impl App {
 
     /// `K` — show hover info.
     pub(crate) fn lsp_hover(&mut self) {
+        if !self.active().features.hover {
+            return;
+        }
         // In BLAME mode `K` shows the cursor line's commit message (the same
         // markdown popup), not an LSP symbol hover — the buffer is a read-only
         // blame view.
@@ -717,6 +723,9 @@ impl App {
     /// position without moving the cursor. Used by the Phase 5 hover-popup
     /// timer so the user's cursor stays in place.
     pub(crate) fn lsp_hover_at_doc(&mut self, doc_row: usize, doc_col: usize) {
+        if !self.active().features.hover {
+            return;
+        }
         if self.lsp.is_none() {
             return; // LSP not running — silently skip mouse hover
         }

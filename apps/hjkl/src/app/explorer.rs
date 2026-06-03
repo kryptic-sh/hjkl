@@ -813,6 +813,11 @@ impl super::App {
         let slot = super::BufferSlot {
             buffer_id,
             is_explorer: true,
+            features: super::BufferFeatures {
+                syntax: false,
+                lsp: false,
+                hover: false,
+            },
             editor,
             filename: None,
             dirty: false,
@@ -2479,5 +2484,44 @@ mod tests {
         assert_eq!(tree.match_count, 0, "match_count must be 0");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn explorer_slot_features_disabled_normal_slot_features_enabled() {
+        use crate::keymap_actions::AppAction;
+
+        // Open the app with an unnamed scratch buffer (slot 0 = normal).
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+
+        // Normal slot must have all features on.
+        let normal = &app.slots[0];
+        assert!(
+            normal.features.syntax,
+            "normal slot: syntax should be enabled"
+        );
+        assert!(normal.features.lsp, "normal slot: lsp should be enabled");
+        assert!(
+            normal.features.hover,
+            "normal slot: hover should be enabled"
+        );
+
+        // Open the explorer — its slot is pushed after the normal slot.
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let explorer_idx = app
+            .slots
+            .iter()
+            .position(|s| s.is_explorer)
+            .expect("explorer slot must exist after ToggleExplorer");
+        let exp = &app.slots[explorer_idx];
+
+        assert!(
+            !exp.features.syntax,
+            "explorer slot: syntax should be disabled"
+        );
+        assert!(!exp.features.lsp, "explorer slot: lsp should be disabled");
+        assert!(
+            !exp.features.hover,
+            "explorer slot: hover should be disabled"
+        );
     }
 }

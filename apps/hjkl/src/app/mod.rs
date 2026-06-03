@@ -48,6 +48,7 @@ pub mod window;
 use crate::completion::Completion;
 use hjkl_info_popup::InfoPopup;
 
+pub(crate) use types::BufferFeatures;
 pub use types::{
     BufferSlot, DiagSeverity, DiskState, LspDiag, LspPendingRequest, LspServerInfo, MouseFlags,
     mouse_enabled_for,
@@ -634,6 +635,7 @@ pub(super) fn build_slot(
     let mut slot = BufferSlot {
         buffer_id,
         is_explorer: false,
+        features: BufferFeatures::default(),
         editor,
         filename: path,
         dirty: false,

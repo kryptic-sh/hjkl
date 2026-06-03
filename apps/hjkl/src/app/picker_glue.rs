@@ -771,6 +771,7 @@ fn build_scratch_slot(
     let mut slot = BufferSlot {
         buffer_id,
         is_explorer: false,
+        features: super::BufferFeatures::default(),
         editor,
         filename: None,
         dirty: false,

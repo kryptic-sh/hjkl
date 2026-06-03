@@ -725,6 +725,7 @@ impl App {
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
+                features: super::BufferFeatures::default(),
                 editor,
                 filename: None,
                 dirty: false,
@@ -809,6 +810,7 @@ impl App {
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
+                features: super::BufferFeatures::default(),
                 editor,
                 filename: None,
                 dirty: false,
@@ -1268,6 +1270,7 @@ impl App {
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
+                features: super::BufferFeatures::default(),
                 editor,
                 filename: None,
                 dirty: true, // nudge user to :w as <name>
@@ -2066,6 +2069,7 @@ impl App {
             let mut slot = super::BufferSlot {
                 buffer_id,
                 is_explorer: false,
+                features: super::BufferFeatures::default(),
                 editor,
                 filename: None,
                 dirty: false,

@@ -260,6 +260,27 @@ fn buffer_signature(editor: &Editor<Buffer, TuiHost>) -> (u64, usize) {
     (hasher.finish(), len)
 }
 
+/// Per-buffer feature switches. Lets special buffers (e.g. the file explorer
+/// scratch buffer) opt out of editor features they don't want. All on by default.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BufferFeatures {
+    /// Tree-sitter syntax highlighting.
+    pub syntax: bool,
+    /// LSP attach + hover/diagnostics for this buffer.
+    pub lsp: bool,
+    /// Hover popups (mouse-idle hover and `K`).
+    pub hover: bool,
+}
+impl Default for BufferFeatures {
+    fn default() -> Self {
+        Self {
+            syntax: true,
+            lsp: true,
+            hover: true,
+        }
+    }
+}
+
 /// Per-buffer state. Phase B: App holds `Vec<BufferSlot>` + `active: usize`.
 /// Phase C will add bnext / bdelete / switch-or-create.
 ///
@@ -274,6 +295,8 @@ pub struct BufferSlot {
     /// `true` when this slot backs the explorer buffer window (#55).
     /// Drives: key interception, buffer-cycle exclusion, gutterless render.
     pub(crate) is_explorer: bool,
+    /// Per-buffer feature opt-outs. Default: all enabled.
+    pub(crate) features: BufferFeatures,
     /// The slot-level editor. Holds buffer content, undo stack, syntax spans,
     /// LSP attachment. The focused window's [`AppWindow::editor`] is the
     /// source of truth for cursor and scroll during dispatch; after each key

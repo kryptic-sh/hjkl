@@ -1978,9 +1978,24 @@ impl App {
         }
         // Otherwise a code cell triggers an LSP hover.
         if let crate::app::mouse::Zone::Code {
-            doc_row, doc_col, ..
+            win_id,
+            doc_row,
+            doc_col,
         } = crate::app::mouse::hit_test_zone(self, cell.0, cell.1)
         {
+            // Skip (and clear the timer) when the hovered window's buffer has
+            // hover popups disabled — avoids spurious LSP requests over the
+            // explorer or other special scratch buffers.
+            let hover_disabled = self
+                .windows
+                .get(win_id)
+                .and_then(|w| w.as_ref())
+                .map(|w| !self.slots[w.slot].features.hover)
+                .unwrap_or(false);
+            if hover_disabled {
+                self.hover_timer = None;
+                return;
+            }
             self.lsp_hover_at_doc(doc_row, doc_col);
             if let Some(h) = self.hover_timer.as_mut() {
                 h.request_sent = true;

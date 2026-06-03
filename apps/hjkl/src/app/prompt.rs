@@ -953,6 +953,7 @@ impl App {
         let slot = super::BufferSlot {
             buffer_id,
             is_explorer: false,
+            features: crate::app::BufferFeatures::default(),
             editor,
             filename: None,
             dirty: false,
