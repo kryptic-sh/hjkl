@@ -311,32 +311,19 @@ impl App {
                 continue;
             }
 
-            // Extract win_id before mutating self (borrow hygiene — mirrors
-            // existing explorer mouse-click code pattern).
-            let win_id = self.explorer.as_ref().map(|ep| ep.win_id);
-
             // Install the result onto the tree.
             if let Some(ref mut ep) = self.explorer {
-                ep.tree
-                    .apply_search_result(res.query, res.nodes, res.match_count, res.total_count);
+                ep.tree.apply_search_result(
+                    res.query,
+                    res.nodes,
+                    res.match_count,
+                    res.total_count,
+                    res.best_match_row,
+                );
             }
             self.explorer_rebuild_buffer();
-
-            // Move the explorer window cursor to the first matched file row.
-            let first_match = self
-                .explorer
-                .as_ref()
-                .and_then(|ep| ep.tree.nodes.iter().position(|n| !n.is_dir));
-            if let (Some(row), Some(win_id)) = (first_match, win_id) {
-                if let Some(Some(win)) = self.windows.get_mut(win_id) {
-                    win.cursor_row = row;
-                    win.cursor_col = 0;
-                }
-                let fw = self.focused_window();
-                if fw == win_id {
-                    self.sync_viewport_to_explorer_editor();
-                }
-            }
+            // Focus the highest-scoring match.
+            self.explorer_cursor_to_best_match();
 
             self.pending_recompute = true;
         }

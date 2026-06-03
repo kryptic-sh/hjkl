@@ -97,6 +97,10 @@ pub(crate) struct ExplorerTree {
     /// Total number of files visited during the last filtered rebuild. 0 when
     /// unfiltered.
     pub(crate) total_count: usize,
+    /// Row (index into `nodes`) of the highest-scoring matched file after the
+    /// last filtered rebuild, so the search can focus the BEST match rather than
+    /// the first in tree order. `None` when unfiltered or no match.
+    pub(crate) best_match_row: Option<usize>,
 }
 
 impl ExplorerTree {
@@ -115,6 +119,7 @@ impl ExplorerTree {
             filter: None,
             match_count: 0,
             total_count: 0,
+            best_match_row: None,
         };
         tree.rebuild();
         tree
@@ -230,6 +235,7 @@ impl ExplorerTree {
         self.nodes = out;
         self.match_count = 0;
         self.total_count = 0;
+        self.best_match_row = None;
     }
 
     /// Full recursive fs walk under `root`, filtered to fuzzy-matching files.
@@ -323,6 +329,14 @@ impl ExplorerTree {
         });
         self.push_children_filtered(&root, 1, &[], &show, &mut out, repo.as_ref());
         self.nodes = out;
+
+        // Focus the highest-scoring match (not the first in tree order). Pick
+        // the matched file with the max score, then its row in `nodes`.
+        self.best_match_row = scored
+            .iter()
+            .max_by_key(|(_, s)| **s)
+            .map(|(p, _)| p.clone())
+            .and_then(|best| self.nodes.iter().position(|n| n.path == best));
     }
 
     /// Recursive helper for filtered rebuild — mirrors `push_children` but
@@ -402,6 +416,7 @@ impl ExplorerTree {
             filter: Some(query),
             match_count: 0,
             total_count: 0,
+            best_match_row: None,
         };
         tree.rebuild();
         tree
@@ -415,11 +430,13 @@ impl ExplorerTree {
         nodes: Vec<ExplorerNode>,
         match_count: usize,
         total_count: usize,
+        best_match_row: Option<usize>,
     ) {
         self.filter = Some(query);
         self.nodes = nodes;
         self.match_count = match_count;
         self.total_count = total_count;
+        self.best_match_row = best_match_row;
     }
 
     /// Toggle the expansion of the directory at `path`. Returns `true` if the
@@ -464,21 +481,43 @@ impl ExplorerTree {
         self.rebuild();
     }
 
-    /// Expand all ancestors of `path` up to (and including) `self.root`, then
-    /// rebuild. Returns the row index of `path` in `self.nodes`, or `None` if
-    /// `path` is not under the root or not visible after rebuild.
+    /// Expand all ancestor dirs of `path` and return its row in `self.nodes`,
+    /// or `None` if `path` is not under the root.
+    ///
+    /// Robust to path-form differences (relative vs absolute, symlinked cwd):
+    /// the path is reduced to components relative to the root — trying a plain
+    /// `strip_prefix` first, then a canonicalized one — and the node path is
+    /// reconstructed as `root.join(rel)` so it matches how the tree builds node
+    /// paths (`read_dir` → `dir.join(name)`).
     pub(crate) fn reveal(&mut self, path: &Path) -> Option<usize> {
-        // Walk from path upward, inserting each ancestor into `expanded`.
-        let mut cur = path.parent();
-        while let Some(p) = cur {
+        // Determine `path` relative to root, tolerating canonicalization diffs.
+        let rel = path
+            .strip_prefix(&self.root)
+            .ok()
+            .map(|p| p.to_path_buf())
+            .or_else(|| {
+                let rc = std::fs::canonicalize(&self.root).ok()?;
+                let pc = std::fs::canonicalize(path).ok()?;
+                pc.strip_prefix(&rc).ok().map(|p| p.to_path_buf())
+            })?;
+
+        // Reconstruct the node path from the root + relative components, and
+        // expand every ancestor directory down to (and including) the root.
+        let mut target = self.root.clone();
+        for comp in rel.components() {
+            target = target.join(comp);
+        }
+        self.expanded.insert(self.root.clone());
+        let mut anc = target.parent();
+        while let Some(p) = anc {
             self.expanded.insert(p.to_path_buf());
             if p == self.root {
                 break;
             }
-            cur = p.parent();
+            anc = p.parent();
         }
         self.rebuild();
-        self.nodes.iter().position(|n| n.path == path)
+        self.nodes.iter().position(|n| n.path == target)
     }
 
     /// Build the buffer text and line→node map for the current tree state.
@@ -565,6 +604,7 @@ pub(crate) struct ExplorerSearchResult {
     pub nodes: Vec<ExplorerNode>,
     pub match_count: usize,
     pub total_count: usize,
+    pub best_match_row: Option<usize>,
 }
 
 /// Background worker that runs the filtered fs walk off the UI thread.
@@ -669,9 +709,10 @@ fn explorer_search_worker_loop(
         let result = ExplorerSearchResult {
             generation: last.generation,
             query: last.query,
-            nodes: tree.nodes,
             match_count: tree.match_count,
             total_count: tree.total_count,
+            best_match_row: tree.best_match_row,
+            nodes: tree.nodes,
         };
 
         if res_tx.send(result).is_err() {
@@ -1571,23 +1612,16 @@ impl super::App {
     /// Re-filter the tree from the current field text and move cursor to the
     /// first matched file row.
     #[allow(dead_code)]
-    pub(crate) fn explorer_apply_search(&mut self) {
-        let text = match self.explorer_search.as_ref() {
-            Some(f) => f.text(),
-            None => return,
-        };
-        if let Some(ref mut ep) = self.explorer {
-            ep.tree.apply_filter(&text);
-        }
-        self.explorer_rebuild_buffer();
-
-        // Move cursor to the first matched file row (first non-dir, non-root node).
-        let first_match = self
-            .explorer
-            .as_ref()
-            .and_then(|ep| ep.tree.nodes.iter().position(|n| !n.is_dir));
+    /// Move the explorer cursor to the highest-scoring match
+    /// (`tree.best_match_row`), falling back to the first matched file row.
+    pub(crate) fn explorer_cursor_to_best_match(&mut self) {
+        let target = self.explorer.as_ref().and_then(|ep| {
+            ep.tree
+                .best_match_row
+                .or_else(|| ep.tree.nodes.iter().position(|n| !n.is_dir))
+        });
         let win_id = self.explorer.as_ref().map(|ep| ep.win_id);
-        if let (Some(row), Some(win_id)) = (first_match, win_id) {
+        if let (Some(row), Some(win_id)) = (target, win_id) {
             if let Some(Some(win)) = self.windows.get_mut(win_id) {
                 win.cursor_row = row;
                 win.cursor_col = 0;
@@ -1618,6 +1652,7 @@ impl super::App {
                     ep.tree.apply_filter(&q);
                 }
                 self.explorer_rebuild_buffer();
+                self.explorer_cursor_to_best_match();
             }
             self.explorer_search = None;
             self.explorer_search_dirty_at = None;
@@ -2294,6 +2329,28 @@ mod tests {
         fs::write(base.join("tests").join("buffer_test.rs"), "x").unwrap();
         fs::write(base.join("readme.md"), "x").unwrap();
         base
+    }
+
+    #[test]
+    fn filter_best_match_row_points_at_highest_scorer() {
+        let root = make_filter_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        // "main" matches only src/main.rs in this fixture; best_match_row must
+        // point at that node (a file, not a dir).
+        tree.apply_filter("main");
+        let row = tree.best_match_row.expect("best_match_row should be set");
+        let node = &tree.nodes[row];
+        assert!(!node.is_dir, "best match must be a file");
+        assert_eq!(
+            node.path.file_name().unwrap(),
+            "main.rs",
+            "best match should be main.rs, got {:?}",
+            node.path
+        );
+        // Unfiltered → cleared.
+        tree.clear_filter();
+        assert!(tree.best_match_row.is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
