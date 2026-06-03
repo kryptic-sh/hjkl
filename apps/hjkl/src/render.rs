@@ -417,6 +417,18 @@ fn full_gutter_width(
     lnum_width + sign_w + fold_w
 }
 
+/// Widest line-number gutter across all open (non-explorer) buffers, so the
+/// number column can be sized to the biggest file and the text column stays put
+/// when switching buffers. Buffers with line numbers off contribute 0.
+fn max_lnum_width(app: &App) -> u16 {
+    app.slots()
+        .iter()
+        .filter(|s| !s.is_explorer)
+        .map(|s| s.editor.lnum_width())
+        .max()
+        .unwrap_or(0)
+}
+
 /// Parse a comma-separated colorcolumn string into a sorted `Vec<u16>` of
 /// 1-based column indices. Non-numeric or zero entries are silently ignored.
 fn parse_colorcolumn(cc: &str) -> Vec<u16> {
@@ -746,7 +758,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // foldcolumn=0 → no column (0 cells), so files without folds are unchanged.
     let has_folds = !app.slots()[slot_idx].editor.buffer().folds().is_empty();
     let fold_w = (fdc.min(12) as u16).max(if has_folds { 1 } else { 0 });
-    let num_gw_for_text = app.slots()[slot_idx].editor.lnum_width();
+    // Stable line-number gutter: when this buffer shows numbers, size the column
+    // to the widest needed across ALL open buffers (the biggest file's line
+    // count) so switching buffers doesn't shift the text column horizontally.
+    let own_lnum = app.slots()[slot_idx].editor.lnum_width();
+    let num_gw_for_text = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
+    // Extra padding added to the number column beyond the buffer's own width —
+    // folded into the cursor's gutter offset below so the caret stays aligned.
+    let lnum_pad = num_gw_for_text.saturating_sub(own_lnum);
     let gw = sign_w + num_gw_for_text + fold_w;
     let text_width = area.width.saturating_sub(gw);
 
@@ -772,7 +791,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         (true, true) => GutterNumbers::Hybrid { cursor_row },
     };
     // Number-column width only (sign/fold widths are tracked separately).
-    let num_gw = app.slots()[slot_idx].editor.lnum_width();
+    // Uses the stable cross-buffer max computed above.
+    let num_gw = num_gw_for_text;
     let gutter = if num_gw > 0 || sign_w > 0 || fold_w > 0 {
         Some(Gutter {
             width: num_gw,
@@ -1199,14 +1219,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // Emit the terminal cursor only for the focused window.
-    // extra_gutter_width = sign_w + fold_w (cells left of number column).
+    // extra_gutter_width = sign_w + fold_w + lnum_pad. The engine computes the
+    // cursor x from the buffer's OWN line-number width; `lnum_pad` accounts for
+    // the extra cells when the number column is widened to the cross-buffer max.
     if show_cursor
         && let Some((cx, cy)) = app.slots_mut()[slot_idx].editor.cursor_screen_pos(
             area.x,
             area.y,
             area.width,
             area.height,
-            sign_w + fold_w,
+            sign_w + fold_w + lnum_pad,
         )
     {
         if box_mode {
@@ -1326,12 +1348,11 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
         .chain(app.slots()[slot_idx].diag_signs_lsp.iter())
         .chain(app.slots()[slot_idx].git_signs.iter())
         .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
-    let gw = full_gutter_width(
-        app.slots()[slot_idx].editor.lnum_width(),
-        s.signcolumn,
-        s.foldcolumn,
-        has_visible_signs,
-    );
+    // Use the stable cross-buffer number-column width (matches render_window) so
+    // the popup anchors under the cursor even when the gutter is widened.
+    let own_lnum = app.slots()[slot_idx].editor.lnum_width();
+    let eff_lnum = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
+    let gw = full_gutter_width(eff_lnum, s.signcolumn, s.foldcolumn, has_visible_signs);
 
     // Cursor cell in absolute screen coordinates (0-based row relative to viewport top).
     let cursor_row = completion.anchor_row.saturating_sub(vp_top) as u16;
