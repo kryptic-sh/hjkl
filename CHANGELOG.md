@@ -8,8 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-06-04
+
 ### Added
 
+- **Window-level folds**: fold open/closed state is now per-window. Two windows
+  on the same buffer fold independently; a `:split`/`:vsplit` duplicate inherits
+  the source window's folds (vim default), and editing text invalidates
+  overlapping folds in sibling windows. Implemented via the existing focus-swap
+  rails (`Buffer::set_folds` installs the focused window's set; saved back after
+  dispatch). New `BufferView.folds_override` renders unfocused windows against
+  their own snapshot.
 - File explorer (#55): file operations and richer navigation. New keys when the
   explorer is focused — `a` create (trailing `/` makes a directory), `r` rename,
   `d` delete (with a `[y/N]` confirm), `y`/`x` copy/cut and `p` paste (move on
@@ -19,6 +28,54 @@ patch bumps.
   parent directory. Opening the explorer reveals the active buffer's file
   (expands its ancestors and places the cursor on it). Create/rename use an
   in-status text prompt; delete uses a confirm prompt.
+- Explorer fuzzy search: a vim-editable `/` search rendered as a persistent,
+  rounded neo-tree-style box at the top of the pane. It filters the tree
+  (keeping ancestors), honors `.gitignore` by default (`I` toggles), focuses the
+  highest-scoring match, and supports mouse + `k`/`Up`-into-the-box. `/` is now
+  per-buffer overridable (`open_search_prompt`) so buffers can supply their own
+  search — a seam for future plugins.
+- New `hjkl-fuzzy` crate: the picker's scorer extracted into a standalone,
+  renderer-agnostic crate, now ranked by match-percentage (coverage) as the
+  primary key.
+- Per-buffer feature toggles (`BufferFeatures`: `syntax`/`lsp`/`hover`/
+  `end_of_buffer`); the explorer disables all four. The end-of-buffer `~`
+  markers (vim `fillchars=eob:`) are toggleable per buffer via
+  `BufferView.show_eob`.
+- Stable gutter: the line-number column is sized to the widest open buffer and
+  the sign/fold columns are reserved across all buffers, so switching buffers no
+  longer jiggles the text column.
+- Tab bar / buffer line: a clickable `✕` close icon on each entry, and a
+  distinct raised background for inactive tabs/buffers.
+- Auto-folds for multi-line Rust `macro_invocation` (e.g. `concat!( … )`) and
+  `use a::{ … };` declarations.
+
+### Changed
+
+- Fold-header background is a distinct violet tint (was a blue-grey too close to
+  the cursorline). When the cursor row (or an unfocused window's ghost cursor
+  row) lands on a closed fold header, the two backgrounds are blended.
+
+### Fixed
+
+- Per-window render correctness: relative/hybrid line numbers, the cursorline
+  "ghost", matchparen, the active indent-guide column, and visual selection now
+  key off each window's own saved cursor (or are gated to the focused window)
+  instead of chasing the active window.
+- Fold-aware scrolloff: the scroll margin is measured in screen rows, so the
+  viewport tracks the cursor correctly around closed folds.
+- Explorer: `switch_to` never loads a buffer into the explorer window; clicking
+  a buffer in the buffer-line maps past the explorer slot; switching buffers
+  scrolls the explorer so the revealed row stays in view; the read-only scratch
+  buffer no longer blocks `:qa` or writes a swap file.
+- Mouse clicks map through the actual rendered gutter width (correct column on
+  buffers with a widened gutter).
+
+### Performance
+
+- Scrolloff on fold-heavy files is O(height), not O(n²) in the jump distance —
+  fixes a noticeable lag on `G` (and other big jumps) in real source files with
+  many tree-sitter auto-folds.
+- Explorer fuzzy search runs off-thread with a debounce.
 
 ## [0.29.0] - 2026-06-02
 
@@ -3898,7 +3955,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.30.0...HEAD
+[0.30.0]: https://github.com/kryptic-sh/hjkl/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/kryptic-sh/hjkl/compare/v0.28.1...v0.29.0
 [0.28.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.28.1
 [0.28.0]: https://github.com/kryptic-sh/hjkl/compare/v0.27.0...v0.28.0
