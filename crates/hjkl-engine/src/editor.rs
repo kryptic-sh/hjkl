@@ -6656,6 +6656,31 @@ mod insert_mode_scrolloff_tests {
             vp.top_row,
         );
     }
+
+    /// Perf guard: scrolloff on a fold-heavy buffer must be O(height), not
+    /// O(n²) in the jump distance. A `G`-to-bottom jump over 50 k rows with a
+    /// fold every 10 lines must finish well under budget. The old
+    /// re-walk-per-step path was ~50k × ~50k line reads = seconds-to-minutes
+    /// even in debug; the O(height) path is microseconds. Budget is generous
+    /// (200 ms) so it never false-fails on slow CI but still catches a
+    /// reintroduced per-step rescan, which would blow past it by orders of
+    /// magnitude.
+    #[test]
+    fn scrolloff_fold_big_jump_is_under_200ms() {
+        let mut e = ed_with_lines(50_000);
+        for start in (0..49_990).step_by(10) {
+            e.buffer_mut().add_fold(start, start + 5, false);
+        }
+        e.set_cursor_doc(49_999, 0);
+        let t = std::time::Instant::now();
+        e.ensure_cursor_in_scrolloff();
+        let elapsed = t.elapsed();
+        assert!(
+            elapsed.as_millis() < 200,
+            "fold-heavy G-to-bottom took {elapsed:?}; budget 200 ms (catches \
+             reintroduction of the O(n²) per-step screen-row rescan)"
+        );
+    }
 }
 
 #[cfg(test)]
