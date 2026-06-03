@@ -169,7 +169,7 @@ impl ExplorerTree {
     /// Rebuild the flattened node list from the current expansion state.
     ///
     /// When `self.filter` is `Some(q)`, performs a full bounded recursive walk
-    /// of the filesystem under `root`, scores each file with `hjkl_picker::score`,
+    /// of the filesystem under `root`, scores each file with `hjkl_fuzzy::score`,
     /// and builds a force-expanded filtered view. Otherwise falls back to the
     /// lazy expansion-set walk.
     pub(crate) fn rebuild(&mut self) {
@@ -239,7 +239,7 @@ impl ExplorerTree {
                     } else {
                         full.as_ref()
                     };
-                    if let Some((s, _)) = hjkl_picker::score(rel, query) {
+                    if let Some((s, _)) = hjkl_fuzzy::score(rel, query) {
                         scored.insert(path, s);
                     }
                 }

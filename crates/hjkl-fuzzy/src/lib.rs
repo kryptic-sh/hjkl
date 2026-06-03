@@ -1,3 +1,12 @@
+//! Subsequence fuzzy scorer for the hjkl editor stack.
+//!
+//! Provides [`score`] — a single function that returns a relevance score
+//! and char-index match positions for a needle/haystack pair. Used by
+//! `hjkl-picker` and any other crate that needs fuzzy ranking without
+//! pulling in the full picker subsystem.
+
+#![forbid(unsafe_code)]
+
 /// Subsequence-based fuzzy score. Returns `None` when not all needle
 /// characters appear (in order) in the haystack.
 ///

@@ -743,6 +743,7 @@ jobs:
           #   5b. hjkl-lang             — language directory + grammar request (#4).
           #   5c. hjkl-buffer-tui       — ratatui Widget adapter (#5).
           #   5d. hjkl-icons            — filetype/dir → icon mapping (no hjkl deps).
+          #   5e. hjkl-fuzzy            — subsequence fuzzy scorer (no hjkl deps).
           #   6.  hjkl-clipboard        — clipboard abstraction (no hjkl deps).
           #   7.  hjkl-config           — config schema (no hjkl deps).
           #   8.  hjkl-engine           — editor engine (depends on #5).
@@ -878,6 +879,7 @@ jobs:
           publish_if_missing hjkl-buffer-tui
           publish_if_missing hjkl-completion
           publish_if_missing hjkl-icons
+          publish_if_missing hjkl-fuzzy
           publish_if_missing hjkl-lang
           publish_if_missing hjkl-clipboard
           publish_if_missing hjkl-config

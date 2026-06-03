@@ -30,6 +30,7 @@ hjkl-prompt-tui.workspace = true
 hjkl-markdown-tui.workspace = true
 hjkl-hover.workspace = true
 hjkl-hover-tui.workspace = true
+hjkl-fuzzy.workspace = true
 hjkl-icons.workspace = true
 hjkl-anvil.workspace = true
 hjkl-keymap.workspace = true

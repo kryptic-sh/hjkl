@@ -19,7 +19,7 @@ use hjkl_engine::{Input, Key};
 use hjkl_form::TextFieldEditor;
 
 use crate::logic::{FilteredEntry, PickerAction, PickerEvent, PickerLogic, RequeryMode};
-use crate::score::score;
+use hjkl_fuzzy::score;
 
 /// Debounce delay for `RequeryMode::Spawn` sources (milliseconds).
 const REQUERY_DEBOUNCE_MS: u64 = 150;

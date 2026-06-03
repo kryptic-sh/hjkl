@@ -9,15 +9,14 @@ pub mod highlight;
 pub mod logic;
 pub mod picker;
 pub mod preview;
-pub mod score;
 pub mod source;
 
 // Flat re-exports for ergonomic use by consumers.
 pub use highlight::{PlainPreview, PreviewHighlighter};
+pub use hjkl_fuzzy::score;
 pub use logic::{PickerAction, PickerEvent, PickerLogic, RequeryMode};
 pub use picker::Picker;
 pub use preview::{PREVIEW_MAX_BYTES, PreviewSpans, build_preview_spans, load_preview};
-pub use score::score;
 pub use source::{
     FileSource, GrepBackend, RgMatch, RgSource, detect_grep_backend, extract_json_string,
     extract_json_u32, parse_grep_line, parse_rg_json_line,
