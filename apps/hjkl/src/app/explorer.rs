@@ -1410,6 +1410,47 @@ mod tests {
             .collect()
     }
 
+    /// End-to-end: `/` in the focused explorer opens the fuzzy-search field via
+    /// `handle_keypress`, typing applies a tree filter, and Esc cancels +
+    /// restores the unfiltered tree. Guards the full key path (not just the
+    /// `ExplorerTree::apply_filter` unit).
+    #[test]
+    fn slash_opens_search_typing_filters_esc_cancels() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        assert!(app.explorer.is_some(), "explorer should be open");
+        assert!(app.explorer_buf_focused(), "explorer should be focused");
+
+        // `/` opens the search field.
+        app.handle_keypress(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        assert!(
+            app.explorer_search.is_some(),
+            "`/` must open the explorer fuzzy-search field"
+        );
+
+        // Typing routes to the field and applies a live filter.
+        app.handle_keypress(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+        let filter = app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone());
+        assert_eq!(
+            filter.as_deref(),
+            Some("z"),
+            "typing in the search field must set the tree filter"
+        );
+
+        // Esc: insert→normal, then normal(non-empty)→cancel (close + clear).
+        app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(
+            app.explorer_search.is_none(),
+            "Esc must close the search field"
+        );
+        let filter2 = app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone());
+        assert_eq!(filter2, None, "cancel must restore the unfiltered tree");
+    }
+
     #[test]
     fn root_first_then_dirs_first_then_name() {
         let root = make_tree();
