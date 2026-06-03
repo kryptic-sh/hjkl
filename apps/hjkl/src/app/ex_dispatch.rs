@@ -1091,6 +1091,12 @@ impl App {
     pub(crate) fn write_swap_for_slot(&mut self, idx: usize) {
         use hjkl_app::swap::{self, SwapHeader};
 
+        // The explorer is a programmatic scratch buffer — never persist it to a
+        // swap file (otherwise a crash would offer to "recover" the tree text).
+        if self.slots[idx].is_explorer {
+            return;
+        }
+
         let is_scratch = self.slots[idx].filename.is_none();
 
         if is_scratch {
@@ -1583,7 +1589,9 @@ impl App {
 
     /// `:qa[!]` — quit all. Blocks when any slot is dirty unless `force`.
     fn quit_all(&mut self, force: bool) {
-        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty) {
+        // Explorer scratch buffers are programmatic (no file, never user-saved)
+        // — they must never block quit, like they're skipped by :bnext/pickers.
+        if !force && let Some(idx) = self.slots.iter().position(|s| s.dirty && !s.is_explorer) {
             let name = self.slots[idx]
                 .filename
                 .as_ref()
