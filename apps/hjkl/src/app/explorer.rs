@@ -1038,6 +1038,20 @@ impl super::App {
             if let Some(Some(win)) = self.windows.get_mut(win_id) {
                 win.cursor_row = r;
                 win.cursor_col = 0;
+                // Scroll the explorer window so the revealed row stays in
+                // view. The window's per-window `top_row` is independent of
+                // any other window on the same buffer, so this only moves
+                // the explorer's viewport — a second window showing the same
+                // slot is unaffected. Without this the cursor can land off
+                // the bottom/top of the pane after a buffer switch.
+                let height = win.last_rect.map(|rc| rc.h as usize).unwrap_or(0);
+                if height > 0 {
+                    if r < win.top_row {
+                        win.top_row = r;
+                    } else if r >= win.top_row + height {
+                        win.top_row = r + 1 - height;
+                    }
+                }
             }
             // Sync the explorer editor cursor so the (usually unfocused)
             // cursorline highlights the revealed row.
