@@ -484,6 +484,10 @@ impl App {
                     self.explorer_toggle_hidden();
                     return KeyOutcome::Continue;
                 }
+                KeyCode::Char('I') => {
+                    self.explorer_toggle_gitignore();
+                    return KeyOutcome::Continue;
+                }
                 _ => {}
             }
         }

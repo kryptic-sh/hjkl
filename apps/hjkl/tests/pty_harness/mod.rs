@@ -6,6 +6,7 @@
 // file to linux until the flake is root-caused.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub mod at_colon;
+pub mod explorer_search;
 pub mod harness;
 pub mod register_count;
 pub mod render_sync;

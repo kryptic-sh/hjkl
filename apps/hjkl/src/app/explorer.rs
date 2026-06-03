@@ -75,9 +75,15 @@ pub(crate) struct ExplorerTree {
     /// Flattened depth-first list of currently visible rows.
     /// Indexed 1:1 with buffer lines after `render_text`.
     pub(crate) nodes: Vec<ExplorerNode>,
-    /// When `false` (default), entries whose name starts with `.` are hidden.
-    /// `H` toggles this on/off.
+    /// When `false`, entries whose name starts with `.` are hidden. Defaults to
+    /// `true` (dotfiles shown). `H` toggles this. The `.git` dir is always
+    /// skipped regardless.
     pub(crate) show_hidden: bool,
+    /// When `true` (default), entries matched by the repo's git ignore rules
+    /// (`.gitignore`, `.git/info/exclude`, core.excludesfile) are hidden — this
+    /// also prunes ignored dirs (e.g. `target/`, `node_modules/`) from the fuzzy
+    /// search walk, keeping it fast. `I` toggles this. No effect outside a repo.
+    pub(crate) respect_gitignore: bool,
     /// Active fuzzy filter query. `None` = unfiltered (normal expansion mode).
     /// When `Some`, `rebuild` performs a full recursive walk and only shows
     /// files that fuzzy-match the query, plus their ancestor dirs.
@@ -91,7 +97,8 @@ pub(crate) struct ExplorerTree {
 
 impl ExplorerTree {
     /// Create a fresh tree rooted at `root`. The root starts expanded so its
-    /// children are visible immediately. Dotfiles are hidden by default.
+    /// children are visible immediately. Dotfiles are shown by default;
+    /// git-ignored entries are hidden by default.
     pub(crate) fn new(root: PathBuf) -> Self {
         let mut expanded = HashSet::new();
         expanded.insert(root.clone());
@@ -99,7 +106,8 @@ impl ExplorerTree {
             root,
             expanded,
             nodes: Vec::new(),
-            show_hidden: false,
+            show_hidden: true,
+            respect_gitignore: true,
             filter: None,
             match_count: 0,
             total_count: 0,
@@ -109,17 +117,28 @@ impl ExplorerTree {
     }
 
     /// Read one directory's children, sorted directories-first then by
-    /// case-insensitive name. Dotfiles are filtered unless `show_hidden`.
-    fn read_children(&self, dir: &Path) -> Vec<(PathBuf, bool)> {
+    /// case-insensitive name. The `.git` dir is always skipped; dotfiles are
+    /// filtered unless `show_hidden`; git-ignored entries are filtered when
+    /// `respect_gitignore` and a repo is available (`repo`).
+    fn read_children(&self, dir: &Path, repo: Option<&git2::Repository>) -> Vec<(PathBuf, bool)> {
         let mut entries: Vec<(PathBuf, bool)> = match std::fs::read_dir(dir) {
             Ok(rd) => rd
                 .filter_map(|e| e.ok())
                 .filter_map(|e| {
                     let p = e.path();
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+                    // Never show the repo internals dir.
+                    if name.as_deref() == Some(".git") {
+                        return None;
+                    }
                     // Skip dotfiles unless show_hidden.
-                    if !self.show_hidden
-                        && p.file_name()
-                            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                    if !self.show_hidden && name.as_deref().is_some_and(|n| n.starts_with('.')) {
+                        return None;
+                    }
+                    // Skip git-ignored entries (prunes ignored dirs from the walk).
+                    if self.respect_gitignore
+                        && let Some(r) = repo
+                        && r.is_path_ignored(&p).unwrap_or(false)
                     {
                         return None;
                     }
@@ -139,6 +158,15 @@ impl ExplorerTree {
         entries
     }
 
+    /// Open the git repo enclosing `root` for ignore checks. `None` when not in
+    /// a repo or when ignore-honoring is disabled.
+    fn open_repo(&self) -> Option<git2::Repository> {
+        if !self.respect_gitignore {
+            return None;
+        }
+        git2::Repository::discover(&self.root).ok()
+    }
+
     /// Recursively append `dir`'s expanded children to `out`.
     fn push_children(
         &self,
@@ -146,8 +174,9 @@ impl ExplorerTree {
         depth: usize,
         prefix: &[bool],
         out: &mut Vec<ExplorerNode>,
+        repo: Option<&git2::Repository>,
     ) {
-        let children = self.read_children(dir);
+        let children = self.read_children(dir, repo);
         let n = children.len();
         for (i, (path, is_dir)) in children.into_iter().enumerate() {
             let is_last = i + 1 == n;
@@ -161,7 +190,7 @@ impl ExplorerTree {
             if is_dir && self.expanded.contains(&path) {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children(&path, depth + 1, &child_prefix, out);
+                self.push_children(&path, depth + 1, &child_prefix, out, repo);
             }
         }
     }
@@ -191,7 +220,8 @@ impl ExplorerTree {
             branches: Vec::new(),
         });
         if self.expanded.contains(&root) {
-            self.push_children(&root, 1, &[], &mut out);
+            let repo = self.open_repo();
+            self.push_children(&root, 1, &[], &mut out, repo.as_ref());
         }
         self.nodes = out;
         self.match_count = 0;
@@ -207,6 +237,10 @@ impl ExplorerTree {
         let root_str = root.to_string_lossy().to_string();
         let root_str_len = root_str.len();
 
+        // Open the repo once for the whole walk so ignored dirs (target/,
+        // node_modules/, …) are pruned and never descended into.
+        let repo = self.open_repo();
+
         let mut visited: usize = 0;
         let mut truncated = false;
         // file_path → score (only files that matched)
@@ -220,7 +254,7 @@ impl ExplorerTree {
                 truncated = true;
                 break;
             }
-            let children = self.read_children(&dir);
+            let children = self.read_children(&dir, repo.as_ref());
             for (path, is_dir) in children {
                 visited += 1;
                 if visited > CAP {
@@ -283,7 +317,7 @@ impl ExplorerTree {
             is_last: true,
             branches: Vec::new(),
         });
-        self.push_children_filtered(&root, 1, &[], &show, &mut out);
+        self.push_children_filtered(&root, 1, &[], &show, &mut out, repo.as_ref());
         self.nodes = out;
     }
 
@@ -297,8 +331,9 @@ impl ExplorerTree {
         prefix: &[bool],
         show: &HashSet<PathBuf>,
         out: &mut Vec<ExplorerNode>,
+        repo: Option<&git2::Repository>,
     ) {
-        let children = self.read_children(dir);
+        let children = self.read_children(dir, repo);
         // Keep only children that are in the show set.
         let visible: Vec<(PathBuf, bool)> = children
             .into_iter()
@@ -317,7 +352,7 @@ impl ExplorerTree {
             if is_dir {
                 let mut child_prefix = prefix.to_vec();
                 child_prefix.push(!is_last);
-                self.push_children_filtered(&path, depth + 1, &child_prefix, show, out);
+                self.push_children_filtered(&path, depth + 1, &child_prefix, show, out, repo);
             }
         }
     }
@@ -365,6 +400,12 @@ impl ExplorerTree {
     /// Flip `show_hidden` and rebuild.
     pub(crate) fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
+        self.rebuild();
+    }
+
+    /// Flip `respect_gitignore` (show/hide git-ignored entries) and rebuild.
+    pub(crate) fn toggle_gitignore(&mut self) {
+        self.respect_gitignore = !self.respect_gitignore;
         self.rebuild();
     }
 
@@ -868,6 +909,14 @@ impl super::App {
     pub(crate) fn explorer_toggle_hidden(&mut self) {
         if let Some(ref mut ep) = self.explorer {
             ep.tree.toggle_hidden();
+        }
+        self.explorer_rebuild_buffer();
+    }
+
+    /// Toggle git-ignore honoring (show/hide ignored entries) and rebuild.
+    pub(crate) fn explorer_toggle_gitignore(&mut self) {
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.toggle_gitignore();
         }
         self.explorer_rebuild_buffer();
     }
@@ -1594,14 +1643,14 @@ mod tests {
     }
 
     #[test]
-    fn read_children_hides_dotfiles_by_default() {
+    fn read_children_shows_dotfiles_by_default() {
         let root = make_dotfile_tree();
         let tree = ExplorerTree::new(root.clone());
-        // Only visible.txt should appear (dotfiles hidden by default).
+        // Dotfiles are shown by default now; `.git` would still be skipped.
         let names = child_names(&tree);
         assert!(
-            !names.iter().any(|n| n.starts_with('.')),
-            "dotfiles should be hidden by default, got: {names:?}"
+            names.iter().any(|n| n.starts_with('.')),
+            "dotfiles should be shown by default, got: {names:?}"
         );
         assert!(
             names.contains(&"visible.txt".to_string()),
@@ -1611,24 +1660,24 @@ mod tests {
     }
 
     #[test]
-    fn toggle_hidden_shows_dotfiles() {
+    fn toggle_hidden_hides_then_shows_dotfiles() {
         let root = make_dotfile_tree();
         let mut tree = ExplorerTree::new(root.clone());
         assert!(
-            !child_names(&tree).iter().any(|n| n.starts_with('.')),
-            "dotfiles should be hidden before toggle"
+            child_names(&tree).iter().any(|n| n.starts_with('.')),
+            "dotfiles should be shown before toggle"
         );
         tree.toggle_hidden();
         let names = child_names(&tree);
         assert!(
-            names.iter().any(|n| n.starts_with('.')),
-            "dotfiles should be visible after toggle_hidden, got: {names:?}"
+            !names.iter().any(|n| n.starts_with('.')),
+            "dotfiles should be hidden after toggle_hidden, got: {names:?}"
         );
         // Toggle back.
         tree.toggle_hidden();
         assert!(
-            !child_names(&tree).iter().any(|n| n.starts_with('.')),
-            "dotfiles should be hidden after second toggle"
+            child_names(&tree).iter().any(|n| n.starts_with('.')),
+            "dotfiles should be shown again after second toggle"
         );
         let _ = fs::remove_dir_all(&root);
     }
