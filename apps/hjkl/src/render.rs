@@ -389,34 +389,6 @@ fn build_diag_overlays(
         .collect()
 }
 
-/// Full gutter width including number column, sign column, and fold column.
-///
-/// `lnum_width` must come from `Editor::lnum_width()` — the single source of
-/// truth for the number-column width. Pass 0 when both number flags are off.
-///
-/// - `sign_column` width: 1 cell when `mode=Yes` or (`mode=Auto` and any visible sign).
-/// - `fold_column` width: `foldcolumn` cells (0 = none, capped at 12).
-fn full_gutter_width(
-    lnum_width: u16,
-    signcolumn: hjkl_engine::types::SignColumnMode,
-    foldcolumn: u32,
-    has_visible_signs: bool,
-) -> u16 {
-    let sign_w: u16 = match signcolumn {
-        hjkl_engine::types::SignColumnMode::Yes => 1,
-        hjkl_engine::types::SignColumnMode::No => 0,
-        hjkl_engine::types::SignColumnMode::Auto => {
-            if has_visible_signs {
-                1
-            } else {
-                0
-            }
-        }
-    };
-    let fold_w = foldcolumn.min(12) as u16;
-    lnum_width + sign_w + fold_w
-}
-
 /// Widest line-number gutter across all open (non-explorer) buffers, so the
 /// number column can be sized to the biggest file and the text column stays put
 /// when switching buffers. Buffers with line numbers off contribute 0.
@@ -427,6 +399,42 @@ fn max_lnum_width(app: &App) -> u16 {
         .map(|s| s.editor.lnum_width())
         .max()
         .unwrap_or(0)
+}
+
+/// Stable `(sign_column_width, fold_column_width)` reserved for ALL non-explorer
+/// buffers — sized to the max each would need across every open buffer. This
+/// keeps the text column from shifting when a diagnostic/git sign (or a fold)
+/// appears in one buffer but not another (or scrolls in/out of view): once any
+/// buffer needs a sign/fold column, it's reserved everywhere.
+///
+/// The sign decision uses whether a buffer has ANY signs (not just ones in the
+/// current viewport), so scrolling within a buffer doesn't jiggle either.
+fn stable_gutter_extra(app: &App) -> (u16, u16) {
+    use hjkl_engine::types::SignColumnMode;
+    let mut sign_w = 0u16;
+    let mut fold_w = 0u16;
+    for slot in app.slots().iter().filter(|s| !s.is_explorer) {
+        let st = slot.editor.settings();
+        let has_any_signs = !slot.diag_signs.is_empty()
+            || !slot.diag_signs_lsp.is_empty()
+            || !slot.git_signs.is_empty();
+        let sw = match st.signcolumn {
+            SignColumnMode::Yes => 1,
+            SignColumnMode::No => 0,
+            SignColumnMode::Auto => {
+                if has_any_signs {
+                    1
+                } else {
+                    0
+                }
+            }
+        };
+        sign_w = sign_w.max(sw);
+        let has_folds = !slot.editor.buffer().folds().is_empty();
+        let fw = (st.foldcolumn.min(12) as u16).max(if has_folds { 1 } else { 0 });
+        fold_w = fold_w.max(fw);
+    }
+    (sign_w, fold_w)
 }
 
 /// Parse a comma-separated colorcolumn string into a sorted `Vec<u16>` of
@@ -715,7 +723,6 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
     let s = app.slots()[slot_idx].editor.settings();
     let (nu, rnu) = (s.number, s.relativenumber);
-    let (scl, fdc) = (s.signcolumn, s.foldcolumn);
     let (cul, cuc) = (s.cursorline, s.cursorcolumn);
     let colorcolumn = s.colorcolumn.clone();
     let list_active = s.list;
@@ -725,39 +732,16 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let indent_guide_shiftwidth = s.shiftwidth;
     let indent_guide_tabstop = s.tabstop;
 
-    // We need visible signs before computing gutter width for signcolumn=auto.
-    // Pre-compute a lightweight "has any visible sign" check using the last
-    // known viewport top (updated after lnum_width when focused).
-    let pre_vp_top = if is_focused {
-        app.slots()[slot_idx].editor.host().viewport().top_row
+    // Stable sign + fold columns: reserve the max width each would need across
+    // ALL open buffers, so a diagnostic/git sign (or fold) appearing in one
+    // buffer doesn't shift the text column when switching buffers or scrolling.
+    // The explorer pane is gutterless.
+    let is_explorer_slot = app.slots()[slot_idx].is_explorer;
+    let (sign_w, fold_w) = if is_explorer_slot {
+        (0, 0)
     } else {
-        top_row
+        stable_gutter_extra(app)
     };
-    let pre_vp_bot = pre_vp_top + area.height as usize;
-    let has_visible_signs = app.slots()[slot_idx]
-        .diag_signs
-        .iter()
-        .chain(app.slots()[slot_idx].diag_signs_lsp.iter())
-        .chain(app.slots()[slot_idx].git_signs.iter())
-        .any(|s| s.row >= pre_vp_top && s.row < pre_vp_bot);
-
-    let sign_w: u16 = match scl {
-        hjkl_engine::types::SignColumnMode::Yes => 1,
-        hjkl_engine::types::SignColumnMode::No => 0,
-        hjkl_engine::types::SignColumnMode::Auto => {
-            if has_visible_signs {
-                1
-            } else {
-                0
-            }
-        }
-    };
-    // Fold column: auto-show a 1-cell indicator whenever the buffer has any
-    // fold (#245), so foldable/folded regions are visible without `:set
-    // foldcolumn`. An explicit `foldcolumn=N` still widens it. No folds and
-    // foldcolumn=0 → no column (0 cells), so files without folds are unchanged.
-    let has_folds = !app.slots()[slot_idx].editor.buffer().folds().is_empty();
-    let fold_w = (fdc.min(12) as u16).max(if has_folds { 1 } else { 0 });
     // Stable line-number gutter: when this buffer shows numbers, size the column
     // to the widest needed across ALL open buffers (the biggest file's line
     // count) so switching buffers doesn't shift the text column horizontally.
@@ -1338,21 +1322,15 @@ fn completion_popup(frame: &mut Frame, app: &App, buf_area: Rect) {
     let (base_x, base_y) = win_rect
         .map(|r| (r.x, r.y))
         .unwrap_or((buf_area.x, buf_area.y));
-    let s = app.slots()[slot_idx].editor.settings();
     let vp = app.slots()[slot_idx].editor.host().viewport();
     let vp_top = vp.top_row;
-    let vp_bot = vp_top + 100; // generous upper bound for sign detection
-    let has_visible_signs = app.slots()[slot_idx]
-        .diag_signs
-        .iter()
-        .chain(app.slots()[slot_idx].diag_signs_lsp.iter())
-        .chain(app.slots()[slot_idx].git_signs.iter())
-        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
-    // Use the stable cross-buffer number-column width (matches render_window) so
-    // the popup anchors under the cursor even when the gutter is widened.
+    // Stable cross-buffer gutter width (matches render_window) so the popup
+    // anchors under the cursor even when the number/sign/fold columns are
+    // widened to the open-buffer max.
     let own_lnum = app.slots()[slot_idx].editor.lnum_width();
     let eff_lnum = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
-    let gw = full_gutter_width(eff_lnum, s.signcolumn, s.foldcolumn, has_visible_signs);
+    let (sign_w, fold_w) = stable_gutter_extra(app);
+    let gw = eff_lnum + sign_w + fold_w;
 
     // Cursor cell in absolute screen coordinates (0-based row relative to viewport top).
     let cursor_row = completion.anchor_row.saturating_sub(vp_top) as u16;
