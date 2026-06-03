@@ -786,7 +786,19 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             .set_viewport_height(area.height);
     }
 
-    let cursor_row = app.slots()[slot_idx].editor.buffer().cursor().row;
+    // Relative/hybrid line numbers count from THIS window's cursor row. The
+    // focused window's editor cursor is authoritative and matches its saved
+    // `cursor_row`; an unfocused window must use its own saved row so its
+    // relative numbers don't count from the active window's cursor.
+    let cursor_row = if is_focused {
+        app.slots()[slot_idx].editor.buffer().cursor().row
+    } else {
+        app.windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| w.cursor_row)
+            .unwrap_or_else(|| app.slots()[slot_idx].editor.buffer().cursor().row)
+    };
     let numbers = match (nu, rnu) {
         (false, false) => GutterNumbers::None,
         (true, false) => GutterNumbers::Absolute,
@@ -1203,8 +1215,23 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         }
     };
 
-    // ── matchparen bracket highlight (focused window only) ─────────────────
-    if is_focused && let Some(pairs) = app.matchparen_cells() {
+    // Bracket / tag matchparen keys off THIS window's cursor: the focused
+    // window uses its editor's live cursor; an unfocused window uses its own
+    // saved cursor so the highlight is a ghost that stays put when another
+    // window on the same buffer moves (mirrors the ghost cursorline).
+    let (mp_row, mp_col) = if is_focused {
+        let c = app.slots()[slot_idx].editor.buffer().cursor();
+        (c.row, c.col)
+    } else {
+        app.windows
+            .get(win_id)
+            .and_then(|w| w.as_ref())
+            .map(|w| (w.cursor_row, w.cursor_col))
+            .unwrap_or((0, 0))
+    };
+
+    // ── matchparen bracket highlight ───────────────────────────────────────
+    if let Some(pairs) = app.matchparen_cells_at(slot_idx, mp_row, mp_col) {
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
@@ -1221,7 +1248,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 
     // ── matchparen tag highlight ──────────────────────────────────────────
-    if is_focused && let Some(tag_cells) = app.matchparen_tag_cells() {
+    if let Some(tag_cells) = app.matchparen_tag_cells_at(slot_idx, mp_row, mp_col) {
         let match_paren_style = Style::default()
             .bg(app.theme.ui.match_paren_bg)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED);
