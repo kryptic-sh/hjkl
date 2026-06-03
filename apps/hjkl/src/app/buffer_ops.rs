@@ -10,6 +10,14 @@ impl App {
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).
     pub(crate) fn switch_to(&mut self, idx: usize) {
+        // Never load a normal buffer into the explorer pane. If the explorer is
+        // focused (e.g. clicking a buffer-line entry while it's focused),
+        // redirect to the nearest non-explorer window first.
+        if self.explorer_buf_focused()
+            && let Some(win_id) = self.nearest_non_explorer_window()
+        {
+            self.switch_focus(win_id);
+        }
         let current_slot = self.focused_slot_idx();
         if idx != current_slot {
             self.prev_active = Some(current_slot);

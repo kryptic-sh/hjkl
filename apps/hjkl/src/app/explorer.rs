@@ -1600,6 +1600,38 @@ mod tests {
     }
 
     #[test]
+    fn switch_to_never_targets_the_explorer_window() {
+        use crate::keymap_actions::AppAction;
+        let f1 = std::env::temp_dir().join(format!("hjkl_exp_st_{}.txt", std::process::id()));
+        std::fs::write(&f1, "hello").unwrap();
+        let mut app = super::super::App::new(Some(f1.clone()), false, None, None).unwrap();
+        // Open the explorer — it gets focused.
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        assert!(app.explorer_buf_focused(), "explorer should be focused");
+
+        // Switching to the real buffer while the explorer is focused must NOT
+        // clobber the explorer pane — it redirects to a non-explorer window.
+        let real_idx = app.slots.iter().position(|s| !s.is_explorer).unwrap();
+        app.switch_to(real_idx);
+
+        assert!(
+            !app.explorer_buf_focused(),
+            "switch_to must move focus off the explorer window"
+        );
+        assert!(
+            !app.active().is_explorer,
+            "active buffer must be the real one"
+        );
+        let ep_win = app.explorer.as_ref().unwrap().win_id;
+        let ep_slot = app.windows[ep_win].as_ref().unwrap().slot;
+        assert!(
+            app.slots[ep_slot].is_explorer,
+            "the explorer window must still display the explorer buffer"
+        );
+        let _ = std::fs::remove_file(&f1);
+    }
+
+    #[test]
     fn buffer_next_skips_explorer_slot() {
         use crate::keymap_actions::AppAction;
         // Create two real files so buffer_next has something to cycle through.
