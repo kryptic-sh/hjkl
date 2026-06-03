@@ -132,6 +132,15 @@ pub struct App {
     /// (authoritative at all times). The slot editor's cursor/scroll are only
     /// synced on focus changes, not before every keypress.
     pub windows: Vec<Option<window::AppWindow>>,
+    /// Per-window fold open/closed state, keyed by `WindowId` (window-level
+    /// folds). The shared slot buffer only ever holds the *focused* window's
+    /// fold set — it is installed on focus-in and saved back after dispatch via
+    /// `sync_viewport_to_editor` / `sync_viewport_from_editor`. Unfocused
+    /// windows render against their snapshot here. Kept app-side (not on the
+    /// renderer-agnostic layout `Window`) so `hjkl-layout` stays buffer-free.
+    /// `WindowId`s are monotonic and never reused, so stale entries can't
+    /// collide; closed windows are pruned on the main close paths.
+    pub window_folds: std::collections::HashMap<window::WindowId, Vec<hjkl_buffer::Fold>>,
     /// All open tabs. Each tab owns its own layout tree + focused window.
     /// Never empty — always at least one tab.
     pub tabs: Vec<window::Tab>,
@@ -1022,6 +1031,38 @@ impl App {
                 .shift_syntax_spans_for_edits(&edits);
         }
         self.lsp_notify_change_active(&edits);
+        // Window-level folds: an edit invalidates any overlapping fold in OTHER
+        // windows showing this same slot, mirroring the engine's
+        // `FoldOp::Invalidate` on the focused window (whose folds were already
+        // saved by `sync_viewport_from_editor`). Keeps sibling snapshots from
+        // stranding closed-fold markers over rows the edit moved.
+        if !edits.is_empty() {
+            let fw = self.focused_window();
+            let slot = self
+                .windows
+                .get(fw)
+                .and_then(|w| w.as_ref())
+                .map(|w| w.slot);
+            if let Some(slot) = slot {
+                let siblings: Vec<usize> = self
+                    .windows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, w)| w.as_ref().map(|w| (id, w.slot)))
+                    .filter(|&(id, s)| s == slot && id != fw)
+                    .map(|(id, _)| id)
+                    .collect();
+                for sid in siblings {
+                    if let Some(folds) = self.window_folds.get_mut(&sid) {
+                        for e in &edits {
+                            let lo = e.start_position.0 as usize;
+                            let hi = e.old_end_position.0.max(e.new_end_position.0) as usize;
+                            hjkl_buffer::invalidate_folds(folds, lo, hi);
+                        }
+                    }
+                }
+            }
+        }
         // Drain pending fold ops so the vec doesn't grow unboundedly.
         // `recompute_and_install` handles the visual refresh; the ops are
         // queued for host observation but this app has no other consumer.
@@ -1360,6 +1401,7 @@ impl App {
         let mut app = Self {
             slots: vec![slot],
             windows: vec![Some(initial_window)],
+            window_folds: std::collections::HashMap::new(),
             tabs: vec![window::Tab::new(window::LayoutTree::Leaf(0), 0)],
             active_tab: 0,
             next_window_id: 1,

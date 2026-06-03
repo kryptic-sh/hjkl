@@ -631,6 +631,13 @@ impl App {
         self.windows.push(Some(Window::with_scroll(
             new_slot, top_row, top_col, cursor_row, cursor_col,
         )));
+        // Inherit the source window's fold state on a same-slot duplicate
+        // (vim default). A split onto a different file starts fresh.
+        if new_slot == cur_slot
+            && let Some(folds) = self.window_folds.get(&focused).cloned()
+        {
+            self.window_folds.insert(new_win_id, folds);
+        }
         // Replace the focused leaf with a horizontal split:
         // new window on top (a), existing window below (b).
         self.layout_mut()
@@ -681,6 +688,13 @@ impl App {
         self.windows.push(Some(Window::with_scroll(
             new_slot, top_row, top_col, cursor_row, cursor_col,
         )));
+        // Inherit the source window's fold state on a same-slot duplicate
+        // (vim default). A split onto a different file starts fresh.
+        if new_slot == cur_slot
+            && let Some(folds) = self.window_folds.get(&focused).cloned()
+        {
+            self.window_folds.insert(new_win_id, folds);
+        }
         // Replace the focused leaf with a vertical split:
         // new window on the left (a), existing window on the right (b).
         self.layout_mut()

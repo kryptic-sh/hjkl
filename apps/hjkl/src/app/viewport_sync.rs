@@ -54,6 +54,21 @@ impl App {
         self.active_mut()
             .editor
             .set_cursor_quiet(cursor_row, cursor_col);
+        // Install this window's fold snapshot into the shared slot buffer so
+        // motions/render/`z`-ops operate on the focused window's folds
+        // (window-level folds). If the window has no snapshot yet (freshly
+        // created, never focused), adopt whatever the buffer currently holds
+        // rather than wiping its folds.
+        match self.window_folds.get(&fw) {
+            Some(folds) => {
+                let folds = folds.clone();
+                self.active_mut().editor.buffer_mut().set_folds(&folds);
+            }
+            None => {
+                let folds = self.active().editor.buffer().folds();
+                self.window_folds.insert(fw, folds);
+            }
+        }
     }
 
     /// Copy the active editor's host viewport scroll state and cursor back
@@ -68,7 +83,11 @@ impl App {
         let vp = self.active().editor.host().viewport();
         let (top_row, top_col) = (vp.top_row, vp.top_col);
         let (cursor_row, cursor_col) = self.active().editor.cursor();
+        // Persist the focused window's fold state (captures `z`-command toggles
+        // from this dispatch and auto-folds seeded during the prior render).
+        let folds = self.active().editor.buffer().folds();
         let fw = self.focused_window();
+        self.window_folds.insert(fw, folds);
         let win = self.windows[fw].as_mut().expect("focused_window open");
         win.top_row = top_row;
         win.top_col = top_col;

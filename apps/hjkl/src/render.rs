@@ -434,6 +434,12 @@ pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
         let fw = (st.foldcolumn.min(12) as u16).max(if has_folds { 1 } else { 0 });
         fold_w = fold_w.max(fw);
     }
+    // Window-level folds: the shared buffer only holds the focused window's
+    // set, so an unfocused window with folds wouldn't be seen by the loop
+    // above. Reserve the fold column if ANY window's snapshot has folds.
+    if fold_w == 0 && app.window_folds.values().any(|f| !f.is_empty()) {
+        fold_w = 1;
+    }
     (sign_w, fold_w)
 }
 
@@ -1084,6 +1090,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 .map(|w| w.cursor_row)
         },
         fold_line_bg: Style::default().bg(app.theme.ui.fold_line_bg),
+        // Unfocused windows render their OWN fold snapshot (window-level folds);
+        // the shared buffer holds only the focused window's set. Focused window:
+        // `None` reads the live `buffer.folds()`.
+        folds_override: if is_focused {
+            None
+        } else {
+            app.window_folds.get(&win_id).map(Vec::as_slice)
+        },
         cursor_column_bg: cursor_column_style,
         selection_bg: Style::default().bg(Color::Blue),
         cursor_style: Style::default(),

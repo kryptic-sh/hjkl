@@ -199,6 +199,7 @@ impl App {
         for id in all_leaves {
             if id != focused {
                 self.windows[id] = None;
+                self.window_folds.remove(&id);
             }
         }
         *self.layout_mut() = LayoutTree::Leaf(focused);
@@ -265,6 +266,7 @@ impl App {
             }
             Ok(new_focus) => {
                 self.windows[focused] = None;
+                self.window_folds.remove(&focused);
                 // switch_focus saves the outgoing window then restores the
                 // incoming one — but the outgoing window is being closed, so
                 // we set the new focus directly and only restore the incoming.

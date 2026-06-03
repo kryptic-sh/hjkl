@@ -80,6 +80,12 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// `cursor_line_bg` so a collapsed fold is visually distinct.
     /// `Style::default()` to disable.
     pub fold_line_bg: Style,
+    /// Fold set to render, overriding `buffer.folds()`. Used for **unfocused**
+    /// windows under window-level folds: each window keeps its own open/closed
+    /// state, and the shared buffer only holds the focused window's set, so an
+    /// unfocused split must render against its own snapshot. `None` = read the
+    /// live `buffer.folds()` (the focused-window default).
+    pub folds_override: Option<&'a [hjkl_buffer::Fold]>,
     /// Bg painted down the cursor column (vim's `cursorcolumn`). Pass
     /// `Style::default()` to disable.
     pub cursor_column_bg: Style,
@@ -350,7 +356,10 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // cursor) when set, else the buffer's live cursor row.
         let cursor_line_row = self.cursor_line_row.unwrap_or(cursor.row);
         let spans = self.spans;
-        let folds = self.buffer.folds();
+        let folds = self
+            .folds_override
+            .map(<[hjkl_buffer::Fold]>::to_vec)
+            .unwrap_or_else(|| self.buffer.folds());
         let top_row = viewport.top_row;
         let top_col = viewport.top_col;
         // Fetch only the viewport-bounded row slice. The render loop walks
@@ -781,7 +790,10 @@ impl<R: StyleResolver> BufferView<'_, R> {
         let viewport = *self.viewport;
         let top_col = viewport.top_col;
         let cursor = self.buffer.cursor();
-        let folds = self.buffer.folds();
+        let folds = self
+            .folds_override
+            .map(<[hjkl_buffer::Fold]>::to_vec)
+            .unwrap_or_else(|| self.buffer.folds());
         let rope = self.buffer.rope();
 
         let frame_x = area.x;
@@ -1436,6 +1448,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1480,6 +1493,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1525,6 +1539,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1575,6 +1590,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1620,6 +1636,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1668,6 +1685,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1730,6 +1748,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1796,6 +1815,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1867,6 +1887,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1927,6 +1948,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -1974,6 +1996,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2029,6 +2052,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2089,6 +2113,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2141,6 +2166,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2194,6 +2220,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2248,6 +2275,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2312,6 +2340,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2364,6 +2393,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2393,6 +2423,7 @@ mod tests {
             cursor_line_bg: Style::default(),
             cursor_line_row: None,
             fold_line_bg: Style::default().bg(fold_bg),
+            folds_override: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2475,6 +2506,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2518,6 +2550,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -2540,6 +2573,7 @@ mod tests {
             cursor_line_bg: Style::default(),
             cursor_line_row: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2747,6 +2781,7 @@ mod tests {
             cursor_line_bg: Style::default(),
             cursor_line_row: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default().bg(Color::Blue),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
@@ -2951,6 +2986,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3018,6 +3054,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3076,6 +3113,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3143,6 +3181,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3212,6 +3251,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3278,6 +3318,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3357,6 +3398,7 @@ mod tests {
             indent_guide_active_fg: Color::Reset,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3395,6 +3437,7 @@ mod tests {
             cursor_line_bg: Style::default(),
             cursor_line_row: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),
@@ -3455,6 +3498,7 @@ mod tests {
             indent_guide_active_fg: Color::Gray,
             indent_guide_active_col: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             eol_hints: &[],
             blame_plan: None,
         };
@@ -3620,6 +3664,7 @@ mod tests {
             cursor_line_bg: Style::default(),
             cursor_line_row: None,
             fold_line_bg: Style::default(),
+            folds_override: None,
             cursor_column_bg: Style::default(),
             selection_bg: Style::default(),
             cursor_style: Style::default(),

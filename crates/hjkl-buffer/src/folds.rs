@@ -386,13 +386,36 @@ impl crate::Buffer {
     /// Drop every fold that touches `[start_row, end_row]`.
     pub fn invalidate_folds_in_range(&mut self, start_row: usize, end_row: usize) {
         let before = self.content_lock().folds.len();
-        self.content_lock_mut()
-            .folds
-            .retain(|f| f.end_row < start_row || f.start_row > end_row);
+        invalidate_folds(&mut self.content_lock_mut().folds, start_row, end_row);
         if self.content_lock().folds.len() != before {
             self.dirty_gen_bump();
         }
     }
+
+    /// Replace the entire fold set wholesale. Used to install a per-window fold
+    /// snapshot into the shared buffer on focus change (window-level folds): the
+    /// app keeps each window's open/closed state and swaps it in before dispatch,
+    /// so motions/render/`z`-ops operate on the focused window's folds.
+    pub fn set_folds(&mut self, folds: &[Fold]) {
+        {
+            let mut c = self.content_lock_mut();
+            if c.folds.as_slice() == folds {
+                return; // no-op — avoid a spurious dirty_gen bump
+            }
+            c.folds = folds.to_vec();
+        }
+        self.dirty_gen_bump();
+    }
+}
+
+/// Drop every fold in `folds` that touches `[start_row, end_row]`, in place.
+///
+/// Free helper so both [`crate::Buffer::invalidate_folds_in_range`] (operating
+/// on the shared content) and the app's window-level edit-coherence pass
+/// (operating on a sibling window's owned `Vec<Fold>`) share one rule — vim
+/// opens/forgets any fold the edit overlapped.
+pub fn invalidate_folds(folds: &mut Vec<Fold>, start_row: usize, end_row: usize) {
+    folds.retain(|f| f.end_row < start_row || f.start_row > end_row);
 }
 
 #[cfg(test)]
@@ -410,6 +433,40 @@ mod tests {
         buf.add_fold(0, 1, false);
         let starts: Vec<usize> = buf.folds().iter().map(|f| f.start_row).collect();
         assert_eq!(starts, vec![0, 2]);
+    }
+
+    #[test]
+    fn set_folds_replaces_wholesale() {
+        let mut buf = b();
+        buf.add_fold(0, 1, false);
+        // Install a different per-window snapshot.
+        let snapshot = vec![super::Fold {
+            start_row: 2,
+            end_row: 3,
+            closed: true,
+            auto_generated: false,
+        }];
+        buf.set_folds(&snapshot);
+        assert_eq!(buf.folds(), snapshot);
+        // Idempotent: re-installing the same set is a no-op (no dirty bump).
+        let dg = buf.dirty_gen();
+        buf.set_folds(&snapshot);
+        assert_eq!(buf.dirty_gen(), dg);
+    }
+
+    #[test]
+    fn invalidate_folds_helper_drops_overlapping() {
+        let f = |s, e| super::Fold {
+            start_row: s,
+            end_row: e,
+            closed: true,
+            auto_generated: false,
+        };
+        let mut folds = vec![f(0, 2), f(4, 6), f(8, 10)];
+        // Edit touches rows 5..5 → only the [4,6] fold overlaps.
+        super::invalidate_folds(&mut folds, 5, 5);
+        let starts: Vec<usize> = folds.iter().map(|x| x.start_row).collect();
+        assert_eq!(starts, vec![0, 8]);
     }
 
     #[test]
