@@ -905,9 +905,20 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         // Check buffer region (left-aligned).
         if show_buffer_line {
             let buf_ranges = buffer_line_x_ranges(app, bar_width);
+            // The buffer line skips explorer slots, so the i-th displayed entry
+            // is NOT necessarily slot `i`. Map the display position to the
+            // actual slot index of the i-th non-explorer slot.
+            let real_indices: Vec<usize> = app
+                .slots()
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| !s.is_explorer)
+                .map(|(idx, _)| idx)
+                .collect();
             for (i, (start, end)) in buf_ranges.iter().enumerate() {
                 if col >= *start && col < *end {
-                    return Zone::BufferLine { slot_idx: i };
+                    let slot_idx = real_indices.get(i).copied().unwrap_or(i);
+                    return Zone::BufferLine { slot_idx };
                 }
             }
         }

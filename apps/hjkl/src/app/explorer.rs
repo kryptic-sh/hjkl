@@ -800,7 +800,7 @@ impl super::App {
             if let Some(win_id) = target_win {
                 self.switch_focus(win_id);
             }
-            let s = node.path.to_string_lossy().to_string();
+            let s = Self::explorer_open_arg(&node.path);
             self.dispatch_ex(&format!("edit {s}"));
         }
     }
@@ -880,6 +880,19 @@ impl super::App {
         ep.tree.nodes.get(win.cursor_row).cloned()
     }
 
+    /// Path string for an `:edit`/`:split`/… open command. Relative to the cwd
+    /// when the file is under it (so buffer names match normally-opened files
+    /// instead of showing absolute paths in the picker / buffer line), else
+    /// absolute.
+    fn explorer_open_arg(path: &Path) -> String {
+        if let Ok(cwd) = std::env::current_dir()
+            && let Ok(rel) = path.strip_prefix(&cwd)
+        {
+            return rel.to_string_lossy().into_owned();
+        }
+        path.to_string_lossy().into_owned()
+    }
+
     /// Resolve the "target directory" for create / paste from the cursor node:
     /// - dir node → that directory
     /// - file node → parent of file
@@ -946,7 +959,7 @@ impl super::App {
         if let Some(win_id) = self.nearest_non_explorer_window() {
             self.switch_focus(win_id);
         }
-        let s = node.path.to_string_lossy().to_string();
+        let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("split {s}"));
     }
 
@@ -959,7 +972,7 @@ impl super::App {
         if let Some(win_id) = self.nearest_non_explorer_window() {
             self.switch_focus(win_id);
         }
-        let s = node.path.to_string_lossy().to_string();
+        let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("vsplit {s}"));
     }
 
@@ -969,7 +982,7 @@ impl super::App {
             Some(n) if !n.is_dir => n,
             _ => return,
         };
-        let s = node.path.to_string_lossy().to_string();
+        let s = Self::explorer_open_arg(&node.path);
         self.dispatch_ex(&format!("tabnew {s}"));
     }
 
@@ -1628,6 +1641,44 @@ mod tests {
         // Close explorer.
         app.dispatch_action(AppAction::ToggleExplorer, 1);
         assert!(app.explorer.is_none(), "explorer should be closed");
+    }
+
+    #[test]
+    fn buffer_line_click_maps_past_interleaved_explorer_slot() {
+        use crate::app::mouse::{Zone, buffer_line_x_ranges, hit_test_zone};
+        use crate::keymap_actions::AppAction;
+        let pid = std::process::id();
+        let f0 = std::env::temp_dir().join(format!("hjkl_bl_a_{pid}.txt"));
+        let f1 = std::env::temp_dir().join(format!("hjkl_bl_b_{pid}.txt"));
+        std::fs::write(&f0, "a").unwrap();
+        std::fs::write(&f1, "b").unwrap();
+        let mut app = super::super::App::new(Some(f0.clone()), false, None, None).unwrap();
+        // Open the explorer so its slot lands BETWEEN the two file slots.
+        app.dispatch_action(AppAction::ToggleExplorer, 1); // slot 1 = explorer
+        app.dispatch_action(AppAction::FocusRight, 1); // focus the editor window
+        app.dispatch_ex(&format!("edit {}", f1.display())); // slot 2 = f1
+
+        // Buffer line shows f0, f1 (explorer skipped). Clicking the LAST entry
+        // must resolve to f1's real slot — NOT the interleaved explorer slot.
+        let ranges = buffer_line_x_ranges(&app, 80);
+        assert!(ranges.len() >= 2, "expected >=2 entries, got {ranges:?}");
+        let col = ranges[ranges.len() - 1].0;
+        match hit_test_zone(&app, col, 0) {
+            Zone::BufferLine { slot_idx } => {
+                assert!(
+                    !app.slots[slot_idx].is_explorer,
+                    "buffer-line click must not map to the explorer slot"
+                );
+                assert_eq!(
+                    app.slots[slot_idx].filename.as_deref(),
+                    Some(f1.as_path()),
+                    "last buffer-line entry must map to f1"
+                );
+            }
+            other => panic!("expected BufferLine zone, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&f0);
+        let _ = std::fs::remove_file(&f1);
     }
 
     #[test]

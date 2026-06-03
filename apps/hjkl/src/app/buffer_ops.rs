@@ -10,6 +10,11 @@ impl App {
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).
     pub(crate) fn switch_to(&mut self, idx: usize) {
+        // The explorer scratch buffer is never a switch target — it's managed
+        // as its own pane, not a normal buffer.
+        if self.slots.get(idx).is_some_and(|s| s.is_explorer) {
+            return;
+        }
         // Never load a normal buffer into the explorer pane. If the explorer is
         // focused (e.g. clicking a buffer-line entry while it's focused),
         // redirect to the nearest non-explorer window first.
