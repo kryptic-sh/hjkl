@@ -1258,9 +1258,12 @@ fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect, is_focus
         return;
     }
 
-    // Inner content row: `/query` left, `matches/total` flush-right.
+    // Inner content row: `/query` left, `matches/total` flush-right. When the
+    // field is closed, fall back to the committed filter so a committed search
+    // stays visible in the box.
     let display: String = field
         .map(|f| f.text().lines().next().unwrap_or("").to_string())
+        .or_else(|| app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone()))
         .unwrap_or_default();
     let left = format!("/{display}");
     let badge: String = match app.explorer.as_ref() {

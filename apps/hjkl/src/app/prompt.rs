@@ -579,7 +579,7 @@ impl App {
     /// slot in later without touching every `/` call site.
     fn try_buffer_search_override(&mut self, _dir: SearchDir) -> bool {
         if self.active().is_explorer {
-            self.open_explorer_search();
+            self.open_explorer_search(true);
             return true;
         }
         false

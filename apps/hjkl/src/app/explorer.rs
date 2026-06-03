@@ -1296,17 +1296,33 @@ impl super::App {
 
     // ── Explorer search (fuzzy filter) ────────────────────────────────────────
 
-    /// `/` in explorer Normal mode: open a vim-editable fuzzy-filter field.
-    /// Clears any prior filter so the field starts on the full tree.
-    pub(crate) fn open_explorer_search(&mut self) {
-        // Start with a fresh full tree — don't filter until first keystroke.
-        if let Some(ref mut ep) = self.explorer {
-            ep.tree.clear_filter();
-        }
-        self.explorer_rebuild_buffer();
+    /// Open the explorer's vim-editable fuzzy-filter field. The field is seeded
+    /// with any committed filter query so re-focusing keeps the current search
+    /// visible (Enter commits without clearing; only Esc cancels). `insert`
+    /// picks the starting mode: `true` (via `/` or click) drops straight into
+    /// insert; `false` (via `k` from the top row) lands in normal mode so `j`
+    /// moves back down into the tree.
+    pub(crate) fn open_explorer_search(&mut self, insert: bool) {
+        // Seed from the committed filter so the box keeps showing it.
+        let seed = self
+            .explorer
+            .as_ref()
+            .and_then(|ep| ep.tree.filter.clone())
+            .unwrap_or_default();
 
         let mut field = hjkl_form::TextFieldEditor::new(true);
         field.enter_insert_at_end();
+        for c in seed.chars() {
+            field.handle_input(hjkl_engine::Input {
+                key: hjkl_engine::Key::Char(c),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            });
+        }
+        if !insert {
+            field.enter_normal();
+        }
         self.explorer_search = Some(field);
     }
 
@@ -1378,6 +1394,21 @@ impl super::App {
                 }
             }
             return;
+        }
+
+        // In NORMAL mode, `j`/Down returns focus to the tree (keeps the
+        // committed filter — this is navigation, not a cancel).
+        {
+            use crossterm::event::KeyCode;
+            let in_normal = self
+                .explorer_search
+                .as_ref()
+                .map(|f| f.vim_mode() == VimMode::Normal)
+                .unwrap_or(false);
+            if in_normal && matches!(key.code, KeyCode::Char('j') | KeyCode::Down) {
+                self.explorer_search = None;
+                return;
+            }
         }
 
         // Backspace on empty prompt → cancel.

@@ -413,7 +413,9 @@ impl App {
                         false
                     };
                     if at_top {
-                        self.open_explorer_search();
+                        // Focus the search box in NORMAL mode so `j` returns to
+                        // the tree (and `i`/`a` start editing).
+                        self.open_explorer_search(false);
                         return KeyOutcome::Continue;
                     }
                     // not at top: fall through to engine for normal movement.
@@ -1057,7 +1059,7 @@ impl App {
                                 self.switch_focus(win_id);
                             }
                             if self.explorer_search.is_none() {
-                                self.open_explorer_search();
+                                self.open_explorer_search(true);
                             } else if let Some(f) = self.explorer_search.as_mut() {
                                 f.enter_insert_at_end();
                             }
