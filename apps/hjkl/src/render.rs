@@ -693,6 +693,12 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             area.y = area.y.saturating_add(box_h);
             area.height = area.height.saturating_sub(box_h);
         }
+        // 1-col left/right padding for the file list so it isn't flush against
+        // the pane edges (aligns the tree with the search box's inner text).
+        if area.width >= 2 {
+            area.x += 1;
+            area.width -= 2;
+        }
     }
 
     let s = app.slots()[slot_idx].editor.settings();
