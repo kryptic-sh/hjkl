@@ -307,6 +307,23 @@ pub struct EolHint {
     pub style: Style,
 }
 
+/// Average two terminal colors channel-wise. Used to blend the fold-header bg
+/// with the cursorline (or ghost-cursorline) bg when both land on the same
+/// row, so the line reads as "fold AND cursor" instead of one overriding the
+/// other. Falls back to the first color when either side isn't a concrete RGB
+/// value (named/indexed colors can't be averaged meaningfully).
+fn mix_colors(a: ratatui::style::Color, b: ratatui::style::Color) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    match (a, b) {
+        (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => Color::Rgb(
+            ((r1 as u16 + r2 as u16) / 2) as u8,
+            ((g1 as u16 + g2 as u16) / 2) as u8,
+            ((b1 as u16 + b2 as u16) / 2) as u8,
+        ),
+        _ => a,
+    }
+}
+
 /// Glyph for the fold-indicator column at `doc_row`:
 ///   `▾` open fold start · `▸` closed fold start ·
 ///   `│` row inside an open fold body · ` ` no fold.
@@ -467,12 +484,23 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 );
                 // Overlay fold bg across the full row (gutter + text) so the
                 // collapsed fold header is visually distinct. Patched so only
-                // bg changes — fg, glyphs, and text are preserved.
+                // bg changes — fg, glyphs, and text are preserved. When the
+                // cursor row (or an unfocused window's ghost cursor row) lands
+                // on the fold header, blend the two backgrounds so the row
+                // reads as "fold AND cursorline" instead of one hiding the
+                // other.
                 if self.fold_line_bg != Style::default() {
+                    let overlay =
+                        match (is_cursor_row, self.fold_line_bg.bg, self.cursor_line_bg.bg) {
+                            (true, Some(fold_bg), Some(cur_bg)) => {
+                                Style::default().bg(mix_colors(fold_bg, cur_bg))
+                            }
+                            _ => self.fold_line_bg,
+                        };
                     let y = area.y + screen_row;
                     for x in area.x..(area.x + area.width) {
                         if let Some(cell) = term_buf.cell_mut((x, y)) {
-                            cell.set_style(cell.style().patch(self.fold_line_bg));
+                            cell.set_style(cell.style().patch(overlay));
                         }
                     }
                 }
@@ -2470,6 +2498,73 @@ mod tests {
         );
         // Row 2: "e" (the 5th doc row, after the collapsed range).
         assert_eq!(term.cell((0, 2)).unwrap().symbol(), "e");
+    }
+
+    #[test]
+    fn mix_colors_averages_rgb_channels() {
+        use ratatui::style::Color;
+        assert_eq!(
+            super::mix_colors(Color::Rgb(0x10, 0x20, 0x30), Color::Rgb(0x30, 0x40, 0x50)),
+            Color::Rgb(0x20, 0x30, 0x40),
+        );
+        // Non-RGB → falls back to the first color (can't average named/indexed).
+        assert_eq!(
+            super::mix_colors(Color::Rgb(0x10, 0x20, 0x30), Color::Blue),
+            Color::Rgb(0x10, 0x20, 0x30),
+        );
+    }
+
+    /// When the cursorline lands on a closed fold header, the row bg is the
+    /// BLEND of `fold_line_bg` and `cursor_line_bg`, not either one alone.
+    #[test]
+    fn fold_header_on_cursor_row_blends_bgs() {
+        let mut b = Buffer::from_str("a\nb\nc\nd\ne");
+        let v = vp(30, 5);
+        b.add_fold(1, 3, true);
+        let fold_bg = Color::Rgb(0x40, 0x20, 0x60);
+        let cursor_bg = Color::Rgb(0x20, 0x30, 0x40);
+        let blended = Color::Rgb(0x30, 0x28, 0x50); // channel-wise average
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default().bg(cursor_bg),
+            // Cursor is on doc row 1 — the fold header row.
+            cursor_line_row: Some(1),
+            fold_line_bg: Style::default().bg(fold_bg),
+            folds_override: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            eol_hints: &[],
+            blame_plan: None,
+        };
+        let term = run_render(view, 30, 5);
+        // Row 1 is the fold header AND the cursor row → blended bg.
+        assert_eq!(
+            term.cell((0, 1)).unwrap().bg,
+            blended,
+            "fold header on the cursor row must blend fold + cursorline bg"
+        );
     }
 
     #[test]
