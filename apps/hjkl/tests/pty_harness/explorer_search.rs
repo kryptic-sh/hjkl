@@ -16,15 +16,16 @@ fn explorer_slash_shows_search_prompt() {
     s.keys("<Space>e");
     s.keys("/");
 
-    // The search bar renders at the TOP of the explorer pane (row 0), not the
-    // bottom status line.
+    // The search input renders as a titled rounded box at the TOP of the
+    // explorer pane (not the bottom status line). The top rows show the
+    // "Explorer" title and the `/` query prefix inside the box.
     let top: String = (0..3).map(|r| s.line(r)).collect::<Vec<_>>().join("\n");
     let dump: String = (0..24)
         .map(|r| format!("{r:>2}|{}", s.line(r)))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        top.lines().any(|l| l.trim_start().starts_with('/')),
-        "after `/` the explorer fuzzy-search bar (leading `/`) must show at the top.\n{dump}"
+        top.contains("Explorer") && top.contains('/'),
+        "after `/` the explorer search box (titled `Explorer`, with a `/` query) must show at the top.\n{dump}"
     );
 }

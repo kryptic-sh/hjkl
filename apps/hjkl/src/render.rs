@@ -676,15 +676,22 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         )
     };
 
-    // Explorer top search bar: when this focused explorer window has an active
-    // fuzzy-search field, carve its top row for the search input and render the
-    // tree below it. `last_rect` (recorded above) stays the full window.
+    // Explorer top search box: when this focused explorer window has an active
+    // fuzzy-search field, carve a rounded 3-row box at the top for the search
+    // input and render the tree below it. `last_rect` (recorded above) stays the
+    // full window. Degrades to whatever height is available on tiny panes.
     let mut area = area;
     if is_focused && app.explorer_search.is_some() && app.slots()[slot_idx].is_explorer {
-        let search_row = Rect { height: 1, ..area };
-        render_explorer_search_bar(frame, app, search_row);
-        area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(1);
+        let box_h = 3u16.min(area.height);
+        if box_h > 0 {
+            let search_box = Rect {
+                height: box_h,
+                ..area
+            };
+            render_explorer_search_bar(frame, app, search_box);
+            area.y = area.y.saturating_add(box_h);
+            area.height = area.height.saturating_sub(box_h);
+        }
     }
 
     let s = app.slots()[slot_idx].editor.settings();
@@ -1214,38 +1221,63 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     }
 }
 
-/// Render the explorer's fuzzy-search input as a one-row bar at the TOP of the
-/// explorer pane (not the bottom status line, which stays the normal one for
-/// ordinary buffers). Echoes the live query + a right-aligned match/total badge,
-/// and places the terminal cursor on the bar.
+/// Render the explorer's fuzzy-search input as a rounded box at the TOP of the
+/// explorer pane (neo-tree / Snacks.explorer style), not the bottom status line
+/// (which stays the normal one for ordinary buffers). The box is titled
+/// `Explorer`; the inner row shows the live `/query` on the left and a
+/// `matches/total` badge flush-right. Places the terminal cursor in the box.
 fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect) {
+    use ratatui::widgets::BorderType;
+
     let Some(field) = app.explorer_search.as_ref() else {
         return;
     };
-    let text = field.text();
-    let display: String = text.lines().next().unwrap_or("").to_string();
-    // Right-align a match/total badge when a filter is active.
+
+    // Rounded bordered box with an "Explorer" title in the top border.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.theme.ui.border_active))
+        .title(" Explorer ")
+        .title_style(
+            Style::default()
+                .fg(app.theme.ui.border_active)
+                .add_modifier(Modifier::BOLD),
+        );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // Inner content row: `/query` left, `matches/total` flush-right.
+    let display: String = field.text().lines().next().unwrap_or("").to_string();
+    let left = format!("/{display}");
     let badge: String = match app.explorer.as_ref() {
         Some(ep) if ep.tree.filter.is_some() => {
-            format!(" {}/{}", ep.tree.match_count, ep.tree.total_count)
+            format!("{}/{}", ep.tree.match_count, ep.tree.total_count)
         }
         _ => String::new(),
     };
-    let prefix = "/";
-    let width = area.width;
+    let iw = inner.width as usize;
     let content = if badge.is_empty() {
-        format!("{prefix}{display}")
+        left
     } else {
-        // Pad so the badge sits flush-right.
-        let used = prefix.len() + display.len() + badge.len();
-        let pad = (width as usize).saturating_sub(used);
-        format!("{prefix}{display}{}{badge}", " ".repeat(pad))
+        let pad = iw.saturating_sub(left.chars().count() + badge.chars().count() + 1);
+        format!("{left}{}{badge} ", " ".repeat(pad))
     };
-    let theme = prompt_theme(&app.theme.ui);
-    let line = build_prompt_line(&content, field.vim_mode(), &theme, width);
-    frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
+    frame.render_widget(
+        Paragraph::new(content).style(Style::default().fg(app.theme.ui.search_fg)),
+        inner,
+    );
+
+    // Cursor sits after the `/` prefix at the field's caret column.
     let (_, ccol) = field.cursor();
-    frame.set_cursor_position((area.x + 1 + ccol as u16, area.y));
+    let cx = inner.x + 1 + ccol as u16;
+    if cx < inner.x + inner.width {
+        frame.set_cursor_position((cx, inner.y));
+    }
 }
 
 /// Render the completion popup, floating below the cursor position.
