@@ -872,7 +872,14 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         .collect();
     visible_signs.sort_by_key(|s| s.row);
 
-    let selection = app.slots()[slot_idx].editor.buffer_selection();
+    // Visual selection belongs to the focused window only. The selection is
+    // editor state shared by every window on the same slot, so an unfocused
+    // split would otherwise paint the active window's selection too.
+    let selection = if is_focused {
+        app.slots()[slot_idx].editor.buffer_selection()
+    } else {
+        None
+    };
     let buffer_spans = app.slots()[slot_idx].editor.buffer_spans();
     let search_pattern = app.slots()[slot_idx].editor.search_state().pattern.as_ref();
 
