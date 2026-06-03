@@ -8,6 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- File explorer (#55): file operations and richer navigation. New keys when the
+  explorer is focused — `a` create (trailing `/` makes a directory), `r` rename,
+  `d` delete (with a `[y/N]` confirm), `y`/`x` copy/cut and `p` paste (move on
+  cut, recursive copy for directories); `s`/`v`/`t` open the file under the
+  cursor in a horizontal split, vertical split, or new tab; `R` refresh, `H`
+  toggle hidden dotfiles (hidden by default now), `-` set the tree root to the
+  parent directory. Opening the explorer reveals the active buffer's file
+  (expands its ancestors and places the cursor on it). Create/rename use an
+  in-status text prompt; delete uses a confirm prompt.
+
 ## [0.29.0] - 2026-06-02
 
 ### Added
