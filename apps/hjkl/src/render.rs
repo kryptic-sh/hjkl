@@ -906,8 +906,11 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // The active column is the deepest guide column at the cursor's indent level:
     //   active_col = floor((leading_vcols - 1) / sw) * sw
     // Returns None when sw == 0 or the cursor row has no leading whitespace.
+    // Only the focused window highlights its active indent column — it keys off
+    // the shared editor cursor, so an unfocused window would otherwise track the
+    // active window's cursor instead of staying put.
     let indent_guide_active_col: Option<usize> =
-        if indent_guides_enabled && indent_guide_shiftwidth > 0 {
+        if is_focused && indent_guides_enabled && indent_guide_shiftwidth > 0 {
             let cursor_row = app.slots()[slot_idx].editor.buffer().cursor().row;
             let rope = app.slots()[slot_idx].editor.buffer().rope();
             let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor_row);
