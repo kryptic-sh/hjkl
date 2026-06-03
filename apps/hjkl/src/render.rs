@@ -784,7 +784,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         || app.search_field.is_some()
         || app.picker.is_some()
         || app.explorer_prompt.is_some()
-        || app.explorer_confirm.is_some();
+        || app.explorer_confirm.is_some()
+        || app.explorer_search.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
@@ -1780,6 +1781,38 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
                     .add_modifier(Modifier::BOLD),
             )]),
             None,
+        );
+    }
+
+    // ── Explorer fuzzy-search field ────────────────────────────────────────
+    if let Some(ref field) = app.explorer_search {
+        let text = field.text();
+        let display: String = text.lines().next().unwrap_or("").to_string();
+        // Right-align a match/total badge when a filter is active.
+        let badge: String = if let Some(ref ep) = app.explorer {
+            if ep.tree.filter.is_some() {
+                format!(" {}/{}", ep.tree.match_count, ep.tree.total_count)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        let prefix = "/";
+        let content = if badge.is_empty() {
+            format!("{prefix}{display}")
+        } else {
+            // Pad so the badge sits flush-right.
+            let used = prefix.len() + display.len() + badge.len();
+            let pad = (width as usize).saturating_sub(used);
+            format!("{prefix}{display}{}{badge}", " ".repeat(pad))
+        };
+        let (_, ccol) = field.cursor();
+        let cursor_col = 1u16 + ccol as u16;
+        let theme = prompt_theme(&app.theme.ui);
+        return (
+            build_prompt_line(&content, field.vim_mode(), &theme, width),
+            Some(cursor_col),
         );
     }
 

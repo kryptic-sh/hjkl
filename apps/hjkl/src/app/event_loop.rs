@@ -330,6 +330,12 @@ impl App {
             self.context_menu = None;
         }
 
+        // ── Explorer fuzzy-search field ───────────────────────────
+        if self.explorer_search.is_some() {
+            self.handle_explorer_search_key(key);
+            return KeyOutcome::Continue;
+        }
+
         // ── Explorer text prompt (create / rename) ────────────────
         if self.explorer_prompt.is_some() {
             self.handle_explorer_prompt_key(key);
@@ -435,6 +441,28 @@ impl App {
                 KeyCode::Char('-') => {
                     self.explorer_root_up();
                     return KeyOutcome::Continue;
+                }
+                // Open fuzzy-search field
+                KeyCode::Char('/') => {
+                    self.open_explorer_search();
+                    return KeyOutcome::Continue;
+                }
+                // Esc while no search field open but a committed filter is active
+                // → clear the filter and restore the full tree.
+                KeyCode::Esc => {
+                    let has_filter = self
+                        .explorer
+                        .as_ref()
+                        .map(|ep| ep.tree.filter.is_some())
+                        .unwrap_or(false);
+                    if has_filter {
+                        if let Some(ref mut ep) = self.explorer {
+                            ep.tree.clear_filter();
+                        }
+                        self.explorer_rebuild_buffer();
+                        return KeyOutcome::Continue;
+                    }
+                    // No filter — fall through to engine (normal Esc behaviour).
                 }
                 _ => {} // fall through to engine
             }

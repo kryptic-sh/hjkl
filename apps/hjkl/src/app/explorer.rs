@@ -7,7 +7,7 @@
 //! those for free because the explorer is now a real left window in the layout
 //! tree.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 // ── Prompt / confirm / clipboard state ────────────────────────────────────────
@@ -78,6 +78,15 @@ pub(crate) struct ExplorerTree {
     /// When `false` (default), entries whose name starts with `.` are hidden.
     /// `H` toggles this on/off.
     pub(crate) show_hidden: bool,
+    /// Active fuzzy filter query. `None` = unfiltered (normal expansion mode).
+    /// When `Some`, `rebuild` performs a full recursive walk and only shows
+    /// files that fuzzy-match the query, plus their ancestor dirs.
+    pub(crate) filter: Option<String>,
+    /// Number of files that matched the last filtered rebuild. 0 when unfiltered.
+    pub(crate) match_count: usize,
+    /// Total number of files visited during the last filtered rebuild. 0 when
+    /// unfiltered.
+    pub(crate) total_count: usize,
 }
 
 impl ExplorerTree {
@@ -91,6 +100,9 @@ impl ExplorerTree {
             expanded,
             nodes: Vec::new(),
             show_hidden: false,
+            filter: None,
+            match_count: 0,
+            total_count: 0,
         };
         tree.rebuild();
         tree
@@ -155,7 +167,20 @@ impl ExplorerTree {
     }
 
     /// Rebuild the flattened node list from the current expansion state.
+    ///
+    /// When `self.filter` is `Some(q)`, performs a full bounded recursive walk
+    /// of the filesystem under `root`, scores each file with `hjkl_picker::score`,
+    /// and builds a force-expanded filtered view. Otherwise falls back to the
+    /// lazy expansion-set walk.
     pub(crate) fn rebuild(&mut self) {
+        if let Some(ref q) = self.filter.clone() {
+            self.rebuild_filtered(q);
+        } else {
+            self.rebuild_unfiltered();
+        }
+    }
+
+    fn rebuild_unfiltered(&mut self) {
         let mut out = Vec::new();
         let root = self.root.clone();
         out.push(ExplorerNode {
@@ -169,6 +194,150 @@ impl ExplorerTree {
             self.push_children(&root, 1, &[], &mut out);
         }
         self.nodes = out;
+        self.match_count = 0;
+        self.total_count = 0;
+    }
+
+    /// Full recursive fs walk under `root`, filtered to fuzzy-matching files.
+    /// Cap total entries visited at 20_000 to bound scan time on huge trees.
+    fn rebuild_filtered(&mut self, query: &str) {
+        // Walk the entire tree under root, collecting matching files.
+        const CAP: usize = 20_000;
+        let root = self.root.clone();
+        let root_str = root.to_string_lossy().to_string();
+        let root_str_len = root_str.len();
+
+        let mut visited: usize = 0;
+        let mut truncated = false;
+        // file_path → score (only files that matched)
+        let mut scored: HashMap<PathBuf, i64> = HashMap::new();
+        let mut total: usize = 0;
+
+        // Iterative DFS using a stack of dirs to visit.
+        let mut dir_stack: Vec<PathBuf> = vec![root.clone()];
+        while let Some(dir) = dir_stack.pop() {
+            if visited >= CAP {
+                truncated = true;
+                break;
+            }
+            let children = self.read_children(&dir);
+            for (path, is_dir) in children {
+                visited += 1;
+                if visited > CAP {
+                    truncated = true;
+                    break;
+                }
+                if is_dir {
+                    dir_stack.push(path);
+                } else {
+                    total += 1;
+                    // Score relative path so matches feel project-relative.
+                    let full = path.to_string_lossy();
+                    let rel = if full.starts_with(&root_str) {
+                        let stripped = &full[root_str_len..];
+                        stripped.trim_start_matches(std::path::MAIN_SEPARATOR)
+                    } else {
+                        full.as_ref()
+                    };
+                    if let Some((s, _)) = hjkl_picker::score(rel, query) {
+                        scored.insert(path, s);
+                    }
+                }
+            }
+        }
+
+        if truncated {
+            tracing::debug!(
+                cap = CAP,
+                "explorer filter walk capped at {CAP} entries; tree may be incomplete"
+            );
+        }
+
+        self.match_count = scored.len();
+        self.total_count = total;
+
+        // Build the ancestor set: every dir from a matched file up to root.
+        let mut show: HashSet<PathBuf> = HashSet::new();
+        show.insert(root.clone());
+        for path in scored.keys() {
+            let mut cur = path.parent();
+            while let Some(p) = cur {
+                show.insert(p.to_path_buf());
+                if p == root {
+                    break;
+                }
+                cur = p.parent();
+            }
+        }
+        // Also insert matched files themselves into show.
+        for path in scored.keys() {
+            show.insert(path.clone());
+        }
+
+        // DFS to build nodes — force-expanded, include only `show` members.
+        let mut out = Vec::new();
+        out.push(ExplorerNode {
+            path: root.clone(),
+            depth: 0,
+            is_dir: true,
+            is_last: true,
+            branches: Vec::new(),
+        });
+        self.push_children_filtered(&root, 1, &[], &show, &mut out);
+        self.nodes = out;
+    }
+
+    /// Recursive helper for filtered rebuild — mirrors `push_children` but
+    /// limits children to those in `show` and always recurses into dirs
+    /// (force-expanded).
+    fn push_children_filtered(
+        &self,
+        dir: &Path,
+        depth: usize,
+        prefix: &[bool],
+        show: &HashSet<PathBuf>,
+        out: &mut Vec<ExplorerNode>,
+    ) {
+        let children = self.read_children(dir);
+        // Keep only children that are in the show set.
+        let visible: Vec<(PathBuf, bool)> = children
+            .into_iter()
+            .filter(|(p, _)| show.contains(p))
+            .collect();
+        let n = visible.len();
+        for (i, (path, is_dir)) in visible.into_iter().enumerate() {
+            let is_last = i + 1 == n;
+            out.push(ExplorerNode {
+                path: path.clone(),
+                depth,
+                is_dir,
+                is_last,
+                branches: prefix.to_vec(),
+            });
+            if is_dir {
+                let mut child_prefix = prefix.to_vec();
+                child_prefix.push(!is_last);
+                self.push_children_filtered(&path, depth + 1, &child_prefix, show, out);
+            }
+        }
+    }
+
+    /// Apply a fuzzy filter query. Empty string → clears the filter.
+    /// Triggers a `rebuild`.
+    pub(crate) fn apply_filter(&mut self, query: &str) {
+        let q = query.trim();
+        if q.is_empty() {
+            self.filter = None;
+        } else {
+            self.filter = Some(q.to_string());
+        }
+        self.rebuild();
+    }
+
+    /// Clear the active filter and rebuild.
+    pub(crate) fn clear_filter(&mut self) {
+        self.filter = None;
+        self.rebuild();
     }
 
     /// Toggle the expansion of the directory at `path`. Returns `true` if the
@@ -486,7 +655,7 @@ impl super::App {
 
     /// Rebuild the explorer buffer text (after expand/collapse). Keeps the
     /// cursor row on the same path when possible.
-    fn explorer_rebuild_buffer(&mut self) {
+    pub(crate) fn explorer_rebuild_buffer(&mut self) {
         let Some(slot_idx) = self.explorer_slot_idx() else {
             return;
         };
@@ -1075,6 +1244,119 @@ impl super::App {
             _ => {} // consume but do nothing
         }
     }
+
+    // ── Explorer search (fuzzy filter) ────────────────────────────────────────
+
+    /// `/` in explorer Normal mode: open a vim-editable fuzzy-filter field.
+    /// Clears any prior filter so the field starts on the full tree.
+    pub(crate) fn open_explorer_search(&mut self) {
+        // Start with a fresh full tree — don't filter until first keystroke.
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.clear_filter();
+        }
+        self.explorer_rebuild_buffer();
+
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        self.explorer_search = Some(field);
+    }
+
+    /// Re-filter the tree from the current field text and move cursor to the
+    /// first matched file row.
+    pub(crate) fn explorer_apply_search(&mut self) {
+        let text = match self.explorer_search.as_ref() {
+            Some(f) => f.text(),
+            None => return,
+        };
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.apply_filter(&text);
+        }
+        self.explorer_rebuild_buffer();
+
+        // Move cursor to the first matched file row (first non-dir, non-root node).
+        let first_match = self
+            .explorer
+            .as_ref()
+            .and_then(|ep| ep.tree.nodes.iter().position(|n| !n.is_dir));
+        let win_id = self.explorer.as_ref().map(|ep| ep.win_id);
+        if let (Some(row), Some(win_id)) = (first_match, win_id) {
+            if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                win.cursor_row = row;
+                win.cursor_col = 0;
+            }
+            let fw = self.focused_window();
+            if fw == win_id {
+                self.sync_viewport_to_explorer_editor();
+            }
+        }
+    }
+
+    /// Key handler while `explorer_search` is active — mirrors
+    /// `handle_search_field_key` minus history / `<C-f>`.
+    pub(crate) fn handle_explorer_search_key(&mut self, key: crossterm::event::KeyEvent) {
+        use hjkl_engine::{Key as EngineKey, VimMode};
+
+        let input = hjkl_engine_tui::crossterm_to_input(key);
+
+        // Enter → commit (close the field, keep filter, cursor on first match).
+        if input.key == EngineKey::Enter {
+            self.explorer_search = None;
+            // Cursor was already placed on first match by the last
+            // explorer_apply_search call. Nothing more to do.
+            return;
+        }
+
+        // Esc logic:
+        //   - empty field → cancel (clear filter + close)
+        //   - Insert mode → enter Normal mode
+        //   - Normal mode, non-empty → cancel (clear filter + close)
+        if input.key == EngineKey::Esc {
+            let (is_empty, is_insert) = match self.explorer_search.as_ref() {
+                Some(f) => (f.text().is_empty(), f.vim_mode() == VimMode::Insert),
+                None => return,
+            };
+            if is_empty || !is_insert {
+                // Cancel: close + clear filter.
+                self.explorer_search = None;
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.clear_filter();
+                }
+                self.explorer_rebuild_buffer();
+            } else {
+                // Insert → Normal.
+                if let Some(ref mut f) = self.explorer_search {
+                    f.enter_normal();
+                }
+            }
+            return;
+        }
+
+        // Backspace on empty prompt → cancel.
+        if input.key == EngineKey::Backspace {
+            let is_empty = self
+                .explorer_search
+                .as_ref()
+                .map(|f| f.text().is_empty())
+                .unwrap_or(true);
+            if is_empty {
+                self.explorer_search = None;
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.clear_filter();
+                }
+                self.explorer_rebuild_buffer();
+                return;
+            }
+        }
+
+        // Forward the key to the field; live-filter if content changed.
+        let dirty = match self.explorer_search.as_mut() {
+            Some(f) => f.handle_input(input),
+            None => return,
+        };
+        if dirty {
+            self.explorer_apply_search();
+        }
+    }
 }
 
 /// Width of the explorer window in columns.
@@ -1474,6 +1756,150 @@ mod tests {
         });
         app.explorer_commit_delete();
         assert!(!path.exists(), "b_dir should be deleted");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ── Plan Verification: fuzzy filter tests ──────────────────────────────
+
+    /// Tree fixture for filter tests:
+    /// root/{ src/{ buffer_ops.rs, main.rs }, tests/{ buffer_test.rs }, readme.md }
+    fn make_filter_tree() -> PathBuf {
+        let base = std::env::temp_dir().join(format!("hjkl_filter_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("src")).unwrap();
+        fs::create_dir_all(base.join("tests")).unwrap();
+        fs::write(base.join("src").join("buffer_ops.rs"), "x").unwrap();
+        fs::write(base.join("src").join("main.rs"), "x").unwrap();
+        fs::write(base.join("tests").join("buffer_test.rs"), "x").unwrap();
+        fs::write(base.join("readme.md"), "x").unwrap();
+        base
+    }
+
+    #[test]
+    fn filter_keeps_matching_files_and_ancestors() {
+        let root = make_filter_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        tree.apply_filter("buf");
+
+        // buffer_ops.rs and buffer_test.rs should match; main.rs and readme.md
+        // should be absent.
+        let paths: Vec<String> = tree
+            .nodes
+            .iter()
+            .filter_map(|n| n.path.file_name().map(|f| f.to_string_lossy().into_owned()))
+            .collect();
+
+        assert!(
+            paths.contains(&"buffer_ops.rs".to_string()),
+            "buffer_ops.rs must be present: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"buffer_test.rs".to_string()),
+            "buffer_test.rs must be present: {paths:?}"
+        );
+        // Ancestor dirs must appear too.
+        assert!(
+            paths.contains(&"src".to_string()),
+            "src dir must be present as ancestor: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"tests".to_string()),
+            "tests dir must be present as ancestor: {paths:?}"
+        );
+        // Non-matching files must be absent.
+        assert!(
+            !paths.contains(&"main.rs".to_string()),
+            "main.rs must NOT be present: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"readme.md".to_string()),
+            "readme.md must NOT be present: {paths:?}"
+        );
+        // match_count must equal 2 (buffer_ops.rs + buffer_test.rs).
+        assert_eq!(
+            tree.match_count, 2,
+            "match_count should be 2, got {}",
+            tree.match_count
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn filter_empty_query_equals_full_tree() {
+        let root = make_filter_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        // Count nodes with no filter (default: root + dirs only at top level,
+        // since a_dir etc. are collapsed). We expand everything manually.
+        for entry in fs::read_dir(&root).unwrap().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                tree.expanded.insert(p);
+            }
+        }
+        tree.rebuild();
+        let unfiltered_count = tree.nodes.len();
+
+        // Apply and then clear the filter.
+        tree.apply_filter("buf");
+        assert!(
+            tree.nodes.len() < unfiltered_count,
+            "filtered should be shorter"
+        );
+
+        tree.apply_filter(""); // empty → clear
+        assert_eq!(
+            tree.nodes.len(),
+            unfiltered_count,
+            "after clearing filter, node count must equal unfiltered count"
+        );
+        assert!(
+            tree.filter.is_none(),
+            "filter should be None after empty apply"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn filter_nodes_have_no_orphans() {
+        let root = make_filter_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        tree.apply_filter("buf");
+
+        // Every non-root node's parent path must appear in the node list.
+        let node_paths: HashSet<PathBuf> = tree.nodes.iter().map(|n| n.path.clone()).collect();
+        for node in &tree.nodes {
+            if node.depth == 0 {
+                continue;
+            }
+            let parent = node.path.parent().map(|p| p.to_path_buf());
+            if let Some(p) = parent {
+                assert!(
+                    node_paths.contains(&p),
+                    "node {:?} has no parent in the node list (orphan)",
+                    node.path
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn filter_no_match_yields_only_root() {
+        let root = make_filter_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        tree.apply_filter("xyzzy_no_match_possible");
+
+        assert_eq!(
+            tree.nodes.len(),
+            1,
+            "a query matching nothing should yield only the root node"
+        );
+        assert_eq!(tree.nodes[0].path, root, "the sole node should be the root");
+        assert_eq!(tree.match_count, 0, "match_count must be 0");
+
         let _ = fs::remove_dir_all(&root);
     }
 }

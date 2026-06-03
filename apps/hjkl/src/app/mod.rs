@@ -182,6 +182,10 @@ pub struct App {
     pub(crate) explorer_confirm: Option<explorer::ExplorerConfirm>,
     /// Explorer copy/cut clipboard. Persists until overwritten or pasted.
     pub(crate) explorer_clip: Option<explorer::ExplorerClip>,
+    /// Active explorer fuzzy-search field. `None` when closed.
+    /// When `Some`, the bottom prompt row shows a `/`-prefixed vim-editable
+    /// field and the tree is live-filtered to fuzzy matches.
+    pub(crate) explorer_search: Option<hjkl_form::TextFieldEditor>,
     /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
     /// `icons` config setting.
     pub(crate) icon_mode: hjkl_icons::IconMode,
@@ -1348,6 +1352,7 @@ impl App {
             explorer_prompt: None,
             explorer_confirm: None,
             explorer_clip: None,
+            explorer_search: None,
             icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
