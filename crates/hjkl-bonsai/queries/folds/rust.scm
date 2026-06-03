@@ -37,3 +37,8 @@
 
 ; Macro definitions
 (macro_definition) @fold
+
+; Multi-line macro invocations (e.g. `concat!( … )`, `vec![ … ]`, `lazy_static! { … }`).
+; Single-line calls like `println!("x")` are filtered out by the extractor,
+; which only folds nodes spanning more than one row.
+(macro_invocation) @fold
