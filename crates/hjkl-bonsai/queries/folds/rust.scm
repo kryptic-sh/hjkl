@@ -21,6 +21,10 @@
 ; Modules
 (mod_item) @fold
 
+; Multi-line `use a::{ … };` import lists (single-line uses are skipped by the
+; extractor's one-row filter).
+(use_declaration) @fold
+
 ; Match expressions
 (match_expression) @fold
 
