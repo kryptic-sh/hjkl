@@ -952,6 +952,52 @@ impl super::App {
         vp.top_row = top;
     }
 
+    /// "Follow" the active buffer in the explorer: when the explorer is open,
+    /// reveal the active buffer's file (expand its ancestors) and move the
+    /// explorer's selection to it — so the buffer you're editing is the
+    /// highlighted row in the tree. Does NOT change window focus. No-op for
+    /// scratch buffers or files outside the tree root.
+    pub(crate) fn explorer_reveal_active(&mut self) {
+        if self.explorer.is_none() {
+            return;
+        }
+        let Some(fname) = self.active().filename.clone() else {
+            return;
+        };
+        // Tree nodes are absolute (root = cwd); the active filename may be cwd-
+        // relative. Resolve to absolute before matching.
+        let abs = if fname.is_absolute() {
+            fname
+        } else {
+            std::env::current_dir()
+                .map(|c| c.join(&fname))
+                .unwrap_or(fname)
+        };
+
+        let win_id;
+        let row;
+        {
+            let Some(ep) = self.explorer.as_mut() else {
+                return;
+            };
+            if !abs.starts_with(&ep.tree.root) {
+                return; // file isn't under the explorer's root
+            }
+            win_id = ep.win_id;
+            row = ep.tree.reveal(&abs);
+        }
+        self.explorer_rebuild_buffer();
+        if let Some(r) = row {
+            if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                win.cursor_row = r;
+                win.cursor_col = 0;
+            }
+            // Sync the explorer editor cursor so the (usually unfocused)
+            // cursorline highlights the revealed row.
+            self.sync_viewport_to_explorer_editor();
+        }
+    }
+
     /// Enter/l/o on the explorer: toggle dir or open file.
     pub(crate) fn explorer_activate(&mut self) {
         // Determine the cursor row in the explorer window.

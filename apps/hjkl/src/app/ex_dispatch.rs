@@ -1712,6 +1712,8 @@ impl App {
                     self.bus.info(format!("\"{path_display}\" {line_count}L"));
                 }
                 self.refresh_git_signs_force();
+                // Follow the opened buffer in the explorer (select its row).
+                self.explorer_reveal_active();
             }
             Err(msg) => {
                 self.bus.info(msg);

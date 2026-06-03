@@ -54,6 +54,8 @@ impl App {
         // refactor) — no need for a preview_render warm-up paint.
         self.recompute_and_install();
         self.refresh_git_signs_force();
+        // Follow the new active buffer in the explorer (select its row).
+        self.explorer_reveal_active();
     }
 
     /// `:bnext` — cycle active forward, skipping `is_explorer` slots.
