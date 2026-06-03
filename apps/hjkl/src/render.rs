@@ -1238,18 +1238,13 @@ fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect, is_focus
 
     let field = app.explorer_search.as_ref();
     let active = field.is_some();
-    // Brighter border when the search field is active; dim chrome otherwise.
-    let border_color = if active && is_focused {
-        app.theme.ui.border_active
-    } else {
-        app.theme.ui.border
-    };
 
-    // Rounded bordered box with an "Explorer" title in the top border.
+    // Rounded bordered box with an "Explorer" title in the top border. Always
+    // uses the active border color — the cursor position already signals focus.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
+        .border_style(Style::default().fg(app.theme.ui.border_active))
         .title(" Explorer ")
         .title_style(
             Style::default()

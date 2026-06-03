@@ -399,6 +399,25 @@ impl App {
                     self.explorer_collapse();
                     return KeyOutcome::Continue;
                 }
+                // `k`/Up from the top tree row moves focus up into the search
+                // box. Anywhere else, fall through to the engine for normal
+                // upward movement.
+                KeyCode::Char('k') | KeyCode::Up => {
+                    let at_top = if let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) {
+                        self.windows
+                            .get(win_id)
+                            .and_then(|w| w.as_ref())
+                            .map(|w| w.cursor_row == 0)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    if at_top {
+                        self.open_explorer_search();
+                        return KeyOutcome::Continue;
+                    }
+                    // not at top: fall through to engine for normal movement.
+                }
                 // File ops
                 KeyCode::Char('a') => {
                     self.explorer_create();
