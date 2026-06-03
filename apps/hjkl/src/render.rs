@@ -1060,6 +1060,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         spans: buffer_spans,
         search_pattern,
         non_text_style: Style::default().fg(app.theme.ui.non_text),
+        show_eob: app.slots()[slot_idx].features.end_of_buffer,
         diag_overlays: &diag_overlays,
         colorcolumn_cols: &cc_cols,
         colorcolumn_style: cc_style,

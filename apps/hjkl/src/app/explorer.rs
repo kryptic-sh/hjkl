@@ -817,6 +817,7 @@ impl super::App {
                 syntax: false,
                 lsp: false,
                 hover: false,
+                end_of_buffer: false,
             },
             editor,
             filename: None,

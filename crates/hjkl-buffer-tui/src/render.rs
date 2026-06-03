@@ -121,6 +121,10 @@ pub struct BufferView<'a, R: StyleResolver> {
     /// The gutter on those rows is painted blank; the `~` appears at the
     /// leftmost text column. Rows within the buffer are unaffected.
     pub non_text_style: Style,
+    /// Whether to paint the end-of-buffer `~` markers (vim's `fillchars=eob:`).
+    /// `true` is the default vim behaviour; `false` leaves rows past the last
+    /// line blank (e.g. the file explorer).
+    pub show_eob: bool,
     /// Diagnostic overlays (LSP inline highlights). Applied in a
     /// post-paint pass after every row is drawn so they layer on top of
     /// syntax and selection colours without a second layout traversal.
@@ -530,11 +534,13 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             if let Some(gutter) = self.gutter {
                 self.paint_blank_gutter(term_buf, area, screen_row, gutter);
             }
-            // Paint `~` at the first text column.
-            let y = text_area.y + screen_row;
-            if let Some(cell) = term_buf.cell_mut((text_area.x, y)) {
-                cell.set_char('~');
-                cell.set_style(self.non_text_style);
+            // Paint `~` at the first text column (unless eob markers are off).
+            if self.show_eob {
+                let y = text_area.y + screen_row;
+                if let Some(cell) = term_buf.cell_mut((text_area.x, y)) {
+                    cell.set_char('~');
+                    cell.set_style(self.non_text_style);
+                }
             }
             screen_row += 1;
         }
@@ -1407,6 +1413,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1449,6 +1456,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1492,6 +1500,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1540,6 +1549,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1583,6 +1593,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1629,6 +1640,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1689,6 +1701,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1753,6 +1766,7 @@ mod tests {
             spans: &spans,
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1822,6 +1836,7 @@ mod tests {
             spans: &spans,
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1880,6 +1895,7 @@ mod tests {
             spans: &spans,
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1925,6 +1941,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -1978,6 +1995,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2036,6 +2054,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2086,6 +2105,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2137,6 +2157,7 @@ mod tests {
             spans: &[],
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2189,6 +2210,7 @@ mod tests {
             spans: &[],
             search_pattern: Some(&pat),
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2251,6 +2273,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2301,6 +2324,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2350,6 +2374,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2408,6 +2433,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2449,6 +2475,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2491,6 +2518,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2696,6 +2724,7 @@ mod tests {
             spans,
             search_pattern,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2876,6 +2905,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -2918,6 +2948,55 @@ mod tests {
         }
     }
 
+    /// With `show_eob: false`, rows past the last buffer line stay blank — no
+    /// `~` marker (vim's `fillchars=eob:`).
+    #[test]
+    fn show_eob_false_suppresses_tilde() {
+        let b = Buffer::from_str("a\nb\nc");
+        let v = vp(10, 8);
+        let r = no_styles as fn(u32) -> Style;
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &r,
+            cursor_line_bg: Style::default(),
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default(),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            non_text_style: Style::default().fg(Color::DarkGray),
+            show_eob: false,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
+            eol_hints: &[],
+            blame_plan: None,
+        };
+        let term = run_render(view, 10, 8);
+        // Rows 3-7 are past EOF — with show_eob off they must NOT show `~`.
+        for row in 3..8u16 {
+            assert_ne!(
+                term.cell((0, row)).unwrap().symbol(),
+                "~",
+                "row {row} past EOF must be blank when show_eob is false"
+            );
+        }
+    }
+
     /// When a gutter is present, rows past EOF paint a blank gutter and
     /// `~` at the first text column (after the gutter).
     #[test]
@@ -2949,6 +3028,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default().fg(non_text_fg),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3014,6 +3094,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[overlay],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3081,6 +3162,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[overlay],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3145,6 +3227,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3222,6 +3305,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3280,6 +3364,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3316,6 +3401,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),
@@ -3501,6 +3587,7 @@ mod tests {
             spans: &[],
             search_pattern: None,
             non_text_style: Style::default(),
+            show_eob: true,
             diag_overlays: &[],
             colorcolumn_cols: &[],
             colorcolumn_style: Style::default(),

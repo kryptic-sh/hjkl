@@ -190,6 +190,7 @@ pub fn preview_pane(
         spans: &preview_spans.by_row,
         search_pattern: None,
         non_text_style: theme.non_text,
+        show_eob: true,
         diag_overlays: &[],
         colorcolumn_cols: &[],
         colorcolumn_style: Style::default(),

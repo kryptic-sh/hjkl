@@ -270,6 +270,8 @@ pub(crate) struct BufferFeatures {
     pub lsp: bool,
     /// Hover popups (mouse-idle hover and `K`).
     pub hover: bool,
+    /// End-of-buffer `~` markers (vim's `fillchars=eob:`).
+    pub end_of_buffer: bool,
 }
 impl Default for BufferFeatures {
     fn default() -> Self {
@@ -277,6 +279,7 @@ impl Default for BufferFeatures {
             syntax: true,
             lsp: true,
             hover: true,
+            end_of_buffer: true,
         }
     }
 }
