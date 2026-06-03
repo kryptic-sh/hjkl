@@ -676,19 +676,20 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         )
     };
 
-    // Explorer top search box: when this focused explorer window has an active
-    // fuzzy-search field, carve a rounded 3-row box at the top for the search
-    // input and render the tree below it. `last_rect` (recorded above) stays the
+    // Explorer top search box: the explorer pane always shows a rounded 3-row
+    // search box header at the top; the tree renders below it. The box echoes
+    // the live `/query` (when searching) and carries the cursor only while the
+    // search field is active and focused. `last_rect` (recorded above) stays the
     // full window. Degrades to whatever height is available on tiny panes.
     let mut area = area;
-    if is_focused && app.explorer_search.is_some() && app.slots()[slot_idx].is_explorer {
+    if app.slots()[slot_idx].is_explorer {
         let box_h = 3u16.min(area.height);
         if box_h > 0 {
             let search_box = Rect {
                 height: box_h,
                 ..area
             };
-            render_explorer_search_bar(frame, app, search_box);
+            render_explorer_search_bar(frame, app, search_box, is_focused);
             area.y = area.y.saturating_add(box_h);
             area.height = area.height.saturating_sub(box_h);
         }
@@ -1226,22 +1227,27 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 /// (which stays the normal one for ordinary buffers). The box is titled
 /// `Explorer`; the inner row shows the live `/query` on the left and a
 /// `matches/total` badge flush-right. Places the terminal cursor in the box.
-fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect, is_focused: bool) {
     use ratatui::widgets::BorderType;
 
-    let Some(field) = app.explorer_search.as_ref() else {
-        return;
+    let field = app.explorer_search.as_ref();
+    let active = field.is_some();
+    // Brighter border when the search field is active; dim chrome otherwise.
+    let border_color = if active && is_focused {
+        app.theme.ui.border_active
+    } else {
+        app.theme.ui.border
     };
 
     // Rounded bordered box with an "Explorer" title in the top border.
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(app.theme.ui.border_active))
+        .border_style(Style::default().fg(border_color))
         .title(" Explorer ")
         .title_style(
             Style::default()
-                .fg(app.theme.ui.border_active)
+                .fg(app.theme.ui.text)
                 .add_modifier(Modifier::BOLD),
         );
     let inner = block.inner(area);
@@ -1252,7 +1258,9 @@ fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Inner content row: `/query` left, `matches/total` flush-right.
-    let display: String = field.text().lines().next().unwrap_or("").to_string();
+    let display: String = field
+        .map(|f| f.text().lines().next().unwrap_or("").to_string())
+        .unwrap_or_default();
     let left = format!("/{display}");
     let badge: String = match app.explorer.as_ref() {
         Some(ep) if ep.tree.filter.is_some() => {
@@ -1268,15 +1276,21 @@ fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect) {
         format!("{left}{}{badge} ", " ".repeat(pad))
     };
     frame.render_widget(
-        Paragraph::new(content).style(Style::default().fg(app.theme.ui.search_fg)),
+        Paragraph::new(content).style(Style::default().fg(app.theme.ui.text)),
         inner,
     );
 
-    // Cursor sits after the `/` prefix at the field's caret column.
-    let (_, ccol) = field.cursor();
-    let cx = inner.x + 1 + ccol as u16;
-    if cx < inner.x + inner.width {
-        frame.set_cursor_position((cx, inner.y));
+    // Cursor sits after the `/` prefix at the field's caret column — only while
+    // the search field is active and this explorer pane is focused.
+    if let Some(field) = field
+        && active
+        && is_focused
+    {
+        let (_, ccol) = field.cursor();
+        let cx = inner.x + 1 + ccol as u16;
+        if cx < inner.x + inner.width {
+            frame.set_cursor_position((cx, inner.y));
+        }
     }
 }
 

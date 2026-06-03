@@ -1012,6 +1012,81 @@ impl App {
 
                 self.dismiss_hover_popup_on_click();
 
+                // ── Explorer mouse handling ───────────────────────
+                // - Click the top search box = pressing `/`: focus + insert mode.
+                // - Click a tree row: focus the explorer, move the cursor there,
+                //   and activate it (toggle a dir / open-or-focus a file).
+                // - Any click outside the box cancels an active search (clears a
+                //   typed query — only Enter commits).
+                // - Click entirely outside the explorer pane falls through.
+                if let Some(win_id) = self.explorer.as_ref().map(|ep| ep.win_id) {
+                    let rect = self
+                        .windows
+                        .get(win_id)
+                        .and_then(|w| w.as_ref())
+                        .and_then(|w| w.last_rect);
+                    if let Some(rect) = rect {
+                        let box_h = 3u16.min(rect.h);
+                        let in_pane = me.column >= rect.x
+                            && me.column < rect.x + rect.w
+                            && me.row >= rect.y
+                            && me.row < rect.y + rect.h;
+                        let in_box = in_pane && me.row < rect.y + box_h;
+
+                        if in_box {
+                            if self.focused_window() != win_id {
+                                self.switch_focus(win_id);
+                            }
+                            if self.explorer_search.is_none() {
+                                self.open_explorer_search();
+                            } else if let Some(f) = self.explorer_search.as_mut() {
+                                f.enter_insert_at_end();
+                            }
+                            return MouseOutcome::Continue;
+                        }
+
+                        // Outside the box: cancel any active search first.
+                        if self.explorer_search.is_some() {
+                            self.explorer_search = None;
+                            if let Some(ep) = self.explorer.as_mut() {
+                                ep.tree.clear_filter();
+                            }
+                            self.explorer_rebuild_buffer();
+                        }
+
+                        // Tree-row click → move cursor there + activate.
+                        if in_pane {
+                            if self.focused_window() != win_id {
+                                self.switch_focus(win_id);
+                            }
+                            let top_row = self
+                                .windows
+                                .get(win_id)
+                                .and_then(|w| w.as_ref())
+                                .map(|w| w.top_row)
+                                .unwrap_or(0);
+                            let node_idx = top_row + (me.row - (rect.y + box_h)) as usize;
+                            let node_count = self
+                                .explorer
+                                .as_ref()
+                                .map(|ep| ep.tree.nodes.len())
+                                .unwrap_or(0);
+                            if node_idx < node_count {
+                                if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                                    win.cursor_row = node_idx;
+                                    win.cursor_col = 0;
+                                }
+                                // explorer_activate reads the window cursor row:
+                                // toggles a dir or opens/focuses a file (`:edit`
+                                // switch-or-create).
+                                self.explorer_activate();
+                            }
+                            return MouseOutcome::Continue;
+                        }
+                        // else: click outside the explorer pane → fall through.
+                    }
+                }
+
                 // ── Phase 9: border-drag hit-test ─────────────────
                 // Check BEFORE context-menu and window-click logic so
                 // a border click never accidentally focuses a window.
