@@ -9,6 +9,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Instant;
+
+use crossbeam_channel::{Receiver, Sender};
 
 // ── Prompt / confirm / clipboard state ────────────────────────────────────────
 
@@ -375,6 +379,49 @@ impl ExplorerTree {
         self.rebuild();
     }
 
+    /// Build a filtered tree for a worker thread search. Constructs the struct
+    /// directly (no unfiltered `new()` rebuild), sets `filter = Some(query)`,
+    /// and calls `rebuild()` to run the filtered walk. The `git2::Repository`
+    /// opened inside `rebuild()` stays on the calling (worker) thread — never
+    /// send a `Repository` across a channel.
+    pub(crate) fn for_search(
+        root: PathBuf,
+        show_hidden: bool,
+        respect_gitignore: bool,
+        query: String,
+    ) -> Self {
+        // Build the struct directly without running the unfiltered walk.
+        let mut expanded = HashSet::new();
+        expanded.insert(root.clone());
+        let mut tree = Self {
+            root,
+            expanded,
+            nodes: Vec::new(),
+            show_hidden,
+            respect_gitignore,
+            filter: Some(query),
+            match_count: 0,
+            total_count: 0,
+        };
+        tree.rebuild();
+        tree
+    }
+
+    /// Install a worker result onto the tree without running a filesystem walk.
+    /// Called from the main thread when a worker result arrives.
+    pub(crate) fn apply_search_result(
+        &mut self,
+        query: String,
+        nodes: Vec<ExplorerNode>,
+        match_count: usize,
+        total_count: usize,
+    ) {
+        self.filter = Some(query);
+        self.nodes = nodes;
+        self.match_count = match_count;
+        self.total_count = total_count;
+    }
+
     /// Toggle the expansion of the directory at `path`. Returns `true` if the
     /// tree changed (caller should rebuild + set_content the buffer).
     pub(crate) fn toggle(&mut self, path: &Path) -> bool {
@@ -496,6 +543,142 @@ pub(crate) struct ExplorerPane {
     pub win_id: super::window::WindowId,
     /// The tree model.
     pub tree: ExplorerTree,
+}
+
+// ── Explorer search worker ─────────────────────────────────────────────────────
+
+/// Job submitted to the explorer search worker.
+pub(crate) struct ExplorerSearchJob {
+    /// Monotonic generation counter — used by the main thread to discard stale
+    /// results (only results whose `generation == explorer_search_gen` are applied).
+    pub generation: u64,
+    pub root: PathBuf,
+    pub query: String,
+    pub show_hidden: bool,
+    pub respect_gitignore: bool,
+}
+
+/// Result produced by the explorer search worker.
+pub(crate) struct ExplorerSearchResult {
+    pub generation: u64,
+    pub query: String,
+    pub nodes: Vec<ExplorerNode>,
+    pub match_count: usize,
+    pub total_count: usize,
+}
+
+/// Background worker that runs the filtered fs walk off the UI thread.
+///
+/// One background thread services all submitted jobs. Jobs are coalesced
+/// by processing only the **last** job in a drained batch (queries are
+/// strictly latest-wins — no per-key map needed because there is only one
+/// explorer search at a time). Results are sent back on an unbounded channel.
+///
+/// `Drop` closes the job channel (dropping `tx`) and then **joins** the
+/// thread — this prevents teardown races with `libgit2`'s OpenSSL cleanup
+/// (same rationale as `BlameWorker`).
+pub(crate) struct ExplorerSearchWorker {
+    tx: Option<Sender<ExplorerSearchJob>>,
+    rx: Receiver<ExplorerSearchResult>,
+    join: Option<thread::JoinHandle<()>>,
+}
+
+impl ExplorerSearchWorker {
+    /// Spawn the worker thread. Returns immediately.
+    pub(crate) fn new() -> Self {
+        let (job_tx, job_rx) = crossbeam_channel::unbounded::<ExplorerSearchJob>();
+        let (res_tx, res_rx) = crossbeam_channel::unbounded::<ExplorerSearchResult>();
+
+        let handle = thread::Builder::new()
+            .name("hjkl-explorer-search".into())
+            .spawn(move || explorer_search_worker_loop(job_rx, res_tx))
+            .expect("spawn explorer-search worker");
+
+        Self {
+            tx: Some(job_tx),
+            rx: res_rx,
+            join: Some(handle),
+        }
+    }
+
+    /// Submit a search job. Non-blocking.
+    pub(crate) fn submit(&self, job: ExplorerSearchJob) {
+        if let Some(tx) = self.tx.as_ref() {
+            let _ = tx.send(job);
+        }
+    }
+
+    /// Non-blocking drain. Returns the next completed result, if any.
+    pub(crate) fn try_recv(&self) -> Option<ExplorerSearchResult> {
+        self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for ExplorerSearchWorker {
+    fn drop(&mut self) {
+        // Close the sender first — the worker's `recv()` will return `Err`
+        // and the loop will exit cleanly.
+        drop(self.tx.take());
+        if let Some(h) = self.join.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Default for ExplorerSearchWorker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Main loop executed on the worker thread.
+///
+/// Blocks on `recv()` until a job arrives, then drains all
+/// immediately-available additional jobs with `try_recv()` and
+/// **processes only the last one** (highest index — pure coalesce; earlier
+/// queries are stale). Builds the filtered tree via
+/// `ExplorerTree::for_search`, which creates the `git2::Repository` on
+/// this thread (never sent across a channel). Loops until the sender is
+/// dropped.
+fn explorer_search_worker_loop(
+    job_rx: Receiver<ExplorerSearchJob>,
+    res_tx: Sender<ExplorerSearchResult>,
+) {
+    loop {
+        // Block until at least one job arrives (or channel closes).
+        let first = match job_rx.recv() {
+            Ok(j) => j,
+            Err(_) => return, // sender dropped → exit
+        };
+
+        // Drain all immediately-available additional jobs without blocking,
+        // then keep only the last one (latest-wins coalescing).
+        let mut last = first;
+        while let Ok(j) = job_rx.try_recv() {
+            last = j;
+        }
+
+        // Run the filtered fs walk on the worker thread.
+        let tree = ExplorerTree::for_search(
+            last.root,
+            last.show_hidden,
+            last.respect_gitignore,
+            last.query.clone(),
+        );
+
+        let result = ExplorerSearchResult {
+            generation: last.generation,
+            query: last.query,
+            nodes: tree.nodes,
+            match_count: tree.match_count,
+            total_count: tree.total_count,
+        };
+
+        if res_tx.send(result).is_err() {
+            // Receiver dropped → UI is gone. Exit.
+            return;
+        }
+    }
 }
 
 // ── App methods ────────────────────────────────────────────────────────────────
@@ -750,7 +933,7 @@ impl super::App {
 
     /// Sync the explorer editor's cursor from the explorer window's snapshot.
     /// Like `sync_viewport_to_editor` but only for the explorer slot.
-    fn sync_viewport_to_explorer_editor(&mut self) {
+    pub(crate) fn sync_viewport_to_explorer_editor(&mut self) {
         let Some(ref ep) = self.explorer else { return };
         let win_id = ep.win_id;
         let Some(slot_idx) = self.slots.iter().position(|s| s.is_explorer) else {
@@ -1341,6 +1524,7 @@ impl super::App {
 
     /// Re-filter the tree from the current field text and move cursor to the
     /// first matched file row.
+    #[allow(dead_code)]
     pub(crate) fn explorer_apply_search(&mut self) {
         let text = match self.explorer_search.as_ref() {
             Some(f) => f.text(),
@@ -1376,11 +1560,23 @@ impl super::App {
 
         let input = hjkl_engine_tui::crossterm_to_input(key);
 
-        // Enter → commit (close the field, keep filter, cursor on first match).
+        // Enter → commit (close the field, keep filter). Clear the pending
+        // debounce and bump gen so any in-flight worker result is dropped —
+        // the committed filter is already installed from the last applied result.
         if input.key == EngineKey::Enter {
+            // If a debounce was still pending (typed fast, then Enter before it
+            // fired), apply the final query synchronously so the committed
+            // filter reflects exactly what was typed.
+            if let Some(q) = self.explorer_search_pending_query.take() {
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.apply_filter(&q);
+                }
+                self.explorer_rebuild_buffer();
+            }
             self.explorer_search = None;
-            // Cursor was already placed on first match by the last
-            // explorer_apply_search call. Nothing more to do.
+            self.explorer_search_dirty_at = None;
+            self.explorer_search_pending_query = None;
+            self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
             return;
         }
 
@@ -1394,8 +1590,11 @@ impl super::App {
                 None => return,
             };
             if is_empty || !is_insert {
-                // Cancel: close + clear filter.
+                // Cancel: close + clear filter + clear pending debounce.
                 self.explorer_search = None;
+                self.explorer_search_dirty_at = None;
+                self.explorer_search_pending_query = None;
+                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
                 if let Some(ref mut ep) = self.explorer {
                     ep.tree.clear_filter();
                 }
@@ -1420,6 +1619,9 @@ impl super::App {
                 .unwrap_or(false);
             if in_normal && matches!(key.code, KeyCode::Char('j') | KeyCode::Down) {
                 self.explorer_search = None;
+                self.explorer_search_dirty_at = None;
+                self.explorer_search_pending_query = None;
+                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
                 return;
             }
         }
@@ -1433,6 +1635,9 @@ impl super::App {
                 .unwrap_or(true);
             if is_empty {
                 self.explorer_search = None;
+                self.explorer_search_dirty_at = None;
+                self.explorer_search_pending_query = None;
+                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
                 if let Some(ref mut ep) = self.explorer {
                     ep.tree.clear_filter();
                 }
@@ -1441,13 +1646,20 @@ impl super::App {
             }
         }
 
-        // Forward the key to the field; live-filter if content changed.
+        // Forward the key to the field; if content changed, schedule a
+        // debounced worker submission rather than filtering synchronously.
         let dirty = match self.explorer_search.as_mut() {
             Some(f) => f.handle_input(input),
             None => return,
         };
         if dirty {
-            self.explorer_apply_search();
+            let text = self
+                .explorer_search
+                .as_ref()
+                .map(|f| f.text())
+                .unwrap_or_default();
+            self.explorer_search_pending_query = Some(text);
+            self.explorer_search_dirty_at = Some(Instant::now());
         }
     }
 }
@@ -1524,24 +1736,83 @@ mod tests {
             "`/` must open the explorer fuzzy-search field"
         );
 
-        // Typing routes to the field and applies a live filter.
+        // Typing routes to the field and SCHEDULES a debounce (not synchronous
+        // filter) — the worker fires after EXPLORER_SEARCH_DEBOUNCE elapses.
         app.handle_keypress(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-        let filter = app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone());
         assert_eq!(
-            filter.as_deref(),
+            app.explorer_search_pending_query.as_deref(),
             Some("z"),
-            "typing in the search field must set the tree filter"
+            "typing must schedule a debounce with the query"
+        );
+        assert!(
+            app.explorer_search_dirty_at.is_some(),
+            "typing must arm the debounce timer"
         );
 
         // Esc: insert→normal, then normal(non-empty)→cancel (close + clear).
+        // Cancel must also clear the pending debounce state.
         app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         app.handle_keypress(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(
             app.explorer_search.is_none(),
             "Esc must close the search field"
         );
+        assert!(
+            app.explorer_search_pending_query.is_none(),
+            "Esc must clear the pending query"
+        );
+        assert!(
+            app.explorer_search_dirty_at.is_none(),
+            "Esc must clear the debounce timer"
+        );
         let filter2 = app.explorer.as_ref().and_then(|ep| ep.tree.filter.clone());
         assert_eq!(filter2, None, "cancel must restore the unfiltered tree");
+    }
+
+    /// `ExplorerTree::for_search` constructs and walks a filtered tree without
+    /// spinning up a worker thread — exactly the code path the worker uses.
+    /// Query "buf" on the make_filter_tree fixture must yield 2 matches
+    /// (buffer_ops.rs, buffer_test.rs) plus their ancestor dirs.
+    #[test]
+    fn for_search_returns_filtered_tree() {
+        let root = make_filter_tree();
+        let tree = ExplorerTree::for_search(root.clone(), true, false, "buf".to_string());
+
+        let paths: Vec<String> = tree
+            .nodes
+            .iter()
+            .filter_map(|n| n.path.file_name().map(|f| f.to_string_lossy().into_owned()))
+            .collect();
+
+        assert_eq!(tree.match_count, 2, "match_count must be 2 (buf query)");
+        assert!(
+            paths.contains(&"buffer_ops.rs".to_string()),
+            "buffer_ops.rs must be present: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"buffer_test.rs".to_string()),
+            "buffer_test.rs must be present: {paths:?}"
+        );
+        // Ancestor dirs must be included.
+        assert!(
+            paths.contains(&"src".to_string()),
+            "src dir must be present as ancestor: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"tests".to_string()),
+            "tests dir must be present as ancestor: {paths:?}"
+        );
+        // Non-matching files must be absent.
+        assert!(
+            !paths.contains(&"main.rs".to_string()),
+            "main.rs must NOT be present: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"readme.md".to_string()),
+            "readme.md must NOT be present: {paths:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

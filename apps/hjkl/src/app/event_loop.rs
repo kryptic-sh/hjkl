@@ -193,6 +193,9 @@ impl App {
 
         // Poll any in-flight anvil install jobs and surface status toasts.
         let _ = self.poll_anvil_jobs();
+
+        // Fire debounced explorer search jobs + drain worker results.
+        self.poll_explorer_search();
     }
 
     /// Compute how long to wait for the next event.
@@ -231,7 +234,112 @@ impl App {
             let deadline = self.last_input_at + Duration::from_millis(ut_ms as u64);
             t = t.min(deadline.saturating_duration_since(now));
         }
+        // Wake when the explorer search debounce elapses so the worker job
+        // fires even when the user stops typing without pressing another key.
+        if let Some(at) = self.explorer_search_dirty_at {
+            let deadline = at + crate::app::EXPLORER_SEARCH_DEBOUNCE;
+            t = t.min(deadline.saturating_duration_since(now));
+        }
         t
+    }
+
+    /// Fire debounced explorer search jobs and drain worker results.
+    ///
+    /// Two responsibilities in one call to keep borrow-checker noise low:
+    ///
+    /// **Fire**: if the debounce timer has elapsed and the explorer is open,
+    /// take the pending query, clear the timer, and either:
+    ///   - Submit a worker job (non-empty query), or
+    ///   - Clear the filter synchronously (empty query, cheap — no walk needed).
+    ///
+    /// **Poll**: drain any completed worker results and install them when
+    /// the generation matches (stale results whose gen differs from the current
+    /// `explorer_search_gen` are silently dropped).
+    fn poll_explorer_search(&mut self) {
+        let now = std::time::Instant::now();
+
+        // ── Fire ──────────────────────────────────────────────────────────────
+        if let Some(dirty_at) = self.explorer_search_dirty_at
+            && now.duration_since(dirty_at) >= crate::app::EXPLORER_SEARCH_DEBOUNCE
+            && self.explorer.is_some()
+        {
+            // Take the pending query and clear the timer.
+            let query = self
+                .explorer_search_pending_query
+                .take()
+                .unwrap_or_default();
+            self.explorer_search_dirty_at = None;
+
+            if query.is_empty() {
+                // Empty query → clear synchronously (no worker needed).
+                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.clear_filter();
+                }
+                self.explorer_rebuild_buffer();
+            } else {
+                // Non-empty query → bump gen and submit to worker.
+                self.explorer_search_gen = self.explorer_search_gen.wrapping_add(1);
+                let generation = self.explorer_search_gen;
+                // Extract root/flags before the mutable borrow of self.
+                let (root, show_hidden, respect_gitignore) = match self.explorer.as_ref() {
+                    Some(ep) => (
+                        ep.tree.root.clone(),
+                        ep.tree.show_hidden,
+                        ep.tree.respect_gitignore,
+                    ),
+                    None => return,
+                };
+                self.explorer_search_worker
+                    .submit(crate::app::explorer::ExplorerSearchJob {
+                        generation,
+                        root,
+                        query,
+                        show_hidden,
+                        respect_gitignore,
+                    });
+            }
+        }
+
+        // ── Poll results ──────────────────────────────────────────────────────
+        while let Some(res) = self.explorer_search_worker.try_recv() {
+            // Drop stale results (cancelled, superseded by a newer query).
+            if res.generation != self.explorer_search_gen {
+                continue;
+            }
+            if self.explorer.is_none() {
+                continue;
+            }
+
+            // Extract win_id before mutating self (borrow hygiene — mirrors
+            // existing explorer mouse-click code pattern).
+            let win_id = self.explorer.as_ref().map(|ep| ep.win_id);
+
+            // Install the result onto the tree.
+            if let Some(ref mut ep) = self.explorer {
+                ep.tree
+                    .apply_search_result(res.query, res.nodes, res.match_count, res.total_count);
+            }
+            self.explorer_rebuild_buffer();
+
+            // Move the explorer window cursor to the first matched file row.
+            let first_match = self
+                .explorer
+                .as_ref()
+                .and_then(|ep| ep.tree.nodes.iter().position(|n| !n.is_dir));
+            if let (Some(row), Some(win_id)) = (first_match, win_id) {
+                if let Some(Some(win)) = self.windows.get_mut(win_id) {
+                    win.cursor_row = row;
+                    win.cursor_col = 0;
+                }
+                let fw = self.focused_window();
+                if fw == win_id {
+                    self.sync_viewport_to_explorer_editor();
+                }
+            }
+
+            self.pending_recompute = true;
+        }
     }
 
     /// Handle a single key event. Returns a [`KeyOutcome`] that tells `run()`

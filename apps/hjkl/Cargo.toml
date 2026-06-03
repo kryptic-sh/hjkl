@@ -66,6 +66,7 @@ hjkl-menu.workspace = true
 hjkl-menu-tui.workspace = true
 hjkl-syntax.workspace = true
 hjkl-syntax-tui.workspace = true
+crossbeam-channel = "0.5"
 ratatui = "0.30"
 crossterm = "0.29"
 clap = { version = "4", features = ["derive"] }
