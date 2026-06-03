@@ -48,6 +48,9 @@ pub struct TabBarTheme {
     pub active_bg: Color,
     /// Foreground colour of inactive tabs.
     pub inactive_fg: Color,
+    /// Background colour of inactive tabs (distinct from the bar background so
+    /// inactive tabs read as raised chips rather than blending in).
+    pub inactive_bg: Color,
     /// Foreground colour of the `│` tab separator.
     pub sep_fg: Color,
     /// Foreground colour of the `<` / `>` overflow indicators.
@@ -65,6 +68,7 @@ impl TabBarTheme {
     ///     Color::White,
     ///     Color::Blue,
     ///     Color::DarkGray,
+    ///     Color::Black,
     ///     Color::Gray,
     ///     Color::Cyan,
     /// );
@@ -74,6 +78,7 @@ impl TabBarTheme {
         active_fg: Color,
         active_bg: Color,
         inactive_fg: Color,
+        inactive_bg: Color,
         sep_fg: Color,
         overflow_fg: Color,
     ) -> Self {
@@ -81,6 +86,7 @@ impl TabBarTheme {
             active_fg,
             active_bg,
             inactive_fg,
+            inactive_bg,
             sep_fg,
             overflow_fg,
         }
@@ -93,6 +99,7 @@ impl Default for TabBarTheme {
             active_fg: Color::Rgb(0x2e, 0x34, 0x40),
             active_bg: Color::Rgb(0x5e, 0x81, 0xac),
             inactive_fg: Color::Rgb(0x81, 0x8a, 0x9a),
+            inactive_bg: Color::Rgb(0x3b, 0x42, 0x52),
             sep_fg: Color::Rgb(0x4c, 0x56, 0x6a),
             overflow_fg: Color::Rgb(0x88, 0xc0, 0xd0),
         }
@@ -156,7 +163,7 @@ pub fn build_line<Id: Eq + Clone>(
         .fg(theme.active_fg)
         .bg(theme.active_bg)
         .add_modifier(Modifier::BOLD);
-    let inactive_style = Style::default().fg(theme.inactive_fg);
+    let inactive_style = Style::default().fg(theme.inactive_fg).bg(theme.inactive_bg);
     let sep_style = Style::default().fg(theme.sep_fg);
     let overflow_style = Style::default()
         .fg(theme.overflow_fg)
@@ -323,12 +330,14 @@ mod tests {
             Color::White,
             Color::Blue,
             Color::DarkGray,
+            Color::Black,
             Color::Gray,
             Color::Cyan,
         );
         assert_eq!(theme.active_fg, Color::White);
         assert_eq!(theme.active_bg, Color::Blue);
         assert_eq!(theme.inactive_fg, Color::DarkGray);
+        assert_eq!(theme.inactive_bg, Color::Black);
         assert_eq!(theme.sep_fg, Color::Gray);
         assert_eq!(theme.overflow_fg, Color::Cyan);
     }

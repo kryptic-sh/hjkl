@@ -1502,7 +1502,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
         .fg(ui.on_accent)
         .bg(ui.mode_normal_bg)
         .add_modifier(Modifier::BOLD);
-    let inactive_style = Style::default().fg(ui.text_dim);
+    let inactive_style = Style::default().fg(ui.text_dim).bg(ui.surface_bg);
     let sep_style = Style::default().fg(ui.border);
 
     let show_tabs = app.tabs.len() > 1;
@@ -1552,6 +1552,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
         ui.on_accent,
         ui.mode_normal_bg,
         ui.text_dim,
+        ui.surface_bg,
         ui.border,
         ui.border,
     );
