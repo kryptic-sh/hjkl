@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(theme.ui.cursor_line_bg, Color::Rgb(0x2a, 0x32, 0x40));
         assert_eq!(
             theme.ui.fold_line_bg,
-            Color::Rgb(0x3a, 0x4a, 0x5a),
+            Color::Rgb(0x3a, 0x2f, 0x50),
             "fold_line_bg must match ui-dark.toml fold_bg value"
         );
         // indent_flash_bg must parse — muted amber tint.
