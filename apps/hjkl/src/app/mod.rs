@@ -928,30 +928,16 @@ impl App {
     /// Tag-pair matching (`<tag>…</tag>`) is handled by `matchparen_tag_cells`
     /// via char-scan (not tree-sitter) as of #243.
     ///
-    /// The renderer now calls the per-window [`Self::matchparen_cells_at`];
-    /// this focused-cursor convenience is retained for tests + external callers.
-    #[allow(dead_code)]
+    /// Focused-window only: matchparen highlights the bracket under the live
+    /// editor cursor, so it is not rendered for unfocused windows.
     pub fn matchparen_cells(&self) -> Option<[(usize, usize); 2]> {
         let slot_idx = self.focused_slot_idx();
-        let cur = self.slots[slot_idx].editor.buffer().cursor();
-        self.matchparen_cells_at(slot_idx, cur.row, cur.col)
-    }
-
-    /// Like [`Self::matchparen_cells`] but anchored at an explicit `(row, col)`
-    /// in `slot_idx`'s buffer instead of the focused editor's live cursor.
-    /// Used by the renderer so each window matches the bracket under ITS OWN
-    /// saved cursor — an unfocused window shows a "ghost" match that stays put
-    /// when another window on the same buffer moves.
-    pub fn matchparen_cells_at(
-        &self,
-        slot_idx: usize,
-        row: usize,
-        col: usize,
-    ) -> Option<[(usize, usize); 2]> {
-        let editor = &self.slots.get(slot_idx)?.editor;
+        let editor = &self.slots[slot_idx].editor;
         if !editor.settings().matchparen {
             return None;
         }
+        let cur = editor.buffer().cursor();
+        let (row, col) = (cur.row, cur.col); // hjkl_buffer::Position fields are usize
         let match_pos = hjkl_engine::motions::matching_bracket_pos(editor.buffer(), row, col)?;
         Some([(row, col), match_pos])
     }
@@ -960,26 +946,14 @@ impl App {
     /// the per-cell char-col positions covering BOTH the open and close tag
     /// names, or `None` when matchparen is off or the cursor is not on a
     /// paired tag name.
-    #[allow(dead_code)]
     pub fn matchparen_tag_cells(&self) -> Option<Vec<(usize, usize)>> {
         let slot_idx = self.focused_slot_idx();
-        let cur = self.slots[slot_idx].editor.buffer().cursor();
-        self.matchparen_tag_cells_at(slot_idx, cur.row, cur.col)
-    }
-
-    /// Like [`Self::matchparen_tag_cells`] but anchored at an explicit
-    /// `(row, col)` in `slot_idx`'s buffer — the per-window "ghost" variant.
-    pub fn matchparen_tag_cells_at(
-        &self,
-        slot_idx: usize,
-        row: usize,
-        col: usize,
-    ) -> Option<Vec<(usize, usize)>> {
-        let editor = &self.slots.get(slot_idx)?.editor;
+        let editor = &self.slots[slot_idx].editor;
         if !editor.settings().matchparen {
             return None;
         }
-        let pair = hjkl_engine::vim::matching_tag_pair(editor.buffer(), row, col)?;
+        let cur = editor.buffer().cursor();
+        let pair = hjkl_engine::vim::matching_tag_pair(editor.buffer(), cur.row, cur.col)?;
         let mut cells = Vec::new();
         for (row, start, end) in pair {
             for col in start..end {
