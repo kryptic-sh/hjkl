@@ -94,6 +94,10 @@ impl From<crate::keymap_actions::CmdLineWindowKind> for CmdLineKind {
 /// screen, when shown (either more than one slot or more than one tab).
 pub const TOP_BAR_HEIGHT: u16 = 1;
 
+/// Close glyph appended to every tab and buffer-line entry. 1 display column,
+/// 3 UTF-8 bytes — all width math must use `.chars().count()`.
+pub(crate) const TAB_CLOSE_GLYPH: char = '✕';
+
 /// Resolve a path for buffer-list matching. Two paths that point to
 /// the same file should compare equal here even when one is relative
 /// and the other absolute. We try `canonicalize` first (only works for
@@ -687,7 +691,7 @@ impl App {
     /// - None → no-op.
     pub(crate) fn middle_click(&mut self, col: u16, row: u16) {
         match mouse::hit_test_zone(self, col, row) {
-            mouse::Zone::TabBar { tab_idx } => {
+            mouse::Zone::TabBar { tab_idx } | mouse::Zone::TabBarClose { tab_idx } => {
                 // Switch to the clicked tab so do_tabclose targets it,
                 // then close.
                 if tab_idx != self.active_tab {
@@ -695,7 +699,7 @@ impl App {
                 }
                 self.do_tabclose();
             }
-            mouse::Zone::BufferLine { slot_idx } => {
+            mouse::Zone::BufferLine { slot_idx } | mouse::Zone::BufferLineClose { slot_idx } => {
                 // Switch to the clicked slot so buffer_delete targets it.
                 if slot_idx != self.focused_slot_idx() {
                     self.switch_to(slot_idx);

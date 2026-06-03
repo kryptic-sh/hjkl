@@ -598,10 +598,14 @@ pub enum Zone {
     },
     /// On the vim-style tab bar at the top of the screen.
     TabBar { tab_idx: usize },
+    /// Click on the close glyph (`✕`) of a tab-bar entry.
+    TabBarClose { tab_idx: usize },
     /// On the buffer-line region of the unified top bar (one entry per open
     /// slot, left-aligned) — shown when `app.slots.len() > 1`. Always at
     /// row 0; shares the row with `TabBar` entries (right-aligned).
     BufferLine { slot_idx: usize },
+    /// Click on the close glyph (`✕`) of a buffer-line entry.
+    BufferLineClose { slot_idx: usize },
     /// On the status line (bottom row when no prompt/command overlay is active).
     StatusLine,
     /// On a split border (the 1-cell divider between two panes).
@@ -646,13 +650,22 @@ pub fn tabs_total_width(app: &App) -> usize {
                 .map(|w| app.slots()[w.slot].dirty)
                 .unwrap_or(false)
         });
+        // Replicate the crate's rendered text exactly:
+        // ` ● {n}: {name} ✕ ` (dirty) or ` {n}: {name} ✕ ` (clean).
+        // hjkl_tabs_tui wraps each title as ` {display_label} ` where
+        // display_label = `● {title}` when dirty or `{title}` when clean.
         let label = if tab_dirty {
-            format!(" {}: {}+ ", i + 1, base_name)
+            format!(
+                " \u{25cf} {}: {} {} ",
+                i + 1,
+                base_name,
+                super::TAB_CLOSE_GLYPH
+            )
         } else {
-            format!(" {}: {} ", i + 1, base_name)
+            format!(" {}: {} {} ", i + 1, base_name, super::TAB_CLOSE_GLYPH)
         };
         let sep_len = if i == 0 { 0 } else { 1 }; // single space between tabs
-        total += sep_len + label.len();
+        total += sep_len + label.chars().count();
     }
     total
 }
@@ -687,13 +700,19 @@ pub fn tab_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
                 .map(|w| app.slots()[w.slot].dirty)
                 .unwrap_or(false)
         });
+        // Replicate the crate's rendered text exactly (same as tabs_total_width).
         let label = if tab_dirty {
-            format!(" {}: {}+ ", i + 1, base_name)
+            format!(
+                " \u{25cf} {}: {} {} ",
+                i + 1,
+                base_name,
+                super::TAB_CLOSE_GLYPH
+            )
         } else {
-            format!(" {}: {} ", i + 1, base_name)
+            format!(" {}: {} {} ", i + 1, base_name, super::TAB_CLOSE_GLYPH)
         };
         let sep_len = if i == 0 { 0 } else { 1 }; // single space between entries
-        let entry_width = sep_len + label.len();
+        let entry_width = sep_len + label.chars().count();
 
         let entry_start = (used + sep_len) as u16;
         let entry_end = (used + entry_width) as u16;
@@ -733,13 +752,13 @@ pub fn buffer_line_x_ranges(app: &App, bar_width: u16) -> Vec<(u16, u16)> {
             .and_then(|n| n.to_str())
             .unwrap_or("[No Name]");
         let label = if slot.dirty {
-            format!(" {}+ ", base_name)
+            format!(" {}+ {} ", base_name, super::TAB_CLOSE_GLYPH)
         } else {
-            format!(" {} ", base_name)
+            format!(" {} {} ", base_name, super::TAB_CLOSE_GLYPH)
         };
 
         let sep_len = if first { 0 } else { 1 }; // single '│' between entries
-        let entry_width = sep_len + label.len();
+        let entry_width = sep_len + label.chars().count();
 
         if used + entry_width > buf_budget {
             break;
@@ -898,6 +917,12 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
             let tab_ranges = tab_x_ranges(app, bar_width);
             for (i, (start, end)) in tab_ranges.iter().enumerate() {
                 if col >= *start && col < *end {
+                    // The close glyph is at end-2 (layout: `… ✕ `, so end-1 =
+                    // trailing space, end-2 = glyph). Guard: entry must be ≥3
+                    // cols wide to avoid misfiring on tiny truncated entries.
+                    if *end >= *start + 3 && col == end - 2 {
+                        return Zone::TabBarClose { tab_idx: i };
+                    }
                     return Zone::TabBar { tab_idx: i };
                 }
             }
@@ -918,6 +943,12 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
             for (i, (start, end)) in buf_ranges.iter().enumerate() {
                 if col >= *start && col < *end {
                     let slot_idx = real_indices.get(i).copied().unwrap_or(i);
+                    // The close glyph is at end-2 (layout: `… ✕ `, so
+                    // end-1 = trailing space, end-2 = glyph). Guard: entry
+                    // must be ≥3 cols wide to avoid misfiring on tiny entries.
+                    if *end >= *start + 3 && col == end - 2 {
+                        return Zone::BufferLineClose { slot_idx };
+                    }
                     return Zone::BufferLine { slot_idx };
                 }
             }
@@ -1885,6 +1916,85 @@ mod tests {
                 zone_out,
                 Zone::None,
                 "click outside picker overlay must be Zone::None; got {zone_out:?}"
+            );
+        }
+    }
+
+    // ── Close-glyph hit-test regression (plan: tabbar-close-icon) ────────────
+
+    /// With ≥2 slots, clicking `end-2` of a buffer-line entry returns
+    /// `BufferLineClose { slot_idx }` and clicking `start` returns
+    /// `BufferLine { slot_idx }`.
+    #[test]
+    fn hit_test_zone_buffer_line_close_glyph() {
+        let (app, paths) = make_app_with_n_slots(2);
+        let ranges = buffer_line_x_ranges(&app, 200);
+        cleanup_paths(&paths);
+
+        assert_eq!(ranges.len(), 2, "expected 2 buffer ranges");
+
+        for (i, (start, end)) in ranges.iter().enumerate() {
+            // Entry must be wide enough for the close cell to exist.
+            assert!(
+                end >= &(start + 3),
+                "entry {i} must be ≥3 cols wide for close-glyph guard"
+            );
+
+            // Click at entry start → BufferLine (switch zone).
+            let zone_start = hit_test_zone(&app, *start, 0);
+            assert_eq!(
+                zone_start,
+                Zone::BufferLine { slot_idx: i },
+                "col {start} (start) should be BufferLine{{{i}}}; got {zone_start:?}"
+            );
+
+            // Click at end-2 → BufferLineClose (close zone).
+            let close_col = end - 2;
+            let zone_close = hit_test_zone(&app, close_col, 0);
+            assert_eq!(
+                zone_close,
+                Zone::BufferLineClose { slot_idx: i },
+                "col {close_col} (end-2) should be BufferLineClose{{{i}}}; got {zone_close:?}"
+            );
+        }
+    }
+
+    /// With ≥2 tabs, clicking `end-2` of a tab-bar entry returns
+    /// `TabBarClose { tab_idx }` and clicking `start` returns
+    /// `TabBar { tab_idx }`.
+    #[test]
+    fn hit_test_zone_tab_bar_close_glyph() {
+        // 1 slot + 1 extra tab (tabnew) = 2 tabs. Buffer line shows (2 slots).
+        let (app, paths) = make_app_with_slots_and_tabs(1, 1);
+        cleanup_paths(&paths);
+
+        assert_eq!(app.tabs.len(), 2, "expected 2 tabs");
+
+        let tab_ranges = tab_x_ranges(&app, 200);
+        assert_eq!(tab_ranges.len(), 2, "expected 2 tab ranges");
+
+        for (i, (start, end)) in tab_ranges.iter().enumerate() {
+            // Entry must be wide enough for the close cell to exist.
+            assert!(
+                end >= &(start + 3),
+                "tab entry {i} must be ≥3 cols wide for close-glyph guard"
+            );
+
+            // Click at entry start → TabBar (switch zone).
+            let zone_start = hit_test_zone(&app, *start, 0);
+            assert_eq!(
+                zone_start,
+                Zone::TabBar { tab_idx: i },
+                "col {start} (start) should be TabBar{{{i}}}; got {zone_start:?}"
+            );
+
+            // Click at end-2 → TabBarClose (close zone).
+            let close_col = end - 2;
+            let zone_close = hit_test_zone(&app, close_col, 0);
+            assert_eq!(
+                zone_close,
+                Zone::TabBarClose { tab_idx: i },
+                "col {close_col} (end-2) should be TabBarClose{{{i}}}; got {zone_close:?}"
             );
         }
     }

@@ -1531,7 +1531,7 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("[No Name]");
-            let title = format!("{}: {}", i + 1, base_name);
+            let title = format!("{}: {} {}", i + 1, base_name, crate::app::TAB_CLOSE_GLYPH);
             tab_bar.open(i, title);
             let tab_dirty = layout_tab.layout.leaves().iter().any(|&wid| {
                 app.windows[wid]
@@ -1594,12 +1594,12 @@ fn top_bar(frame: &mut Frame, app: &App, area: Rect) {
                 .and_then(|n| n.to_str())
                 .unwrap_or("[No Name]");
             let label = if slot.dirty {
-                format!(" {}+ ", base_name)
+                format!(" {}+ {} ", base_name, crate::app::TAB_CLOSE_GLYPH)
             } else {
-                format!(" {} ", base_name)
+                format!(" {} {} ", base_name, crate::app::TAB_CLOSE_GLYPH)
             };
             let sep_len = if first { 0 } else { 1 };
-            let entry_width = sep_len + label.len();
+            let entry_width = sep_len + label.chars().count();
 
             if buf_used + entry_width > buf_budget {
                 // Truncate with ellipsis if space remains.

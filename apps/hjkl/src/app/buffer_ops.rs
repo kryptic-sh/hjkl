@@ -200,6 +200,18 @@ impl App {
         self.bus.info(format!("buffer closed: \"{name}\""));
     }
 
+    /// Close buffer slot `idx` triggered by a mouse click on the `✕` glyph.
+    ///
+    /// Switches focus to the target slot first (so `buffer_delete` operates on
+    /// it), then calls `buffer_delete(false)` — preserving the unsaved-changes
+    /// guard: a dirty buffer emits E89 rather than silently discarding changes.
+    pub(crate) fn close_buffer_slot(&mut self, idx: usize) {
+        if idx != self.focused_slot_idx() {
+            self.switch_to(idx);
+        }
+        self.buffer_delete(false);
+    }
+
     /// `:bwipeout[!]` — completely remove the active buffer: drop marks,
     /// jumplist entries, and all per-buffer cached state.  With more than
     /// one slot open the slot is removed (same mechanics as `buffer_delete`

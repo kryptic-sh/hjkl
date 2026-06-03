@@ -1326,12 +1326,23 @@ impl App {
                 }
 
                 // Left-click on the tab bar / buffer line switches
-                // to that tab or buffer.
+                // to that tab or buffer. Clicking the close glyph closes it.
                 match mouse::hit_test_zone(self, me.column, me.row) {
+                    mouse::Zone::TabBarClose { tab_idx } => {
+                        if tab_idx != self.active_tab {
+                            self.switch_tab(tab_idx);
+                        }
+                        self.do_tabclose();
+                        return MouseOutcome::Continue;
+                    }
                     mouse::Zone::TabBar { tab_idx } => {
                         if tab_idx != self.active_tab {
                             self.switch_tab(tab_idx);
                         }
+                        return MouseOutcome::Continue;
+                    }
+                    mouse::Zone::BufferLineClose { slot_idx } => {
+                        self.close_buffer_slot(slot_idx);
                         return MouseOutcome::Continue;
                     }
                     mouse::Zone::BufferLine { slot_idx } => {
@@ -1507,7 +1518,7 @@ impl App {
                             has_sel,
                         )
                     }
-                    mouse::Zone::TabBar { tab_idx } => {
+                    mouse::Zone::TabBar { tab_idx } | mouse::Zone::TabBarClose { tab_idx } => {
                         // Switch to the clicked tab first so that
                         // Close-Tab / Close-Right / Close-Left operate on it.
                         if tab_idx != self.active_tab {
@@ -1515,7 +1526,8 @@ impl App {
                         }
                         build_tab_menu(self.tabs.len() > 1)
                     }
-                    mouse::Zone::BufferLine { slot_idx } => {
+                    mouse::Zone::BufferLine { slot_idx }
+                    | mouse::Zone::BufferLineClose { slot_idx } => {
                         // Switch to the clicked buffer first so the
                         // tab menu's actions operate on it. Buffer
                         // line shares the tab menu for v1 — close /
