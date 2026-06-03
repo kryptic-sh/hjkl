@@ -10,6 +10,44 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+// ── Prompt / confirm / clipboard state ────────────────────────────────────────
+
+/// Kind of explorer prompt currently open.
+#[derive(Debug, Clone)]
+pub(crate) enum ExplorerPromptKind {
+    /// `a` — create a new file or directory.
+    Create,
+    /// `r` — rename the node under cursor.
+    Rename {
+        /// The path being renamed.
+        from: PathBuf,
+    },
+}
+
+/// An active explorer text prompt (create / rename).
+pub(crate) struct ExplorerPrompt {
+    pub kind: ExplorerPromptKind,
+    pub field: hjkl_form::TextFieldEditor,
+    /// Directory under which the new name will be placed.
+    pub base: PathBuf,
+}
+
+/// Pending delete confirmation.
+#[derive(Debug, Clone)]
+pub(crate) struct ExplorerConfirm {
+    /// Path to delete.
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+/// Clipboard entry for copy (`y`) / cut (`x`) operations.
+#[derive(Debug, Clone)]
+pub(crate) struct ExplorerClip {
+    pub path: PathBuf,
+    /// `true` → move (cut); `false` → copy.
+    pub cut: bool,
+}
+
 // ── Tree model ─────────────────────────────────────────────────────────────────
 
 /// One visible row in the flattened tree.
@@ -37,11 +75,14 @@ pub(crate) struct ExplorerTree {
     /// Flattened depth-first list of currently visible rows.
     /// Indexed 1:1 with buffer lines after `render_text`.
     pub(crate) nodes: Vec<ExplorerNode>,
+    /// When `false` (default), entries whose name starts with `.` are hidden.
+    /// `H` toggles this on/off.
+    pub(crate) show_hidden: bool,
 }
 
 impl ExplorerTree {
     /// Create a fresh tree rooted at `root`. The root starts expanded so its
-    /// children are visible immediately.
+    /// children are visible immediately. Dotfiles are hidden by default.
     pub(crate) fn new(root: PathBuf) -> Self {
         let mut expanded = HashSet::new();
         expanded.insert(root.clone());
@@ -49,21 +90,29 @@ impl ExplorerTree {
             root,
             expanded,
             nodes: Vec::new(),
+            show_hidden: false,
         };
         tree.rebuild();
         tree
     }
 
     /// Read one directory's children, sorted directories-first then by
-    /// case-insensitive name. Hidden dotfiles are included.
-    fn read_children(dir: &Path) -> Vec<(PathBuf, bool)> {
+    /// case-insensitive name. Dotfiles are filtered unless `show_hidden`.
+    fn read_children(&self, dir: &Path) -> Vec<(PathBuf, bool)> {
         let mut entries: Vec<(PathBuf, bool)> = match std::fs::read_dir(dir) {
             Ok(rd) => rd
                 .filter_map(|e| e.ok())
-                .map(|e| {
+                .filter_map(|e| {
                     let p = e.path();
+                    // Skip dotfiles unless show_hidden.
+                    if !self.show_hidden
+                        && p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                    {
+                        return None;
+                    }
                     let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    (p, is_dir)
+                    Some((p, is_dir))
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -86,7 +135,7 @@ impl ExplorerTree {
         prefix: &[bool],
         out: &mut Vec<ExplorerNode>,
     ) {
-        let children = Self::read_children(dir);
+        let children = self.read_children(dir);
         let n = children.len();
         for (i, (path, is_dir)) in children.into_iter().enumerate() {
             let is_last = i + 1 == n;
@@ -142,6 +191,37 @@ impl ExplorerTree {
 
     pub(crate) fn is_expanded(&self, path: &Path) -> bool {
         self.expanded.contains(path)
+    }
+
+    /// Flip `show_hidden` and rebuild.
+    pub(crate) fn toggle_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        self.rebuild();
+    }
+
+    /// Re-root the tree at `new_root`, preserving the existing `expanded` set.
+    /// The new root is automatically added to `expanded`.
+    pub(crate) fn set_root(&mut self, new_root: PathBuf) {
+        self.root = new_root.clone();
+        self.expanded.insert(new_root);
+        self.rebuild();
+    }
+
+    /// Expand all ancestors of `path` up to (and including) `self.root`, then
+    /// rebuild. Returns the row index of `path` in `self.nodes`, or `None` if
+    /// `path` is not under the root or not visible after rebuild.
+    pub(crate) fn reveal(&mut self, path: &Path) -> Option<usize> {
+        // Walk from path upward, inserting each ancestor into `expanded`.
+        let mut cur = path.parent();
+        while let Some(p) = cur {
+            self.expanded.insert(p.to_path_buf());
+            if p == self.root {
+                break;
+            }
+            cur = p.parent();
+        }
+        self.rebuild();
+        self.nodes.iter().position(|n| n.path == path)
     }
 
     /// Build the buffer text and line→node map for the current tree state.
@@ -241,8 +321,23 @@ impl super::App {
         use hjkl_engine::{BufferEdit, Editor, Host, Options};
         use std::time::Instant;
 
+        // Capture the file the user was editing so we can reveal it.
+        let active_file = self.active().filename.clone();
+
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let tree = ExplorerTree::new(cwd);
+        let mut tree = ExplorerTree::new(cwd.clone());
+
+        // Reveal the active file's path before rendering, so the initial
+        // cursor lands on it.
+        let reveal_row: Option<usize> = active_file.as_deref().and_then(|p| {
+            // Only reveal when the file is under cwd.
+            if p.starts_with(&cwd) {
+                tree.reveal(p)
+            } else {
+                None
+            }
+        });
+
         let text = tree.render_text(self.icon_mode);
         // Nodes are rebuilt by new() above; no extra rebuild needed.
 
@@ -346,6 +441,15 @@ impl super::App {
             win_id: new_win_id,
             tree,
         });
+
+        // Apply the reveal cursor position if we found the active file.
+        if let Some(row) = reveal_row {
+            if let Some(Some(win)) = self.windows.get_mut(new_win_id) {
+                win.cursor_row = row;
+                win.cursor_col = 0;
+            }
+            self.sync_viewport_to_explorer_editor();
+        }
     }
 
     /// Current slot index of the explorer's scratch buffer, found by its
@@ -543,7 +647,7 @@ impl super::App {
     }
 
     /// Find the nearest non-explorer window in the active tab's layout.
-    fn nearest_non_explorer_window(&self) -> Option<super::window::WindowId> {
+    pub(crate) fn nearest_non_explorer_window(&self) -> Option<super::window::WindowId> {
         let leaves = self.layout().leaves();
         let explorer_win = self.explorer.as_ref().map(|ep| ep.win_id);
         // Prefer the currently focused non-explorer window.
@@ -556,10 +660,445 @@ impl super::App {
             .into_iter()
             .find(|&win_id| Some(win_id) != explorer_win)
     }
+
+    // ── Cursor-node helpers ───────────────────────────────────────────────────
+
+    /// Return the node currently under the explorer cursor.
+    fn explorer_cursor_node(&self) -> Option<ExplorerNode> {
+        let ep = self.explorer.as_ref()?;
+        let win = self.windows.get(ep.win_id)?.as_ref()?;
+        ep.tree.nodes.get(win.cursor_row).cloned()
+    }
+
+    /// Resolve the "target directory" for create / paste from the cursor node:
+    /// - dir node → that directory
+    /// - file node → parent of file
+    /// - root node with no parent → root
+    fn explorer_target_dir(node: &ExplorerNode) -> PathBuf {
+        if node.is_dir {
+            node.path.clone()
+        } else {
+            node.path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| node.path.clone())
+        }
+    }
+
+    // ── Refresh / hidden / root ───────────────────────────────────────────────
+
+    /// Re-read the filesystem and rebuild the buffer (preserves cursor path).
+    pub(crate) fn explorer_refresh(&mut self) {
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.rebuild();
+        }
+        self.explorer_rebuild_buffer();
+    }
+
+    /// Toggle dotfile visibility and rebuild.
+    pub(crate) fn explorer_toggle_hidden(&mut self) {
+        if let Some(ref mut ep) = self.explorer {
+            ep.tree.toggle_hidden();
+        }
+        self.explorer_rebuild_buffer();
+    }
+
+    /// Move the tree root up to its parent directory.
+    pub(crate) fn explorer_root_up(&mut self) {
+        let parent = self
+            .explorer
+            .as_ref()
+            .and_then(|ep| ep.tree.root.parent().map(|p| p.to_path_buf()));
+        if let Some(parent) = parent {
+            if let Some(ref mut ep) = self.explorer {
+                ep.tree.set_root(parent);
+            }
+            self.explorer_rebuild_buffer();
+        }
+    }
+
+    // ── Open modes ───────────────────────────────────────────────────────────
+
+    /// Open the file under cursor in a horizontal split.
+    pub(crate) fn explorer_open_split(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) if !n.is_dir => n,
+            _ => return,
+        };
+        if let Some(win_id) = self.nearest_non_explorer_window() {
+            self.switch_focus(win_id);
+        }
+        let s = node.path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("split {s}"));
+    }
+
+    /// Open the file under cursor in a vertical split.
+    pub(crate) fn explorer_open_vsplit(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) if !n.is_dir => n,
+            _ => return,
+        };
+        if let Some(win_id) = self.nearest_non_explorer_window() {
+            self.switch_focus(win_id);
+        }
+        let s = node.path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("vsplit {s}"));
+    }
+
+    /// Open the file under cursor in a new tab.
+    pub(crate) fn explorer_open_tab(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) if !n.is_dir => n,
+            _ => return,
+        };
+        let s = node.path.to_string_lossy().to_string();
+        self.dispatch_ex(&format!("tabnew {s}"));
+    }
+
+    // ── File operations ───────────────────────────────────────────────────────
+
+    /// `a` — open a create prompt. Name ending with `/` creates a directory.
+    pub(crate) fn explorer_create(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        let base = Self::explorer_target_dir(&node);
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        self.explorer_prompt = Some(ExplorerPrompt {
+            kind: ExplorerPromptKind::Create,
+            field,
+            base,
+        });
+    }
+
+    /// `r` — open a rename prompt prefilled with the current filename.
+    pub(crate) fn explorer_rename(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        if node.depth == 0 {
+            return; // Don't rename the root.
+        }
+        let from = node.path.clone();
+        let base = from
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| from.clone());
+        let prefill = from
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        // Seed the field with the current filename.
+        for c in prefill.chars() {
+            let input = hjkl_engine::Input {
+                key: hjkl_engine::Key::Char(c),
+                ctrl: false,
+                alt: false,
+                shift: false,
+            };
+            field.handle_input(input);
+        }
+        self.explorer_prompt = Some(ExplorerPrompt {
+            kind: ExplorerPromptKind::Rename { from },
+            field,
+            base,
+        });
+    }
+
+    /// `d` — open a delete confirmation prompt.
+    pub(crate) fn explorer_delete(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        if node.depth == 0 {
+            return; // Refuse to delete the root.
+        }
+        self.explorer_confirm = Some(ExplorerConfirm {
+            path: node.path,
+            is_dir: node.is_dir,
+        });
+    }
+
+    /// `y` — copy the node under cursor to the clipboard.
+    pub(crate) fn explorer_copy(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        if node.depth == 0 {
+            return;
+        }
+        let name = node
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.bus.info(format!("Copied: {name}"));
+        self.explorer_clip = Some(ExplorerClip {
+            path: node.path,
+            cut: false,
+        });
+    }
+
+    /// `x` — cut the node under cursor (move on paste).
+    pub(crate) fn explorer_cut(&mut self) {
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        if node.depth == 0 {
+            return;
+        }
+        let name = node
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.bus.info(format!("Cut: {name}"));
+        self.explorer_clip = Some(ExplorerClip {
+            path: node.path,
+            cut: true,
+        });
+    }
+
+    /// `p` — paste from clipboard into the target directory.
+    pub(crate) fn explorer_paste(&mut self) {
+        let clip = match self.explorer_clip.clone() {
+            Some(c) => c,
+            None => {
+                self.bus.info("Nothing to paste");
+                return;
+            }
+        };
+        let node = match self.explorer_cursor_node() {
+            Some(n) => n,
+            None => return,
+        };
+        let dest_dir = Self::explorer_target_dir(&node);
+        let file_name = match clip.path.file_name() {
+            Some(n) => n,
+            None => {
+                self.bus.error("Cannot paste: source has no filename");
+                return;
+            }
+        };
+        let dest = dest_dir.join(file_name);
+
+        if clip.cut {
+            // Move: try rename first (same device), fall back to copy+remove.
+            if let Err(e) = std::fs::rename(&clip.path, &dest) {
+                // Cross-device: copy then remove.
+                if copy_recursive(&clip.path, &dest).is_err() {
+                    self.bus.error(format!("Paste failed: {e}"));
+                    return;
+                }
+                let _ = if clip.path.is_dir() {
+                    std::fs::remove_dir_all(&clip.path)
+                } else {
+                    std::fs::remove_file(&clip.path)
+                };
+            }
+            // Clear clip after cut-paste.
+            self.explorer_clip = None;
+        } else {
+            // Copy.
+            if let Err(e) = copy_recursive(&clip.path, &dest) {
+                self.bus.error(format!("Copy failed: {e}"));
+                return;
+            }
+        }
+
+        self.explorer_refresh();
+        // Reveal the destination.
+        if let Some(ref mut ep) = self.explorer {
+            let row = ep.tree.reveal(&dest);
+            let win_id = ep.win_id;
+            if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
+                win.cursor_row = row;
+                win.cursor_col = 0;
+            }
+        }
+        self.explorer_rebuild_buffer();
+    }
+
+    // ── Prompt commit helpers ─────────────────────────────────────────────────
+
+    /// Called when the user presses Enter in a Create prompt.
+    pub(crate) fn explorer_commit_create(&mut self, name: String) {
+        let base = match self.explorer_prompt.as_ref() {
+            Some(ep) => ep.base.clone(),
+            None => return,
+        };
+        self.explorer_prompt = None;
+
+        let new_path = base.join(&name);
+        let result = if name.ends_with('/') {
+            std::fs::create_dir_all(&new_path)
+        } else {
+            // Ensure parent dirs exist, then create the file.
+            if let Some(parent) = new_path.parent()
+                && let Err(e) = std::fs::create_dir_all(parent)
+            {
+                self.bus.error(format!("Create failed: {e}"));
+                return;
+            }
+            std::fs::File::create(&new_path).map(|_| ())
+        };
+
+        match result {
+            Ok(()) => {
+                self.explorer_refresh();
+                // Expand the base dir and reveal the new path.
+                if let Some(ref mut ep) = self.explorer {
+                    ep.tree.expanded.insert(base.clone());
+                    let row = ep.tree.reveal(&new_path);
+                    let win_id = ep.win_id;
+                    if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
+                        win.cursor_row = row;
+                        win.cursor_col = 0;
+                    }
+                }
+                self.explorer_rebuild_buffer();
+            }
+            Err(e) => {
+                self.bus.error(format!("Create failed: {e}"));
+            }
+        }
+    }
+
+    /// Called when the user presses Enter in a Rename prompt.
+    pub(crate) fn explorer_commit_rename(&mut self, new_name: String) {
+        let (from, base) = match self.explorer_prompt.as_ref() {
+            Some(ep) => match &ep.kind {
+                ExplorerPromptKind::Rename { from } => (from.clone(), ep.base.clone()),
+                _ => return,
+            },
+            None => return,
+        };
+        self.explorer_prompt = None;
+
+        let dest = base.join(&new_name);
+        match std::fs::rename(&from, &dest) {
+            Ok(()) => {
+                self.explorer_refresh();
+                if let Some(ref mut ep) = self.explorer {
+                    let row = ep.tree.reveal(&dest);
+                    let win_id = ep.win_id;
+                    if let (Some(row), Some(Some(win))) = (row, self.windows.get_mut(win_id)) {
+                        win.cursor_row = row;
+                        win.cursor_col = 0;
+                    }
+                }
+                self.explorer_rebuild_buffer();
+            }
+            Err(e) => {
+                self.bus.error(format!("Rename failed: {e}"));
+            }
+        }
+    }
+
+    /// Called when the user confirms deletion with `y`.
+    pub(crate) fn explorer_commit_delete(&mut self) {
+        let confirm = match self.explorer_confirm.take() {
+            Some(c) => c,
+            None => return,
+        };
+        let result = if confirm.is_dir {
+            std::fs::remove_dir_all(&confirm.path)
+        } else {
+            std::fs::remove_file(&confirm.path)
+        };
+        match result {
+            Ok(()) => {
+                self.explorer_refresh();
+            }
+            Err(e) => {
+                self.bus.error(format!("Delete failed: {e}"));
+            }
+        }
+    }
+
+    // ── Prompt / confirm key handlers ─────────────────────────────────────────
+
+    /// Route a key when `explorer_prompt` is active.
+    pub(crate) fn handle_explorer_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Esc => {
+                self.explorer_prompt = None;
+            }
+            KeyCode::Enter => {
+                let (kind, name) = match self.explorer_prompt.as_ref() {
+                    Some(ep) => {
+                        let name = ep.field.text();
+                        (ep.kind.clone(), name)
+                    }
+                    None => return,
+                };
+                match kind {
+                    ExplorerPromptKind::Create => {
+                        self.explorer_commit_create(name);
+                    }
+                    ExplorerPromptKind::Rename { .. } => {
+                        self.explorer_commit_rename(name);
+                    }
+                }
+            }
+            _ => {
+                // Forward to the text field.
+                let input = hjkl_engine_tui::crossterm_to_input(key);
+                if let Some(ref mut ep) = self.explorer_prompt {
+                    ep.field.handle_input(input);
+                }
+            }
+        }
+    }
+
+    /// Route a key when `explorer_confirm` (delete) is active.
+    pub(crate) fn handle_explorer_confirm_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        match key.code {
+            // Accept either case regardless of whether SHIFT is reported.
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.explorer_commit_delete();
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                self.explorer_confirm = None;
+            }
+            _ => {} // consume but do nothing
+        }
+    }
 }
 
 /// Width of the explorer window in columns.
 pub(crate) const EXPLORER_WINDOW_WIDTH: u16 = 36;
+
+/// Recursively copy `src` to `dst`. `src` may be a file or directory.
+fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let child_dst = dst.join(entry.file_name());
+            if ty.is_dir() {
+                copy_recursive(&entry.path(), &child_dst)?;
+            } else {
+                std::fs::copy(entry.path(), child_dst)?;
+            }
+        }
+        Ok(())
+    } else {
+        std::fs::copy(src, dst).map(|_| ())
+    }
+}
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
@@ -715,5 +1254,226 @@ mod tests {
         }
         let _ = std::fs::remove_file(&f1);
         let _ = std::fs::remove_file(&f2);
+    }
+
+    // ── New tests for plan features ────────────────────────────────────────
+
+    /// Build a unique temp dir with dotfiles:
+    /// root/{ .hidden_dir/, .hidden_file, visible.txt }
+    fn make_dotfile_tree() -> PathBuf {
+        let base =
+            std::env::temp_dir().join(format!("hjkl_explorer_dot_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join(".hidden_dir")).unwrap();
+        fs::write(base.join(".hidden_file"), "x").unwrap();
+        fs::write(base.join("visible.txt"), "x").unwrap();
+        base
+    }
+
+    #[test]
+    fn read_children_hides_dotfiles_by_default() {
+        let root = make_dotfile_tree();
+        let tree = ExplorerTree::new(root.clone());
+        // Only visible.txt should appear (dotfiles hidden by default).
+        let names = child_names(&tree);
+        assert!(
+            !names.iter().any(|n| n.starts_with('.')),
+            "dotfiles should be hidden by default, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"visible.txt".to_string()),
+            "visible.txt should be present"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn toggle_hidden_shows_dotfiles() {
+        let root = make_dotfile_tree();
+        let mut tree = ExplorerTree::new(root.clone());
+        assert!(
+            !child_names(&tree).iter().any(|n| n.starts_with('.')),
+            "dotfiles should be hidden before toggle"
+        );
+        tree.toggle_hidden();
+        let names = child_names(&tree);
+        assert!(
+            names.iter().any(|n| n.starts_with('.')),
+            "dotfiles should be visible after toggle_hidden, got: {names:?}"
+        );
+        // Toggle back.
+        tree.toggle_hidden();
+        assert!(
+            !child_names(&tree).iter().any(|n| n.starts_with('.')),
+            "dotfiles should be hidden after second toggle"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reveal_expands_ancestors_and_returns_row() {
+        let root = make_tree();
+        // Build a fresh tree (root expanded by default, a_dir is NOT expanded).
+        let mut tree = ExplorerTree::new(root.clone());
+        let inner = root.join("a_dir").join("inner.txt");
+        // inner.txt is two levels deep; reveal should expand a_dir.
+        let row = tree.reveal(&inner);
+        assert!(
+            row.is_some(),
+            "reveal should return a row for an existing path"
+        );
+        let row = row.unwrap();
+        assert_eq!(
+            tree.nodes[row].path, inner,
+            "node at returned row should be inner.txt"
+        );
+        assert!(
+            tree.is_expanded(&root.join("a_dir")),
+            "a_dir should be expanded after reveal"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_root_re_roots_to_parent() {
+        let root = make_tree();
+        let mut tree = ExplorerTree::new(root.join("a_dir"));
+        // a_dir is the root; set_root to root's parent brings us up.
+        tree.set_root(root.clone());
+        // Now root should be the root and a_dir visible as a child.
+        assert_eq!(tree.root, root);
+        let names = child_names(&tree);
+        assert!(
+            names.contains(&"a_dir".to_string()),
+            "a_dir should be a visible child after set_root: {names:?}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn target_dir_resolver_dir_node_returns_itself() {
+        let root = make_tree();
+        let tree = ExplorerTree::new(root.clone());
+        // nodes[1] is a_dir (a directory).
+        let node = tree.nodes[1].clone();
+        assert!(node.is_dir, "test prerequisite: nodes[1] is a_dir");
+        let target = super::super::App::explorer_target_dir(&node);
+        assert_eq!(target, node.path, "dir node → that dir");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn target_dir_resolver_file_node_returns_parent() {
+        let root = make_tree();
+        let tree = ExplorerTree::new(root.clone());
+        // Find m_file.txt (a file node).
+        let node = tree
+            .nodes
+            .iter()
+            .find(|n| {
+                n.path
+                    .file_name()
+                    .map(|f| f == "m_file.txt")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .expect("m_file.txt should exist");
+        assert!(!node.is_dir, "test prerequisite: m_file.txt is not a dir");
+        let target = super::super::App::explorer_target_dir(&node);
+        assert_eq!(
+            target,
+            node.path.parent().unwrap().to_path_buf(),
+            "file node → parent dir"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_create_file_creates_on_disk() {
+        let root = make_tree();
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        // Manually set up explorer_prompt state as if `a` was pressed.
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        app.explorer_prompt = Some(super::ExplorerPrompt {
+            kind: super::ExplorerPromptKind::Create,
+            field,
+            base: root.clone(),
+        });
+        // Commit creation of a plain file.
+        app.explorer_commit_create("new_file.txt".to_string());
+        assert!(
+            root.join("new_file.txt").exists(),
+            "new_file.txt should be created on disk"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_create_dir_trailing_slash_creates_dir() {
+        let root = make_tree();
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        app.explorer_prompt = Some(super::ExplorerPrompt {
+            kind: super::ExplorerPromptKind::Create,
+            field,
+            base: root.clone(),
+        });
+        app.explorer_commit_create("new_dir/".to_string());
+        assert!(
+            root.join("new_dir").is_dir(),
+            "new_dir/ should create a directory"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_rename_moves_file() {
+        let root = make_tree();
+        let from = root.join("m_file.txt");
+        let expected = root.join("renamed.txt");
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        let mut field = hjkl_form::TextFieldEditor::new(true);
+        field.enter_insert_at_end();
+        app.explorer_prompt = Some(super::ExplorerPrompt {
+            kind: super::ExplorerPromptKind::Rename { from: from.clone() },
+            field,
+            base: root.clone(),
+        });
+        app.explorer_commit_rename("renamed.txt".to_string());
+        assert!(!from.exists(), "original file should be gone after rename");
+        assert!(expected.exists(), "renamed file should exist");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_delete_removes_file() {
+        let root = make_tree();
+        let path = root.join("m_file.txt");
+        assert!(path.exists(), "test prerequisite: m_file.txt exists");
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.explorer_confirm = Some(super::ExplorerConfirm {
+            path: path.clone(),
+            is_dir: false,
+        });
+        app.explorer_commit_delete();
+        assert!(!path.exists(), "m_file.txt should be deleted");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn commit_delete_removes_dir() {
+        let root = make_tree();
+        let path = root.join("b_dir");
+        assert!(path.is_dir(), "test prerequisite: b_dir exists");
+        let mut app = super::super::App::new(None, false, None, None).unwrap();
+        app.explorer_confirm = Some(super::ExplorerConfirm {
+            path: path.clone(),
+            is_dir: true,
+        });
+        app.explorer_commit_delete();
+        assert!(!path.exists(), "b_dir should be deleted");
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -330,6 +330,18 @@ impl App {
             self.context_menu = None;
         }
 
+        // ── Explorer text prompt (create / rename) ────────────────
+        if self.explorer_prompt.is_some() {
+            self.handle_explorer_prompt_key(key);
+            return KeyOutcome::Continue;
+        }
+
+        // ── Explorer delete confirm ───────────────────────────────
+        if self.explorer_confirm.is_some() {
+            self.handle_explorer_confirm_key(key);
+            return KeyOutcome::Continue;
+        }
+
         // ── Command palette (`:` prompt) ─────────────────────────
         if self.command_field.is_some() {
             self.handle_command_field_key(key);
@@ -381,7 +393,71 @@ impl App {
                     self.explorer_collapse();
                     return KeyOutcome::Continue;
                 }
+                // File ops
+                KeyCode::Char('a') => {
+                    self.explorer_create();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('r') => {
+                    self.explorer_rename();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('d') => {
+                    self.explorer_delete();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('y') => {
+                    self.explorer_copy();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('x') => {
+                    self.explorer_cut();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('p') => {
+                    self.explorer_paste();
+                    return KeyOutcome::Continue;
+                }
+                // Open modes
+                KeyCode::Char('s') => {
+                    self.explorer_open_split();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('v') => {
+                    self.explorer_open_vsplit();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('t') => {
+                    self.explorer_open_tab();
+                    return KeyOutcome::Continue;
+                }
+                // Root up (no modifier)
+                KeyCode::Char('-') => {
+                    self.explorer_root_up();
+                    return KeyOutcome::Continue;
+                }
                 _ => {} // fall through to engine
+            }
+        }
+        // Capital R (refresh) / H (toggle hidden): handled separately because
+        // shifted letters may arrive with or without a SHIFT modifier depending
+        // on the terminal's keyboard protocol — accept the key code regardless,
+        // as long as Ctrl/Alt aren't held (those are real engine chords).
+        if self.explorer_buf_focused()
+            && self.active().editor.vim_mode() == VimMode::Normal
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+        {
+            match key.code {
+                KeyCode::Char('R') => {
+                    self.explorer_refresh();
+                    return KeyOutcome::Continue;
+                }
+                KeyCode::Char('H') => {
+                    self.explorer_toggle_hidden();
+                    return KeyOutcome::Continue;
+                }
+                _ => {}
             }
         }
 

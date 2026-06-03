@@ -782,7 +782,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     let in_prompt = app.command_field.is_some()
         || app.filter_field.is_some()
         || app.search_field.is_some()
-        || app.picker.is_some();
+        || app.picker.is_some()
+        || app.explorer_prompt.is_some()
+        || app.explorer_confirm.is_some();
 
     // Merge diagnostic + LSP diag + git signs, filtered to the visible viewport.
     let vp_top = viewport_ref.top_row;
@@ -1768,6 +1770,46 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
             "E325: swap file found (written {} ago). Recover? [y/N/q]",
             pr.written_ago
         );
+        let padded = format!("{content:<width$}", width = width as usize);
+        return (
+            Line::from(vec![Span::styled(
+                padded,
+                Style::default()
+                    .bg(app.theme.ui.search_bg)
+                    .fg(app.theme.ui.search_fg)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+            None,
+        );
+    }
+
+    // ── Explorer text prompt (create / rename) ─────────────────────────────
+    if let Some(ref ep) = app.explorer_prompt {
+        use crate::app::explorer::ExplorerPromptKind;
+        let label = match &ep.kind {
+            ExplorerPromptKind::Create => "Create: ",
+            ExplorerPromptKind::Rename { .. } => "Rename: ",
+        };
+        let text = ep.field.text();
+        let display: String = text.lines().next().unwrap_or("").to_string();
+        let content = format!("{label}{display}");
+        let (_, ccol) = ep.field.cursor();
+        let cursor_col = label.len() as u16 + ccol as u16;
+        let theme = prompt_theme(&app.theme.ui);
+        return (
+            build_prompt_line(&content, ep.field.vim_mode(), &theme, width),
+            Some(cursor_col),
+        );
+    }
+
+    // ── Explorer delete confirm ─────────────────────────────────────────────
+    if let Some(ref ec) = app.explorer_confirm {
+        let name = ec
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ec.path.to_string_lossy().into_owned());
+        let content = format!("Delete '{name}'? [y/N]");
         let padded = format!("{content:<width$}", width = width as usize);
         return (
             Line::from(vec![Span::styled(

@@ -176,6 +176,12 @@ pub struct App {
     pub picker: Option<crate::picker::Picker>,
     /// Left file-explorer window (#55). `None` when closed; closed on launch.
     pub(crate) explorer: Option<explorer::ExplorerPane>,
+    /// Active explorer text prompt (create / rename). `None` when closed.
+    pub(crate) explorer_prompt: Option<explorer::ExplorerPrompt>,
+    /// Pending explorer delete confirmation. `None` when not confirming.
+    pub(crate) explorer_confirm: Option<explorer::ExplorerConfirm>,
+    /// Explorer copy/cut clipboard. Persists until overwritten or pasted.
+    pub(crate) explorer_clip: Option<explorer::ExplorerClip>,
     /// Resolved icon set for the explorer (Nerd / Unicode / Ascii), from the
     /// `icons` config setting.
     pub(crate) icon_mode: hjkl_icons::IconMode,
@@ -1339,6 +1345,9 @@ impl App {
             search_field: None,
             picker: None,
             explorer: None,
+            explorer_prompt: None,
+            explorer_confirm: None,
+            explorer_clip: None,
             icon_mode: hjkl_icons::IconMode::default(),
             pending_count: hjkl_vim::CountAccumulator::new(),
             search_dir: SearchDir::Forward,
