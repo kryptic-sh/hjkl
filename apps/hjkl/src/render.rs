@@ -392,7 +392,7 @@ fn build_diag_overlays(
 /// Widest line-number gutter across all open (non-explorer) buffers, so the
 /// number column can be sized to the biggest file and the text column stays put
 /// when switching buffers. Buffers with line numbers off contribute 0.
-fn max_lnum_width(app: &App) -> u16 {
+pub(crate) fn max_lnum_width(app: &App) -> u16 {
     app.slots()
         .iter()
         .filter(|s| !s.is_explorer)
@@ -409,7 +409,7 @@ fn max_lnum_width(app: &App) -> u16 {
 ///
 /// The sign decision uses whether a buffer has ANY signs (not just ones in the
 /// current viewport), so scrolling within a buffer doesn't jiggle either.
-fn stable_gutter_extra(app: &App) -> (u16, u16) {
+pub(crate) fn stable_gutter_extra(app: &App) -> (u16, u16) {
     use hjkl_engine::types::SignColumnMode;
     let mut sign_w = 0u16;
     let mut fold_w = 0u16;
@@ -435,6 +435,25 @@ fn stable_gutter_extra(app: &App) -> (u16, u16) {
         fold_w = fold_w.max(fw);
     }
     (sign_w, fold_w)
+}
+
+/// Total rendered gutter width (sign + number + fold cells) for `slot_idx`,
+/// matching exactly what `render_window` draws: the number column is sized to
+/// the cross-buffer max, and the sign/fold columns are the stable reserved
+/// widths. The explorer pane is gutterless (0). This is the single source of
+/// truth shared with the mouse hit-test so clicks map to the right column even
+/// when the gutter is widened beyond the buffer's own line-count width.
+pub(crate) fn rendered_gutter_width(app: &App, slot_idx: usize) -> u16 {
+    let Some(slot) = app.slots().get(slot_idx) else {
+        return 0;
+    };
+    if slot.is_explorer {
+        return 0;
+    }
+    let (sign_w, fold_w) = stable_gutter_extra(app);
+    let own_lnum = slot.editor.lnum_width();
+    let num_gw = if own_lnum > 0 { max_lnum_width(app) } else { 0 };
+    sign_w + num_gw + fold_w
 }
 
 /// Parse a comma-separated colorcolumn string into a sorted `Vec<u16>` of

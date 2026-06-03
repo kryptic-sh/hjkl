@@ -157,58 +157,6 @@ fn rect_contains(rect: window::LayoutRect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.w && row >= rect.y && row < rect.y + rect.h
 }
 
-fn sign_column_width(
-    signcolumn: hjkl_engine::types::SignColumnMode,
-    has_visible_signs: bool,
-) -> u16 {
-    match signcolumn {
-        hjkl_engine::types::SignColumnMode::Yes => 1,
-        hjkl_engine::types::SignColumnMode::No => 0,
-        hjkl_engine::types::SignColumnMode::Auto => {
-            if has_visible_signs {
-                1
-            } else {
-                0
-            }
-        }
-    }
-}
-
-/// Width of the non-text region on the left edge of a window — the cells the
-/// renderer reserves before the first text cell.
-///
-/// Gutter layout is `[sign][number][fold][text]`, matching the renderer
-/// (`apps/hjkl/src/render.rs`). Text starts at
-/// `area.x + sign_w + num_gw + fold_w`. The fold column (#245) is now
-/// painted, so it MUST be included here or clicks in a buffer with folds
-/// map one column too far left.
-///
-/// `lnum_width` must come from `Editor::lnum_width()`; `fold_w` is the fold
-/// column width (auto: 1 when the buffer has folds, widened by `foldcolumn`).
-/// `cell_to_doc` and `hit_test_zone` must use this so mouse clicks map to the
-/// correct document coordinates.
-fn text_start_offset(
-    lnum_width: u16,
-    signcolumn: hjkl_engine::types::SignColumnMode,
-    has_visible_signs: bool,
-    fold_w: u16,
-) -> u16 {
-    let sign_w = sign_column_width(signcolumn, has_visible_signs);
-    lnum_width + sign_w + fold_w
-}
-
-/// Fold-column width for `slot`, matching the renderer's auto rule: 1 when
-/// the buffer has any fold (widened by an explicit `foldcolumn`), else the
-/// `foldcolumn` setting (0 by default).
-fn fold_column_width_for(slot: &crate::app::BufferSlot) -> u16 {
-    let fdc = slot.editor.settings().foldcolumn.min(12) as u16;
-    if slot.editor.buffer().folds().is_empty() {
-        fdc
-    } else {
-        fdc.max(1)
-    }
-}
-
 // ── doc_row_at_screen_offset ─────────────────────────────────────────────────
 
 /// Map a screen-row offset (rows below the viewport top, as the renderer
@@ -329,31 +277,18 @@ pub fn cell_to_doc(
 
     let slot_idx = win.slot;
     let slot = app.slots().get(slot_idx)?;
-    let s = slot.editor.settings();
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
-
-    // Compute sign-column visibility for this window's viewport.
-    let vp_top = vp.top_row;
-    let vp_bot = vp_top + rect.h as usize;
-    let has_visible_signs = slot
-        .diag_signs
-        .iter()
-        .chain(slot.diag_signs_lsp.iter())
-        .chain(slot.git_signs.iter())
-        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
 
     // Boxed-blame view reserves a 1-col left frame and inserts virtual border
     // rows; map clicks through the box plan and account for the frame.
     let box_mode = slot.editor.is_blame() && matches!(vp.wrap, hjkl_buffer::Wrap::None);
     let frame = u16::from(box_mode);
 
-    let gw = text_start_offset(
-        slot.editor.lnum_width(),
-        s.signcolumn,
-        has_visible_signs,
-        fold_column_width_for(slot),
-    ) + frame;
+    // Use the SAME rendered gutter width as `render_window` (stable cross-buffer
+    // number column + reserved sign/fold) so clicks map to the correct column
+    // even when the gutter is widened beyond this buffer's own line-count width.
+    let gw = crate::render::rendered_gutter_width(app, slot_idx) + frame;
 
     // Relative cell offset from the window's top-left corner.
     let rel_x = cell_x.saturating_sub(rect.x);
@@ -414,7 +349,6 @@ pub fn doc_to_cell(
 
     let slot_idx = win.slot;
     let slot = app.slots().get(slot_idx)?;
-    let s = slot.editor.settings();
     let vp = slot.editor.host().viewport();
 
     // Row must be within the visible viewport.
@@ -424,19 +358,8 @@ pub fn doc_to_cell(
         return None;
     }
 
-    // Gutter width — must match cell_to_doc's sign-column visibility math.
-    let has_visible_signs = slot
-        .diag_signs
-        .iter()
-        .chain(slot.diag_signs_lsp.iter())
-        .chain(slot.git_signs.iter())
-        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
-    let gw = text_start_offset(
-        slot.editor.lnum_width(),
-        s.signcolumn,
-        has_visible_signs,
-        fold_column_width_for(slot),
-    );
+    // Gutter width — same rendered width as render_window / cell_to_doc.
+    let gw = crate::render::rendered_gutter_width(app, slot_idx);
 
     // Box mode (BLAME, no soft-wrap) inserts virtual border rows and reserves a
     // 1-col left frame, so the screen row is the doc row's index in the render
@@ -992,26 +915,11 @@ pub fn hit_test_zone(app: &App, col: u16, row: u16) -> Zone {
         return Zone::None;
     };
 
-    let s = slot.editor.settings();
     let line_count = slot.editor.buffer().line_count() as usize;
     let vp = slot.editor.host().viewport();
 
-    // Compute sign-column visibility for this window.
-    let vp_top = vp.top_row;
-    let vp_bot = vp_top + rect.h as usize;
-    let has_visible_signs = slot
-        .diag_signs
-        .iter()
-        .chain(slot.diag_signs_lsp.iter())
-        .chain(slot.git_signs.iter())
-        .any(|sg| sg.row >= vp_top && sg.row < vp_bot);
-
-    let gw = text_start_offset(
-        slot.editor.lnum_width(),
-        s.signcolumn,
-        has_visible_signs,
-        fold_column_width_for(slot),
-    );
+    // Same rendered gutter width as render_window / cell_to_doc.
+    let gw = crate::render::rendered_gutter_width(app, slot_idx);
 
     let rel_x = col.saturating_sub(rect.x);
     let rel_y = row.saturating_sub(rect.y);
