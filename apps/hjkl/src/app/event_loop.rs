@@ -442,11 +442,10 @@ impl App {
                     self.explorer_root_up();
                     return KeyOutcome::Continue;
                 }
-                // Open fuzzy-search field
-                KeyCode::Char('/') => {
-                    self.open_explorer_search();
-                    return KeyOutcome::Continue;
-                }
+                // `/` is NOT special-cased here — it flows through the keymap to
+                // OpenSearchPrompt → open_search_prompt, which consults the
+                // per-buffer search override (the explorer's fuzzy filter). That
+                // keeps `/` overridable per buffer for future plugins.
                 // Esc while no search field open but a committed filter is active
                 // → clear the filter and restore the full tree.
                 KeyCode::Esc => {
