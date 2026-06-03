@@ -16,13 +16,15 @@ fn explorer_slash_shows_search_prompt() {
     s.keys("<Space>e");
     s.keys("/");
 
-    let bottom: String = (20..24).map(|r| s.line(r)).collect::<Vec<_>>().join("\n");
+    // The search bar renders at the TOP of the explorer pane (row 0), not the
+    // bottom status line.
+    let top: String = (0..3).map(|r| s.line(r)).collect::<Vec<_>>().join("\n");
     let dump: String = (0..24)
         .map(|r| format!("{r:>2}|{}", s.line(r)))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        bottom.lines().any(|l| l.trim_start().starts_with('/')),
-        "after `/` the explorer fuzzy-search prompt (leading `/`) must show.\n{dump}"
+        top.lines().any(|l| l.trim_start().starts_with('/')),
+        "after `/` the explorer fuzzy-search bar (leading `/`) must show at the top.\n{dump}"
     );
 }

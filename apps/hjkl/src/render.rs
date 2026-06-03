@@ -676,6 +676,17 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         )
     };
 
+    // Explorer top search bar: when this focused explorer window has an active
+    // fuzzy-search field, carve its top row for the search input and render the
+    // tree below it. `last_rect` (recorded above) stays the full window.
+    let mut area = area;
+    if is_focused && app.explorer_search.is_some() && app.slots()[slot_idx].is_explorer {
+        let search_row = Rect { height: 1, ..area };
+        render_explorer_search_bar(frame, app, search_row);
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(1);
+    }
+
     let s = app.slots()[slot_idx].editor.settings();
     let (nu, rnu) = (s.number, s.relativenumber);
     let (scl, fdc) = (s.signcolumn, s.foldcolumn);
@@ -1201,6 +1212,40 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             frame.set_cursor_position((cx, cy));
         }
     }
+}
+
+/// Render the explorer's fuzzy-search input as a one-row bar at the TOP of the
+/// explorer pane (not the bottom status line, which stays the normal one for
+/// ordinary buffers). Echoes the live query + a right-aligned match/total badge,
+/// and places the terminal cursor on the bar.
+fn render_explorer_search_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let Some(field) = app.explorer_search.as_ref() else {
+        return;
+    };
+    let text = field.text();
+    let display: String = text.lines().next().unwrap_or("").to_string();
+    // Right-align a match/total badge when a filter is active.
+    let badge: String = match app.explorer.as_ref() {
+        Some(ep) if ep.tree.filter.is_some() => {
+            format!(" {}/{}", ep.tree.match_count, ep.tree.total_count)
+        }
+        _ => String::new(),
+    };
+    let prefix = "/";
+    let width = area.width;
+    let content = if badge.is_empty() {
+        format!("{prefix}{display}")
+    } else {
+        // Pad so the badge sits flush-right.
+        let used = prefix.len() + display.len() + badge.len();
+        let pad = (width as usize).saturating_sub(used);
+        format!("{prefix}{display}{}{badge}", " ".repeat(pad))
+    };
+    let theme = prompt_theme(&app.theme.ui);
+    let line = build_prompt_line(&content, field.vim_mode(), &theme, width);
+    frame.render_widget(ratatui::widgets::Paragraph::new(line), area);
+    let (_, ccol) = field.cursor();
+    frame.set_cursor_position((area.x + 1 + ccol as u16, area.y));
 }
 
 /// Render the completion popup, floating below the cursor position.
@@ -1784,37 +1829,9 @@ fn build_status_line(app: &App, width: u16) -> (Line<'static>, Option<u16>) {
         );
     }
 
-    // ── Explorer fuzzy-search field ────────────────────────────────────────
-    if let Some(ref field) = app.explorer_search {
-        let text = field.text();
-        let display: String = text.lines().next().unwrap_or("").to_string();
-        // Right-align a match/total badge when a filter is active.
-        let badge: String = if let Some(ref ep) = app.explorer {
-            if ep.tree.filter.is_some() {
-                format!(" {}/{}", ep.tree.match_count, ep.tree.total_count)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-        let prefix = "/";
-        let content = if badge.is_empty() {
-            format!("{prefix}{display}")
-        } else {
-            // Pad so the badge sits flush-right.
-            let used = prefix.len() + display.len() + badge.len();
-            let pad = (width as usize).saturating_sub(used);
-            format!("{prefix}{display}{}{badge}", " ".repeat(pad))
-        };
-        let (_, ccol) = field.cursor();
-        let cursor_col = 1u16 + ccol as u16;
-        let theme = prompt_theme(&app.theme.ui);
-        return (
-            build_prompt_line(&content, field.vim_mode(), &theme, width),
-            Some(cursor_col),
-        );
-    }
+    // NOTE: the explorer fuzzy-search field is NOT rendered here — it draws in a
+    // bar at the TOP of the explorer pane (see `render_explorer_search_bar`),
+    // leaving the bottom status line as the normal one for ordinary buffers.
 
     // ── Explorer text prompt (create / rename) ─────────────────────────────
     if let Some(ref ep) = app.explorer_prompt {
