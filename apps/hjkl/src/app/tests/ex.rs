@@ -2705,3 +2705,109 @@ fn set_background_tracks_colorscheme() {
         ":set background= must track colorscheme"
     );
 }
+
+// ── sed-style ex commands: vim-compat (range + %/# literal-in-body) ───────────
+//
+// These run through the full `dispatch_ex` path WITH A CURRENT FILE so the
+// command-line `%`/`#` filename expansion is live. The bug class: the leading
+// range `%` (`:%s/…`) and any `%`/`#` inside a substitute/global body were
+// being rewritten to the current filename, breaking the command. Vim expands
+// `%`/`#` only in file-argument/shell commands — never the range, never the
+// substitute/global body.
+
+/// Open an app on a temp file seeded with `content`; returns (app, tempdir).
+/// The tempdir must outlive the app (kept by the caller).
+fn app_with_file(content: &str) -> (App, tempfile::TempDir) {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("sed_compat.txt");
+    std::fs::write(&path, content).unwrap();
+    let mut app = App::new(Some(path), false, None, None).unwrap();
+    seed_buffer(&mut app, content);
+    (app, td)
+}
+
+#[test]
+fn percent_substitute_replaces_all_lines() {
+    // The reported bug: `:%s/foo/bar/g` did nothing because the leading `%`
+    // range was expanded to the current filename before dispatch.
+    let (mut app, _td) = app_with_file("foo foo\nbar\nfoo\n");
+    app.dispatch_ex("%s/foo/bar/g");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        &**content, "bar bar\nbar\nbar\n",
+        "`:%s/foo/bar/g` must replace every match on every line, got: {content:?}"
+    );
+}
+
+#[test]
+fn substitute_literal_percent_in_pattern() {
+    // `%` inside the substitute pattern is a literal char, NOT the current-file
+    // token — vim never expands `%`/`#` in a substitute body.
+    let (mut app, _td) = app_with_file("50% done\n");
+    // Cursor is on line 0; no range → current line.
+    app.dispatch_ex("s/50%/half/");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        &**content, "half done\n",
+        "`%` in the substitute pattern must stay literal, got: {content:?}"
+    );
+}
+
+#[test]
+fn substitute_literal_hash_in_replacement() {
+    // `#` (alternate-file token) must also stay literal in a substitute body.
+    let (mut app, _td) = app_with_file("count: N\n");
+    app.dispatch_ex(r"s/N/#42/");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        &**content, "count: #42\n",
+        "`#` in the replacement must stay literal, got: {content:?}"
+    );
+}
+
+#[test]
+fn percent_global_delete_matching_lines() {
+    // `:%g/pat/d` — range `%` + global; the leading `%` must not expand.
+    let (mut app, _td) = app_with_file("keep\ndrop me\nkeep2\ndrop again\n");
+    app.dispatch_ex("%g/drop/d");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        &**content, "keep\nkeep2\n",
+        "`:%g/drop/d` must delete every matching line, got: {content:?}"
+    );
+}
+
+#[test]
+fn numeric_range_substitute_still_works() {
+    // Control: a numeric range (no `%`) was never affected; guard it stays so.
+    let (mut app, _td) = app_with_file("a\nx\nx\nx\nb\n");
+    app.dispatch_ex("2,3s/x/y/");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        &**content, "a\ny\ny\nx\nb\n",
+        "`:2,3s/x/y/` must touch only lines 2-3, got: {content:?}"
+    );
+}
+
+#[test]
+fn edit_percent_still_expands_to_filename() {
+    // Guard the OTHER side: `%` as a FILE ARGUMENT (`:e %`) must still expand —
+    // the fix must not over-suppress expansion for file commands.
+    let (mut app, _td) = app_with_file("hello\n");
+    // `:e %` reloads the current file; it must not error with an unexpanded
+    // `%` path. Dirty the buffer first so the reload is observable, then
+    // force-edit to discard.
+    seed_buffer(&mut app, "changed\n");
+    app.active_mut().dirty = true;
+    app.dispatch_ex("e! %");
+    let content = app.active().editor.buffer().content_joined();
+    assert_eq!(
+        content.trim_end(),
+        "hello",
+        "`:e! %` must expand `%` to the current file and reload it, got: {content:?}"
+    );
+    assert!(
+        !content.contains("changed"),
+        "reload must replace the dirty buffer, got: {content:?}"
+    );
+}

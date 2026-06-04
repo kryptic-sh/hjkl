@@ -65,10 +65,42 @@ impl App {
         App::push_history(&mut self.ex_history, &raw_owned);
 
         // Phase 7: expand `%`, `#`, `<cword>`, `<cWORD>` tokens in the command
-        // line BEFORE dispatch so commands see literal paths.
+        // line BEFORE dispatch so file-argument commands see literal paths.
+        //
+        // Two vim-parity guards (kryptic-sh/hjkl): never expand the LEADING
+        // RANGE — a leading `%` there is "whole buffer" (`:%s/…`), not the
+        // current-file token — and never expand the BODY of substitute/global/
+        // normal commands, whose `%`/`#` are literal regex/replacement/keystroke
+        // characters (`:s/100%/done/`). Without these, `:%s/foo/bar/g` rewrote
+        // the leading `%` to the filename and the command failed to dispatch.
         let cmd_expanded = {
-            let ctx = build_expand_context(self);
-            hjkl_ex::expand_args(&ctx, raw)
+            // Strip the leading range (its text is preserved for re-dispatch).
+            let after_range = match hjkl_ex::parse_range(raw, &self.active().editor) {
+                Ok((_, rest)) => rest,
+                Err(_) => raw,
+            };
+            let range_len = raw.len() - after_range.len();
+            // Canonical command name of the body (resolve abbreviations).
+            let name: String = after_range
+                .chars()
+                .take_while(char::is_ascii_alphabetic)
+                .collect();
+            let canon = {
+                let reg = hjkl_ex::default_registry::<TuiHost>();
+                reg.resolve(&name)
+                    .map(|c| c.name.to_string())
+                    .unwrap_or(name)
+            };
+            if matches!(
+                canon.as_str(),
+                "substitute" | "global" | "vglobal" | "normal"
+            ) {
+                raw.to_string()
+            } else {
+                let ctx = build_expand_context(self);
+                let head = &raw[..range_len];
+                format!("{head}{}", hjkl_ex::expand_args(&ctx, after_range))
+            }
         };
         // Shadow both `raw` and `cmd` so all dispatch arms see the expanded text.
         let raw = cmd_expanded.as_str();
