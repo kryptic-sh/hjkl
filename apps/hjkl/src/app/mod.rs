@@ -1162,10 +1162,13 @@ impl App {
         let dirty_gen = self.active().editor.buffer().dirty_gen();
         let buffer_id = self.active().buffer_id;
 
-        let parent = path
-            .parent()
-            .map(|p| p.to_owned())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        // `Path::parent()` of a bare relative filename (`foo.toml`) is
+        // `Some("")`, not `None`; an empty root would break project discovery
+        // and the formatter's working dir, so normalise it to `.`.
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.to_owned(),
+            _ => std::path::PathBuf::from("."),
+        };
         let project_root = types::find_project_root(&parent);
 
         tracing::debug!(

@@ -989,7 +989,14 @@ impl App {
                             ));
                         } else {
                             let content = self.slots[idx].editor.buffer().content_joined();
-                            let project_root = p.parent().unwrap_or(std::path::Path::new("."));
+                            // `Path::parent()` of a bare relative filename is
+                            // `Some("")`, not `None`; an empty working dir makes
+                            // the formatter spawn fail with NotFound (misread as
+                            // "not installed"). Normalise empty → `.`.
+                            let project_root = match p.parent() {
+                                Some(par) if !par.as_os_str().is_empty() => par,
+                                _ => std::path::Path::new("."),
+                            };
                             match formatter.format(&content, project_root, None) {
                                 Ok(formatted) => {
                                     self.slots[idx].editor.set_content_undoable(&formatted);

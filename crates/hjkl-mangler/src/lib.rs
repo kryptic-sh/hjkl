@@ -625,10 +625,20 @@ fn run_formatter(
 
     tracing::debug!(tool = tool_name, ?project_root, "spawning formatter");
 
+    // An empty path as the working directory makes `spawn()` fail with
+    // `ErrorKind::NotFound` — which we'd misreport as `NotInstalled`. A bare
+    // relative filename (`foo.toml`) yields `Path::parent() == Some("")`, so
+    // callers can hand us an empty root; fall back to `.` (the process cwd).
+    let cwd: &Path = if project_root.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        project_root
+    };
+
     let mut child = match Command::new(program)
         .args(rest)
         .args(extra_args)
-        .current_dir(project_root)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1031,6 +1041,26 @@ mod tests {
     fn formatter_for_path_picks_formatter_for_json() {
         let path = PathBuf::from("package.json");
         assert!(formatter_for_path(&path).is_some());
+    }
+
+    /// Regression: an empty `project_root` (what `Path::parent()` of a bare
+    /// relative filename like `foo.toml` yields — `Some("")`) must NOT make the
+    /// spawn fail with `NotFound` and get misreported as `NotInstalled`. The
+    /// formatter must run against the process cwd instead. Uses `cat` (present
+    /// on every POSIX box) as a stdin→stdout echo "formatter".
+    #[test]
+    #[cfg(unix)]
+    fn empty_project_root_does_not_report_not_installed() {
+        let fmt = StdinFormatter {
+            args: &["cat"],
+            tool_name: "cat",
+        };
+        let out = fmt.format("hello\n", std::path::Path::new(""), None);
+        assert!(
+            !matches!(out, Err(FormatError::NotInstalled(_))),
+            "empty project_root must not be misreported as NotInstalled: {out:?}"
+        );
+        assert_eq!(out.unwrap(), "hello\n", "cat echoes stdin → stdout");
     }
 
     #[test]
