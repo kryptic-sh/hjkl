@@ -196,6 +196,20 @@ impl TerminalSession {
         None
     }
 
+    /// Like [`Self::cursor_cell`] but polls until the software cursor appears,
+    /// up to ~2s. The PTY harness drives the real binary asynchronously, so a
+    /// single read right after `keys()` can race the cursor-bearing frame
+    /// (especially on loaded CI). Panics if the cursor never renders.
+    pub fn cursor_cell_wait(&self) -> (u16, u16) {
+        for _ in 0..200 {
+            if let Some(pos) = self.cursor_cell() {
+                return pos;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("software cursor never rendered within 2s");
+    }
+
     /// Rendered text of a 0-based screen row (trailing spaces stripped).
     pub fn line(&self, row: u16) -> String {
         let screen = self.screen();
