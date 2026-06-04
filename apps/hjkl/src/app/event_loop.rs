@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    cursor::{Hide, SetCursorStyle},
+    cursor::SetCursorStyle,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
 };
@@ -1699,26 +1699,6 @@ impl App {
             // (source-agnostic) before drawing so the blame ghost engages only
             // after the cursor has settled for `BLAME_IDLE_DELAY`.
             self.note_blame_cursor_motion();
-            // Hide the hardware cursor before the draw ONLY when the viewport
-            // scrolled since the last frame. ratatui's `Terminal::draw` flushes
-            // the cell diff BEFORE it repositions the cursor (ratatui-core
-            // terminal.rs: `flush()` then `show_cursor()`+`set_cursor_position()`),
-            // so on a scroll — which rewrites whole rows — the still-visible
-            // cursor trails across every rewritten cell (the "flicker around the
-            // editor" when holding `j`/`k`). Hiding makes the flush run with the
-            // cursor off; ratatui re-shows it at the final position right after.
-            // Gating on an actual scroll matters: hiding on EVERY frame would
-            // blink the steady cursor on idle redraws (blame/which-key/hover
-            // timer wakes redraw with no scroll). No scroll ⇒ at most the old +
-            // new cursor cell are rewritten, so no visible trail.
-            let scroll = {
-                let vp = self.active().editor.host().viewport();
-                (vp.top_row, vp.top_col)
-            };
-            if scroll != self.last_draw_scroll {
-                let _ = execute!(terminal.backend_mut(), Hide);
-                self.last_draw_scroll = scroll;
-            }
             let t_draw = std::time::Instant::now();
             terminal.draw(|frame| render::frame(frame, self))?;
             tracing::debug!(

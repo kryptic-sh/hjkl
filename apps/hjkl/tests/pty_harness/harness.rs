@@ -182,6 +182,26 @@ impl TerminalSession {
         s.cursor_position()
     }
 
+    /// 0-based (row, col) of the SOFTWARE cursor — the cell the editor paints
+    /// as the cursor (block = reversed cell, bar = `▏` glyph). The editor no
+    /// longer drives the terminal's hardware cursor (it trailed during scroll),
+    /// so `cursor()` is stale for editor windows; tests that need the editor
+    /// cursor position use this. Returns the first matching cell scanning
+    /// top-to-bottom, left-to-right. `None` when no software cursor is on screen.
+    pub fn cursor_cell(&self) -> Option<(u16, u16)> {
+        let screen = self.screen();
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                if let Some(cell) = screen.cell(row, col)
+                    && (cell.inverse() || cell.contents() == "▏")
+                {
+                    return Some((row, col));
+                }
+            }
+        }
+        None
+    }
+
     /// Rendered text of a 0-based screen row (trailing spaces stripped).
     pub fn line(&self, row: u16) -> String {
         let screen = self.screen();

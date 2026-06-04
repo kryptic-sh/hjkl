@@ -399,12 +399,6 @@ pub struct App {
     /// draw normally. `:redraw` (no `!`) leaves this `false` — ratatui's
     /// diff-based renderer already issues a repaint on the next tick.
     pub(crate) force_clear_screen: bool,
-    /// Focused viewport scroll `(top_row, top_col)` at the last drawn frame.
-    /// The event loop hides the hardware cursor before a draw ONLY when this
-    /// changed (a scroll) — that's when ratatui's pre-reposition cell flush
-    /// would otherwise trail the visible cursor across rewritten rows. Idle
-    /// redraws (no scroll) skip the hide so the steady cursor doesn't blink.
-    pub(crate) last_draw_scroll: (usize, usize),
     /// Active interactive substitute confirm session (`:s/pat/rep/c`).
     /// While `Some`, keypresses are routed to the confirm-substitute handler
     /// rather than the editor engine. Cleared when the session finishes
@@ -1502,7 +1496,6 @@ impl App {
             border_drag: None,
             indent_flash: None,
             force_clear_screen: false,
-            last_draw_scroll: (usize::MAX, usize::MAX),
             confirming_substitute: None,
             pending_recovery: None,
             last_input_at: std::time::Instant::now(),

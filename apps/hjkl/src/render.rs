@@ -1274,6 +1274,15 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // extra_gutter_width = sign_w + fold_w + lnum_pad. The engine computes the
     // cursor x from the buffer's OWN line-number width; `lnum_pad` accounts for
     // the extra cells when the number column is widened to the cross-buffer max.
+    // Software cursor: paint the cursor cell directly rather than positioning
+    // the terminal's hardware cursor. The hardware cursor trails/flickers during
+    // scroll redraws (ratatui flushes the cell diff BEFORE repositioning it), so
+    // a painted cell — which only moves with content — stays rock-steady while
+    // scrolling. Not setting `frame.set_cursor_position` for the editor makes
+    // ratatui hide the hardware cursor; the command/search prompt paths still
+    // set it for the single-line prompt (no scroll → no flicker there).
+    // Shape mirrors vim: Block = reversed cell, Underline = underlined cell,
+    // Bar = a `▏` (left one-eighth block) glyph in the theme text colour.
     if show_cursor
         && let Some((cx, cy)) = app.slots_mut()[slot_idx].editor.cursor_screen_pos(
             area.x,
@@ -1283,21 +1292,42 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             sign_w + fold_w + lnum_pad,
         )
     {
-        if box_mode {
-            // Boxed-blame: the cursor's screen row comes from the plan (borders
-            // shift content down); the column shifts right by the box frame.
-            // Hidden when the cursor row scrolled past the plan's last row.
+        // Boxed-blame: the cursor's screen row comes from the plan (borders
+        // shift content down); the column shifts right by the box frame.
+        // `None` when the cursor row scrolled past the plan's last row.
+        let pos = if box_mode {
             let cur = app.slots()[slot_idx].editor.buffer().cursor().row;
-            if let Some(idx) = blame_box_plan.iter().position(
-                |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cur),
-            ) {
-                frame.set_cursor_position((
-                    cx + hjkl_buffer_tui::render::BLAME_BOX_FRAME_LEFT,
-                    area.y + idx as u16,
-                ));
-            }
+            blame_box_plan
+                .iter()
+                .position(
+                    |r| matches!(r, hjkl_buffer_tui::render::BlameRow::Content(d) if *d == cur),
+                )
+                .map(|idx| {
+                    (
+                        cx + hjkl_buffer_tui::render::BLAME_BOX_FRAME_LEFT,
+                        area.y + idx as u16,
+                    )
+                })
         } else {
-            frame.set_cursor_position((cx, cy));
+            Some((cx, cy))
+        };
+        if let Some((cx, cy)) = pos {
+            let shape = app.slots()[slot_idx].editor.host().cursor_shape();
+            let text_fg = app.theme.ui.text;
+            if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
+                match shape {
+                    hjkl_engine::CursorShape::Block => {
+                        cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
+                    }
+                    hjkl_engine::CursorShape::Underline => {
+                        cell.set_style(Style::default().add_modifier(Modifier::UNDERLINED));
+                    }
+                    hjkl_engine::CursorShape::Bar => {
+                        cell.set_symbol("▏");
+                        cell.set_style(Style::default().fg(text_fg));
+                    }
+                }
+            }
         }
     }
 }

@@ -22,7 +22,7 @@ fn register_a_dd_then_p_round_trips() {
     s.keys("\"add");
 
     // Cursor is now on line2 (the new first line).
-    let (cur_row, _) = s.cursor();
+    let (cur_row, _) = s.cursor_cell().expect("software cursor visible");
     let line_after_delete = s.line(cur_row);
     assert!(
         line_after_delete.contains("line2"),
@@ -33,7 +33,7 @@ fn register_a_dd_then_p_round_trips() {
     s.keys("\"ap");
 
     // The pasted content should appear one row below the cursor.
-    let (cur_row2, _) = s.cursor();
+    let (cur_row2, _) = s.cursor_cell().expect("software cursor visible");
     // `p` moves cursor to the pasted line for linewise yanks; check nearby rows.
     let found_line1 =
         (cur_row2.saturating_sub(1)..=cur_row2 + 1).any(|r| s.line(r).contains("line1"));
@@ -56,7 +56,7 @@ fn count_5_quote_a_dd_deletes_5_lines() {
     s.keys("5\"add");
 
     // Cursor should be at top; first content line must be "line6".
-    let (cur_row, _) = s.cursor();
+    let (cur_row, _) = s.cursor_cell().expect("software cursor visible");
     let visible = s.line(cur_row);
     assert!(
         visible.contains("line6"),
@@ -77,12 +77,12 @@ fn count_3_at_a_repeats_macro_three_times() {
     s.keys("qajq");
 
     // After recording: cursor moved once (row 1 in 0-based; screen row 1).
-    let (row_after_record, _) = s.cursor();
+    let (row_after_record, _) = s.cursor_cell().expect("software cursor visible");
 
     // Play macro 'a' three times.
     s.keys("3@a");
 
-    let (row_after_play, _) = s.cursor();
+    let (row_after_play, _) = s.cursor_cell().expect("software cursor visible");
     assert_eq!(
         row_after_play,
         row_after_record + 3,

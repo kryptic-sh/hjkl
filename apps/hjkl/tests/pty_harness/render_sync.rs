@@ -67,12 +67,13 @@ fn goto_line_100_scrolls_viewport() {
     let mut last_line = String::new();
     let mut ok = false;
     for _ in 0..1000 {
-        let (row, _) = s.cursor();
-        cursor_row = row;
-        last_line = s.line(row);
-        if row < 24 && last_line.contains("line100") {
-            ok = true;
-            break;
+        if let Some((row, _)) = s.cursor_cell() {
+            cursor_row = row;
+            last_line = s.line(row);
+            if row < 24 && last_line.contains("line100") {
+                ok = true;
+                break;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -96,7 +97,7 @@ fn gg_from_normal_lands_top() {
     s.keys("G");
     s.keys("gg");
 
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible after gg");
     let line_text = s.line(cursor_row);
 
     assert!(
@@ -123,7 +124,7 @@ fn gg_in_visual_extends_selection_to_top() {
     // Move down 3 lines, enter Visual, then jump to top.
     s.keys("jjjvgg");
 
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible after v+gg");
 
     // Cursor must be on a visible row (viewport sync works).
     assert!(cursor_row < 24, "cursor row {cursor_row} is off-screen");
@@ -165,7 +166,7 @@ fn j_past_viewport_bottom_scrolls() {
     );
 
     // The cursor must be within the visible screen (not off-screen).
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible after 30j");
     assert!(
         cursor_row < 24,
         "cursor row {cursor_row} is off-screen after 30j"
@@ -190,7 +191,7 @@ fn g_to_bottom_scrolls_viewport() {
     );
 
     // Cursor must be on a visible row.
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible after G");
     assert!(
         cursor_row < 24,
         "cursor row {cursor_row} is off-screen after G"

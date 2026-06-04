@@ -26,7 +26,7 @@ fn at_colon_repeats_last_goto_line() {
     // Jump to line 10.
     s.keys(":10<Enter>");
 
-    let (cursor_row_after_10, _) = s.cursor();
+    let (cursor_row_after_10, _) = s.cursor_cell().expect("software cursor visible");
     let line_text_after_10 = s.line(cursor_row_after_10);
     assert!(
         line_text_after_10.contains("line10"),
@@ -44,7 +44,7 @@ fn at_colon_repeats_last_goto_line() {
     // `@:` must replay :10 and return to line 10.
     s.keys("@:");
 
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible");
     let line_text = s.line(cursor_row);
     assert!(
         line_text.contains("line10"),
@@ -66,7 +66,7 @@ fn at_colon_no_prior_is_silent() {
     s.keys("@:");
 
     // Cursor must still be on line 1 (row 0 of screen contains "line1").
-    let (cursor_row, _) = s.cursor();
+    let (cursor_row, _) = s.cursor_cell().expect("software cursor visible");
     assert!(
         cursor_row < 5,
         "cursor should still be near top (row {cursor_row}) after no-op @:"
