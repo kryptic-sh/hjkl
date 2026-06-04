@@ -176,16 +176,6 @@ impl TerminalSession {
         self.parser.lock().unwrap().screen().clone()
     }
 
-    /// 0-based (row, col) of the terminal HARDWARE cursor. The editor now draws
-    /// a software cursor (see [`Self::cursor_cell`]); this reports the hardware
-    /// cursor, still used by the command/search prompt. Retained for prompt
-    /// cursor assertions.
-    #[allow(dead_code)]
-    pub fn cursor(&self) -> (u16, u16) {
-        let s = self.screen();
-        s.cursor_position()
-    }
-
     /// 0-based (row, col) of the SOFTWARE cursor — the cell the editor paints
     /// as the cursor (block = reversed cell, bar = `▏` glyph). The editor no
     /// longer drives the terminal's hardware cursor (it trailed during scroll),
