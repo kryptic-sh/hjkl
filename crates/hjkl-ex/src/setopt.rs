@@ -402,6 +402,17 @@ fn apply_set_token<H: Host>(
             editor.settings_mut().indent_guide_char = ch;
             return Ok(());
         }
+        // Boolean options accept `name=on|off|true|false|yes|no|1|0`. Try this
+        // before the numeric parse so `:set format_on_save=off` works (vim sets
+        // booleans via `:set name`/`:set noname`, but `=value` is a common
+        // expectation). A non-boolean name falls through to the numeric parse,
+        // and `0`/`1` on a numeric option (e.g. `tabstop=1`) isn't a bool option
+        // so it falls through too.
+        if let Some(b) = parse_bool_word(value)
+            && apply_bool_option(editor, name, b)
+        {
+            return Ok(());
+        }
         let parsed: usize = value
             .parse()
             .map_err(|_| format!("bad value `{value}` for :set {name}"))?;
@@ -480,6 +491,32 @@ fn apply_set_token<H: Host>(
     } else {
         (token, true)
     };
+    if apply_bool_option(editor, name, value) {
+        Ok(())
+    } else {
+        Err(format!("unknown :set option `{name}`"))
+    }
+}
+
+/// Parse a vim-ish boolean keyword used on the right of `name=value` for a
+/// boolean option (`:set format_on_save=off`). Returns `None` for anything
+/// that isn't a boolean literal so numeric options fall through unaffected.
+fn parse_bool_word(s: &str) -> Option<bool> {
+    match s {
+        "on" | "true" | "yes" | "1" => Some(true),
+        "off" | "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Set boolean option `name` to `value`. Returns `true` when `name` is a known
+/// boolean option (and was applied), `false` otherwise. Shared by the bare
+/// `name`/`noname` path and the `name=on|off|true|false|yes|no|1|0` path.
+fn apply_bool_option<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    name: &str,
+    value: bool,
+) -> bool {
     match name {
         "ignorecase" | "ic" => editor.settings_mut().ignore_case = value,
         "smartcase" | "scs" => editor.settings_mut().smartcase = value,
@@ -518,8 +555,6 @@ fn apply_set_token<H: Host>(
                 }
             };
         }
-        // Booleans we don't (yet) honour: accept silently so :set lines
-        // copied from a vimrc don't error out. `foldenable` falls here.
         // NOTE: `background` is completion-only — the host intercepts it in
         // ex_dispatch.rs before hjkl-ex is consulted. Accept silently here so
         // hjkl-ex never emits an "unknown option" error if the token somehow
@@ -538,9 +573,9 @@ fn apply_set_token<H: Host>(
         "matchparen" | "mps" => editor.settings_mut().matchparen = value,
         "foldenable" | "fen" => editor.settings_mut().foldenable = value,
         "background" | "bg" => {}
-        other => return Err(format!("unknown :set option `{other}`")),
+        _ => return false,
     }
-    Ok(())
+    true
 }
 
 #[cfg(test)]
@@ -1039,6 +1074,63 @@ mod tests {
             ExEffect::Error(s) => assert!(s.contains("bogus"), "got {s:?}"),
             other => panic!("expected Error(_), got {other:?}"),
         }
+    }
+
+    // ---- boolean options via `name=value` ------------------------------------
+
+    #[test]
+    fn set_bool_eq_off_disables() {
+        let mut editor = make_editor();
+        editor.settings_mut().format_on_save = true;
+        assert_eq!(apply_set(&mut editor, "format_on_save=off"), ExEffect::Ok);
+        assert!(
+            !editor.settings().format_on_save,
+            "`:set format_on_save=off` must disable it, not error"
+        );
+    }
+
+    #[test]
+    fn set_bool_eq_accepts_all_keywords() {
+        for (val, exp) in [
+            ("on", true),
+            ("off", false),
+            ("true", true),
+            ("false", false),
+            ("yes", true),
+            ("no", false),
+            ("1", true),
+            ("0", false),
+        ] {
+            let mut editor = make_editor();
+            assert_eq!(
+                apply_set(&mut editor, &format!("format_on_save={val}")),
+                ExEffect::Ok,
+                "`=value` form must accept `{val}`"
+            );
+            assert_eq!(
+                editor.settings().format_on_save,
+                exp,
+                "format_on_save={val} → {exp}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_bool_eq_bad_value_errors() {
+        let mut editor = make_editor();
+        match apply_set(&mut editor, "format_on_save=maybe") {
+            ExEffect::Error(s) => assert!(s.contains("bad value"), "got {s:?}"),
+            other => panic!("expected Error for non-bool value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_numeric_eq_still_works_alongside_bool_path() {
+        // A numeric option with a `0`/`1` value must NOT be hijacked by the
+        // boolean keyword path.
+        let mut editor = make_editor();
+        assert_eq!(apply_set(&mut editor, "tabstop=1"), ExEffect::Ok);
+        assert_eq!(editor.settings().tabstop, 1);
     }
 
     #[test]
