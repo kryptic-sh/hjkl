@@ -1274,15 +1274,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
     // extra_gutter_width = sign_w + fold_w + lnum_pad. The engine computes the
     // cursor x from the buffer's OWN line-number width; `lnum_pad` accounts for
     // the extra cells when the number column is widened to the cross-buffer max.
-    // Software cursor: paint the cursor cell directly rather than positioning
-    // the terminal's hardware cursor. The hardware cursor trails/flickers during
-    // scroll redraws (ratatui flushes the cell diff BEFORE repositioning it), so
-    // a painted cell — which only moves with content — stays rock-steady while
-    // scrolling. Not setting `frame.set_cursor_position` for the editor makes
-    // ratatui hide the hardware cursor; the command/search prompt paths still
-    // set it for the single-line prompt (no scroll → no flicker there).
-    // Shape mirrors vim: Block = reversed cell, Underline = underlined cell,
-    // Bar = a `▏` (left one-eighth block) glyph in the theme text colour.
+    // Cursor rendering. The BLOCK (normal/visual) and UNDERLINE shapes are drawn
+    // as a SOFTWARE cursor — a styled cell — because the terminal's hardware
+    // cursor trails/flickers during scroll redraws (ratatui flushes the cell
+    // diff BEFORE repositioning it), and held-`j`/`k` scrolling happens in those
+    // modes. Both keep the underlying character visible (reversed / underlined).
+    //
+    // The BAR (insert) shape can't be a software cursor: a thin bar AND the
+    // character can't share one cell, so painting `▏` would erase the char under
+    // the cursor. Insert mode uses the real HARDWARE bar instead (positioned via
+    // `set_cursor_position`), which renders between cells and leaves the char
+    // intact. Insert mode has no held-scroll, so the hardware cursor doesn't
+    // trail there. The command/search prompt likewise keeps the hardware cursor.
     if show_cursor
         && let Some((cx, cy)) = app.slots_mut()[slot_idx].editor.cursor_screen_pos(
             area.x,
@@ -1313,18 +1316,19 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         };
         if let Some((cx, cy)) = pos {
             let shape = app.slots()[slot_idx].editor.host().cursor_shape();
-            let text_fg = app.theme.ui.text;
-            if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
-                match shape {
-                    hjkl_engine::CursorShape::Block => {
+            match shape {
+                hjkl_engine::CursorShape::Bar => {
+                    // Hardware bar — keeps the char under the cursor visible.
+                    frame.set_cursor_position((cx, cy));
+                }
+                hjkl_engine::CursorShape::Block => {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
                         cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
                     }
-                    hjkl_engine::CursorShape::Underline => {
+                }
+                hjkl_engine::CursorShape::Underline => {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((cx, cy)) {
                         cell.set_style(Style::default().add_modifier(Modifier::UNDERLINED));
-                    }
-                    hjkl_engine::CursorShape::Bar => {
-                        cell.set_symbol("▏");
-                        cell.set_style(Style::default().fg(text_fg));
                     }
                 }
             }
