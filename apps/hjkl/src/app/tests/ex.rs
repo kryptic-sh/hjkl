@@ -2706,6 +2706,47 @@ fn set_background_tracks_colorscheme() {
     );
 }
 
+/// End-to-end `==`/`=` external-format path: `submit_external_format` (what the
+/// `=` operator calls) must dispatch the async worker, and `poll_format_results`
+/// must install taplo's reformatted output into the buffer. Skipped where taplo
+/// isn't on PATH (CI) so it never flakes there.
+#[test]
+fn external_format_toml_installs_worker_result() {
+    if !hjkl_mangler::is_tool_installed("taplo") {
+        return; // taplo not available — nothing to exercise
+    }
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("messy.toml");
+    std::fs::write(&path, "[a]\nx=1\n").unwrap();
+    let mut app = App::new(Some(path), false, None, None).unwrap();
+    seed_buffer(&mut app, "[a]\nx=1\n");
+
+    let submitted = app.submit_external_format(Some(hjkl_mangler::RangeSpec {
+        start_row: 0,
+        end_row: 1,
+    }));
+    assert!(
+        submitted,
+        "taplo is installed → submit_external_format must dispatch a job"
+    );
+
+    let mut installed = false;
+    for _ in 0..200 {
+        if app.poll_format_results() {
+            installed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(installed, "the async format result must install within ~4s");
+
+    let out = app.active().editor.buffer().content_joined();
+    assert!(
+        out.contains("x = 1"),
+        "taplo must reformat `x=1` → `x = 1`, got: {out:?}"
+    );
+}
+
 // ── trailing-newline (EOL) model: vim-consistent ─────────────────────────────
 //
 // vim's line model excludes the file-final newline: a file `a\nb\nc\n` is 3

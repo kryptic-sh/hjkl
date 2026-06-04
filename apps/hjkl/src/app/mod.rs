@@ -1130,7 +1130,7 @@ impl App {
         &mut self,
         range: Option<hjkl_mangler::RangeSpec>,
     ) -> bool {
-        use hjkl_mangler::{formatter_for_path, probe_tool};
+        use hjkl_mangler::{formatter_for_path, is_tool_installed};
 
         let filename = self.active().filename.clone();
         let Some(ref path) = filename else {
@@ -1141,20 +1141,21 @@ impl App {
             return false;
         };
 
-        // Probe binary availability up-front so a missing formatter
-        // (prettier on a fresh box opening a .md, etc.) silently falls
-        // through to the dumb-algo path instead of dispatching a worker
-        // job that would surface as a noisy "prettier: not installed".
+        // Gate on "can we launch this binary?" — a spawn-only probe, NOT
+        // `probe_tool` (which additionally requires `--version` to exit 0).
+        // Some tools/wrappers print their version to stderr or exit non-zero
+        // on `--version` (e.g. taplo via a mason shim), so the exit-0 probe
+        // wrongly rejected them — `==` then silently did nothing while
+        // format-on-save (which uses `is_tool_installed`) worked. Match the
+        // save path. When the tool genuinely isn't on PATH, warn once and fall
+        // back to the dumb auto-indent algo.
         let tool_name = formatter.tool_name().to_owned();
-        if let Err(why) = probe_tool(&tool_name) {
+        if !is_tool_installed(&tool_name) {
             tracing::debug!(
                 tool = %tool_name,
-                reason = %why,
-                "formatter probe failed; falling back to dumb algo"
+                "formatter not launchable; falling back to dumb algo"
             );
-            // Surface the *real* reason so the user can tell apart
-            // "binary not on PATH" from "wrapper script exits non-zero".
-            self.bus.warn(format!("{tool_name} probe: {why}"));
+            self.bus.warn(format!("{tool_name}: not installed"));
             return false;
         }
 
