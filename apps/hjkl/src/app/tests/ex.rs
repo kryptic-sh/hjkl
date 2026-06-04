@@ -2706,6 +2706,43 @@ fn set_background_tracks_colorscheme() {
     );
 }
 
+/// Reproduce `==` through the REAL keypress path (handle_keypress →
+/// route_chord_key → chord_routing → submit_external_format), not a direct
+/// call. Skipped where taplo isn't on PATH.
+#[test]
+fn double_equals_keypress_formats_toml() {
+    if !hjkl_mangler::is_tool_installed("taplo") {
+        return;
+    }
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("k.toml");
+    std::fs::write(&path, "[a]\nx=1\n").unwrap();
+    let mut app = App::new(Some(path), false, None, None).unwrap();
+    seed_buffer(&mut app, "[a]\nx=1\n");
+    app.active_mut().editor.jump_cursor(0, 0);
+
+    // Press `==` exactly as the live loop would.
+    macro_key_seq(&mut app, &[ck('='), ck('=')]);
+
+    let mut installed = false;
+    for _ in 0..200 {
+        if app.poll_format_results() {
+            installed = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        installed,
+        "`==` keypress must submit a format job whose result installs"
+    );
+    let out = app.active().editor.buffer().content_joined();
+    assert!(
+        out.contains("x = 1"),
+        "`==` must reformat `x=1` → `x = 1`, got: {out:?}"
+    );
+}
+
 /// End-to-end `==`/`=` external-format path: `submit_external_format` (what the
 /// `=` operator calls) must dispatch the async worker, and `poll_format_results`
 /// must install taplo's reformatted output into the buffer. Skipped where taplo

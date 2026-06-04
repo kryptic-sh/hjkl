@@ -825,6 +825,11 @@ pub struct FormatResult {
     pub buffer_id: BufferId,
     /// The dirty-gen that was current when the job was submitted.
     pub dirty_gen: u64,
+    /// The exact buffer snapshot this result was formatted from. The installer
+    /// compares it against the buffer's current content to decide staleness —
+    /// `dirty_gen` alone is unreliable because non-content operations (e.g.
+    /// fold open/close) also bump it, which would falsely reject valid output.
+    pub source: Arc<String>,
     /// Formatted source, or the error that occurred.
     ///
     /// For formatters with native range support, this is the **whole file**
@@ -946,6 +951,7 @@ fn format_worker_loop(
         let msg = FormatResult {
             buffer_id: job.buffer_id,
             dirty_gen: job.dirty_gen,
+            source: job.source.clone(),
             result,
             range: job.range,
         };

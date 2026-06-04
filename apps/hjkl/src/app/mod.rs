@@ -1233,15 +1233,19 @@ impl App {
                 continue;
             };
 
-            // Stale check: if the buffer was mutated after the job was
-            // submitted, drop the result — the user will re-trigger `=`.
-            let current_dg = self.slots[slot_idx].editor.buffer().dirty_gen();
-            if current_dg != result.dirty_gen {
+            // Stale check: drop the result only if the buffer's CONTENT changed
+            // since the job was submitted. We compare the actual text, not
+            // `dirty_gen` — non-content operations (notably fold open/close and
+            // the per-window fold install) bump `dirty_gen` without changing the
+            // text, which made `==` falsely reject every valid format result.
+            let unchanged = {
+                let current = self.slots[slot_idx].editor.buffer().content_joined();
+                *current == *result.source
+            };
+            if !unchanged {
                 tracing::debug!(
                     buffer_id = result.buffer_id,
-                    submitted_gen = result.dirty_gen,
-                    current_gen = current_dg,
-                    "format result stale; dropping"
+                    "format result stale (content changed since submit); dropping"
                 );
                 // Dismiss the "formatting…" toast if it's still active.
                 self.bus.clear_active();
