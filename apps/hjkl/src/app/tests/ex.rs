@@ -2706,6 +2706,61 @@ fn set_background_tracks_colorscheme() {
     );
 }
 
+// ── trailing-newline (EOL) model: vim-consistent ─────────────────────────────
+//
+// vim's line model excludes the file-final newline: a file `a\nb\nc\n` is 3
+// lines, not 4. hjkl strips one trailing `\n` on load and re-adds it on save
+// (matching vim's `fixendofline`), so the buffer never shows a phantom empty
+// last line. Formatter output (prettier appends `\n`) is normalised the same
+// way at the install site.
+
+#[test]
+fn trailing_newline_file_loads_without_phantom_line() {
+    use hjkl_engine::Query;
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("eol.txt");
+    std::fs::write(&path, "a\nb\nc\n").unwrap();
+    let app = App::new(Some(path), false, None, None).unwrap();
+    assert_eq!(
+        app.active().editor.buffer().line_count(),
+        3,
+        "a file ending in `\\n` must load as 3 lines, not 4 (no phantom empty line)"
+    );
+}
+
+#[test]
+fn save_round_trips_trailing_newline_exactly_once() {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("eol_rt.txt");
+    std::fs::write(&path, "a\nb\nc\n").unwrap();
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.active_mut().dirty = true; // force the write
+    app.dispatch_ex("w");
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, "a\nb\nc\n",
+        "save must preserve exactly one trailing newline, not drop or double it"
+    );
+}
+
+#[test]
+fn save_adds_trailing_newline_when_missing() {
+    use hjkl_engine::Query;
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join("noeol.txt");
+    std::fs::write(&path, "a\nb\nc").unwrap(); // no trailing newline
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    // Still 3 lines (load strips nothing here — there's no trailing newline).
+    assert_eq!(app.active().editor.buffer().line_count(), 3);
+    app.active_mut().dirty = true;
+    app.dispatch_ex("w");
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, "a\nb\nc\n",
+        "save must add a trailing newline when missing (vim `fixendofline`)"
+    );
+}
+
 // ── sed-style ex commands: vim-compat (range + %/# literal-in-body) ───────────
 //
 // These run through the full `dispatch_ex` path WITH A CURRENT FILE so the

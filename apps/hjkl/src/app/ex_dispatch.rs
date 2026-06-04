@@ -999,7 +999,15 @@ impl App {
                             };
                             match formatter.format(&content, project_root, None) {
                                 Ok(formatted) => {
-                                    self.slots[idx].editor.set_content_undoable(&formatted);
+                                    // Strip the single trailing newline that
+                                    // formatters (prettier, etc.) append — the
+                                    // buffer line model excludes the file-final
+                                    // EOL (matching file load), and save re-adds
+                                    // it. Without this the buffer gains a phantom
+                                    // empty last line after format-on-save.
+                                    let formatted =
+                                        formatted.strip_suffix('\n').unwrap_or(&formatted);
+                                    self.slots[idx].editor.set_content_undoable(formatted);
                                 }
                                 Err(e) => {
                                     self.bus.error(format!("format-on-save error: {e}"));
