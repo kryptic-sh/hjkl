@@ -6046,8 +6046,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
     /// Apply `op` over the current visual selection (char-wise, linewise, or
     /// block). Mirrors the engine's internal `apply_visual_operator` free fn.
     /// Promoted in Phase 6.6e for `hjkl-vim::normal`.
-    pub fn apply_visual_operator(&mut self, op: crate::vim::Operator) {
-        vim::apply_visual_operator(self, op);
+    pub fn apply_visual_operator(&mut self, op: crate::vim::Operator, count: usize) {
+        vim::apply_visual_operator(self, op, count);
     }
 
     /// Replace each character cell in the current VisualBlock selection with

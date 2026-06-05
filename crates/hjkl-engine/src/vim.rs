@@ -1094,14 +1094,34 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         String::new()
     };
     let inserted = extract_inserted(&before, &after);
-    if !inserted.is_empty() && session.count > 1 && !ed.vim.replaying {
+    let open_line = matches!(session.reason, InsertReason::Open { .. });
+    if session.count > 1 && !ed.vim.replaying {
         use hjkl_buffer::{Edit, Position};
-        for _ in 0..session.count - 1 {
-            let (row, col) = ed.cursor();
-            ed.mutate_edit(Edit::InsertStr {
-                at: Position::new(row, col),
-                text: inserted.clone(),
-            });
+        if open_line {
+            // `[count]o` / `[count]O` open `count` SEPARATE lines, each with the
+            // typed text. Read the just-opened line's content directly (the
+            // row-range extract above is unreliable across the open boundary)
+            // and stack `count - 1` further lines below it.
+            let (start_row, _) = ed.cursor();
+            let typed = buf_line(&ed.buffer, start_row).unwrap_or_default();
+            let mut at_row = start_row;
+            for _ in 0..session.count - 1 {
+                let end = buf_line_chars(&ed.buffer, at_row);
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(at_row, end),
+                    text: format!("\n{typed}"),
+                });
+                at_row += 1;
+            }
+        } else if !inserted.is_empty() {
+            // `[count]i` / `[count]A` repeat the typed text inline.
+            for _ in 0..session.count - 1 {
+                let (row, col) = ed.cursor();
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(row, col),
+                    text: inserted.clone(),
+                });
+            }
         }
     }
     // Helper: replicate `inserted` text across block rows top+1..=bot at `col`,
@@ -5124,7 +5144,7 @@ pub(crate) fn delete_block_bridge<H: crate::types::Host>(
     let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
     // Place cursor at bot_row / right_col so block_bounds resolves correctly.
     buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
-    apply_block_operator(ed, Operator::Delete);
+    apply_block_operator(ed, Operator::Delete, 1);
     // Restore — block_anchor/vcol are only meaningful in VisualBlock mode;
     // after the op we're in Normal so restoring is a no-op for the user but
     // keeps state coherent if the caller inspects fields.
@@ -5148,7 +5168,7 @@ pub(crate) fn yank_block_bridge<H: crate::types::Host>(
     ed.vim.block_vcol = right_col;
     let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
     buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
-    apply_block_operator(ed, Operator::Yank);
+    apply_block_operator(ed, Operator::Yank, 1);
     ed.vim.block_anchor = saved_anchor;
     ed.vim.block_vcol = saved_vcol;
 }
@@ -5170,7 +5190,7 @@ pub(crate) fn change_block_bridge<H: crate::types::Host>(
     ed.vim.block_vcol = right_col;
     let clamped = right_col.min(buf_line_chars(&ed.buffer, bot_row).saturating_sub(1));
     buf_set_cursor_rc(&mut ed.buffer, bot_row, clamped);
-    apply_block_operator(ed, Operator::Change);
+    apply_block_operator(ed, Operator::Change, 1);
     ed.vim.block_anchor = saved_anchor;
     ed.vim.block_vcol = saved_vcol;
 }
@@ -5474,12 +5494,21 @@ fn reflow_rows<H: crate::types::Host>(
     let original = lines[top..=bot].to_vec();
     let wrapped = greedy_wrap(&original, width);
 
+    // vim leaves the cursor on the last NON-BLANK line of the reflowed range
+    // (a trailing blank from `ap` etc. is not counted).
+    let last_offset = wrapped
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .unwrap_or(0);
+    let last_row = top + last_offset;
+
     // Splice back. push_undo above means `u` reverses.
     let after: Vec<String> = lines.split_off(bot + 1);
     lines.truncate(top);
     lines.extend(wrapped);
     lines.extend(after);
-    ed.restore(lines, (top, 0));
+    ed.restore(lines, (last_row, 0));
+    move_first_non_whitespace(ed);
     ed.mark_content_dirty();
 }
 
@@ -5890,6 +5919,26 @@ fn execute_line_op<H: crate::types::Host>(
 ) {
     let (row, col) = ed.cursor();
     let total = buf_row_count(&ed.buffer);
+    // Vim: `[count]op` for a linewise operator implies a `count_` motion that
+    // moves `count - 1` lines down. On the last line that motion can't move at
+    // all, so the whole operator aborts (E16) — `2dd`/`2yy`/`5>>`/`5<<` on the
+    // final line are no-ops, not "operate on the one remaining line". When the
+    // cursor is above the last line the motion clamps to the buffer end instead.
+    //
+    // A trailing newline is stored as a phantom empty final row, so the last
+    // *content* line is one above it; use that as the boundary.
+    let last_content_row = if total >= 2
+        && buf_line(&ed.buffer, total - 1)
+            .map(|s| s.is_empty())
+            .unwrap_or(false)
+    {
+        total - 2
+    } else {
+        total.saturating_sub(1)
+    };
+    if count >= 2 && row >= last_content_row {
+        return;
+    }
     let end_row = (row + count.saturating_sub(1)).min(total.saturating_sub(1));
 
     match op {
@@ -6020,7 +6069,11 @@ fn execute_line_op<H: crate::types::Host>(
 pub(crate) fn apply_visual_operator<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
+    count: usize,
 ) {
+    // `count` is the number of indent levels for `>` / `<` (vim `2>` = two
+    // shiftwidths); other visual operators ignore it.
+    let levels = count.max(1);
     match ed.vim.mode {
         Mode::VisualLine => {
             let cursor_row = buf_cursor_pos(&ed.buffer).row;
@@ -6060,9 +6113,9 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     let (cursor_row, _) = ed.cursor();
                     let bot = cursor_row.max(ed.vim.visual_line_anchor);
                     if op == Operator::Indent {
-                        indent_rows(ed, top, bot, 1);
+                        indent_rows(ed, top, bot, levels);
                     } else {
-                        outdent_rows(ed, top, bot, 1);
+                        outdent_rows(ed, top, bot, levels);
                     }
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6140,9 +6193,9 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
                     if op == Operator::Indent {
-                        indent_rows(ed, top.0, bot.0, 1);
+                        indent_rows(ed, top.0, bot.0, levels);
                     } else {
-                        outdent_rows(ed, top.0, bot.0, 1);
+                        outdent_rows(ed, top.0, bot.0, levels);
                     }
                     ed.vim.mode = Mode::Normal;
                 }
@@ -6182,7 +6235,7 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                 Operator::Fold => unreachable!("Visual zf takes its own path"),
             }
         }
-        Mode::VisualBlock => apply_block_operator(ed, op),
+        Mode::VisualBlock => apply_block_operator(ed, op, levels),
         _ => {}
     }
 }
@@ -6243,6 +6296,7 @@ pub(crate) fn update_block_vcol<H: crate::types::Host>(
 fn apply_block_operator<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     op: Operator,
+    count: usize,
 ) {
     let (top, bot, left, right) = block_bounds(ed);
     // Snapshot the block text for yank / clipboard.
@@ -6297,9 +6351,9 @@ fn apply_block_operator<H: crate::types::Host>(
             // indent/outdent doesn't make sense).
             ed.push_undo();
             if op == Operator::Indent {
-                indent_rows(ed, top, bot, 1);
+                indent_rows(ed, top, bot, count.max(1));
             } else {
-                outdent_rows(ed, top, bot, 1);
+                outdent_rows(ed, top, bot, count.max(1));
             }
             ed.vim.mode = Mode::Normal;
         }
@@ -6788,9 +6842,15 @@ fn tag_text_object<H: crate::types::Host>(
                 stack.truncate(stack_idx);
                 let content_end = i;
                 let candidate = (open_start, content_start, content_end, close_end);
-                if cursor_idx >= content_start && cursor_idx <= content_end {
+                // A pair encloses the cursor when the cursor lies anywhere
+                // within the whole pair span — including ON the open or close
+                // tag itself (vim `it`/`at` operate on the tag under the
+                // cursor, not just its content). Innermost (tightest span)
+                // wins; closes are seen innermost-first so the first enclosing
+                // candidate is already the tightest.
+                if cursor_idx >= open_start && cursor_idx < close_end {
                     innermost = match innermost {
-                        Some((_, cs, ce, _)) if cs <= content_start && content_end <= ce => {
+                        Some((os, _, _, ce)) if os <= open_start && close_end <= ce => {
                             Some(candidate)
                         }
                         None => Some(candidate),
@@ -8339,5 +8399,93 @@ mod sneak_tests {
             Some((('b', 'a'), true)),
             "last_sneak should record the digraph and direction"
         );
+    }
+}
+
+// ─── [count]>> / [count]<< line-operator count tests ──────────────────────
+//
+// vim semantics (captured from `nvim --headless`, mirrored by the
+// `tier2_indent_count` oracle corpus):
+//   - `[count]op` operates on `count` lines from the cursor, clamped to the
+//     buffer end.
+//   - The implied `count_` motion moves `count - 1` lines down; on the last
+//     line it can't move, so `[count>=2]>>` / `<<` is a complete no-op (E16).
+#[cfg(test)]
+mod indent_count_tests {
+    use super::*;
+    use crate::{DefaultHost, Editor, Options};
+    use hjkl_buffer::Buffer;
+
+    fn make_editor(content: &str) -> Editor<Buffer, DefaultHost> {
+        let buf = Buffer::from_str(content);
+        let mut ed = Editor::new(buf, DefaultHost::new(), Options::default());
+        ed.settings_mut().expandtab = true;
+        ed.settings_mut().shiftwidth = 4;
+        ed
+    }
+
+    fn content(ed: &Editor<Buffer, DefaultHost>) -> String {
+        (*ed.buffer().content_joined()).clone()
+    }
+
+    #[test]
+    fn count_indent_operates_on_n_lines() {
+        let mut ed = make_editor("a\nb\nc\nd\ne\nf\n");
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Indent, 3);
+        assert_eq!(content(&ed), "    a\n    b\n    c\nd\ne\nf\n");
+    }
+
+    #[test]
+    fn count_indent_clamps_to_buffer_end() {
+        let mut ed = make_editor("a\nb\nc\nd\ne\nf\n");
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Indent, 10);
+        assert_eq!(content(&ed), "    a\n    b\n    c\n    d\n    e\n    f\n");
+    }
+
+    #[test]
+    fn count_outdent_clamps_to_buffer_end() {
+        let mut ed = make_editor("    a\n    b\n    c\n");
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Outdent, 10);
+        assert_eq!(content(&ed), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn count_indent_on_last_line_is_noop() {
+        let mut ed = make_editor("a\nb\nc\n");
+        ed.jump_cursor(2, 0); // last content line
+        execute_line_op(&mut ed, Operator::Indent, 5);
+        assert_eq!(
+            content(&ed),
+            "a\nb\nc\n",
+            "5>> on last line must abort (E16)"
+        );
+    }
+
+    #[test]
+    fn count_indent_on_single_line_is_noop() {
+        let mut ed = make_editor("x\n");
+        ed.jump_cursor(0, 0);
+        execute_line_op(&mut ed, Operator::Indent, 5);
+        assert_eq!(content(&ed), "x\n", "5>> on the only line must abort (E16)");
+    }
+
+    #[test]
+    fn count_outdent_on_last_line_is_noop() {
+        let mut ed = make_editor("    a\n    b\n    c\n");
+        ed.jump_cursor(2, 0);
+        execute_line_op(&mut ed, Operator::Outdent, 5);
+        assert_eq!(content(&ed), "    a\n    b\n    c\n");
+    }
+
+    #[test]
+    fn single_indent_on_last_line_still_works() {
+        // count == 1 needs no motion, so `>>` on the last line indents it.
+        let mut ed = make_editor("a\nb\nc\n");
+        ed.jump_cursor(2, 0);
+        execute_line_op(&mut ed, Operator::Indent, 1);
+        assert_eq!(content(&ed), "a\nb\n    c\n");
     }
 }

@@ -785,6 +785,69 @@ fn substitute_handler<H: Host>(
 
 /// `:&` / `:&&` / `:[range]&` / `:[range]&&` — repeat last substitute.
 ///
+/// `:[range]>` / `:[range]<` — shift lines right / left by `shiftwidth`.
+///
+/// `cmd_str` is the command text after the range, beginning with one or more
+/// `>` (or `<`) characters. The number of repeated shift chars is the number of
+/// indent levels (`:>>` = 2 levels). An optional trailing numeric count is the
+/// number of lines to operate on, starting at the *last* line of the range
+/// (vim `:[range]> {count}` semantics). With no range the current line is used.
+///
+/// Cursor lands on the first non-blank of the last shifted line, matching vim.
+pub(crate) fn shift_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    cmd_str: &str,
+    range: Option<LineRange>,
+) -> ExEffect {
+    let shift_char = match cmd_str.chars().next() {
+        Some(c @ ('>' | '<')) => c,
+        _ => return ExEffect::Error("not a shift command".into()),
+    };
+    let levels = cmd_str.chars().take_while(|c| *c == shift_char).count();
+    let rest = cmd_str[levels..].trim();
+
+    let total = editor.buffer().row_count();
+    if total == 0 {
+        return ExEffect::Ok;
+    }
+
+    // Resolve the range (default: current line).
+    let r = range.unwrap_or_else(|| LineRange::single(editor.cursor().0 + 1));
+    let mut start_row = r.start_one_based().saturating_sub(1);
+    let mut end_row = r.end_one_based().saturating_sub(1);
+
+    // Optional trailing count: operate on `count` lines from the range's last
+    // line (vim semantics). Anything else trailing is an error.
+    if !rest.is_empty() {
+        match rest.parse::<usize>() {
+            Ok(0) | Err(_) => return ExEffect::Error("Trailing characters".into()),
+            Ok(n) => {
+                start_row = end_row;
+                end_row = start_row + n - 1;
+            }
+        }
+    }
+
+    end_row = end_row.min(total.saturating_sub(1));
+    if start_row > end_row {
+        return ExEffect::Ok;
+    }
+
+    let signed = if shift_char == '>' {
+        levels as i32
+    } else {
+        -(levels as i32)
+    };
+    editor.indent_range((start_row, 0), (end_row, 0), signed, 0);
+
+    // Cursor → first non-blank of the last shifted line (vim behaviour).
+    let line = hjkl_buffer::rope_line_str(&editor.buffer().rope(), end_row);
+    let first_non_blank = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
+    editor.jump_cursor(end_row, first_non_blank);
+
+    ExEffect::Ok
+}
+
 /// `:&`  — repeat with original flags dropped (pattern and replacement kept).
 /// `:&&` — repeat with original flags preserved.
 ///
@@ -1796,6 +1859,74 @@ mod tests {
         (0..rope.len_lines())
             .map(|i| hjkl_buffer::rope_line_str(&rope, i))
             .collect()
+    }
+
+    // ── :> / :< shift commands ────────────────────────────────────────────────
+
+    fn shift_editor(lines: &[&str]) -> Editor<hjkl_buffer::Buffer, DefaultHost> {
+        let mut ed = make_editor_with_lines(lines);
+        ed.settings_mut().expandtab = true;
+        ed.settings_mut().shiftwidth = 4;
+        ed
+    }
+
+    fn dispatch(
+        ed: &mut Editor<hjkl_buffer::Buffer, DefaultHost>,
+        input: &str,
+    ) -> Option<ExEffect> {
+        let mut reg = crate::registry::Registry::<DefaultHost>::new();
+        register_builtins(&mut reg);
+        crate::try_dispatch(&reg, ed, input)
+    }
+
+    #[test]
+    fn shift_right_range_one_level() {
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        assert_eq!(dispatch(&mut ed, "1,2>"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["    a", "    b", "c"]);
+    }
+
+    #[test]
+    fn shift_right_range_two_levels() {
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        assert_eq!(dispatch(&mut ed, "1,2>>"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["        a", "        b", "c"]);
+    }
+
+    #[test]
+    fn shift_right_whole_buffer() {
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        assert_eq!(dispatch(&mut ed, "%>"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["    a", "    b", "    c"]);
+    }
+
+    #[test]
+    fn shift_left_range_outdents() {
+        let mut ed = shift_editor(&["    a", "    b", "    c"]);
+        assert_eq!(dispatch(&mut ed, "1,3<"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn shift_no_range_uses_current_line() {
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        ed.jump_cursor(1, 0); // cursor on line 2 (row 1)
+        assert_eq!(dispatch(&mut ed, ">"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["a", "    b", "c"]);
+    }
+
+    #[test]
+    fn shift_trailing_count_is_line_count() {
+        // `:1> 2` shifts 2 lines starting at the range's last line (line 1).
+        let mut ed = shift_editor(&["a", "b", "c"]);
+        assert_eq!(dispatch(&mut ed, "1> 2"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["    a", "    b", "c"]);
+    }
+
+    #[test]
+    fn shift_trailing_garbage_errors() {
+        let mut ed = shift_editor(&["a", "b"]);
+        assert!(matches!(dispatch(&mut ed, "1>x"), Some(ExEffect::Error(_))));
     }
 
     // ── quit_handler ─────────────────────────────────────────────────────────

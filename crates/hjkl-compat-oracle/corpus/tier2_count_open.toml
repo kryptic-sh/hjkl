@@ -1,0 +1,52 @@
+# Tier 2 — `[count]o` / `[count]O` open-line counts.
+#
+# vim: `[count]o` opens `count` new lines below the cursor and repeats the typed
+# text on each; `[count]O` does the same above. (Contrast `[count]i` / `[count]A`
+# which repeat the text inline on a single line.)
+#
+# Expected buffers captured from `nvim --headless`.
+
+# `3ox<Esc>` opens three lines below, each containing "x".
+[[cases]]
+name = "count_3o_opens_three_lines"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "3ox<Esc>"
+expected_buffer = "a\nx\nx\nx\nb\n"
+expected_mode = "normal"
+
+# `3Ox<Esc>` opens three lines above the first line.
+[[cases]]
+name = "count_3O_opens_three_lines_above"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "3Ox<Esc>"
+expected_buffer = "x\nx\nx\na\nb\n"
+expected_mode = "normal"
+
+# `2ox<Esc>` on a single line opens two lines below.
+[[cases]]
+name = "count_2o_single_line"
+initial_buffer = "a\n"
+initial_cursor = [0, 0]
+keys = "2ox<Esc>"
+expected_buffer = "a\nx\nx\n"
+expected_mode = "normal"
+
+# Sanity: `3ix` repeats inline on ONE line (not three) — contrasts with `o`.
+[[cases]]
+name = "count_3i_repeats_inline"
+initial_buffer = "z\n"
+initial_cursor = [0, 0]
+keys = "3ix<Esc>"
+expected_buffer = "xxxz\n"
+expected_mode = "normal"
+
+# Sanity: `3A` appends inline three times on the same line.
+[[cases]]
+name = "count_3A_appends_inline"
+initial_buffer = "a\n"
+initial_cursor = [0, 0]
+keys = "3Az<Esc>"
+expected_buffer = "azzz\n"
+expected_mode = "normal"

@@ -646,13 +646,23 @@ impl App {
             && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
             && let Some(km_mode) = super::current_km_mode(self)
         {
+            // Visual-mode count prefix: the digit buffer is populated in
+            // event_loop's visual-mode arm. Pass it as the dispatch count so
+            // visual ops/motions that read `action_count` see it; handlers that
+            // read `pending_count` directly (VisualOp / Motion) drain it via
+            // `take_or`. Mirrors the Normal-mode dispatch in step (3) below.
+            let count = self.pending_count.peek().max(1);
             let mut replay: Vec<hjkl_keymap::KeyEvent> = Vec::new();
-            let consumed = self.dispatch_keymap_in_mode(km_ev, 1, &mut replay, km_mode);
+            let consumed = self.dispatch_keymap_in_mode(km_ev, count, &mut replay, km_mode);
             if consumed {
                 self.sync_after_engine_mutation();
                 return true;
             }
-            // Unbound — fall through to engine.
+            // Unbound — flush any buffered count to the engine so engine-handled
+            // visual commands (e.g. `2J`) still receive it, then fall through.
+            if !self.pending_count.is_empty() {
+                self.flush_pending_count_to_engine();
+            }
         }
 
         // (3) Normal-mode keymap dispatch — only the trie step; count-prefix

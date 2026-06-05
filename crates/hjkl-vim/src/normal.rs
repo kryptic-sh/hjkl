@@ -34,6 +34,14 @@ pub fn step_normal<H: Host>(
                 | Pending::Find { .. }
                 | Pending::OpFind { .. }
                 | Pending::VisualTextObj { .. }
+                // Pendings whose next key is a literal NAME, not a count, so a
+                // digit selects e.g. `"1` (numbered register), `` `1 `` /
+                // `'1` (numbered mark), `q1` (macro register) — not a count.
+                | Pending::SelectRegister
+                | Pending::SetMark
+                | Pending::GotoMarkLine
+                | Pending::GotoMarkChar
+                | Pending::RecordMacroTarget
                 | SneakFirst { .. }
                 | SneakSecond { .. }
                 | OpSneakFirst { .. }
@@ -184,11 +192,13 @@ pub fn step_normal<H: Host>(
         _ => {}
     }
 
-    // Visual mode: operators act on the current selection.
+    // Visual mode: operators act on the current selection. The leading count
+    // (drained into `count` above) multiplies indent levels (`2>` = two
+    // shiftwidths); other visual operators ignore it.
     if ed.is_visual()
         && let Some(op) = visual_operator(&input)
     {
-        ed.apply_visual_operator(op);
+        ed.apply_visual_operator(op, count.max(1));
         return true;
     }
 

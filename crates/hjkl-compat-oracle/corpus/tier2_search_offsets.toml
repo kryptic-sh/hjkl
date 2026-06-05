@@ -1,0 +1,48 @@
+# Tier 2 — search offsets (`/pat/e`, `/pat/+N`, `/pat/s+N`).
+#
+# These move only the cursor, so `expected_buffer` equals the input; the oracle
+# checks the cursor position hjkl-vs-nvim. nvim cursor truth (0-based):
+#   /bar/e  → (0,6)  end of match
+#   /bar/   → (0,4)  start of match (baseline)
+#   /bar/+1 → (1,0)  line offset, first column of next line
+#   /o/s+1  → (0,2)  start of match + 1 char
+
+# `/bar/e<CR>` — cursor on the LAST char of the match.
+[[cases]]
+name = "search_offset_e_end_of_match"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "/bar/e<CR>"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+
+# `/bar/<CR>` — baseline: cursor on the FIRST char of the match.
+[[cases]]
+name = "search_offset_none_start_of_match"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "/bar/<CR>"
+expected_buffer = "foo bar baz\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+# `/bar/+1<CR>` — line offset: one line below the match, first column.
+[[cases]]
+name = "search_offset_line_plus_one"
+initial_buffer = "foo bar\nx\ny\n"
+initial_cursor = [0, 0]
+keys = "/bar/+1<CR>"
+expected_buffer = "foo bar\nx\ny\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
+# `/o/s+1<CR>` — char offset from match start (`s`/`b` = start).
+[[cases]]
+name = "search_offset_s_plus_one"
+initial_buffer = "foobar\n"
+initial_cursor = [0, 0]
+keys = "/o/s+1<CR>"
+expected_buffer = "foobar\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"

@@ -1,5 +1,31 @@
 use std::path::PathBuf;
 
+/// Load `rel_path` (relative to the crate manifest), run it through the oracle,
+/// and assert every case passes (or is skipped). Skips entirely when nvim is
+/// not on PATH.
+async fn run_corpus(rel_path: &str) {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
+    let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
+
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+
+    let results = hjkl_compat_oracle::run_oracle(&corpus).await;
+    let failures: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            !matches!(
+                r.status,
+                hjkl_compat_oracle::CaseStatus::Pass | hjkl_compat_oracle::CaseStatus::Skipped(_)
+            )
+        })
+        .collect();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sample_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -142,6 +168,62 @@ async fn tier2_case_indent_join_corpus_passes() {
         .collect();
 
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_indent_count_corpus_passes() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_indent_count.toml");
+    let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
+
+    if !hjkl_compat_oracle::nvim_available() {
+        eprintln!("skipping: nvim not installed");
+        return;
+    }
+
+    let results = hjkl_compat_oracle::run_oracle(&corpus).await;
+
+    let failures: Vec<_> = results
+        .iter()
+        .filter(|r| {
+            !matches!(
+                r.status,
+                hjkl_compat_oracle::CaseStatus::Pass | hjkl_compat_oracle::CaseStatus::Skipped(_)
+            )
+        })
+        .collect();
+
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_count_open_corpus_passes() {
+    run_corpus("corpus/tier2_count_open.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_registers_corpus_passes() {
+    run_corpus("corpus/tier2_registers.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_search_offsets_corpus_passes() {
+    run_corpus("corpus/tier2_search_offsets.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_jumps_corpus_passes() {
+    run_corpus("corpus/tier2_jumps.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_reflow_corpus_passes() {
+    run_corpus("corpus/tier2_reflow.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_text_objects_edge_corpus_passes() {
+    run_corpus("corpus/tier2_text_objects_edge.toml").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

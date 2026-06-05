@@ -42,6 +42,17 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // 2. Construct editor.
     let mut editor = Editor::new(buffer, TestHost::new(), Options::default());
 
+    // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
+    if let Some(sw) = case.shiftwidth {
+        editor.settings_mut().shiftwidth = sw;
+    }
+    if let Some(et) = case.expandtab {
+        editor.settings_mut().expandtab = et;
+    }
+    if let Some(tw) = case.textwidth {
+        editor.settings_mut().textwidth = tw;
+    }
+
     // 3. Set initial cursor.
     let (init_row, init_col) = case.initial_cursor;
     editor.jump_cursor(init_row, init_col);

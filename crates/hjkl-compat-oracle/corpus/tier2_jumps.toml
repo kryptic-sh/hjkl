@@ -1,0 +1,56 @@
+# Tier 2 — jumplist navigation (`<C-o>` / `<C-i>`) and the `` `` `` jump-back
+# mark. These move only the cursor, so `expected_buffer` equals the input and the
+# oracle checks the cursor hjkl-vs-nvim. nvim cursor truth (0-based) noted below.
+#
+# (Changelist `g;` / `g,` is intentionally omitted — its semantics under
+# `-u NONE` are subtle and deferred to a focused pass.)
+
+# `G` records a jump from line 0; `<C-o>` returns to it.
+[[cases]]
+name = "jump_ctrl_o_returns_to_origin"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "G<C-o>"
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `<C-i>` walks the jumplist forward again after `<C-o>`.
+[[cases]]
+name = "jump_ctrl_i_goes_forward"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "G<C-o><C-i>"
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+
+# Two jumps: `<C-o>` steps back one entry (to the G line, not all the way home).
+[[cases]]
+name = "jump_ctrl_o_steps_one_entry"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "Ggg<C-o>"
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+
+# `` `` `` jumps to the position before the latest jump.
+[[cases]]
+name = "jump_backtick_backtick"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "G``"
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `` `` `` after a mid-buffer jump returns to that mid position.
+[[cases]]
+name = "jump_backtick_backtick_mid"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "3GG``"
+expected_buffer = "a\nb\nc\nd\ne\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"

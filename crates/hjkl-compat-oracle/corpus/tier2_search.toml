@@ -83,7 +83,10 @@ expected_cursor = [0, 5]
 name = "search_vim_word_boundary"
 initial_buffer = "foobar bar baz\n"
 initial_cursor = [0, 0]
-keys = "/\\<bar\\><CR>"
+# The literal `<` of the `\<` word-boundary atom must be encoded as `<lt>` so
+# the macro decoder doesn't treat `<bar\>` as a key-notation token. `>` is not
+# special, so `\>` stays literal.
+keys = "/\\<lt>bar\\><CR>"
 expected_buffer = "foobar bar baz\n"
 expected_cursor = [0, 7]
 

@@ -1,0 +1,142 @@
+# Tier 2 indent-operator corpus — `>>` / `<<` with counts, including the
+# clamp-to-end and last-line no-op edge cases.
+#
+# Indent operators depend on `shiftwidth` / `expandtab`, which differ between
+# hjkl's defaults and `nvim --clean`. Every case here pins both via the
+# per-case `shiftwidth` / `expandtab` fields so hjkl and nvim produce identical
+# output. Expected buffers were captured from `nvim --headless` with
+# `set expandtab shiftwidth=4 tabstop=4`.
+#
+# vim semantics being locked in: `[count]>>` operates on `count` lines from the
+# cursor. The implied `count_` motion moves `count - 1` lines down; on the last
+# line that motion fails, so `[count>=2]>>` / `<<` on the final line is a
+# complete no-op (E16). Above the last line the range clamps to the buffer end.
+
+# `3>>` indents the cursor line and the two below it.
+[[cases]]
+name = "count_3_indent_three_lines"
+initial_buffer = "a\nb\nc\nd\ne\nf\n"
+initial_cursor = [0, 0]
+keys = "3>>"
+expected_buffer = "    a\n    b\n    c\nd\ne\nf\n"
+shiftwidth = 4
+expandtab = true
+
+# `10>>` with only 6 lines clamps to the buffer end — all 6 get indented.
+[[cases]]
+name = "count_10_indent_clamps_to_end"
+initial_buffer = "a\nb\nc\nd\ne\nf\n"
+initial_cursor = [0, 0]
+keys = "10>>"
+expected_buffer = "    a\n    b\n    c\n    d\n    e\n    f\n"
+shiftwidth = 4
+expandtab = true
+
+# `10<<` clamps the same way and outdents every line by one shiftwidth.
+[[cases]]
+name = "count_10_outdent_clamps_to_end"
+initial_buffer = "    a\n    b\n    c\n"
+initial_cursor = [0, 0]
+keys = "10<<"
+expected_buffer = "a\nb\nc\n"
+shiftwidth = 4
+expandtab = true
+
+# `5>>` on the last line of a multi-line buffer is a no-op (count >= 2, the
+# `count_` motion can't move down).
+[[cases]]
+name = "count_indent_last_line_noop"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [2, 0]
+keys = "5>>"
+expected_buffer = "a\nb\nc\n"
+shiftwidth = 4
+expandtab = true
+
+# `5>>` on a single-line buffer is likewise a no-op (cursor is the last line).
+[[cases]]
+name = "count_indent_single_line_noop"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = "5>>"
+expected_buffer = "x\n"
+shiftwidth = 4
+expandtab = true
+
+# `5<<` on the last line is a no-op too (the count motion aborts before any
+# outdent happens).
+[[cases]]
+name = "count_outdent_last_line_noop"
+initial_buffer = "    a\n    b\n    c\n"
+initial_cursor = [2, 0]
+keys = "5<<"
+expected_buffer = "    a\n    b\n    c\n"
+shiftwidth = 4
+expandtab = true
+
+# Visual-line `>` indents the selected lines once.
+[[cases]]
+name = "visual_line_indent_two_lines"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "Vj>"
+expected_buffer = "    a\n    b\nc\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Visual-line `>` over the whole buffer indents every selected line once.
+[[cases]]
+name = "visual_line_indent_all_lines"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "VG>"
+expected_buffer = "    a\n    b\n    c\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Visual-line `2>` indents the selected lines by TWO shiftwidths (count = levels).
+[[cases]]
+name = "visual_count_indent_two_levels"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "Vj2>"
+expected_buffer = "        a\n        b\nc\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Visual-line `2<` outdents the selected lines by TWO shiftwidths.
+[[cases]]
+name = "visual_count_outdent_two_levels"
+initial_buffer = "        a\n        b\n        c\n"
+initial_cursor = [0, 0]
+keys = "Vj2<"
+expected_buffer = "a\nb\n        c\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Visual-line `3>` on a single selected line indents by THREE shiftwidths.
+[[cases]]
+name = "visual_count_indent_three_levels"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "V3>"
+expected_buffer = "            a\nb\nc\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+
+# Visual `2j` count on the motion extends the selection two lines down, so three
+# lines are indented once.
+[[cases]]
+name = "visual_motion_count_extends_selection"
+initial_buffer = "a\nb\nc\nd\ne\n"
+initial_cursor = [0, 0]
+keys = "V2j>"
+expected_buffer = "    a\n    b\n    c\nd\ne\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true

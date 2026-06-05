@@ -60,6 +60,24 @@ pub struct OracleCase {
     /// Optional `(register_char, expected_contents)` check.
     #[serde(default)]
     pub expected_register: Option<(char, String)>,
+
+    /// Optional `shiftwidth` (indent width in columns). Applied to *both*
+    /// drivers so indent operators (`>>` / `<<`) produce matching output
+    /// despite hjkl and `nvim --clean` having different defaults. When unset,
+    /// each driver keeps its own default.
+    #[serde(default)]
+    pub shiftwidth: Option<usize>,
+
+    /// Optional `expandtab` toggle (insert spaces instead of tabs). Applied to
+    /// both drivers alongside [`Self::shiftwidth`] for deterministic indent
+    /// operator cases.
+    #[serde(default)]
+    pub expandtab: Option<bool>,
+
+    /// Optional `textwidth` (wrap column for `gq` / `gw` reflow). Applied to
+    /// both drivers so reflow cases produce identical line breaks.
+    #[serde(default)]
+    pub textwidth: Option<usize>,
 }
 
 /// A collection of [`OracleCase`]s loaded from a single TOML corpus file.

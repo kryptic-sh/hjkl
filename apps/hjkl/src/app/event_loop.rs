@@ -752,8 +752,34 @@ impl App {
             }
 
             // Fall through to route_chord_key below.
+        } else if matches!(
+            self.active().editor.vim_mode(),
+            VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock
+        ) {
+            // ── Visual-mode count prefix ─────────────────────────
+            // Clear stale Normal-mode chord state but PRESERVE the pending
+            // count so visual-mode counts accumulate (`2j`, `2>`, `3<`),
+            // mirroring the Normal-mode buffering above. Without this the
+            // digit was dropped (and the count reset every key), so every
+            // visual op / motion ran with count 1.
+            self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
+            self.clear_prefix_state();
+            if key.code == KeyCode::Esc {
+                // Cancel a half-typed count; the engine still receives Esc
+                // below to exit visual mode.
+                self.pending_count.reset();
+            } else if self.pending_state.is_none()
+                && key.modifiers == KeyModifiers::NONE
+                && let KeyCode::Char(d @ '0'..='9') = key.code
+            {
+                // try_accumulate buffers the digit; `0` with an empty buffer
+                // returns false (LineStart motion) and falls through.
+                if self.pending_count.try_accumulate(d) {
+                    return KeyOutcome::Continue;
+                }
+            }
         } else {
-            // Non-Normal mode: reset any pending Normal-mode chord state.
+            // Insert / other modes: reset any pending Normal-mode chord state.
             self.app_keymap.reset(crate::app::keymap::HjklMode::Normal);
             self.pending_count.reset();
             self.clear_prefix_state();

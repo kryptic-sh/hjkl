@@ -2706,6 +2706,108 @@ fn set_background_tracks_colorscheme() {
     );
 }
 
+/// App-level indentation surface coverage, driven through the real keypress
+/// path (`macro_key_seq`). Expected outputs match `nvim --headless` with
+/// `expandtab` / `shiftwidth=4`. Covers operator+motion, text objects, dot
+/// repeat, visual-mode counts (the regression this suite was added for), and
+/// insert-mode `Ctrl-T` / `Ctrl-D`.
+fn indent_app(seed: &str, keys: &[KeyEvent]) -> String {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().editor.settings_mut().expandtab = true;
+    app.active_mut().editor.settings_mut().shiftwidth = 4;
+    seed_buffer(&mut app, seed);
+    app.active_mut().editor.jump_cursor(0, 0);
+    macro_key_seq(&mut app, keys);
+    (*app.active().editor.buffer().content_joined()).clone()
+}
+
+#[test]
+fn indent_operator_motion_forms() {
+    assert_eq!(
+        indent_app("a\nb\nc\n", &[ck('>'), ck('j')]),
+        "    a\n    b\nc\n"
+    );
+    assert_eq!(
+        indent_app("a\nb\nc\n", &[ck('>'), ck('G')]),
+        "    a\n    b\n    c\n"
+    );
+    // count between op and motion, and before op — both indent 3 lines.
+    assert_eq!(
+        indent_app("a\nb\nc\nd\n", &[ck('>'), ck('2'), ck('j')]),
+        "    a\n    b\n    c\nd\n"
+    );
+    assert_eq!(
+        indent_app("a\nb\nc\nd\n", &[ck('2'), ck('>'), ck('j')]),
+        "    a\n    b\n    c\nd\n"
+    );
+}
+
+#[test]
+fn indent_text_objects() {
+    // `>ip` indents the paragraph (up to the blank line).
+    assert_eq!(
+        indent_app("a\nb\n\nc\n", &[ck('>'), ck('i'), ck('p')]),
+        "    a\n    b\n\nc\n"
+    );
+    // `>iB` indents inside the surrounding `{ }` block.
+    assert_eq!(
+        indent_app("{\nx\ny\n}\n", &[ck('j'), ck('>'), ck('i'), ck('B')]),
+        "{\n    x\n    y\n}\n"
+    );
+}
+
+#[test]
+fn indent_dot_repeat() {
+    // `>>` then `j.` repeats the indent on the next line.
+    assert_eq!(
+        indent_app("a\nb\nc\n", &[ck('>'), ck('>'), ck('j'), ck('.')]),
+        "    a\n    b\nc\n"
+    );
+}
+
+#[test]
+fn visual_indent_count_applies_levels() {
+    // `Vj2>` indents the two selected lines by TWO shiftwidths (8 spaces).
+    assert_eq!(
+        indent_app("a\nb\nc\n", &[ck('V'), ck('j'), ck('2'), ck('>')]),
+        "        a\n        b\nc\n"
+    );
+    // `Vj2<` outdents the two selected lines by TWO shiftwidths (8 → 0).
+    assert_eq!(
+        indent_app(
+            "        a\n        b\n        c\n",
+            &[ck('V'), ck('j'), ck('2'), ck('<')]
+        ),
+        "a\nb\n        c\n"
+    );
+    // `V3>` indents the single selected line by THREE shiftwidths (12 spaces).
+    assert_eq!(
+        indent_app("a\nb\nc\n", &[ck('V'), ck('3'), ck('>')]),
+        "            a\nb\nc\n"
+    );
+}
+
+#[test]
+fn visual_motion_count_extends_selection() {
+    // `V2j>` — the count on the motion extends the selection 2 lines down, so
+    // three lines are indented once.
+    assert_eq!(
+        indent_app("a\nb\nc\nd\ne\n", &[ck('V'), ck('2'), ck('j'), ck('>')]),
+        "    a\n    b\n    c\nd\ne\n"
+    );
+}
+
+#[test]
+fn insert_ctrl_t_and_ctrl_d() {
+    // `i` then Ctrl-T indents the current line by one shiftwidth.
+    assert_eq!(indent_app("abc\n", &[ck('i'), ctrl_key('t')]), "    abc\n");
+    // Ctrl-D outdents it back.
+    assert_eq!(
+        indent_app("abc\n", &[ck('i'), ctrl_key('t'), ctrl_key('d')]),
+        "abc\n"
+    );
+}
+
 /// Reproduce `==` through the REAL keypress path (handle_keypress →
 /// route_chord_key → chord_routing → submit_external_format), not a direct
 /// call. Skipped where taplo isn't on PATH.

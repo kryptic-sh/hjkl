@@ -1,0 +1,47 @@
+# Tier 2 — register semantics, verified through their buffer effects (the oracle
+# only surfaces the unnamed register directly, so named / numbered / special
+# registers are exercised by yanking into them and pasting back).
+#
+# Expected buffers captured from `nvim --headless`.
+
+# Numbered yank-ring: each `dd` shifts the previous delete down the ring, so
+# after two deletes `"1` holds the most recent and `"2` the one before.
+#   dd (del a → "1=a), dd (del b → "1=b, "2=a), "1p (paste b), "2p (paste a)
+[[cases]]
+name = "register_numbered_ring_after_deletes"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "dddd\"1p\"2p"
+expected_buffer = "c\nb\na\nd\n"
+expected_mode = "normal"
+
+# Small-delete register `"-` holds the most recent intra-line delete.
+#   x (del a → "-=a), x (del b → "-=b), $ (end), "-p (paste b after d)
+[[cases]]
+name = "register_small_delete_dash"
+initial_buffer = "abcd\n"
+initial_cursor = [0, 0]
+keys = "xx$\"-p"
+expected_buffer = "cdb\n"
+expected_mode = "normal"
+
+# Blackhole register `"_` discards text WITHOUT touching the yank register, so
+# a prior yank (`"0`) survives a `"_dd`.
+#   yiw (yank foo → "0), j, "_dd (blackhole-delete bar), k, "0p (paste foo)
+[[cases]]
+name = "register_blackhole_preserves_yank"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "yiwj\"_ddk\"0p"
+expected_buffer = "ffoooo\nbaz\n"
+expected_mode = "normal"
+
+# Uppercase register name APPENDS to the named register.
+#   "ayy (a="aaa\n"), j, "Ayy (append → a="aaa\nbbb\n"), o<Esc>, "ap (paste both)
+[[cases]]
+name = "register_named_append_uppercase"
+initial_buffer = "aaa\nbbb\n"
+initial_cursor = [0, 0]
+keys = "\"ayyj\"Ayyo<Esc>\"ap"
+expected_buffer = "aaa\nbbb\n\naaa\nbbb\n"
+expected_mode = "normal"

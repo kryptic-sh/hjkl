@@ -8,5 +8,9 @@
 pub mod at_colon;
 pub mod explorer_search;
 pub mod harness;
+// Uses `:set`/`:w` ex commands; macOS pty timing mangles `:cmd\r` into literal
+// insert text (see `at_colon` note above), so restrict to linux.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod indent;
 pub mod register_count;
 pub mod render_sync;

@@ -84,6 +84,12 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return Some(builtins::repeat_substitute_handler(editor, false, range));
     }
 
+    // `:[range]>` / `:[range]<` shift commands — special-cased because `>` / `<`
+    // are not alphabetic and split_name_args cannot parse them as command names.
+    if cmd_str.starts_with('>') || cmd_str.starts_with('<') {
+        return Some(builtins::shift_handler(editor, cmd_str, range));
+    }
+
     let (name, args) = parse::split_name_args(cmd_str);
     if name.is_empty() {
         // Bare `:N` or bare range — jump to line.

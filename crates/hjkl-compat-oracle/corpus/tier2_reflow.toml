@@ -1,0 +1,45 @@
+# Tier 2 — `gq` / `gw` reflow against `textwidth`.
+#
+# `gq{motion}` reflows the lines to `textwidth`, leaving the cursor at the end of
+# the reflowed text; `gw{motion}` does the same but restores the cursor. Expected
+# buffers captured from `nvim --headless` with `set textwidth=10`.
+
+# `gqq` reflows the current line.
+[[cases]]
+name = "reflow_gqq_current_line"
+initial_buffer = "one two three four five\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "one two\nthree four\nfive\n"
+expected_mode = "normal"
+textwidth = 10
+
+# `gqap` reflows the whole paragraph.
+[[cases]]
+name = "reflow_gqap_paragraph"
+initial_buffer = "one two three four five six\n"
+initial_cursor = [0, 0]
+keys = "gqap"
+expected_buffer = "one two\nthree four\nfive six\n"
+expected_mode = "normal"
+textwidth = 10
+
+# `gww` reflows the current line and restores the cursor (cursor-stable form).
+[[cases]]
+name = "reflow_gww_current_line"
+initial_buffer = "one two three four five\n"
+initial_cursor = [0, 0]
+keys = "gww"
+expected_buffer = "one two\nthree four\nfive\n"
+expected_mode = "normal"
+textwidth = 10
+
+# `gqj` reflows the current line plus the one below.
+[[cases]]
+name = "reflow_gqj_two_lines"
+initial_buffer = "one two three\nfour five six\n"
+initial_cursor = [0, 0]
+keys = "gqj"
+expected_buffer = "one two\nthree four\nfive six\n"
+expected_mode = "normal"
+textwidth = 10

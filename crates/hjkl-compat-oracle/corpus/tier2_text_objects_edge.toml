@@ -1,0 +1,59 @@
+# Tier 2 — text-object edge cases not covered by the main text-object corpora:
+# cursor-before-quote seeking and nested tag objects.
+#
+# Expected buffers captured from `nvim --headless`.
+
+# `di"` with the cursor BEFORE the quotes seeks forward to the pair on the line.
+[[cases]]
+name = "textobj_di_quote_cursor_before"
+initial_buffer = "foo \"bar\" baz\n"
+initial_cursor = [0, 0]
+keys = "di\""
+expected_buffer = "foo \"\" baz\n"
+expected_mode = "normal"
+
+# `da"` from before the quotes deletes the quotes plus a trailing space.
+[[cases]]
+name = "textobj_da_quote_cursor_before"
+initial_buffer = "foo \"bar\" baz\n"
+initial_cursor = [0, 0]
+keys = "da\""
+expected_buffer = "foo baz\n"
+expected_mode = "normal"
+
+# `dit` on the OUTER tag (cursor inside `<a>`) deletes everything between the
+# outer tags, including the nested `<b>` element.
+[[cases]]
+name = "textobj_dit_nested_outer"
+initial_buffer = "<a><b>x</b></a>\n"
+initial_cursor = [0, 1]
+keys = "dit"
+expected_buffer = "<a></a>\n"
+expected_mode = "normal"
+
+# `dit` with the cursor on the inner content deletes only the inner tag body.
+[[cases]]
+name = "textobj_dit_nested_inner"
+initial_buffer = "<a><b>x</b></a>\n"
+initial_cursor = [0, 6]
+keys = "dit"
+expected_buffer = "<a><b></b></a>\n"
+expected_mode = "normal"
+
+# `dat` on the outer tag removes the entire `<a>…</a>` element.
+[[cases]]
+name = "textobj_dat_outer_removes_all"
+initial_buffer = "<a><b>x</b></a>\n"
+initial_cursor = [0, 1]
+keys = "dat"
+expected_buffer = "\n"
+expected_mode = "normal"
+
+# `dat` on the inner tag removes only the `<b>…</b>` element.
+[[cases]]
+name = "textobj_dat_inner"
+initial_buffer = "<a><b>x</b></a>\n"
+initial_cursor = [0, 6]
+keys = "dat"
+expected_buffer = "<a></a>\n"
+expected_mode = "normal"

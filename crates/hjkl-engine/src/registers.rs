@@ -65,6 +65,12 @@ impl Registers {
         self.yank_zero = slot.clone();
         if let Some(c) = target {
             self.write_named(c, slot);
+            // vim: the unnamed register points at the named register just
+            // written, so an uppercase-append (`"Ayy`) leaves `"` holding the
+            // full appended contents, not just the latest fragment.
+            if let Some(named) = self.read(c) {
+                self.unnamed = named.clone();
+            }
         }
     }
 
@@ -89,6 +95,10 @@ impl Registers {
         self.delete_ring[0] = slot.clone();
         if let Some(c) = target {
             self.write_named(c, slot);
+            // vim: unnamed points at the named register just written.
+            if let Some(named) = self.read(c) {
+                self.unnamed = named.clone();
+            }
         }
     }
 

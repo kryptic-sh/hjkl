@@ -98,9 +98,40 @@ async fn run_case_inner(
         .set_cursor((init_row as i64 + 1, init_col as i64))
         .await?;
 
+    // 3b. Apply per-case indent settings so `>>` / `<<` match hjkl's output.
+    //     `nvim --clean` defaults to noexpandtab / shiftwidth=8, which diverge
+    //     from hjkl's defaults; the corpus pins both sides explicitly.
+    //     `startofline` is set whenever indent settings are pinned: nvim
+    //     defaults it OFF (cursor keeps its column after `>>`) whereas hjkl
+    //     follows traditional vim (cursor → first non-blank), so align nvim
+    //     with hjkl for these cases.
+    let pins_indent = case.shiftwidth.is_some() || case.expandtab.is_some();
+    if let Some(sw) = case.shiftwidth {
+        nvim.command(&format!("set shiftwidth={sw} tabstop={sw}"))
+            .await?;
+    }
+    if let Some(et) = case.expandtab {
+        nvim.command(if et {
+            "set expandtab"
+        } else {
+            "set noexpandtab"
+        })
+        .await?;
+    }
+    if pins_indent {
+        nvim.command("set startofline").await?;
+    }
+    if let Some(tw) = case.textwidth {
+        nvim.command(&format!("set textwidth={tw}")).await?;
+    }
+
     // 4. Apply keystrokes.
+    //    `nvim_input` reads `<` as the start of a key-notation token (`<Esc>`,
+    //    `<C-w>`, ...) and *blocks* waiting for the closing `>` if one never
+    //    arrives — so a literal `<` (e.g. the `<<` outdent operator) would hang
+    //    the RPC. Escape any `<` that does not open a valid token to `<lt>`.
     if !case.keys.is_empty() {
-        nvim.input(&case.keys).await?;
+        nvim.input(&escape_literal_lt(&case.keys)).await?;
     }
 
     // 5. Synchronisation barrier — a round-trip ensures the previous input is
@@ -147,6 +178,55 @@ async fn run_case_inner(
     })
 }
 
+/// Rewrite any `<` that does NOT open a valid key-notation token (`<Esc>`,
+/// `<C-w>`, `<lt>`, ...) into the literal-`<` escape `<lt>`.
+///
+/// `nvim_input` blocks waiting for a closing `>` when it sees an unterminated
+/// `<...>`, so a bare `<` (the `<<` outdent operator) would hang the RPC. A `<`
+/// is treated as a token opener only when a matching `>` follows with a
+/// plausible key name in between (`[A-Za-z][A-Za-z0-9_-]*`).
+fn escape_literal_lt(keys: &str) -> String {
+    let bytes = keys.as_bytes();
+    let mut out = String::with_capacity(keys.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            if let Some(end) = token_end(&bytes[i..]) {
+                out.push_str(&keys[i..i + end]);
+                i += end;
+                continue;
+            }
+            out.push_str("<lt>");
+            i += 1;
+            continue;
+        }
+        // Copy one full UTF-8 char (keys are ASCII in practice, but be safe).
+        let ch = keys[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// If `s` starts with a valid `<Name>` token, return its byte length (including
+/// the angle brackets); otherwise `None`. `Name` must start with a letter and
+/// contain only `[A-Za-z0-9_-]`.
+fn token_end(s: &[u8]) -> Option<usize> {
+    debug_assert_eq!(s[0], b'<');
+    if s.len() < 3 || !s[1].is_ascii_alphabetic() {
+        return None;
+    }
+    let mut j = 2;
+    while j < s.len() {
+        match s[j] {
+            b'>' => return Some(j + 1),
+            c if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' => j += 1,
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Map nvim's short mode codes to the canonical lowercase strings used by the
 /// oracle. Unknown codes are passed through so mismatches surface in the diff.
 fn nvim_mode_to_string(code: &str) -> String {
@@ -159,4 +239,41 @@ fn nvim_mode_to_string(code: &str) -> String {
         other => return other.to_owned(),
     }
     .to_owned()
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::escape_literal_lt;
+
+    #[test]
+    fn literal_double_left_angle_is_escaped() {
+        assert_eq!(escape_literal_lt("10<<"), "10<lt><lt>");
+        assert_eq!(escape_literal_lt("5<<"), "5<lt><lt>");
+    }
+
+    #[test]
+    fn right_angle_is_untouched() {
+        assert_eq!(escape_literal_lt("3>>"), "3>>");
+        assert_eq!(escape_literal_lt("Vj>"), "Vj>");
+    }
+
+    #[test]
+    fn valid_key_tokens_pass_through() {
+        assert_eq!(escape_literal_lt("i x<Esc>"), "i x<Esc>");
+        assert_eq!(escape_literal_lt("<C-w>v"), "<C-w>v");
+        assert_eq!(escape_literal_lt("a<CR>b"), "a<CR>b");
+    }
+
+    #[test]
+    fn unterminated_or_invalid_angle_is_escaped() {
+        // No closing '>' at all.
+        assert_eq!(escape_literal_lt("a<b"), "a<lt>b");
+        // '<' followed by a non-letter is never a token opener.
+        assert_eq!(escape_literal_lt("<1>"), "<lt>1>");
+    }
+
+    #[test]
+    fn mixed_token_and_literal() {
+        assert_eq!(escape_literal_lt("<Esc>2<<"), "<Esc>2<lt><lt>");
+    }
 }
