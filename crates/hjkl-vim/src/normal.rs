@@ -117,6 +117,9 @@ pub fn step_normal<H: Host>(
         Pending::None => {}
     }
 
+    // Whether the user typed an explicit count before this key (`take_count`
+    // defaults to 1, erasing the distinction — capture it first).
+    let had_explicit_count = ed.count() > 0;
     let count = ed.take_count();
 
     // Common normal / visual keys.
@@ -195,6 +198,12 @@ pub fn step_normal<H: Host>(
     // Visual mode: `p` / `P` replace the selection with the register.
     if ed.is_visual() && !input.ctrl && matches!(input.key, Key::Char('p') | Key::Char('P')) {
         ed.visual_paste(matches!(input.key, Key::Char('P')));
+        return true;
+    }
+
+    // Visual mode: `J` joins the selected lines (with a space).
+    if ed.is_visual() && !input.ctrl && input.key == Key::Char('J') {
+        ed.visual_join(true);
         return true;
     }
 
@@ -312,6 +321,13 @@ pub fn step_normal<H: Host>(
     // `Tab` in normal mode is also `Ctrl-i` — vim aliases them.
     if !input.ctrl && input.key == Key::Tab && ed.fsm_mode() == FsmMode::Normal {
         ed.jump_forward(count);
+        return true;
+    }
+
+    // `[count]%` — go to the line at `count` percent of the file. With no
+    // count, `%` is the match-pair motion (handled by `parse_motion` below).
+    if !input.ctrl && input.key == Key::Char('%') && had_explicit_count {
+        ed.goto_percent(count);
         return true;
     }
 
@@ -833,7 +849,11 @@ fn handle_after_op<H: Host>(
         if let Motion::Find { ch, forward, till } = &motion {
             ed.set_last_find(Some((*ch, *forward, *till)));
         }
-        if !ed.is_replaying() && op_is_change(op) {
+        // Record for dot-repeat: change ops (d/c) plus the buffer-mutating
+        // indent ops (`>j` / `<j` etc.).
+        if !ed.is_replaying()
+            && (op_is_change(op) || matches!(op, Operator::Indent | Operator::Outdent))
+        {
             ed.set_last_change(Some(LastChange::OpMotion {
                 op,
                 motion,
@@ -891,6 +911,8 @@ fn handle_after_g<H: Host>(
                 '~' => ed.apply_visual_operator(Operator::ToggleCase, count.max(1)),
                 'q' => ed.apply_visual_operator(Operator::Reflow, count.max(1)),
                 'w' => ed.apply_visual_operator(Operator::ReflowKeepCursor, count.max(1)),
+                // `gJ` — join the selected lines without a space.
+                'J' => ed.visual_join(false),
                 // Extend-the-selection motions go through the shared body.
                 'g' | 'e' | 'E' | '_' | 'j' | 'k' | 'M' | 'm' | '*' | '#' => ed.after_g(c, count),
                 // Other g-commands have no visual meaning here — swallow.

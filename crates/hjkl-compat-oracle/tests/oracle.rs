@@ -241,6 +241,31 @@ async fn tier2_incr_case_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_indent_ops_corpus_passes() {
+    run_corpus("corpus/tier2_indent_ops.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_registers_special_corpus_passes() {
+    run_corpus("corpus/tier2_registers_special.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_visual_join_corpus_passes() {
+    run_corpus("corpus/tier2_visual_join.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_percent_motion_corpus_passes() {
+    run_corpus("corpus/tier2_percent_motion.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_insert_ctrl_r_corpus_passes() {
+    run_corpus("corpus/tier2_insert_ctrl_r.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_search_offsets_corpus_passes() {
     run_corpus("corpus/tier2_search_offsets.toml").await;
 }

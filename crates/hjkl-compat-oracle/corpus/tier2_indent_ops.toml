@@ -1,0 +1,72 @@
+# Tier 2 — operator + motion/text-object indent: `>{motion}` / `<{motion}`.
+#
+# Only `>>`/`<<` (line doubles) and visual indent were covered before; the
+# operator-pending forms `>j`, `>ip`, `>G`, `<ip`, `>i{` were not.
+#
+# shiftwidth=4 + expandtab so output is deterministic spaces; live nvim compare.
+
+# `>j` indents the current + next line.
+[[cases]]
+name = "indent_op_down"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ">j"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "    a\n    b\nc\n"
+expected_mode = "normal"
+
+# `>ip` indents the whole paragraph.
+[[cases]]
+name = "indent_op_inner_paragraph"
+initial_buffer = "a\nb\n\nc\n"
+initial_cursor = [0, 0]
+keys = ">ip"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "    a\n    b\n\nc\n"
+expected_mode = "normal"
+
+# `>G` indents from the cursor to the end of the buffer.
+[[cases]]
+name = "indent_op_to_eof"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ">G"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "    a\n    b\n    c\n"
+expected_mode = "normal"
+
+# `<ip` unindents the paragraph.
+[[cases]]
+name = "outdent_op_inner_paragraph"
+initial_buffer = "    a\n    b\n\nc\n"
+initial_cursor = [0, 0]
+keys = "<ip"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "a\nb\n\nc\n"
+expected_mode = "normal"
+
+# `>i{` indents the lines inside a brace block.
+[[cases]]
+name = "indent_op_inner_brace"
+initial_buffer = "{\na\nb\n}\n"
+initial_cursor = [1, 0]
+keys = ">i{"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "{\n    a\n    b\n}\n"
+expected_mode = "normal"
+
+# `>j` followed by `.` repeats the indent at the new cursor.
+[[cases]]
+name = "indent_op_dot_repeat"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = ">j."
+shiftwidth = 4
+expandtab = true
+expected_buffer = "        a\n        b\nc\nd\n"
+expected_mode = "normal"

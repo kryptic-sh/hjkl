@@ -1,0 +1,41 @@
+# Tier 2 — special registers: blackhole `"_` and yank register `"0`.
+#
+# Live nvim compare.
+
+# `"_dd` deletes into the blackhole, leaving the unnamed register intact, so a
+# following `p` still pastes the earlier yank.
+[[cases]]
+name = "blackhole_preserves_unnamed"
+initial_buffer = "alpha\nbeta\n"
+initial_cursor = [0, 0]
+keys = "yyj\"_ddp"
+expected_buffer = "alpha\nalpha\n"
+expected_mode = "normal"
+
+# `"0` holds the last YANK (not delete); after a yank then a delete, `"0p`
+# pastes the yanked text, not the deleted text.
+[[cases]]
+name = "yank_register_zero"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "yyjdd\"0p"
+expected_buffer = "one\nthree\none\n"
+expected_mode = "normal"
+
+# `"ayy` then `"ap` pastes from the named register `a`.
+[[cases]]
+name = "named_register_roundtrip"
+initial_buffer = "x\ny\n"
+initial_cursor = [0, 0]
+keys = "\"ayyj\"ap"
+expected_buffer = "x\ny\nx\n"
+expected_mode = "normal"
+
+# Append to a named register: `"Ayy` appends the current line to `"a`.
+[[cases]]
+name = "named_register_append"
+initial_buffer = "p\nq\n"
+initial_cursor = [0, 0]
+keys = "\"ayyj\"Ayy\"ap"
+expected_buffer = "p\nq\np\nq\n"
+expected_mode = "normal"

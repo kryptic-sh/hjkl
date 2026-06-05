@@ -5088,6 +5088,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::ampersand_repeat(self);
     }
 
+    /// Visual-mode `J` (`with_space = true`) / `gJ` (`false`) — join the
+    /// selected lines into one.
+    pub fn visual_join(&mut self, with_space: bool) {
+        vim::visual_join(self, with_space);
+    }
+
+    /// `[count]%` — jump to the line at `count` percent of the file.
+    pub fn goto_percent(&mut self, count: usize) {
+        vim::goto_percent(self, count);
+    }
+
     /// `<C-o>` — jump back `count` entries in the jumplist, saving the
     /// current position on the forward stack so `<C-i>` can return.
     pub fn jump_back(&mut self, count: usize) {

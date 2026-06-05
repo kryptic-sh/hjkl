@@ -7777,6 +7777,78 @@ fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
     ed.push_buffer_cursor_to_textarea();
 }
 
+/// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
+/// every line spanned by the selection into one. A single-line selection joins
+/// the current line with the one below (matching normal-mode `J`).
+pub(crate) fn visual_join<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    with_space: bool,
+) {
+    let cursor_row = buf_cursor_pos(&ed.buffer).row;
+    let (top, bot) = match ed.vim.mode {
+        Mode::VisualLine => (
+            cursor_row.min(ed.vim.visual_line_anchor),
+            cursor_row.max(ed.vim.visual_line_anchor),
+        ),
+        Mode::VisualBlock => {
+            let a = ed.vim.block_anchor.0;
+            (a.min(cursor_row), a.max(cursor_row))
+        }
+        Mode::Visual => {
+            let a = ed.vim.visual_anchor.0;
+            (a.min(cursor_row), a.max(cursor_row))
+        }
+        _ => return,
+    };
+    // N selected lines → N-1 joins; a single line still does one join (with the
+    // line below) like normal-mode `J`.
+    let joins = (bot - top).max(1);
+    ed.push_undo();
+    buf_set_cursor_rc(&mut ed.buffer, top, 0);
+    ed.push_buffer_cursor_to_textarea();
+    for _ in 0..joins {
+        if with_space {
+            join_line(ed);
+        } else {
+            join_line_raw(ed);
+        }
+    }
+    ed.vim.mode = Mode::Normal;
+    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+}
+
+/// `[count]%` — go to the line at `count` percent of the file (vim: line
+/// `(count * line_count + 99) / 100`), cursor on the first non-blank.
+pub(crate) fn goto_percent<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    count: usize,
+) {
+    let rows = buf_row_count(&ed.buffer);
+    if rows == 0 {
+        return;
+    }
+    // Exclude the phantom trailing empty line (a file ending in `\n` is N lines
+    // in vim, not N+1) so the percentage matches nvim.
+    let total = if rows >= 2
+        && buf_line(&ed.buffer, rows - 1)
+            .map(|s| s.is_empty())
+            .unwrap_or(false)
+    {
+        rows - 1
+    } else {
+        rows
+    };
+    // 1-based target line, clamped to the buffer (vim: ceil(count*lines/100)).
+    let line = (count * total).div_ceil(100).clamp(1, total);
+    let pre = ed.cursor();
+    ed.jump_cursor(line - 1, 0);
+    move_first_non_whitespace(ed);
+    ed.sticky_col = Some(ed.cursor().1);
+    if ed.cursor() != pre {
+        ed.push_jump(pre);
+    }
+}
+
 /// Indent width of a leading-whitespace prefix, counting a `\t` as advancing
 /// to the next `tabstop` boundary and a space as one column.
 fn indent_width(s: &str, tabstop: usize) -> usize {

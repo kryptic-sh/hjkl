@@ -1,0 +1,48 @@
+# Tier 2 — insert-mode `<C-r>{reg}` register paste, and `[count];` find-repeat.
+#
+# Live nvim compare.
+
+# `<C-r>"` in insert mode pastes the unnamed register.
+[[cases]]
+name = "insert_ctrl_r_unnamed"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "yiwA<C-r>\"<Esc>"
+expected_buffer = "foofoo\n"
+expected_mode = "normal"
+
+# `<C-r>0` pastes the yank register.
+[[cases]]
+name = "insert_ctrl_r_zero"
+initial_buffer = "bar\n"
+initial_cursor = [0, 0]
+keys = "yiwo<C-r>0<Esc>"
+expected_buffer = "bar\nbar\n"
+expected_mode = "normal"
+
+# `<C-r>a` pastes a named register.
+[[cases]]
+name = "insert_ctrl_r_named"
+initial_buffer = "hi\n"
+initial_cursor = [0, 0]
+keys = "\"ayiwA <C-r>a<Esc>"
+expected_buffer = "hi hi\n"
+expected_mode = "normal"
+
+# `[count];` repeats the last `f` find that many times.
+[[cases]]
+name = "count_semicolon_find_repeat"
+initial_buffer = "a.b.c.d.e\n"
+initial_cursor = [0, 0]
+keys = "f.2;"
+expected_buffer = "a.b.c.d.e\n"
+expected_mode = "normal"
+
+# `[count]n` repeats the search.
+[[cases]]
+name = "count_n_search_repeat"
+initial_buffer = "x foo y foo z foo w\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>2nx"
+expected_buffer = "x foo y foo z oo w\n"
+expected_mode = "normal"

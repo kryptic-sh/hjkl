@@ -1,0 +1,39 @@
+# Tier 2 — visual-mode `J` / `gJ` (join the selected lines).
+#
+# Live nvim compare.
+
+# `VjJ` joins the two selected lines with a single space.
+[[cases]]
+name = "visual_J_join_two"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "VjJ"
+expected_buffer = "a b\nc\n"
+expected_mode = "normal"
+
+# `VGJ` joins the whole buffer into one line.
+[[cases]]
+name = "visual_J_join_all"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "VGJ"
+expected_buffer = "a b c\n"
+expected_mode = "normal"
+
+# `VjgJ` joins without inserting a space.
+[[cases]]
+name = "visual_gJ_join_no_space"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "VjgJ"
+expected_buffer = "ab\nc\n"
+expected_mode = "normal"
+
+# Charwise visual `J` also joins the spanned lines.
+[[cases]]
+name = "visual_char_J"
+initial_buffer = "foo\nbar\nbaz\n"
+initial_cursor = [0, 0]
+keys = "vjJ"
+expected_buffer = "foo bar\nbaz\n"
+expected_mode = "normal"

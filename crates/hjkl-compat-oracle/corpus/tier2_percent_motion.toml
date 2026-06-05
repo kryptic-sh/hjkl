@@ -1,0 +1,32 @@
+# Tier 2 — `[count]%` go-to-percentage motion (distinct from bare `%` match).
+#
+# vim: `N%` jumps to the line at N percent of the file:
+#   line = (N * line_count + 99) / 100, cursor on first non-blank.
+# Pure motion (buffer unchanged); cursor is compared against live nvim.
+
+# `50%` of a 10-line file → line 5 (row 4).
+[[cases]]
+name = "percent_50_of_10"
+initial_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+initial_cursor = [0, 0]
+keys = "50%"
+expected_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+expected_mode = "normal"
+
+# `100%` → last line.
+[[cases]]
+name = "percent_100_last_line"
+initial_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+initial_cursor = [0, 0]
+keys = "100%"
+expected_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+expected_mode = "normal"
+
+# `10%` → line 1 (row 0).
+[[cases]]
+name = "percent_10_first_line"
+initial_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+initial_cursor = [5, 0]
+keys = "10%"
+expected_buffer = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
+expected_mode = "normal"
