@@ -10,11 +10,23 @@ use crate::completion::{Completion, item_from_lsp};
 
 use super::{App, DiagSeverity, LspDiag, LspPendingRequest, LspServerInfo};
 
-/// How long a pending LSP request may sit unanswered before the timeout sweep
-/// drops it (clearing the status spinner). Generous enough for a cold
-/// rust-analyzer goto, short enough that a dead/misconfigured server doesn't
-/// spin forever.
+/// Default timeout before the sweep drops an unanswered pending request
+/// (clearing the status spinner). Generous enough for a cold rust-analyzer
+/// goto, short enough that a dead/misconfigured server doesn't spin forever.
 const LSP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Shorter timeout for auto-fired completion: it should feel instant, and the
+/// popup already shows buffer words, so an unresponsive server (e.g. taplo on
+/// TOML) shouldn't keep the spinner lit for long.
+const LSP_AUTO_COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Per-request timeout used by the stale-pending sweep.
+fn pending_request_timeout(req: &LspPendingRequest) -> std::time::Duration {
+    match req {
+        LspPendingRequest::Completion { auto: true, .. } => LSP_AUTO_COMPLETION_TIMEOUT,
+        _ => LSP_REQUEST_TIMEOUT,
+    }
+}
 
 /// Resolve a (possibly relative) buffer path against `current_dir` so the
 /// resulting `PathBuf` is absolute. `url::Url::from_file_path` (used by
@@ -218,17 +230,14 @@ impl App {
         // Drop pending requests whose server exited or never answered, so the
         // "LSP:…" status spinner can't hang forever (e.g. a misconfigured TOML
         // server that exits without responding).
-        self.sweep_stale_lsp_pending_at(std::time::Instant::now(), LSP_REQUEST_TIMEOUT);
+        self.sweep_stale_lsp_pending_at(std::time::Instant::now());
     }
 
     /// Stamp newly-seen pending requests with `now`, then drop any that have
-    /// outlived `timeout` (or whose id is no longer pending). Split from the
-    /// wall-clock so it can be unit-tested with a controlled clock.
-    pub(crate) fn sweep_stale_lsp_pending_at(
-        &mut self,
-        now: std::time::Instant,
-        timeout: std::time::Duration,
-    ) {
+    /// outlived their per-request timeout (or whose id is no longer pending).
+    /// Split from the wall-clock so it can be unit-tested with a controlled
+    /// clock.
+    pub(crate) fn sweep_stale_lsp_pending_at(&mut self, now: std::time::Instant) {
         // Record first-sight time for any request not yet tracked.
         let ids: Vec<i64> = self.lsp_pending.keys().copied().collect();
         for id in ids {
@@ -237,8 +246,11 @@ impl App {
         // Collect ids to drop: resolved (no longer pending) or timed out.
         let mut drop_ids: Vec<i64> = Vec::new();
         for (id, seen) in self.lsp_pending_seen_at.iter() {
-            if !self.lsp_pending.contains_key(id) || now.saturating_duration_since(*seen) >= timeout
-            {
+            let timed_out = match self.lsp_pending.get(id) {
+                Some(req) => now.saturating_duration_since(*seen) >= pending_request_timeout(req),
+                None => true, // already resolved — clean up its timestamp
+            };
+            if timed_out {
                 drop_ids.push(*id);
             }
         }
@@ -1177,17 +1189,19 @@ impl App {
         if !(is_trigger || is_ident) {
             return;
         }
-        if has_provider {
-            // Don't pile up requests while one is in flight; the local prefix
-            // filter narrows the open popup until the response lands. Buffer
-            // words are merged in when the response arrives.
-            if self.lsp_has_pending_completion() {
-                return;
-            }
-            self.lsp_request_completion_inner(true);
-        } else if is_ident {
-            // No language server — surface unique tokens from the open buffers.
+        // Surface buffer-dictionary words immediately when typing an identifier,
+        // so completion works regardless of whether a language server is
+        // attached or responsive (e.g. a TOML server that never answers). When
+        // an LSP response lands it replaces this popup with merged server +
+        // buffer-word results.
+        if is_ident {
             self.open_buffer_word_completion();
+        }
+        // Augment with LSP results when a server offers completion. The pending
+        // guard avoids a request storm; the local prefix filter narrows the
+        // open popup until the response lands.
+        if has_provider && !self.lsp_has_pending_completion() {
+            self.lsp_request_completion_inner(true);
         }
     }
 
