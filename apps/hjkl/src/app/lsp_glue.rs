@@ -32,6 +32,25 @@ fn absolutize(p: &std::path::Path) -> PathBuf {
     }
 }
 
+/// JSON-pointer to the server-capability that gates an LSP request `method`,
+/// or `None` for methods that need no capability check (e.g. notifications or
+/// `workspace/executeCommand`). Used to skip requests a server can't service.
+fn capability_pointer_for_method(method: &str) -> Option<&'static str> {
+    Some(match method {
+        "textDocument/definition" => "/definitionProvider",
+        "textDocument/declaration" => "/declarationProvider",
+        "textDocument/typeDefinition" => "/typeDefinitionProvider",
+        "textDocument/implementation" => "/implementationProvider",
+        "textDocument/references" => "/referencesProvider",
+        "textDocument/hover" => "/hoverProvider",
+        "textDocument/completion" => "/completionProvider",
+        "textDocument/codeAction" => "/codeActionProvider",
+        "textDocument/rename" => "/renameProvider",
+        "textDocument/formatting" => "/documentFormattingProvider",
+        _ => return None,
+    })
+}
+
 /// Snap `byte` down to the nearest char boundary in `rope`.
 ///
 /// LSP byte offsets that are clamped to `len_bytes` can land in the middle of
@@ -473,6 +492,38 @@ impl App {
         change_kind == 2
     }
 
+    /// True when an *initialized* LSP server for the active buffer's language
+    /// advertises the capability at `pointer` (a JSON pointer such as
+    /// `"/completionProvider"`). A capability explicitly set to `false` counts
+    /// as unsupported.
+    ///
+    /// Gating requests on this prevents queuing a pending request that the
+    /// server will never answer — either because it hasn't finished its
+    /// `initialize` handshake or because it doesn't implement the feature.
+    /// Without it, an auto-fired request (e.g. completion on every keystroke to
+    /// a TOML server with no completion support) leaves the "LSP:…" status
+    /// spinner stuck.
+    fn lsp_active_supports(&self, pointer: &str) -> bool {
+        let Some(lang) = self
+            .active()
+            .filename
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .and_then(language_id_for_ext)
+        else {
+            return false;
+        };
+        self.lsp_state.iter().any(|(k, info)| {
+            k.language == lang
+                && info.initialized
+                && info
+                    .capabilities
+                    .pointer(pointer)
+                    .is_some_and(|v| *v != serde_json::Value::Bool(false))
+        })
+    }
+
     /// File-type label for the active buffer — the language id string when
     /// the extension is recognized, otherwise the raw extension, otherwise
     /// `"(none)"`.
@@ -654,6 +705,13 @@ impl App {
                 .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
+        if let Some(ptr) = capability_pointer_for_method(method)
+            && !self.lsp_active_supports(ptr)
+        {
+            self.bus
+                .error(format!("LSP: server does not support {method}"));
+            return;
+        }
         let (mut params, buffer_id, origin) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
@@ -768,6 +826,9 @@ impl App {
         }
         if self.lsp.is_none() {
             return; // LSP not running — silently skip mouse hover
+        }
+        if !self.lsp_active_supports("/hoverProvider") {
+            return; // server can't hover — silently skip (mouse-idle fire)
         }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
@@ -1265,6 +1326,15 @@ impl App {
             }
             return;
         }
+        // Skip entirely when no initialized server advertises completion — an
+        // auto-fire on every keystroke to a server that never answers would
+        // otherwise pile up pending requests and hang the status spinner.
+        if !self.lsp_active_supports("/completionProvider") {
+            if !auto {
+                self.bus.error("LSP: server has no completion support");
+            }
+            return;
+        }
         let (params, buffer_id, (row, col)) = match self.lsp_position_params() {
             Some(v) => v,
             None => {
@@ -1326,6 +1396,10 @@ impl App {
         if self.lsp.is_none() {
             self.bus
                 .error("LSP: not enabled (set [lsp] enabled = true in config)");
+            return;
+        }
+        if !self.lsp_active_supports("/codeActionProvider") {
+            self.bus.error("LSP: server has no code-action support");
             return;
         }
         let slot = self.active();
@@ -1652,6 +1726,10 @@ impl App {
                 .error("LSP: not enabled (set [lsp] enabled = true in config)");
             return;
         }
+        if !self.lsp_active_supports("/renameProvider") {
+            self.bus.error("LSP: server has no rename support");
+            return;
+        }
         let slot = self.active();
         let path = match slot.filename.as_ref() {
             Some(p) => absolutize(p),
@@ -1740,6 +1818,10 @@ impl App {
         if self.lsp.is_none() {
             self.bus
                 .error("LSP: not enabled (set [lsp] enabled = true in config)");
+            return;
+        }
+        if !self.lsp_active_supports("/documentFormattingProvider") {
+            self.bus.error("LSP: server has no formatting support");
             return;
         }
         let slot = self.active();

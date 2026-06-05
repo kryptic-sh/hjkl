@@ -791,7 +791,7 @@ fn lsp_info_lists_running_servers() {
     // Manually insert a fake server into lsp_state.
     let key = hjkl_lsp::ServerKey {
         language: "rust".into(),
-        root: std::path::PathBuf::from("/tmp/proj"),
+        root: tmp_path("proj"),
     };
     app.lsp_state.insert(
         key,
@@ -998,6 +998,18 @@ fn lsp_request_works_with_relative_filename() {
     let mgr = hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default());
     app.lsp = Some(mgr);
     app.active_mut().filename = Some(std::path::PathBuf::from("src/main.rs"));
+    // Requests are gated on an initialized server advertising the capability,
+    // so register a rust server that supports goto-definition.
+    app.lsp_state.insert(
+        hjkl_lsp::ServerKey {
+            language: "rust".into(),
+            root: tmp_path("proj"),
+        },
+        LspServerInfo {
+            initialized: true,
+            capabilities: serde_json::json!({ "definitionProvider": true }),
+        },
+    );
     app.lsp_goto_definition();
     // Request was registered as pending — absolutize made URI conversion
     // succeed even though the buffer's filename is relative.
@@ -1020,7 +1032,7 @@ fn completion_response_opens_popup() {
     // Enter insert mode so the guard passes.
     hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
     // Give the buffer a filename so buffer_id matches.
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
     let response_val = synthesize_completion_response(&["foo", "bar", "baz"]);
@@ -1036,7 +1048,7 @@ fn completion_response_opens_popup() {
 fn completion_response_empty_no_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
     // Empty list response.
@@ -1058,7 +1070,7 @@ fn completion_request_pending_routes_to_handler() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Simulate a pending completion request.
     hjkl_vim_tui::handle_key(&mut app.active_mut().editor, key(KeyCode::Char('i')));
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/test.rs"));
+    app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
     // Insert a fake pending request.
@@ -1141,14 +1153,14 @@ fn accept_completion_inserts_selected_item() {
 #[test]
 fn active_comment_lead_matches_language() {
     let mut app = App::new(None, false, None, None).unwrap();
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.rs"));
+    app.active_mut().filename = Some(tmp_path("x.rs"));
     assert_eq!(app.active_comment_lead(), "//", "rust");
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.py"));
+    app.active_mut().filename = Some(tmp_path("x.py"));
     assert_eq!(app.active_comment_lead(), "#", "python");
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.js"));
+    app.active_mut().filename = Some(tmp_path("x.js"));
     assert_eq!(app.active_comment_lead(), "//", "javascript");
     // Unknown / no extension falls back to `//`.
-    app.active_mut().filename = Some(std::path::PathBuf::from("/tmp/x.unknownext"));
+    app.active_mut().filename = Some(tmp_path("x.unknownext"));
     assert_eq!(app.active_comment_lead(), "//", "unknown fallback");
 }
 
@@ -1878,5 +1890,76 @@ fn resolved_lsp_pending_timestamp_is_cleaned() {
     assert!(
         !app.lsp_pending_seen_at.contains_key(&id),
         "timestamp for a resolved request must be cleaned up"
+    );
+}
+
+// ── capability gating ──────────────────────────────────────────────────────
+
+fn server_with_caps(app: &mut App, language: &str, caps: serde_json::Value) {
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+    app.lsp_state.insert(
+        hjkl_lsp::ServerKey {
+            language: language.into(),
+            root: tmp_path("proj"),
+        },
+        LspServerInfo {
+            initialized: true,
+            capabilities: caps,
+        },
+    );
+}
+
+/// Completion must NOT fire when the server advertises no completion support —
+/// otherwise the auto-fire piles up pending requests and hangs the spinner.
+#[test]
+fn completion_gated_without_capability() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(tmp_path("gate_none.rs"));
+    server_with_caps(&mut app, "rust", serde_json::json!({}));
+    app.lsp_request_completion();
+    assert!(
+        app.lsp_pending.is_empty(),
+        "completion must be skipped when the server has no completionProvider"
+    );
+}
+
+/// Completion fires when the server advertises completion support.
+#[test]
+fn completion_fires_with_capability() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(tmp_path("gate_yes.rs"));
+    server_with_caps(
+        &mut app,
+        "rust",
+        serde_json::json!({ "completionProvider": {} }),
+    );
+    app.lsp_request_completion();
+    assert_eq!(
+        app.lsp_pending.len(),
+        1,
+        "completion must fire when the server advertises completionProvider"
+    );
+}
+
+/// Requests are gated until the server finishes initializing.
+#[test]
+fn completion_gated_before_initialized() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.active_mut().filename = Some(tmp_path("gate_init.rs"));
+    app.lsp = Some(hjkl_lsp::LspManager::spawn(hjkl_lsp::LspConfig::default()));
+    app.lsp_state.insert(
+        hjkl_lsp::ServerKey {
+            language: "rust".into(),
+            root: tmp_path("proj"),
+        },
+        LspServerInfo {
+            initialized: false,
+            capabilities: serde_json::json!({ "completionProvider": {} }),
+        },
+    );
+    app.lsp_request_completion();
+    assert!(
+        app.lsp_pending.is_empty(),
+        "requests must wait until the server is initialized"
     );
 }
