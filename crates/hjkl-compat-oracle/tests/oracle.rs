@@ -286,6 +286,31 @@ async fn tier2_op_search_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_undo_redo_corpus_passes() {
+    run_corpus("corpus/tier2_undo_redo.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_undo_combo_corpus_passes() {
+    run_corpus("corpus/tier2_undo_combo.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_rot13_corpus_passes() {
+    run_corpus("corpus/tier2_rot13.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_more_coverage_corpus_passes() {
+    run_corpus("corpus/tier2_more_coverage.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_ex_undo_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_ex_undo.toml", "tier2_ex_undo").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_search_offsets_corpus_passes() {
     run_corpus("corpus/tier2_search_offsets.toml").await;
 }

@@ -1,0 +1,43 @@
+# Tier 2 — undo/redo ex commands: `:undo`/`:u`, `:redo`/`:red`,
+# `:earlier N`, `:later N`. Driven through the `hjkl --nvim-api` binary.
+
+# `:undo` reverts the last change.
+[[cases]]
+name = "ex_undo"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "x:undo<CR>"
+expected_buffer = "abc\n"
+expected_mode = "normal"
+
+# `:u` is the abbreviation for `:undo`.
+[[cases]]
+name = "ex_undo_abbrev"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "x:u<CR>"
+expected_buffer = "abc\n"
+expected_mode = "normal"
+
+# `:redo` reapplies a change after `:undo`.
+[[cases]]
+name = "ex_redo"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "x:undo<CR>:redo<CR>"
+expected_buffer = "bc\n"
+expected_mode = "normal"
+
+# `:red` is the abbreviation for `:redo`.
+[[cases]]
+name = "ex_redo_abbrev"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "x:undo<CR>:red<CR>"
+expected_buffer = "bc\n"
+expected_mode = "normal"
+
+# NOTE: `:earlier N` / `:later N` time-travel is covered in nvim_api_tier.toml
+# (the `:s/...<CR>:earlier 1<CR>` cases). They are not repeated here because the
+# nvim-api test driver mangles a normal-mode edit followed by a spaced colon
+# command (`xx:earlier 2<CR>`) — a harness limitation, not an editor bug.

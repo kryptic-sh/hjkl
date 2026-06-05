@@ -1,0 +1,42 @@
+# Tier 2 — misc coverage: counted `r`, `d%`, ragged visual-block append,
+# and insert-mode `<C-r>/` / `<C-r>.` special registers. Live nvim compare.
+
+# `[count]r` replaces `count` chars with the same char.
+[[cases]]
+name = "count_replace_char"
+initial_buffer = "abcde\n"
+initial_cursor = [0, 0]
+keys = "3rx"
+expected_buffer = "xxxde\n"
+expected_mode = "normal"
+
+# `d%` deletes through the matching bracket (inclusive).
+[[cases]]
+name = "delete_match_bracket"
+initial_buffer = "(abc)x\n"
+initial_cursor = [0, 0]
+keys = "d%"
+expected_buffer = "x\n"
+expected_mode = "normal"
+
+# NOTE: visual-block `$A` (ragged right-edge append) is a known gap — it needs
+# a block "to-end-of-line" flag threaded through the block-insert machinery.
+# Tracked for a future round; not asserted here.
+
+# Insert-mode `<C-r>/` pastes the last search pattern.
+[[cases]]
+name = "insert_ctrl_r_search"
+initial_buffer = "cat\n"
+initial_cursor = [0, 0]
+keys = "/cat<CR>o<C-r>/<Esc>"
+expected_buffer = "cat\ncat\n"
+expected_mode = "normal"
+
+# Insert-mode `<C-r>.` pastes the last inserted text.
+[[cases]]
+name = "insert_ctrl_r_dot"
+initial_buffer = "x\n"
+initial_cursor = [0, 0]
+keys = "ihi<Esc>o<C-r>.<Esc>"
+expected_buffer = "hix\nhi\n"
+expected_mode = "normal"

@@ -236,6 +236,20 @@ pub enum Operator {
     /// Dispatched through `Editor::toggle_comment_range` rather than the
     /// normal `run_operator_over_range` pipeline (same pattern as `Filter`).
     Comment,
+    /// `g?{motion}` / `g??` / visual `g?` — ROT13 the range. Same operator
+    /// shape as the case ops; only the per-char transform differs.
+    Rot13,
+}
+
+/// ROT13 a string: rotate ASCII letters by 13, leave everything else.
+pub(crate) fn rot13_str(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' => (((c as u8 - b'a' + 13) % 26) + b'a') as char,
+            'A'..='Z' => (((c as u8 - b'A' + 13) % 26) + b'A') as char,
+            _ => c,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +551,9 @@ pub struct VimState {
     /// inverts it. Defaults to forward so a never-searched buffer's
     /// `n` still walks downward.
     pub last_search_forward: bool,
+    /// Text of the most recent insert session — vim's `".` register, pasted
+    /// via `<C-r>.` in insert mode (and `".p` in normal mode).
+    pub last_insert_text: Option<String>,
     /// Back half of the jumplist — `Ctrl-o` pops from here. Populated
     /// with the pre-motion cursor when a "big jump" motion fires
     /// (`gg`/`G`, `%`, `*`/`#`, `n`/`N`, `H`/`M`/`L`, committed `/` or
@@ -787,6 +804,8 @@ impl VimState {
             Operator::Filter => '!',
             // `gc` prefix — doubled as `gcc`.
             Operator::Comment => 'c',
+            // `g?` prefix — doubled as `g??`.
+            Operator::Rot13 => '?',
         })
     }
 }
@@ -889,9 +908,21 @@ fn insert_register_text<H: crate::types::Host>(
     selector: char,
 ) {
     use hjkl_buffer::Edit;
-    let text = match ed.registers().read(selector) {
-        Some(slot) if !slot.text.is_empty() => slot.text.clone(),
-        _ => return,
+    // Special read-only registers: `/` = last search pattern, `.` = last
+    // inserted text. Fall back to the register store for everything else.
+    let text = match selector {
+        '/' => match &ed.vim.last_search {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => return,
+        },
+        '.' => match &ed.vim.last_insert_text {
+            Some(s) if !s.is_empty() => s.clone(),
+            _ => return,
+        },
+        _ => match ed.registers().read(selector) {
+            Some(slot) if !slot.text.is_empty() => slot.text.clone(),
+            _ => return,
+        },
     };
     ed.sync_buffer_content_from_textarea();
     let cursor = buf_cursor_pos(&ed.buffer);
@@ -1162,6 +1193,10 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     } else {
         extract_inserted(&before, &after)
     };
+    // vim `".` register — text of the most recent insert.
+    if !ed.vim.replaying && !inserted.is_empty() {
+        ed.vim.last_insert_text = Some(inserted.clone());
+    }
     let open_line = matches!(session.reason, InsertReason::Open { .. });
     if session.count > 1 && !ed.vim.replaying {
         use hjkl_buffer::{Edit, Position};
@@ -4445,16 +4480,17 @@ pub(crate) fn apply_op_g_inner<H: crate::types::Host>(
     ch: char,
     total_count: usize,
 ) {
-    // Case-op linewise form: `gUgU`, `gugu`, `g~g~` — same effect as
-    // `gUU` / `guu` / `g~~`.
+    // Case-op linewise form: `gUgU`, `gugu`, `g~g~`, `g?g?` — same effect as
+    // `gUU` / `guu` / `g~~` / `g??`.
     if matches!(
         op,
-        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13
     ) {
         let op_char = match op {
             Operator::Uppercase => 'U',
             Operator::Lowercase => 'u',
             Operator::ToggleCase => '~',
+            Operator::Rot13 => '?',
             _ => unreachable!(),
         };
         if ch == op_char {
@@ -4551,6 +4587,13 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
         '~' => {
             ed.vim.pending = Pending::Op {
                 op: Operator::ToggleCase,
+                count1: count,
+            };
+        }
+        '?' => {
+            // `g?{motion}` — ROT13 operator (`g??` / `g?g?` doubled).
+            ed.vim.pending = Pending::Op {
+                op: Operator::Rot13,
                 count1: count,
             };
         }
@@ -5239,7 +5282,7 @@ fn run_operator_over_range<H: crate::types::Host>(
                 begin_insert_noundo(ed, 1, InsertReason::AfterChange);
             }
         }
-        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {
             apply_case_op_to_selection(ed, op, top, bot, kind);
         }
         Operator::Indent | Operator::Outdent => {
@@ -5407,7 +5450,7 @@ pub(crate) fn case_range_bridge<H: crate::types::Host>(
     op: Operator,
 ) {
     match op {
-        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {}
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {}
         _ => return,
     }
     let (top, bot) = order(start, end);
@@ -5939,6 +5982,7 @@ fn apply_case_op_to_selection<H: crate::types::Host>(
         Operator::Uppercase => selection.to_uppercase(),
         Operator::Lowercase => selection.to_lowercase(),
         Operator::ToggleCase => toggle_case_str(&selection),
+        Operator::Rot13 => rot13_str(&selection),
         _ => unreachable!(),
     };
     if !transformed.is_empty() {
@@ -6310,8 +6354,8 @@ fn execute_line_op<H: crate::types::Host>(
             // and enters insert mode.
             change_linewise_rows(ed, row, end_row);
         }
-        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
-            // `gUU` / `guu` / `g~~` — linewise case transform over
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {
+            // `gUU` / `guu` / `g~~` / `g??` — linewise case/rot13 transform over
             // [row, end_row]. Preserve cursor on `row` (first non-blank
             // lines up with vim's behaviour).
             apply_case_op_to_selection(ed, op, (row, col), (end_row, 0), RangeKind::Linewise);
@@ -6408,7 +6452,10 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     // `cc` — preserve first line's indent, enter insert.
                     change_linewise_rows(ed, top, bot);
                 }
-                Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
+                Operator::Uppercase
+                | Operator::Lowercase
+                | Operator::ToggleCase
+                | Operator::Rot13 => {
                     let bot = buf_cursor_pos(&ed.buffer)
                         .row
                         .max(ed.vim.visual_line_anchor);
@@ -6487,7 +6534,10 @@ pub(crate) fn apply_visual_operator<H: crate::types::Host>(
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
                     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
                 }
-                Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
+                Operator::Uppercase
+                | Operator::Lowercase
+                | Operator::ToggleCase
+                | Operator::Rot13 => {
                     // Anchor stays where the visual selection started.
                     let anchor = ed.vim.visual_anchor;
                     let cursor = ed.cursor();
@@ -6646,7 +6696,7 @@ fn apply_block_operator<H: crate::types::Host>(
                 },
             );
         }
-        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase => {
+        Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {
             ed.push_undo();
             transform_block_case(ed, op, top, bot, left, right);
             ed.vim.mode = Mode::Normal;
@@ -6722,6 +6772,7 @@ fn transform_block_case<H: crate::types::Host>(
             Operator::Uppercase => mid.to_uppercase(),
             Operator::Lowercase => mid.to_lowercase(),
             Operator::ToggleCase => toggle_case_str(&mid),
+            Operator::Rot13 => rot13_str(&mid),
             _ => mid,
         };
         lines[r] = format!("{head}{transformed}{tail}");
@@ -8440,6 +8491,7 @@ pub(crate) fn do_undo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer
 pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
     if let Some(entry) = ed.redo_stack.pop() {
         let (cur_rope, cur_cursor) = ed.snapshot();
+        let before = cur_rope.clone();
         ed.undo_stack.push(crate::editor::UndoEntry {
             rope: cur_rope,
             cursor: cur_cursor,
@@ -8447,8 +8499,44 @@ pub(crate) fn do_redo<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer
         });
         ed.cap_undo();
         ed.restore_rope(entry.rope, entry.cursor);
+        // vim parks the cursor at the START of the reapplied change, not the
+        // end-of-insert position stored in the redo snapshot. Recompute it from
+        // the first character that differs between the pre- and post-redo text.
+        let after = crate::types::Query::rope(&ed.buffer);
+        if let Some((row, col)) = first_diff_pos(&before, &after) {
+            buf_set_cursor_rc(&mut ed.buffer, row, col);
+            ed.push_buffer_cursor_to_textarea();
+        }
     }
     ed.vim.mode = Mode::Normal;
+    clamp_cursor_to_normal_mode(ed);
+}
+
+/// First `(row, col)` where two ropes differ, or `None` if identical. Used to
+/// place the cursor at the start of a redone change (vim parity).
+fn first_diff_pos(a: &ropey::Rope, b: &ropey::Rope) -> Option<(usize, usize)> {
+    let rows = a.len_lines().max(b.len_lines());
+    for r in 0..rows {
+        let la = if r < a.len_lines() {
+            hjkl_buffer::rope_line_str(a, r)
+        } else {
+            String::new()
+        };
+        let lb = if r < b.len_lines() {
+            hjkl_buffer::rope_line_str(b, r)
+        } else {
+            String::new()
+        };
+        if la != lb {
+            let col = la
+                .chars()
+                .zip(lb.chars())
+                .take_while(|(x, y)| x == y)
+                .count();
+            return Some((r, col));
+        }
+    }
+    None
 }
 
 // ─── Dot repeat ────────────────────────────────────────────────────────────

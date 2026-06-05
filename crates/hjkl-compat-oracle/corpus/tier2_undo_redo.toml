@@ -1,0 +1,101 @@
+# Tier 2 — undo (`u`) / redo (`<C-r>`) binds: counts, redo invalidation, and
+# undo across the different edit kinds. Live nvim compare.
+
+# `u` undoes a character delete; `<C-r>` redoes it.
+[[cases]]
+name = "undo_redo_char_delete"
+initial_buffer = "hello\n"
+initial_cursor = [0, 0]
+keys = "xu<C-r>"
+expected_buffer = "ello\n"
+expected_mode = "normal"
+
+# `[count]u` undoes `count` changes.
+[[cases]]
+name = "count_undo"
+initial_buffer = "abcde\n"
+initial_cursor = [0, 0]
+keys = "xxx3u"
+expected_buffer = "abcde\n"
+expected_mode = "normal"
+
+# `[count]<C-r>` redoes `count` changes.
+[[cases]]
+name = "count_redo"
+initial_buffer = "abcde\n"
+initial_cursor = [0, 0]
+keys = "xxxuuu3<C-r>"
+expected_buffer = "de\n"
+expected_mode = "normal"
+
+# A new edit after `u` clears the redo stack — `<C-r>` is then a no-op.
+[[cases]]
+name = "redo_invalidated_by_edit"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "xuiZ<Esc><C-r>"
+expected_buffer = "Zabc\n"
+expected_mode = "normal"
+
+# Undo restores a linewise `dd`.
+[[cases]]
+name = "undo_linewise_delete"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "ddu"
+expected_buffer = "a\nb\nc\n"
+expected_mode = "normal"
+
+# Undo restores a paste.
+[[cases]]
+name = "undo_paste"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "yypu"
+expected_buffer = "a\nb\n"
+expected_mode = "normal"
+
+# Undo restores a change-insert (`ciw`).
+[[cases]]
+name = "undo_change_insert"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "ciwX<Esc>u"
+expected_buffer = "foo bar\n"
+expected_mode = "normal"
+
+# Walk back two changes then redo both.
+[[cases]]
+name = "undo_two_redo_two"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "xxuu<C-r><C-r>"
+expected_buffer = "c\n"
+expected_mode = "normal"
+
+# Undo of an insert restores the buffer and parks the cursor at the edit.
+[[cases]]
+name = "undo_insert_restores"
+initial_buffer = "world\n"
+initial_cursor = [0, 0]
+keys = "ihello <Esc>u"
+expected_buffer = "world\n"
+expected_mode = "normal"
+
+# Undo a `J` join.
+[[cases]]
+name = "undo_join"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "Ju"
+expected_buffer = "a\nb\nc\n"
+expected_mode = "normal"
+
+# Redo after undoing a change-insert reapplies it.
+[[cases]]
+name = "redo_change_insert"
+initial_buffer = "foo\n"
+initial_cursor = [0, 0]
+keys = "ciwbar<Esc>u<C-r>"
+expected_buffer = "bar\n"
+expected_mode = "normal"

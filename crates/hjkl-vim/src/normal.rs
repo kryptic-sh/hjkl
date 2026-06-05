@@ -285,7 +285,7 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             'r' => {
-                ed.redo();
+                ed.later_by_steps(count.max(1));
                 return true;
             }
             'a' if ed.fsm_mode() == FsmMode::Normal => {
@@ -587,7 +587,7 @@ fn handle_normal_only<H: Host>(
             true
         }
         Key::Char('u') => {
-            ed.undo();
+            ed.earlier_by_steps(count.max(1));
             true
         }
         Key::Char('r') => {
@@ -763,6 +763,8 @@ fn handle_after_op<H: Host>(
         Operator::Filter => Some('!'),
         // `gcc` toggles comment on the current line — doubled 'c' after `gc`.
         Operator::Comment => Some('c'),
+        // `g??` rot13s the current line — doubled '?' after `g?`.
+        Operator::Rot13 => Some('?'),
     };
     if let Key::Char(c) = input.key
         && !input.ctrl
@@ -918,6 +920,7 @@ fn handle_after_g<H: Host>(
                 'u' => ed.apply_visual_operator(Operator::Lowercase, count.max(1)),
                 'U' => ed.apply_visual_operator(Operator::Uppercase, count.max(1)),
                 '~' => ed.apply_visual_operator(Operator::ToggleCase, count.max(1)),
+                '?' => ed.apply_visual_operator(Operator::Rot13, count.max(1)),
                 'q' => ed.apply_visual_operator(Operator::Reflow, count.max(1)),
                 'w' => ed.apply_visual_operator(Operator::ReflowKeepCursor, count.max(1)),
                 // `gJ` — join the selected lines without a space.

@@ -1,0 +1,53 @@
+# Tier 2 — undo/redo half-way state coverage. Ten content-editing binds, each
+# preceded by `gg0` so the cursor is reset to a known position (isolating undo
+# behaviour from motion nuances). The binds: x, ~, r, A-append, I-insert,
+# o-open, dd, p, J, >> — each exactly one undo entry. Then:
+#   - undo 5  (half back)
+#   - undo 10 (all the way back → original)
+#   - undo 10 + redo 5  (half forward; equals the undo-5 state)
+#   - undo 10 + redo 10 (all forward; the full-edit state)
+# shiftwidth=2 + expandtab so `>>` is deterministic. Live nvim compare.
+
+# After 10 edits, undo 5 → state after the first 5 edits.
+[[cases]]
+name = "edits10_undo5"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "gg0xgg0~gg0rAggA1<Esc>gg0I2<Esc>ggo9<Esc>gg0ddggpggJgg0>>5u"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "2Ae1\ntwo\nthree\n"
+expected_mode = "normal"
+
+# After 10 edits, undo 10 → original buffer.
+[[cases]]
+name = "edits10_undo10"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "gg0xgg0~gg0rAggA1<Esc>gg0I2<Esc>ggo9<Esc>gg0ddggpggJgg0>>10u"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "one\ntwo\nthree\n"
+expected_mode = "normal"
+
+# After 10 edits, undo 10 then redo 5 → same as the undo-5 state.
+[[cases]]
+name = "edits10_undo10_redo5"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "gg0xgg0~gg0rAggA1<Esc>gg0I2<Esc>ggo9<Esc>gg0ddggpggJgg0>>10u5<C-r>"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "2Ae1\ntwo\nthree\n"
+expected_mode = "normal"
+
+# After 10 edits, undo 10 then redo 10 → the full post-edit state.
+[[cases]]
+name = "edits10_undo10_redo10"
+initial_buffer = "one\ntwo\nthree\n"
+initial_cursor = [0, 0]
+keys = "gg0xgg0~gg0rAggA1<Esc>gg0I2<Esc>ggo9<Esc>gg0ddggpggJgg0>>10u10<C-r>"
+shiftwidth = 2
+expandtab = true
+expected_buffer = "  9 2Ae1\ntwo\nthree\n"
+expected_mode = "normal"

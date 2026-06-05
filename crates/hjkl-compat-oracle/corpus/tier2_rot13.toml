@@ -1,0 +1,64 @@
+# Tier 2 — `g?` ROT13 operator. Live nvim compare.
+
+# `g?iw` rot13s the inner word.
+[[cases]]
+name = "rot13_inner_word"
+initial_buffer = "hello world\n"
+initial_cursor = [0, 0]
+keys = "g?iw"
+expected_buffer = "uryyb world\n"
+expected_mode = "normal"
+
+# `g?$` rot13s to end of line.
+[[cases]]
+name = "rot13_to_eol"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "g?$"
+expected_buffer = "nop\n"
+expected_mode = "normal"
+
+# `g??` rot13s the whole line (doubled operator).
+[[cases]]
+name = "rot13_line_double"
+initial_buffer = "Hello\n"
+initial_cursor = [0, 0]
+keys = "g??"
+expected_buffer = "Uryyb\n"
+expected_mode = "normal"
+
+# `g?g?` is the other doubled form.
+[[cases]]
+name = "rot13_line_gg"
+initial_buffer = "Hello\n"
+initial_cursor = [0, 0]
+keys = "g?g?"
+expected_buffer = "Uryyb\n"
+expected_mode = "normal"
+
+# `g?j` rot13s two lines (linewise motion).
+[[cases]]
+name = "rot13_two_lines"
+initial_buffer = "abc\ndef\n"
+initial_cursor = [0, 0]
+keys = "g?j"
+expected_buffer = "nop\nqrs\n"
+expected_mode = "normal"
+
+# Visual `g?` rot13s the selection.
+[[cases]]
+name = "rot13_visual_line"
+initial_buffer = "Hello\n"
+initial_cursor = [0, 0]
+keys = "Vg?"
+expected_buffer = "Uryyb\n"
+expected_mode = "normal"
+
+# ROT13 is its own inverse: `g??` twice restores the line.
+[[cases]]
+name = "rot13_involution"
+initial_buffer = "Test123\n"
+initial_cursor = [0, 0]
+keys = "g??g??"
+expected_buffer = "Test123\n"
+expected_mode = "normal"
