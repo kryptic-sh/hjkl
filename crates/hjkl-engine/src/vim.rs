@@ -1104,14 +1104,12 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             // and stack `count - 1` further lines below it.
             let (start_row, _) = ed.cursor();
             let typed = buf_line(&ed.buffer, start_row).unwrap_or_default();
-            let mut at_row = start_row;
-            for _ in 0..session.count - 1 {
+            for at_row in start_row..start_row + (session.count - 1) {
                 let end = buf_line_chars(&ed.buffer, at_row);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(at_row, end),
                     text: format!("\n{typed}"),
                 });
-                at_row += 1;
             }
         } else if !inserted.is_empty() {
             // `[count]i` / `[count]A` repeat the typed text inline.
