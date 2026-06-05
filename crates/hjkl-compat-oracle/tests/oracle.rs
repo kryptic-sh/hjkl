@@ -78,15 +78,10 @@ async fn tier1_corpus_passes() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Drive the tier-2 substitute corpus through `hjkl --nvim-api`. Mirrors
-/// the `nvim_api_tier_passes` shape because `:` ex commands need the
-/// nvim-api subprocess driver, not the in-process key replay.
-#[tokio::test(flavor = "multi_thread")]
-async fn tier2_substitute_corpus_passes() {
+/// Resolve the `hjkl` binary path (HJKL_BIN override, else workspace
+/// target/debug). Returns `None` if it doesn't exist so callers can skip.
+fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_substitute.toml");
-    let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
     let bin_path: std::path::PathBuf = if let Ok(v) = std::env::var("HJKL_BIN") {
         v.into()
     } else {
@@ -97,15 +92,26 @@ async fn tier2_substitute_corpus_passes() {
             .map(|p| p.join("target/debug").join(&exe_name))
             .unwrap_or_else(|| std::path::PathBuf::from(&exe_name))
     };
+    bin_path.exists().then_some(bin_path)
+}
 
-    if !bin_path.exists() {
+/// Drive `rel_path` through the `hjkl --nvim-api` subprocess and assert every
+/// case's buffer (and cursor, when pinned) matches the authored expectation.
+/// Skips when the binary isn't built. Used for `:`-ex / substitute corpora
+/// that need the command line, not in-process key replay.
+async fn run_corpus_via_nvim_api(rel_path: &str, label: &str) {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
+    let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
+
+    let Some(bin_path) = resolve_hjkl_bin() else {
         eprintln!(
-            "skipping tier2_substitute_corpus_passes: binary not found at {}. \
-             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN.",
-            bin_path.display()
+            "skipping {label}: hjkl binary not found. \
+             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN."
         );
         return;
-    }
+    };
+    let _ = bin_path;
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -139,9 +145,22 @@ async fn tier2_substitute_corpus_passes() {
 
     assert!(
         failures.is_empty(),
-        "tier2_substitute cases failed:\n{}",
+        "{label} cases failed:\n{}",
         failures.join("\n")
     );
+}
+
+/// Drive the tier-2 substitute corpus through `hjkl --nvim-api`. Mirrors
+/// the `nvim_api_tier_passes` shape because `:` ex commands need the
+/// nvim-api subprocess driver, not the in-process key replay.
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_substitute_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_substitute.toml", "tier2_substitute").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_ex_lineops_corpus_passes() {
+    run_corpus_via_nvim_api("corpus/tier2_ex_lineops.toml", "tier2_ex_lineops").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -204,6 +223,21 @@ async fn tier2_count_open_corpus_passes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tier2_registers_corpus_passes() {
     run_corpus("corpus/tier2_registers.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_paste_family_corpus_passes() {
+    run_corpus("corpus/tier2_paste_family.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_gn_corpus_passes() {
+    run_corpus("corpus/tier2_gn.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_incr_case_corpus_passes() {
+    run_corpus("corpus/tier2_incr_case.toml").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

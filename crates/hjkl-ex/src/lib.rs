@@ -881,11 +881,15 @@ mod tests {
     // ---- Phase 2c: prefix gating (marks) -----------------------------------
 
     #[test]
-    fn dispatch_m_returns_none_below_min_prefix() {
+    fn dispatch_m_resolves_to_move() {
         let reg = default_registry::<DefaultHost>();
         let mut editor = make_editor();
-        // `:m` — below min_prefix=5 for marks; no other registered command starts with "m"
-        assert_eq!(try_dispatch(&reg, &mut editor, "m"), None);
+        // `:m` is the `:move` alias; with no destination address it reports an
+        // error (it no longer falls through to the marks prefix gate).
+        assert!(matches!(
+            try_dispatch(&reg, &mut editor, "m"),
+            Some(ExEffect::Error(_))
+        ));
     }
 
     #[test]

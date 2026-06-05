@@ -5059,6 +5059,35 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::paste_before_bridge(self, count);
     }
 
+    /// `gp` / `gP` — paste like `p`/`P` but leave the cursor just after the
+    /// pasted text. `before = true` for `gP`.
+    pub fn paste_cursor_after(&mut self, before: bool, count: usize) {
+        vim::paste_bridge(self, before, count, true, false);
+    }
+
+    /// `]p` / `[p` — linewise paste with the pasted block reindented to match
+    /// the current line. `before = true` for `[p`.
+    pub fn paste_reindent(&mut self, before: bool, count: usize) {
+        vim::paste_bridge(self, before, count, false, true);
+    }
+
+    /// Visual-mode `p` / `P` — replace the active selection with the register.
+    /// `before = true` for `P` (preserves the source register).
+    pub fn visual_paste(&mut self, before: bool) {
+        vim::visual_paste(self, before);
+    }
+
+    /// Visual-mode `<C-a>`/`<C-x>` (uniform) and `g<C-a>`/`g<C-x>`
+    /// (`sequential`) — adjust the first number on each selected line.
+    pub fn adjust_number_visual(&mut self, delta: i64, sequential: bool) {
+        vim::adjust_number_visual(self, delta, sequential);
+    }
+
+    /// Normal-mode `&` — repeat the last `:s` on the current line (no flags).
+    pub fn ampersand_repeat(&mut self) {
+        vim::ampersand_repeat(self);
+    }
+
     /// `<C-o>` — jump back `count` entries in the jumplist, saving the
     /// current position on the forward stack so `<C-i>` can return.
     pub fn jump_back(&mut self, count: usize) {

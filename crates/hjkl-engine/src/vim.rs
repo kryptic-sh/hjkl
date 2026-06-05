@@ -386,8 +386,15 @@ pub enum LastChange {
     ToggleCase { count: usize },
     /// `J` with a count.
     JoinLine { count: usize },
-    /// `p` / `P` with a count.
-    Paste { before: bool, count: usize },
+    /// `p` / `P` (and `gp`/`gP`, `]p`/`[p`) with a count.
+    Paste {
+        before: bool,
+        count: usize,
+        /// `gp` / `gP` — leave the cursor just after the pasted text.
+        cursor_after: bool,
+        /// `]p` / `[p` — reindent the pasted block to the current line.
+        reindent: bool,
+    },
     /// `D` (delete to EOL).
     DeleteToEol { inserted: Option<String> },
     /// `o` / `O` + the inserted text.
@@ -397,6 +404,13 @@ pub enum LastChange {
         entry: InsertEntry,
         inserted: String,
         count: usize,
+    },
+    /// `dgn` / `cgn` (and `gN` forms) — operate on the next search match.
+    /// `inserted` is filled on Esc for the `cgn` change form so `.` retypes it.
+    GnOp {
+        op: Operator,
+        forward: bool,
+        inserted: Option<String>,
     },
 }
 
@@ -1191,7 +1205,8 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
             if let Some(
                 LastChange::OpMotion { inserted: ins, .. }
                 | LastChange::OpTextObj { inserted: ins, .. }
-                | LastChange::LineOp { inserted: ins, .. },
+                | LastChange::LineOp { inserted: ins, .. }
+                | LastChange::GnOp { inserted: ins, .. },
             ) = ed.vim.last_change.as_mut()
             {
                 *ins = Some(inserted);
@@ -2734,13 +2749,7 @@ pub(crate) fn paste_after_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    do_paste(ed, false, count.max(1));
-    if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::Paste {
-            before: false,
-            count: count.max(1),
-        });
-    }
+    paste_bridge(ed, false, count, false, false);
 }
 
 /// `P` — paste the unnamed register (or `"reg` register) before the cursor.
@@ -2750,11 +2759,25 @@ pub(crate) fn paste_before_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    do_paste(ed, true, count.max(1));
+    paste_bridge(ed, true, count, false, false);
+}
+
+/// Shared paste entry for `p`/`P`, `gp`/`gP` (`cursor_after`), and
+/// `]p`/`[p` (`reindent`). Records `LastChange::Paste` for dot-repeat.
+pub(crate) fn paste_bridge<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    before: bool,
+    count: usize,
+    cursor_after: bool,
+    reindent: bool,
+) {
+    do_paste(ed, before, count.max(1), cursor_after, reindent);
     if !ed.vim.replaying {
         ed.vim.last_change = Some(LastChange::Paste {
-            before: true,
+            before,
             count: count.max(1),
+            cursor_after,
+            reindent,
         });
     }
 }
@@ -4148,12 +4171,132 @@ pub(crate) fn apply_op_double<H: crate::types::Host>(
     }
 }
 
+/// Compute the `gn` / `gN` target match as a `(start, end_inclusive)` pair.
+/// When the cursor sits inside a match, that match is the target; otherwise the
+/// next match (forward) or previous match (backward) is used. Returns `None`
+/// when there is no pattern or no match remains.
+fn gn_find_range<H: crate::types::Host>(
+    ed: &Editor<hjkl_buffer::Buffer, H>,
+    re: &regex::Regex,
+    forward: bool,
+) -> Option<(crate::types::Pos, crate::types::Pos)> {
+    use crate::types::{Cursor, Pos, Search};
+    let cursor = Cursor::cursor(&ed.buffer);
+    let contains =
+        Search::find_prev(&ed.buffer, cursor, re).filter(|m| m.start <= cursor && cursor < m.end);
+    let range = if let Some(m) = contains {
+        m
+    } else if forward {
+        Search::find_next(&ed.buffer, cursor, re)?
+    } else {
+        Search::find_prev(&ed.buffer, cursor, re)?
+    };
+    let end_incl = if range.end.col > 0 {
+        Pos::new(range.end.line, range.end.col - 1)
+    } else {
+        range.end
+    };
+    Some((range.start, end_incl))
+}
+
+/// `gn` / `gN` — operate on (or select) the search match. `op = None` enters
+/// Visual mode with the match selected; `Some(op)` applies the operator to the
+/// match as a charwise inclusive range. Records `LastChange::GnOp` so `cgn` /
+/// `dgn` are `.`-repeatable.
+pub(crate) fn gn_operate<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Option<Operator>,
+    forward: bool,
+    count: usize,
+) {
+    use crate::types::{Cursor, Pos};
+    // Make sure the compiled pattern reflects the last `/` or `*` search.
+    if let Some(p) = ed.vim.last_search.clone() {
+        ed.push_search_pattern(&p);
+    }
+    let Some(re) = ed.search_state().pattern.clone() else {
+        return;
+    };
+    ed.sync_buffer_content_from_textarea();
+
+    let Some(mut range) = gn_find_range(ed, &re, forward) else {
+        return;
+    };
+    // `[count]gn` walks to the count-th match.
+    for _ in 1..count.max(1) {
+        let past = Pos::new(range.1.line, range.1.col + 1);
+        Cursor::set_cursor(&mut ed.buffer, past);
+        match gn_find_range(ed, &re, forward) {
+            Some(r) => range = r,
+            None => break,
+        }
+    }
+    let start_t = (range.0.line as usize, range.0.col as usize);
+    let end_t = (range.1.line as usize, range.1.col as usize);
+
+    match op {
+        None => {
+            // Bare `gn` — select the match in Visual mode.
+            ed.vim.visual_anchor = start_t;
+            buf_set_cursor_rc(&mut ed.buffer, end_t.0, end_t.1);
+            ed.vim.mode = Mode::Visual;
+            ed.vim.current_mode = crate::VimMode::Visual;
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Some(Operator::Delete) => {
+            ed.push_undo();
+            cut_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
+            // Deleting at the line end can leave the cursor one past the last
+            // char; vim clamps it back onto the line.
+            clamp_cursor_to_normal_mode(ed);
+            ed.push_buffer_cursor_to_textarea();
+            if !ed.vim.replaying {
+                ed.vim.last_change = Some(LastChange::GnOp {
+                    op: Operator::Delete,
+                    forward,
+                    inserted: None,
+                });
+            }
+        }
+        Some(Operator::Change) => {
+            ed.push_undo();
+            ed.vim.change_mark_start = Some(start_t);
+            cut_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
+            if !ed.vim.replaying {
+                ed.vim.last_change = Some(LastChange::GnOp {
+                    op: Operator::Change,
+                    forward,
+                    inserted: None,
+                });
+            }
+            begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+        }
+        Some(Operator::Yank) => {
+            let text = read_vim_range(ed, start_t, end_t, RangeKind::Inclusive);
+            if !text.is_empty() {
+                ed.record_yank_to_host(text.clone());
+                ed.record_yank(text, false);
+            }
+            buf_set_cursor_rc(&mut ed.buffer, start_t.0, start_t.1);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Some(other @ (Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase)) => {
+            // Case op over a gn match: apply as a charwise op over the
+            // inclusive range.
+            ed.push_undo();
+            apply_case_op_to_selection(ed, other, start_t, end_t, RangeKind::Inclusive);
+        }
+        Some(_) => {}
+    }
+}
+
 /// Shared implementation: apply operator over a g-chord motion or case-op
 /// linewise form. Called by `Editor::apply_op_g` (the public controller API)
 /// so the hjkl-vim reducer can dispatch `ApplyOpG` without re-entering the FSM.
 ///
 /// - If `op` is Uppercase/Lowercase/ToggleCase and `ch` matches the op's char
 ///   (`U`/`u`/`~`): executes the line op and updates `last_change`.
+/// - `n` / `N` operate on the search match (`dgn` / `cgn`).
 /// - Otherwise, maps `ch` to a motion (`g`→FileTop, `e`→WordEndBack,
 ///   `E`→BigWordEndBack, `j`→ScreenDown, `k`→ScreenUp) and applies. Unknown
 ///   chars are silently ignored (no-op), matching the engine FSM's behaviour.
@@ -4186,6 +4329,11 @@ pub(crate) fn apply_op_g_inner<H: crate::types::Host>(
             }
             return;
         }
+    }
+    // `dgn` / `cgn` / `ygn` (and `gN` forms) — operate on the search match.
+    if ch == 'n' || ch == 'N' {
+        gn_operate(ed, Some(op), ch == 'n', total_count);
+        return;
     }
     let motion = match ch {
         'g' => Motion::FileTop,
@@ -4322,6 +4470,13 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
                 count1: count,
             };
         }
+        // `gp` / `gP` — paste like `p`/`P` but leave the cursor just after
+        // the pasted text.
+        'p' => paste_bridge(ed, false, count.max(1), true, false),
+        'P' => paste_bridge(ed, true, count.max(1), true, false),
+        // `gn` / `gN` — select the next / previous search match in Visual mode.
+        'n' => gn_operate(ed, None, true, count.max(1)),
+        'N' => gn_operate(ed, None, false, count.max(1)),
         // `g;` / `g,` — walk the change list. `g;` toward older
         // entries, `g,` toward newer.
         ';' => walk_change_list(ed, -1, count.max(1)),
@@ -4369,6 +4524,18 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
         }
         _ => {}
     }
+}
+
+/// Normal-mode `&` — repeat the last `:s` on the current line, dropping the
+/// previous flags (vim: `&` ≡ `:s` with no flags). `g&` keeps flags + whole
+/// buffer; this is the single-line, flag-less form.
+pub(crate) fn ampersand_repeat<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>) {
+    let Some(mut cmd) = ed.vim.last_substitute.clone() else {
+        return;
+    };
+    cmd.flags = crate::substitute::SubstFlags::default();
+    let row = buf_cursor_pos(&ed.buffer).row as u32;
+    let _ = crate::substitute::apply_substitute(ed, &cmd, row..=row);
 }
 
 /// Public(crate) entry point for bare `z<x>`. Applies the z-chord effect
@@ -7610,10 +7777,62 @@ fn join_line_raw<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, H>)
     ed.push_buffer_cursor_to_textarea();
 }
 
+/// Indent width of a leading-whitespace prefix, counting a `\t` as advancing
+/// to the next `tabstop` boundary and a space as one column.
+fn indent_width(s: &str, tabstop: usize) -> usize {
+    let ts = tabstop.max(1);
+    let mut w = 0usize;
+    for c in s.chars() {
+        match c {
+            ' ' => w += 1,
+            '\t' => w += ts - (w % ts),
+            _ => break,
+        }
+    }
+    w
+}
+
+/// Build a leading-whitespace string of `width` columns honoring `expandtab`
+/// (spaces) vs `noexpandtab` (tabs for full `tabstop` runs, spaces remainder).
+fn build_indent(width: usize, settings: &crate::editor::Settings) -> String {
+    if settings.expandtab {
+        return " ".repeat(width);
+    }
+    let ts = settings.tabstop.max(1);
+    let tabs = width / ts;
+    let spaces = width % ts;
+    format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
+}
+
+/// `]p` / `[p` reindent: shift every line of `text` so the FIRST line's indent
+/// matches `target_width` columns; later lines keep their relative offset.
+fn reindent_block(text: &str, target_width: usize, settings: &crate::editor::Settings) -> String {
+    let ts = settings.tabstop.max(1);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let first_width = lines.first().map(|l| indent_width(l, ts)).unwrap_or(0);
+    let delta = target_width as isize - first_width as isize;
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start_matches([' ', '\t']);
+            if trimmed.is_empty() {
+                // Preserve blank lines as truly empty (vim does not indent them).
+                return String::new();
+            }
+            let old_w = indent_width(line, ts) as isize;
+            let new_w = (old_w + delta).max(0) as usize;
+            format!("{}{}", build_indent(new_w, settings), trimmed)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn do_paste<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     before: bool,
     count: usize,
+    cursor_after: bool,
+    reindent: bool,
 ) {
     use hjkl_buffer::{Edit, Position};
     ed.push_undo();
@@ -7658,8 +7877,14 @@ fn do_paste<H: crate::types::Host>(
             // Linewise paste: insert payload as fresh row(s) above
             // (`P`) or below (`p`) the cursor's row. Cursor lands on
             // the first non-blank of the first pasted line.
-            let text = yank.trim_matches('\n').to_string();
+            let mut text = yank.trim_matches('\n').to_string();
             let row = buf_cursor_pos(&ed.buffer).row;
+            // `]p` / `[p` — reindent the pasted block to the current line.
+            if reindent {
+                let cur_line = buf_line(&ed.buffer, row).unwrap_or_default();
+                let target_w = indent_width(&cur_line, ed.settings.tabstop.max(1));
+                text = reindent_block(&text, target_w, &ed.settings);
+            }
             let target_row = if before {
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(row, 0),
@@ -7697,13 +7922,22 @@ fn do_paste<H: crate::types::Host>(
                 at,
                 text: yank.clone(),
             });
-            // Vim parks the cursor on the last char of the pasted
-            // text (do_insert_str leaves it one past the end).
-            crate::motions::move_left(&mut ed.buffer, 1);
-            ed.push_buffer_cursor_to_textarea();
-            // Charwise: `[` = insert start, `]` = cursor (last pasted char).
+            // Vim parks the cursor on the last char of the pasted text
+            // (do_insert_str leaves it one past the end). `gp` instead
+            // leaves the cursor just AFTER the pasted text, so skip the
+            // step-back there.
+            if !cursor_after && ed.cursor().1 > 0 {
+                crate::motions::move_left(&mut ed.buffer, 1);
+                ed.push_buffer_cursor_to_textarea();
+            }
+            // Charwise: `[` = insert start, `]` = last pasted char.
             let lo = (at.row, at.col);
-            let hi = ed.cursor();
+            let hi = if cursor_after {
+                let c = ed.cursor();
+                (c.0, c.1.saturating_sub(1))
+            } else {
+                ed.cursor()
+            };
             paste_mark = Some((lo, hi));
         }
     }
@@ -7711,17 +7945,221 @@ fn do_paste<H: crate::types::Host>(
         ed.set_mark('[', lo);
         ed.set_mark(']', hi);
     }
-    // Linewise `p` (after) with count: cursor lands on the FIRST pasted
-    // line (original_row + 1) — vim parity. The per-iteration loop
-    // moves cursor to each paste's target_row, so without this reset
-    // `5p` would land at original_row + 5 instead of original_row + 1.
-    if let Some(orig_row) = original_row_for_linewise_after {
+    // `gp` / `gP` linewise: cursor lands on the line just AFTER the pasted
+    // block (the `]` mark's row + 1), at column 0, clamped to the last row.
+    if cursor_after && linewise {
+        if let Some((_, (bot_row, _))) = paste_mark {
+            let last_row = buf_row_count(&ed.buffer).saturating_sub(1);
+            let target = (bot_row + 1).min(last_row);
+            buf_set_cursor_rc(&mut ed.buffer, target, 0);
+            ed.push_buffer_cursor_to_textarea();
+        }
+    } else if let Some(orig_row) = original_row_for_linewise_after {
+        // Linewise `p` (after) with count: cursor lands on the FIRST pasted
+        // line (original_row + 1) — vim parity. The per-iteration loop
+        // moves cursor to each paste's target_row, so without this reset
+        // `5p` would land at original_row + 5 instead of original_row + 1.
         let first_target = orig_row.saturating_add(1);
         buf_set_cursor_rc(&mut ed.buffer, first_target, 0);
         crate::motions::move_first_non_blank(&mut ed.buffer);
         ed.push_buffer_cursor_to_textarea();
     }
     // Any paste re-anchors the sticky column to the new cursor position.
+    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+}
+
+/// Visual-mode `p` / `P` — replace the active selection with the register.
+/// With `p` the deleted selection lands in the unnamed register (vim's swap);
+/// with `P` (`before = true`) the source register is preserved so it can be
+/// pasted over multiple selections in turn.
+pub(crate) fn visual_paste<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    before: bool,
+) {
+    use hjkl_buffer::{Edit, Position};
+    ed.sync_buffer_content_from_textarea();
+
+    // Resolve the source register (selector or unnamed) BEFORE the delete
+    // overwrites the unnamed register with the cut selection.
+    let selector = ed.vim.pending_register.take();
+    let (reg_text, reg_linewise) = match selector.and_then(|c| ed.registers().read(c)) {
+        Some(slot) => (slot.text.clone(), slot.linewise),
+        None => {
+            let s = &ed.registers().unnamed;
+            (s.text.clone(), s.linewise)
+        }
+    };
+    // For `P`, snapshot the unnamed register so we can restore it afterwards.
+    let saved_unnamed = before.then(|| ed.registers().unnamed.clone());
+
+    let mode = ed.vim.mode;
+    ed.push_undo();
+
+    match mode {
+        Mode::VisualLine => {
+            let cursor_row = buf_cursor_pos(&ed.buffer).row;
+            let top = cursor_row.min(ed.vim.visual_line_anchor);
+            let bot = cursor_row.max(ed.vim.visual_line_anchor);
+            // Delete the selected lines into the unnamed register.
+            cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
+            // Insert the register as fresh line(s) where the selection was.
+            let text = reg_text.trim_matches('\n').to_string();
+            let line_count = buf_row_count(&ed.buffer);
+            if top >= line_count {
+                // Selection reached the end of the buffer: append below the
+                // (new) last line.
+                let last = line_count.saturating_sub(1);
+                let lc = buf_line_chars(&ed.buffer, last);
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(last, lc),
+                    text: format!("\n{text}"),
+                });
+                buf_set_cursor_rc(&mut ed.buffer, last + 1, 0);
+            } else {
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(top, 0),
+                    text: format!("{text}\n"),
+                });
+                buf_set_cursor_rc(&mut ed.buffer, top, 0);
+            }
+            crate::motions::move_first_non_blank(&mut ed.buffer);
+            ed.push_buffer_cursor_to_textarea();
+        }
+        Mode::Visual | Mode::VisualBlock => {
+            let anchor = if mode == Mode::VisualBlock {
+                ed.vim.block_anchor
+            } else {
+                ed.vim.visual_anchor
+            };
+            let cursor = ed.cursor();
+            let (top, bot) = order(anchor, cursor);
+            // Delete the selection into the unnamed register.
+            cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+            // Insert the register text where the selection started.
+            if reg_linewise {
+                // Linewise register into a charwise hole: open a line below.
+                let text = reg_text.trim_matches('\n').to_string();
+                let lc = buf_line_chars(&ed.buffer, top.0);
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(top.0, lc),
+                    text: format!("\n{text}"),
+                });
+                buf_set_cursor_rc(&mut ed.buffer, top.0 + 1, 0);
+                crate::motions::move_first_non_blank(&mut ed.buffer);
+            } else {
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(top.0, top.1),
+                    text: reg_text.clone(),
+                });
+                // Park the cursor on the last char of the inserted text.
+                let inserted_len = reg_text.chars().count();
+                let last_col = top.1 + inserted_len.saturating_sub(1);
+                buf_set_cursor_rc(&mut ed.buffer, top.0, last_col);
+            }
+            ed.push_buffer_cursor_to_textarea();
+        }
+        _ => {}
+    }
+
+    // `P` preserves the source register; restore the snapshot.
+    if let Some(slot) = saved_unnamed {
+        ed.registers_mut().unnamed = slot;
+    }
+    ed.vim.mode = Mode::Normal;
+    ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
+}
+
+/// Visual-mode `<C-a>` / `<C-x>` and `g<C-a>` / `g<C-x>`. Adds `delta` to the
+/// first number on each selected line. When `sequential` is true the increment
+/// grows by `delta` for each successive number found (vim's `g<C-a>`): the
+/// first gets `delta`, the second `2*delta`, and so on.
+pub(crate) fn adjust_number_visual<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    delta: i64,
+    sequential: bool,
+) {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    ed.sync_buffer_content_from_textarea();
+    let mode = ed.vim.mode;
+    let cursor = buf_cursor_pos(&ed.buffer);
+
+    // Resolve the row range + the per-row start column to scan from.
+    let (top, bot, mut scan_col_first, block_left) = match mode {
+        Mode::VisualLine => {
+            let t = cursor.row.min(ed.vim.visual_line_anchor);
+            let b = cursor.row.max(ed.vim.visual_line_anchor);
+            (t, b, 0usize, None)
+        }
+        Mode::Visual => {
+            let (a, c) = order(ed.vim.visual_anchor, (cursor.row, cursor.col));
+            (a.0, c.0, a.1, None)
+        }
+        Mode::VisualBlock => {
+            let (a, c) = order(ed.vim.block_anchor, (cursor.row, cursor.col));
+            let left = a.1.min(c.1);
+            (a.0, c.0, left, Some(left))
+        }
+        _ => return,
+    };
+
+    ed.push_undo();
+    let mut found_count: i64 = 0;
+    for row in top..=bot {
+        let start_col = match block_left {
+            Some(left) => left,
+            None => {
+                // First row of a charwise selection starts at the anchor/cursor
+                // column; subsequent rows start at column 0.
+                let c = if row == top { scan_col_first } else { 0 };
+                scan_col_first = 0;
+                c
+            }
+        };
+        let chars: Vec<char> = match buf_line(&ed.buffer, row) {
+            Some(l) => l.chars().collect(),
+            None => continue,
+        };
+        let Some(digit_start) =
+            (start_col.min(chars.len())..chars.len()).find(|&i| chars[i].is_ascii_digit())
+        else {
+            continue;
+        };
+        let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
+            digit_start - 1
+        } else {
+            digit_start
+        };
+        let mut span_end = digit_start;
+        while span_end < chars.len() && chars[span_end].is_ascii_digit() {
+            span_end += 1;
+        }
+        let s: String = chars[span_start..span_end].iter().collect();
+        let Ok(n) = s.parse::<i64>() else {
+            continue;
+        };
+        found_count += 1;
+        let this_delta = if sequential {
+            delta.saturating_mul(found_count)
+        } else {
+            delta
+        };
+        let new_s = n.saturating_add(this_delta).to_string();
+        let span_start_pos = Position::new(row, span_start);
+        let span_end_pos = Position::new(row, span_end);
+        ed.mutate_edit(Edit::DeleteRange {
+            start: span_start_pos,
+            end: span_end_pos,
+            kind: MotionKind::Char,
+        });
+        ed.mutate_edit(Edit::InsertStr {
+            at: span_start_pos,
+            text: new_s,
+        });
+    }
+    // Vim leaves the cursor at the start of the selection.
+    buf_set_cursor_rc(&mut ed.buffer, top, block_left.unwrap_or(0));
+    ed.push_buffer_cursor_to_textarea();
+    ed.vim.mode = Mode::Normal;
     ed.sticky_col = Some(buf_cursor_pos(&ed.buffer).col);
 }
 
@@ -7845,8 +8283,23 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
                 join_line(ed);
             }
         }
-        LastChange::Paste { before, count } => {
-            do_paste(ed, before, count * scale);
+        LastChange::Paste {
+            before,
+            count,
+            cursor_after,
+            reindent,
+        } => {
+            do_paste(ed, before, count * scale, cursor_after, reindent);
+        }
+        LastChange::GnOp {
+            op,
+            forward,
+            inserted,
+        } => {
+            gn_operate(ed, Some(op), forward, 1);
+            if let Some(text) = inserted {
+                replay_insert_and_finish(ed, &text);
+            }
         }
         LastChange::DeleteToEol { inserted } => {
             use hjkl_buffer::{Edit, Position};

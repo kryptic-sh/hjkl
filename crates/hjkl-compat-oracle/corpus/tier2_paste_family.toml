@@ -1,0 +1,104 @@
+# Tier 2 — paste family: `gp`/`gP` (cursor-after paste), `]p`/`[p`
+# (indent-adjusted linewise paste), and visual-mode `p`/`P` (replace selection).
+#
+# Driven in-process and live-compared against `nvim --headless`, so the
+# `expected_buffer` is sanity-checked against nvim and the cursor/mode are
+# compared hjkl-vs-nvim automatically.
+
+# ── gp / gP — paste, then leave cursor just AFTER the pasted text ──────────
+
+# Linewise `gp`: paste line below, cursor on the line after the pasted line.
+[[cases]]
+name = "gp_linewise_cursor_after"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "yygp"
+expected_buffer = "a\na\nb\n"
+expected_mode = "normal"
+
+# Linewise `gP`: paste line above, cursor on the line after the pasted line.
+[[cases]]
+name = "gP_linewise_cursor_after"
+initial_buffer = "one\ntwo\n"
+initial_cursor = [0, 0]
+keys = "yyGgP"
+expected_buffer = "one\none\ntwo\n"
+expected_mode = "normal"
+
+# Charwise `gp`: paste after cursor, cursor one past the last pasted char.
+[[cases]]
+name = "gp_charwise_cursor_after"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "ylgp"
+expected_buffer = "aabc\n"
+expected_mode = "normal"
+
+# `gp` with a count repeats the register and still lands cursor after.
+[[cases]]
+name = "gp_count_linewise"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "yy2gp"
+expected_buffer = "a\na\na\nb\n"
+expected_mode = "normal"
+
+# ── ]p / [p — linewise paste, reindent first line to current line ─────────
+
+# `]p` adjusts the pasted line's indent to match the current line (below).
+[[cases]]
+name = "bracket_p_reindent_below"
+initial_buffer = "    foo\nbar\n"
+initial_cursor = [1, 0]
+keys = "yyk]p"
+expected_buffer = "    foo\n    bar\nbar\n"
+expected_mode = "normal"
+
+# `[p` is the same but pastes above the current line.
+[[cases]]
+name = "bracket_P_reindent_above"
+initial_buffer = "    foo\nbar\n"
+initial_cursor = [1, 0]
+keys = "yyk[p"
+expected_buffer = "    bar\n    foo\nbar\n"
+expected_mode = "normal"
+
+# Reindent shrinks indent too: yank a 4-space line, paste at a 0-indent line.
+[[cases]]
+name = "bracket_p_reindent_shrink"
+initial_buffer = "    foo\nbar\n"
+initial_cursor = [0, 0]
+keys = "yyj]p"
+expected_buffer = "    foo\nbar\nfoo\n"
+expected_mode = "normal"
+
+# ── visual p / P — replace the selection with the register ────────────────
+
+# `viwp` over a word replaces it with the unnamed register; deleted text
+# goes back into the unnamed register (vim swap semantics).
+[[cases]]
+name = "visual_p_replace_word"
+initial_buffer = "foo bar\n"
+initial_cursor = [0, 0]
+keys = "yiwwviwp"
+expected_buffer = "foo foo\n"
+expected_mode = "normal"
+
+# Visual-line `p` replaces whole selected line with a linewise register.
+[[cases]]
+name = "visual_line_p_replace_line"
+initial_buffer = "alpha\nbeta\n"
+initial_cursor = [0, 0]
+keys = "yyjVp"
+expected_buffer = "alpha\nalpha\n"
+expected_mode = "normal"
+
+# After a visual `p`, the just-replaced text is in the unnamed register, so a
+# following `p` re-pastes the ORIGINAL selection text (vim register swap).
+[[cases]]
+name = "visual_p_register_swap"
+initial_buffer = "foo bar baz\n"
+initial_cursor = [0, 0]
+keys = "yiwwviwp$p"
+expected_buffer = "foo foo bazbar\n"
+expected_mode = "normal"

@@ -192,6 +192,12 @@ pub fn step_normal<H: Host>(
         _ => {}
     }
 
+    // Visual mode: `p` / `P` replace the selection with the register.
+    if ed.is_visual() && !input.ctrl && matches!(input.key, Key::Char('p') | Key::Char('P')) {
+        ed.visual_paste(matches!(input.key, Key::Char('P')));
+        return true;
+    }
+
     // Visual mode: operators act on the current selection. The leading count
     // (drained into `count` above) multiplies indent levels (`2>` = two
     // shiftwidths); other visual operators ignore it.
@@ -277,6 +283,16 @@ pub fn step_normal<H: Host>(
                 ed.adjust_number(count.max(1) as i64);
                 return true;
             }
+            // Visual `<C-a>` — add the same amount to each selected line's
+            // first number (uniform). `g<C-a>` (sequential) takes the g path.
+            'a' if ed.is_visual() => {
+                ed.adjust_number_visual(count.max(1) as i64, false);
+                return true;
+            }
+            'x' if ed.is_visual() => {
+                ed.adjust_number_visual(-(count.max(1) as i64), false);
+                return true;
+            }
             'x' if ed.fsm_mode() == FsmMode::Normal => {
                 ed.adjust_number(-(count.max(1) as i64));
                 return true;
@@ -336,8 +352,15 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
-    // `g` prefix.
-    if !input.ctrl && input.key == Key::Char('g') && ed.fsm_mode() == FsmMode::Normal {
+    // `g` prefix. Available in Normal and the Visual modes (visual `gu`/`gU`/
+    // `g~`, `gq`/`gw`, `g<C-a>`/`g<C-x>`, and the `gg`/`ge` extend motions).
+    if !input.ctrl
+        && input.key == Key::Char('g')
+        && matches!(
+            ed.fsm_mode(),
+            FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+        )
+    {
         ed.set_count(count);
         ed.set_pending(Pending::G);
         return true;
@@ -540,6 +563,11 @@ fn handle_normal_only<H: Host>(
         }
         Key::Char('P') => {
             ed.paste_before(count);
+            true
+        }
+        Key::Char('&') => {
+            // `&` — repeat last `:s` on the current line (no flags).
+            ed.ampersand_repeat();
             true
         }
         Key::Char('u') => {
@@ -842,6 +870,35 @@ fn handle_after_g<H: Host>(
     input: Input,
 ) -> bool {
     let count = ed.take_count();
+    // Visual-mode `g`-commands apply to the active selection rather than
+    // entering operator-pending the way the Normal-mode forms do.
+    if ed.is_visual() {
+        if input.ctrl {
+            // `g<C-a>` / `g<C-x>` — sequential increment over the selection.
+            if let Key::Char(c) = input.key {
+                match c {
+                    'a' => ed.adjust_number_visual(count.max(1) as i64, true),
+                    'x' => ed.adjust_number_visual(-(count.max(1) as i64), true),
+                    _ => {}
+                }
+            }
+            return true;
+        }
+        if let Key::Char(c) = input.key {
+            match c {
+                'u' => ed.apply_visual_operator(Operator::Lowercase, count.max(1)),
+                'U' => ed.apply_visual_operator(Operator::Uppercase, count.max(1)),
+                '~' => ed.apply_visual_operator(Operator::ToggleCase, count.max(1)),
+                'q' => ed.apply_visual_operator(Operator::Reflow, count.max(1)),
+                'w' => ed.apply_visual_operator(Operator::ReflowKeepCursor, count.max(1)),
+                // Extend-the-selection motions go through the shared body.
+                'g' | 'e' | 'E' | '_' | 'j' | 'k' | 'M' | 'm' | '*' | '#' => ed.after_g(c, count),
+                // Other g-commands have no visual meaning here — swallow.
+                _ => {}
+            }
+        }
+        return true;
+    }
     // Extract the char and delegate to the shared apply_after_g body.
     // Non-char keys (ctrl sequences etc.) are silently ignored.
     if let Key::Char(ch) = input.key {
@@ -956,6 +1013,11 @@ fn handle_after_square_bracket_open<H: Host>(
     input: Input,
     count: usize,
 ) -> bool {
+    // `[p` / `[P` — indent-adjusted paste ABOVE the current line.
+    if let Key::Char('p' | 'P') = input.key {
+        ed.paste_reindent(true, count.max(1));
+        return true;
+    }
     let motion = match input.key {
         Key::Char('[') => Motion::SectionBackward,
         Key::Char(']') => Motion::SectionEndBackward,
@@ -971,6 +1033,18 @@ fn handle_after_square_bracket_close<H: Host>(
     input: Input,
     count: usize,
 ) -> bool {
+    // `]p` — indent-adjusted paste BELOW; `]P` — indent-adjusted paste ABOVE.
+    match input.key {
+        Key::Char('p') => {
+            ed.paste_reindent(false, count.max(1));
+            return true;
+        }
+        Key::Char('P') => {
+            ed.paste_reindent(true, count.max(1));
+            return true;
+        }
+        _ => {}
+    }
     let motion = match input.key {
         Key::Char(']') => Motion::SectionForward,
         Key::Char('[') => Motion::SectionEndForward,

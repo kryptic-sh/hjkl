@@ -697,6 +697,105 @@ fn sort_handler<H: Host>(
     Some(ExEffect::Ok)
 }
 
+/// `:[range]m {addr}` / `:move` — move the range to after line `addr`
+/// (`0` = before the first line). Default range is the current line.
+fn move_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    line_relocate_handler(editor, args, range, false)
+}
+
+/// `:[range]t {addr}` / `:co` / `:copy` — copy the range to after line `addr`
+/// (`0` = before the first line). Default range is the current line.
+fn copy_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+) -> Option<ExEffect> {
+    line_relocate_handler(editor, args, range, true)
+}
+
+/// Shared body for `:move` (`copy = false`) and `:copy` (`copy = true`).
+fn line_relocate_handler<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+    args: &str,
+    range: Option<LineRange>,
+    copy: bool,
+) -> Option<ExEffect> {
+    let dest = match crate::range::parse_dest_address(args, editor) {
+        Ok(d) => d,
+        Err(e) => return Some(ExEffect::Error(e)),
+    };
+
+    let rope = editor.buffer().rope();
+    let mut all_lines: Vec<String> = (0..rope.len_lines())
+        .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+        .collect();
+    drop(rope);
+    let content_rows = editor.buffer().row_count();
+    if content_rows == 0 {
+        return Some(ExEffect::Ok);
+    }
+
+    // Source range (1-based inclusive); default to the current line.
+    let (s, e) = match range {
+        Some(r) => (
+            r.start_one_based().max(1),
+            r.end_one_based().min(content_rows),
+        ),
+        None => {
+            let cur = editor.cursor().0 + 1;
+            (cur, cur)
+        }
+    };
+    if s > e || e > all_lines.len() {
+        return Some(ExEffect::Ok);
+    }
+
+    // vim rejects moving a range into itself.
+    if !copy && dest >= s && dest < e + 1 && dest != 0 {
+        // dest inside [s, e] is illegal; dest == e means "after last src line"
+        // which is a no-op move. Treat both as no-op (vim errors; be lenient).
+        if dest >= s && dest <= e {
+            return Some(ExEffect::Error("cannot move lines into themselves".into()));
+        }
+    }
+
+    let block: Vec<String> = all_lines[(s - 1)..=(e - 1)].to_vec();
+    let removed = e - s + 1;
+
+    let cursor_row = if copy {
+        // Insert a clone after `dest` (0 = top).
+        let insert_at = dest.min(all_lines.len());
+        for (i, line) in block.iter().enumerate() {
+            all_lines.insert(insert_at + i, line.clone());
+        }
+        insert_at + block.len() - 1
+    } else {
+        // Remove the source block, then insert after the (shift-adjusted) dest.
+        all_lines.drain((s - 1)..=(e - 1));
+        let insert_at = if dest == 0 {
+            0
+        } else if dest < s {
+            dest
+        } else {
+            dest - removed
+        };
+        let insert_at = insert_at.min(all_lines.len());
+        for (i, line) in block.iter().enumerate() {
+            all_lines.insert(insert_at + i, line.clone());
+        }
+        insert_at + block.len() - 1
+    };
+
+    editor.push_undo();
+    editor.restore(all_lines, (cursor_row, 0));
+    editor.mark_content_dirty();
+    Some(ExEffect::Ok)
+}
+
 /// Parse the first signed decimal integer from `line` for `:sort n`.
 /// Lines with no leading number sort as `i64::MIN` (cluster at top, vim compat).
 fn extract_leading_number(line: &str) -> i64 {
@@ -1255,6 +1354,24 @@ pub(crate) fn register_builtins<H: Host>(reg: &mut Registry<H>) {
         arg_kind: ArgKind::Raw,
         min_prefix: 3,
         run: sort_handler::<H>,
+    });
+
+    // `:move` / `:m` — relocate lines (range-aware; takes a dest address).
+    reg.add(ExCommand {
+        name: "move",
+        aliases: &["m"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: move_handler::<H>,
+    });
+
+    // `:copy` / `:co` / `:t` — duplicate lines (range-aware; dest address).
+    reg.add(ExCommand {
+        name: "copy",
+        aliases: &["co", "t"],
+        arg_kind: ArgKind::Raw,
+        min_prefix: 2,
+        run: copy_handler::<H>,
     });
 
     // `:substitute` / `:s` (min_prefix=1; range-aware)

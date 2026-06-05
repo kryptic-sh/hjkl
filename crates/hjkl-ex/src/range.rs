@@ -131,6 +131,30 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
     Ok((Some(LineRange::single(start)), after_start))
 }
 
+/// Parse a single destination address for `:move` / `:copy` — `$`, `.`, a
+/// number, a mark, or `0` (meaning "before the first line"). Returns a 1-based
+/// line number, or `0` for the top-of-buffer destination. Trailing text after
+/// the address is an error.
+pub fn parse_dest_address<H: hjkl_engine::Host>(
+    s: &str,
+    editor: &hjkl_engine::Editor<hjkl_buffer::Buffer, H>,
+) -> Result<usize, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("expected a destination address".into());
+    }
+    let (addr, rest) = parse_address(s).ok_or_else(|| format!("invalid address: `{s}`"))?;
+    if !rest.trim().is_empty() {
+        return Err(format!("trailing characters after address: `{rest}`"));
+    }
+    // `0` is a legal destination (place before line 1); resolve_address would
+    // clamp it to 1, so special-case it here.
+    if let Address::Number(0) = addr {
+        return Ok(0);
+    }
+    resolve_address(addr, editor)
+}
+
 // ---- tests -----------------------------------------------------------------
 
 #[cfg(test)]

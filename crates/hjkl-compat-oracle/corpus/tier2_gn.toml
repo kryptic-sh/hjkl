@@ -1,0 +1,53 @@
+# Tier 2 — `gn` / `gN` search-match text object.
+#
+# `gn` selects the next match of the last search pattern (or the match the
+# cursor is already on); as an operator target `cgn` / `dgn` operate on that
+# match and are `.`-repeatable. `gN` is the backward form.
+#
+# Driven in-process and live-compared against `nvim --headless`.
+
+# `cgn` changes the match the cursor landed on after a search.
+[[cases]]
+name = "cgn_changes_current_match"
+initial_buffer = "foo bar foo baz\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>cgnX<Esc>"
+expected_buffer = "foo bar X baz\n"
+expected_mode = "normal"
+
+# `dgn` deletes the next match.
+[[cases]]
+name = "dgn_deletes_next_match"
+initial_buffer = "foo foo\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>dgn"
+expected_buffer = "foo \n"
+expected_mode = "normal"
+
+# `cgn` then `.` repeats the change on the following match — the canonical
+# search-and-replace-by-hand workflow.
+[[cases]]
+name = "cgn_dot_repeat"
+initial_buffer = "foo foo foo\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>cgnX<Esc>."
+expected_buffer = "foo X X\n"
+expected_mode = "normal"
+
+# `gn` started from before any match still selects the first match forward.
+[[cases]]
+name = "cgn_from_before_match"
+initial_buffer = "x foo y\n"
+initial_cursor = [0, 0]
+keys = "/foo<CR>cgnZ<Esc>"
+expected_buffer = "x Z y\n"
+expected_mode = "normal"
+
+# `*` sets the search pattern (whole-word) and `cgn` changes the next match.
+[[cases]]
+name = "star_then_cgn"
+initial_buffer = "cat catalog cat\n"
+initial_cursor = [0, 0]
+keys = "*cgnDOG<Esc>"
+expected_buffer = "cat catalog DOG\n"
+expected_mode = "normal"

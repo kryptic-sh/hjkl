@@ -1,0 +1,91 @@
+# Tier 2 — ex line-ops `:m`/`:move`, `:t`/`:co`/`:copy`, and normal-mode `&`
+# (repeat last `:s` on the current line, no flags).
+#
+# Driven through the `hjkl --nvim-api` binary (these need the ex command line),
+# so `expected_buffer` is authored from vim semantics.
+
+# ── normal & — repeat last :s on the current line ─────────────────────────
+
+[[cases]]
+name = "amp_repeats_last_substitute"
+initial_buffer = "foo\nfoo\n"
+initial_cursor = [0, 0]
+keys = ":s/foo/bar/<CR>j&"
+expected_buffer = "bar\nbar\n"
+expected_mode = "normal"
+
+# ── :m / :move — move lines ───────────────────────────────────────────────
+
+# `:m$` moves the current line to after the last line.
+[[cases]]
+name = "move_current_to_end"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ":m$<CR>"
+expected_buffer = "b\nc\na\n"
+expected_mode = "normal"
+
+# `:move` long form behaves identically.
+[[cases]]
+name = "move_longform_alias"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ":move$<CR>"
+expected_buffer = "b\nc\na\n"
+expected_mode = "normal"
+
+# `:m0` moves the current line to the top.
+[[cases]]
+name = "move_current_to_top"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [2, 0]
+keys = ":m0<CR>"
+expected_buffer = "c\na\nb\n"
+expected_mode = "normal"
+
+# Ranged move: `:1,2m$` moves lines 1-2 to the end.
+[[cases]]
+name = "move_range_to_end"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = ":1,2m$<CR>"
+expected_buffer = "c\na\nb\n"
+expected_mode = "normal"
+
+# ── :t / :co / :copy — copy lines ─────────────────────────────────────────
+
+# `:t.` copies the current line to just below itself.
+[[cases]]
+name = "copy_current_below_self"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = ":t.<CR>"
+expected_buffer = "a\na\nb\n"
+expected_mode = "normal"
+
+# `:co$` copies the current line to the end.
+[[cases]]
+name = "copy_co_to_end"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = ":co$<CR>"
+expected_buffer = "a\nb\na\n"
+expected_mode = "normal"
+
+# `:copy0` long form copies to the top.
+[[cases]]
+name = "copy_longform_to_top"
+initial_buffer = "x\ny\n"
+initial_cursor = [1, 0]
+keys = ":copy0<CR>"
+expected_buffer = "y\nx\ny\n"
+expected_mode = "normal"
+
+# `:t0` copies the current line to the top.
+[[cases]]
+name = "copy_t0_to_top"
+initial_buffer = "a\nb\n"
+initial_cursor = [1, 0]
+keys = ":t0<CR>"
+expected_buffer = "b\na\nb\n"
+expected_mode = "normal"
