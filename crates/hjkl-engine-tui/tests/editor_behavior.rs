@@ -2029,12 +2029,22 @@ fn join_line_merges_next_line_with_space() {
 }
 
 #[test]
-fn join_line_count_2_merges_three_lines() {
+fn join_line_count_2_merges_two_lines() {
     let mut e = normal_editor("a\nb\nc");
     e.join_line(2);
-    // Our bridge calls join_line() `count` times, each joining the
-    // current line with the next → 2 iterations: "a b c".
+    // vim `[count]J` joins `count` lines (`count - 1` joins): `2J` merges the
+    // current line with the one below → "a b", leaving "c".
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "c");
+}
+
+#[test]
+fn join_line_count_3_merges_three_lines() {
+    let mut e = normal_editor("a\nb\nc\nd");
+    e.join_line(3);
+    // `3J` joins three lines (two joins) → "a b c", leaving "d".
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b c");
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "d");
 }
 
 #[test]
