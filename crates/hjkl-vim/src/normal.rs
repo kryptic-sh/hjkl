@@ -1043,6 +1043,15 @@ fn handle_after_square_bracket_open<H: Host>(
     let motion = match input.key {
         Key::Char('[') => Motion::SectionBackward,
         Key::Char(']') => Motion::SectionEndBackward,
+        // `[(` / `[{` — previous unmatched open bracket.
+        Key::Char('(') => Motion::UnmatchedBracket {
+            forward: false,
+            open: '(',
+        },
+        Key::Char('{') => Motion::UnmatchedBracket {
+            forward: false,
+            open: '{',
+        },
         _ => return true, // unknown second key — cancel silently
     };
     ed.execute_motion(motion, count);
@@ -1070,6 +1079,15 @@ fn handle_after_square_bracket_close<H: Host>(
     let motion = match input.key {
         Key::Char(']') => Motion::SectionForward,
         Key::Char('[') => Motion::SectionEndForward,
+        // `])` / `]}` — next unmatched close bracket.
+        Key::Char(')') => Motion::UnmatchedBracket {
+            forward: true,
+            open: '(',
+        },
+        Key::Char('}') => Motion::UnmatchedBracket {
+            forward: true,
+            open: '{',
+        },
         _ => return true,
     };
     ed.execute_motion(motion, count);
@@ -1086,6 +1104,14 @@ fn handle_op_after_square_bracket_open<H: Host>(
     let motion = match input.key {
         Key::Char('[') => Motion::SectionBackward,
         Key::Char(']') => Motion::SectionEndBackward,
+        Key::Char('(') => Motion::UnmatchedBracket {
+            forward: false,
+            open: '(',
+        },
+        Key::Char('{') => Motion::UnmatchedBracket {
+            forward: false,
+            open: '{',
+        },
         _ => return true,
     };
     let count2 = ed.take_count();
@@ -1104,6 +1130,14 @@ fn handle_op_after_square_bracket_close<H: Host>(
     let motion = match input.key {
         Key::Char(']') => Motion::SectionForward,
         Key::Char('[') => Motion::SectionEndForward,
+        Key::Char(')') => Motion::UnmatchedBracket {
+            forward: true,
+            open: '(',
+        },
+        Key::Char('}') => Motion::UnmatchedBracket {
+            forward: true,
+            open: '{',
+        },
         _ => return true,
     };
     let count2 = ed.take_count();

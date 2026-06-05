@@ -1,0 +1,57 @@
+# Tier 2 — counted `<C-a>`/`<C-x>`, hex increment, and counted `~` / `J`.
+#
+# Live nvim compare.
+
+# `5<C-a>` adds 5 to the number under the cursor.
+[[cases]]
+name = "count_ctrl_a"
+initial_buffer = "10\n"
+initial_cursor = [0, 0]
+keys = "5<C-a>"
+expected_buffer = "15\n"
+expected_mode = "normal"
+
+# `3<C-x>` subtracts 3.
+[[cases]]
+name = "count_ctrl_x"
+initial_buffer = "10\n"
+initial_cursor = [0, 0]
+keys = "3<C-x>"
+expected_buffer = "7\n"
+expected_mode = "normal"
+
+# `<C-a>` on a hex literal increments in hexadecimal (vim default).
+[[cases]]
+name = "hex_increment"
+initial_buffer = "0x0f\n"
+initial_cursor = [0, 0]
+keys = "<C-a>"
+expected_buffer = "0x10\n"
+expected_mode = "normal"
+
+# Hex carry across a digit boundary.
+[[cases]]
+name = "hex_increment_carry"
+initial_buffer = "0xff\n"
+initial_cursor = [0, 0]
+keys = "<C-a>"
+expected_buffer = "0x100\n"
+expected_mode = "normal"
+
+# `3~` toggles the case of three characters.
+[[cases]]
+name = "count_tilde"
+initial_buffer = "abcd\n"
+initial_cursor = [0, 0]
+keys = "3~"
+expected_buffer = "ABCd\n"
+expected_mode = "normal"
+
+# `3J` joins three lines into one.
+[[cases]]
+name = "count_join"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "3J"
+expected_buffer = "a b c\nd\n"
+expected_mode = "normal"

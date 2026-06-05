@@ -268,6 +268,13 @@ pub enum Motion {
         reverse: bool,
     },
     MatchBracket,
+    /// `[(` / `])` / `[{` / `]}` — jump to the previous/next unmatched bracket
+    /// of the given kind. `open` is the open char (`(` or `{`); `forward` picks
+    /// the close (`)`/`}`) when true, the open when false.
+    UnmatchedBracket {
+        forward: bool,
+        open: char,
+    },
     WordAtCursor {
         forward: bool,
         /// `*` / `#` use `\bword\b` boundaries; `g*` / `g#` drop them so
@@ -2714,14 +2721,15 @@ pub(crate) fn join_line_bridge<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     count: usize,
 ) {
-    for _ in 0..count.max(1) {
+    // vim `[count]J` joins `count` lines together — i.e. `count - 1` joins.
+    // Bare `J` (and `1J`) join the current line with the one below (1 join).
+    let joins = count.max(2) - 1;
+    for _ in 0..joins {
         ed.push_undo();
         join_line(ed);
     }
     if !ed.vim.replaying {
-        ed.vim.last_change = Some(LastChange::JoinLine {
-            count: count.max(1),
-        });
+        ed.vim.last_change = Some(LastChange::JoinLine { count: joins });
     }
 }
 
@@ -3874,6 +3882,9 @@ pub(crate) fn apply_motion_cursor_ctx<H: crate::types::Host>(
         Motion::MatchBracket => {
             let _ = matching_bracket(ed);
         }
+        Motion::UnmatchedBracket { forward, open } => {
+            goto_unmatched_bracket(ed, *forward, *open, count);
+        }
         Motion::WordAtCursor {
             forward,
             whole_word,
@@ -4017,6 +4028,91 @@ fn matching_bracket<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buffer, 
         ed.push_buffer_cursor_to_textarea();
     }
     moved
+}
+
+/// `[(` / `])` / `[{` / `]}` — move to the `count`-th previous (`forward =
+/// false`) / next (`forward = true`) unmatched bracket of the kind given by
+/// `open` (`(` or `{`). Balanced inner pairs are skipped via a depth counter.
+fn goto_unmatched_bracket<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    forward: bool,
+    open: char,
+    count: usize,
+) {
+    let close = match open {
+        '(' => ')',
+        '{' => '}',
+        _ => return,
+    };
+    let cursor = buf_cursor_pos(&ed.buffer);
+    let rows = buf_row_count(&ed.buffer);
+    let target = count.max(1);
+    let mut found = 0usize;
+    let mut depth = 0i32;
+
+    if forward {
+        let mut r = cursor.row;
+        let mut from_col = cursor.col + 1;
+        while r < rows {
+            let line: Vec<char> = buf_line(&ed.buffer, r)
+                .unwrap_or_default()
+                .chars()
+                .collect();
+            let mut ci = from_col;
+            while ci < line.len() {
+                let ch = line[ci];
+                if ch == open {
+                    depth += 1;
+                } else if ch == close {
+                    if depth == 0 {
+                        found += 1;
+                        if found == target {
+                            buf_set_cursor_rc(&mut ed.buffer, r, ci);
+                            ed.push_buffer_cursor_to_textarea();
+                            return;
+                        }
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                ci += 1;
+            }
+            r += 1;
+            from_col = 0;
+        }
+    } else {
+        let mut r = cursor.row as isize;
+        // First row scans from the column left of the cursor; earlier rows from
+        // their last column (`isize::MAX` clamps to `len - 1`).
+        let mut from_col = cursor.col as isize - 1;
+        while r >= 0 {
+            let line: Vec<char> = buf_line(&ed.buffer, r as usize)
+                .unwrap_or_default()
+                .chars()
+                .collect();
+            let mut ci = from_col.min(line.len() as isize - 1);
+            while ci >= 0 {
+                let ch = line[ci as usize];
+                if ch == close {
+                    depth += 1;
+                } else if ch == open {
+                    if depth == 0 {
+                        found += 1;
+                        if found == target {
+                            buf_set_cursor_rc(&mut ed.buffer, r as usize, ci as usize);
+                            ed.push_buffer_cursor_to_textarea();
+                            return;
+                        }
+                    } else {
+                        depth -= 1;
+                    }
+                }
+                ci -= 1;
+            }
+            r -= 1;
+            from_col = isize::MAX;
+        }
+    }
 }
 
 fn word_at_cursor_search<H: crate::types::Host>(
@@ -4432,15 +4528,15 @@ pub(crate) fn apply_after_g<H: crate::types::Host>(
             };
         }
         'J' => {
-            // `gJ` — join line below without inserting a space.
-            for _ in 0..count.max(1) {
+            // `gJ` — join line below without inserting a space. `[count]gJ`
+            // joins `count` lines (`count - 1` joins), like `J`.
+            let joins = count.max(2) - 1;
+            for _ in 0..joins {
                 ed.push_undo();
                 join_line_raw(ed);
             }
             if !ed.vim.replaying {
-                ed.vim.last_change = Some(LastChange::JoinLine {
-                    count: count.max(1),
-                });
+                ed.vim.last_change = Some(LastChange::JoinLine { count: joins });
             }
         }
         'd' => {
@@ -4955,6 +5051,9 @@ fn motion_kind(motion: &Motion) -> RangeKind {
         }
         Motion::Find { .. } => RangeKind::Inclusive,
         Motion::MatchBracket => RangeKind::Inclusive,
+        // `[(` / `])` etc. are exclusive: `d])` deletes up to but not including
+        // the bracket; `d[(` deletes back to but not past the open bracket.
+        Motion::UnmatchedBracket { .. } => RangeKind::Exclusive,
         // `$` now lands on the last char — operator ranges include it.
         Motion::LineEnd => RangeKind::Inclusive,
         // Linewise motions: +/-/_ land on the first non-blank of a line.
@@ -7625,9 +7724,10 @@ fn do_char_delete<H: crate::types::Host>(
     ed.push_buffer_cursor_to_textarea();
 }
 
-/// Vim `Ctrl-a` / `Ctrl-x` — find the next decimal number at or after the
-/// cursor on the current line, add `delta`, leave the cursor on the last
-/// digit of the result. No-op if the line has no digits to the right.
+/// Vim `Ctrl-a` / `Ctrl-x` — find the next number at or after the cursor on the
+/// current line, add `delta`, leave the cursor on the last digit of the result.
+/// Recognises `0x`/`0X` hex literals (incremented in hex, width preserved) as
+/// well as signed decimals. No-op if the line has no number to the right.
 pub(crate) fn adjust_number<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::Buffer, H>,
     delta: i64,
@@ -7640,23 +7740,65 @@ pub(crate) fn adjust_number<H: crate::types::Host>(
         Some(l) => l.chars().collect(),
         None => return false,
     };
-    let Some(digit_start) = (cursor.col..chars.len()).find(|&i| chars[i].is_ascii_digit()) else {
-        return false;
+    let len = chars.len();
+
+    // Scan from the cursor for the start of the leftmost number — a `0x`/`0X`
+    // hex literal takes priority over a bare decimal at the same position.
+    let is_hex_prefix = |i: usize| {
+        chars[i] == '0'
+            && i + 1 < len
+            && matches!(chars[i + 1], 'x' | 'X')
+            && chars.get(i + 2).is_some_and(|c| c.is_ascii_hexdigit())
     };
-    let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
-        digit_start - 1
-    } else {
-        digit_start
-    };
-    let mut span_end = digit_start;
-    while span_end < chars.len() && chars[span_end].is_ascii_digit() {
-        span_end += 1;
+    let mut i = cursor.col;
+    let mut hex = false;
+    loop {
+        if i >= len {
+            return false;
+        }
+        if is_hex_prefix(i) {
+            hex = true;
+            break;
+        }
+        if chars[i].is_ascii_digit() {
+            break;
+        }
+        i += 1;
     }
-    let s: String = chars[span_start..span_end].iter().collect();
-    let Ok(n) = s.parse::<i64>() else {
-        return false;
+
+    let (span_start, span_end, new_s) = if hex {
+        // `0x` + hex digits. Increment the value, preserve the digit width.
+        let digits_start = i + 2;
+        let mut digits_end = digits_start;
+        while digits_end < len && chars[digits_end].is_ascii_hexdigit() {
+            digits_end += 1;
+        }
+        let hexs: String = chars[digits_start..digits_end].iter().collect();
+        let Ok(n) = u64::from_str_radix(&hexs, 16) else {
+            return false;
+        };
+        let new_val = (n as i128 + delta as i128).max(0) as u64;
+        let width = digits_end - digits_start;
+        let prefix: String = chars[i..digits_start].iter().collect();
+        (i, digits_end, format!("{prefix}{new_val:0width$x}"))
+    } else {
+        // Signed decimal.
+        let digit_start = i;
+        let span_start = if digit_start > 0 && chars[digit_start - 1] == '-' {
+            digit_start - 1
+        } else {
+            digit_start
+        };
+        let mut span_end = digit_start;
+        while span_end < len && chars[span_end].is_ascii_digit() {
+            span_end += 1;
+        }
+        let s: String = chars[span_start..span_end].iter().collect();
+        let Ok(n) = s.parse::<i64>() else {
+            return false;
+        };
+        (span_start, span_end, n.saturating_add(delta).to_string())
     };
-    let new_s = n.saturating_add(delta).to_string();
 
     ed.push_undo();
     let span_start_pos = Position::new(row, span_start);

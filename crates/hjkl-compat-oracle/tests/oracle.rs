@@ -266,6 +266,16 @@ async fn tier2_insert_ctrl_r_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_unmatched_brackets_corpus_passes() {
+    run_corpus("corpus/tier2_unmatched_brackets.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_increment_count_corpus_passes() {
+    run_corpus("corpus/tier2_increment_count.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_search_offsets_corpus_passes() {
     run_corpus("corpus/tier2_search_offsets.toml").await;
 }

@@ -1,0 +1,72 @@
+# Tier 2 — unmatched-bracket motions: `[(`, `])`, `[{`, `]}`.
+#
+# `[(` / `[{` jump to the previous unmatched `(` / `{`; `])` / `]}` jump to the
+# next unmatched `)` / `}`. Live nvim compare (cursor is the assertion).
+
+# `[(` — jump back to the enclosing open paren.
+[[cases]]
+name = "prev_unmatched_paren"
+initial_buffer = "foo(bar baz)\n"
+initial_cursor = [0, 8]
+keys = "[("
+expected_buffer = "foo(bar baz)\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+
+# `])` — jump forward to the enclosing close paren.
+[[cases]]
+name = "next_unmatched_paren"
+initial_buffer = "foo(bar baz)\n"
+initial_cursor = [0, 5]
+keys = "])"
+expected_buffer = "foo(bar baz)\n"
+expected_cursor = [0, 11]
+expected_mode = "normal"
+
+# `[{` — jump back to the enclosing open brace.
+[[cases]]
+name = "prev_unmatched_brace"
+initial_buffer = "{ a b }\n"
+initial_cursor = [0, 4]
+keys = "[{"
+expected_buffer = "{ a b }\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# `]}` — jump forward to the enclosing close brace.
+[[cases]]
+name = "next_unmatched_brace"
+initial_buffer = "{ a b }\n"
+initial_cursor = [0, 3]
+keys = "]}"
+expected_buffer = "{ a b }\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+
+# Nested: `[(` skips a balanced inner pair to find the enclosing open paren.
+[[cases]]
+name = "prev_unmatched_paren_nested"
+initial_buffer = "a(b(c)d)e\n"
+initial_cursor = [0, 6]
+keys = "[("
+expected_buffer = "a(b(c)d)e\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+# Operator: `d])` deletes from the cursor up to the close paren (exclusive).
+[[cases]]
+name = "delete_to_unmatched_paren"
+initial_buffer = "(abcdef)\n"
+initial_cursor = [0, 1]
+keys = "d])"
+expected_buffer = "()\n"
+expected_mode = "normal"
+
+# Operator: `d[(` deletes backward to the open paren (exclusive of the cursor).
+[[cases]]
+name = "delete_to_prev_unmatched_paren"
+initial_buffer = "(xyz)\n"
+initial_cursor = [0, 3]
+keys = "d[("
+expected_buffer = "z)\n"
+expected_mode = "normal"
