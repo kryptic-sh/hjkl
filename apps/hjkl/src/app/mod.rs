@@ -301,6 +301,14 @@ pub struct App {
     /// Lets `drain_lsp_events` drop requests whose server exited / never
     /// answered, so the "LSP:…" spinner can't hang forever.
     pub lsp_pending_seen_at: HashMap<i64, std::time::Instant>,
+    /// Global yank/delete registers, shared across all buffers (vim registers
+    /// are global, but each `Editor` owns its own set). Synced at buffer
+    /// switches by [`App::sync_registers_across_buffers`] so `yy` in one buffer
+    /// pastes with `p` in another.
+    pub registers: hjkl_engine::Registers,
+    /// Slot index the global registers were last synced from — detects buffer
+    /// switches for the register sync.
+    pub last_register_slot: usize,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -932,6 +940,26 @@ impl App {
         self.focused_slot_idx()
     }
 
+    /// Carry yank/delete registers across a buffer switch so they behave like
+    /// vim's *global* registers (each `Editor` owns its own set). Saves the
+    /// buffer being left into the global set, then installs the global set into
+    /// the buffer being entered. No-op when the focused buffer is unchanged.
+    pub(crate) fn sync_registers_across_buffers(&mut self) {
+        let cur = self.focused_slot_idx();
+        if cur == self.last_register_slot {
+            return;
+        }
+        // The buffer we're leaving holds the most recent yank/delete.
+        if let Some(old) = self.slots.get(self.last_register_slot) {
+            self.registers = old.editor.registers().clone();
+        }
+        let global = self.registers.clone();
+        if let Some(new) = self.slots.get_mut(cur) {
+            *new.editor.registers_mut() = global;
+        }
+        self.last_register_slot = cur;
+    }
+
     /// When `matchparen` is on and the cursor sits on a C-style bracket with
     /// a matching partner, return `[(cursor_row, cursor_col), (match_row, match_col)]`.
     /// Otherwise returns `None`.
@@ -1463,6 +1491,8 @@ impl App {
             lsp_next_request_id: 0,
             lsp_pending: HashMap::new(),
             lsp_pending_seen_at: HashMap::new(),
+            registers: hjkl_engine::Registers::default(),
+            last_register_slot: 0,
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

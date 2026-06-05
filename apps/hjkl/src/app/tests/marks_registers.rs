@@ -1608,3 +1608,32 @@ fn count_100p_pastes_100_times() {
         lines.len()
     );
 }
+
+/// Vim registers are global: `yy` in one buffer must paste with `p` after
+/// switching to another buffer. Regression — registers used to live per-Editor.
+#[test]
+fn registers_are_global_across_buffers() {
+    let path_a = std::env::temp_dir().join("hjkl_reg_global_a.txt");
+    let path_b = std::env::temp_dir().join("hjkl_reg_global_b.txt");
+    std::fs::write(&path_a, "alpha\n").unwrap();
+    std::fs::write(&path_b, "beta\n").unwrap();
+
+    let mut app = App::new(Some(path_a.clone()), false, None, None).unwrap();
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    // Re-open A (reuses its slot) so it's active, then yank its line.
+    app.dispatch_ex(&format!("e {}", path_a.display()));
+    macro_key_seq(&mut app, &[ck('y'), ck('y')]);
+
+    // Switch to B and paste — should paste A's yanked "alpha".
+    app.dispatch_ex(&format!("e {}", path_b.display()));
+    macro_key_seq(&mut app, &[ck('p')]);
+
+    let content = (*app.active().editor.buffer().content_joined()).clone();
+    assert!(
+        content.contains("alpha"),
+        "yank in buffer A must paste in buffer B (global registers); got {content:?}"
+    );
+
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
+}
