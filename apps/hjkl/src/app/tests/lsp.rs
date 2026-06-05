@@ -1810,3 +1810,73 @@ fn lnext_then_j_preserves_diag_col() {
          sticky_col may not have been reset by lnext_severity"
     );
 }
+
+// ── pending-request timeout sweep ──────────────────────────────────────────
+
+/// A pending request older than the timeout is dropped (clears the spinner)
+/// while a fresh one survives.
+#[test]
+fn stale_lsp_pending_is_swept() {
+    use std::time::{Duration, Instant};
+    let mut app = App::new(None, false, None, None).unwrap();
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+
+    let stale = app.lsp_alloc_request_id();
+    let fresh = app.lsp_alloc_request_id();
+    for id in [stale, fresh] {
+        app.lsp_pending.insert(
+            id,
+            LspPendingRequest::Hover {
+                buffer_id,
+                origin: (0, 0),
+            },
+        );
+    }
+
+    let now = Instant::now();
+    // First sweep stamps both as seen "now".
+    app.sweep_stale_lsp_pending_at(now, Duration::from_secs(20));
+    assert_eq!(
+        app.lsp_pending.len(),
+        2,
+        "fresh requests must not be dropped"
+    );
+
+    // A later sweep past the timeout drops both (both were stamped at `now`).
+    app.sweep_stale_lsp_pending_at(now + Duration::from_secs(21), Duration::from_secs(20));
+    assert!(
+        app.lsp_pending.is_empty(),
+        "requests older than the timeout must be swept"
+    );
+    assert!(
+        app.lsp_pending_seen_at.is_empty(),
+        "timestamps for dropped requests must be cleaned up"
+    );
+}
+
+/// A resolved request (removed from `lsp_pending`) has its timestamp cleaned up
+/// on the next sweep, so the map can't grow unbounded.
+#[test]
+fn resolved_lsp_pending_timestamp_is_cleaned() {
+    use std::time::{Duration, Instant};
+    let mut app = App::new(None, false, None, None).unwrap();
+    let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
+    let id = app.lsp_alloc_request_id();
+    app.lsp_pending.insert(
+        id,
+        LspPendingRequest::Hover {
+            buffer_id,
+            origin: (0, 0),
+        },
+    );
+    let now = Instant::now();
+    app.sweep_stale_lsp_pending_at(now, Duration::from_secs(20));
+    assert!(app.lsp_pending_seen_at.contains_key(&id));
+    // Request resolves (response handler removed it from lsp_pending).
+    app.lsp_pending.remove(&id);
+    app.sweep_stale_lsp_pending_at(now + Duration::from_millis(1), Duration::from_secs(20));
+    assert!(
+        !app.lsp_pending_seen_at.contains_key(&id),
+        "timestamp for a resolved request must be cleaned up"
+    );
+}

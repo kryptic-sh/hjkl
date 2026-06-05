@@ -297,6 +297,10 @@ pub struct App {
     /// Maps app-allocated request id → what the request was for, so the
     /// response handler knows how to act on the result.
     pub lsp_pending: HashMap<i64, LspPendingRequest>,
+    /// First time each pending request id was observed by the timeout sweep.
+    /// Lets `drain_lsp_events` drop requests whose server exited / never
+    /// answered, so the "LSP:…" spinner can't hang forever.
+    pub lsp_pending_seen_at: HashMap<i64, std::time::Instant>,
     /// Active completion popup, if any.
     pub completion: Option<Completion>,
     /// Code actions from the most recent `textDocument/codeAction` response.
@@ -1458,6 +1462,7 @@ impl App {
             lsp_state: HashMap::new(),
             lsp_next_request_id: 0,
             lsp_pending: HashMap::new(),
+            lsp_pending_seen_at: HashMap::new(),
             completion: None,
             pending_code_actions: Vec::new(),
             pending_ctrl_x: false,

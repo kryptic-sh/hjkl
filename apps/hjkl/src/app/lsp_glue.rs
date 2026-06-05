@@ -10,6 +10,12 @@ use crate::completion::{Completion, item_from_lsp};
 
 use super::{App, DiagSeverity, LspDiag, LspPendingRequest, LspServerInfo};
 
+/// How long a pending LSP request may sit unanswered before the timeout sweep
+/// drops it (clearing the status spinner). Generous enough for a cold
+/// rust-analyzer goto, short enough that a dead/misconfigured server doesn't
+/// spin forever.
+const LSP_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Resolve a (possibly relative) buffer path against `current_dir` so the
 /// resulting `PathBuf` is absolute. `url::Url::from_file_path` (used by
 /// `hjkl_lsp::uri::from_path`) requires an absolute path; without this
@@ -188,6 +194,40 @@ impl App {
                     }
                 }
             }
+        }
+
+        // Drop pending requests whose server exited or never answered, so the
+        // "LSP:…" status spinner can't hang forever (e.g. a misconfigured TOML
+        // server that exits without responding).
+        self.sweep_stale_lsp_pending_at(std::time::Instant::now(), LSP_REQUEST_TIMEOUT);
+    }
+
+    /// Stamp newly-seen pending requests with `now`, then drop any that have
+    /// outlived `timeout` (or whose id is no longer pending). Split from the
+    /// wall-clock so it can be unit-tested with a controlled clock.
+    pub(crate) fn sweep_stale_lsp_pending_at(
+        &mut self,
+        now: std::time::Instant,
+        timeout: std::time::Duration,
+    ) {
+        // Record first-sight time for any request not yet tracked.
+        let ids: Vec<i64> = self.lsp_pending.keys().copied().collect();
+        for id in ids {
+            self.lsp_pending_seen_at.entry(id).or_insert(now);
+        }
+        // Collect ids to drop: resolved (no longer pending) or timed out.
+        let mut drop_ids: Vec<i64> = Vec::new();
+        for (id, seen) in self.lsp_pending_seen_at.iter() {
+            if !self.lsp_pending.contains_key(id) || now.saturating_duration_since(*seen) >= timeout
+            {
+                drop_ids.push(*id);
+            }
+        }
+        for id in drop_ids {
+            if self.lsp_pending.remove(&id).is_some() {
+                tracing::warn!(request_id = id, "lsp request timed out; dropping pending");
+            }
+            self.lsp_pending_seen_at.remove(&id);
         }
     }
 
