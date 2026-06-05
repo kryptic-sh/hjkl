@@ -276,6 +276,16 @@ async fn tier2_increment_count_corpus_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tier2_replace_mode_corpus_passes() {
+    run_corpus("corpus/tier2_replace_mode.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tier2_op_search_corpus_passes() {
+    run_corpus("corpus/tier2_op_search.toml").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tier2_search_offsets_corpus_passes() {
     run_corpus("corpus/tier2_search_offsets.toml").await;
 }

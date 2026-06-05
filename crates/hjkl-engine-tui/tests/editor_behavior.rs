@@ -2793,6 +2793,7 @@ fn search_prompt_state_round_trips() {
         text: "foo".to_string(),
         cursor: 3,
         forward: true,
+        operator: None,
     }));
     assert_eq!(
         e.search_prompt_state().map(|p| p.text.as_str()),

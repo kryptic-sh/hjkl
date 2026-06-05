@@ -1,0 +1,42 @@
+# Tier 2 — operator + search motion: `d/pat<CR>`, `y/pat<CR>`, `c/pat<CR>`,
+# `d?pat<CR>`. The search motion is exclusive: it deletes up to (not including)
+# the match start.
+#
+# Live nvim compare.
+
+# `d/foo<CR>` deletes from the cursor up to the next match of `foo`.
+[[cases]]
+name = "delete_to_search"
+initial_buffer = "abc foo def\n"
+initial_cursor = [0, 0]
+keys = "d/foo<CR>"
+expected_buffer = "foo def\n"
+expected_mode = "normal"
+
+# `c/foo<CR>` changes up to the match and enters insert.
+[[cases]]
+name = "change_to_search"
+initial_buffer = "abc foo def\n"
+initial_cursor = [0, 0]
+keys = "c/foo<CR>X<Esc>"
+expected_buffer = "Xfoo def\n"
+expected_mode = "normal"
+
+# `y/foo<CR>P` yanks up to the match and pastes it before the cursor.
+[[cases]]
+name = "yank_to_search"
+initial_buffer = "abc foo def\n"
+initial_cursor = [0, 0]
+keys = "y/foo<CR>P"
+expected_buffer = "abc abc foo def\n"
+expected_mode = "normal"
+
+# `d?bar<CR>` deletes backward to the previous match of `bar` (the match start
+# becomes the new cursor; the delete runs [match, origin), so `bar` goes too).
+[[cases]]
+name = "delete_to_backward_search"
+initial_buffer = "bar xyz end\n"
+initial_cursor = [0, 8]
+keys = "d?bar<CR>"
+expected_buffer = "end\n"
+expected_mode = "normal"

@@ -71,7 +71,12 @@ pub fn step_search_prompt<H: Host>(
                         apply_search_offset(ed, off);
                     }
                     ed.push_buffer_cursor_to_textarea();
-                    if ed.cursor() != pre {
+                    // Operator-pending search (`d/pat`, `c/pat`, `y/pat`): apply
+                    // the operator over the range to the match instead of just
+                    // moving the cursor / pushing a jump.
+                    if let Some((op, _count, origin)) = p.operator {
+                        ed.apply_op_search_range(op, origin);
+                    } else if ed.cursor() != pre {
                         ed.push_jump(pre);
                     }
                     ed.record_search_history(&pattern);

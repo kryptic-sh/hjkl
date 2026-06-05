@@ -419,6 +419,8 @@ pub enum LastChange {
         forward: bool,
         inserted: Option<String>,
     },
+    /// `R{text}<Esc>` — replace (overstrike) mode. `.` re-overtypes `text`.
+    ReplaceMode { text: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -615,6 +617,11 @@ pub struct SearchPrompt {
     pub text: String,
     pub cursor: usize,
     pub forward: bool,
+    /// Operator-pending search (`d/pat`, `c/pat`, `y/pat`): the operator, its
+    /// count, and the cursor position where the operator started. `None` for a
+    /// plain `/` / `?` search. On commit the operator runs over the (exclusive,
+    /// charwise) range from `origin` to the match.
+    pub operator: Option<(Operator, usize, (usize, usize))>,
 }
 
 #[derive(Debug, Clone)]
@@ -797,12 +804,45 @@ pub(crate) fn enter_search<H: crate::types::Host>(
         text: String::new(),
         cursor: 0,
         forward,
+        operator: None,
     });
     ed.vim.search_history_cursor = None;
     // 0.0.37: clear via the engine search state (the buffer-side
     // bridge from 0.0.35 was removed in this patch — the `BufferView`
     // renderer reads the pattern from `Editor::search_state()`).
     ed.set_search_pattern(None);
+}
+
+/// `d/pat` / `c/pat` / `y/pat` (and `?` forms) — open the search prompt in
+/// operator-pending mode. On commit the operator runs over the exclusive
+/// charwise range from the current cursor to the match.
+pub(crate) fn enter_search_op<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    forward: bool,
+    op: Operator,
+    count: usize,
+) {
+    let origin = ed.cursor();
+    ed.vim.search_prompt = Some(SearchPrompt {
+        text: String::new(),
+        cursor: 0,
+        forward,
+        operator: Some((op, count.max(1), origin)),
+    });
+    ed.vim.search_history_cursor = None;
+    ed.set_search_pattern(None);
+}
+
+/// Apply a pending operator-search over the exclusive charwise range from
+/// `origin` to the current (post-search) cursor. Used by the search-prompt
+/// commit path for `d/` / `c/` / `y/`.
+pub(crate) fn apply_op_search_range<H: crate::types::Host>(
+    ed: &mut Editor<hjkl_buffer::Buffer, H>,
+    op: Operator,
+    origin: (usize, usize),
+) {
+    let target = ed.cursor();
+    run_operator_over_range(ed, op, origin, target, RangeKind::Exclusive);
 }
 
 /// `g;` / `g,` body. `dir = -1` walks toward older entries (g;),
@@ -1114,7 +1154,14 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
     } else {
         String::new()
     };
-    let inserted = extract_inserted(&before, &after);
+    // `R` overstrike keeps the line length the same, so `extract_inserted`
+    // (which only reports net growth) misses the typed text. Use the changed
+    // run instead so dot-repeat retypes it.
+    let inserted = if matches!(session.reason, InsertReason::Replace) {
+        changed_run(&before, &after)
+    } else {
+        extract_inserted(&before, &after)
+    };
     let open_line = matches!(session.reason, InsertReason::Open { .. });
     if session.count > 1 && !ed.vim.replaying {
         use hjkl_buffer::{Edit, Position};
@@ -1238,13 +1285,9 @@ fn finish_insert_session<H: crate::types::Host>(ed: &mut Editor<hjkl_buffer::Buf
         InsertReason::BlockEdge { .. } => unreachable!("handled above"),
         InsertReason::BlockChange { .. } => unreachable!("handled above"),
         InsertReason::Replace => {
-            // Record overstrike sessions as DeleteToEol-style — replay
-            // re-types each character but doesn't try to restore prior
-            // content (vim's R has its own replay path; this is the
-            // pragmatic approximation).
-            ed.vim.last_change = Some(LastChange::DeleteToEol {
-                inserted: Some(inserted),
-            });
+            // `R` overstrike: dot-repeat re-overtypes the same text at the
+            // cursor (vim parity — not a delete-to-EOL).
+            ed.vim.last_change = Some(LastChange::ReplaceMode { text: inserted });
         }
     }
 }
@@ -8515,6 +8558,29 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
                 replay_insert_and_finish(ed, &text);
             }
         }
+        LastChange::ReplaceMode { text } => {
+            use hjkl_buffer::{Edit, MotionKind, Position};
+            ed.push_undo();
+            for ch in text.chars() {
+                let cursor = buf_cursor_pos(&ed.buffer);
+                let line_chars = buf_line_chars(&ed.buffer, cursor.row);
+                if cursor.col < line_chars {
+                    // Overtype the char under the cursor.
+                    ed.mutate_edit(Edit::DeleteRange {
+                        start: cursor,
+                        end: Position::new(cursor.row, cursor.col + 1),
+                        kind: MotionKind::Char,
+                    });
+                }
+                ed.mutate_edit(Edit::InsertChar { at: cursor, ch });
+                buf_set_cursor_rc(&mut ed.buffer, cursor.row, cursor.col + 1);
+            }
+            // Esc step-back onto the last overtyped char.
+            if ed.cursor().1 > 0 {
+                crate::motions::move_left(&mut ed.buffer, 1);
+            }
+            ed.push_buffer_cursor_to_textarea();
+        }
         LastChange::DeleteToEol { inserted } => {
             use hjkl_buffer::{Edit, Position};
             ed.push_undo();
@@ -8586,6 +8652,24 @@ pub(crate) fn replay_last_change<H: crate::types::Host>(
 }
 
 // ─── Extracting inserted text for replay ───────────────────────────────────
+
+/// The substring of `after` that differs from `before` (first-diff to
+/// last-diff). Unlike [`extract_inserted`] this works for equal-length or
+/// shorter results, so it captures `R` overstrike text for dot-repeat.
+fn changed_run(before: &str, after: &str) -> String {
+    let a: Vec<char> = before.chars().collect();
+    let b: Vec<char> = after.chars().collect();
+    let prefix = a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count();
+    let max_suffix = a.len().min(b.len()) - prefix;
+    let suffix = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take(max_suffix)
+        .take_while(|(x, y)| x == y)
+        .count();
+    b[prefix..b.len() - suffix].iter().collect()
+}
 
 fn extract_inserted(before: &str, after: &str) -> String {
     let before_chars: Vec<char> = before.chars().collect();

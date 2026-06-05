@@ -825,6 +825,15 @@ fn handle_after_op<H: Host>(
         return true;
     }
 
+    // `/` / `?` — operator + search motion (`d/pat`, `c/pat`, `y/pat`). Opens
+    // the search prompt in operator-pending mode; the operator runs over the
+    // range to the match on commit.
+    if !input.ctrl && matches!(input.key, Key::Char('/') | Key::Char('?')) {
+        let forward = input.key == Key::Char('/');
+        ed.enter_search_op(forward, op, count1);
+        return true;
+    }
+
     // Motion.
     let count2 = ed.take_count();
     let total = count1.max(1) * count2.max(1);

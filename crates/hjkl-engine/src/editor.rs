@@ -6044,6 +6044,18 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::Buffer, H> {
         vim::enter_search(self, forward);
     }
 
+    /// `d/pat` / `c/pat` / `y/pat` — open the search prompt in operator-pending
+    /// mode so the operator applies over the range to the match on commit.
+    pub fn enter_search_op(&mut self, forward: bool, op: vim::Operator, count: usize) {
+        vim::enter_search_op(self, forward, op, count);
+    }
+
+    /// Apply a pending operator-search over the exclusive charwise range from
+    /// `origin` to the current cursor (the just-found match position).
+    pub fn apply_op_search_range(&mut self, op: vim::Operator, origin: (usize, usize)) {
+        vim::apply_op_search_range(self, op, origin);
+    }
+
     /// Enter Insert mode at the left edge of a VisualBlock selection for
     /// `I`. Moves the cursor to `(top, col)`, resets to Normal internally,
     /// then begins an insert session with `InsertReason::BlockEdge`.

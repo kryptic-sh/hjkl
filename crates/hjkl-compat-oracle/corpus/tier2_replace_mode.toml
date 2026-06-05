@@ -1,0 +1,39 @@
+# Tier 2 — `R` replace (overtype) mode.
+#
+# Live nvim compare.
+
+# `RXYZ<Esc>` overtypes the first three characters.
+[[cases]]
+name = "replace_overtype"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "RXYZ<Esc>"
+expected_buffer = "XYZdef\n"
+expected_mode = "normal"
+
+# `R` exactly at the line length replaces every char.
+[[cases]]
+name = "replace_whole_line"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "RXYZ<Esc>"
+expected_buffer = "XYZ\n"
+expected_mode = "normal"
+
+# `R` past the end of the line extends it (overtype then append).
+[[cases]]
+name = "replace_past_eol_extends"
+initial_buffer = "ab\n"
+initial_cursor = [0, 0]
+keys = "RXYZ<Esc>"
+expected_buffer = "XYZ\n"
+expected_mode = "normal"
+
+# `R` mid-line then `.` repeats the replacement.
+[[cases]]
+name = "replace_dot_repeat"
+initial_buffer = "abcdef\n"
+initial_cursor = [0, 0]
+keys = "RXY<Esc>l."
+expected_buffer = "XYXYef\n"
+expected_mode = "normal"
