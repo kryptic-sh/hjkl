@@ -21,3 +21,8 @@
 # content collapses to bare braces) now match nvim via the operator
 # exclusive-motion adjustment in `apply_op_with_text_object`. Promoted to
 # corpus/tier2_block_textobj.toml (di/ci/da/ca across {}/()/[] + visual vi{).
+#
+# No known divergences remain. The empty `cases` array keeps the corpus loader
+# (and the `known_divergences_report` test) happy; add new `[[cases]]` here when
+# a fresh divergence is discovered.
+cases = []
