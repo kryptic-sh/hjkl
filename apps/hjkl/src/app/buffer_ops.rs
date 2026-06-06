@@ -6,6 +6,7 @@ use super::{App, DiskState, STATUS_LINE_HEIGHT};
 use crate::host::TuiHost;
 
 impl App {
+    // Test
     /// Switch the focused window to display slot `idx` and refresh its
     /// viewport spans.  Records the previous slot index in `prev_active`
     /// for alt-buffer (`<C-^>` / `:b#`).

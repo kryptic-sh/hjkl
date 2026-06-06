@@ -29,7 +29,9 @@ serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 thiserror = "2"
 # install-pipeline deps (always present — needed at runtime by downstream consumers)
-reqwest = { version = "0.13", features = ["blocking", "rustls", "rustls-native-certs"], default-features = false }
+# `rustls` pulls native-cert roots itself since reqwest 0.13.2 (the standalone
+# `rustls-native-certs` feature was removed).
+reqwest = { version = "0.13", features = ["blocking", "rustls"], default-features = false }
 flate2 = "1"
 tar = "0.4"
 zip = { version = "8", default-features = false, features = ["deflate"] }
